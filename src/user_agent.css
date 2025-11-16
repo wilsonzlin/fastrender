@@ -1,0 +1,200 @@
+/* User Agent Stylesheet - Default browser styles */
+
+/* Document structure */
+html, body {
+    display: block;
+    margin: 8px;
+}
+
+/* HTML5 semantic elements */
+main, article, section, header, footer, nav, aside, figure, figcaption {
+    display: block;
+}
+
+/* Headings */
+h1 {
+    display: block;
+    font-size: 2em;
+    font-weight: bold;
+    margin-top: 0.67em;
+    margin-bottom: 0.67em;
+}
+
+h2 {
+    display: block;
+    font-size: 1.5em;
+    font-weight: bold;
+    margin-top: 0.83em;
+    margin-bottom: 0.83em;
+}
+
+h3 {
+    display: block;
+    font-size: 1.17em;
+    font-weight: bold;
+    margin-top: 1em;
+    margin-bottom: 1em;
+}
+
+h4 {
+    display: block;
+    font-size: 1em;
+    font-weight: bold;
+    margin-top: 1.33em;
+    margin-bottom: 1.33em;
+}
+
+h5 {
+    display: block;
+    font-size: 0.83em;
+    font-weight: bold;
+    margin-top: 1.67em;
+    margin-bottom: 1.67em;
+}
+
+h6 {
+    display: block;
+    font-size: 0.67em;
+    font-weight: bold;
+    margin-top: 2.33em;
+    margin-bottom: 2.33em;
+}
+
+/* Text blocks */
+p {
+    display: block;
+    margin-top: 1em;
+    margin-bottom: 1em;
+}
+
+/* Lists */
+ul, ol {
+    display: block;
+    margin-top: 1em;
+    margin-bottom: 1em;
+    padding-left: 40px;
+}
+
+li {
+    display: list-item;
+}
+
+/* Block elements */
+div, header, footer, section, article, nav, aside, main, form {
+    display: block;
+}
+
+blockquote {
+    display: block;
+    margin-top: 1em;
+    margin-bottom: 1em;
+    margin-left: 40px;
+    margin-right: 40px;
+}
+
+pre {
+    display: block;
+    font-family: monospace;
+    white-space: pre;
+    margin-top: 1em;
+    margin-bottom: 1em;
+}
+
+/* Tables */
+table {
+    display: table;
+    border-collapse: separate;
+    border-spacing: 2px;
+}
+
+thead {
+    display: table-header-group;
+}
+
+tbody {
+    display: table-row-group;
+}
+
+tfoot {
+    display: table-footer-group;
+}
+
+tr {
+    display: table-row;
+}
+
+td, th {
+    display: table-cell;
+    padding: 1px;
+}
+
+th {
+    font-weight: bold;
+    text-align: center;
+}
+
+/* Inline elements */
+span, a, strong, em, b, i, u, small, mark, code {
+    display: inline;
+}
+
+strong, b {
+    font-weight: bold;
+}
+
+em, i {
+    font-style: italic;
+}
+
+u {
+    text-decoration: underline;
+}
+
+small {
+    font-size: 0.83em;
+}
+
+code {
+    font-family: monospace;
+}
+
+/* Form elements */
+input, textarea, select, button {
+    display: inline-block;
+    padding: 1px 2px;
+    border: 2px inset #ccc;
+    font-family: inherit;
+    font-size: inherit;
+}
+
+input[type="text"], input[type="password"], input[type="email"],
+input[type="search"], input[type="tel"], input[type="url"] {
+    padding: 1px 2px;
+}
+
+input[type="submit"], input[type="button"], button {
+    padding: 2px 6px;
+    border: 2px outset #ccc;
+}
+
+textarea {
+    white-space: pre-wrap;
+}
+
+/* Hidden elements */
+meta, link, title {
+    display: none;
+}
+
+/* Keep head, style, script as inline internally (we skip rendering their text in paint.rs) */
+head, style, script {
+    display: inline;
+}
+
+/* Horizontal rule */
+hr {
+    display: block;
+    margin-top: 0.5em;
+    margin-bottom: 0.5em;
+    border: 1px inset;
+}
