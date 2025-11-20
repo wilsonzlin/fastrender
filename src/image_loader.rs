@@ -28,11 +28,18 @@ impl ImageCache {
     fn resolve_url(&self, url: &str) -> String {
         // DEBUG: Log URL resolution for y18.svg
         if url.contains("y18") {
-            eprintln!("DEBUG: Resolving Y logo URL '{}' with base_url {:?}", url, self.base_url);
+            eprintln!(
+                "DEBUG: Resolving Y logo URL '{}' with base_url {:?}",
+                url, self.base_url
+            );
         }
 
         // If it's already absolute, return as-is
-        if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("data:") || url.starts_with("file://") {
+        if url.starts_with("http://")
+            || url.starts_with("https://")
+            || url.starts_with("data:")
+            || url.starts_with("file://")
+        {
             return url.to_string();
         }
 
@@ -40,7 +47,11 @@ impl ImageCache {
         if let Some(base) = &self.base_url {
             if url.starts_with("//") {
                 // Protocol-relative URL
-                let protocol = if base.starts_with("https://") { "https:" } else { "http:" };
+                let protocol = if base.starts_with("https://") {
+                    "https:"
+                } else {
+                    "http:"
+                };
                 return format!("{}{}", protocol, url);
             } else if url.starts_with('/') {
                 // Absolute path - extract protocol and domain from base
@@ -132,10 +143,12 @@ impl ImageCache {
             .build();
         let agent: ureq::Agent = config.into();
 
-        let mut response = agent
-            .get(url)
-            .call()
-            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        let mut response = agent.get(url).call().map_err(|e| {
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            ))
+        })?;
 
         // Read response body into bytes (limit to 50MB for images)
         let bytes = response
@@ -143,7 +156,12 @@ impl ImageCache {
             .with_config()
             .limit(50 * 1024 * 1024)
             .read_to_vec()
-            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            .map_err(|e| {
+                Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e.to_string(),
+                ))
+            })?;
 
         // Decode image
         image::load_from_memory(&bytes)
@@ -174,8 +192,9 @@ impl ImageCache {
             let bytes = base64::decode(data)
                 .map_err(|e| Error::ImageDecode(format!("Failed to decode base64: {}", e)))?;
 
-            image::load_from_memory(&bytes)
-                .map_err(|e| Error::ImageDecode(format!("Failed to decode image from data URL: {}", e)))
+            image::load_from_memory(&bytes).map_err(|e| {
+                Error::ImageDecode(format!("Failed to decode image from data URL: {}", e))
+            })
         } else if header.contains("image/svg+xml") {
             // Handle URL-encoded SVG
             let decoded = urlencoding::decode(data)
@@ -184,7 +203,9 @@ impl ImageCache {
             // Use resvg to render SVG to bitmap
             self.render_svg_to_image(&decoded)
         } else {
-            Err(Error::ImageDecode("Unsupported data URL format".to_string()))
+            Err(Error::ImageDecode(
+                "Unsupported data URL format".to_string(),
+            ))
         }
     }
 
@@ -208,12 +229,17 @@ impl ImageCache {
         let mut pixmap = tiny_skia::Pixmap::new(width, height)
             .ok_or_else(|| Error::ImageDecode("Failed to create pixmap for SVG".to_string()))?;
 
-        resvg::render(&tree, tiny_skia::Transform::identity(), &mut pixmap.as_mut());
+        resvg::render(
+            &tree,
+            tiny_skia::Transform::identity(),
+            &mut pixmap.as_mut(),
+        );
 
         // Convert pixmap to image
         let rgba_data = pixmap.take();
-        let img = image::RgbaImage::from_raw(width, height, rgba_data)
-            .ok_or_else(|| Error::ImageDecode("Failed to create image from SVG pixmap".to_string()))?;
+        let img = image::RgbaImage::from_raw(width, height, rgba_data).ok_or_else(|| {
+            Error::ImageDecode("Failed to create image from SVG pixmap".to_string())
+        })?;
 
         eprintln!("DEBUG: SVG rendered to {}x{} image", width, height);
         Ok(image::DynamicImage::ImageRgba8(img))

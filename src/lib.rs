@@ -1,13 +1,15 @@
-pub mod dom;
 pub mod css;
-pub mod style;
-pub mod layout;
-pub mod text;
-pub mod paint;
-pub mod image_output;
-pub mod image_loader;
+pub mod dom;
 pub mod error;
+pub mod geometry;
+pub mod image_loader;
+pub mod image_output;
+pub mod layout;
+pub mod paint;
 pub mod renderer;
+pub mod style;
+pub mod text;
 
 pub use error::{Error, Result};
-pub use renderer::{Renderer, RenderOptions, ImageFormat};
+pub use geometry::{EdgeOffsets, Point, Rect, Size};
+pub use renderer::{ImageFormat, RenderOptions, Renderer};

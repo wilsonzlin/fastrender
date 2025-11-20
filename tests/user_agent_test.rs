@@ -21,7 +21,10 @@ fn test_user_agent_styles() {
     let renderer = Renderer::new();
     let result = renderer.render_to_png(html, 800, 600);
 
-    assert!(result.is_ok(), "Should render successfully with user-agent styles");
+    assert!(
+        result.is_ok(),
+        "Should render successfully with user-agent styles"
+    );
 
     let png = result.unwrap();
     assert!(png.len() > 0, "Should produce non-empty PNG");
@@ -45,7 +48,10 @@ fn test_user_agent_form_elements() {
     let renderer = Renderer::new();
     let result = renderer.render_to_png(html, 800, 600);
 
-    assert!(result.is_ok(), "Should render form elements with user-agent styles");
+    assert!(
+        result.is_ok(),
+        "Should render form elements with user-agent styles"
+    );
 }
 
 #[test]

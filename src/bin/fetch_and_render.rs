@@ -1,12 +1,11 @@
-use fastrender::{Renderer, Error, Result};
+use fastrender::{Error, Renderer, Result};
 use std::env;
 
 fn fetch_url(url: &str) -> Result<String> {
     // Handle file:// URLs
     if url.starts_with("file://") {
         let path = url.strip_prefix("file://").unwrap();
-        return std::fs::read_to_string(path)
-            .map_err(|e| Error::Io(e));
+        return std::fs::read_to_string(path).map_err(|e| Error::Io(e));
     }
 
     // Configure agent with timeout for ureq 3.x
@@ -15,14 +14,19 @@ fn fetch_url(url: &str) -> Result<String> {
         .build();
     let agent: ureq::Agent = config.into();
 
-    let mut response = agent.get(url)
-        .call()
-        .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    let mut response = agent.get(url).call().map_err(|e| {
+        Error::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            e.to_string(),
+        ))
+    })?;
 
-    let body = response
-        .body_mut()
-        .read_to_string()
-        .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    let body = response.body_mut().read_to_string().map_err(|e| {
+        Error::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            e.to_string(),
+        ))
+    })?;
 
     Ok(body)
 }
@@ -45,14 +49,18 @@ fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
                 // Extract href
                 if let Some(href_start) = link_tag_lower.find("href") {
                     let href_section = &link_tag[href_start..];
-                    if let Some(quote_start) = href_section.find('"').or_else(|| href_section.find('\'')) {
+                    if let Some(quote_start) =
+                        href_section.find('"').or_else(|| href_section.find('\''))
+                    {
                         let quote_char = href_section.chars().nth(quote_start).unwrap();
                         let after_quote = &href_section[quote_start + 1..];
                         if let Some(quote_end) = after_quote.find(quote_char) {
                             let href = &after_quote[..quote_end];
 
                             // Resolve relative URLs
-                            let full_url = if href.starts_with("http://") || href.starts_with("https://") {
+                            let full_url = if href.starts_with("http://")
+                                || href.starts_with("https://")
+                            {
                                 href.to_string()
                             } else if href.starts_with("//") {
                                 format!("https:{}", href)
@@ -73,7 +81,8 @@ fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
                                     let after_protocol = &base_url[protocol_end..];
 
                                     // Find where the path starts (after the domain)
-                                    let path_start = after_protocol.find('/').map(|p| protocol_end + p);
+                                    let path_start =
+                                        after_protocol.find('/').map(|p| protocol_end + p);
 
                                     let base_without_file = if let Some(path_pos) = path_start {
                                         // There's a path - find the last / to get directory
@@ -136,8 +145,14 @@ fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: {} <url> [output.png] [width] [height] [scroll_y]", args[0]);
-        eprintln!("Example: {} https://www.example.com output.png 1200 800 0", args[0]);
+        eprintln!(
+            "Usage: {} <url> [output.png] [width] [height] [scroll_y]",
+            args[0]
+        );
+        eprintln!(
+            "Example: {} https://www.example.com output.png 1200 800 0",
+            args[0]
+        );
         eprintln!("  width: viewport width (default: 1200)");
         eprintln!("  height: viewport height (default: 800)");
         eprintln!("  scroll_y: vertical scroll offset (default: 0)");
@@ -198,10 +213,19 @@ fn main() -> Result<()> {
         html
     };
 
-    println!("Rendering to image ({}x{} viewport, scroll_y={})...", width, height, scroll_y);
+    println!(
+        "Rendering to image ({}x{} viewport, scroll_y={})...",
+        width, height, scroll_y
+    );
     let renderer = Renderer::new();
     // Always use the base URL for image resolution, whether scrolling or not
-    let png_data = renderer.render_to_png_with_scroll_and_base_url(&html_with_css, width, height, scroll_y, url.to_string())?;
+    let png_data = renderer.render_to_png_with_scroll_and_base_url(
+        &html_with_css,
+        width,
+        height,
+        scroll_y,
+        url.to_string(),
+    )?;
 
     println!("Saving to {}...", output);
     std::fs::write(&output, png_data)?;

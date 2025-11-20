@@ -6,7 +6,10 @@ use taffy::prelude::*;
 fn has_nested_replaced_element(styled_node: &style::StyledNode) -> bool {
     // Check immediate children for replaced elements
     for child in &styled_node.children {
-        if matches!(child.node.tag_name(), Some("img") | Some("video") | Some("canvas") | Some("svg")) {
+        if matches!(
+            child.node.tag_name(),
+            Some("img") | Some("video") | Some("canvas") | Some("svg")
+        ) {
             return true;
         }
         // Recursively check nested children
@@ -38,7 +41,11 @@ pub struct LayoutBox {
     pub img_src: Option<String>,
 }
 
-pub fn compute_layout(styled_tree: &style::StyledNode, viewport_width: f32, viewport_height: f32) -> LayoutTree {
+pub fn compute_layout(
+    styled_tree: &style::StyledNode,
+    viewport_width: f32,
+    viewport_height: f32,
+) -> LayoutTree {
     let mut taffy = TaffyTree::new();
     let root_font_size = 16.0;
 
@@ -79,13 +86,20 @@ fn build_taffy_tree(
     // Check if this node is a flex or grid container
     let is_flex_or_grid = matches!(
         styles.display,
-        style::Display::Flex | style::Display::InlineFlex | style::Display::Grid | style::Display::InlineGrid |
-        style::Display::Table | style::Display::TableRow  // Table elements become flex containers
+        style::Display::Flex
+            | style::Display::InlineFlex
+            | style::Display::Grid
+            | style::Display::InlineGrid
+            | style::Display::Table
+            | style::Display::TableRow // Table elements become flex containers
     );
 
     if let Some(tag) = styled_node.node.tag_name() {
         if tag == "tr" {
-            eprintln!("DEBUG: Table row - display: {:?}, is_flex_or_grid: {}", styles.display, is_flex_or_grid);
+            eprintln!(
+                "DEBUG: Table row - display: {:?}, is_flex_or_grid: {}",
+                styles.display, is_flex_or_grid
+            );
         }
     }
 
@@ -115,7 +129,11 @@ fn build_taffy_tree(
 
     // Recursively collect text from text nodes and inline elements
     // BUT: don't collect from inline children if parent is flex/grid (they become items instead)
-    fn collect_text_for_layout(node: &style::StyledNode, text: &mut String, parent_is_flex_or_grid: bool) -> bool {
+    fn collect_text_for_layout(
+        node: &style::StyledNode,
+        text: &mut String,
+        parent_is_flex_or_grid: bool,
+    ) -> bool {
         let mut has_text = false;
 
         for child in &node.children {
@@ -134,7 +152,10 @@ fn build_taffy_tree(
                         has_text = true;
                     }
                 }
-            } else if matches!(child.styles.display, style::Display::Inline | style::Display::InlineBlock) {
+            } else if matches!(
+                child.styles.display,
+                style::Display::Inline | style::Display::InlineBlock
+            ) {
                 // Only collect inline children as text if parent is NOT flex/grid
                 // In flex/grid, inline children become flex/grid items
                 if !parent_is_flex_or_grid {
@@ -204,7 +225,8 @@ fn build_taffy_tree(
         .collect();
 
     // Convert styles to Taffy style
-    let mut taffy_style = convert_to_taffy_style(styles, root_font_size, _viewport_width, styled_node);
+    let mut taffy_style =
+        convert_to_taffy_style(styles, root_font_size, _viewport_width, styled_node);
 
     // CRITICAL: Set height for text elements based on content
     // Without this, text boxes have zero/minimal height and content overlaps
@@ -213,7 +235,7 @@ fn build_taffy_tree(
         if !text.is_empty() {
             let font_size = styles.font_size;
             let line_height_value = match &styles.line_height {
-                style::LineHeight::Normal => font_size * 1.5,  // More conservative than 1.2
+                style::LineHeight::Normal => font_size * 1.5, // More conservative than 1.2
                 style::LineHeight::Number(n) => font_size * n,
                 style::LineHeight::Length(len) => len.to_px(font_size, 16.0),
             };
@@ -225,7 +247,10 @@ fn build_taffy_tree(
             // Estimate available width based on viewport or explicit width
             let available_width = if let Some(width) = &styles.width {
                 width.to_px(font_size, 16.0)
-            } else if matches!(styles.display, style::Display::Inline | style::Display::InlineBlock) {
+            } else if matches!(
+                styles.display,
+                style::Display::Inline | style::Display::InlineBlock
+            ) {
                 // For inline elements (especially in flex containers), don't constrain width
                 // Use natural content width to avoid excessive wrapping
                 text.len() as f32 * avg_char_width
@@ -236,31 +261,34 @@ fn build_taffy_tree(
                 let col_span = if styles.grid_column_end > styles.grid_column_start {
                     (styles.grid_column_end - styles.grid_column_start) as f32
                 } else {
-                    3.0  // Default span
+                    3.0 // Default span
                 };
                 // Assuming 13-column grid over viewport width
-                (_viewport_width / 13.0) * col_span * 0.9  // 90% to account for gaps
+                (_viewport_width / 13.0) * col_span * 0.9 // 90% to account for gaps
             } else if matches!(styles.display, style::Display::TableCell) {
                 // Table cells should be generous with width to avoid excessive wrapping
                 // Especially important for navigation headers and story titles
                 // For short text (likely navigation), use full viewport width to prevent wrapping
                 if text.len() < 100 {
-                    _viewport_width  // Don't wrap short navigation text
+                    _viewport_width // Don't wrap short navigation text
                 } else {
-                    _viewport_width * 0.8  // Allow some wrapping for longer content
+                    _viewport_width * 0.8 // Allow some wrapping for longer content
                 }
             } else {
                 // For block elements in grid or regular flow, estimate based on context
                 // For headings (h1-h6), use a more generous width estimate as they're typically
                 // in the main content area (not sidebars)
-                let is_heading = matches!(styled_node.node.tag_name(), Some("h1") | Some("h2") | Some("h3") | Some("h4") | Some("h5") | Some("h6"));
+                let is_heading = matches!(
+                    styled_node.node.tag_name(),
+                    Some("h1") | Some("h2") | Some("h3") | Some("h4") | Some("h5") | Some("h6")
+                );
                 if is_heading {
                     // Headings are typically in "text" grid columns which span ~70-75% of viewport
-                    _viewport_width * 0.73  // ~704px for 961px viewport
+                    _viewport_width * 0.73 // ~704px for 961px viewport
                 } else if font_size < 14.0 {
-                    250.0  // Narrow sidebar content (TOC, etc.)
+                    250.0 // Narrow sidebar content (TOC, etc.)
                 } else {
-                    _viewport_width * 0.6  // Reasonable default for main content area
+                    _viewport_width * 0.6 // Reasonable default for main content area
                 }
             };
 
@@ -268,18 +296,23 @@ fn build_taffy_tree(
             let chars_per_line = (available_width / avg_char_width).max(10.0);
             let mut estimated_lines = (text.len() as f32 / chars_per_line).ceil().max(1.0);
 
-
             // For block elements without explicit width in grid layouts,
             // Add a small buffer to account for word boundaries and padding
             // EXCEPT for headings which are usually in grid columns and sized correctly
-            let is_heading = matches!(styled_node.node.tag_name(), Some("h1") | Some("h2") | Some("h3") | Some("h4") | Some("h5") | Some("h6"));
-            if matches!(styles.display, style::Display::Block) && styles.width.is_none() && !is_heading {
+            let is_heading = matches!(
+                styled_node.node.tag_name(),
+                Some("h1") | Some("h2") | Some("h3") | Some("h4") | Some("h5") | Some("h6")
+            );
+            if matches!(styles.display, style::Display::Block)
+                && styles.width.is_none()
+                && !is_heading
+            {
                 // Use a moderate multiplier - enough to prevent overlaps but not too much space
                 // Longer text wraps more predictably, shorter text needs more buffer
                 let buffer = if text.len() < 30 {
-                    1.5  // Short text (TOC items) - reduced now that we have better width estimates
+                    1.5 // Short text (TOC items) - reduced now that we have better width estimates
                 } else if text.len() < 50 {
-                    1.3  // Short text needs modest buffer for single-word lines
+                    1.3 // Short text needs modest buffer for single-word lines
                 } else {
                     1.2 // Longer text wraps more predictably
                 };
@@ -289,7 +322,10 @@ fn build_taffy_tree(
             let estimated_height = estimated_lines * line_height_value;
 
             // For inline elements, also set width to prevent excessive wrapping
-            if matches!(styles.display, style::Display::Inline | style::Display::InlineBlock) {
+            if matches!(
+                styles.display,
+                style::Display::Inline | style::Display::InlineBlock
+            ) {
                 taffy_style.size.width = Dimension::length(available_width);
             }
 
@@ -322,7 +358,12 @@ fn build_taffy_tree(
     }
 }
 
-fn convert_to_taffy_style(styles: &style::ComputedStyles, root_font_size: f32, _viewport_width: f32, styled_node: &style::StyledNode) -> Style {
+fn convert_to_taffy_style(
+    styles: &style::ComputedStyles,
+    root_font_size: f32,
+    _viewport_width: f32,
+    styled_node: &style::StyledNode,
+) -> Style {
     let mut style = Style::default();
 
     // Display
@@ -333,7 +374,10 @@ fn convert_to_taffy_style(styles: &style::ComputedStyles, root_font_size: f32, _
         style::Display::None => taffy::Display::None,
         style::Display::Inline | style::Display::InlineBlock => taffy::Display::Block, // Treat as block for now
         // Map table to flex column (stack rows)
-        style::Display::Table | style::Display::TableHeaderGroup | style::Display::TableRowGroup | style::Display::TableFooterGroup => taffy::Display::Flex,
+        style::Display::Table
+        | style::Display::TableHeaderGroup
+        | style::Display::TableRowGroup
+        | style::Display::TableFooterGroup => taffy::Display::Flex,
         // Map table row to flex row (cells side by side)
         style::Display::TableRow => taffy::Display::Flex,
         // Table cell should be block to be a proper flex item
@@ -357,18 +401,23 @@ fn convert_to_taffy_style(styles: &style::ComputedStyles, root_font_size: f32, _
         }
 
         if has_header_content(styled_node) {
-            style.size.width = Dimension::length(_viewport_width);  // Force full viewport width
-            style.min_size.width = Dimension::length(_viewport_width);  // Ensure minimum full width
-            eprintln!("DEBUG: Found header table - forcing to full viewport width {}px", _viewport_width);
+            style.size.width = Dimension::length(_viewport_width); // Force full viewport width
+            style.min_size.width = Dimension::length(_viewport_width); // Ensure minimum full width
+            eprintln!(
+                "DEBUG: Found header table - forcing to full viewport width {}px",
+                _viewport_width
+            );
         }
     }
-
 
     // Configure flex properties for table cells
     // Table cells without explicit width should grow to fill available space
     // Cells with width should respect it
     if matches!(styles.display, style::Display::TableCell) {
-        eprintln!("DEBUG: Configuring table cell flex - width: {:?}", styles.width);
+        eprintln!(
+            "DEBUG: Configuring table cell flex - width: {:?}",
+            styles.width
+        );
 
         // CRITICAL FIX: Detect header navigation cells and force proper width
         let mut is_navigation_cell = false;
@@ -399,15 +448,17 @@ fn convert_to_taffy_style(styles: &style::ComputedStyles, root_font_size: f32, _
             if is_navigation_cell {
                 // CRITICAL FIX: Header navigation cells need much more space
                 // Use flex_basis instead of size.width to force width in flex container
-                style.flex_grow = 1.0;  // Allow growing to fill space
-                style.flex_shrink = 0.0;  // Don't shrink below basis
-                style.flex_basis = Dimension::length(800.0);  // Force 800px basis
-                style.min_size.width = Dimension::length(400.0);  // Minimum 400px backup
-                eprintln!("DEBUG: Applied navigation cell flex - basis:800px, grow:1.0, shrink:0.0");
+                style.flex_grow = 1.0; // Allow growing to fill space
+                style.flex_shrink = 0.0; // Don't shrink below basis
+                style.flex_basis = Dimension::length(800.0); // Force 800px basis
+                style.min_size.width = Dimension::length(400.0); // Minimum 400px backup
+                eprintln!(
+                    "DEBUG: Applied navigation cell flex - basis:800px, grow:1.0, shrink:0.0"
+                );
             } else {
                 // Regular cells: reasonable minimum width
-                style.min_size.width = Dimension::length(100.0);  // Minimum 100px width
-                style.size.width = Dimension::length(100.0);  // Explicit 100px width
+                style.min_size.width = Dimension::length(100.0); // Minimum 100px width
+                style.size.width = Dimension::length(100.0); // Explicit 100px width
             }
         } else {
             // Cell with explicit width: don't flex but still respect content min
@@ -436,52 +487,147 @@ fn convert_to_taffy_style(styles: &style::ComputedStyles, root_font_size: f32, _
     };
 
     // Size
-    let height_dim = convert_dimension(&styles.height, styles.font_size, root_font_size, _viewport_width);
+    let height_dim = convert_dimension(
+        &styles.height,
+        styles.font_size,
+        root_font_size,
+        _viewport_width,
+    );
 
     style.size = Size {
-        width: convert_dimension(&styles.width, styles.font_size, root_font_size, _viewport_width),
+        width: convert_dimension(
+            &styles.width,
+            styles.font_size,
+            root_font_size,
+            _viewport_width,
+        ),
         height: height_dim,
     };
 
     style.min_size = Size {
-        width: convert_dimension(&styles.min_width, styles.font_size, root_font_size, _viewport_width),
-        height: convert_dimension(&styles.min_height, styles.font_size, root_font_size, _viewport_width),
+        width: convert_dimension(
+            &styles.min_width,
+            styles.font_size,
+            root_font_size,
+            _viewport_width,
+        ),
+        height: convert_dimension(
+            &styles.min_height,
+            styles.font_size,
+            root_font_size,
+            _viewport_width,
+        ),
     };
 
     style.max_size = Size {
-        width: convert_dimension(&styles.max_width, styles.font_size, root_font_size, _viewport_width),
-        height: convert_dimension(&styles.max_height, styles.font_size, root_font_size, _viewport_width),
+        width: convert_dimension(
+            &styles.max_width,
+            styles.font_size,
+            root_font_size,
+            _viewport_width,
+        ),
+        height: convert_dimension(
+            &styles.max_height,
+            styles.font_size,
+            root_font_size,
+            _viewport_width,
+        ),
     };
 
     // Margin
     style.margin = Rect {
-        left: convert_margin(&styles.margin_left, styles.font_size, root_font_size, _viewport_width),
-        right: convert_margin(&styles.margin_right, styles.font_size, root_font_size, _viewport_width),
-        top: convert_margin(&styles.margin_top, styles.font_size, root_font_size, _viewport_width),
-        bottom: convert_margin(&styles.margin_bottom, styles.font_size, root_font_size, _viewport_width),
+        left: convert_margin(
+            &styles.margin_left,
+            styles.font_size,
+            root_font_size,
+            _viewport_width,
+        ),
+        right: convert_margin(
+            &styles.margin_right,
+            styles.font_size,
+            root_font_size,
+            _viewport_width,
+        ),
+        top: convert_margin(
+            &styles.margin_top,
+            styles.font_size,
+            root_font_size,
+            _viewport_width,
+        ),
+        bottom: convert_margin(
+            &styles.margin_bottom,
+            styles.font_size,
+            root_font_size,
+            _viewport_width,
+        ),
     };
 
     // Padding
     style.padding = Rect {
-        left: convert_length_unit(&styles.padding_left, styles.font_size, root_font_size, _viewport_width),
-        right: convert_length_unit(&styles.padding_right, styles.font_size, root_font_size, _viewport_width),
-        top: convert_length_unit(&styles.padding_top, styles.font_size, root_font_size, _viewport_width),
-        bottom: convert_length_unit(&styles.padding_bottom, styles.font_size, root_font_size, _viewport_width),
+        left: convert_length_unit(
+            &styles.padding_left,
+            styles.font_size,
+            root_font_size,
+            _viewport_width,
+        ),
+        right: convert_length_unit(
+            &styles.padding_right,
+            styles.font_size,
+            root_font_size,
+            _viewport_width,
+        ),
+        top: convert_length_unit(
+            &styles.padding_top,
+            styles.font_size,
+            root_font_size,
+            _viewport_width,
+        ),
+        bottom: convert_length_unit(
+            &styles.padding_bottom,
+            styles.font_size,
+            root_font_size,
+            _viewport_width,
+        ),
     };
 
     // Border
     style.border = Rect {
-        left: convert_length_unit(&styles.border_left_width, styles.font_size, root_font_size, _viewport_width),
-        right: convert_length_unit(&styles.border_right_width, styles.font_size, root_font_size, _viewport_width),
-        top: convert_length_unit(&styles.border_top_width, styles.font_size, root_font_size, _viewport_width),
-        bottom: convert_length_unit(&styles.border_bottom_width, styles.font_size, root_font_size, _viewport_width),
+        left: convert_length_unit(
+            &styles.border_left_width,
+            styles.font_size,
+            root_font_size,
+            _viewport_width,
+        ),
+        right: convert_length_unit(
+            &styles.border_right_width,
+            styles.font_size,
+            root_font_size,
+            _viewport_width,
+        ),
+        top: convert_length_unit(
+            &styles.border_top_width,
+            styles.font_size,
+            root_font_size,
+            _viewport_width,
+        ),
+        bottom: convert_length_unit(
+            &styles.border_bottom_width,
+            styles.font_size,
+            root_font_size,
+            _viewport_width,
+        ),
     };
 
     // Flexbox properties - also applies to tables mapped to flex
-    if matches!(styles.display,
-        style::Display::Flex | style::Display::InlineFlex |
-        style::Display::Table | style::Display::TableHeaderGroup | style::Display::TableRowGroup | style::Display::TableFooterGroup |
-        style::Display::TableRow
+    if matches!(
+        styles.display,
+        style::Display::Flex
+            | style::Display::InlineFlex
+            | style::Display::Table
+            | style::Display::TableHeaderGroup
+            | style::Display::TableRowGroup
+            | style::Display::TableFooterGroup
+            | style::Display::TableRow
     ) {
         style.flex_direction = match styles.flex_direction {
             style::FlexDirection::Row => taffy::FlexDirection::Row,
@@ -523,8 +669,18 @@ fn convert_to_taffy_style(styles: &style::ComputedStyles, root_font_size: f32, _
         });
 
         // Flexbox gap (same as grid gap)
-        let gap_width = convert_length_unit(&styles.grid_column_gap, styles.font_size, root_font_size, _viewport_width);
-        let gap_height = convert_length_unit(&styles.grid_row_gap, styles.font_size, root_font_size, _viewport_width);
+        let gap_width = convert_length_unit(
+            &styles.grid_column_gap,
+            styles.font_size,
+            root_font_size,
+            _viewport_width,
+        );
+        let gap_height = convert_length_unit(
+            &styles.grid_row_gap,
+            styles.font_size,
+            root_font_size,
+            _viewport_width,
+        );
 
         style.gap = Size {
             width: gap_width,
@@ -534,7 +690,13 @@ fn convert_to_taffy_style(styles: &style::ComputedStyles, root_font_size: f32, _
 
     // CRITICAL: Override flex properties for table elements after CSS processing
     // Table rows need specific flex behavior that overrides CSS values
-    if matches!(styles.display, style::Display::Table | style::Display::TableHeaderGroup | style::Display::TableRowGroup | style::Display::TableFooterGroup) {
+    if matches!(
+        styles.display,
+        style::Display::Table
+            | style::Display::TableHeaderGroup
+            | style::Display::TableRowGroup
+            | style::Display::TableFooterGroup
+    ) {
         style.flex_direction = taffy::FlexDirection::Column; // Stack rows vertically
         style.flex_wrap = taffy::FlexWrap::NoWrap;
     } else if matches!(styles.display, style::Display::TableRow) {
@@ -554,93 +716,111 @@ fn convert_to_taffy_style(styles: &style::ComputedStyles, root_font_size: f32, _
     style.flex_shrink = styles.flex_shrink;
     style.flex_basis = match &styles.flex_basis {
         style::FlexBasis::Auto => Dimension::auto(),
-        style::FlexBasis::Length(len) => Dimension::length(len.to_px(styles.font_size, root_font_size)),
+        style::FlexBasis::Length(len) => {
+            Dimension::length(len.to_px(styles.font_size, root_font_size))
+        }
     };
 
     // Grid properties
-    if matches!(styles.display, style::Display::Grid | style::Display::InlineGrid) {
-        use taffy::{GridTemplateComponent, MinMax as TaffyMinMax, MinTrackSizingFunction, MaxTrackSizingFunction};
+    if matches!(
+        styles.display,
+        style::Display::Grid | style::Display::InlineGrid
+    ) {
+        use taffy::{
+            GridTemplateComponent, MaxTrackSizingFunction, MinMax as TaffyMinMax,
+            MinTrackSizingFunction,
+        };
 
         // Convert grid template columns
         if !styles.grid_template_columns.is_empty() {
-            style.grid_template_columns = styles.grid_template_columns.iter().map(|track| {
-                let sizing_function = match track {
-                    style::GridTrack::Length(len) => {
-                        let px = len.to_px(styles.font_size, root_font_size);
-                        TaffyMinMax {
-                            min: MinTrackSizingFunction::length(px),
-                            max: MaxTrackSizingFunction::length(px)
+            style.grid_template_columns = styles
+                .grid_template_columns
+                .iter()
+                .map(|track| {
+                    let sizing_function = match track {
+                        style::GridTrack::Length(len) => {
+                            let px = len.to_px(styles.font_size, root_font_size);
+                            TaffyMinMax {
+                                min: MinTrackSizingFunction::length(px),
+                                max: MaxTrackSizingFunction::length(px),
+                            }
                         }
-                    }
-                    style::GridTrack::Fr(fr) => {
-                        TaffyMinMax {
+                        style::GridTrack::Fr(fr) => TaffyMinMax {
                             min: MinTrackSizingFunction::AUTO,
-                            max: MaxTrackSizingFunction::fr(*fr)
-                        }
-                    }
-                    style::GridTrack::Auto => {
-                        TaffyMinMax {
+                            max: MaxTrackSizingFunction::fr(*fr),
+                        },
+                        style::GridTrack::Auto => TaffyMinMax {
                             min: MinTrackSizingFunction::AUTO,
-                            max: MaxTrackSizingFunction::AUTO
+                            max: MaxTrackSizingFunction::AUTO,
+                        },
+                        style::GridTrack::MinMax(_, _) => {
+                            // TODO: Handle MinMax properly
+                            TaffyMinMax {
+                                min: MinTrackSizingFunction::AUTO,
+                                max: MaxTrackSizingFunction::AUTO,
+                            }
                         }
-                    }
-                    style::GridTrack::MinMax(_, _) => {
-                        // TODO: Handle MinMax properly
-                        TaffyMinMax {
-                            min: MinTrackSizingFunction::AUTO,
-                            max: MaxTrackSizingFunction::AUTO
-                        }
-                    }
-                };
-                GridTemplateComponent::Single(sizing_function)
-            }).collect();
+                    };
+                    GridTemplateComponent::Single(sizing_function)
+                })
+                .collect();
         }
 
         // Convert grid template rows
         if !styles.grid_template_rows.is_empty() {
-            style.grid_template_rows = styles.grid_template_rows.iter().map(|track| {
-                let sizing_function = match track {
-                    style::GridTrack::Length(len) => {
-                        let px = len.to_px(styles.font_size, root_font_size);
-                        TaffyMinMax {
-                            min: MinTrackSizingFunction::length(px),
-                            max: MaxTrackSizingFunction::length(px)
+            style.grid_template_rows = styles
+                .grid_template_rows
+                .iter()
+                .map(|track| {
+                    let sizing_function = match track {
+                        style::GridTrack::Length(len) => {
+                            let px = len.to_px(styles.font_size, root_font_size);
+                            TaffyMinMax {
+                                min: MinTrackSizingFunction::length(px),
+                                max: MaxTrackSizingFunction::length(px),
+                            }
                         }
-                    }
-                    style::GridTrack::Fr(fr) => {
-                        TaffyMinMax {
+                        style::GridTrack::Fr(fr) => TaffyMinMax {
                             min: MinTrackSizingFunction::AUTO,
-                            max: MaxTrackSizingFunction::fr(*fr)
-                        }
-                    }
-                    style::GridTrack::Auto => {
-                        TaffyMinMax {
+                            max: MaxTrackSizingFunction::fr(*fr),
+                        },
+                        style::GridTrack::Auto => TaffyMinMax {
                             min: MinTrackSizingFunction::AUTO,
-                            max: MaxTrackSizingFunction::AUTO
+                            max: MaxTrackSizingFunction::AUTO,
+                        },
+                        style::GridTrack::MinMax(_, _) => {
+                            // TODO: Handle MinMax properly
+                            TaffyMinMax {
+                                min: MinTrackSizingFunction::AUTO,
+                                max: MaxTrackSizingFunction::AUTO,
+                            }
                         }
-                    }
-                    style::GridTrack::MinMax(_, _) => {
-                        // TODO: Handle MinMax properly
-                        TaffyMinMax {
-                            min: MinTrackSizingFunction::AUTO,
-                            max: MaxTrackSizingFunction::AUTO
-                        }
-                    }
-                };
-                GridTemplateComponent::Single(sizing_function)
-            }).collect();
+                    };
+                    GridTemplateComponent::Single(sizing_function)
+                })
+                .collect();
         }
 
         // Grid gaps
         style.gap = Size {
-            width: convert_length_unit(&styles.grid_column_gap, styles.font_size, root_font_size, _viewport_width),
-            height: convert_length_unit(&styles.grid_row_gap, styles.font_size, root_font_size, _viewport_width),
+            width: convert_length_unit(
+                &styles.grid_column_gap,
+                styles.font_size,
+                root_font_size,
+                _viewport_width,
+            ),
+            height: convert_length_unit(
+                &styles.grid_row_gap,
+                styles.font_size,
+                root_font_size,
+                _viewport_width,
+            ),
         };
     }
 
     // Grid child placement (grid-column, grid-row)
     // Apply regardless of parent display type - Taffy will use it if parent is grid
-    use taffy::{GridPlacement, style_helpers::TaffyGridLine};
+    use taffy::{style_helpers::TaffyGridLine, GridPlacement};
 
     // Set grid column if either start or end is explicitly set
     // Note: grid_column_start can be 0 (first column), so we check if end != 0 to detect explicit placement
@@ -691,16 +871,22 @@ fn convert_to_taffy_style(styles: &style::ComputedStyles, root_font_size: f32, _
     // Position offsets
     if styles.position != style::Position::Static {
         if let Some(top) = &styles.top {
-            style.inset.top = convert_length_unit(top, styles.font_size, root_font_size, _viewport_width).into();
+            style.inset.top =
+                convert_length_unit(top, styles.font_size, root_font_size, _viewport_width).into();
         }
         if let Some(right) = &styles.right {
-            style.inset.right = convert_length_unit(right, styles.font_size, root_font_size, _viewport_width).into();
+            style.inset.right =
+                convert_length_unit(right, styles.font_size, root_font_size, _viewport_width)
+                    .into();
         }
         if let Some(bottom) = &styles.bottom {
-            style.inset.bottom = convert_length_unit(bottom, styles.font_size, root_font_size, _viewport_width).into();
+            style.inset.bottom =
+                convert_length_unit(bottom, styles.font_size, root_font_size, _viewport_width)
+                    .into();
         }
         if let Some(left) = &styles.left {
-            style.inset.left = convert_length_unit(left, styles.font_size, root_font_size, _viewport_width).into();
+            style.inset.left =
+                convert_length_unit(left, styles.font_size, root_font_size, _viewport_width).into();
         }
     }
 
@@ -721,15 +907,13 @@ fn convert_dimension(
     _viewport_width: f32,
 ) -> Dimension {
     match opt_len {
-        Some(len) => {
-            match len.unit {
-                LengthUnit::Percent => Dimension::percent(len.value / 100.0),
-                _ => {
-                    let px = len.to_px(font_size, root_font_size);
-                    Dimension::length(px)
-                }
+        Some(len) => match len.unit {
+            LengthUnit::Percent => Dimension::percent(len.value / 100.0),
+            _ => {
+                let px = len.to_px(font_size, root_font_size);
+                Dimension::length(px)
             }
-        }
+        },
         None => Dimension::auto(),
     }
 }
@@ -787,12 +971,17 @@ fn extract_layout(
     let border_top = styles.border_top_width.to_px(styles.font_size, 16.0);
     let border_bottom = styles.border_bottom_width.to_px(styles.font_size, 16.0);
 
-    let content_width = (width - padding_left - padding_right - border_left - border_right).max(0.0);
-    let content_height = (height - padding_top - padding_bottom - border_top - border_bottom).max(0.0);
+    let content_width =
+        (width - padding_left - padding_right - border_left - border_right).max(0.0);
+    let content_height =
+        (height - padding_top - padding_bottom - border_top - border_bottom).max(0.0);
 
     // Extract children layouts
-    let taffy_children = taffy.children(node).ok().map(|c| c.to_vec()).unwrap_or_default();
-
+    let taffy_children = taffy
+        .children(node)
+        .ok()
+        .map(|c| c.to_vec())
+        .unwrap_or_default();
 
     // Collect text from text node children AND inline element children
     // Inline elements (a, span, em, strong, etc.) should have their text collected into the parent block
@@ -802,19 +991,30 @@ fn extract_layout(
     // Check if this node is a flex or grid container
     let is_flex_or_grid = matches!(
         styles.display,
-        style::Display::Flex | style::Display::InlineFlex | style::Display::Grid | style::Display::InlineGrid |
-        style::Display::Table | style::Display::TableRow  // Table elements become flex containers
+        style::Display::Flex
+            | style::Display::InlineFlex
+            | style::Display::Grid
+            | style::Display::InlineGrid
+            | style::Display::Table
+            | style::Display::TableRow // Table elements become flex containers
     );
 
     if let Some(tag) = styled_node.node.tag_name() {
         if tag == "tr" {
-            eprintln!("DEBUG: Table row - display: {:?}, is_flex_or_grid: {}", styles.display, is_flex_or_grid);
+            eprintln!(
+                "DEBUG: Table row - display: {:?}, is_flex_or_grid: {}",
+                styles.display, is_flex_or_grid
+            );
         }
     }
 
     // Recursively collect text from direct text nodes AND inline element children
     // BUT: don't collect from inline children if this is a flex/grid container
-    fn collect_inline_text(node: &style::StyledNode, text: &mut String, parent_is_flex_or_grid: bool) -> bool {
+    fn collect_inline_text(
+        node: &style::StyledNode,
+        text: &mut String,
+        parent_is_flex_or_grid: bool,
+    ) -> bool {
         let mut has_text = false;
 
         for child in &node.children {
@@ -839,7 +1039,10 @@ fn extract_layout(
                         }
                     }
                 }
-            } else if matches!(child.styles.display, style::Display::Inline | style::Display::InlineBlock) {
+            } else if matches!(
+                child.styles.display,
+                style::Display::Inline | style::Display::InlineBlock
+            ) {
                 // Only collect inline children as text if parent is NOT flex/grid
                 // In flex/grid, inline children become flex/grid items
                 if !parent_is_flex_or_grid {
@@ -866,14 +1069,19 @@ fn extract_layout(
     }
 
     // Table cells should always collect text, regardless of parent being flex
-    let should_collect_text = !is_flex_or_grid || matches!(styles.display, style::Display::TableCell);
+    let should_collect_text =
+        !is_flex_or_grid || matches!(styles.display, style::Display::TableCell);
     // For table cells, always treat as non-flex parent so inline children are collected as text
     let parent_is_flex_for_collection = if matches!(styles.display, style::Display::TableCell) {
-        false  // Table cells collect inline children as text
+        false // Table cells collect inline children as text
     } else {
         !should_collect_text
     };
-    has_text_children = collect_inline_text(styled_node, &mut collected_text, parent_is_flex_for_collection);
+    has_text_children = collect_inline_text(
+        styled_node,
+        &mut collected_text,
+        parent_is_flex_for_collection,
+    );
 
     // CRITICAL FIX: Force vote arrow content in extract_layout phase
     if styled_node.node.has_class("votelinks") {
@@ -917,20 +1125,32 @@ fn extract_layout(
         if has_nav {
             collected_text = nav_text;
             has_text_children = true;
-            eprintln!("DEBUG: Extract phase - Found header navigation cell, forcing content: '{}'", collected_text);
+            eprintln!(
+                "DEBUG: Extract phase - Found header navigation cell, forcing content: '{}'",
+                collected_text
+            );
         }
     }
 
     // Debug table cell text collection and header navigation text
     if matches!(styles.display, style::Display::TableCell) {
-        eprintln!("DEBUG: Table cell text collection - has_text: {}, text: '{}'", has_text_children, collected_text);
+        eprintln!(
+            "DEBUG: Table cell text collection - has_text: {}, text: '{}'",
+            has_text_children, collected_text
+        );
     }
 
     // Debug header navigation text collection
-    if styled_node.node.has_class("pagetop") || styled_node.node.has_class("hnname") ||
-       (styled_node.node.tag_name() == Some("a") && collected_text.contains("new")) {
-        eprintln!("DEBUG: Header navigation text collection - class: {:?}, tag: {:?}, text: '{}'",
-                 styled_node.node.get_attribute("class"), styled_node.node.tag_name(), collected_text);
+    if styled_node.node.has_class("pagetop")
+        || styled_node.node.has_class("hnname")
+        || (styled_node.node.tag_name() == Some("a") && collected_text.contains("new"))
+    {
+        eprintln!(
+            "DEBUG: Header navigation text collection - class: {:?}, tag: {:?}, text: '{}'",
+            styled_node.node.get_attribute("class"),
+            styled_node.node.tag_name(),
+            collected_text
+        );
     }
 
     // Build layout boxes for children
