@@ -77,7 +77,13 @@ impl Renderer {
     }
 
     /// Renders HTML to PNG with viewport and optional scroll offset
-    pub fn render_to_png_with_scroll(&self, html: &str, width: u32, height: u32, scroll_y: u32) -> Result<Vec<u8>> {
+    pub fn render_to_png_with_scroll(
+        &self,
+        html: &str,
+        width: u32,
+        height: u32,
+        scroll_y: u32,
+    ) -> Result<Vec<u8>> {
         let options = RenderOptions {
             format: ImageFormat::Png,
             background_color: self.background_color,
@@ -87,20 +93,49 @@ impl Renderer {
     }
 
     /// Renders HTML to PNG with viewport, scroll offset, and base URL for resolving relative image paths
-    pub fn render_to_png_with_scroll_and_base_url(&self, html: &str, width: u32, height: u32, scroll_y: u32, base_url: String) -> Result<Vec<u8>> {
+    pub fn render_to_png_with_scroll_and_base_url(
+        &self,
+        html: &str,
+        width: u32,
+        height: u32,
+        scroll_y: u32,
+        base_url: String,
+    ) -> Result<Vec<u8>> {
         let options = RenderOptions {
             format: ImageFormat::Png,
             background_color: self.background_color,
         };
 
-        self.render_with_size_scroll_and_base_url(html, width, height, scroll_y, options, Some(base_url))
+        self.render_with_size_scroll_and_base_url(
+            html,
+            width,
+            height,
+            scroll_y,
+            options,
+            Some(base_url),
+        )
     }
 
-    fn render_with_size_and_scroll(&self, html: &str, width: u32, height: u32, scroll_y: u32, options: RenderOptions) -> Result<Vec<u8>> {
+    fn render_with_size_and_scroll(
+        &self,
+        html: &str,
+        width: u32,
+        height: u32,
+        scroll_y: u32,
+        options: RenderOptions,
+    ) -> Result<Vec<u8>> {
         self.render_with_size_scroll_and_base_url(html, width, height, scroll_y, options, None)
     }
 
-    fn render_with_size_scroll_and_base_url(&self, html: &str, width: u32, height: u32, scroll_y: u32, options: RenderOptions, base_url: Option<String>) -> Result<Vec<u8>> {
+    fn render_with_size_scroll_and_base_url(
+        &self,
+        html: &str,
+        width: u32,
+        height: u32,
+        scroll_y: u32,
+        options: RenderOptions,
+        base_url: Option<String>,
+    ) -> Result<Vec<u8>> {
         if width == 0 || height == 0 {
             return Err(Error::InvalidDimensions(width, height));
         }
@@ -119,7 +154,14 @@ impl Renderer {
         let layout_tree = layout::compute_layout(&styled_tree, width as f32, full_height);
 
         // Paint to pixmap with scroll offset and base URL for image resolution
-        let pixmap = paint::paint_with_scroll(&layout_tree.root, width, height, scroll_y, options.background_color, base_url)?;
+        let pixmap = paint::paint_with_scroll(
+            &layout_tree.root,
+            width,
+            height,
+            scroll_y,
+            options.background_color,
+            base_url,
+        )?;
 
         // Encode to image format
         let image_data = image_output::encode_image(&pixmap, options.format)?;
@@ -127,7 +169,13 @@ impl Renderer {
         Ok(image_data)
     }
 
-    pub fn render_to_jpeg(&self, html: &str, width: u32, height: u32, quality: u8) -> Result<Vec<u8>> {
+    pub fn render_to_jpeg(
+        &self,
+        html: &str,
+        width: u32,
+        height: u32,
+        quality: u8,
+    ) -> Result<Vec<u8>> {
         let options = RenderOptions {
             format: ImageFormat::Jpeg(quality),
             background_color: self.background_color,
@@ -136,7 +184,13 @@ impl Renderer {
         self.render_with_size(html, width, height, options)
     }
 
-    pub fn render_to_webp(&self, html: &str, width: u32, height: u32, quality: u8) -> Result<Vec<u8>> {
+    pub fn render_to_webp(
+        &self,
+        html: &str,
+        width: u32,
+        height: u32,
+        quality: u8,
+    ) -> Result<Vec<u8>> {
         let options = RenderOptions {
             format: ImageFormat::WebP(quality),
             background_color: self.background_color,
@@ -153,7 +207,13 @@ impl Renderer {
         self.render_with_size(html, self.viewport_width, self.viewport_height, options)
     }
 
-    fn render_with_size(&self, html: &str, width: u32, height: u32, options: RenderOptions) -> Result<Vec<u8>> {
+    fn render_with_size(
+        &self,
+        html: &str,
+        width: u32,
+        height: u32,
+        options: RenderOptions,
+    ) -> Result<Vec<u8>> {
         if width == 0 || height == 0 {
             return Err(Error::InvalidDimensions(width, height));
         }
@@ -241,7 +301,9 @@ fn calculate_content_height(layout_box: &layout::LayoutBox) -> f32 {
     // Calculate the maximum y + height from this box and all its children
     let box_bottom = layout_box.y + layout_box.height;
 
-    let children_bottom = layout_box.children.iter()
+    let children_bottom = layout_box
+        .children
+        .iter()
         .map(|child| calculate_content_height(child))
         .fold(box_bottom, f32::max);
 

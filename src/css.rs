@@ -1,12 +1,12 @@
 use crate::error::Result;
-use cssparser::{Parser, ParserInput, Token, ParseError, ToCss};
+use cssparser::{ParseError, Parser, ParserInput, ToCss, Token};
 use selectors::parser::{SelectorList, SelectorParseErrorKind};
 use selectors::Element;
 use std::fmt;
 
 // Re-export selectors types we use
-pub use selectors::parser::SelectorImpl;
 pub use selectors::matching::matches_selector;
+pub use selectors::parser::SelectorImpl;
 
 /// Wrapper for String that implements ToCss
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
@@ -99,7 +99,10 @@ impl selectors::parser::NonTSPseudoClass for PseudoClass {
     }
 
     fn is_user_action_state(&self) -> bool {
-        matches!(self, PseudoClass::Hover | PseudoClass::Active | PseudoClass::Focus)
+        matches!(
+            self,
+            PseudoClass::Hover | PseudoClass::Active | PseudoClass::Focus
+        )
     }
 }
 
@@ -183,13 +186,8 @@ pub enum PropertyValue {
     BoxShadow(Vec<BoxShadow>),
     TextShadow(Vec<TextShadow>),
     Transform(Vec<Transform>),
-    LinearGradient {
-        angle: f32,
-        stops: Vec<ColorStop>,
-    },
-    RadialGradient {
-        stops: Vec<ColorStop>,
-    },
+    LinearGradient { angle: f32, stops: Vec<ColorStop> },
+    RadialGradient { stops: Vec<ColorStop> },
 }
 
 /// Color representation
@@ -202,9 +200,24 @@ pub struct Color {
 }
 
 impl Color {
-    pub const TRANSPARENT: Self = Self { r: 0, g: 0, b: 0, a: 0 };
-    pub const WHITE: Self = Self { r: 255, g: 255, b: 255, a: 255 };
-    pub const BLACK: Self = Self { r: 0, g: 0, b: 0, a: 255 };
+    pub const TRANSPARENT: Self = Self {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    };
+    pub const WHITE: Self = Self {
+        r: 255,
+        g: 255,
+        b: 255,
+        a: 255,
+    };
+    pub const BLACK: Self = Self {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 255,
+    };
 
     pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self { r, g, b, a }
@@ -215,7 +228,12 @@ impl Color {
     }
 
     pub const fn transparent() -> Self {
-        Self { r: 0, g: 0, b: 0, a: 0 }
+        Self {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0,
+        }
     }
 
     pub const fn black() -> Self {
@@ -284,7 +302,7 @@ impl Length {
             LengthUnit::Rem => self.value * root_font_size,
             LengthUnit::Percent => self.value, // Caller handles percentage context
             LengthUnit::Vw => self.value * 12.0, // Simplified
-            LengthUnit::Vh => self.value * 8.0,  // Simplified
+            LengthUnit::Vh => self.value * 8.0, // Simplified
             LengthUnit::Pt => self.value * 1.333,
             LengthUnit::Cm => self.value * 37.795,
             LengthUnit::Mm => self.value * 3.7795,
@@ -354,7 +372,9 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
             "link" => Ok(PseudoClass::Link),
             "visited" => Ok(PseudoClass::Visited),
             _ => Err(ParseError {
-                kind: cssparser::ParseErrorKind::Basic(cssparser::BasicParseErrorKind::UnexpectedToken(Token::Ident(name))),
+                kind: cssparser::ParseErrorKind::Basic(
+                    cssparser::BasicParseErrorKind::UnexpectedToken(Token::Ident(name)),
+                ),
                 location: _location,
             }),
         }
@@ -369,17 +389,23 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
         match &*name {
             "nth-child" => {
                 let (a, b) = parse_nth(parser).map_err(|_| {
-                    parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone()))
+                    parser.new_custom_error(
+                        SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone()),
+                    )
                 })?;
                 Ok(PseudoClass::NthChild(a, b))
             }
             "nth-last-child" => {
                 let (a, b) = parse_nth(parser).map_err(|_| {
-                    parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone()))
+                    parser.new_custom_error(
+                        SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone()),
+                    )
                 })?;
                 Ok(PseudoClass::NthLastChild(a, b))
             }
-            _ => Err(parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name))),
+            _ => Err(parser.new_custom_error(
+                SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name),
+            )),
         }
     }
 
@@ -392,7 +418,9 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
             "before" => Ok(PseudoElement::Before),
             "after" => Ok(PseudoElement::After),
             _ => Err(ParseError {
-                kind: cssparser::ParseErrorKind::Basic(cssparser::BasicParseErrorKind::UnexpectedToken(Token::Ident(name))),
+                kind: cssparser::ParseErrorKind::Basic(
+                    cssparser::BasicParseErrorKind::UnexpectedToken(Token::Ident(name)),
+                ),
                 location: _location,
             }),
         }
@@ -405,12 +433,16 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
 }
 
 /// Parse nth-child/nth-last-child expressions
-fn parse_nth<'i, 't>(parser: &mut Parser<'i, 't>) -> std::result::Result<(i32, i32), ParseError<'i, ()>> {
+fn parse_nth<'i, 't>(
+    parser: &mut Parser<'i, 't>,
+) -> std::result::Result<(i32, i32), ParseError<'i, ()>> {
     // Simplified: just handle numbers and "odd"/"even"
     let location = parser.current_source_location();
     let token = parser.next()?.clone();
     match &token {
-        Token::Number { int_value: Some(b), .. } => {
+        Token::Number {
+            int_value: Some(b), ..
+        } => {
             // Just a number: 0n+b
             Ok((0, *b))
         }
@@ -579,13 +611,14 @@ pub fn parse_stylesheet(css: &str) -> Result<StyleSheet> {
             Ok(Some(rule)) => {
                 rules.push(rule);
             }
-            Ok(None) => {}, // Comment or unknown at-rule, skip
+            Ok(None) => {} // Comment or unknown at-rule, skip
             Err(e) => {
                 eprintln!("CSS parse error: {:?}", e);
                 // Try to recover by skipping to next rule
                 while !parser.is_exhausted() {
                     if let Ok(Token::CurlyBracketBlock) = parser.next() {
-                        let _: std::result::Result<(), ParseError<()>> = parser.parse_nested_block(|_| { Ok(()) });
+                        let _: std::result::Result<(), ParseError<()>> =
+                            parser.parse_nested_block(|_| Ok(()));
                         break;
                     }
                 }
@@ -597,16 +630,18 @@ pub fn parse_stylesheet(css: &str) -> Result<StyleSheet> {
 }
 
 /// Parse a single CSS rule
-fn parse_rule<'i, 't>(parser: &mut Parser<'i, 't>) -> std::result::Result<Option<StyleRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+fn parse_rule<'i, 't>(
+    parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Option<StyleRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
     parser.skip_whitespace();
 
     // Check for at-rules - use try_parse to avoid consuming token
-    let is_at_rule = parser.try_parse(|p| {
-        match p.next_including_whitespace()? {
+    let is_at_rule = parser
+        .try_parse(|p| match p.next_including_whitespace()? {
             Token::AtKeyword(_) => Ok(()),
             _ => Err(p.new_error_for_next_token::<()>()),
-        }
-    }).is_ok();
+        })
+        .is_ok();
 
     if is_at_rule {
         // Peek at the @-rule keyword
@@ -649,14 +684,25 @@ fn parse_rule<'i, 't>(parser: &mut Parser<'i, 't>) -> std::result::Result<Option
     }
 
     // Parse selectors - only parse until we hit the opening curly brace
-    let selectors = parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
-        SelectorList::parse(&PseudoClassParser, parser, selectors::parser::ParseRelative::No)
-    })?;
+    let selectors =
+        parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
+            SelectorList::parse(
+                &PseudoClassParser,
+                parser,
+                selectors::parser::ParseRelative::No,
+            )
+        })?;
 
     // Parse declaration block
-    parser.expect_curly_bracket_block().map_err(|_| parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected".into())))?;
+    parser.expect_curly_bracket_block().map_err(|_| {
+        parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected".into()))
+    })?;
     let declarations = parser.parse_nested_block(|parser| {
-        parse_declaration_list(parser).map_err(|_| parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("declaration".into())))
+        parse_declaration_list(parser).map_err(|_| {
+            parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+                "declaration".into(),
+            ))
+        })
     })?;
 
     Ok(Some(StyleRule {
@@ -666,7 +712,9 @@ fn parse_rule<'i, 't>(parser: &mut Parser<'i, 't>) -> std::result::Result<Option
 }
 
 /// Parse a list of declarations
-fn parse_declaration_list<'i, 't>(parser: &mut Parser<'i, 't>) -> std::result::Result<Vec<Declaration>, ParseError<'i, ()>> {
+fn parse_declaration_list<'i, 't>(
+    parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Vec<Declaration>, ParseError<'i, ()>> {
     let mut declarations = Vec::new();
 
     while !parser.is_exhausted() {
@@ -691,7 +739,10 @@ fn parse_declaration_list<'i, 't>(parser: &mut Parser<'i, 't>) -> std::result::R
             match parser.next() {
                 Ok(Token::Semicolon) | Err(_) => break,
                 Ok(Token::Delim('!')) => {
-                    if parser.try_parse(|p| p.expect_ident_matching("important")).is_ok() {
+                    if parser
+                        .try_parse(|p| p.expect_ident_matching("important"))
+                        .is_ok()
+                    {
                         important = true;
                     }
                     break;
@@ -715,7 +766,11 @@ fn parse_declaration_list<'i, 't>(parser: &mut Parser<'i, 't>) -> std::result::R
         // Slice from value_start to value_end (excludes the delimiter)
         let full_slice = parser.slice_from(value_start).trim();
         let value = if important {
-            full_slice.trim_end_matches("!important").trim_end().trim_end_matches(';').trim_end()
+            full_slice
+                .trim_end_matches("!important")
+                .trim_end()
+                .trim_end_matches(';')
+                .trim_end()
         } else {
             full_slice.trim_end_matches(';').trim_end()
         };
@@ -747,7 +802,17 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
     let value_str = value_str.trim_end_matches("!important").trim();
 
     // Try to parse as color first for color properties
-    if matches!(property, "color" | "background" | "background-color" | "border-color" | "border-top-color" | "border-right-color" | "border-bottom-color" | "border-left-color") {
+    if matches!(
+        property,
+        "color"
+            | "background"
+            | "background-color"
+            | "border-color"
+            | "border-top-color"
+            | "border-right-color"
+            | "border-bottom-color"
+            | "border-left-color"
+    ) {
         if let Ok(color) = csscolorparser::parse(value_str) {
             return Some(PropertyValue::Color(Color::rgb(
                 (color.r * 255.0) as u8,
@@ -769,7 +834,7 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
 
     // Check for percentage
     if value_str.ends_with('%') {
-        if let Ok(num) = value_str[..value_str.len()-1].parse::<f32>() {
+        if let Ok(num) = value_str[..value_str.len() - 1].parse::<f32>() {
             return Some(PropertyValue::Percentage(num));
         }
     }
@@ -808,7 +873,10 @@ fn parse_length(s: &str) -> Option<Length> {
     }
 
     if let Some(rest) = s.strip_suffix("pt") {
-        return rest.parse::<f32>().ok().map(|v| Length { value: v, unit: LengthUnit::Pt });
+        return rest.parse::<f32>().ok().map(|v| Length {
+            value: v,
+            unit: LengthUnit::Pt,
+        });
     }
 
     if let Some(rest) = s.strip_suffix("%") {
@@ -816,11 +884,17 @@ fn parse_length(s: &str) -> Option<Length> {
     }
 
     if let Some(rest) = s.strip_suffix("vw") {
-        return rest.parse::<f32>().ok().map(|v| Length { value: v, unit: LengthUnit::Vw });
+        return rest.parse::<f32>().ok().map(|v| Length {
+            value: v,
+            unit: LengthUnit::Vw,
+        });
     }
 
     if let Some(rest) = s.strip_suffix("vh") {
-        return rest.parse::<f32>().ok().map(|v| Length { value: v, unit: LengthUnit::Vh });
+        return rest.parse::<f32>().ok().map(|v| Length {
+            value: v,
+            unit: LengthUnit::Vh,
+        });
     }
 
     None

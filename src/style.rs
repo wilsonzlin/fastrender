@@ -1,7 +1,9 @@
-use crate::css::{self, Color, Declaration, Length, PropertyValue, StyleSheet, Transform, BoxShadow, TextShadow};
+use crate::css::{
+    self, BoxShadow, Color, Declaration, Length, PropertyValue, StyleSheet, TextShadow, Transform,
+};
 use crate::dom::{DomNode, ElementRef};
-use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
 use selectors::context::{QuirksMode, SelectorCaches};
+use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
 use std::collections::HashMap;
 
 // User-agent stylesheet
@@ -280,8 +282,13 @@ pub enum WhiteSpace {
 #[derive(Debug, Clone, PartialEq)]
 pub enum BackgroundImage {
     Url(String),
-    LinearGradient { angle: f32, stops: Vec<css::ColorStop> },
-    RadialGradient { stops: Vec<css::ColorStop> },
+    LinearGradient {
+        angle: f32,
+        stops: Vec<css::ColorStop>,
+    },
+    RadialGradient {
+        stops: Vec<css::ColorStop>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -476,7 +483,15 @@ fn apply_styles_internal(
     let children = node
         .children
         .iter()
-        .map(|child| apply_styles_internal_with_ancestors(child, stylesheet, &styles, root_font_size, &new_ancestors))
+        .map(|child| {
+            apply_styles_internal_with_ancestors(
+                child,
+                stylesheet,
+                &styles,
+                root_font_size,
+                &new_ancestors,
+            )
+        })
         .collect();
 
     StyledNode {
@@ -574,10 +589,22 @@ fn apply_styles_internal_with_ancestors(
         // Check if we're inside an article element (.5rem = 8px)
         let in_article = ancestors.iter().any(|a| a.tag_name() == Some("article"));
         if in_article {
-            styles.border_top_left_radius = Length { value: 8.0, unit: css::LengthUnit::Px };
-            styles.border_top_right_radius = Length { value: 8.0, unit: css::LengthUnit::Px };
-            styles.border_bottom_left_radius = Length { value: 8.0, unit: css::LengthUnit::Px };
-            styles.border_bottom_right_radius = Length { value: 8.0, unit: css::LengthUnit::Px };
+            styles.border_top_left_radius = Length {
+                value: 8.0,
+                unit: css::LengthUnit::Px,
+            };
+            styles.border_top_right_radius = Length {
+                value: 8.0,
+                unit: css::LengthUnit::Px,
+            };
+            styles.border_bottom_left_radius = Length {
+                value: 8.0,
+                unit: css::LengthUnit::Px,
+            };
+            styles.border_bottom_right_radius = Length {
+                value: 8.0,
+                unit: css::LengthUnit::Px,
+            };
         }
 
         // Check if we're inside banner-left (avatar image with border-radius: 50%)
@@ -585,37 +612,115 @@ fn apply_styles_internal_with_ancestors(
         if in_banner_left {
             // border-radius: 50% for circular avatar
             // Since the image is 2rem (32px) square, 50% = 16px radius
-            styles.border_top_left_radius = Length { value: 16.0, unit: css::LengthUnit::Px };
-            styles.border_top_right_radius = Length { value: 16.0, unit: css::LengthUnit::Px };
-            styles.border_bottom_left_radius = Length { value: 16.0, unit: css::LengthUnit::Px };
-            styles.border_bottom_right_radius = Length { value: 16.0, unit: css::LengthUnit::Px };
+            styles.border_top_left_radius = Length {
+                value: 16.0,
+                unit: css::LengthUnit::Px,
+            };
+            styles.border_top_right_radius = Length {
+                value: 16.0,
+                unit: css::LengthUnit::Px,
+            };
+            styles.border_bottom_left_radius = Length {
+                value: 16.0,
+                unit: css::LengthUnit::Px,
+            };
+            styles.border_bottom_right_radius = Length {
+                value: 16.0,
+                unit: css::LengthUnit::Px,
+            };
         }
     }
 
     // HACK: Style subscribe button - white background, blue border and text
     if node.has_class("subscribe-btn") {
-        styles.padding_top = Length { value: 6.0, unit: css::LengthUnit::Px }; // .375rem
-        styles.padding_right = Length { value: 12.0, unit: css::LengthUnit::Px }; // .75rem
-        styles.padding_bottom = Length { value: 6.0, unit: css::LengthUnit::Px };
-        styles.padding_left = Length { value: 12.0, unit: css::LengthUnit::Px };
-        styles.background_color = Color { r: 255, g: 255, b: 255, a: 255 }; // white background
-        styles.color = Color { r: 59, g: 130, b: 246, a: 255 }; // #3b82f6 blue text
-        styles.border_top_width = Length { value: 1.0, unit: css::LengthUnit::Px };
-        styles.border_right_width = Length { value: 1.0, unit: css::LengthUnit::Px };
-        styles.border_bottom_width = Length { value: 1.0, unit: css::LengthUnit::Px };
-        styles.border_left_width = Length { value: 1.0, unit: css::LengthUnit::Px };
-        styles.border_top_color = Color { r: 59, g: 130, b: 246, a: 255 }; // #3b82f6
-        styles.border_right_color = Color { r: 59, g: 130, b: 246, a: 255 };
-        styles.border_bottom_color = Color { r: 59, g: 130, b: 246, a: 255 };
-        styles.border_left_color = Color { r: 59, g: 130, b: 246, a: 255 };
+        styles.padding_top = Length {
+            value: 6.0,
+            unit: css::LengthUnit::Px,
+        }; // .375rem
+        styles.padding_right = Length {
+            value: 12.0,
+            unit: css::LengthUnit::Px,
+        }; // .75rem
+        styles.padding_bottom = Length {
+            value: 6.0,
+            unit: css::LengthUnit::Px,
+        };
+        styles.padding_left = Length {
+            value: 12.0,
+            unit: css::LengthUnit::Px,
+        };
+        styles.background_color = Color {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+        }; // white background
+        styles.color = Color {
+            r: 59,
+            g: 130,
+            b: 246,
+            a: 255,
+        }; // #3b82f6 blue text
+        styles.border_top_width = Length {
+            value: 1.0,
+            unit: css::LengthUnit::Px,
+        };
+        styles.border_right_width = Length {
+            value: 1.0,
+            unit: css::LengthUnit::Px,
+        };
+        styles.border_bottom_width = Length {
+            value: 1.0,
+            unit: css::LengthUnit::Px,
+        };
+        styles.border_left_width = Length {
+            value: 1.0,
+            unit: css::LengthUnit::Px,
+        };
+        styles.border_top_color = Color {
+            r: 59,
+            g: 130,
+            b: 246,
+            a: 255,
+        }; // #3b82f6
+        styles.border_right_color = Color {
+            r: 59,
+            g: 130,
+            b: 246,
+            a: 255,
+        };
+        styles.border_bottom_color = Color {
+            r: 59,
+            g: 130,
+            b: 246,
+            a: 255,
+        };
+        styles.border_left_color = Color {
+            r: 59,
+            g: 130,
+            b: 246,
+            a: 255,
+        };
         styles.border_top_style = BorderStyle::Solid;
         styles.border_right_style = BorderStyle::Solid;
         styles.border_bottom_style = BorderStyle::Solid;
         styles.border_left_style = BorderStyle::Solid;
-        styles.border_top_left_radius = Length { value: 4.0, unit: css::LengthUnit::Px }; // .25rem
-        styles.border_top_right_radius = Length { value: 4.0, unit: css::LengthUnit::Px };
-        styles.border_bottom_left_radius = Length { value: 4.0, unit: css::LengthUnit::Px };
-        styles.border_bottom_right_radius = Length { value: 4.0, unit: css::LengthUnit::Px };
+        styles.border_top_left_radius = Length {
+            value: 4.0,
+            unit: css::LengthUnit::Px,
+        }; // .25rem
+        styles.border_top_right_radius = Length {
+            value: 4.0,
+            unit: css::LengthUnit::Px,
+        };
+        styles.border_bottom_left_radius = Length {
+            value: 4.0,
+            unit: css::LengthUnit::Px,
+        };
+        styles.border_bottom_right_radius = Length {
+            value: 4.0,
+            unit: css::LengthUnit::Px,
+        };
     }
 
     // Recursively style children (passing current node in ancestors)
@@ -625,7 +730,15 @@ fn apply_styles_internal_with_ancestors(
     let mut children: Vec<StyledNode> = node
         .children
         .iter()
-        .map(|child| apply_styles_internal_with_ancestors(child, stylesheet, &styles, root_font_size, &new_ancestors))
+        .map(|child| {
+            apply_styles_internal_with_ancestors(
+                child,
+                stylesheet,
+                &styles,
+                root_font_size,
+                &new_ancestors,
+            )
+        })
         .collect();
 
     // HACK: Add ::before pseudo-element content for .toc elements
@@ -653,8 +766,16 @@ fn apply_styles_internal_with_ancestors(
         before_styles.display = Display::Block;
         before_styles.font_size = 12.0; // .75rem = 12px
         before_styles.font_weight = FontWeight::Bold;
-        before_styles.color = Color { r: 90, g: 90, b: 90, a: 255 }; // #5a5a5a (--color-text-muted)
-        before_styles.margin_bottom = Some(Length { value: 8.0, unit: css::LengthUnit::Px });
+        before_styles.color = Color {
+            r: 90,
+            g: 90,
+            b: 90,
+            a: 255,
+        }; // #5a5a5a (--color-text-muted)
+        before_styles.margin_bottom = Some(Length {
+            value: 8.0,
+            unit: css::LengthUnit::Px,
+        });
         before_styles.line_height = LineHeight::Normal;
 
         // Create styled text child
@@ -688,12 +809,10 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
     if let Some(tag) = node.tag_name() {
         styles.display = match tag {
             // Block-level elements
-            "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" |
-            "ul" | "ol" | "li" |
-            "blockquote" | "pre" | "article" | "section" | "nav" | "aside" |
-            "header" | "footer" | "main" | "figure" | "figcaption" |
-            "dl" | "dt" | "dd" | "form" | "fieldset" | "legend" |
-            "address" | "hr" | "center" => Display::Block,
+            "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol" | "li"
+            | "blockquote" | "pre" | "article" | "section" | "nav" | "aside" | "header"
+            | "footer" | "main" | "figure" | "figcaption" | "dl" | "dt" | "dd" | "form"
+            | "fieldset" | "legend" | "address" | "hr" | "center" => Display::Block,
 
             // Table elements
             "table" => Display::Table,
@@ -702,9 +821,10 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
             "thead" | "tbody" | "tfoot" => Display::TableRowGroup,
 
             // Inline elements (explicit for clarity, though it's the default)
-            "a" | "span" | "em" | "strong" | "code" | "b" | "i" |
-            "u" | "small" | "sub" | "sup" | "mark" | "abbr" | "cite" |
-            "q" | "kbd" | "samp" | "var" | "time" | "label" => Display::Inline,
+            "a" | "span" | "em" | "strong" | "code" | "b" | "i" | "u" | "small" | "sub" | "sup"
+            | "mark" | "abbr" | "cite" | "q" | "kbd" | "samp" | "var" | "time" | "label" => {
+                Display::Inline
+            }
 
             // Everything else defaults to inline
             _ => Display::Inline,
@@ -753,40 +873,76 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
         // CRITICAL FIX: Ensure header navigation is visible
         // HN CSS parse error prevents pagetop styling from being applied
         if node.has_class("pagetop") {
-            styles.font_family = vec!["Verdana".to_string(), "Geneva".to_string(), "sans-serif".to_string()];
+            styles.font_family = vec![
+                "Verdana".to_string(),
+                "Geneva".to_string(),
+                "sans-serif".to_string(),
+            ];
             styles.font_size = 10.0;
-            styles.color = Color { r: 34, g: 34, b: 34, a: 255 }; // #222222
-            styles.line_height = LineHeight::Length(Length { value: 12.0, unit: css::LengthUnit::Px });
+            styles.color = Color {
+                r: 34,
+                g: 34,
+                b: 34,
+                a: 255,
+            }; // #222222
+            styles.line_height = LineHeight::Length(Length {
+                value: 12.0,
+                unit: css::LengthUnit::Px,
+            });
         }
 
         // CRITICAL FIX: Ensure pagetop links are visible
         // Fix any CSS that might be hiding navigation links in header
         if matches!(node.tag_name(), Some("a")) {
             // For now, make all links visible
-            styles.color = Color { r: 34, g: 34, b: 34, a: 255 }; // #222222
+            styles.color = Color {
+                r: 34,
+                g: 34,
+                b: 34,
+                a: 255,
+            }; // #222222
             styles.display = Display::Inline;
         }
 
         // CRITICAL FIX: Ensure votearrow elements are visible with proper styling
         if node.has_class("votearrow") {
             styles.display = Display::Block;
-            styles.width = Some(Length { value: 10.0, unit: css::LengthUnit::Px });
-            styles.height = Some(Length { value: 10.0, unit: css::LengthUnit::Px });
-            styles.color = Color { r: 0, g: 0, b: 0, a: 255 }; // BLACK for visibility
+            styles.width = Some(Length {
+                value: 10.0,
+                unit: css::LengthUnit::Px,
+            });
+            styles.height = Some(Length {
+                value: 10.0,
+                unit: css::LengthUnit::Px,
+            });
+            styles.color = Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            }; // BLACK for visibility
             styles.font_size = 20.0; // LARGER for visibility
             styles.text_align = TextAlign::Center; // Center the vote arrow
         }
 
         // CRITICAL FIX: Ensure vote link cells have proper width
         if node.has_class("votelinks") {
-            styles.width = Some(Length { value: 30.0, unit: css::LengthUnit::Px }); // Wider for visibility
+            styles.width = Some(Length {
+                value: 30.0,
+                unit: css::LengthUnit::Px,
+            }); // Wider for visibility
             styles.text_align = TextAlign::Center; // Center content in vote column
         }
 
         // CRITICAL FIX: Ensure story rank numbers are visible
         if node.has_class("rank") {
             styles.display = Display::Block;
-            styles.color = Color { r: 0, g: 0, b: 0, a: 255 }; // Black text
+            styles.color = Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            }; // Black text
             styles.font_size = 10.0; // Small like HN
             styles.text_align = TextAlign::Right; // Right-align like HN
             eprintln!("DEBUG: Applied rank styling to rank element");
@@ -795,8 +951,13 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
         // CRITICAL FIX: Ensure rank column (title cell with rank content) has proper width
         if node.has_class("title") && node.tag_name() == Some("td") {
             // Check if this is the rank column by looking at its align attribute
-            if node.get_attribute("align").as_deref() == Some("right") && node.get_attribute("valign").as_deref() == Some("top") {
-                styles.width = Some(Length { value: 30.0, unit: css::LengthUnit::Px }); // Wide enough for rank numbers
+            if node.get_attribute("align").as_deref() == Some("right")
+                && node.get_attribute("valign").as_deref() == Some("top")
+            {
+                styles.width = Some(Length {
+                    value: 30.0,
+                    unit: css::LengthUnit::Px,
+                }); // Wide enough for rank numbers
                 styles.text_align = TextAlign::Right;
                 eprintln!("DEBUG: Applied rank column width to title cell with right alignment");
             }
@@ -805,15 +966,25 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
         // CRITICAL FIX: Ensure header navigation elements are visible and styled
         if node.has_class("pagetop") {
             styles.display = Display::Inline; // Keep inline so text is collected by parent table cell
-            styles.color = Color { r: 255, g: 255, b: 255, a: 255 }; // White text for orange header
+            styles.color = Color {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            }; // White text for orange header
             styles.font_size = 10.0; // Small navigation font
-            // Remove forced width/height so it remains inline
+                                     // Remove forced width/height so it remains inline
             eprintln!("DEBUG: Applied pagetop navigation styling as inline");
         }
 
         if node.has_class("hnname") {
             styles.display = Display::Inline; // Keep inline so text is collected by parent table cell
-            styles.color = Color { r: 255, g: 255, b: 255, a: 255 }; // White text
+            styles.color = Color {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            }; // White text
             styles.font_weight = crate::style::FontWeight::Bold;
             styles.font_size = 10.0;
             // Remove forced dimensions so it remains inline
@@ -825,11 +996,22 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
             if tag == "a" && node.get_attribute("href").is_some() {
                 // Check if this is a header navigation link by checking href patterns
                 if let Some(href) = node.get_attribute("href") {
-                    if href.contains("newest") || href.contains("front") || href.contains("newcomments") ||
-                       href.contains("ask") || href.contains("show") || href.contains("jobs") ||
-                       href.contains("submit") || href.contains("news") {
+                    if href.contains("newest")
+                        || href.contains("front")
+                        || href.contains("newcomments")
+                        || href.contains("ask")
+                        || href.contains("show")
+                        || href.contains("jobs")
+                        || href.contains("submit")
+                        || href.contains("news")
+                    {
                         styles.display = Display::Inline;
-                        styles.color = Color { r: 255, g: 255, b: 255, a: 255 }; // White text
+                        styles.color = Color {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                            a: 255,
+                        }; // White text
                         styles.font_size = 10.0;
                         eprintln!("DEBUG: Applied navigation link styling for href: {}", href);
                     }
@@ -846,14 +1028,20 @@ fn parse_dimension_attribute(dim_str: &str) -> Option<Length> {
 
     // Handle percentage like "85%"
     if dim_str.ends_with('%') {
-        if let Ok(value) = dim_str[..dim_str.len()-1].trim().parse::<f32>() {
-            return Some(Length { value, unit: css::LengthUnit::Percent });
+        if let Ok(value) = dim_str[..dim_str.len() - 1].trim().parse::<f32>() {
+            return Some(Length {
+                value,
+                unit: css::LengthUnit::Percent,
+            });
         }
     }
 
     // Handle pixels (just a number like "18")
     if let Ok(value) = dim_str.parse::<f32>() {
-        return Some(Length { value, unit: css::LengthUnit::Px });
+        return Some(Length {
+            value,
+            unit: css::LengthUnit::Px,
+        });
     }
 
     None
@@ -881,7 +1069,12 @@ fn parse_color_attribute(color_str: &str) -> Option<Color> {
                 u8::from_str_radix(&hex[2..3], 16),
             ) {
                 // Double each digit: #f60 -> #ff6600
-                return Some(Color { r: r * 17, g: g * 17, b: b * 17, a: 255 });
+                return Some(Color {
+                    r: r * 17,
+                    g: g * 17,
+                    b: b * 17,
+                    a: 255,
+                });
             }
         }
     }
@@ -914,11 +1107,18 @@ fn inherit_styles(styles: &mut ComputedStyles, parent: &ComputedStyles) {
 }
 
 /// Resolve var() references in a PropertyValue (with recursion limit)
-fn resolve_var(value: &PropertyValue, custom_properties: &HashMap<String, String>) -> PropertyValue {
+fn resolve_var(
+    value: &PropertyValue,
+    custom_properties: &HashMap<String, String>,
+) -> PropertyValue {
     resolve_var_with_depth(value, custom_properties, 0)
 }
 
-fn resolve_var_with_depth(value: &PropertyValue, custom_properties: &HashMap<String, String>, depth: usize) -> PropertyValue {
+fn resolve_var_with_depth(
+    value: &PropertyValue,
+    custom_properties: &HashMap<String, String>,
+    depth: usize,
+) -> PropertyValue {
     const MAX_DEPTH: usize = 10;
 
     if depth >= MAX_DEPTH {
@@ -928,14 +1128,17 @@ fn resolve_var_with_depth(value: &PropertyValue, custom_properties: &HashMap<Str
 
     match value {
         PropertyValue::Keyword(kw) => {
-
             // Check if it's a simple var() reference
-            if kw.starts_with("var(") && kw.ends_with(')') && !kw[4..kw.len()-1].contains("var(") {
-                let var_name = &kw[4..kw.len()-1]; // Extract variable name from var(...)
+            if kw.starts_with("var(") && kw.ends_with(')') && !kw[4..kw.len() - 1].contains("var(")
+            {
+                let var_name = &kw[4..kw.len() - 1]; // Extract variable name from var(...)
 
                 // Handle fallback values: var(--name, fallback)
                 let (var_name, fallback) = if let Some(comma_pos) = var_name.find(',') {
-                    (var_name[..comma_pos].trim(), Some(var_name[comma_pos+1..].trim()))
+                    (
+                        var_name[..comma_pos].trim(),
+                        Some(var_name[comma_pos + 1..].trim()),
+                    )
                 } else {
                     (var_name.trim(), None)
                 };
@@ -985,11 +1188,14 @@ fn resolve_var_with_depth(value: &PropertyValue, custom_properties: &HashMap<Str
 
                     // Extract the var call to avoid borrow issues
                     let var_call = resolved_str[start..=end].to_string();
-                    let var_name_full = var_call[4..var_call.len()-1].to_string();
+                    let var_name_full = var_call[4..var_call.len() - 1].to_string();
 
                     // Handle fallback
                     let (var_name, fallback) = if let Some(comma_pos) = var_name_full.find(',') {
-                        (var_name_full[..comma_pos].trim().to_string(), Some(var_name_full[comma_pos+1..].trim().to_string()))
+                        (
+                            var_name_full[..comma_pos].trim().to_string(),
+                            Some(var_name_full[comma_pos + 1..].trim().to_string()),
+                        )
                     } else {
                         (var_name_full.trim().to_string(), None)
                     };
@@ -1022,7 +1228,11 @@ fn parse_resolved_value(value: &str) -> Option<PropertyValue> {
     parse_property_value("", value)
 }
 
-fn find_matching_rules_with_ancestors(node: &DomNode, stylesheet: &StyleSheet, ancestors: &[&DomNode]) -> Vec<(u32, Vec<Declaration>)> {
+fn find_matching_rules_with_ancestors(
+    node: &DomNode,
+    stylesheet: &StyleSheet,
+    ancestors: &[&DomNode],
+) -> Vec<(u32, Vec<Declaration>)> {
     let mut matches = Vec::new();
 
     // Build ElementRef chain with proper parent links
@@ -1088,25 +1298,31 @@ fn apply_declaration(
             PropertyValue::Keyword(kw) => kw.clone(),
             PropertyValue::Length(len) => {
                 use crate::css::LengthUnit;
-                format!("{}{}", len.value, match len.unit {
-                    LengthUnit::Px => "px",
-                    LengthUnit::Em => "em",
-                    LengthUnit::Rem => "rem",
-                    LengthUnit::Percent => "%",
-                    LengthUnit::Pt => "pt",
-                    LengthUnit::Vw => "vw",
-                    LengthUnit::Vh => "vh",
-                    LengthUnit::Cm => "cm",
-                    LengthUnit::Mm => "mm",
-                    LengthUnit::In => "in",
-                })
-            },
+                format!(
+                    "{}{}",
+                    len.value,
+                    match len.unit {
+                        LengthUnit::Px => "px",
+                        LengthUnit::Em => "em",
+                        LengthUnit::Rem => "rem",
+                        LengthUnit::Percent => "%",
+                        LengthUnit::Pt => "pt",
+                        LengthUnit::Vw => "vw",
+                        LengthUnit::Vh => "vh",
+                        LengthUnit::Cm => "cm",
+                        LengthUnit::Mm => "mm",
+                        LengthUnit::In => "in",
+                    }
+                )
+            }
             PropertyValue::Number(n) => n.to_string(),
             PropertyValue::Percentage(p) => format!("{}%", p),
             PropertyValue::Color(c) => format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b),
             _ => return, // Skip other types for now
         };
-        styles.custom_properties.insert(decl.property.clone(), value_str);
+        styles
+            .custom_properties
+            .insert(decl.property.clone(), value_str);
         return;
     }
 
@@ -1171,8 +1387,13 @@ fn apply_declaration(
         // Margin
         "margin" => {
             if let Some(lengths) = extract_margin_values(&resolved_value) {
-                apply_margin_values(&mut styles.margin_top, &mut styles.margin_right,
-                               &mut styles.margin_bottom, &mut styles.margin_left, lengths);
+                apply_margin_values(
+                    &mut styles.margin_top,
+                    &mut styles.margin_right,
+                    &mut styles.margin_bottom,
+                    &mut styles.margin_left,
+                    lengths,
+                );
             }
         }
         "margin-top" => {
@@ -1191,8 +1412,13 @@ fn apply_declaration(
         // Padding
         "padding" => {
             if let Some(lengths) = extract_box_values(&resolved_value) {
-                apply_box_values(&mut styles.padding_top, &mut styles.padding_right,
-                               &mut styles.padding_bottom, &mut styles.padding_left, lengths);
+                apply_box_values(
+                    &mut styles.padding_top,
+                    &mut styles.padding_right,
+                    &mut styles.padding_bottom,
+                    &mut styles.padding_left,
+                    lengths,
+                );
             }
         }
         "padding-top" => {
@@ -1219,8 +1445,13 @@ fn apply_declaration(
         // Border width
         "border-width" => {
             if let Some(lengths) = extract_box_values(&resolved_value) {
-                apply_box_values(&mut styles.border_top_width, &mut styles.border_right_width,
-                               &mut styles.border_bottom_width, &mut styles.border_left_width, lengths);
+                apply_box_values(
+                    &mut styles.border_top_width,
+                    &mut styles.border_right_width,
+                    &mut styles.border_bottom_width,
+                    &mut styles.border_left_width,
+                    lengths,
+                );
             }
         }
         "border-top-width" => {
@@ -1503,7 +1734,8 @@ fn apply_declaration(
                     styles.grid_column_start = n;
                 } else {
                     // Store in grid_column_raw for deferred resolution
-                    let current_end = styles.grid_column_raw
+                    let current_end = styles
+                        .grid_column_raw
                         .as_ref()
                         .and_then(|s| s.split_once('/').map(|(_, e)| e.trim()))
                         .unwrap_or("auto");
@@ -1516,7 +1748,8 @@ fn apply_declaration(
                 if let Ok(n) = kw.parse::<i32>() {
                     styles.grid_column_end = n;
                 } else {
-                    let current_start = styles.grid_column_raw
+                    let current_start = styles
+                        .grid_column_raw
                         .as_ref()
                         .and_then(|s| s.split_once('/').map(|(s, _)| s.trim()))
                         .unwrap_or("auto");
@@ -1529,7 +1762,8 @@ fn apply_declaration(
                 if let Ok(n) = kw.parse::<i32>() {
                     styles.grid_row_start = n;
                 } else {
-                    let current_end = styles.grid_row_raw
+                    let current_end = styles
+                        .grid_row_raw
                         .as_ref()
                         .and_then(|s| s.split_once('/').map(|(_, e)| e.trim()))
                         .unwrap_or("auto");
@@ -1542,7 +1776,8 @@ fn apply_declaration(
                 if let Ok(n) = kw.parse::<i32>() {
                     styles.grid_row_end = n;
                 } else {
-                    let current_start = styles.grid_row_raw
+                    let current_start = styles
+                        .grid_row_raw
                         .as_ref()
                         .and_then(|s| s.split_once('/').map(|(s, _)| s.trim()))
                         .unwrap_or("auto");
@@ -1562,23 +1797,21 @@ fn apply_declaration(
                 styles.font_size = len.to_px(parent_font_size, root_font_size);
             }
         }
-        "font-weight" => {
-            match &resolved_value {
-                PropertyValue::Keyword(kw) => {
-                    styles.font_weight = match kw.as_str() {
-                        "normal" => FontWeight::Normal,
-                        "bold" => FontWeight::Bold,
-                        "lighter" => FontWeight::Weight(300),
-                        "bolder" => FontWeight::Weight(700),
-                        _ => styles.font_weight,
-                    };
-                }
-                PropertyValue::Number(n) => {
-                    styles.font_weight = FontWeight::Weight(*n as u16);
-                }
-                _ => {}
+        "font-weight" => match &resolved_value {
+            PropertyValue::Keyword(kw) => {
+                styles.font_weight = match kw.as_str() {
+                    "normal" => FontWeight::Normal,
+                    "bold" => FontWeight::Bold,
+                    "lighter" => FontWeight::Weight(300),
+                    "bolder" => FontWeight::Weight(700),
+                    _ => styles.font_weight,
+                };
             }
-        }
+            PropertyValue::Number(n) => {
+                styles.font_weight = FontWeight::Weight(*n as u16);
+            }
+            _ => {}
+        },
         "font-style" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.font_style = match kw.as_str() {
@@ -1589,20 +1822,18 @@ fn apply_declaration(
                 };
             }
         }
-        "line-height" => {
-            match &resolved_value {
-                PropertyValue::Keyword(kw) if kw == "normal" => {
-                    styles.line_height = LineHeight::Normal;
-                }
-                PropertyValue::Number(n) => {
-                    styles.line_height = LineHeight::Number(*n);
-                }
-                PropertyValue::Length(len) => {
-                    styles.line_height = LineHeight::Length(*len);
-                }
-                _ => {}
+        "line-height" => match &resolved_value {
+            PropertyValue::Keyword(kw) if kw == "normal" => {
+                styles.line_height = LineHeight::Normal;
             }
-        }
+            PropertyValue::Number(n) => {
+                styles.line_height = LineHeight::Number(*n);
+            }
+            PropertyValue::Length(len) => {
+                styles.line_height = LineHeight::Length(*len);
+            }
+            _ => {}
+        },
         "text-align" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.text_align = match kw.as_str() {
@@ -1672,46 +1903,43 @@ fn apply_declaration(
         }
 
         // Background
-        "background-image" => {
-            match &resolved_value {
-                PropertyValue::Url(url) => {
-                    styles.background_image = Some(BackgroundImage::Url(url.clone()));
-                }
-                PropertyValue::LinearGradient { angle, stops } => {
-                    styles.background_image = Some(BackgroundImage::LinearGradient {
-                        angle: *angle,
-                        stops: stops.clone(),
-                    });
-                }
-                PropertyValue::RadialGradient { stops } => {
-                    styles.background_image = Some(BackgroundImage::RadialGradient {
-                        stops: stops.clone(),
-                    });
-                }
-                PropertyValue::Keyword(kw) if kw == "none" => {
-                    styles.background_image = None;
-                }
-                _ => {}
+        "background-image" => match &resolved_value {
+            PropertyValue::Url(url) => {
+                styles.background_image = Some(BackgroundImage::Url(url.clone()));
             }
-        }
-        "background-size" => {
-            match &resolved_value {
-                PropertyValue::Keyword(kw) => {
-                    styles.background_size = match kw.as_str() {
-                        "auto" => BackgroundSize::Auto,
-                        "cover" => BackgroundSize::Cover,
-                        "contain" => BackgroundSize::Contain,
-                        _ => styles.background_size,
-                    };
-                }
-                PropertyValue::Multiple(values) if values.len() == 2 => {
-                    if let (Some(w), Some(h)) = (extract_length(&values[0]), extract_length(&values[1])) {
-                        styles.background_size = BackgroundSize::Length(w, h);
-                    }
-                }
-                _ => {}
+            PropertyValue::LinearGradient { angle, stops } => {
+                styles.background_image = Some(BackgroundImage::LinearGradient {
+                    angle: *angle,
+                    stops: stops.clone(),
+                });
             }
-        }
+            PropertyValue::RadialGradient { stops } => {
+                styles.background_image = Some(BackgroundImage::RadialGradient {
+                    stops: stops.clone(),
+                });
+            }
+            PropertyValue::Keyword(kw) if kw == "none" => {
+                styles.background_image = None;
+            }
+            _ => {}
+        },
+        "background-size" => match &resolved_value {
+            PropertyValue::Keyword(kw) => {
+                styles.background_size = match kw.as_str() {
+                    "auto" => BackgroundSize::Auto,
+                    "cover" => BackgroundSize::Cover,
+                    "contain" => BackgroundSize::Contain,
+                    _ => styles.background_size,
+                };
+            }
+            PropertyValue::Multiple(values) if values.len() == 2 => {
+                if let (Some(w), Some(h)) = (extract_length(&values[0]), extract_length(&values[1]))
+                {
+                    styles.background_size = BackgroundSize::Length(w, h);
+                }
+            }
+            _ => {}
+        },
         "background-repeat" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.background_repeat = match kw.as_str() {
@@ -1746,28 +1974,24 @@ fn apply_declaration(
                 styles.opacity = n.clamp(0.0, 1.0);
             }
         }
-        "box-shadow" => {
-            match &resolved_value {
-                PropertyValue::BoxShadow(shadows) => {
-                    styles.box_shadow = shadows.clone();
-                }
-                PropertyValue::Keyword(kw) if kw == "none" => {
-                    styles.box_shadow.clear();
-                }
-                _ => {}
+        "box-shadow" => match &resolved_value {
+            PropertyValue::BoxShadow(shadows) => {
+                styles.box_shadow = shadows.clone();
             }
-        }
-        "text-shadow" => {
-            match &resolved_value {
-                PropertyValue::TextShadow(shadows) => {
-                    styles.text_shadow = shadows.clone();
-                }
-                PropertyValue::Keyword(kw) if kw == "none" => {
-                    styles.text_shadow.clear();
-                }
-                _ => {}
+            PropertyValue::Keyword(kw) if kw == "none" => {
+                styles.box_shadow.clear();
             }
-        }
+            _ => {}
+        },
+        "text-shadow" => match &resolved_value {
+            PropertyValue::TextShadow(shadows) => {
+                styles.text_shadow = shadows.clone();
+            }
+            PropertyValue::Keyword(kw) if kw == "none" => {
+                styles.text_shadow.clear();
+            }
+            _ => {}
+        },
         "transform" => {
             if let PropertyValue::Transform(transforms) = &resolved_value {
                 styles.transform = transforms.clone();
@@ -1831,10 +2055,7 @@ fn extract_margin_values(value: &PropertyValue) -> Option<Vec<Option<Length>>> {
         PropertyValue::Length(len) => Some(vec![Some(*len)]),
         PropertyValue::Keyword(kw) if kw == "auto" => Some(vec![None]), // auto margins
         PropertyValue::Multiple(values) => {
-            let lengths: Vec<Option<Length>> = values
-                .iter()
-                .map(extract_length)
-                .collect();
+            let lengths: Vec<Option<Length>> = values.iter().map(extract_length).collect();
             if lengths.is_empty() {
                 None
             } else {
@@ -1849,10 +2070,7 @@ fn extract_box_values(value: &PropertyValue) -> Option<Vec<Length>> {
     match value {
         PropertyValue::Length(len) => Some(vec![*len]),
         PropertyValue::Multiple(values) => {
-            let lengths: Vec<Length> = values
-                .iter()
-                .filter_map(extract_length)
-                .collect();
+            let lengths: Vec<Length> = values.iter().filter_map(extract_length).collect();
             if lengths.is_empty() {
                 None
             } else {
@@ -1878,7 +2096,6 @@ fn parse_grid_tracks_with_names(tracks_str: &str) -> (Vec<GridTrack>, HashMap<St
     let mut current_token = String::new();
     let mut bracket_content = String::new();
 
-
     // Parse character by character to handle brackets, functions
     for ch in tracks_str.chars() {
         match ch {
@@ -1896,7 +2113,8 @@ fn parse_grid_tracks_with_names(tracks_str: &str) -> (Vec<GridTrack>, HashMap<St
                 // End of grid line name - store it
                 let line_position = tracks.len(); // Line is before this track
                 for name in bracket_content.split_whitespace() {
-                    named_lines.entry(name.to_string())
+                    named_lines
+                        .entry(name.to_string())
                         .or_insert_with(Vec::new)
                         .push(line_position);
                 }
@@ -2042,12 +2260,12 @@ fn process_track_token(token: &str, tracks: &mut Vec<GridTrack>) {
 
     // Check for repeat() function
     if token.starts_with("repeat(") && token.ends_with(')') {
-        let inner = &token[7..token.len()-1]; // Extract "3, 1fr" from "repeat(3, 1fr)"
+        let inner = &token[7..token.len() - 1]; // Extract "3, 1fr" from "repeat(3, 1fr)"
 
         // Split by comma to get count and pattern
         if let Some(comma_pos) = inner.find(',') {
             let count_str = inner[..comma_pos].trim();
-            let pattern_str = inner[comma_pos+1..].trim();
+            let pattern_str = inner[comma_pos + 1..].trim();
 
             if let Ok(count) = count_str.parse::<usize>() {
                 // Parse the pattern track
@@ -2104,11 +2322,9 @@ fn parse_single_grid_track(track_str: &str) -> Option<GridTrack> {
     }
 
     // Try to parse as length
-    if let Some(len) = crate::css::parse_property_value("", track_str).and_then(|pv| {
-        match pv {
-            PropertyValue::Length(l) => Some(l),
-            _ => None,
-        }
+    if let Some(len) = crate::css::parse_property_value("", track_str).and_then(|pv| match pv {
+        PropertyValue::Length(l) => Some(l),
+        _ => None,
     }) {
         return Some(GridTrack::Length(len));
     }
@@ -2116,7 +2332,13 @@ fn parse_single_grid_track(track_str: &str) -> Option<GridTrack> {
     None
 }
 
-fn apply_margin_values(top: &mut Option<Length>, right: &mut Option<Length>, bottom: &mut Option<Length>, left: &mut Option<Length>, values: Vec<Option<Length>>) {
+fn apply_margin_values(
+    top: &mut Option<Length>,
+    right: &mut Option<Length>,
+    bottom: &mut Option<Length>,
+    left: &mut Option<Length>,
+    values: Vec<Option<Length>>,
+) {
     match values.len() {
         1 => {
             *top = values[0];
@@ -2146,7 +2368,13 @@ fn apply_margin_values(top: &mut Option<Length>, right: &mut Option<Length>, bot
     }
 }
 
-fn apply_box_values(top: &mut Length, right: &mut Length, bottom: &mut Length, left: &mut Length, values: Vec<Length>) {
+fn apply_box_values(
+    top: &mut Length,
+    right: &mut Length,
+    bottom: &mut Length,
+    left: &mut Length,
+    values: Vec<Length>,
+) {
     match values.len() {
         1 => {
             *top = values[0];

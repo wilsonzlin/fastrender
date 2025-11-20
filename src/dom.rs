@@ -1,9 +1,12 @@
+use crate::css::{CssString, FastRenderSelectorImpl, PseudoClass, PseudoElement};
+use crate::error::{Error, Result};
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
-use crate::error::{Error, Result};
-use crate::css::{FastRenderSelectorImpl, PseudoClass, PseudoElement, CssString};
-use selectors::{Element, OpaqueElement, attr::{CaseSensitivity, AttrSelectorOperation}};
+use selectors::{
+    attr::{AttrSelectorOperation, CaseSensitivity},
+    Element, OpaqueElement,
+};
 use std::ptr;
 
 #[derive(Debug, Clone)]
@@ -43,12 +46,7 @@ fn convert_handle_to_node(handle: &Handle) -> DomNode {
             let attributes = attrs
                 .borrow()
                 .iter()
-                .map(|attr| {
-                    (
-                        attr.name.local.to_string(),
-                        attr.value.to_string(),
-                    )
-                })
+                .map(|attr| (attr.name.local.to_string(), attr.value.to_string()))
                 .collect();
 
             DomNodeType::Element {
@@ -64,7 +62,12 @@ fn convert_handle_to_node(handle: &Handle) -> DomNode {
             // Skip comments, processing instructions, doctypes
             return DomNode {
                 node_type: DomNodeType::Document,
-                children: node.children.borrow().iter().map(convert_handle_to_node).collect(),
+                children: node
+                    .children
+                    .borrow()
+                    .iter()
+                    .map(convert_handle_to_node)
+                    .collect(),
             };
         }
     };
@@ -85,12 +88,10 @@ fn convert_handle_to_node(handle: &Handle) -> DomNode {
 impl DomNode {
     pub fn get_attribute(&self, name: &str) -> Option<String> {
         match &self.node_type {
-            DomNodeType::Element { attributes, .. } => {
-                attributes
-                    .iter()
-                    .find(|(k, _)| k == name)
-                    .map(|(_, v)| v.clone())
-            }
+            DomNodeType::Element { attributes, .. } => attributes
+                .iter()
+                .find(|(k, _)| k == name)
+                .map(|(_, v)| v.clone()),
             _ => None,
         }
     }
@@ -158,7 +159,11 @@ pub struct ElementRef<'a> {
 
 impl<'a> ElementRef<'a> {
     pub fn new(node: &'a DomNode) -> Self {
-        Self { node, parent: None, all_ancestors: &[] }
+        Self {
+            node,
+            parent: None,
+            all_ancestors: &[],
+        }
     }
 
     pub fn with_ancestors(node: &'a DomNode, ancestors: &'a [&'a DomNode]) -> Self {
@@ -187,7 +192,9 @@ impl<'a> ElementRef<'a> {
     /// Find index of this element among siblings
     fn element_index(&self) -> Option<usize> {
         let siblings = self.sibling_elements();
-        siblings.iter().position(|&sibling| ptr::eq(sibling, self.node))
+        siblings
+            .iter()
+            .position(|&sibling| ptr::eq(sibling, self.node))
     }
 }
 
@@ -203,7 +210,10 @@ impl<'a> Element for ElementRef<'a> {
             // Create ElementRef for parent with its ancestors
             if self.all_ancestors.len() > 1 {
                 // If we have multiple ancestors, the parent's ancestors are all but the last
-                ElementRef::with_ancestors(parent, &self.all_ancestors[..self.all_ancestors.len() - 1])
+                ElementRef::with_ancestors(
+                    parent,
+                    &self.all_ancestors[..self.all_ancestors.len() - 1],
+                )
             } else {
                 // Parent is the root
                 ElementRef::new(parent)
@@ -325,16 +335,12 @@ impl<'a> Element for ElementRef<'a> {
             PseudoClass::Root => {
                 matches!(self.node.tag_name(), Some("html"))
             }
-            PseudoClass::FirstChild => {
-                self.element_index() == Some(0)
-            }
+            PseudoClass::FirstChild => self.element_index() == Some(0),
             PseudoClass::LastChild => {
                 let siblings = self.sibling_elements();
                 self.element_index() == Some(siblings.len().saturating_sub(1))
             }
-            PseudoClass::OnlyChild => {
-                self.sibling_elements().len() == 1
-            }
+            PseudoClass::OnlyChild => self.sibling_elements().len() == 1,
             PseudoClass::NthChild(a, b) => {
                 // nth-child formula: an + b
                 // Index is 1-based in CSS
@@ -365,7 +371,8 @@ impl<'a> Element for ElementRef<'a> {
             // Interactive pseudo-classes (not supported in static rendering)
             PseudoClass::Hover | PseudoClass::Active | PseudoClass::Focus => false,
             PseudoClass::Link => {
-                matches!(self.node.tag_name(), Some("a")) && self.node.get_attribute("href").is_some()
+                matches!(self.node.tag_name(), Some("a"))
+                    && self.node.get_attribute("href").is_some()
             }
             PseudoClass::Visited => false, // Can't determine visited state
         }
@@ -405,7 +412,11 @@ impl<'a> Element for ElementRef<'a> {
 
     fn is_empty(&self) -> bool {
         self.node.children.iter().all(|child| {
-            child.is_text() && child.text_content().map(|t| t.trim().is_empty()).unwrap_or(true)
+            child.is_text()
+                && child
+                    .text_content()
+                    .map(|t| t.trim().is_empty())
+                    .unwrap_or(true)
         })
     }
 
@@ -427,7 +438,10 @@ impl<'a> Element for ElementRef<'a> {
         false
     }
 
-    fn add_element_unique_hashes(&self, _filter: &mut selectors::bloom::CountingBloomFilter<selectors::bloom::BloomStorageU8>) -> bool {
+    fn add_element_unique_hashes(
+        &self,
+        _filter: &mut selectors::bloom::CountingBloomFilter<selectors::bloom::BloomStorageU8>,
+    ) -> bool {
         // We don't use bloom filters for optimization
         true
     }

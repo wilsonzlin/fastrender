@@ -1,4 +1,4 @@
-use fastrender::{Renderer, RenderOptions, ImageFormat};
+use fastrender::{ImageFormat, RenderOptions, Renderer};
 
 #[test]
 fn test_simple_html_rendering() {
@@ -245,9 +245,7 @@ fn test_custom_viewport_size() {
         </html>
     "#;
 
-    let renderer = Renderer::builder()
-        .viewport_size(1024, 768)
-        .build();
+    let renderer = Renderer::builder().viewport_size(1024, 768).build();
 
     let result = renderer.render(html);
     assert!(result.is_ok());
