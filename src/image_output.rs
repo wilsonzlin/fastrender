@@ -51,12 +51,20 @@ pub fn encode_image(pixmap: &Pixmap, format: OutputFormat) -> Result<Vec<u8>> {
 
     match format {
         OutputFormat::Png => {
-            let img = RgbaImage::from_raw(width, height, rgba_data)
-                .ok_or_else(|| Error::ImageEncode("Failed to create RGBA image".to_string()))?;
+            let img = RgbaImage::from_raw(width, height, rgba_data).ok_or_else(|| {
+                Error::Render(crate::error::RenderError::EncodeFailed {
+                    format: "PNG".to_string(),
+                    reason: "Failed to create RGBA image".to_string(),
+                })
+            })?;
 
             let mut cursor = Cursor::new(&mut buffer);
-            img.write_to(&mut cursor, ImageFormat::Png)
-                .map_err(|e| Error::ImageEncode(format!("PNG encoding failed: {}", e)))?;
+            img.write_to(&mut cursor, ImageFormat::Png).map_err(|e| {
+                Error::Render(crate::error::RenderError::EncodeFailed {
+                    format: "PNG".to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
         }
         OutputFormat::Jpeg(quality) => {
             // Convert RGBA to RGB for JPEG
@@ -65,24 +73,39 @@ pub fn encode_image(pixmap: &Pixmap, format: OutputFormat) -> Result<Vec<u8>> {
                 .flat_map(|chunk| vec![chunk[0], chunk[1], chunk[2]])
                 .collect();
 
-            let rgb_img = image::RgbImage::from_raw(width, height, rgb_data)
-                .ok_or_else(|| Error::ImageEncode("Failed to create RGB image".to_string()))?;
+            let rgb_img = image::RgbImage::from_raw(width, height, rgb_data).ok_or_else(|| {
+                Error::Render(crate::error::RenderError::EncodeFailed {
+                    format: "JPEG".to_string(),
+                    reason: "Failed to create RGB image".to_string(),
+                })
+            })?;
 
             let mut cursor = Cursor::new(&mut buffer);
             let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, quality);
-            rgb_img
-                .write_with_encoder(encoder)
-                .map_err(|e| Error::ImageEncode(format!("JPEG encoding failed: {}", e)))?;
+            rgb_img.write_with_encoder(encoder).map_err(|e| {
+                Error::Render(crate::error::RenderError::EncodeFailed {
+                    format: "JPEG".to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
         }
         OutputFormat::WebP(_quality) => {
-            let img = RgbaImage::from_raw(width, height, rgba_data)
-                .ok_or_else(|| Error::ImageEncode("Failed to create RGBA image".to_string()))?;
+            let img = RgbaImage::from_raw(width, height, rgba_data).ok_or_else(|| {
+                Error::Render(crate::error::RenderError::EncodeFailed {
+                    format: "WebP".to_string(),
+                    reason: "Failed to create RGBA image".to_string(),
+                })
+            })?;
 
             // WebP encoding
             let mut cursor = Cursor::new(&mut buffer);
             let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut cursor);
-            img.write_with_encoder(encoder)
-                .map_err(|e| Error::ImageEncode(format!("WebP encoding failed: {}", e)))?;
+            img.write_with_encoder(encoder).map_err(|e| {
+                Error::Render(crate::error::RenderError::EncodeFailed {
+                    format: "WebP".to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
         }
     }
 

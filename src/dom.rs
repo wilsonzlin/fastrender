@@ -31,7 +31,12 @@ pub fn parse_html(html: &str) -> Result<DomNode> {
     let dom = parse_document(RcDom::default(), Default::default())
         .from_utf8()
         .read_from(&mut html.as_bytes())
-        .map_err(|e| Error::HtmlParse(format!("Failed to parse HTML: {}", e)))?;
+        .map_err(|e| {
+            Error::Parse(crate::error::ParseError::InvalidHtml {
+                message: format!("Failed to parse HTML: {}", e),
+                line: 0,
+            })
+        })?;
 
     Ok(convert_handle_to_node(&dom.document))
 }
