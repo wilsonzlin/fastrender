@@ -59,7 +59,8 @@ impl FontCache {
         let weight_value = match weight {
             FontWeight::Normal => 400,
             FontWeight::Bold => 700,
-            FontWeight::Weight(w) => w,
+            FontWeight::Number(w) => w,
+            _ => 400, // Fallback
         };
 
         // Map font style
@@ -172,7 +173,7 @@ pub fn shape_text(
     let line_gap = ttf_face.line_gap() as f32 * scale;
 
     let line_height_px = calculate_line_height(
-        styles.line_height,
+        styles.line_height.clone(),
         styles.font_size,
         ascender,
         descender,
@@ -186,7 +187,7 @@ pub fn shape_text(
     // Break into lines if max_width is specified and white-space allows wrapping
     let lines = if let Some(max_w) = max_width {
         // Don't break lines if white-space is nowrap or pre
-        if styles.white_space == WhiteSpace::NoWrap || styles.white_space == WhiteSpace::Pre {
+        if styles.white_space == WhiteSpace::Nowrap || styles.white_space == WhiteSpace::Pre {
             // Single line, no wrapping
             let shaped_line = shape_line(
                 &processed_text,
@@ -261,7 +262,7 @@ fn process_whitespace(text: &str, white_space: WhiteSpace) -> String {
             // Collapse whitespace
             text.split_whitespace().collect::<Vec<_>>().join(" ")
         }
-        WhiteSpace::NoWrap => {
+        WhiteSpace::Nowrap => {
             // Collapse whitespace but don't wrap
             text.split_whitespace().collect::<Vec<_>>().join(" ")
         }
@@ -293,7 +294,13 @@ fn calculate_line_height(
     match line_height {
         LineHeight::Normal => ascender - descender + line_gap,
         LineHeight::Number(n) => font_size * n,
-        LineHeight::Length(len) => len.to_px(font_size, 16.0),
+        LineHeight::Length(len) => {
+             if len.unit.is_absolute() {
+                 len.to_px()
+             } else {
+                 len.resolve_with_font_size(font_size)
+             }
+        }
     }
 }
 
@@ -396,7 +403,7 @@ fn shape_line(
     let line_gap = ttf_face.line_gap() as f32 * scale;
 
     let line_height = calculate_line_height(
-        styles.line_height,
+        styles.line_height.clone(),
         styles.font_size,
         ascender,
         descender,

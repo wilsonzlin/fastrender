@@ -13,3 +13,4 @@ pub mod text;
 pub use error::{Error, Result};
 pub use geometry::{EdgeOffsets, Point, Rect, Size};
 pub use renderer::{ImageFormat, RenderOptions, Renderer};
+pub use style::{Length, LengthUnit, LengthOrAuto};
