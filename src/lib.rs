@@ -8,6 +8,7 @@ pub mod layout;
 pub mod paint;
 pub mod renderer;
 pub mod style;
+mod style_old; // Old style module for backwards compatibility
 pub mod text;
 
 pub use error::{Error, Result};

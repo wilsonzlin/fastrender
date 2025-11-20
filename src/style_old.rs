@@ -2,6 +2,7 @@ use crate::css::{
     self, BoxShadow, Color, Declaration, Length, PropertyValue, StyleSheet, TextShadow, Transform,
 };
 use crate::dom::{DomNode, ElementRef};
+use crate::style::display::Display;
 use selectors::context::{QuirksMode, SelectorCaches};
 use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
 use std::collections::HashMap;
@@ -124,23 +125,7 @@ pub struct ComputedStyles {
     pub custom_properties: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Display {
-    Block,
-    Inline,
-    InlineBlock,
-    Flex,
-    InlineFlex,
-    Grid,
-    InlineGrid,
-    Table,
-    TableRow,
-    TableCell,
-    TableHeaderGroup,
-    TableRowGroup,
-    TableFooterGroup,
-    None,
-}
+// Display enum is now imported from crate::style::display
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Position {
