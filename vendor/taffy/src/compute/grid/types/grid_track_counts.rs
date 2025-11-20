@@ -50,7 +50,11 @@ pub(crate) struct TrackCounts {
 impl TrackCounts {
     /// Create a TrackCounts instance from raw track count numbers
     pub fn from_raw(negative_implicit: u16, explicit: u16, positive_implicit: u16) -> Self {
-        Self { negative_implicit, explicit, positive_implicit }
+        Self {
+            negative_implicit,
+            explicit,
+            positive_implicit,
+        }
     }
 
     /// Count the total number of tracks in the axis

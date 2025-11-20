@@ -1,4 +1,4 @@
-use fastrender::{ImageFormat, RenderOptions, Renderer};
+use fastrender::Renderer;
 
 #[test]
 fn test_simple_html_rendering() {

@@ -6,12 +6,7 @@ use crate::style::{BackgroundImage, BorderStyle, Display, FontWeight, TextAlign}
 use crate::text::{shape_text, FontCache};
 use tiny_skia::*;
 
-pub fn paint(
-    layout_tree: &LayoutBox,
-    width: u32,
-    height: u32,
-    background: Color,
-) -> Result<Pixmap> {
+pub fn paint(layout_tree: &LayoutBox, width: u32, height: u32, background: Color) -> Result<Pixmap> {
     paint_with_scroll(layout_tree, width, height, 0, background, None)
 }
 
@@ -42,14 +37,7 @@ pub fn paint_with_scroll(
     let scroll_offset = scroll_y as f32;
 
     // Paint the layout tree with scroll offset
-    paint_box_with_offset(
-        &mut pixmap,
-        layout_tree,
-        &font_cache,
-        &image_cache,
-        0.0,
-        -scroll_offset,
-    )?;
+    paint_box_with_offset(&mut pixmap, layout_tree, &font_cache, &image_cache, 0.0, -scroll_offset)?;
 
     Ok(pixmap)
 }
@@ -136,14 +124,9 @@ fn paint_box_with_offset(
             || has_zero_width;
 
         // Create clip path if needed
-        let clip_path_data = if needs_clip {
+        let _clip_path_data = if needs_clip {
             // Create a rectangle for clipping
-            if let Some(rect) = Rect::from_xywh(
-                effective_x,
-                effective_y,
-                layout_box.width,
-                layout_box.height,
-            ) {
+            if let Some(rect) = Rect::from_xywh(effective_x, effective_y, layout_box.width, layout_box.height) {
                 let mut pb = PathBuilder::new();
                 pb.push_rect(rect);
                 pb.finish()
@@ -157,10 +140,10 @@ fn paint_box_with_offset(
         // If we have overflow clipping, we need to skip painting children that fall outside the bounds
         if needs_clip {
             // Simple bounds-based clipping: don't paint children that are completely outside parent bounds
-            let parent_top = layout_box.y;
+            let _parent_top = layout_box.y;
             let parent_bottom = layout_box.y + layout_box.height;
-            let parent_left = layout_box.x;
-            let parent_right = layout_box.x + layout_box.width;
+            let _parent_left = layout_box.x;
+            let _parent_right = layout_box.x + layout_box.width;
 
             // Paint img elements
             if let Some(ref tag) = layout_box.element_name {
@@ -395,11 +378,7 @@ fn paint_radial_gradient(
     Ok(())
 }
 
-fn paint_borders(
-    pixmap: &mut Pixmap,
-    layout_box: &LayoutBox,
-    transform: &tiny_skia::Transform,
-) -> Result<()> {
+fn paint_borders(pixmap: &mut Pixmap, layout_box: &LayoutBox, transform: &tiny_skia::Transform) -> Result<()> {
     let x = layout_box.x;
     let y = layout_box.y;
     let width = layout_box.width;
@@ -598,11 +577,7 @@ fn paint_border_edge(
     Ok(())
 }
 
-fn paint_box_shadows(
-    pixmap: &mut Pixmap,
-    layout_box: &LayoutBox,
-    transform: &tiny_skia::Transform,
-) -> Result<()> {
+fn paint_box_shadows(pixmap: &mut Pixmap, layout_box: &LayoutBox, transform: &tiny_skia::Transform) -> Result<()> {
     for shadow in &layout_box.styles.box_shadow {
         if shadow.inset {
             continue; // Skip inset shadows for now
@@ -611,9 +586,7 @@ fn paint_box_shadows(
         let offset_x = shadow.offset_x.to_px(layout_box.styles.font_size, 16.0);
         let offset_y = shadow.offset_y.to_px(layout_box.styles.font_size, 16.0);
         let _blur_radius = shadow.blur_radius.to_px(layout_box.styles.font_size, 16.0);
-        let spread_radius = shadow
-            .spread_radius
-            .to_px(layout_box.styles.font_size, 16.0);
+        let spread_radius = shadow.spread_radius.to_px(layout_box.styles.font_size, 16.0);
 
         let shadow_x = layout_box.x + offset_x - spread_radius;
         let shadow_y = layout_box.y + offset_y - spread_radius;
@@ -666,7 +639,7 @@ fn paint_text(
     // The text has already been collected from inline elements into the block children
     // This prevents duplicate rendering (e.g., UL collecting LI>A text AND LI rendering same text)
     // Get text content first to check for vote arrows
-    let mut text_content = match &layout_box.text_content {
+    let text_content = match &layout_box.text_content {
         Some(text) => text.trim().to_string(),
         None => return Ok(()),
     };
@@ -677,8 +650,7 @@ fn paint_text(
 
     // CRITICAL FIX: Allow vote arrows and navigation text to paint even if they have children
     let is_vote_arrow = text_content == "▲" || text_content == "^";
-    let is_navigation_text =
-        text_content.contains("new | past | comments | ask | show | jobs | submit");
+    let is_navigation_text = text_content.contains("new | past | comments | ask | show | jobs | submit");
 
     // Only skip text painting if there are children AND this is not a special element
     if !layout_box.children.is_empty() && !is_vote_arrow && !is_navigation_text {
@@ -692,10 +664,7 @@ fn paint_text(
         b: 0,
         a: 255,
     };
-    if text_content == "▲"
-        || text_content == "^"
-        || is_navigation_text
-        || layout_box.styles.background_color == red_bg
+    if text_content == "▲" || text_content == "^" || is_navigation_text || layout_box.styles.background_color == red_bg
     {
         eprintln!(
             "DEBUG: About to paint text '{}' at ({}, {}) size {}x{}, bg={:?}",
@@ -725,14 +694,8 @@ fn paint_text(
     let text_layout = shape_text(&text_content, &layout_box.styles, font_cache, max_width)?;
 
     // Calculate text position based on text-align
-    let padding_left = layout_box
-        .styles
-        .padding_left
-        .to_px(layout_box.styles.font_size, 16.0);
-    let padding_top = layout_box
-        .styles
-        .padding_top
-        .to_px(layout_box.styles.font_size, 16.0);
+    let padding_left = layout_box.styles.padding_left.to_px(layout_box.styles.font_size, 16.0);
+    let padding_top = layout_box.styles.padding_top.to_px(layout_box.styles.font_size, 16.0);
     let border_left = layout_box
         .styles
         .border_left_width
@@ -784,11 +747,7 @@ fn paint_text_with_shadow(
     transform: &tiny_skia::Transform,
     _clip_path: Option<&()>,
 ) -> Result<()> {
-    let color = if let Some(s) = shadow {
-        s.color
-    } else {
-        styles.color
-    };
+    let color = if let Some(s) = shadow { s.color } else { styles.color };
 
     let (shadow_x, shadow_y) = if let Some(s) = shadow {
         (
@@ -811,8 +770,7 @@ fn paint_text_with_shadow(
 
         for glyph in &line.glyphs {
             // Parse font and extract glyph outline
-            if let Ok(face) = ttf_parser::Face::parse(&glyph.font_face.data, glyph.font_face.index)
-            {
+            if let Ok(face) = ttf_parser::Face::parse(&glyph.font_face.data, glyph.font_face.index) {
                 let glyph_x = line_x + glyph.x + shadow_x;
                 let glyph_y = line_y + line.baseline + glyph.y + shadow_y;
 
@@ -823,9 +781,7 @@ fn paint_text_with_shadow(
 
                 // Extract glyph outline and convert to path
                 let font_size = styles.font_size;
-                if let Some(glyph_path) =
-                    build_glyph_path(&face, glyph.glyph_id, glyph_x, glyph_y, font_size)
-                {
+                if let Some(glyph_path) = build_glyph_path(&face, glyph.glyph_id, glyph_x, glyph_y, font_size) {
                     pixmap.fill_path(&glyph_path, &paint, FillRule::Winding, *transform, None);
                 }
             }
@@ -875,9 +831,7 @@ fn create_transform_matrix(
                 let rad = angle * std::f32::consts::PI / 180.0;
                 tiny_skia::Transform::from_skew(0.0, rad)
             }
-            crate::css::Transform::Matrix(a, b, c, d, e, f) => {
-                tiny_skia::Transform::from_row(*a, *b, *c, *d, *e, *f)
-            }
+            crate::css::Transform::Matrix(a, b, c, d, e, f) => tiny_skia::Transform::from_row(*a, *b, *c, *d, *e, *f),
         };
 
         matrix = matrix.post_concat(t);
@@ -989,13 +943,11 @@ impl GlyphPathBuilder {
 
 impl ttf_parser::OutlineBuilder for GlyphPathBuilder {
     fn move_to(&mut self, x: f32, y: f32) {
-        self.path_builder
-            .move_to(self.transform_x(x), self.transform_y(y));
+        self.path_builder.move_to(self.transform_x(x), self.transform_y(y));
     }
 
     fn line_to(&mut self, x: f32, y: f32) {
-        self.path_builder
-            .line_to(self.transform_x(x), self.transform_y(y));
+        self.path_builder.line_to(self.transform_x(x), self.transform_y(y));
     }
 
     fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
@@ -1023,13 +975,7 @@ impl ttf_parser::OutlineBuilder for GlyphPathBuilder {
     }
 }
 
-fn build_glyph_path(
-    face: &ttf_parser::Face,
-    glyph_id: u16,
-    x: f32,
-    y: f32,
-    font_size: f32,
-) -> Option<Path> {
+fn build_glyph_path(face: &ttf_parser::Face, glyph_id: u16, x: f32, y: f32, font_size: f32) -> Option<Path> {
     let glyph_id = ttf_parser::GlyphId(glyph_id);
 
     // Get the scale factor from font units to pixels
@@ -1075,11 +1021,7 @@ fn build_glyph_path(
         || glyph_name.contains("asciicircum")
         || glyph_name.contains("triangle")
     {
-        eprintln!(
-            "DEBUG: Final path for glyph_id={}: {:?}",
-            glyph_id.0,
-            path.is_some()
-        );
+        eprintln!("DEBUG: Final path for glyph_id={}: {:?}", glyph_id.0, path.is_some());
     }
 
     outline_result?;
@@ -1101,11 +1043,7 @@ fn paint_image(
             Ok(img) => {
                 eprintln!(
                     "DEBUG: Successfully loaded image, painting at ({}, {}) size {}x{}, bg: {:?}",
-                    layout_box.x,
-                    layout_box.y,
-                    layout_box.width,
-                    layout_box.height,
-                    layout_box.styles.background_color
+                    layout_box.x, layout_box.y, layout_box.width, layout_box.height, layout_box.styles.background_color
                 );
                 // Paint the image
                 paint_background_image(pixmap, layout_box, &img, transform)?;
@@ -1207,10 +1145,7 @@ fn paint_background_image(
     }
 
     // Create a tiny-skia pixmap from the image data
-    if let Some(img_pixmap) = Pixmap::from_vec(
-        img_data,
-        IntSize::from_wh(scaled_width, scaled_height).unwrap(),
-    ) {
+    if let Some(img_pixmap) = Pixmap::from_vec(img_data, IntSize::from_wh(scaled_width, scaled_height).unwrap()) {
         // Check if border-radius is set - if so, use clipping
         let has_radius = layout_box.styles.border_top_left_radius.value > 0.0
             || layout_box.styles.border_top_right_radius.value > 0.0

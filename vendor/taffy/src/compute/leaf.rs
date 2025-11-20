@@ -21,7 +21,14 @@ pub fn compute_leaf_layout<MeasureFunction>(
 where
     MeasureFunction: FnOnce(Size<Option<f32>>, Size<AvailableSpace>) -> Size<f32>,
 {
-    let LayoutInput { known_dimensions, parent_size, available_space, sizing_mode, run_mode, .. } = inputs;
+    let LayoutInput {
+        known_dimensions,
+        parent_size,
+        available_space,
+        sizing_mode,
+        run_mode,
+        ..
+    } = inputs;
 
     // Note: both horizontal and vertical percentage padding/borders are resolved against the container's inline size (i.e. width).
     // This is not a bug, but is how CSS is specified (see: https://developer.mozilla.org/en-US/docs/Web/CSS/padding#values)
@@ -30,7 +37,11 @@ where
     let border = style.border().resolve_or_zero(parent_size.width, &resolve_calc_value);
     let padding_border = padding + border;
     let pb_sum = padding_border.sum_axes();
-    let box_sizing_adjustment = if style.box_sizing() == BoxSizing::ContentBox { pb_sum } else { Size::ZERO };
+    let box_sizing_adjustment = if style.box_sizing() == BoxSizing::ContentBox {
+        pb_sum
+    } else {
+        Size::ZERO
+    };
 
     // Resolve node's preferred/min/max sizes (width/heights) against the available space (percentages resolve to pixel values)
     // For ContentSize mode, we pretend that the node has no size styles as these should be ignored.
@@ -53,8 +64,10 @@ where
                 .maybe_resolve(parent_size, &resolve_calc_value)
                 .maybe_apply_aspect_ratio(aspect_ratio)
                 .maybe_add(box_sizing_adjustment);
-            let style_max_size =
-                style.max_size().maybe_resolve(parent_size, &resolve_calc_value).maybe_add(box_sizing_adjustment);
+            let style_max_size = style
+                .max_size()
+                .maybe_resolve(parent_size, &resolve_calc_value)
+                .maybe_add(box_sizing_adjustment);
 
             let node_size = known_dimensions.or(style_size);
             (node_size, style_min_size, style_max_size, aspect_ratio)
@@ -91,7 +104,11 @@ where
 
     // Return early if both width and height are known
     if run_mode == RunMode::ComputeSize && has_styles_preventing_being_collapsed_through {
-        if let Size { width: Some(width), height: Some(height) } = node_size {
+        if let Size {
+            width: Some(width),
+            height: Some(height),
+        } = node_size
+        {
             let size = Size { width, height }
                 .maybe_clamp(node_min_size, node_max_size)
                 .maybe_max(padding_border.sum_axes().map(Some));
@@ -146,7 +163,10 @@ where
         .maybe_clamp(node_min_size, node_max_size);
     let size = Size {
         width: clamped_size.width,
-        height: f32_max(clamped_size.height, aspect_ratio.map(|ratio| clamped_size.width / ratio).unwrap_or(0.0)),
+        height: f32_max(
+            clamped_size.height,
+            aspect_ratio.map(|ratio| clamped_size.width / ratio).unwrap_or(0.0),
+        ),
     };
     let size = size.maybe_max(padding_border.sum_axes().map(Some));
 

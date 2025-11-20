@@ -50,25 +50,50 @@ impl Node {
     pub fn new_row(style: Style) -> Node {
         Node {
             kind: NodeKind::Flexbox,
-            style: Style { display: Display::Flex, flex_direction: FlexDirection::Row, ..style },
+            style: Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Row,
+                ..style
+            },
             ..Node::default()
         }
     }
     pub fn new_column(style: Style) -> Node {
         Node {
             kind: NodeKind::Flexbox,
-            style: Style { display: Display::Flex, flex_direction: FlexDirection::Column, ..style },
+            style: Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Column,
+                ..style
+            },
             ..Node::default()
         }
     }
     pub fn new_grid(style: Style) -> Node {
-        Node { kind: NodeKind::Grid, style: Style { display: Display::Grid, ..style }, ..Node::default() }
+        Node {
+            kind: NodeKind::Grid,
+            style: Style {
+                display: Display::Grid,
+                ..style
+            },
+            ..Node::default()
+        }
     }
     pub fn new_text(style: Style, text_data: TextContext) -> Node {
-        Node { kind: NodeKind::Text, style, text_data: Some(text_data), ..Node::default() }
+        Node {
+            kind: NodeKind::Text,
+            style,
+            text_data: Some(text_data),
+            ..Node::default()
+        }
     }
     pub fn new_image(style: Style, image_data: ImageContext) -> Node {
-        Node { kind: NodeKind::Image, style, image_data: Some(image_data), ..Node::default() }
+        Node {
+            kind: NodeKind::Image,
+            style,
+            image_data: Some(image_data),
+            ..Node::default()
+        }
     }
 }
 
@@ -161,7 +186,10 @@ impl taffy::LayoutPartialTree for Tree {
     fn compute_child_layout(&mut self, node_id: NodeId, inputs: taffy::tree::LayoutInput) -> taffy::tree::LayoutOutput {
         compute_cached_layout(self, node_id, inputs, |tree, node_id, inputs| {
             let node = &mut tree.nodes[usize::from(node_id)];
-            let font_metrics = FontMetrics { char_width: 10.0, char_height: 10.0 };
+            let font_metrics = FontMetrics {
+                char_width: 10.0,
+                char_height: 10.0,
+            };
 
             match node.kind {
                 NodeKind::Flexbox => compute_flexbox_layout(tree, node_id, inputs),
@@ -200,7 +228,9 @@ impl CacheTree for Tree {
         available_space: Size<AvailableSpace>,
         run_mode: taffy::RunMode,
     ) -> Option<taffy::LayoutOutput> {
-        self.node_from_id(node_id).cache.get(known_dimensions, available_space, run_mode)
+        self.node_from_id(node_id)
+            .cache
+            .get(known_dimensions, available_space, run_mode)
     }
 
     fn cache_store(
@@ -211,7 +241,9 @@ impl CacheTree for Tree {
         run_mode: taffy::RunMode,
         layout_output: taffy::LayoutOutput,
     ) {
-        self.node_from_id_mut(node_id).cache.store(known_dimensions, available_space, run_mode, layout_output)
+        self.node_from_id_mut(node_id)
+            .cache
+            .store(known_dimensions, available_space, run_mode, layout_output)
     }
 
     fn cache_clear(&mut self, node_id: NodeId) {
@@ -292,12 +324,21 @@ fn main() -> Result<(), taffy::TaffyError> {
 
     let text_node = Node::new_text(
         Style::default(),
-        TextContext { text_content: LOREM_IPSUM.into(), writing_mode: WritingMode::Horizontal },
+        TextContext {
+            text_content: LOREM_IPSUM.into(),
+            writing_mode: WritingMode::Horizontal,
+        },
     );
     let text_node_id = tree.add_node(text_node);
     tree.append_child(root_id, text_node_id);
 
-    let image_node = Node::new_image(Style::default(), ImageContext { width: 400.0, height: 300.0 });
+    let image_node = Node::new_image(
+        Style::default(),
+        ImageContext {
+            width: 400.0,
+            height: 300.0,
+        },
+    );
     let image_node_id = tree.add_node(image_node);
     tree.append_child(root_id, image_node_id);
 

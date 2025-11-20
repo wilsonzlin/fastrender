@@ -67,7 +67,9 @@ pub(crate) struct NamedLineResolver<S: CheapCloneStr> {
 
 /// Utility function to create or update an entry in a line name map
 fn upsert_line_name_map<S: CheapCloneStr>(map: &mut Map<StrHasher<S>, Vec<u16>>, key: S, value: u16) {
-    map.entry(StrHasher(key)).and_modify(|lines| lines.push(value)).or_insert_with(|| single_value_vec(value));
+    map.entry(StrHasher(key))
+        .and_modify(|lines| lines.push(value))
+        .or_insert_with(|| single_value_vec(value));
 }
 
 impl<S: CheapCloneStr> NamedLineResolver<S> {
@@ -253,7 +255,10 @@ impl<S: CheapCloneStr> NamedLineResolver<S> {
                     let point = lines.partition_point(|line| *line <= normalized_start_line);
                     &lines[point..]
                 });
-                Line { start: NonNamedGridPlacement::Line(*start_line), end: NonNamedGridPlacement::Line(end_line) }
+                Line {
+                    start: NonNamedGridPlacement::Line(*start_line),
+                    end: NonNamedGridPlacement::Line(end_line),
+                }
             }
             (GridPlacement::NamedSpan(name, idx), GridPlacement::Line(end_line)) => {
                 let explicit_track_count = match axis {
@@ -269,7 +274,10 @@ impl<S: CheapCloneStr> NamedLineResolver<S> {
                     let point = lines.partition_point(|line| *line < normalized_end_line);
                     &lines[..point]
                 });
-                Line { start: NonNamedGridPlacement::Line(start_line), end: NonNamedGridPlacement::Line(*end_line) }
+                Line {
+                    start: NonNamedGridPlacement::Line(start_line),
+                    end: NonNamedGridPlacement::Line(*end_line),
+                }
             }
             (start, end) => Line {
                 start: match start {
@@ -364,7 +372,11 @@ impl<S: CheapCloneStr> NamedLineResolver<S> {
         // grid line than it has tracks. And the fallback line is the line *after* that.
         //
         // See: <https://github.com/w3c/csswg-drafts/issues/966#issuecomment-277042153>
-        let line = if idx > 0 { (explicit_track_count + 1) + idx } else { -((explicit_track_count + 1) + idx) };
+        let line = if idx > 0 {
+            (explicit_track_count + 1) + idx
+        } else {
+            -((explicit_track_count + 1) + idx)
+        };
 
         GridLine::from(line)
     }

@@ -67,7 +67,11 @@ impl CellOccupancyMatrix {
     /// Create a CellOccupancyMatrix given a set of provisional track counts. The grid can expand as needed to fit more tracks,
     /// the provisional track counts represent a best effort attempt to avoid the extra allocations this requires.
     pub fn with_track_counts(columns: TrackCounts, rows: TrackCounts) -> Self {
-        Self { inner: Grid::new(rows.len(), columns.len()), rows, columns }
+        Self {
+            inner: Grid::new(rows.len(), columns.len()),
+            rows,
+            columns,
+        }
     }
 
     /// Determines whether the specified area fits within the tracks currently represented by the matrix
@@ -176,8 +180,12 @@ impl CellOccupancyMatrix {
         primary_span: Line<OriginZeroLine>,
         secondary_span: Line<OriginZeroLine>,
     ) -> bool {
-        let primary_range = self.track_counts(primary_axis).oz_line_range_to_track_range(primary_span);
-        let secondary_range = self.track_counts(primary_axis.other_axis()).oz_line_range_to_track_range(secondary_span);
+        let primary_range = self
+            .track_counts(primary_axis)
+            .oz_line_range_to_track_range(primary_span);
+        let secondary_range = self
+            .track_counts(primary_axis.other_axis())
+            .oz_line_range_to_track_range(secondary_span);
         self.track_area_is_unoccupied(primary_axis, primary_range, secondary_range)
     }
 
@@ -212,7 +220,9 @@ impl CellOccupancyMatrix {
         if row_index >= self.inner.rows() {
             return false;
         }
-        self.inner.iter_row(row_index).any(|cell| !matches!(cell, CellOccupancyState::Unoccupied))
+        self.inner
+            .iter_row(row_index)
+            .any(|cell| !matches!(cell, CellOccupancyState::Unoccupied))
     }
 
     /// Determines whether the specified column contains any items
@@ -220,7 +230,9 @@ impl CellOccupancyMatrix {
         if column_index >= self.inner.cols() {
             return false;
         }
-        self.inner.iter_col(column_index).any(|cell| !matches!(cell, CellOccupancyState::Unoccupied))
+        self.inner
+            .iter_col(column_index)
+            .any(|cell| !matches!(cell, CellOccupancyState::Unoccupied))
     }
 
     /// Returns the track counts of this CellOccunpancyMatrix in the relevant axis
@@ -249,12 +261,14 @@ impl CellOccupancyMatrix {
         }
 
         let maybe_index = match track_type {
-            AbsoluteAxis::Horizontal => {
-                self.inner.iter_row(track_computed_index as usize).rposition(|item| *item == kind)
-            }
-            AbsoluteAxis::Vertical => {
-                self.inner.iter_col(track_computed_index as usize).rposition(|item| *item == kind)
-            }
+            AbsoluteAxis::Horizontal => self
+                .inner
+                .iter_row(track_computed_index as usize)
+                .rposition(|item| *item == kind),
+            AbsoluteAxis::Vertical => self
+                .inner
+                .iter_col(track_computed_index as usize)
+                .rposition(|item| *item == kind),
         };
 
         maybe_index.map(|idx| track_counts.track_to_prev_oz_line(idx as u16))

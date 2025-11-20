@@ -252,7 +252,11 @@ mod tests {
         fn maybe_resolve_percent() {
             mr_case(Size::from_percent(5.0, 5.0), Size::NONE, Size::NONE);
             mr_case(Size::from_percent(5.0, 5.0), Size::new(5.0, 5.0), Size::new(25.0, 25.0));
-            mr_case(Size::from_percent(5.0, 5.0), Size::new(-5.0, -5.0), Size::new(-25.0, -25.0));
+            mr_case(
+                Size::from_percent(5.0, 5.0),
+                Size::new(-5.0, -5.0),
+                Size::new(-25.0, -25.0),
+            );
             mr_case(Size::from_percent(5.0, 5.0), Size::new(0.0, 0.0), Size::new(0.0, 0.0));
         }
     }
@@ -300,22 +304,46 @@ mod tests {
 
         #[test]
         fn resolve_or_zero_length() {
-            roz_case(Rect::from_length(5.0, 5.0, 5.0, 5.0), Size::NONE, Rect::new(5.0, 5.0, 5.0, 5.0));
-            roz_case(Rect::from_length(5.0, 5.0, 5.0, 5.0), Size::new(5.0, 5.0), Rect::new(5.0, 5.0, 5.0, 5.0));
-            roz_case(Rect::from_length(5.0, 5.0, 5.0, 5.0), Size::new(-5.0, -5.0), Rect::new(5.0, 5.0, 5.0, 5.0));
-            roz_case(Rect::from_length(5.0, 5.0, 5.0, 5.0), Size::new(0.0, 0.0), Rect::new(5.0, 5.0, 5.0, 5.0));
+            roz_case(
+                Rect::from_length(5.0, 5.0, 5.0, 5.0),
+                Size::NONE,
+                Rect::new(5.0, 5.0, 5.0, 5.0),
+            );
+            roz_case(
+                Rect::from_length(5.0, 5.0, 5.0, 5.0),
+                Size::new(5.0, 5.0),
+                Rect::new(5.0, 5.0, 5.0, 5.0),
+            );
+            roz_case(
+                Rect::from_length(5.0, 5.0, 5.0, 5.0),
+                Size::new(-5.0, -5.0),
+                Rect::new(5.0, 5.0, 5.0, 5.0),
+            );
+            roz_case(
+                Rect::from_length(5.0, 5.0, 5.0, 5.0),
+                Size::new(0.0, 0.0),
+                Rect::new(5.0, 5.0, 5.0, 5.0),
+            );
         }
 
         #[test]
         fn resolve_or_zero_percent() {
             roz_case(Rect::from_percent(5.0, 5.0, 5.0, 5.0), Size::NONE, Rect::zero());
-            roz_case(Rect::from_percent(5.0, 5.0, 5.0, 5.0), Size::new(5.0, 5.0), Rect::new(25.0, 25.0, 25.0, 25.0));
+            roz_case(
+                Rect::from_percent(5.0, 5.0, 5.0, 5.0),
+                Size::new(5.0, 5.0),
+                Rect::new(25.0, 25.0, 25.0, 25.0),
+            );
             roz_case(
                 Rect::from_percent(5.0, 5.0, 5.0, 5.0),
                 Size::new(-5.0, -5.0),
                 Rect::new(-25.0, -25.0, -25.0, -25.0),
             );
-            roz_case(Rect::from_percent(5.0, 5.0, 5.0, 5.0), Size::new(0.0, 0.0), Rect::zero());
+            roz_case(
+                Rect::from_percent(5.0, 5.0, 5.0, 5.0),
+                Size::new(0.0, 0.0),
+                Rect::zero(),
+            );
         }
     }
 
@@ -334,17 +362,41 @@ mod tests {
 
         #[test]
         fn resolve_or_zero_length() {
-            roz_case(Rect::from_length(5.0, 5.0, 5.0, 5.0), None, Rect::new(5.0, 5.0, 5.0, 5.0));
-            roz_case(Rect::from_length(5.0, 5.0, 5.0, 5.0), Some(5.0), Rect::new(5.0, 5.0, 5.0, 5.0));
-            roz_case(Rect::from_length(5.0, 5.0, 5.0, 5.0), Some(-5.0), Rect::new(5.0, 5.0, 5.0, 5.0));
-            roz_case(Rect::from_length(5.0, 5.0, 5.0, 5.0), Some(0.0), Rect::new(5.0, 5.0, 5.0, 5.0));
+            roz_case(
+                Rect::from_length(5.0, 5.0, 5.0, 5.0),
+                None,
+                Rect::new(5.0, 5.0, 5.0, 5.0),
+            );
+            roz_case(
+                Rect::from_length(5.0, 5.0, 5.0, 5.0),
+                Some(5.0),
+                Rect::new(5.0, 5.0, 5.0, 5.0),
+            );
+            roz_case(
+                Rect::from_length(5.0, 5.0, 5.0, 5.0),
+                Some(-5.0),
+                Rect::new(5.0, 5.0, 5.0, 5.0),
+            );
+            roz_case(
+                Rect::from_length(5.0, 5.0, 5.0, 5.0),
+                Some(0.0),
+                Rect::new(5.0, 5.0, 5.0, 5.0),
+            );
         }
 
         #[test]
         fn resolve_or_zero_percent() {
             roz_case(Rect::from_percent(5.0, 5.0, 5.0, 5.0), None, Rect::zero());
-            roz_case(Rect::from_percent(5.0, 5.0, 5.0, 5.0), Some(5.0), Rect::new(25.0, 25.0, 25.0, 25.0));
-            roz_case(Rect::from_percent(5.0, 5.0, 5.0, 5.0), Some(-5.0), Rect::new(-25.0, -25.0, -25.0, -25.0));
+            roz_case(
+                Rect::from_percent(5.0, 5.0, 5.0, 5.0),
+                Some(5.0),
+                Rect::new(25.0, 25.0, 25.0, 25.0),
+            );
+            roz_case(
+                Rect::from_percent(5.0, 5.0, 5.0, 5.0),
+                Some(-5.0),
+                Rect::new(-25.0, -25.0, -25.0, -25.0),
+            );
             roz_case(Rect::from_percent(5.0, 5.0, 5.0, 5.0), Some(0.0), Rect::zero());
         }
     }

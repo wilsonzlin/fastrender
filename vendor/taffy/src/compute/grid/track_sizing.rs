@@ -28,7 +28,12 @@ impl ItemBatcher {
     /// Create a new ItemBatcher for the specified axis
     #[inline(always)]
     fn new(axis: AbstractAxis) -> Self {
-        ItemBatcher { index_offset: 0, axis, current_span: 1, current_is_flex: false }
+        ItemBatcher {
+            index_offset: 0,
+            axis,
+            current_span: 1,
+            current_is_flex: false,
+        }
     }
 
     /// This is basically a manual version of Iterator::next which passes `items`
@@ -252,14 +257,18 @@ pub(super) fn determine_if_item_crosses_flexible_or_intrinsic_tracks(
     rows: &[GridTrack],
 ) {
     for item in items {
-        item.crosses_flexible_column =
-            item.track_range_excluding_lines(AbstractAxis::Inline).any(|i| columns[i].is_flexible());
-        item.crosses_intrinsic_column =
-            item.track_range_excluding_lines(AbstractAxis::Inline).any(|i| columns[i].has_intrinsic_sizing_function());
-        item.crosses_flexible_row =
-            item.track_range_excluding_lines(AbstractAxis::Block).any(|i| rows[i].is_flexible());
-        item.crosses_intrinsic_row =
-            item.track_range_excluding_lines(AbstractAxis::Block).any(|i| rows[i].has_intrinsic_sizing_function());
+        item.crosses_flexible_column = item
+            .track_range_excluding_lines(AbstractAxis::Inline)
+            .any(|i| columns[i].is_flexible());
+        item.crosses_intrinsic_column = item
+            .track_range_excluding_lines(AbstractAxis::Inline)
+            .any(|i| columns[i].has_intrinsic_sizing_function());
+        item.crosses_flexible_row = item
+            .track_range_excluding_lines(AbstractAxis::Block)
+            .any(|i| rows[i].is_flexible());
+        item.crosses_intrinsic_row = item
+            .track_range_excluding_lines(AbstractAxis::Block)
+            .any(|i| rows[i].has_intrinsic_sizing_function());
     }
 }
 
@@ -462,8 +471,9 @@ fn resolve_item_baselines(
         let current_row = remaining_items[0].placement(other_axis).start;
 
         // Find the item index of the first item that is in a different row (or None if we've reached the end of the list)
-        let next_row_first_item =
-            remaining_items.iter().position(|item| item.placement(other_axis).start != current_row);
+        let next_row_first_item = remaining_items
+            .iter()
+            .position(|item| item.placement(other_axis).start != current_row);
 
         // Use this index to split the `remaining_items` slice in two slices:
         //    - A `row_items` slice containing the items (that start) in the current row
@@ -482,7 +492,10 @@ fn resolve_item_baselines(
         // Count how many items in *this row* are baseline aligned
         // If a row has one or zero items participating in baseline alignment then baseline alignment is a no-op
         // for those items and we skip further computations for that row
-        let row_baseline_item_count = row_items.iter().filter(|item| item.align_self == AlignSelf::Baseline).count();
+        let row_baseline_item_count = row_items
+            .iter()
+            .filter(|item| item.align_self == AlignSelf::Baseline)
+            .count();
         if row_baseline_item_count <= 1 {
             continue;
         }
@@ -503,13 +516,19 @@ fn resolve_item_baselines(
 
             item.baseline = Some(
                 baseline.unwrap_or(height)
-                    + item.margin.top.resolve_or_zero(inner_node_size.width, |val, basis| tree.calc(val, basis)),
+                    + item
+                        .margin
+                        .top
+                        .resolve_or_zero(inner_node_size.width, |val, basis| tree.calc(val, basis)),
             );
         }
 
         // Compute the max baseline of all items in the row
-        let row_max_baseline =
-            row_items.iter().map(|item| item.baseline.unwrap_or(0.0)).max_by(|a, b| a.total_cmp(b)).unwrap();
+        let row_max_baseline = row_items
+            .iter()
+            .map(|item| item.baseline.unwrap_or(0.0))
+            .max_by(|a, b| a.total_cmp(b))
+            .unwrap();
 
         // Compute the baseline shim for each item in the row
         for item in row_items.iter_mut() {
@@ -554,8 +573,13 @@ fn resolve_intrinsic_track_sizes<Tree: LayoutPartialTree>(
 
     let axis_inner_node_size = inner_node_size.get(axis);
     let flex_factor_sum = axis_tracks.iter().map(|track| track.flex_factor()).sum::<f32>();
-    let mut item_sizer =
-        IntrisicSizeMeasurer { tree, other_axis_tracks, axis, inner_node_size, get_track_size_estimate };
+    let mut item_sizer = IntrisicSizeMeasurer {
+        tree,
+        other_axis_tracks,
+        axis,
+        inner_node_size,
+        get_track_size_estimate,
+    };
 
     let mut batched_item_iterator = ItemBatcher::new(axis);
     while let Some((batch, is_flex)) = batched_item_iterator.next(items) {
@@ -648,11 +672,15 @@ fn resolve_intrinsic_track_sizes<Tree: LayoutPartialTree>(
                 {
                     // If the container size is indefinite and has not yet been resolved then percentage sized
                     // tracks should be treated as auto (this matches Chrome's behaviour and seems sensible)
-                    track.growth_limit_planned_increase =
-                        f32_max(track.growth_limit_planned_increase, item_sizer.max_content_contribution(item));
+                    track.growth_limit_planned_increase = f32_max(
+                        track.growth_limit_planned_increase,
+                        item_sizer.max_content_contribution(item),
+                    );
                 } else if track.max_track_sizing_function.is_intrinsic() {
-                    track.growth_limit_planned_increase =
-                        f32_max(track.growth_limit_planned_increase, item_sizer.min_content_contribution(item));
+                    track.growth_limit_planned_increase = f32_max(
+                        track.growth_limit_planned_increase,
+                        item_sizer.min_content_contribution(item),
+                    );
                 }
             }
 
@@ -1039,8 +1067,11 @@ fn distribute_item_space_to_base_size(
             };
 
             // If there are no such tracks (matching filter above), then use all affected tracks.
-            let number_of_tracks =
-                tracks.iter().filter(|track| track_is_affected(track)).filter(|track| filter(track)).count();
+            let number_of_tracks = tracks
+                .iter()
+                .filter(|track| track_is_affected(track))
+                .filter(|track| filter(track))
+                .count();
             if number_of_tracks == 0 {
                 filter = (|_| true) as fn(&GridTrack) -> bool;
             }
@@ -1087,7 +1118,13 @@ fn distribute_item_space_to_growth_limit(
     // 1. Find the space to distribute
     let track_sizes: f32 = tracks
         .iter()
-        .map(|track| if track.growth_limit == f32::INFINITY { track.base_size } else { track.growth_limit })
+        .map(|track| {
+            if track.growth_limit == f32::INFINITY {
+                track.base_size
+            } else {
+                track.growth_limit
+            }
+        })
         .sum();
     let extra_space: f32 = f32_max(0.0, space - track_sizes);
 
@@ -1104,9 +1141,14 @@ fn distribute_item_space_to_growth_limit(
         .count();
     if number_of_growable_tracks > 0 {
         let item_incurred_increase = extra_space / number_of_growable_tracks as f32;
-        for track in tracks.iter_mut().filter(|track| track_is_affected(track)).filter(|track| {
-            track.infinitely_growable || track.fit_content_limited_growth_limit(axis_inner_node_size) == f32::INFINITY
-        }) {
+        for track in tracks
+            .iter_mut()
+            .filter(|track| track_is_affected(track))
+            .filter(|track| {
+                track.infinitely_growable
+                    || track.fit_content_limited_growth_limit(axis_inner_node_size) == f32::INFINITY
+            })
+        {
             track.item_incurred_increase = item_incurred_increase;
         }
     } else {
@@ -1118,7 +1160,13 @@ fn distribute_item_space_to_growth_limit(
             tracks,
             track_is_affected,
             |_| 1.0,
-            |track| if track.growth_limit == f32::INFINITY { track.base_size } else { track.growth_limit },
+            |track| {
+                if track.growth_limit == f32::INFINITY {
+                    track.base_size
+                } else {
+                    track.growth_limit
+                }
+            },
             move |track| track.fit_content_limit(axis_inner_node_size),
         );
     };
@@ -1146,7 +1194,9 @@ fn maximise_tracks(
     let used_space: f32 = axis_tracks.iter().map(|track| track.base_size).sum();
     let free_space = axis_available_grid_space.compute_free_space(used_space);
     if free_space == f32::INFINITY {
-        axis_tracks.iter_mut().for_each(|track| track.base_size = track.growth_limit);
+        axis_tracks
+            .iter_mut()
+            .for_each(|track| track.base_size = track.growth_limit);
     } else if free_space > 0.0 {
         distribute_space_up_to_limits(
             free_space,
@@ -1259,7 +1309,10 @@ fn expand_flexible_tracks(
 
     // For each flexible track, if the product of the used flex fraction and the track’s flex factor is greater
     // than the track’s base size, set its base size to that product.
-    for track in axis_tracks.iter_mut().filter(|track| track.max_track_sizing_function.is_fr()) {
+    for track in axis_tracks
+        .iter_mut()
+        .filter(|track| track.max_track_sizing_function.is_fr())
+    {
         let track_flex_factor = track.max_track_sizing_function.0.value();
         track.base_size = f32_max(track.base_size, track_flex_factor * flex_fraction);
     }
@@ -1334,7 +1387,10 @@ fn stretch_auto_tracks(
     axis_min_size: Option<f32>,
     axis_available_space_for_expansion: AvailableSpace,
 ) {
-    let num_auto_tracks = axis_tracks.iter().filter(|track| track.max_track_sizing_function.is_auto()).count();
+    let num_auto_tracks = axis_tracks
+        .iter()
+        .filter(|track| track.max_track_sizing_function.is_auto())
+        .count();
     if num_auto_tracks > 0 {
         let used_space: f32 = axis_tracks.iter().map(|track| track.base_size).sum();
 
@@ -1394,8 +1450,10 @@ fn distribute_space_up_to_limits(
             .map(|track| (track_limit(track) - track_affected_property(track)) / track_distribution_proportion(track))
             .min_by(|a, b| a.total_cmp(b))
             .unwrap(); // We will never pass an empty track list to this function
-        let iteration_item_incurred_increase =
-            f32_min(min_increase_limit, space_to_distribute / track_distribution_proportion_sum);
+        let iteration_item_incurred_increase = f32_min(
+            min_increase_limit,
+            space_to_distribute / track_distribution_proportion_sum,
+        );
 
         for track in tracks.iter_mut().filter(|track| track_is_affected(track)) {
             let increase = iteration_item_incurred_increase * track_distribution_proportion(track);

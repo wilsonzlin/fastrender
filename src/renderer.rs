@@ -77,13 +77,7 @@ impl Renderer {
     }
 
     /// Renders HTML to PNG with viewport and optional scroll offset
-    pub fn render_to_png_with_scroll(
-        &self,
-        html: &str,
-        width: u32,
-        height: u32,
-        scroll_y: u32,
-    ) -> Result<Vec<u8>> {
+    pub fn render_to_png_with_scroll(&self, html: &str, width: u32, height: u32, scroll_y: u32) -> Result<Vec<u8>> {
         let options = RenderOptions {
             format: ImageFormat::Png,
             background_color: self.background_color,
@@ -106,14 +100,7 @@ impl Renderer {
             background_color: self.background_color,
         };
 
-        self.render_with_size_scroll_and_base_url(
-            html,
-            width,
-            height,
-            scroll_y,
-            options,
-            Some(base_url),
-        )
+        self.render_with_size_scroll_and_base_url(html, width, height, scroll_y, options, Some(base_url))
     }
 
     fn render_with_size_and_scroll(
@@ -169,13 +156,7 @@ impl Renderer {
         Ok(image_data)
     }
 
-    pub fn render_to_jpeg(
-        &self,
-        html: &str,
-        width: u32,
-        height: u32,
-        quality: u8,
-    ) -> Result<Vec<u8>> {
+    pub fn render_to_jpeg(&self, html: &str, width: u32, height: u32, quality: u8) -> Result<Vec<u8>> {
         let options = RenderOptions {
             format: ImageFormat::Jpeg(quality),
             background_color: self.background_color,
@@ -184,13 +165,7 @@ impl Renderer {
         self.render_with_size(html, width, height, options)
     }
 
-    pub fn render_to_webp(
-        &self,
-        html: &str,
-        width: u32,
-        height: u32,
-        quality: u8,
-    ) -> Result<Vec<u8>> {
+    pub fn render_to_webp(&self, html: &str, width: u32, height: u32, quality: u8) -> Result<Vec<u8>> {
         let options = RenderOptions {
             format: ImageFormat::WebP(quality),
             background_color: self.background_color,
@@ -207,13 +182,7 @@ impl Renderer {
         self.render_with_size(html, self.viewport_width, self.viewport_height, options)
     }
 
-    fn render_with_size(
-        &self,
-        html: &str,
-        width: u32,
-        height: u32,
-        options: RenderOptions,
-    ) -> Result<Vec<u8>> {
+    fn render_with_size(&self, html: &str, width: u32, height: u32, options: RenderOptions) -> Result<Vec<u8>> {
         if width == 0 || height == 0 {
             return Err(Error::InvalidDimensions(width, height));
         }

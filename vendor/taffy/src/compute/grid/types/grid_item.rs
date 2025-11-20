@@ -197,13 +197,19 @@ impl GridItem {
     ) -> Option<f32> {
         let spanned_tracks = &axis_tracks[self.track_range_excluding_lines(axis)];
         let tracks_all_fixed = spanned_tracks.iter().all(|track| {
-            track.max_track_sizing_function.definite_limit(axis_parent_size, resolve_calc_value).is_some()
+            track
+                .max_track_sizing_function
+                .definite_limit(axis_parent_size, resolve_calc_value)
+                .is_some()
         });
         if tracks_all_fixed {
             let limit: f32 = spanned_tracks
                 .iter()
                 .map(|track| {
-                    track.max_track_sizing_function.definite_limit(axis_parent_size, resolve_calc_value).unwrap()
+                    track
+                        .max_track_sizing_function
+                        .definite_limit(axis_parent_size, resolve_calc_value)
+                        .unwrap()
                 })
                 .sum();
             Some(limit)
@@ -223,13 +229,19 @@ impl GridItem {
     ) -> Option<f32> {
         let spanned_tracks = &axis_tracks[self.track_range_excluding_lines(axis)];
         let tracks_all_fixed = spanned_tracks.iter().all(|track| {
-            track.max_track_sizing_function.definite_value(axis_parent_size, resolve_calc_value).is_some()
+            track
+                .max_track_sizing_function
+                .definite_value(axis_parent_size, resolve_calc_value)
+                .is_some()
         });
         if tracks_all_fixed {
             let limit: f32 = spanned_tracks
                 .iter()
                 .map(|track| {
-                    track.max_track_sizing_function.definite_value(axis_parent_size, resolve_calc_value).unwrap()
+                    track
+                        .max_track_sizing_function
+                        .definite_value(axis_parent_size, resolve_calc_value)
+                        .unwrap()
                 })
                 .sum();
             Some(limit)
@@ -250,11 +262,18 @@ impl GridItem {
         let margins = self.margins_axis_sums_with_baseline_shims(inner_node_size.width, tree);
 
         let aspect_ratio = self.aspect_ratio;
-        let padding = self.padding.resolve_or_zero(grid_area_size, |val, basis| tree.calc(val, basis));
-        let border = self.border.resolve_or_zero(grid_area_size, |val, basis| tree.calc(val, basis));
+        let padding = self
+            .padding
+            .resolve_or_zero(grid_area_size, |val, basis| tree.calc(val, basis));
+        let border = self
+            .border
+            .resolve_or_zero(grid_area_size, |val, basis| tree.calc(val, basis));
         let padding_border_size = (padding + border).sum_axes();
-        let box_sizing_adjustment =
-            if self.box_sizing == BoxSizing::ContentBox { padding_border_size } else { Size::ZERO };
+        let box_sizing_adjustment = if self.box_sizing == BoxSizing::ContentBox {
+            padding_border_size
+        } else {
+            Size::ZERO
+        };
         let inherent_size = self
             .size
             .maybe_resolve(grid_area_size, |val, basis| tree.calc(val, basis))
@@ -287,8 +306,11 @@ impl GridItem {
             None
         });
         // Reapply aspect ratio after stretch and absolute position width adjustments
-        let Size { width, height } =
-            Size { width, height: inherent_size.height }.maybe_apply_aspect_ratio(aspect_ratio);
+        let Size { width, height } = Size {
+            width,
+            height: inherent_size.height,
+        }
+        .maybe_apply_aspect_ratio(aspect_ratio);
 
         let height = height.or_else(|| {
             // Apply height based on stretch alignment if:
@@ -345,8 +367,12 @@ impl GridItem {
         get_track_size_estimate: impl Fn(&GridTrack, Option<f32>) -> Option<f32>,
     ) -> Size<Option<f32>> {
         self.available_space_cache.unwrap_or_else(|| {
-            let available_spaces =
-                self.available_space(axis, other_axis_tracks, other_axis_available_space, get_track_size_estimate);
+            let available_spaces = self.available_space(
+                axis,
+                other_axis_tracks,
+                other_axis_available_space,
+                get_track_size_estimate,
+            );
             self.available_space_cache = Some(available_spaces);
             available_spaces
         })
@@ -361,11 +387,23 @@ impl GridItem {
         tree: &impl LayoutPartialTree,
     ) -> Size<f32> {
         Rect {
-            left: self.margin.left.resolve_or_zero(Some(0.0), |val, basis| tree.calc(val, basis)),
-            right: self.margin.right.resolve_or_zero(Some(0.0), |val, basis| tree.calc(val, basis)),
-            top: self.margin.top.resolve_or_zero(inner_node_width, |val, basis| tree.calc(val, basis))
+            left: self
+                .margin
+                .left
+                .resolve_or_zero(Some(0.0), |val, basis| tree.calc(val, basis)),
+            right: self
+                .margin
+                .right
+                .resolve_or_zero(Some(0.0), |val, basis| tree.calc(val, basis)),
+            top: self
+                .margin
+                .top
+                .resolve_or_zero(inner_node_width, |val, basis| tree.calc(val, basis))
                 + self.baseline_shim,
-            bottom: self.margin.bottom.resolve_or_zero(inner_node_width, |val, basis| tree.calc(val, basis)),
+            bottom: self
+                .margin
+                .bottom
+                .resolve_or_zero(inner_node_width, |val, basis| tree.calc(val, basis)),
         }
         .sum_axes()
     }
@@ -464,11 +502,18 @@ impl GridItem {
         known_dimensions: Size<Option<f32>>,
         inner_node_size: Size<Option<f32>>,
     ) -> f32 {
-        let padding = self.padding.resolve_or_zero(inner_node_size, |val, basis| tree.calc(val, basis));
-        let border = self.border.resolve_or_zero(inner_node_size, |val, basis| tree.calc(val, basis));
+        let padding = self
+            .padding
+            .resolve_or_zero(inner_node_size, |val, basis| tree.calc(val, basis));
+        let border = self
+            .border
+            .resolve_or_zero(inner_node_size, |val, basis| tree.calc(val, basis));
         let padding_border_size = (padding + border).sum_axes();
-        let box_sizing_adjustment =
-            if self.box_sizing == BoxSizing::ContentBox { padding_border_size } else { Size::ZERO };
+        let box_sizing_adjustment = if self.box_sizing == BoxSizing::ContentBox {
+            padding_border_size
+        } else {
+            Size::ZERO
+        };
         let size = self
             .size
             .maybe_resolve(inner_node_size, |val, basis| tree.calc(val, basis))
@@ -515,9 +560,14 @@ impl GridItem {
                     // relevant axis, the size suggestion is capped by those sizes; for this purpose, any indefinite percentages
                     // in these sizes are resolved against zero (and considered definite).
                     if self.is_compressible_replaced {
-                        let size = self.size.get(axis).maybe_resolve(Some(0.0), |val, basis| tree.calc(val, basis));
-                        let max_size =
-                            self.max_size.get(axis).maybe_resolve(Some(0.0), |val, basis| tree.calc(val, basis));
+                        let size = self
+                            .size
+                            .get(axis)
+                            .maybe_resolve(Some(0.0), |val, basis| tree.calc(val, basis));
+                        let max_size = self
+                            .max_size
+                            .get(axis)
+                            .maybe_resolve(Some(0.0), |val, basis| tree.calc(val, basis));
                         minimum_contribution = minimum_contribution.maybe_min(size).maybe_min(max_size);
                     }
 

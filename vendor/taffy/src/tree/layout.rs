@@ -39,14 +39,23 @@ pub struct CollapsibleMarginSet {
 
 impl CollapsibleMarginSet {
     /// A default margin set with no collapsible margins
-    pub const ZERO: Self = Self { positive: 0.0, negative: 0.0 };
+    pub const ZERO: Self = Self {
+        positive: 0.0,
+        negative: 0.0,
+    };
 
     /// Create a set from a single margin
     pub fn from_margin(margin: f32) -> Self {
         if margin >= 0.0 {
-            Self { positive: margin, negative: 0.0 }
+            Self {
+                positive: margin,
+                negative: 0.0,
+            }
         } else {
-            Self { positive: 0.0, negative: margin }
+            Self {
+                positive: 0.0,
+                negative: margin,
+            }
         }
     }
 
@@ -308,7 +317,10 @@ impl Layout {
     /// Get the size of the node's content box
     #[inline]
     pub fn content_box_size(&self) -> Size<f32> {
-        Size { width: self.content_box_width(), height: self.content_box_height() }
+        Size {
+            width: self.content_box_width(),
+            height: self.content_box_height(),
+        }
     }
 
     /// Get x offset of the node's content box relative to it's parent's border box

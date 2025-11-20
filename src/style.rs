@@ -1,6 +1,4 @@
-use crate::css::{
-    self, BoxShadow, Color, Declaration, Length, PropertyValue, StyleSheet, TextShadow, Transform,
-};
+use crate::css::{self, BoxShadow, Color, Declaration, Length, PropertyValue, StyleSheet, TextShadow, Transform};
 use crate::dom::{DomNode, ElementRef};
 use selectors::context::{QuirksMode, SelectorCaches};
 use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
@@ -282,13 +280,8 @@ pub enum WhiteSpace {
 #[derive(Debug, Clone, PartialEq)]
 pub enum BackgroundImage {
     Url(String),
-    LinearGradient {
-        angle: f32,
-        stops: Vec<css::ColorStop>,
-    },
-    RadialGradient {
-        stops: Vec<css::ColorStop>,
-    },
+    LinearGradient { angle: f32, stops: Vec<css::ColorStop> },
+    RadialGradient { stops: Vec<css::ColorStop> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -417,30 +410,28 @@ impl Default for ComputedStyles {
 
 pub fn apply_styles(dom: &DomNode, stylesheet: &StyleSheet) -> StyledNode {
     // Debug: check if we have .toc rules with grid-column
-    let mut found_toc_grid = false;
+    let mut _found_toc_grid = false;
     for rule in &stylesheet.rules {
         let selector_str = format!("{:?}", rule.selectors);
         if selector_str.contains("toc") && selector_str.contains("article") {
             for decl in &rule.declarations {
                 if decl.property == "grid-column" {
-                    found_toc_grid = true;
+                    _found_toc_grid = true;
                 }
             }
         }
     }
 
     // Parse user-agent stylesheet
-    let ua_stylesheet = css::parse_stylesheet(USER_AGENT_STYLESHEET)
-        .unwrap_or_else(|_| StyleSheet { rules: Vec::new() });
+    let ua_stylesheet =
+        css::parse_stylesheet(USER_AGENT_STYLESHEET).unwrap_or_else(|_| StyleSheet { rules: Vec::new() });
 
     // Merge user-agent stylesheet with author stylesheet
     // User-agent rules come first (lower specificity)
     let mut merged_rules = ua_stylesheet.rules;
     merged_rules.extend(stylesheet.rules.clone());
 
-    let merged_stylesheet = StyleSheet {
-        rules: merged_rules,
-    };
+    let merged_stylesheet = StyleSheet { rules: merged_rules };
 
     apply_styles_internal(dom, &merged_stylesheet, &ComputedStyles::default(), 16.0)
 }
@@ -483,15 +474,7 @@ fn apply_styles_internal(
     let children = node
         .children
         .iter()
-        .map(|child| {
-            apply_styles_internal_with_ancestors(
-                child,
-                stylesheet,
-                &styles,
-                root_font_size,
-                &new_ancestors,
-            )
-        })
+        .map(|child| apply_styles_internal_with_ancestors(child, stylesheet, &styles, root_font_size, &new_ancestors))
         .collect();
 
     StyledNode {
@@ -730,15 +713,7 @@ fn apply_styles_internal_with_ancestors(
     let mut children: Vec<StyledNode> = node
         .children
         .iter()
-        .map(|child| {
-            apply_styles_internal_with_ancestors(
-                child,
-                stylesheet,
-                &styles,
-                root_font_size,
-                &new_ancestors,
-            )
-        })
+        .map(|child| apply_styles_internal_with_ancestors(child, stylesheet, &styles, root_font_size, &new_ancestors))
         .collect();
 
     // HACK: Add ::before pseudo-element content for .toc elements
@@ -809,10 +784,9 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
     if let Some(tag) = node.tag_name() {
         styles.display = match tag {
             // Block-level elements
-            "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol" | "li"
-            | "blockquote" | "pre" | "article" | "section" | "nav" | "aside" | "header"
-            | "footer" | "main" | "figure" | "figcaption" | "dl" | "dt" | "dd" | "form"
-            | "fieldset" | "legend" | "address" | "hr" | "center" => Display::Block,
+            "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol" | "li" | "blockquote" | "pre"
+            | "article" | "section" | "nav" | "aside" | "header" | "footer" | "main" | "figure" | "figcaption"
+            | "dl" | "dt" | "dd" | "form" | "fieldset" | "legend" | "address" | "hr" | "center" => Display::Block,
 
             // Table elements
             "table" => Display::Table,
@@ -821,10 +795,8 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
             "thead" | "tbody" | "tfoot" => Display::TableRowGroup,
 
             // Inline elements (explicit for clarity, though it's the default)
-            "a" | "span" | "em" | "strong" | "code" | "b" | "i" | "u" | "small" | "sub" | "sup"
-            | "mark" | "abbr" | "cite" | "q" | "kbd" | "samp" | "var" | "time" | "label" => {
-                Display::Inline
-            }
+            "a" | "span" | "em" | "strong" | "code" | "b" | "i" | "u" | "small" | "sub" | "sup" | "mark" | "abbr"
+            | "cite" | "q" | "kbd" | "samp" | "var" | "time" | "label" => Display::Inline,
 
             // Everything else defaults to inline
             _ => Display::Inline,
@@ -873,11 +845,7 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
         // CRITICAL FIX: Ensure header navigation is visible
         // HN CSS parse error prevents pagetop styling from being applied
         if node.has_class("pagetop") {
-            styles.font_family = vec![
-                "Verdana".to_string(),
-                "Geneva".to_string(),
-                "sans-serif".to_string(),
-            ];
+            styles.font_family = vec!["Verdana".to_string(), "Geneva".to_string(), "sans-serif".to_string()];
             styles.font_size = 10.0;
             styles.color = Color {
                 r: 34,
@@ -1107,10 +1075,7 @@ fn inherit_styles(styles: &mut ComputedStyles, parent: &ComputedStyles) {
 }
 
 /// Resolve var() references in a PropertyValue (with recursion limit)
-fn resolve_var(
-    value: &PropertyValue,
-    custom_properties: &HashMap<String, String>,
-) -> PropertyValue {
+fn resolve_var(value: &PropertyValue, custom_properties: &HashMap<String, String>) -> PropertyValue {
     resolve_var_with_depth(value, custom_properties, 0)
 }
 
@@ -1129,16 +1094,12 @@ fn resolve_var_with_depth(
     match value {
         PropertyValue::Keyword(kw) => {
             // Check if it's a simple var() reference
-            if kw.starts_with("var(") && kw.ends_with(')') && !kw[4..kw.len() - 1].contains("var(")
-            {
+            if kw.starts_with("var(") && kw.ends_with(')') && !kw[4..kw.len() - 1].contains("var(") {
                 let var_name = &kw[4..kw.len() - 1]; // Extract variable name from var(...)
 
                 // Handle fallback values: var(--name, fallback)
                 let (var_name, fallback) = if let Some(comma_pos) = var_name.find(',') {
-                    (
-                        var_name[..comma_pos].trim(),
-                        Some(var_name[comma_pos + 1..].trim()),
-                    )
+                    (var_name[..comma_pos].trim(), Some(var_name[comma_pos + 1..].trim()))
                 } else {
                     (var_name.trim(), None)
                 };
@@ -1285,12 +1246,7 @@ fn build_element_ref_chain<'a>(node: &'a DomNode, ancestors: &'a [&'a DomNode]) 
     ElementRef::with_ancestors(node, ancestors)
 }
 
-fn apply_declaration(
-    styles: &mut ComputedStyles,
-    decl: &Declaration,
-    parent_font_size: f32,
-    root_font_size: f32,
-) {
+fn apply_declaration(styles: &mut ComputedStyles, decl: &Declaration, parent_font_size: f32, root_font_size: f32) {
     // Handle CSS Custom Properties (--*)
     if decl.property.starts_with("--") {
         // Convert the property value to a string for storage
@@ -1320,9 +1276,7 @@ fn apply_declaration(
             PropertyValue::Color(c) => format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b),
             _ => return, // Skip other types for now
         };
-        styles
-            .custom_properties
-            .insert(decl.property.clone(), value_str);
+        styles.custom_properties.insert(decl.property.clone(), value_str);
         return;
     }
 
@@ -1914,9 +1868,7 @@ fn apply_declaration(
                 });
             }
             PropertyValue::RadialGradient { stops } => {
-                styles.background_image = Some(BackgroundImage::RadialGradient {
-                    stops: stops.clone(),
-                });
+                styles.background_image = Some(BackgroundImage::RadialGradient { stops: stops.clone() });
             }
             PropertyValue::Keyword(kw) if kw == "none" => {
                 styles.background_image = None;
@@ -1933,8 +1885,7 @@ fn apply_declaration(
                 };
             }
             PropertyValue::Multiple(values) if values.len() == 2 => {
-                if let (Some(w), Some(h)) = (extract_length(&values[0]), extract_length(&values[1]))
-                {
+                if let (Some(w), Some(h)) = (extract_length(&values[0]), extract_length(&values[1])) {
                     styles.background_size = BackgroundSize::Length(w, h);
                 }
             }
@@ -1962,9 +1913,7 @@ fn apply_declaration(
                     stops: stops.clone(),
                 });
             } else if let PropertyValue::RadialGradient { stops } = &resolved_value {
-                styles.background_image = Some(BackgroundImage::RadialGradient {
-                    stops: stops.clone(),
-                });
+                styles.background_image = Some(BackgroundImage::RadialGradient { stops: stops.clone() });
             }
         }
 
@@ -2160,7 +2109,7 @@ fn parse_grid_tracks_with_names(tracks_str: &str) -> (Vec<GridTrack>, HashMap<St
 
     // Add final line position (after all tracks)
     // This allows "screen-end" etc. to work
-    let final_line = tracks.len();
+    let _final_line = tracks.len();
 
     (tracks, named_lines)
 }
@@ -2368,13 +2317,7 @@ fn apply_margin_values(
     }
 }
 
-fn apply_box_values(
-    top: &mut Length,
-    right: &mut Length,
-    bottom: &mut Length,
-    left: &mut Length,
-    values: Vec<Length>,
-) {
+fn apply_box_values(top: &mut Length, right: &mut Length, bottom: &mut Length, left: &mut Length, values: Vec<Length>) {
     match values.len() {
         1 => {
             *top = values[0];

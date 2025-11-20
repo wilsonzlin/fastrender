@@ -39,13 +39,15 @@ pub fn text_measure_function(
     let min_line_length: usize = words.iter().map(|line| line.len()).max().unwrap_or(0);
     let max_line_length: usize = words.iter().map(|line| line.len()).sum();
     let inline_size =
-        known_dimensions.get_abs(inline_axis).unwrap_or_else(|| match available_space.get_abs(inline_axis) {
-            AvailableSpace::MinContent => min_line_length as f32 * font_metrics.char_width,
-            AvailableSpace::MaxContent => max_line_length as f32 * font_metrics.char_width,
-            AvailableSpace::Definite(inline_size) => inline_size
-                .min(max_line_length as f32 * font_metrics.char_width)
-                .max(min_line_length as f32 * font_metrics.char_width),
-        });
+        known_dimensions
+            .get_abs(inline_axis)
+            .unwrap_or_else(|| match available_space.get_abs(inline_axis) {
+                AvailableSpace::MinContent => min_line_length as f32 * font_metrics.char_width,
+                AvailableSpace::MaxContent => max_line_length as f32 * font_metrics.char_width,
+                AvailableSpace::Definite(inline_size) => inline_size
+                    .min(max_line_length as f32 * font_metrics.char_width)
+                    .max(min_line_length as f32 * font_metrics.char_width),
+            });
     let block_size = known_dimensions.get_abs(block_axis).unwrap_or_else(|| {
         let inline_line_length = (inline_size / font_metrics.char_width).floor() as usize;
         let mut line_count = 1;
@@ -69,7 +71,13 @@ pub fn text_measure_function(
     });
 
     match text_context.writing_mode {
-        WritingMode::Horizontal => Size { width: inline_size, height: block_size },
-        WritingMode::Vertical => Size { width: block_size, height: inline_size },
+        WritingMode::Horizontal => Size {
+            width: inline_size,
+            height: block_size,
+        },
+        WritingMode::Vertical => Size {
+            width: block_size,
+            height: inline_size,
+        },
     }
 }

@@ -143,12 +143,10 @@ impl ImageCache {
             .build();
         let agent: ureq::Agent = config.into();
 
-        let mut response = agent.get(url).call().map_err(|e| {
-            Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            ))
-        })?;
+        let mut response = agent
+            .get(url)
+            .call()
+            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
         // Read response body into bytes (limit to 50MB for images)
         let bytes = response
@@ -156,12 +154,7 @@ impl ImageCache {
             .with_config()
             .limit(50 * 1024 * 1024)
             .read_to_vec()
-            .map_err(|e| {
-                Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e.to_string(),
-                ))
-            })?;
+            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
         // Decode image
         image::load_from_memory(&bytes)
@@ -169,8 +162,7 @@ impl ImageCache {
     }
 
     fn load_from_file(&self, path: &str) -> Result<DynamicImage> {
-        image::open(path)
-            .map_err(|e| Error::ImageDecode(format!("Failed to load image from {}: {}", path, e)))
+        image::open(path).map_err(|e| Error::ImageDecode(format!("Failed to load image from {}: {}", path, e)))
     }
 
     fn load_from_data_url(&self, data_url: &str) -> Result<DynamicImage> {
@@ -189,12 +181,11 @@ impl ImageCache {
 
         // Check if base64 encoded
         if header.contains("base64") {
-            let bytes = base64::decode(data)
-                .map_err(|e| Error::ImageDecode(format!("Failed to decode base64: {}", e)))?;
+            let bytes =
+                base64::decode(data).map_err(|e| Error::ImageDecode(format!("Failed to decode base64: {}", e)))?;
 
-            image::load_from_memory(&bytes).map_err(|e| {
-                Error::ImageDecode(format!("Failed to decode image from data URL: {}", e))
-            })
+            image::load_from_memory(&bytes)
+                .map_err(|e| Error::ImageDecode(format!("Failed to decode image from data URL: {}", e)))
         } else if header.contains("image/svg+xml") {
             // Handle URL-encoded SVG
             let decoded = urlencoding::decode(data)
@@ -203,9 +194,7 @@ impl ImageCache {
             // Use resvg to render SVG to bitmap
             self.render_svg_to_image(&decoded)
         } else {
-            Err(Error::ImageDecode(
-                "Unsupported data URL format".to_string(),
-            ))
+            Err(Error::ImageDecode("Unsupported data URL format".to_string()))
         }
     }
 
@@ -229,17 +218,12 @@ impl ImageCache {
         let mut pixmap = tiny_skia::Pixmap::new(width, height)
             .ok_or_else(|| Error::ImageDecode("Failed to create pixmap for SVG".to_string()))?;
 
-        resvg::render(
-            &tree,
-            tiny_skia::Transform::identity(),
-            &mut pixmap.as_mut(),
-        );
+        resvg::render(&tree, tiny_skia::Transform::identity(), &mut pixmap.as_mut());
 
         // Convert pixmap to image
         let rgba_data = pixmap.take();
-        let img = image::RgbaImage::from_raw(width, height, rgba_data).ok_or_else(|| {
-            Error::ImageDecode("Failed to create image from SVG pixmap".to_string())
-        })?;
+        let img = image::RgbaImage::from_raw(width, height, rgba_data)
+            .ok_or_else(|| Error::ImageDecode("Failed to create image from SVG pixmap".to_string()))?;
 
         eprintln!("DEBUG: SVG rendered to {}x{} image", width, height);
         Ok(image::DynamicImage::ImageRgba8(img))

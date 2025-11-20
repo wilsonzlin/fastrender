@@ -49,10 +49,7 @@ fn convert_handle_to_node(handle: &Handle) -> DomNode {
                 .map(|attr| (attr.name.local.to_string(), attr.value.to_string()))
                 .collect();
 
-            DomNodeType::Element {
-                tag_name,
-                attributes,
-            }
+            DomNodeType::Element { tag_name, attributes }
         }
         NodeData::Text { contents } => {
             let content = contents.borrow().to_string();
@@ -62,36 +59,22 @@ fn convert_handle_to_node(handle: &Handle) -> DomNode {
             // Skip comments, processing instructions, doctypes
             return DomNode {
                 node_type: DomNodeType::Document,
-                children: node
-                    .children
-                    .borrow()
-                    .iter()
-                    .map(convert_handle_to_node)
-                    .collect(),
+                children: node.children.borrow().iter().map(convert_handle_to_node).collect(),
             };
         }
     };
 
-    let children = node
-        .children
-        .borrow()
-        .iter()
-        .map(convert_handle_to_node)
-        .collect();
+    let children = node.children.borrow().iter().map(convert_handle_to_node).collect();
 
-    DomNode {
-        node_type,
-        children,
-    }
+    DomNode { node_type, children }
 }
 
 impl DomNode {
     pub fn get_attribute(&self, name: &str) -> Option<String> {
         match &self.node_type {
-            DomNodeType::Element { attributes, .. } => attributes
-                .iter()
-                .find(|(k, _)| k == name)
-                .map(|(_, v)| v.clone()),
+            DomNodeType::Element { attributes, .. } => {
+                attributes.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+            }
             _ => None,
         }
     }
@@ -192,9 +175,7 @@ impl<'a> ElementRef<'a> {
     /// Find index of this element among siblings
     fn element_index(&self) -> Option<usize> {
         let siblings = self.sibling_elements();
-        siblings
-            .iter()
-            .position(|&sibling| ptr::eq(sibling, self.node))
+        siblings.iter().position(|&sibling| ptr::eq(sibling, self.node))
     }
 }
 
@@ -210,10 +191,7 @@ impl<'a> Element for ElementRef<'a> {
             // Create ElementRef for parent with its ancestors
             if self.all_ancestors.len() > 1 {
                 // If we have multiple ancestors, the parent's ancestors are all but the last
-                ElementRef::with_ancestors(
-                    parent,
-                    &self.all_ancestors[..self.all_ancestors.len() - 1],
-                )
+                ElementRef::with_ancestors(parent, &self.all_ancestors[..self.all_ancestors.len() - 1])
             } else {
                 // Parent is the root
                 ElementRef::new(parent)
@@ -297,7 +275,7 @@ impl<'a> Element for ElementRef<'a> {
             AttrSelectorOperation::Exists => true,
             AttrSelectorOperation::WithValue {
                 operator,
-                case_sensitivity,
+                case_sensitivity: _,
                 value,
             } => {
                 let value_str: &str = std::borrow::Borrow::borrow(&**value);
@@ -307,18 +285,11 @@ impl<'a> Element for ElementRef<'a> {
                         attr_value.split_whitespace().any(|v| v == value_str)
                     }
                     selectors::attr::AttrSelectorOperator::DashMatch => {
-                        attr_value == value_str
-                            || attr_value.starts_with(&format!("{}-", value_str))
+                        attr_value == value_str || attr_value.starts_with(&format!("{}-", value_str))
                     }
-                    selectors::attr::AttrSelectorOperator::Prefix => {
-                        attr_value.starts_with(value_str)
-                    }
-                    selectors::attr::AttrSelectorOperator::Substring => {
-                        attr_value.contains(value_str)
-                    }
-                    selectors::attr::AttrSelectorOperator::Suffix => {
-                        attr_value.ends_with(value_str)
-                    }
+                    selectors::attr::AttrSelectorOperator::Prefix => attr_value.starts_with(value_str),
+                    selectors::attr::AttrSelectorOperator::Substring => attr_value.contains(value_str),
+                    selectors::attr::AttrSelectorOperator::Suffix => attr_value.ends_with(value_str),
                 };
 
                 matches
@@ -370,10 +341,7 @@ impl<'a> Element for ElementRef<'a> {
             }
             // Interactive pseudo-classes (not supported in static rendering)
             PseudoClass::Hover | PseudoClass::Active | PseudoClass::Focus => false,
-            PseudoClass::Link => {
-                matches!(self.node.tag_name(), Some("a"))
-                    && self.node.get_attribute("href").is_some()
-            }
+            PseudoClass::Link => matches!(self.node.tag_name(), Some("a")) && self.node.get_attribute("href").is_some(),
             PseudoClass::Visited => false, // Can't determine visited state
         }
     }
@@ -411,13 +379,10 @@ impl<'a> Element for ElementRef<'a> {
     }
 
     fn is_empty(&self) -> bool {
-        self.node.children.iter().all(|child| {
-            child.is_text()
-                && child
-                    .text_content()
-                    .map(|t| t.trim().is_empty())
-                    .unwrap_or(true)
-        })
+        self.node
+            .children
+            .iter()
+            .all(|child| child.is_text() && child.text_content().map(|t| t.trim().is_empty()).unwrap_or(true))
     }
 
     fn is_root(&self) -> bool {

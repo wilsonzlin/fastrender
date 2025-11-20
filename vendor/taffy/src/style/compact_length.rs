@@ -121,7 +121,9 @@ mod inner {
         #[inline(always)]
         #[cfg(feature = "serde")]
         pub(super) fn from_serialized(value: u64) -> Self {
-            Self { tagged_ptr: value.rotate_right(32) as usize as *const () }
+            Self {
+                tagged_ptr: value.rotate_right(32) as usize as *const (),
+            }
         }
     }
 }
@@ -152,13 +154,19 @@ mod inner {
         /// Construct a `CompactLengthInner` from a tag and numeric value
         #[inline(always)]
         pub(super) const fn from_val(val: f32, tag: usize) -> Self {
-            Self { ptr: f32_to_bits(val) as usize as *const (), tag }
+            Self {
+                ptr: f32_to_bits(val) as usize as *const (),
+                tag,
+            }
         }
 
         /// Construct a `CompactLengthInner` from only a tag
         #[inline(always)]
         pub(super) const fn from_tag(tag: usize) -> Self {
-            Self { ptr: 0 as *const (), tag }
+            Self {
+                ptr: 0 as *const (),
+                tag,
+            }
         }
 
         /// Get the calc tag (low 3 bits)
@@ -197,7 +205,10 @@ mod inner {
         #[inline(always)]
         #[cfg(feature = "serde")]
         pub(super) fn from_serialized(value: u64) -> Self {
-            Self { tag: (value >> 32) as usize, ptr: (value & 0xFFFFFFFF) as usize as *const () }
+            Self {
+                tag: (value >> 32) as usize,
+                ptr: (value & 0xFFFFFFFF) as usize as *const (),
+            }
         }
     }
 }
@@ -382,7 +393,10 @@ impl CompactLength {
     /// Returns true if the value is max-content or a fit-content(...) value
     #[inline(always)]
     pub fn is_max_or_fit_content(self) -> bool {
-        matches!(self.tag(), Self::MAX_CONTENT_TAG | Self::FIT_CONTENT_PX_TAG | Self::FIT_CONTENT_PERCENT_TAG)
+        matches!(
+            self.tag(),
+            Self::MAX_CONTENT_TAG | Self::FIT_CONTENT_PX_TAG | Self::FIT_CONTENT_PERCENT_TAG
+        )
     }
 
     /// Returns true if the max track sizing function is `MaxContent`, `FitContent` or `Auto` else false.
@@ -429,11 +443,17 @@ impl CompactLength {
     pub fn uses_percentage(self) -> bool {
         #[cfg(feature = "calc")]
         {
-            matches!(self.tag(), CompactLength::PERCENT_TAG | CompactLength::FIT_CONTENT_PERCENT_TAG) || self.is_calc()
+            matches!(
+                self.tag(),
+                CompactLength::PERCENT_TAG | CompactLength::FIT_CONTENT_PERCENT_TAG
+            ) || self.is_calc()
         }
         #[cfg(not(feature = "calc"))]
         {
-            matches!(self.tag(), CompactLength::PERCENT_TAG | CompactLength::FIT_CONTENT_PERCENT_TAG)
+            matches!(
+                self.tag(),
+                CompactLength::PERCENT_TAG | CompactLength::FIT_CONTENT_PERCENT_TAG
+            )
         }
     }
 

@@ -82,7 +82,11 @@ where
     Input: Into<f32> + Copy,
     Output: From<MinMax<MinTrackSizingFunction, MaxTrackSizingFunction>>,
 {
-    MinMax { min: zero(), max: fr(flex_fraction.into()) }.into()
+    MinMax {
+        min: zero(),
+        max: fr(flex_fraction.into()),
+    }
+    .into()
 }
 
 /// Returns the zero value for that type
@@ -112,7 +116,10 @@ impl<T: TaffyZero> Point<T> {
     }
 }
 impl<T: TaffyZero> TaffyZero for Line<T> {
-    const ZERO: Line<T> = Line { start: T::ZERO, end: T::ZERO };
+    const ZERO: Line<T> = Line {
+        start: T::ZERO,
+        end: T::ZERO,
+    };
 }
 impl<T: TaffyZero> Line<T> {
     /// Returns a Line where both the start and end values are the zero value of the contained type
@@ -122,7 +129,10 @@ impl<T: TaffyZero> Line<T> {
     }
 }
 impl<T: TaffyZero> TaffyZero for Size<T> {
-    const ZERO: Size<T> = Size { width: T::ZERO, height: T::ZERO };
+    const ZERO: Size<T> = Size {
+        width: T::ZERO,
+        height: T::ZERO,
+    };
 }
 impl<T: TaffyZero> Size<T> {
     /// Returns a Size where both the width and height values are the zero value of the contained type
@@ -132,7 +142,12 @@ impl<T: TaffyZero> Size<T> {
     }
 }
 impl<T: TaffyZero> TaffyZero for Rect<T> {
-    const ZERO: Rect<T> = Rect { left: T::ZERO, right: T::ZERO, top: T::ZERO, bottom: T::ZERO };
+    const ZERO: Rect<T> = Rect {
+        left: T::ZERO,
+        right: T::ZERO,
+        top: T::ZERO,
+        bottom: T::ZERO,
+    };
 }
 impl<T: TaffyZero> Rect<T> {
     /// Returns a Rect where the left, right, top, and bottom values are all the zero value of the contained type
@@ -166,7 +181,10 @@ impl<T: TaffyAuto> Point<T> {
     }
 }
 impl<T: TaffyAuto> TaffyAuto for Line<T> {
-    const AUTO: Line<T> = Line { start: T::AUTO, end: T::AUTO };
+    const AUTO: Line<T> = Line {
+        start: T::AUTO,
+        end: T::AUTO,
+    };
 }
 impl<T: TaffyAuto> Line<T> {
     /// Returns a Line where both the start and end values are the auto value of the contained type
@@ -176,7 +194,10 @@ impl<T: TaffyAuto> Line<T> {
     }
 }
 impl<T: TaffyAuto> TaffyAuto for Size<T> {
-    const AUTO: Size<T> = Size { width: T::AUTO, height: T::AUTO };
+    const AUTO: Size<T> = Size {
+        width: T::AUTO,
+        height: T::AUTO,
+    };
 }
 impl<T: TaffyAuto> Size<T> {
     /// Returns a Size where both the width and height values are the auto value of the contained type
@@ -186,7 +207,12 @@ impl<T: TaffyAuto> Size<T> {
     }
 }
 impl<T: TaffyAuto> TaffyAuto for Rect<T> {
-    const AUTO: Rect<T> = Rect { left: T::AUTO, right: T::AUTO, top: T::AUTO, bottom: T::AUTO };
+    const AUTO: Rect<T> = Rect {
+        left: T::AUTO,
+        right: T::AUTO,
+        top: T::AUTO,
+        bottom: T::AUTO,
+    };
 }
 impl<T: TaffyAuto> Rect<T> {
     /// Returns a Rect where the left, right, top, and bottom values are all the auto value of the contained type
@@ -210,7 +236,10 @@ impl<T: TaffyMinContent> TaffyMinContent for Option<T> {
     const MIN_CONTENT: Option<T> = Some(T::MIN_CONTENT);
 }
 impl<T: TaffyMinContent> TaffyMinContent for Point<T> {
-    const MIN_CONTENT: Point<T> = Point { x: T::MIN_CONTENT, y: T::MIN_CONTENT };
+    const MIN_CONTENT: Point<T> = Point {
+        x: T::MIN_CONTENT,
+        y: T::MIN_CONTENT,
+    };
 }
 impl<T: TaffyMinContent> Point<T> {
     /// Returns a Point where both the x and y values are the min_content value of the contained type
@@ -220,7 +249,10 @@ impl<T: TaffyMinContent> Point<T> {
     }
 }
 impl<T: TaffyMinContent> TaffyMinContent for Line<T> {
-    const MIN_CONTENT: Line<T> = Line { start: T::MIN_CONTENT, end: T::MIN_CONTENT };
+    const MIN_CONTENT: Line<T> = Line {
+        start: T::MIN_CONTENT,
+        end: T::MIN_CONTENT,
+    };
 }
 impl<T: TaffyMinContent> Line<T> {
     /// Returns a Line where both the start and end values are the min_content value of the contained type
@@ -230,7 +262,10 @@ impl<T: TaffyMinContent> Line<T> {
     }
 }
 impl<T: TaffyMinContent> TaffyMinContent for Size<T> {
-    const MIN_CONTENT: Size<T> = Size { width: T::MIN_CONTENT, height: T::MIN_CONTENT };
+    const MIN_CONTENT: Size<T> = Size {
+        width: T::MIN_CONTENT,
+        height: T::MIN_CONTENT,
+    };
 }
 impl<T: TaffyMinContent> Size<T> {
     /// Returns a Size where both the width and height values are the min_content value of the contained type
@@ -240,8 +275,12 @@ impl<T: TaffyMinContent> Size<T> {
     }
 }
 impl<T: TaffyMinContent> TaffyMinContent for Rect<T> {
-    const MIN_CONTENT: Rect<T> =
-        Rect { left: T::MIN_CONTENT, right: T::MIN_CONTENT, top: T::MIN_CONTENT, bottom: T::MIN_CONTENT };
+    const MIN_CONTENT: Rect<T> = Rect {
+        left: T::MIN_CONTENT,
+        right: T::MIN_CONTENT,
+        top: T::MIN_CONTENT,
+        bottom: T::MIN_CONTENT,
+    };
 }
 impl<T: TaffyMinContent> Rect<T> {
     /// Returns a Rect where the left, right, top, and bottom values are all the min_content value of the contained type
@@ -265,7 +304,10 @@ impl<T: TaffyMaxContent> TaffyMaxContent for Option<T> {
     const MAX_CONTENT: Option<T> = Some(T::MAX_CONTENT);
 }
 impl<T: TaffyMaxContent> TaffyMaxContent for Point<T> {
-    const MAX_CONTENT: Point<T> = Point { x: T::MAX_CONTENT, y: T::MAX_CONTENT };
+    const MAX_CONTENT: Point<T> = Point {
+        x: T::MAX_CONTENT,
+        y: T::MAX_CONTENT,
+    };
 }
 impl<T: TaffyMaxContent> Point<T> {
     /// Returns a Point where both the x and y values are the max_content value of the contained type
@@ -275,7 +317,10 @@ impl<T: TaffyMaxContent> Point<T> {
     }
 }
 impl<T: TaffyMaxContent> TaffyMaxContent for Line<T> {
-    const MAX_CONTENT: Line<T> = Line { start: T::MAX_CONTENT, end: T::MAX_CONTENT };
+    const MAX_CONTENT: Line<T> = Line {
+        start: T::MAX_CONTENT,
+        end: T::MAX_CONTENT,
+    };
 }
 impl<T: TaffyMaxContent> Line<T> {
     /// Returns a Line where both the start and end values are the max_content value of the contained type
@@ -285,7 +330,10 @@ impl<T: TaffyMaxContent> Line<T> {
     }
 }
 impl<T: TaffyMaxContent> TaffyMaxContent for Size<T> {
-    const MAX_CONTENT: Size<T> = Size { width: T::MAX_CONTENT, height: T::MAX_CONTENT };
+    const MAX_CONTENT: Size<T> = Size {
+        width: T::MAX_CONTENT,
+        height: T::MAX_CONTENT,
+    };
 }
 impl<T: TaffyMaxContent> Size<T> {
     /// Returns a Size where both the width and height values are the max_content value of the contained type
@@ -295,8 +343,12 @@ impl<T: TaffyMaxContent> Size<T> {
     }
 }
 impl<T: TaffyMaxContent> TaffyMaxContent for Rect<T> {
-    const MAX_CONTENT: Rect<T> =
-        Rect { left: T::MAX_CONTENT, right: T::MAX_CONTENT, top: T::MAX_CONTENT, bottom: T::MAX_CONTENT };
+    const MAX_CONTENT: Rect<T> = Rect {
+        left: T::MAX_CONTENT,
+        right: T::MAX_CONTENT,
+        top: T::MAX_CONTENT,
+        bottom: T::MAX_CONTENT,
+    };
 }
 impl<T: TaffyMaxContent> Rect<T> {
     /// Returns a Rect where the left, right, top, and bottom values are all the max_content value of the contained type
@@ -319,7 +371,10 @@ pub trait TaffyFitContent {
 }
 impl<T: TaffyFitContent> TaffyFitContent for Point<T> {
     fn fit_content(argument: LengthPercentage) -> Self {
-        Point { x: T::fit_content(argument), y: T::fit_content(argument) }
+        Point {
+            x: T::fit_content(argument),
+            y: T::fit_content(argument),
+        }
     }
 }
 impl<T: TaffyFitContent> Point<T> {
@@ -331,7 +386,10 @@ impl<T: TaffyFitContent> Point<T> {
 }
 impl<T: TaffyFitContent> TaffyFitContent for Line<T> {
     fn fit_content(argument: LengthPercentage) -> Self {
-        Line { start: T::fit_content(argument), end: T::fit_content(argument) }
+        Line {
+            start: T::fit_content(argument),
+            end: T::fit_content(argument),
+        }
     }
 }
 impl<T: TaffyFitContent> Line<T> {
@@ -343,7 +401,10 @@ impl<T: TaffyFitContent> Line<T> {
 }
 impl<T: TaffyFitContent> TaffyFitContent for Size<T> {
     fn fit_content(argument: LengthPercentage) -> Self {
-        Size { width: T::fit_content(argument), height: T::fit_content(argument) }
+        Size {
+            width: T::fit_content(argument),
+            height: T::fit_content(argument),
+        }
     }
 }
 impl<T: TaffyFitContent> Size<T> {
@@ -393,7 +454,10 @@ impl FromLength for Option<f32> {
 }
 impl<T: FromLength> FromLength for Point<T> {
     fn from_length<Input: Into<f32> + Copy>(value: Input) -> Self {
-        Point { x: T::from_length(value.into()), y: T::from_length(value.into()) }
+        Point {
+            x: T::from_length(value.into()),
+            y: T::from_length(value.into()),
+        }
     }
 }
 impl<T: FromLength> Point<T> {
@@ -404,7 +468,10 @@ impl<T: FromLength> Point<T> {
 }
 impl<T: FromLength> FromLength for Line<T> {
     fn from_length<Input: Into<f32> + Copy>(value: Input) -> Self {
-        Line { start: T::from_length(value.into()), end: T::from_length(value.into()) }
+        Line {
+            start: T::from_length(value.into()),
+            end: T::from_length(value.into()),
+        }
     }
 }
 impl<T: FromLength> Line<T> {
@@ -415,7 +482,10 @@ impl<T: FromLength> Line<T> {
 }
 impl<T: FromLength> FromLength for Size<T> {
     fn from_length<Input: Into<f32> + Copy>(value: Input) -> Self {
-        Size { width: T::from_length(value.into()), height: T::from_length(value.into()) }
+        Size {
+            width: T::from_length(value.into()),
+            height: T::from_length(value.into()),
+        }
     }
 }
 impl<T: FromLength> Size<T> {
@@ -463,7 +533,10 @@ impl FromPercent for Option<f32> {
 }
 impl<T: FromPercent> FromPercent for Point<T> {
     fn from_percent<Input: Into<f32> + Copy>(percent: Input) -> Self {
-        Point { x: T::from_percent(percent.into()), y: T::from_percent(percent.into()) }
+        Point {
+            x: T::from_percent(percent.into()),
+            y: T::from_percent(percent.into()),
+        }
     }
 }
 impl<T: FromPercent> Point<T> {
@@ -475,7 +548,10 @@ impl<T: FromPercent> Point<T> {
 }
 impl<T: FromPercent> FromPercent for Line<T> {
     fn from_percent<Input: Into<f32> + Copy>(percent: Input) -> Self {
-        Line { start: T::from_percent(percent.into()), end: T::from_percent(percent.into()) }
+        Line {
+            start: T::from_percent(percent.into()),
+            end: T::from_percent(percent.into()),
+        }
     }
 }
 impl<T: FromPercent> Line<T> {
@@ -487,7 +563,10 @@ impl<T: FromPercent> Line<T> {
 }
 impl<T: FromPercent> FromPercent for Size<T> {
     fn from_percent<Input: Into<f32> + Copy>(percent: Input) -> Self {
-        Size { width: T::from_percent(percent.into()), height: T::from_percent(percent.into()) }
+        Size {
+            width: T::from_percent(percent.into()),
+            height: T::from_percent(percent.into()),
+        }
     }
 }
 impl<T: FromPercent> Size<T> {
