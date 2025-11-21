@@ -47,14 +47,25 @@
 //! let fragment_tree = ctx.layout(&box_tree_root);
 //! ```
 
-// Module declarations will be added in Wave 2+
+// Wave 2 modules
+pub mod constraints;
+pub mod contexts;
+pub mod engine;
+pub mod formatting_context;
+
+// Re-exports
+pub use constraints::{AvailableSpace, LayoutConstraints};
+pub use contexts::FormattingContextFactory;
+pub use engine::{LayoutConfig, LayoutEngine};
+pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
+
+// Module declarations will be added in Wave 3+
 // pub mod block;
 // pub mod inline;
 // pub mod flex;
 // pub mod grid;
 // pub mod table;
 // pub mod positioned;
-// pub mod context;
 
 // Temporary re-export of V1 implementation for compatibility
 // This will be removed as Wave 2+ tasks are completed
