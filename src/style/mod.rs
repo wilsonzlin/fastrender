@@ -8,16 +8,19 @@ pub mod display;
 pub mod position;
 
 // Re-export commonly used color types
-pub use color::{Color as NewColor, ColorParseError, Hsla, Rgba};
+// Re-export color types
+pub use color::{Color, ColorParseError, Hsla, Rgba};
 
-// Re-export commonly used types from display module
+// Re-export display types
 pub use display::{Display, DisplayParseError, FormattingContextType, InnerDisplay, OuterDisplay};
 
-// Re-export commonly used types from position module
+// Re-export position types
 pub use position::{Position, PositionParseError};
 
+// Legacy CSS types (will be phased out)
 use crate::css::{
-    self, BoxShadow, Color, Declaration, PropertyValue, StyleSheet, TextShadow, Transform,
+    self, BoxShadow, Color as LegacyColor, Declaration, PropertyValue, StyleSheet, TextShadow,
+    Transform,
 };
 use crate::dom::{DomNode, ElementRef};
 pub use crate::style::values::{Length, LengthOrAuto, LengthUnit};
@@ -74,10 +77,10 @@ pub struct ComputedStyles {
     pub border_bottom_width: Length,
     pub border_left_width: Length,
 
-    pub border_top_color: Color,
-    pub border_right_color: Color,
-    pub border_bottom_color: Color,
-    pub border_left_color: Color,
+    pub border_top_color: LegacyColor,
+    pub border_right_color: LegacyColor,
+    pub border_bottom_color: LegacyColor,
+    pub border_left_color: LegacyColor,
 
     pub border_top_style: BorderStyle,
     pub border_right_style: BorderStyle,
@@ -129,8 +132,8 @@ pub struct ComputedStyles {
     pub white_space: WhiteSpace,
 
     // Color and background
-    pub color: Color,
-    pub background_color: Color,
+    pub color: LegacyColor,
+    pub background_color: LegacyColor,
     pub background_image: Option<BackgroundImage>,
     pub background_size: BackgroundSize,
     pub background_position: BackgroundPosition,
@@ -346,10 +349,10 @@ impl Default for ComputedStyles {
             border_bottom_width: Length::px(0.0),
             border_left_width: Length::px(0.0),
 
-            border_top_color: Color::BLACK,
-            border_right_color: Color::BLACK,
-            border_bottom_color: Color::BLACK,
-            border_left_color: Color::BLACK,
+            border_top_color: LegacyColor::BLACK,
+            border_right_color: LegacyColor::BLACK,
+            border_bottom_color: LegacyColor::BLACK,
+            border_left_color: LegacyColor::BLACK,
 
             border_top_style: BorderStyle::None,
             border_right_style: BorderStyle::None,
@@ -396,8 +399,8 @@ impl Default for ComputedStyles {
             word_spacing: 0.0,
             white_space: WhiteSpace::Normal,
 
-            color: Color::BLACK,
-            background_color: Color::TRANSPARENT,
+            color: LegacyColor::BLACK,
+            background_color: LegacyColor::TRANSPARENT,
             background_image: None,
             background_size: BackgroundSize::Auto,
             background_position: BackgroundPosition::Center,
@@ -613,13 +616,13 @@ fn apply_styles_internal_with_ancestors(
         styles.padding_right = Length::px(12.0); // .75rem
         styles.padding_bottom = Length::px(6.0);
         styles.padding_left = Length::px(12.0);
-        styles.background_color = Color {
+        styles.background_color = LegacyColor {
             r: 255,
             g: 255,
             b: 255,
             a: 255,
         }; // white background
-        styles.color = Color {
+        styles.color = LegacyColor {
             r: 59,
             g: 130,
             b: 246,
@@ -629,25 +632,25 @@ fn apply_styles_internal_with_ancestors(
         styles.border_right_width = Length::px(1.0);
         styles.border_bottom_width = Length::px(1.0);
         styles.border_left_width = Length::px(1.0);
-        styles.border_top_color = Color {
+        styles.border_top_color = LegacyColor {
             r: 59,
             g: 130,
             b: 246,
             a: 255,
         }; // #3b82f6
-        styles.border_right_color = Color {
+        styles.border_right_color = LegacyColor {
             r: 59,
             g: 130,
             b: 246,
             a: 255,
         };
-        styles.border_bottom_color = Color {
+        styles.border_bottom_color = LegacyColor {
             r: 59,
             g: 130,
             b: 246,
             a: 255,
         };
-        styles.border_left_color = Color {
+        styles.border_left_color = LegacyColor {
             r: 59,
             g: 130,
             b: 246,
@@ -706,7 +709,7 @@ fn apply_styles_internal_with_ancestors(
         before_styles.display = Display::Block;
         before_styles.font_size = 12.0; // .75rem = 12px
         before_styles.font_weight = FontWeight::Bold;
-        before_styles.color = Color {
+        before_styles.color = LegacyColor {
             r: 90,
             g: 90,
             b: 90,
@@ -816,7 +819,7 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
                 "sans-serif".to_string(),
             ];
             styles.font_size = 10.0;
-            styles.color = Color {
+            styles.color = LegacyColor {
                 r: 34,
                 g: 34,
                 b: 34,
@@ -829,7 +832,7 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
         // Fix any CSS that might be hiding navigation links in header
         if matches!(node.tag_name(), Some("a")) {
             // For now, make all links visible
-            styles.color = Color {
+            styles.color = LegacyColor {
                 r: 34,
                 g: 34,
                 b: 34,
@@ -843,7 +846,7 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
             styles.display = Display::Block;
             styles.width = Some(Length::px(10.0));
             styles.height = Some(Length::px(10.0));
-            styles.color = Color {
+            styles.color = LegacyColor {
                 r: 0,
                 g: 0,
                 b: 0,
@@ -862,7 +865,7 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
         // CRITICAL FIX: Ensure story rank numbers are visible
         if node.has_class("rank") {
             styles.display = Display::Block;
-            styles.color = Color {
+            styles.color = LegacyColor {
                 r: 0,
                 g: 0,
                 b: 0,
@@ -888,7 +891,7 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
         // CRITICAL FIX: Ensure header navigation elements are visible and styled
         if node.has_class("pagetop") {
             styles.display = Display::Inline; // Keep inline so text is collected by parent table cell
-            styles.color = Color {
+            styles.color = LegacyColor {
                 r: 255,
                 g: 255,
                 b: 255,
@@ -901,7 +904,7 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
 
         if node.has_class("hnname") {
             styles.display = Display::Inline; // Keep inline so text is collected by parent table cell
-            styles.color = Color {
+            styles.color = LegacyColor {
                 r: 255,
                 g: 255,
                 b: 255,
@@ -928,7 +931,7 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
                         || href.contains("news")
                     {
                         styles.display = Display::Inline;
-                        styles.color = Color {
+                        styles.color = LegacyColor {
                             r: 255,
                             g: 255,
                             b: 255,
@@ -963,7 +966,7 @@ fn parse_dimension_attribute(dim_str: &str) -> Option<Length> {
     None
 }
 
-fn parse_color_attribute(color_str: &str) -> Option<Color> {
+fn parse_color_attribute(color_str: &str) -> Option<LegacyColor> {
     let color_str = color_str.trim();
 
     // Handle hex colors like #ff6600 or ff6600
@@ -975,7 +978,7 @@ fn parse_color_attribute(color_str: &str) -> Option<Color> {
                 u8::from_str_radix(&hex[2..4], 16),
                 u8::from_str_radix(&hex[4..6], 16),
             ) {
-                return Some(Color { r, g, b, a: 255 });
+                return Some(LegacyColor { r, g, b, a: 255 });
             }
         } else if hex.len() == 3 {
             // Shorthand like #f60
@@ -985,7 +988,7 @@ fn parse_color_attribute(color_str: &str) -> Option<Color> {
                 u8::from_str_radix(&hex[2..3], 16),
             ) {
                 // Double each digit: #f60 -> #ff6600
-                return Some(Color {
+                return Some(LegacyColor {
                     r: r * 17,
                     g: g * 17,
                     b: b * 17,
