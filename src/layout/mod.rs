@@ -16,45 +16,53 @@
 //!
 //! # Architecture
 //!
-//! Layout is performed in a top-down, recursive tree walk:
+//! Layout is performed through the FormattingContext abstraction:
 //!
-//! 1. **Box Generation**: Create anonymous boxes as needed
-//! 2. **Size Computation**: Calculate intrinsic and definite sizes
-//! 3. **Positioning**: Determine fragment positions
-//! 4. **Fragment Creation**: Generate positioned fragments
+//! 1. **Formatting Context Selection**: Choose appropriate FC based on display type
+//! 2. **Constraint Propagation**: Pass available space down the tree
+//! 3. **Recursive Layout**: Each FC lays out its children using child FCs
+//! 4. **Fragment Tree Construction**: Build positioned fragment tree bottom-up
 //!
 //! # Module Organization
 //!
-//! This module will contain:
-//! - `block.rs` - Block layout algorithm
-//! - `inline.rs` - Inline layout and line breaking
-//! - `flex.rs` - Flexbox integration with Taffy
-//! - `grid.rs` - Grid integration with Taffy
-//! - `table.rs` - Table layout algorithm
-//! - `positioned.rs` - Absolute/fixed positioning
-//! - `context.rs` - Layout context shared across algorithms
+//! - `formatting_context.rs` - FormattingContext trait (W2.T07)
+//! - `constraints.rs` - LayoutConstraints and AvailableSpace (W2.T07)
+//! - `block.rs` - Block layout algorithm (W3.T04)
+//! - `inline.rs` - Inline layout and line breaking (W4.T12)
+//! - `flex.rs` - Flexbox integration with Taffy (W3.T08)
+//! - `grid.rs` - Grid integration with Taffy (W3.T09)
+//! - `table.rs` - Table layout algorithm (W3.T06)
 //!
 //! # Example
 //!
 //! ```rust,ignore
-//! use fastrender::layout::LayoutContext;
-//! use fastrender::geometry::Size;
+//! use fastrender::layout::{FormattingContext, LayoutConstraints};
+//! use fastrender::tree::BoxNode;
 //!
-//! let viewport = Size::new(1024.0, 768.0);
-//! let mut ctx = LayoutContext::new(viewport);
+//! // Get appropriate formatting context for box
+//! let fc = get_formatting_context(&box_node);
 //!
-//! // Run layout on box tree root
-//! let fragment_tree = ctx.layout(&box_tree_root);
+//! // Create constraints (viewport size)
+//! let constraints = LayoutConstraints::with_definite_size(1024.0, 768.0);
+//!
+//! // Perform layout
+//! let fragment = fc.layout(&box_node, &constraints)?;
 //! ```
 
-// Module declarations will be added in Wave 2+
-// pub mod block;
-// pub mod inline;
-// pub mod flex;
-// pub mod grid;
-// pub mod table;
-// pub mod positioned;
-// pub mod context;
+// W2.T07 - FormattingContext trait and infrastructure
+pub mod constraints;
+pub mod formatting_context;
+
+pub use constraints::{AvailableSpace, LayoutConstraints};
+pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
+
+// Future modules (to be implemented in Wave 3+):
+// pub mod block;        // W3.T04
+// pub mod inline;       // W4.T12
+// pub mod flex;         // W3.T08
+// pub mod grid;         // W3.T09
+// pub mod table;        // W3.T06
+// pub mod positioned;   // W3.T12
 
 // Temporary re-export of V1 implementation for compatibility
 // This will be removed as Wave 2+ tasks are completed

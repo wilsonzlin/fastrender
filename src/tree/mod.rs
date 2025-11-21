@@ -30,8 +30,8 @@
 //!
 //! This module will contain:
 //! - `dom.rs` - DOM node types
-//! - `box_node.rs` - Box tree types
-//! - `fragment.rs` - Fragment tree types
+//! - `box_tree.rs` - Box tree types (minimal stub for W2.T07, full impl in W2.T01)
+//! - `fragment.rs` - Fragment tree types (minimal stub for W2.T07, full impl in W2.T03)
 //!
 //! # Example
 //!
@@ -51,7 +51,10 @@
 //! paint(&fragment_tree);
 //! ```
 
-// Module declarations will be added in Wave 2
-// pub mod dom;
-// pub mod box_node;
-// pub mod fragment;
+// Minimal stub implementations for W2.T07 (FormattingContext trait)
+// Full implementations will be provided by W2.T01 (BoxNode) and W2.T03 (Fragment)
+pub mod box_tree;
+pub mod fragment;
+
+pub use box_tree::{BoxNode, ComputedStyle, FormattingContextType};
+pub use fragment::Fragment;
