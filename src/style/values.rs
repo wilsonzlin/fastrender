@@ -480,10 +480,10 @@ impl Length {
         match self.unit {
             LengthUnit::Px => self.value,
             LengthUnit::Pt => self.value * (96.0 / 72.0), // 1pt = 1/72 inch
-            LengthUnit::Pc => self.value * 16.0,           // 1pc = 12pt = 16px
-            LengthUnit::In => self.value * 96.0,           // 1in = 96px (CSS spec)
-            LengthUnit::Cm => self.value * 37.795276,      // 1cm = 96px/2.54
-            LengthUnit::Mm => self.value * 3.7795276,      // 1mm = 1/10 cm
+            LengthUnit::Pc => self.value * 16.0,          // 1pc = 12pt = 16px
+            LengthUnit::In => self.value * 96.0,          // 1in = 96px (CSS spec)
+            LengthUnit::Cm => self.value * 37.795276,     // 1cm = 96px/2.54
+            LengthUnit::Mm => self.value * 3.7795276,     // 1mm = 1/10 cm
             _ => panic!(
                 "Cannot convert {} to px without context",
                 self.unit.as_str()
@@ -534,10 +534,7 @@ impl Length {
         match self.unit {
             LengthUnit::Em | LengthUnit::Rem => self.value * font_size_px,
             _ if self.unit.is_absolute() => self.to_px(),
-            _ => panic!(
-                "Cannot resolve {} with only font size",
-                self.unit.as_str()
-            ),
+            _ => panic!("Cannot resolve {} with only font size", self.unit.as_str()),
         }
     }
 
@@ -558,12 +555,8 @@ impl Length {
         match self.unit {
             LengthUnit::Vw => (self.value / 100.0) * viewport_width,
             LengthUnit::Vh => (self.value / 100.0) * viewport_height,
-            LengthUnit::Vmin => {
-                (self.value / 100.0) * viewport_width.min(viewport_height)
-            }
-            LengthUnit::Vmax => {
-                (self.value / 100.0) * viewport_width.max(viewport_height)
-            }
+            LengthUnit::Vmin => (self.value / 100.0) * viewport_width.min(viewport_height),
+            LengthUnit::Vmax => (self.value / 100.0) * viewport_width.max(viewport_height),
             _ if self.unit.is_absolute() => self.to_px(),
             _ => panic!(
                 "Cannot resolve {} with only viewport dimensions",

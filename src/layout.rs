@@ -505,7 +505,9 @@ fn convert_to_taffy_style(
 
     // Position
     style.position = match styles.position {
-        style::Position::Static | style::Position::Relative => taffy::Position::Relative,
+        style::Position::Static | style::Position::Relative | style::Position::Sticky => {
+            taffy::Position::Relative
+        }
         style::Position::Absolute => taffy::Position::Absolute,
         style::Position::Fixed => taffy::Position::Absolute, // Treat fixed as absolute
     };

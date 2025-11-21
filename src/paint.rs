@@ -2,7 +2,7 @@ use crate::css::{Color, ColorStop, TextShadow};
 use crate::error::{Error, Result};
 use crate::image_loader::ImageCache;
 use crate::layout::LayoutBox;
-use crate::style::{BackgroundImage, BorderStyle, Display, FontWeight, TextAlign, ComputedStyles};
+use crate::style::{BackgroundImage, BorderStyle, ComputedStyles, Display, FontWeight, TextAlign};
 use crate::text::{shape_text, FontCache};
 use tiny_skia::*;
 
@@ -406,22 +406,10 @@ fn paint_borders(
     let width = layout_box.width;
     let height = layout_box.height;
 
-    let top_width = layout_box
-        .styles
-        .border_top_width
-        .to_px();
-    let right_width = layout_box
-        .styles
-        .border_right_width
-        .to_px();
-    let bottom_width = layout_box
-        .styles
-        .border_bottom_width
-        .to_px();
-    let left_width = layout_box
-        .styles
-        .border_left_width
-        .to_px();
+    let top_width = layout_box.styles.border_top_width.to_px();
+    let right_width = layout_box.styles.border_right_width.to_px();
+    let bottom_width = layout_box.styles.border_bottom_width.to_px();
+    let left_width = layout_box.styles.border_left_width.to_px();
 
     // Check if border-radius is set
     let has_radius = layout_box.styles.border_top_left_radius.value > 0.0
@@ -612,9 +600,7 @@ fn paint_box_shadows(
         let offset_x = shadow.offset_x.to_px();
         let offset_y = shadow.offset_y.to_px();
         let _blur_radius = shadow.blur_radius.to_px();
-        let spread_radius = shadow
-            .spread_radius
-            .to_px();
+        let spread_radius = shadow.spread_radius.to_px();
 
         let shadow_x = layout_box.x + offset_x - spread_radius;
         let shadow_y = layout_box.y + offset_y - spread_radius;
@@ -726,22 +712,10 @@ fn paint_text(
     let text_layout = shape_text(&text_content, &layout_box.styles, font_cache, max_width)?;
 
     // Calculate text position based on text-align
-    let padding_left = layout_box
-        .styles
-        .padding_left
-        .to_px();
-    let padding_top = layout_box
-        .styles
-        .padding_top
-        .to_px();
-    let border_left = layout_box
-        .styles
-        .border_left_width
-        .to_px();
-    let border_top = layout_box
-        .styles
-        .border_top_width
-        .to_px();
+    let padding_left = layout_box.styles.padding_left.to_px();
+    let padding_top = layout_box.styles.padding_top.to_px();
+    let border_left = layout_box.styles.border_left_width.to_px();
+    let border_top = layout_box.styles.border_top_width.to_px();
 
     let content_x = layout_box.x + border_left + padding_left;
     let content_y = layout_box.y + border_top + padding_top;
@@ -792,10 +766,7 @@ fn paint_text_with_shadow(
     };
 
     let (shadow_x, shadow_y) = if let Some(s) = shadow {
-        (
-            s.offset_x.to_px(),
-            s.offset_y.to_px(),
-        )
+        (s.offset_x.to_px(), s.offset_y.to_px())
     } else {
         (0.0, 0.0)
     };
@@ -893,22 +864,10 @@ fn create_rounded_rect_path(layout_box: &LayoutBox) -> Option<Path> {
     let width = layout_box.width;
     let height = layout_box.height;
 
-    let tl = layout_box
-        .styles
-        .border_top_left_radius
-        .to_px();
-    let tr = layout_box
-        .styles
-        .border_top_right_radius
-        .to_px();
-    let bl = layout_box
-        .styles
-        .border_bottom_left_radius
-        .to_px();
-    let br = layout_box
-        .styles
-        .border_bottom_right_radius
-        .to_px();
+    let tl = layout_box.styles.border_top_left_radius.to_px();
+    let tr = layout_box.styles.border_top_right_radius.to_px();
+    let bl = layout_box.styles.border_bottom_left_radius.to_px();
+    let br = layout_box.styles.border_bottom_right_radius.to_px();
 
     let mut pb = PathBuilder::new();
 

@@ -4,8 +4,8 @@
 //! computed styles, and style properties.
 
 pub mod color;
-
 pub mod display;
+pub mod position;
 
 // Re-export commonly used color types
 pub use color::{Color as NewColor, ColorParseError, Hsla, Rgba};
@@ -13,11 +13,14 @@ pub use color::{Color as NewColor, ColorParseError, Hsla, Rgba};
 // Re-export commonly used types from display module
 pub use display::{Display, DisplayParseError, FormattingContextType, InnerDisplay, OuterDisplay};
 
+// Re-export commonly used types from position module
+pub use position::{Position, PositionParseError};
+
 use crate::css::{
     self, BoxShadow, Color, Declaration, PropertyValue, StyleSheet, TextShadow, Transform,
 };
 use crate::dom::{DomNode, ElementRef};
-pub use crate::style::values::{Length, LengthUnit, LengthOrAuto};
+pub use crate::style::values::{Length, LengthOrAuto, LengthUnit};
 use selectors::context::{QuirksMode, SelectorCaches};
 use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
 use std::collections::HashMap;
@@ -143,15 +146,6 @@ pub struct ComputedStyles {
 
     // CSS Custom Properties (variables)
     pub custom_properties: HashMap<String, String>,
-}
-
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Position {
-    Static,
-    Relative,
-    Absolute,
-    Fixed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1266,13 +1260,9 @@ fn apply_declaration(
         // Position
         "position" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.position = match kw.as_str() {
-                    "static" => Position::Static,
-                    "relative" => Position::Relative,
-                    "absolute" => Position::Absolute,
-                    "fixed" => Position::Fixed,
-                    _ => styles.position,
-                };
+                if let Ok(position) = Position::parse(kw) {
+                    styles.position = position;
+                }
             }
         }
 
@@ -1708,11 +1698,17 @@ fn apply_declaration(
                 if len.unit.is_absolute() {
                     styles.font_size = len.to_px();
                 } else if len.unit == LengthUnit::Em || len.unit == LengthUnit::Percent {
-                     // Em/percent are relative to parent font size
-                     styles.font_size = len.value / (if len.unit == LengthUnit::Percent { 100.0 } else { 1.0 }) * parent_font_size;
+                    // Em/percent are relative to parent font size
+                    styles.font_size = len.value
+                        / (if len.unit == LengthUnit::Percent {
+                            100.0
+                        } else {
+                            1.0
+                        })
+                        * parent_font_size;
                 } else if len.unit == LengthUnit::Rem {
-                     // Rem is relative to root font size
-                     styles.font_size = len.value * root_font_size;
+                    // Rem is relative to root font size
+                    styles.font_size = len.value * root_font_size;
                 }
             }
         }
@@ -1789,21 +1785,21 @@ fn apply_declaration(
         "letter-spacing" => {
             if let Some(len) = extract_length(&resolved_value) {
                 if len.unit.is_absolute() {
-                     styles.letter_spacing = len.to_px();
+                    styles.letter_spacing = len.to_px();
                 } else {
-                     // Fallback for relative units in letter-spacing (usually small)
-                     // Em units should be relative to current font size, but we don't have it finalized here easily
-                     // Just use value as if px for now if not absolute, or 0
-                     styles.letter_spacing = len.value;
+                    // Fallback for relative units in letter-spacing (usually small)
+                    // Em units should be relative to current font size, but we don't have it finalized here easily
+                    // Just use value as if px for now if not absolute, or 0
+                    styles.letter_spacing = len.value;
                 }
             }
         }
         "word-spacing" => {
             if let Some(len) = extract_length(&resolved_value) {
-                 if len.unit.is_absolute() {
-                     styles.word_spacing = len.to_px();
+                if len.unit.is_absolute() {
+                    styles.word_spacing = len.to_px();
                 } else {
-                     styles.word_spacing = len.value;
+                    styles.word_spacing = len.value;
                 }
             }
         }
