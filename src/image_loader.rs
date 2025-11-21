@@ -164,24 +164,36 @@ impl ImageCache {
             })?;
 
         // Decode image
-        image::load_from_memory(&bytes)
-            .map_err(|e| Error::ImageDecode(format!("Failed to decode image from {}: {}", url, e)))
+        image::load_from_memory(&bytes).map_err(|e| {
+            Error::Image(crate::error::ImageError::DecodeFailed {
+                url: url.to_string(),
+                reason: e.to_string(),
+            })
+        })
     }
 
     fn load_from_file(&self, path: &str) -> Result<DynamicImage> {
-        image::open(path)
-            .map_err(|e| Error::ImageDecode(format!("Failed to load image from {}: {}", path, e)))
+        image::open(path).map_err(|e| {
+            Error::Image(crate::error::ImageError::LoadFailed {
+                url: path.to_string(),
+                reason: e.to_string(),
+            })
+        })
     }
 
     fn load_from_data_url(&self, data_url: &str) -> Result<DynamicImage> {
         // Parse data URL: data:image/png;base64,iVBORw0KG... or data:image/svg+xml,%3Csvg...
         if !data_url.starts_with("data:") {
-            return Err(Error::ImageDecode("Invalid data URL".to_string()));
+            return Err(Error::Image(crate::error::ImageError::InvalidDataUrl {
+                reason: "URL does not start with 'data:'".to_string(),
+            }));
         }
 
         let parts: Vec<&str> = data_url.splitn(2, ',').collect();
         if parts.len() != 2 {
-            return Err(Error::ImageDecode("Invalid data URL format".to_string()));
+            return Err(Error::Image(crate::error::ImageError::InvalidDataUrl {
+                reason: "Missing comma separator".to_string(),
+            }));
         }
 
         let header = parts[0];
@@ -189,23 +201,32 @@ impl ImageCache {
 
         // Check if base64 encoded
         if header.contains("base64") {
-            let bytes = base64::decode(data)
-                .map_err(|e| Error::ImageDecode(format!("Failed to decode base64: {}", e)))?;
+            let bytes = base64::decode(data).map_err(|e| {
+                Error::Image(crate::error::ImageError::InvalidDataUrl {
+                    reason: format!("Failed to decode base64: {}", e),
+                })
+            })?;
 
             image::load_from_memory(&bytes).map_err(|e| {
-                Error::ImageDecode(format!("Failed to decode image from data URL: {}", e))
+                Error::Image(crate::error::ImageError::DecodeFailed {
+                    url: "data URL".to_string(),
+                    reason: e.to_string(),
+                })
             })
         } else if header.contains("image/svg+xml") {
             // Handle URL-encoded SVG
-            let decoded = urlencoding::decode(data)
-                .map_err(|e| Error::ImageDecode(format!("Failed to URL decode SVG: {}", e)))?;
+            let decoded = urlencoding::decode(data).map_err(|e| {
+                Error::Image(crate::error::ImageError::InvalidDataUrl {
+                    reason: format!("Failed to URL decode SVG: {}", e),
+                })
+            })?;
 
             // Use resvg to render SVG to bitmap
             self.render_svg_to_image(&decoded)
         } else {
-            Err(Error::ImageDecode(
-                "Unsupported data URL format".to_string(),
-            ))
+            Err(Error::Image(crate::error::ImageError::InvalidDataUrl {
+                reason: "Unsupported data URL format (not base64 or SVG)".to_string(),
+            }))
         }
     }
 
@@ -216,8 +237,12 @@ impl ImageCache {
 
         // Parse SVG
         let options = usvg::Options::default();
-        let tree = usvg::Tree::from_str(svg_content, &options)
-            .map_err(|e| Error::ImageDecode(format!("Failed to parse SVG: {}", e)))?;
+        let tree = usvg::Tree::from_str(svg_content, &options).map_err(|e| {
+            Error::Image(crate::error::ImageError::DecodeFailed {
+                url: "SVG data URL".to_string(),
+                reason: format!("Failed to parse SVG: {}", e),
+            })
+        })?;
 
         let size = tree.size();
         let width = size.width() as u32;
@@ -226,8 +251,9 @@ impl ImageCache {
         eprintln!("DEBUG: SVG parsed successfully, size: {}x{}", width, height);
 
         // Render SVG to pixmap
-        let mut pixmap = tiny_skia::Pixmap::new(width, height)
-            .ok_or_else(|| Error::ImageDecode("Failed to create pixmap for SVG".to_string()))?;
+        let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or_else(|| {
+            Error::Render(crate::error::RenderError::CanvasCreationFailed { width, height })
+        })?;
 
         resvg::render(
             &tree,
@@ -238,7 +264,10 @@ impl ImageCache {
         // Convert pixmap to image
         let rgba_data = pixmap.take();
         let img = image::RgbaImage::from_raw(width, height, rgba_data).ok_or_else(|| {
-            Error::ImageDecode("Failed to create image from SVG pixmap".to_string())
+            Error::Image(crate::error::ImageError::DecodeFailed {
+                url: "SVG data URL".to_string(),
+                reason: "Failed to create image from SVG pixmap".to_string(),
+            })
         })?;
 
         eprintln!("DEBUG: SVG rendered to {}x{} image", width, height);

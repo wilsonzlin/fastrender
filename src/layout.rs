@@ -1,5 +1,5 @@
-use crate::css::{Length, LengthUnit};
 use crate::style;
+use crate::style::{Length, LengthUnit};
 use crate::text::TextLayout;
 use taffy::prelude::*;
 
@@ -237,7 +237,13 @@ fn build_taffy_tree(
             let line_height_value = match &styles.line_height {
                 style::LineHeight::Normal => font_size * 1.5, // More conservative than 1.2
                 style::LineHeight::Number(n) => font_size * n,
-                style::LineHeight::Length(len) => len.to_px(font_size, 16.0),
+                style::LineHeight::Length(len) => {
+                    if len.unit.is_absolute() {
+                        len.to_px()
+                    } else {
+                        len.resolve_with_font_size(font_size)
+                    }
+                }
             };
 
             // Estimate text width - for grid items, try to use a reasonable default
@@ -246,7 +252,13 @@ fn build_taffy_tree(
 
             // Estimate available width based on viewport or explicit width
             let available_width = if let Some(width) = &styles.width {
-                width.to_px(font_size, 16.0)
+                if width.unit.is_absolute() {
+                    width.to_px()
+                } else if width.unit.is_font_relative() {
+                    width.resolve_with_font_size(font_size)
+                } else {
+                    width.value // fallback
+                }
             } else if matches!(
                 styles.display,
                 style::Display::Inline | style::Display::InlineBlock
@@ -475,7 +487,11 @@ fn convert_to_taffy_style(
             // For very small widths (like width="18" for vote arrows),
             // still allow content to define minimum
             if let Some(ref w) = styles.width {
-                let width_px = w.to_px(styles.font_size, 16.0);
+                let width_px = if w.unit.is_absolute() {
+                    w.to_px()
+                } else {
+                    w.resolve_with_font_size(styles.font_size)
+                };
                 if width_px < 50.0 {
                     // Small cell - use exact width
                     style.min_size.width = Dimension::length(width_px);
@@ -725,7 +741,12 @@ fn convert_to_taffy_style(
     style.flex_basis = match &styles.flex_basis {
         style::FlexBasis::Auto => Dimension::auto(),
         style::FlexBasis::Length(len) => {
-            Dimension::length(len.to_px(styles.font_size, root_font_size))
+            let px = if len.unit.is_absolute() {
+                len.to_px()
+            } else {
+                len.resolve_with_font_size(styles.font_size)
+            };
+            Dimension::length(px)
         }
     };
 
@@ -747,7 +768,11 @@ fn convert_to_taffy_style(
                 .map(|track| {
                     let sizing_function = match track {
                         style::GridTrack::Length(len) => {
-                            let px = len.to_px(styles.font_size, root_font_size);
+                            let px = if len.unit.is_absolute() {
+                                len.to_px()
+                            } else {
+                                len.resolve_with_font_size(styles.font_size)
+                            };
                             TaffyMinMax {
                                 min: MinTrackSizingFunction::length(px),
                                 max: MaxTrackSizingFunction::length(px),
@@ -782,7 +807,11 @@ fn convert_to_taffy_style(
                 .map(|track| {
                     let sizing_function = match track {
                         style::GridTrack::Length(len) => {
-                            let px = len.to_px(styles.font_size, root_font_size);
+                            let px = if len.unit.is_absolute() {
+                                len.to_px()
+                            } else {
+                                len.resolve_with_font_size(styles.font_size)
+                            };
                             TaffyMinMax {
                                 min: MinTrackSizingFunction::length(px),
                                 max: MaxTrackSizingFunction::length(px),
@@ -911,16 +940,17 @@ fn convert_to_taffy_style(
 fn convert_dimension(
     opt_len: &Option<Length>,
     font_size: f32,
-    root_font_size: f32,
+    _root_font_size: f32,
     _viewport_width: f32,
 ) -> Dimension {
     match opt_len {
         Some(len) => match len.unit {
             LengthUnit::Percent => Dimension::percent(len.value / 100.0),
-            _ => {
-                let px = len.to_px(font_size, root_font_size);
-                Dimension::length(px)
+            _ if len.unit.is_absolute() => Dimension::length(len.to_px()),
+            LengthUnit::Em | LengthUnit::Rem => {
+                Dimension::length(len.resolve_with_font_size(font_size))
             }
+            _ => Dimension::length(len.value),
         },
         None => Dimension::auto(),
     }
@@ -929,15 +959,16 @@ fn convert_dimension(
 fn convert_length_unit(
     len: &Length,
     font_size: f32,
-    root_font_size: f32,
+    _root_font_size: f32,
     _viewport_width: f32,
 ) -> LengthPercentage {
     match len.unit {
         LengthUnit::Percent => LengthPercentage::percent(len.value / 100.0),
-        _ => {
-            let px = len.to_px(font_size, root_font_size);
-            LengthPercentage::length(px)
+        _ if len.unit.is_absolute() => LengthPercentage::length(len.to_px()),
+        LengthUnit::Em | LengthUnit::Rem => {
+            LengthPercentage::length(len.resolve_with_font_size(font_size))
         }
+        _ => LengthPercentage::length(len.value),
     }
 }
 
@@ -969,15 +1000,23 @@ fn extract_layout(
     let height = layout.size.height;
 
     // Calculate content dimensions (excluding padding and border)
-    let padding_left = styles.padding_left.to_px(styles.font_size, 16.0);
-    let padding_right = styles.padding_right.to_px(styles.font_size, 16.0);
-    let padding_top = styles.padding_top.to_px(styles.font_size, 16.0);
-    let padding_bottom = styles.padding_bottom.to_px(styles.font_size, 16.0);
+    let resolve_px = |len: &Length| -> f32 {
+        if len.unit.is_absolute() {
+            len.to_px()
+        } else {
+            len.resolve_with_font_size(styles.font_size)
+        }
+    };
 
-    let border_left = styles.border_left_width.to_px(styles.font_size, 16.0);
-    let border_right = styles.border_right_width.to_px(styles.font_size, 16.0);
-    let border_top = styles.border_top_width.to_px(styles.font_size, 16.0);
-    let border_bottom = styles.border_bottom_width.to_px(styles.font_size, 16.0);
+    let padding_left = resolve_px(&styles.padding_left);
+    let padding_right = resolve_px(&styles.padding_right);
+    let padding_top = resolve_px(&styles.padding_top);
+    let padding_bottom = resolve_px(&styles.padding_bottom);
+
+    let border_left = resolve_px(&styles.border_left_width);
+    let border_right = resolve_px(&styles.border_right_width);
+    let border_top = resolve_px(&styles.border_top_width);
+    let border_bottom = resolve_px(&styles.border_bottom_width);
 
     let content_width =
         (width - padding_left - padding_right - border_left - border_right).max(0.0);
