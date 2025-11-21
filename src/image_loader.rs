@@ -143,12 +143,10 @@ impl ImageCache {
             .build();
         let agent: ureq::Agent = config.into();
 
-        let mut response = agent.get(url).call().map_err(|e| {
-            Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            ))
-        })?;
+        let mut response = agent
+            .get(url)
+            .call()
+            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
         // Read response body into bytes (limit to 50MB for images)
         let bytes = response
@@ -156,12 +154,7 @@ impl ImageCache {
             .with_config()
             .limit(50 * 1024 * 1024)
             .read_to_vec()
-            .map_err(|e| {
-                Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e.to_string(),
-                ))
-            })?;
+            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
         // Decode image
         image::load_from_memory(&bytes).map_err(|e| {
@@ -251,15 +244,11 @@ impl ImageCache {
         eprintln!("DEBUG: SVG parsed successfully, size: {}x{}", width, height);
 
         // Render SVG to pixmap
-        let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or_else(|| {
-            Error::Render(crate::error::RenderError::CanvasCreationFailed { width, height })
-        })?;
+        let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or(Error::Render(
+            crate::error::RenderError::CanvasCreationFailed { width, height },
+        ))?;
 
-        resvg::render(
-            &tree,
-            tiny_skia::Transform::identity(),
-            &mut pixmap.as_mut(),
-        );
+        resvg::render(&tree, tiny_skia::Transform::identity(), &mut pixmap.as_mut());
 
         // Convert pixmap to image
         let rgba_data = pixmap.take();

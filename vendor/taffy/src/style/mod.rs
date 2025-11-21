@@ -523,7 +523,10 @@ impl<S: CheapCloneStr> Style<S> {
         item_is_table: false,
         item_is_replaced: false,
         box_sizing: BoxSizing::BorderBox,
-        overflow: Point { x: Overflow::Visible, y: Overflow::Visible },
+        overflow: Point {
+            x: Overflow::Visible,
+            y: Overflow::Visible,
+        },
         scrollbar_width: 0.0,
         position: Position::Relative,
         inset: Rect::auto(),
@@ -581,9 +584,15 @@ impl<S: CheapCloneStr> Style<S> {
         #[cfg(feature = "grid")]
         grid_auto_flow: GridAutoFlow::Row,
         #[cfg(feature = "grid")]
-        grid_row: Line { start: GridPlacement::<S>::Auto, end: GridPlacement::<S>::Auto },
+        grid_row: Line {
+            start: GridPlacement::<S>::Auto,
+            end: GridPlacement::<S>::Auto,
+        },
         #[cfg(feature = "grid")]
-        grid_column: Line { start: GridPlacement::<S>::Auto, end: GridPlacement::<S>::Auto },
+        grid_column: Line {
+            start: GridPlacement::<S>::Auto,
+            end: GridPlacement::<S>::Auto,
+        },
     };
 }
 
@@ -1146,9 +1155,15 @@ mod tests {
             #[cfg(feature = "grid")]
             grid_auto_flow: Default::default(),
             #[cfg(feature = "grid")]
-            grid_row: Line { start: GridPlacement::Auto, end: GridPlacement::Auto },
+            grid_row: Line {
+                start: GridPlacement::Auto,
+                end: GridPlacement::Auto,
+            },
             #[cfg(feature = "grid")]
-            grid_column: Line { start: GridPlacement::Auto, end: GridPlacement::Auto },
+            grid_column: Line {
+                start: GridPlacement::Auto,
+                end: GridPlacement::Auto,
+            },
         };
 
         assert_eq!(Style::DEFAULT, Style::<DefaultCheapStr>::default());

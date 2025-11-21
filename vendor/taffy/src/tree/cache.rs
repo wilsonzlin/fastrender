@@ -39,7 +39,11 @@ impl Default for Cache {
 impl Cache {
     /// Create a new empty cache
     pub const fn new() -> Self {
-        Self { final_layout_entry: None, measure_entries: [None; CACHE_SIZE], is_empty: true }
+        Self {
+            final_layout_entry: None,
+            measure_entries: [None; CACHE_SIZE],
+            is_empty: true,
+        }
     }
 
     /// Return the cache slot to cache the current computed result in
@@ -163,13 +167,20 @@ impl Cache {
         match run_mode {
             RunMode::PerformLayout => {
                 self.is_empty = false;
-                self.final_layout_entry = Some(CacheEntry { known_dimensions, available_space, content: layout_output })
+                self.final_layout_entry = Some(CacheEntry {
+                    known_dimensions,
+                    available_space,
+                    content: layout_output,
+                })
             }
             RunMode::ComputeSize => {
                 self.is_empty = false;
                 let cache_slot = Self::compute_cache_slot(known_dimensions, available_space);
-                self.measure_entries[cache_slot] =
-                    Some(CacheEntry { known_dimensions, available_space, content: layout_output.size });
+                self.measure_entries[cache_slot] = Some(CacheEntry {
+                    known_dimensions,
+                    available_space,
+                    content: layout_output.size,
+                });
             }
             RunMode::PerformHiddenLayout => {}
         }

@@ -369,10 +369,7 @@ impl Rect {
     /// assert!(!rect.contains_point(Point::new(5.0, 5.0)));
     /// ```
     pub fn contains_point(self, point: Point) -> bool {
-        point.x >= self.min_x()
-            && point.x <= self.max_x()
-            && point.y >= self.min_y()
-            && point.y <= self.max_y()
+        point.x >= self.min_x() && point.x <= self.max_x() && point.y >= self.min_y() && point.y <= self.max_y()
     }
 
     /// Returns true if this rectangle intersects another rectangle

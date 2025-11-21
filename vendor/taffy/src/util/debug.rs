@@ -16,7 +16,9 @@ static EMPTY_STRING: String = String::new();
 #[cfg(any(feature = "debug", feature = "profile"))]
 impl DebugLogger {
     pub const fn new() -> Self {
-        Self { stack: Mutex::new(Vec::new()) }
+        Self {
+            stack: Mutex::new(Vec::new()),
+        }
     }
 
     pub fn push_node(&self, new_key: crate::NodeId) {

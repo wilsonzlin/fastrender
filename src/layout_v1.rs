@@ -41,11 +41,7 @@ pub struct LayoutBox {
     pub img_src: Option<String>,
 }
 
-pub fn compute_layout(
-    styled_tree: &style::StyledNode,
-    viewport_width: f32,
-    viewport_height: f32,
-) -> LayoutTree {
+pub fn compute_layout(styled_tree: &style::StyledNode, viewport_width: f32, viewport_height: f32) -> LayoutTree {
     let mut taffy = TaffyTree::new();
     let root_font_size = 16.0;
 
@@ -129,11 +125,7 @@ fn build_taffy_tree(
 
     // Recursively collect text from text nodes and inline elements
     // BUT: don't collect from inline children if parent is flex/grid (they become items instead)
-    fn collect_text_for_layout(
-        node: &style::StyledNode,
-        text: &mut String,
-        parent_is_flex_or_grid: bool,
-    ) -> bool {
+    fn collect_text_for_layout(node: &style::StyledNode, text: &mut String, parent_is_flex_or_grid: bool) -> bool {
         let mut has_text = false;
 
         for child in &node.children {
@@ -225,8 +217,7 @@ fn build_taffy_tree(
         .collect();
 
     // Convert styles to Taffy style
-    let mut taffy_style =
-        convert_to_taffy_style(styles, root_font_size, _viewport_width, styled_node);
+    let mut taffy_style = convert_to_taffy_style(styles, root_font_size, _viewport_width, styled_node);
 
     // CRITICAL: Set height for text elements based on content
     // Without this, text boxes have zero/minimal height and content overlaps
@@ -259,10 +250,7 @@ fn build_taffy_tree(
                 } else {
                     width.value // fallback
                 }
-            } else if matches!(
-                styles.display,
-                style::Display::Inline | style::Display::InlineBlock
-            ) {
+            } else if matches!(styles.display, style::Display::Inline | style::Display::InlineBlock) {
                 // For inline elements (especially in flex containers), don't constrain width
                 // Use natural content width to avoid excessive wrapping
                 text.len() as f32 * avg_char_width
@@ -315,10 +303,7 @@ fn build_taffy_tree(
                 styled_node.node.tag_name(),
                 Some("h1") | Some("h2") | Some("h3") | Some("h4") | Some("h5") | Some("h6")
             );
-            if matches!(styles.display, style::Display::Block)
-                && styles.width.is_none()
-                && !is_heading
-            {
+            if matches!(styles.display, style::Display::Block) && styles.width.is_none() && !is_heading {
                 // Use a moderate multiplier - enough to prevent overlaps but not too much space
                 // Longer text wraps more predictably, shorter text needs more buffer
                 let buffer = if text.len() < 30 {
@@ -334,10 +319,7 @@ fn build_taffy_tree(
             let estimated_height = estimated_lines * line_height_value;
 
             // For inline elements, also set width to prevent excessive wrapping
-            if matches!(
-                styles.display,
-                style::Display::Inline | style::Display::InlineBlock
-            ) {
+            if matches!(styles.display, style::Display::Inline | style::Display::InlineBlock) {
                 taffy_style.size.width = Dimension::length(available_width);
             }
 
@@ -398,9 +380,9 @@ fn convert_to_taffy_style(
         // But needs to behave like a flex container for its contents
         style::Display::TableCell => taffy::Display::Block,
         // Table structure elements - treat as block
-        style::Display::TableColumn
-        | style::Display::TableColumnGroup
-        | style::Display::TableCaption => taffy::Display::Block,
+        style::Display::TableColumn | style::Display::TableColumnGroup | style::Display::TableCaption => {
+            taffy::Display::Block
+        }
         // Contents - element generates no box, treat as block for now
         style::Display::Contents => taffy::Display::Block,
     };
@@ -434,10 +416,7 @@ fn convert_to_taffy_style(
     // Table cells without explicit width should grow to fill available space
     // Cells with width should respect it
     if matches!(styles.display, style::Display::TableCell) {
-        eprintln!(
-            "DEBUG: Configuring table cell flex - width: {:?}",
-            styles.width
-        );
+        eprintln!("DEBUG: Configuring table cell flex - width: {:?}", styles.width);
 
         // CRITICAL FIX: Detect header navigation cells and force proper width
         let mut is_navigation_cell = false;
@@ -472,9 +451,7 @@ fn convert_to_taffy_style(
                 style.flex_shrink = 0.0; // Don't shrink below basis
                 style.flex_basis = Dimension::length(800.0); // Force 800px basis
                 style.min_size.width = Dimension::length(400.0); // Minimum 400px backup
-                eprintln!(
-                    "DEBUG: Applied navigation cell flex - basis:800px, grow:1.0, shrink:0.0"
-                );
+                eprintln!("DEBUG: Applied navigation cell flex - basis:800px, grow:1.0, shrink:0.0");
             } else {
                 // Regular cells: reasonable minimum width
                 style.min_size.width = Dimension::length(100.0); // Minimum 100px width
@@ -505,109 +482,42 @@ fn convert_to_taffy_style(
 
     // Position
     style.position = match styles.position {
-        style::Position::Static | style::Position::Relative | style::Position::Sticky => {
-            taffy::Position::Relative
-        }
+        style::Position::Static | style::Position::Relative | style::Position::Sticky => taffy::Position::Relative,
         style::Position::Absolute => taffy::Position::Absolute,
         style::Position::Fixed => taffy::Position::Absolute, // Treat fixed as absolute
     };
 
     // Size
-    let height_dim = convert_dimension(
-        &styles.height,
-        styles.font_size,
-        root_font_size,
-        _viewport_width,
-    );
+    let height_dim = convert_dimension(&styles.height, styles.font_size, root_font_size, _viewport_width);
 
     style.size = Size {
-        width: convert_dimension(
-            &styles.width,
-            styles.font_size,
-            root_font_size,
-            _viewport_width,
-        ),
+        width: convert_dimension(&styles.width, styles.font_size, root_font_size, _viewport_width),
         height: height_dim,
     };
 
     style.min_size = Size {
-        width: convert_dimension(
-            &styles.min_width,
-            styles.font_size,
-            root_font_size,
-            _viewport_width,
-        ),
-        height: convert_dimension(
-            &styles.min_height,
-            styles.font_size,
-            root_font_size,
-            _viewport_width,
-        ),
+        width: convert_dimension(&styles.min_width, styles.font_size, root_font_size, _viewport_width),
+        height: convert_dimension(&styles.min_height, styles.font_size, root_font_size, _viewport_width),
     };
 
     style.max_size = Size {
-        width: convert_dimension(
-            &styles.max_width,
-            styles.font_size,
-            root_font_size,
-            _viewport_width,
-        ),
-        height: convert_dimension(
-            &styles.max_height,
-            styles.font_size,
-            root_font_size,
-            _viewport_width,
-        ),
+        width: convert_dimension(&styles.max_width, styles.font_size, root_font_size, _viewport_width),
+        height: convert_dimension(&styles.max_height, styles.font_size, root_font_size, _viewport_width),
     };
 
     // Margin
     style.margin = Rect {
-        left: convert_margin(
-            &styles.margin_left,
-            styles.font_size,
-            root_font_size,
-            _viewport_width,
-        ),
-        right: convert_margin(
-            &styles.margin_right,
-            styles.font_size,
-            root_font_size,
-            _viewport_width,
-        ),
-        top: convert_margin(
-            &styles.margin_top,
-            styles.font_size,
-            root_font_size,
-            _viewport_width,
-        ),
-        bottom: convert_margin(
-            &styles.margin_bottom,
-            styles.font_size,
-            root_font_size,
-            _viewport_width,
-        ),
+        left: convert_margin(&styles.margin_left, styles.font_size, root_font_size, _viewport_width),
+        right: convert_margin(&styles.margin_right, styles.font_size, root_font_size, _viewport_width),
+        top: convert_margin(&styles.margin_top, styles.font_size, root_font_size, _viewport_width),
+        bottom: convert_margin(&styles.margin_bottom, styles.font_size, root_font_size, _viewport_width),
     };
 
     // Padding
     style.padding = Rect {
-        left: convert_length_unit(
-            &styles.padding_left,
-            styles.font_size,
-            root_font_size,
-            _viewport_width,
-        ),
-        right: convert_length_unit(
-            &styles.padding_right,
-            styles.font_size,
-            root_font_size,
-            _viewport_width,
-        ),
-        top: convert_length_unit(
-            &styles.padding_top,
-            styles.font_size,
-            root_font_size,
-            _viewport_width,
-        ),
+        left: convert_length_unit(&styles.padding_left, styles.font_size, root_font_size, _viewport_width),
+        right: convert_length_unit(&styles.padding_right, styles.font_size, root_font_size, _viewport_width),
+        top: convert_length_unit(&styles.padding_top, styles.font_size, root_font_size, _viewport_width),
         bottom: convert_length_unit(
             &styles.padding_bottom,
             styles.font_size,
@@ -701,12 +611,7 @@ fn convert_to_taffy_style(
             root_font_size,
             _viewport_width,
         );
-        let gap_height = convert_length_unit(
-            &styles.grid_row_gap,
-            styles.font_size,
-            root_font_size,
-            _viewport_width,
-        );
+        let gap_height = convert_length_unit(&styles.grid_row_gap, styles.font_size, root_font_size, _viewport_width);
 
         style.gap = Size {
             width: gap_width,
@@ -753,14 +658,8 @@ fn convert_to_taffy_style(
     };
 
     // Grid properties
-    if matches!(
-        styles.display,
-        style::Display::Grid | style::Display::InlineGrid
-    ) {
-        use taffy::{
-            GridTemplateComponent, MaxTrackSizingFunction, MinMax as TaffyMinMax,
-            MinTrackSizingFunction,
-        };
+    if matches!(styles.display, style::Display::Grid | style::Display::InlineGrid) {
+        use taffy::{GridTemplateComponent, MaxTrackSizingFunction, MinMax as TaffyMinMax, MinTrackSizingFunction};
 
         // Convert grid template columns
         if !styles.grid_template_columns.is_empty() {
@@ -848,12 +747,7 @@ fn convert_to_taffy_style(
                 root_font_size,
                 _viewport_width,
             ),
-            height: convert_length_unit(
-                &styles.grid_row_gap,
-                styles.font_size,
-                root_font_size,
-                _viewport_width,
-            ),
+            height: convert_length_unit(&styles.grid_row_gap, styles.font_size, root_font_size, _viewport_width),
         };
     }
 
@@ -910,22 +804,16 @@ fn convert_to_taffy_style(
     // Position offsets
     if styles.position != style::Position::Static {
         if let Some(top) = &styles.top {
-            style.inset.top =
-                convert_length_unit(top, styles.font_size, root_font_size, _viewport_width).into();
+            style.inset.top = convert_length_unit(top, styles.font_size, root_font_size, _viewport_width).into();
         }
         if let Some(right) = &styles.right {
-            style.inset.right =
-                convert_length_unit(right, styles.font_size, root_font_size, _viewport_width)
-                    .into();
+            style.inset.right = convert_length_unit(right, styles.font_size, root_font_size, _viewport_width).into();
         }
         if let Some(bottom) = &styles.bottom {
-            style.inset.bottom =
-                convert_length_unit(bottom, styles.font_size, root_font_size, _viewport_width)
-                    .into();
+            style.inset.bottom = convert_length_unit(bottom, styles.font_size, root_font_size, _viewport_width).into();
         }
         if let Some(left) = &styles.left {
-            style.inset.left =
-                convert_length_unit(left, styles.font_size, root_font_size, _viewport_width).into();
+            style.inset.left = convert_length_unit(left, styles.font_size, root_font_size, _viewport_width).into();
         }
     }
 
@@ -949,27 +837,18 @@ fn convert_dimension(
         Some(len) => match len.unit {
             LengthUnit::Percent => Dimension::percent(len.value / 100.0),
             _ if len.unit.is_absolute() => Dimension::length(len.to_px()),
-            LengthUnit::Em | LengthUnit::Rem => {
-                Dimension::length(len.resolve_with_font_size(font_size))
-            }
+            LengthUnit::Em | LengthUnit::Rem => Dimension::length(len.resolve_with_font_size(font_size)),
             _ => Dimension::length(len.value),
         },
         None => Dimension::auto(),
     }
 }
 
-fn convert_length_unit(
-    len: &Length,
-    font_size: f32,
-    _root_font_size: f32,
-    _viewport_width: f32,
-) -> LengthPercentage {
+fn convert_length_unit(len: &Length, font_size: f32, _root_font_size: f32, _viewport_width: f32) -> LengthPercentage {
     match len.unit {
         LengthUnit::Percent => LengthPercentage::percent(len.value / 100.0),
         _ if len.unit.is_absolute() => LengthPercentage::length(len.to_px()),
-        LengthUnit::Em | LengthUnit::Rem => {
-            LengthPercentage::length(len.resolve_with_font_size(font_size))
-        }
+        LengthUnit::Em | LengthUnit::Rem => LengthPercentage::length(len.resolve_with_font_size(font_size)),
         _ => LengthPercentage::length(len.value),
     }
 }
@@ -1020,17 +899,11 @@ fn extract_layout(
     let border_top = resolve_px(&styles.border_top_width);
     let border_bottom = resolve_px(&styles.border_bottom_width);
 
-    let content_width =
-        (width - padding_left - padding_right - border_left - border_right).max(0.0);
-    let content_height =
-        (height - padding_top - padding_bottom - border_top - border_bottom).max(0.0);
+    let content_width = (width - padding_left - padding_right - border_left - border_right).max(0.0);
+    let content_height = (height - padding_top - padding_bottom - border_top - border_bottom).max(0.0);
 
     // Extract children layouts
-    let taffy_children = taffy
-        .children(node)
-        .ok()
-        .map(|c| c.to_vec())
-        .unwrap_or_default();
+    let taffy_children = taffy.children(node).ok().map(|c| c.to_vec()).unwrap_or_default();
 
     // Collect text from text node children AND inline element children
     // Inline elements (a, span, em, strong, etc.) should have their text collected into the parent block
@@ -1059,11 +932,7 @@ fn extract_layout(
 
     // Recursively collect text from direct text nodes AND inline element children
     // BUT: don't collect from inline children if this is a flex/grid container
-    fn collect_inline_text(
-        node: &style::StyledNode,
-        text: &mut String,
-        parent_is_flex_or_grid: bool,
-    ) -> bool {
+    fn collect_inline_text(node: &style::StyledNode, text: &mut String, parent_is_flex_or_grid: bool) -> bool {
         let mut has_text = false;
 
         for child in &node.children {
@@ -1118,19 +987,14 @@ fn extract_layout(
     }
 
     // Table cells should always collect text, regardless of parent being flex
-    let should_collect_text =
-        !is_flex_or_grid || matches!(styles.display, style::Display::TableCell);
+    let should_collect_text = !is_flex_or_grid || matches!(styles.display, style::Display::TableCell);
     // For table cells, always treat as non-flex parent so inline children are collected as text
     let parent_is_flex_for_collection = if matches!(styles.display, style::Display::TableCell) {
         false // Table cells collect inline children as text
     } else {
         !should_collect_text
     };
-    has_text_children = collect_inline_text(
-        styled_node,
-        &mut collected_text,
-        parent_is_flex_for_collection,
-    );
+    has_text_children = collect_inline_text(styled_node, &mut collected_text, parent_is_flex_for_collection);
 
     // CRITICAL FIX: Force vote arrow content in extract_layout phase
     if styled_node.node.has_class("votelinks") {

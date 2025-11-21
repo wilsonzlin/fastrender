@@ -48,11 +48,17 @@ pub(crate) fn compute_grid_size_estimate<'a, S: GridItemStyle + 'a>(
         positive_implicit_block_tracks = row_max_span - explicit_block_tracks - negative_implicit_block_tracks;
     }
 
-    let column_counts =
-        TrackCounts::from_raw(negative_implicit_inline_tracks, explicit_inline_tracks, positive_implicit_inline_tracks);
+    let column_counts = TrackCounts::from_raw(
+        negative_implicit_inline_tracks,
+        explicit_inline_tracks,
+        positive_implicit_inline_tracks,
+    );
 
-    let row_counts =
-        TrackCounts::from_raw(negative_implicit_block_tracks, explicit_block_tracks, positive_implicit_block_tracks);
+    let row_counts = TrackCounts::from_raw(
+        negative_implicit_block_tracks,
+        explicit_block_tracks,
+        positive_implicit_block_tracks,
+    );
 
     (column_counts, row_counts)
 }
@@ -177,7 +183,13 @@ mod tests {
 
         #[test]
         fn child_min_max_line_auto() {
-            let (min_col, max_col, span) = child_min_line_max_line_span::<S>(Line { start: line(5), end: span(6) }, 6);
+            let (min_col, max_col, span) = child_min_line_max_line_span::<S>(
+                Line {
+                    start: line(5),
+                    end: span(6),
+                },
+                6,
+            );
             assert_eq!(min_col, OriginZeroLine(4));
             assert_eq!(max_col, OriginZeroLine(10));
             assert_eq!(span, 1);
@@ -185,7 +197,13 @@ mod tests {
 
         #[test]
         fn child_min_max_line_negative_track() {
-            let (min_col, max_col, span) = child_min_line_max_line_span::<S>(Line { start: line(-5), end: span(3) }, 6);
+            let (min_col, max_col, span) = child_min_line_max_line_span::<S>(
+                Line {
+                    start: line(-5),
+                    end: span(3),
+                },
+                6,
+            );
             assert_eq!(min_col, OriginZeroLine(2));
             assert_eq!(max_col, OriginZeroLine(5));
             assert_eq!(span, 1);

@@ -95,10 +95,7 @@ impl LengthUnit {
     /// assert!(!LengthUnit::Em.is_absolute());
     /// ```
     pub fn is_absolute(self) -> bool {
-        matches!(
-            self,
-            Self::Px | Self::Pt | Self::Pc | Self::In | Self::Cm | Self::Mm
-        )
+        matches!(self, Self::Px | Self::Pt | Self::Pc | Self::In | Self::Cm | Self::Mm)
     }
 
     /// Returns true if this is a font-relative unit (em, rem, ex, ch)
@@ -484,10 +481,7 @@ impl Length {
             LengthUnit::In => self.value * 96.0,          // 1in = 96px (CSS spec)
             LengthUnit::Cm => self.value * 37.795276,     // 1cm = 96px/2.54
             LengthUnit::Mm => self.value * 3.7795276,     // 1mm = 1/10 cm
-            _ => panic!(
-                "Cannot convert {} to px without context",
-                self.unit.as_str()
-            ),
+            _ => panic!("Cannot convert {} to px without context", self.unit.as_str()),
         }
     }
 
@@ -510,10 +504,7 @@ impl Length {
         match self.unit {
             LengthUnit::Percent => (self.value / 100.0) * percentage_base,
             _ if self.unit.is_absolute() => self.to_px(),
-            _ => panic!(
-                "Cannot resolve {} without additional context",
-                self.unit.as_str()
-            ),
+            _ => panic!("Cannot resolve {} without additional context", self.unit.as_str()),
         }
     }
 
@@ -558,10 +549,7 @@ impl Length {
             LengthUnit::Vmin => (self.value / 100.0) * viewport_width.min(viewport_height),
             LengthUnit::Vmax => (self.value / 100.0) * viewport_width.max(viewport_height),
             _ if self.unit.is_absolute() => self.to_px(),
-            _ => panic!(
-                "Cannot resolve {} with only viewport dimensions",
-                self.unit.as_str()
-            ),
+            _ => panic!("Cannot resolve {} with only viewport dimensions", self.unit.as_str()),
         }
     }
 

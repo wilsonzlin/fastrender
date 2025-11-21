@@ -46,14 +46,15 @@ pub(super) fn place_grid_items<'a, S, ChildIter>(
 
     // MODIFIED: Single-pass placement respecting source order
     // Collect all children first
-    let all_children: Vec<_> = children_iter()
-        .map(map_child_style_to_origin_zero_placement)
-        .collect();
+    let all_children: Vec<_> = children_iter().map(map_child_style_to_origin_zero_placement).collect();
 
     // Initialize auto-placement cursor
     let primary_neg_tracks = cell_occupancy_matrix.track_counts(primary_axis).negative_implicit as i16;
     let secondary_neg_tracks = cell_occupancy_matrix.track_counts(secondary_axis).negative_implicit as i16;
-    let grid_start_position = (OriginZeroLine(-primary_neg_tracks), OriginZeroLine(-secondary_neg_tracks));
+    let grid_start_position = (
+        OriginZeroLine(-primary_neg_tracks),
+        OriginZeroLine(-secondary_neg_tracks),
+    );
     let mut grid_position = grid_start_position;
 
     // Process all children in SOURCE ORDER
@@ -84,8 +85,11 @@ pub(super) fn place_grid_items<'a, S, ChildIter>(
             }
 
             // One axis definite, other axis auto (e.g., just row or just column specified)
-            _ if (child_placement.get(secondary_axis).is_definite() && !child_placement.get(primary_axis).is_definite())
-                 || (child_placement.get(primary_axis).is_definite() && !child_placement.get(secondary_axis).is_definite()) => {
+            _ if (child_placement.get(secondary_axis).is_definite()
+                && !child_placement.get(primary_axis).is_definite())
+                || (child_placement.get(primary_axis).is_definite()
+                    && !child_placement.get(secondary_axis).is_definite()) =>
+            {
                 #[cfg(test)]
                 println!("Definite One Axis Item {}\n==============", index);
 
@@ -97,7 +101,9 @@ pub(super) fn place_grid_items<'a, S, ChildIter>(
                     // Primary axis definite, secondary auto - need to handle this case
                     let primary_placement = child_placement.get(primary_axis).resolve_definite_grid_lines();
                     let secondary_start = match grid_auto_flow.is_dense() {
-                        true => cell_occupancy_matrix.track_counts(primary_axis.other_axis()).implicit_start_line(),
+                        true => cell_occupancy_matrix
+                            .track_counts(primary_axis.other_axis())
+                            .implicit_start_line(),
                         false => grid_position.1,
                     };
 
@@ -105,8 +111,15 @@ pub(super) fn place_grid_items<'a, S, ChildIter>(
                     let mut sec_idx = secondary_start;
                     let secondary_span_width = child_placement.get(primary_axis.other_axis()).indefinite_span();
                     loop {
-                        let secondary_span = Line { start: sec_idx, end: sec_idx + secondary_span_width };
-                        if cell_occupancy_matrix.line_area_is_unoccupied(primary_axis, primary_placement, secondary_span) {
+                        let secondary_span = Line {
+                            start: sec_idx,
+                            end: sec_idx + secondary_span_width,
+                        };
+                        if cell_occupancy_matrix.line_area_is_unoccupied(
+                            primary_axis,
+                            primary_placement,
+                            secondary_span,
+                        ) {
                             break (primary_placement, secondary_span);
                         }
                         sec_idx += 1;
@@ -199,7 +212,11 @@ fn place_definite_secondary_axis_item(
     let starting_position = match auto_flow.is_dense() {
         true => primary_axis_grid_start_line,
         false => cell_occupancy_matrix
-            .last_of_type(primary_axis, secondary_axis_placement.start, CellOccupancyState::AutoPlaced)
+            .last_of_type(
+                primary_axis,
+                secondary_axis_placement.start,
+                CellOccupancyState::AutoPlaced,
+            )
             .unwrap_or(primary_axis_grid_start_line),
     };
 
@@ -238,8 +255,9 @@ fn place_indefinitely_positioned_item(
     let has_definite_primary_axis_position = primary_placement_style.is_definite();
     let primary_axis_grid_start_line = cell_occupancy_matrix.track_counts(primary_axis).implicit_start_line();
     let primary_axis_grid_end_line = cell_occupancy_matrix.track_counts(primary_axis).implicit_end_line();
-    let secondary_axis_grid_start_line =
-        cell_occupancy_matrix.track_counts(primary_axis.other_axis()).implicit_start_line();
+    let secondary_axis_grid_start_line = cell_occupancy_matrix
+        .track_counts(primary_axis.other_axis())
+        .implicit_start_line();
 
     let line_area_is_occupied = |primary_span, secondary_span| {
         !cell_occupancy_matrix.line_area_is_unoccupied(primary_axis, primary_span, secondary_span)
@@ -266,7 +284,10 @@ fn place_indefinitely_positioned_item(
         // Item has fixed primary axis position: so we simply increment the secondary axis position
         // until we find a space that the item fits in
         loop {
-            let secondary_span = Line { start: secondary_idx, end: secondary_idx + secondary_span };
+            let secondary_span = Line {
+                start: secondary_idx,
+                end: secondary_idx + secondary_span,
+            };
 
             // If area is occupied, increment the index and try again
             if line_area_is_occupied(primary_span, secondary_span) {
@@ -284,8 +305,14 @@ fn place_indefinitely_positioned_item(
         // existent tracks, and then we reset the primary axis back to zero and increment the secondary axis index.
         // We continue in this vein until we find a space that the item fits in.
         loop {
-            let primary_span = Line { start: primary_idx, end: primary_idx + primary_span };
-            let secondary_span = Line { start: secondary_idx, end: secondary_idx + secondary_span };
+            let primary_span = Line {
+                start: primary_idx,
+                end: primary_idx + primary_span,
+            };
+            let secondary_span = Line {
+                start: secondary_idx,
+                end: secondary_idx + secondary_span,
+            };
 
             // If the primary index is out of bounds, then increment the secondary index and reset the primary
             // index back to the start of the grid
@@ -380,7 +407,11 @@ mod tests {
             flow: GridAutoFlow,
         ) {
             // Setup test
-            let children_iter = || children.iter().map(|(index, style, _)| (*index, NodeId::from(*index), style));
+            let children_iter = || {
+                children
+                    .iter()
+                    .map(|(index, style, _)| (*index, NodeId::from(*index), style))
+            };
             let child_styles_iter = children.iter().map(|(_, style, _)| style);
             let estimated_sizes = compute_grid_size_estimate(explicit_col_count, explicit_row_count, child_styles_iter);
             let mut items = Vec::new();
@@ -409,7 +440,11 @@ mod tests {
             {
                 assert_eq!(item.node, NodeId::from(*id));
                 let actual_placement = (item.column.start, item.column.end, item.row.start, item.row.end);
-                assert_eq!(actual_placement, (*expected_placement).into_oz(), "Item {idx} (0-indexed)");
+                assert_eq!(
+                    actual_placement,
+                    (*expected_placement).into_oz(),
+                    "Item {idx} (0-indexed)"
+                );
             }
 
             // Assert that the correct number of implicit rows have been generated
@@ -433,9 +468,24 @@ mod tests {
                     (4, (line(3), span(2), line(5), auto()).into_grid_child(), (2, 4, 4, 5)),
                 ]
             };
-            let expected_cols = TrackCounts { negative_implicit: 1, explicit: 2, positive_implicit: 2 };
-            let expected_rows = TrackCounts { negative_implicit: 1, explicit: 2, positive_implicit: 3 };
-            placement_test_runner(explicit_col_count, explicit_row_count, children, expected_cols, expected_rows, flow);
+            let expected_cols = TrackCounts {
+                negative_implicit: 1,
+                explicit: 2,
+                positive_implicit: 2,
+            };
+            let expected_rows = TrackCounts {
+                negative_implicit: 1,
+                explicit: 2,
+                positive_implicit: 3,
+            };
+            placement_test_runner(
+                explicit_col_count,
+                explicit_row_count,
+                children,
+                expected_cols,
+                expected_rows,
+                flow,
+            );
         }
 
         #[test]
@@ -446,15 +496,46 @@ mod tests {
             let children = {
                 vec![
                     // node, style (grid coords), expected_placement (oz coords)
-                    (1, (line(-1), line(-1), line(-1), line(-1)).into_grid_child(), (2, 3, 2, 3)),
-                    (2, (line(-1), span(2), line(-1), span(2)).into_grid_child(), (2, 4, 2, 4)),
-                    (3, (line(-4), line(-4), line(-4), line(-4)).into_grid_child(), (-1, 0, -1, 0)),
-                    (4, (line(-4), span(2), line(-4), span(2)).into_grid_child(), (-1, 1, -1, 1)),
+                    (
+                        1,
+                        (line(-1), line(-1), line(-1), line(-1)).into_grid_child(),
+                        (2, 3, 2, 3),
+                    ),
+                    (
+                        2,
+                        (line(-1), span(2), line(-1), span(2)).into_grid_child(),
+                        (2, 4, 2, 4),
+                    ),
+                    (
+                        3,
+                        (line(-4), line(-4), line(-4), line(-4)).into_grid_child(),
+                        (-1, 0, -1, 0),
+                    ),
+                    (
+                        4,
+                        (line(-4), span(2), line(-4), span(2)).into_grid_child(),
+                        (-1, 1, -1, 1),
+                    ),
                 ]
             };
-            let expected_cols = TrackCounts { negative_implicit: 1, explicit: 2, positive_implicit: 2 };
-            let expected_rows = TrackCounts { negative_implicit: 1, explicit: 2, positive_implicit: 2 };
-            placement_test_runner(explicit_col_count, explicit_row_count, children, expected_cols, expected_rows, flow);
+            let expected_cols = TrackCounts {
+                negative_implicit: 1,
+                explicit: 2,
+                positive_implicit: 2,
+            };
+            let expected_rows = TrackCounts {
+                negative_implicit: 1,
+                explicit: 2,
+                positive_implicit: 2,
+            };
+            placement_test_runner(
+                explicit_col_count,
+                explicit_row_count,
+                children,
+                expected_cols,
+                expected_rows,
+                flow,
+            );
         }
 
         #[test]
@@ -476,9 +557,24 @@ mod tests {
                     (8, auto_child.clone(), (1, 2, 3, 4)),
                 ]
             };
-            let expected_cols = TrackCounts { negative_implicit: 0, explicit: 2, positive_implicit: 0 };
-            let expected_rows = TrackCounts { negative_implicit: 0, explicit: 2, positive_implicit: 2 };
-            placement_test_runner(explicit_col_count, explicit_row_count, children, expected_cols, expected_rows, flow);
+            let expected_cols = TrackCounts {
+                negative_implicit: 0,
+                explicit: 2,
+                positive_implicit: 0,
+            };
+            let expected_rows = TrackCounts {
+                negative_implicit: 0,
+                explicit: 2,
+                positive_implicit: 2,
+            };
+            placement_test_runner(
+                explicit_col_count,
+                explicit_row_count,
+                children,
+                expected_cols,
+                expected_rows,
+                flow,
+            );
         }
 
         #[test]
@@ -500,9 +596,24 @@ mod tests {
                     (8, auto_child.clone(), (3, 4, 1, 2)),
                 ]
             };
-            let expected_cols = TrackCounts { negative_implicit: 0, explicit: 2, positive_implicit: 2 };
-            let expected_rows = TrackCounts { negative_implicit: 0, explicit: 2, positive_implicit: 0 };
-            placement_test_runner(explicit_col_count, explicit_row_count, children, expected_cols, expected_rows, flow);
+            let expected_cols = TrackCounts {
+                negative_implicit: 0,
+                explicit: 2,
+                positive_implicit: 2,
+            };
+            let expected_rows = TrackCounts {
+                negative_implicit: 0,
+                explicit: 2,
+                positive_implicit: 0,
+            };
+            placement_test_runner(
+                explicit_col_count,
+                explicit_row_count,
+                children,
+                expected_cols,
+                expected_rows,
+                flow,
+            );
         }
 
         #[test]
@@ -516,9 +627,24 @@ mod tests {
                     (1, (span(5), auto(), auto(), auto()).into_grid_child(), (0, 5, 0, 1)),
                 ]
             };
-            let expected_cols = TrackCounts { negative_implicit: 0, explicit: 2, positive_implicit: 3 };
-            let expected_rows = TrackCounts { negative_implicit: 0, explicit: 2, positive_implicit: 0 };
-            placement_test_runner(explicit_col_count, explicit_row_count, children, expected_cols, expected_rows, flow);
+            let expected_cols = TrackCounts {
+                negative_implicit: 0,
+                explicit: 2,
+                positive_implicit: 3,
+            };
+            let expected_rows = TrackCounts {
+                negative_implicit: 0,
+                explicit: 2,
+                positive_implicit: 0,
+            };
+            placement_test_runner(
+                explicit_col_count,
+                explicit_row_count,
+                children,
+                expected_cols,
+                expected_rows,
+                flow,
+            );
         }
 
         #[test]
@@ -535,9 +661,24 @@ mod tests {
                     (4, (auto(), auto(), line(4), auto()).into_grid_child(), (0, 1, 3, 4)),
                 ]
             };
-            let expected_cols = TrackCounts { negative_implicit: 0, explicit: 2, positive_implicit: 1 };
-            let expected_rows = TrackCounts { negative_implicit: 0, explicit: 2, positive_implicit: 2 };
-            placement_test_runner(explicit_col_count, explicit_row_count, children, expected_cols, expected_rows, flow);
+            let expected_cols = TrackCounts {
+                negative_implicit: 0,
+                explicit: 2,
+                positive_implicit: 1,
+            };
+            let expected_rows = TrackCounts {
+                negative_implicit: 0,
+                explicit: 2,
+                positive_implicit: 2,
+            };
+            placement_test_runner(
+                explicit_col_count,
+                explicit_row_count,
+                children,
+                expected_cols,
+                expected_rows,
+                flow,
+            );
         }
 
         #[test]
@@ -553,9 +694,24 @@ mod tests {
                     (3, (auto(), auto(), line(1), auto()).into_grid_child(), (-1, 0, 0, 1)),
                 ]
             };
-            let expected_cols = TrackCounts { negative_implicit: 1, explicit: 2, positive_implicit: 0 };
-            let expected_rows = TrackCounts { negative_implicit: 0, explicit: 2, positive_implicit: 0 };
-            placement_test_runner(explicit_col_count, explicit_row_count, children, expected_cols, expected_rows, flow);
+            let expected_cols = TrackCounts {
+                negative_implicit: 1,
+                explicit: 2,
+                positive_implicit: 0,
+            };
+            let expected_rows = TrackCounts {
+                negative_implicit: 0,
+                explicit: 2,
+                positive_implicit: 0,
+            };
+            placement_test_runner(
+                explicit_col_count,
+                explicit_row_count,
+                children,
+                expected_cols,
+                expected_rows,
+                flow,
+            );
         }
 
         #[test]
@@ -571,9 +727,24 @@ mod tests {
                     (3, (auto(), auto(), auto(), auto()).into_grid_child(), (0, 1, 0, 1)), // Spans 1 column, so should be positioned before item 1
                 ]
             };
-            let expected_cols = TrackCounts { negative_implicit: 0, explicit: 4, positive_implicit: 0 };
-            let expected_rows = TrackCounts { negative_implicit: 0, explicit: 4, positive_implicit: 0 };
-            placement_test_runner(explicit_col_count, explicit_row_count, children, expected_cols, expected_rows, flow);
+            let expected_cols = TrackCounts {
+                negative_implicit: 0,
+                explicit: 4,
+                positive_implicit: 0,
+            };
+            let expected_rows = TrackCounts {
+                negative_implicit: 0,
+                explicit: 4,
+                positive_implicit: 0,
+            };
+            placement_test_runner(
+                explicit_col_count,
+                explicit_row_count,
+                children,
+                expected_cols,
+                expected_rows,
+                flow,
+            );
         }
 
         #[test]
@@ -589,9 +760,24 @@ mod tests {
                     (3, (auto(), span(1), auto(), auto()).into_grid_child(), (3, 4, 1, 2)), // Width 1 (uses second row as we're already on it)
                 ]
             };
-            let expected_cols = TrackCounts { negative_implicit: 0, explicit: 4, positive_implicit: 0 };
-            let expected_rows = TrackCounts { negative_implicit: 0, explicit: 4, positive_implicit: 0 };
-            placement_test_runner(explicit_col_count, explicit_row_count, children, expected_cols, expected_rows, flow);
+            let expected_cols = TrackCounts {
+                negative_implicit: 0,
+                explicit: 4,
+                positive_implicit: 0,
+            };
+            let expected_rows = TrackCounts {
+                negative_implicit: 0,
+                explicit: 4,
+                positive_implicit: 0,
+            };
+            placement_test_runner(
+                explicit_col_count,
+                explicit_row_count,
+                children,
+                expected_cols,
+                expected_rows,
+                flow,
+            );
         }
 
         #[test]
@@ -607,9 +793,24 @@ mod tests {
                     (3, (auto(), auto(), auto(), auto()).into_grid_child(), (-1, 0, 0, 1)), // Row 1. Auto positioned in column -1
                 ]
             };
-            let expected_cols = TrackCounts { negative_implicit: 2, explicit: 2, positive_implicit: 0 };
-            let expected_rows = TrackCounts { negative_implicit: 0, explicit: 2, positive_implicit: 0 };
-            placement_test_runner(explicit_col_count, explicit_row_count, children, expected_cols, expected_rows, flow);
+            let expected_cols = TrackCounts {
+                negative_implicit: 2,
+                explicit: 2,
+                positive_implicit: 0,
+            };
+            let expected_rows = TrackCounts {
+                negative_implicit: 0,
+                explicit: 2,
+                positive_implicit: 0,
+            };
+            placement_test_runner(
+                explicit_col_count,
+                explicit_row_count,
+                children,
+                expected_cols,
+                expected_rows,
+                flow,
+            );
         }
     }
 }

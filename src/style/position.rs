@@ -181,10 +181,7 @@ impl Position {
     /// assert!(!Position::Fixed.is_in_flow());
     /// ```
     pub fn is_in_flow(self) -> bool {
-        matches!(
-            self,
-            Position::Static | Position::Relative | Position::Sticky
-        )
+        matches!(self, Position::Static | Position::Relative | Position::Sticky)
     }
 
     /// Returns true if the element is absolutely positioned

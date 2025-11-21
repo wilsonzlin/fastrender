@@ -100,10 +100,7 @@ impl selectors::parser::NonTSPseudoClass for PseudoClass {
     }
 
     fn is_user_action_state(&self) -> bool {
-        matches!(
-            self,
-            PseudoClass::Hover | PseudoClass::Active | PseudoClass::Focus
-        )
+        matches!(self, PseudoClass::Hover | PseudoClass::Active | PseudoClass::Focus)
     }
 }
 
@@ -201,12 +198,7 @@ pub struct Color {
 }
 
 impl Color {
-    pub const TRANSPARENT: Self = Self {
-        r: 0,
-        g: 0,
-        b: 0,
-        a: 0,
-    };
+    pub const TRANSPARENT: Self = Self { r: 0, g: 0, b: 0, a: 0 };
     pub const WHITE: Self = Self {
         r: 255,
         g: 255,
@@ -229,12 +221,7 @@ impl Color {
     }
 
     pub const fn transparent() -> Self {
-        Self {
-            r: 0,
-            g: 0,
-            b: 0,
-            a: 0,
-        }
+        Self { r: 0, g: 0, b: 0, a: 0 }
     }
 
     pub const fn black() -> Self {
@@ -307,9 +294,9 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
             "link" => Ok(PseudoClass::Link),
             "visited" => Ok(PseudoClass::Visited),
             _ => Err(ParseError {
-                kind: cssparser::ParseErrorKind::Basic(
-                    cssparser::BasicParseErrorKind::UnexpectedToken(Token::Ident(name)),
-                ),
+                kind: cssparser::ParseErrorKind::Basic(cssparser::BasicParseErrorKind::UnexpectedToken(Token::Ident(
+                    name,
+                ))),
                 location: _location,
             }),
         }
@@ -324,23 +311,17 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
         match &*name {
             "nth-child" => {
                 let (a, b) = parse_nth(parser).map_err(|_| {
-                    parser.new_custom_error(
-                        SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone()),
-                    )
+                    parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone()))
                 })?;
                 Ok(PseudoClass::NthChild(a, b))
             }
             "nth-last-child" => {
                 let (a, b) = parse_nth(parser).map_err(|_| {
-                    parser.new_custom_error(
-                        SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone()),
-                    )
+                    parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone()))
                 })?;
                 Ok(PseudoClass::NthLastChild(a, b))
             }
-            _ => Err(parser.new_custom_error(
-                SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name),
-            )),
+            _ => Err(parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name))),
         }
     }
 
@@ -353,9 +334,9 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
             "before" => Ok(PseudoElement::Before),
             "after" => Ok(PseudoElement::After),
             _ => Err(ParseError {
-                kind: cssparser::ParseErrorKind::Basic(
-                    cssparser::BasicParseErrorKind::UnexpectedToken(Token::Ident(name)),
-                ),
+                kind: cssparser::ParseErrorKind::Basic(cssparser::BasicParseErrorKind::UnexpectedToken(Token::Ident(
+                    name,
+                ))),
                 location: _location,
             }),
         }
@@ -368,16 +349,12 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
 }
 
 /// Parse nth-child/nth-last-child expressions
-fn parse_nth<'i, 't>(
-    parser: &mut Parser<'i, 't>,
-) -> std::result::Result<(i32, i32), ParseError<'i, ()>> {
+fn parse_nth<'i, 't>(parser: &mut Parser<'i, 't>) -> std::result::Result<(i32, i32), ParseError<'i, ()>> {
     // Simplified: just handle numbers and "odd"/"even"
     let location = parser.current_source_location();
     let token = parser.next()?.clone();
     match &token {
-        Token::Number {
-            int_value: Some(b), ..
-        } => {
+        Token::Number { int_value: Some(b), .. } => {
             // Just a number: 0n+b
             Ok((0, *b))
         }
@@ -475,16 +452,16 @@ fn preprocess_media_queries(css: &str) -> String {
 
                     // Read the media query condition
                     let mut cond = String::new();
-                    let mut paren_depth = 0;
+                    let mut _paren_depth = 0;
                     while let Some(c) = chars.next() {
                         if c == '{' {
                             break;
                         }
                         cond.push(c);
                         if c == '(' {
-                            paren_depth += 1;
+                            _paren_depth += 1;
                         } else if c == ')' {
-                            paren_depth -= 1;
+                            _paren_depth -= 1;
                         }
                     }
 
@@ -552,8 +529,7 @@ pub fn parse_stylesheet(css: &str) -> Result<StyleSheet> {
                 // Try to recover by skipping to next rule
                 while !parser.is_exhausted() {
                     if let Ok(Token::CurlyBracketBlock) = parser.next() {
-                        let _: std::result::Result<(), ParseError<()>> =
-                            parser.parse_nested_block(|_| Ok(()));
+                        let _: std::result::Result<(), ParseError<()>> = parser.parse_nested_block(|_| Ok(()));
                         break;
                     }
                 }
@@ -597,8 +573,7 @@ fn parse_rule<'i, 't>(
 
             // Parse the nested rules inside @media block
             // We'll return None here and let the caller handle multiple rules
-            let _: std::result::Result<(), ParseError<SelectorParseErrorKind>> =
-                parser.parse_nested_block(|_| Ok(()));
+            let _: std::result::Result<(), ParseError<SelectorParseErrorKind>> = parser.parse_nested_block(|_| Ok(()));
             return Ok(None);
         } else {
             // Skip other @-rules (@font-face, @import, etc.)
@@ -619,25 +594,17 @@ fn parse_rule<'i, 't>(
     }
 
     // Parse selectors - only parse until we hit the opening curly brace
-    let selectors =
-        parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
-            SelectorList::parse(
-                &PseudoClassParser,
-                parser,
-                selectors::parser::ParseRelative::No,
-            )
-        })?;
+    let selectors = parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
+        SelectorList::parse(&PseudoClassParser, parser, selectors::parser::ParseRelative::No)
+    })?;
 
     // Parse declaration block
-    parser.expect_curly_bracket_block().map_err(|_| {
-        parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected".into()))
-    })?;
+    parser
+        .expect_curly_bracket_block()
+        .map_err(|_| parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected".into())))?;
     let declarations = parser.parse_nested_block(|parser| {
-        parse_declaration_list(parser).map_err(|_| {
-            parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
-                "declaration".into(),
-            ))
-        })
+        parse_declaration_list(parser)
+            .map_err(|_| parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("declaration".into())))
     })?;
 
     Ok(Some(StyleRule {
@@ -667,17 +634,14 @@ fn parse_declaration_list<'i, 't>(
         // Parse value until semicolon or !important
         // We need to handle functions and preserve the full value including nested parens
         let value_start = parser.position();
-        let mut value_end = value_start;
+        let mut _value_end = value_start;
         let mut important = false;
 
         loop {
             match parser.next() {
                 Ok(Token::Semicolon) | Err(_) => break,
                 Ok(Token::Delim('!')) => {
-                    if parser
-                        .try_parse(|p| p.expect_ident_matching("important"))
-                        .is_ok()
-                    {
+                    if parser.try_parse(|p| p.expect_ident_matching("important")).is_ok() {
                         important = true;
                     }
                     break;
@@ -690,10 +654,10 @@ fn parse_declaration_list<'i, 't>(
                         }
                         Ok::<_, ParseError<()>>(())
                     });
-                    value_end = parser.position();
+                    _value_end = parser.position();
                 }
                 Ok(_) => {
-                    value_end = parser.position();
+                    _value_end = parser.position();
                 }
             }
         }

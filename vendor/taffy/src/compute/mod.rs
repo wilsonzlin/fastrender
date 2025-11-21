@@ -68,12 +68,21 @@ pub fn compute_root_layout(tree: &mut impl LayoutPartialTree, root: NodeId, avai
         if style.is_block() {
             // Pull these out earlier to avoid borrowing issues
             let aspect_ratio = style.aspect_ratio();
-            let margin = style.margin().resolve_or_zero(parent_size.width, |val, basis| tree.calc(val, basis));
-            let padding = style.padding().resolve_or_zero(parent_size.width, |val, basis| tree.calc(val, basis));
-            let border = style.border().resolve_or_zero(parent_size.width, |val, basis| tree.calc(val, basis));
+            let margin = style
+                .margin()
+                .resolve_or_zero(parent_size.width, |val, basis| tree.calc(val, basis));
+            let padding = style
+                .padding()
+                .resolve_or_zero(parent_size.width, |val, basis| tree.calc(val, basis));
+            let border = style
+                .border()
+                .resolve_or_zero(parent_size.width, |val, basis| tree.calc(val, basis));
             let padding_border_size = (padding + border).sum_axes();
-            let box_sizing_adjustment =
-                if style.box_sizing() == BoxSizing::ContentBox { padding_border_size } else { Size::ZERO };
+            let box_sizing_adjustment = if style.box_sizing() == BoxSizing::ContentBox {
+                padding_border_size
+            } else {
+                Size::ZERO
+            };
 
             let min_size = style
                 .min_size()
@@ -100,7 +109,10 @@ pub fn compute_root_layout(tree: &mut impl LayoutPartialTree, root: NodeId, avai
 
             // Block nodes automatically stretch fit their width to fit available space if available space is definite
             let available_space_based_size = Size {
-                width: available_space.width.into_option().maybe_sub(margin.horizontal_axis_sum()),
+                width: available_space
+                    .width
+                    .into_option()
+                    .maybe_sub(margin.horizontal_axis_sum()),
                 height: None,
             };
 
@@ -125,15 +137,26 @@ pub fn compute_root_layout(tree: &mut impl LayoutPartialTree, root: NodeId, avai
     );
 
     let style = tree.get_core_container_style(root);
-    let padding =
-        style.padding().resolve_or_zero(available_space.width.into_option(), |val, basis| tree.calc(val, basis));
-    let border =
-        style.border().resolve_or_zero(available_space.width.into_option(), |val, basis| tree.calc(val, basis));
-    let margin =
-        style.margin().resolve_or_zero(available_space.width.into_option(), |val, basis| tree.calc(val, basis));
+    let padding = style
+        .padding()
+        .resolve_or_zero(available_space.width.into_option(), |val, basis| tree.calc(val, basis));
+    let border = style
+        .border()
+        .resolve_or_zero(available_space.width.into_option(), |val, basis| tree.calc(val, basis));
+    let margin = style
+        .margin()
+        .resolve_or_zero(available_space.width.into_option(), |val, basis| tree.calc(val, basis));
     let scrollbar_size = Size {
-        width: if style.overflow().y == Overflow::Scroll { style.scrollbar_width() } else { 0.0 },
-        height: if style.overflow().x == Overflow::Scroll { style.scrollbar_width() } else { 0.0 },
+        width: if style.overflow().y == Overflow::Scroll {
+            style.scrollbar_width()
+        } else {
+            0.0
+        },
+        height: if style.overflow().x == Overflow::Scroll {
+            style.scrollbar_width()
+        } else {
+            0.0
+        },
     };
     drop(style);
 
@@ -168,23 +191,46 @@ where
     ComputeFunction: FnMut(&mut Tree, NodeId, LayoutInput) -> LayoutOutput,
 {
     debug_push_node!(node);
-    let LayoutInput { known_dimensions, available_space, run_mode, .. } = inputs;
+    let LayoutInput {
+        known_dimensions,
+        available_space,
+        run_mode,
+        ..
+    } = inputs;
 
     // First we check if we have a cached result for the given input
     let cache_entry = tree.cache_get(node, known_dimensions, available_space, run_mode);
     if let Some(cached_size_and_baselines) = cache_entry {
-        debug_log_node!(known_dimensions, inputs.parent_size, available_space, run_mode, inputs.sizing_mode);
+        debug_log_node!(
+            known_dimensions,
+            inputs.parent_size,
+            available_space,
+            run_mode,
+            inputs.sizing_mode
+        );
         debug_log!("RESULT (CACHED)", dbg:cached_size_and_baselines.size);
         debug_pop_node!();
         return cached_size_and_baselines;
     }
 
-    debug_log_node!(known_dimensions, inputs.parent_size, available_space, run_mode, inputs.sizing_mode);
+    debug_log_node!(
+        known_dimensions,
+        inputs.parent_size,
+        available_space,
+        run_mode,
+        inputs.sizing_mode
+    );
 
     let computed_size_and_baselines = compute_uncached(tree, node, inputs);
 
     // Cache result
-    tree.cache_store(node, known_dimensions, available_space, run_mode, computed_size_and_baselines);
+    tree.cache_store(
+        node,
+        known_dimensions,
+        available_space,
+        run_mode,
+        computed_size_and_baselines,
+    );
 
     debug_log!("RESULT", dbg:computed_size_and_baselines.size);
     debug_pop_node!();
@@ -295,18 +341,28 @@ mod tests {
     fn hidden_layout_should_hide_recursively() {
         let mut taffy: TaffyTree<()> = TaffyTree::new();
 
-        let style: Style = Style { display: Display::Flex, size: Size::from_lengths(50.0, 50.0), ..Default::default() };
+        let style: Style = Style {
+            display: Display::Flex,
+            size: Size::from_lengths(50.0, 50.0),
+            ..Default::default()
+        };
 
         let grandchild_00 = taffy.new_leaf(style.clone()).unwrap();
         let grandchild_01 = taffy.new_leaf(style.clone()).unwrap();
-        let child_00 = taffy.new_with_children(style.clone(), &[grandchild_00, grandchild_01]).unwrap();
+        let child_00 = taffy
+            .new_with_children(style.clone(), &[grandchild_00, grandchild_01])
+            .unwrap();
 
         let grandchild_02 = taffy.new_leaf(style.clone()).unwrap();
         let child_01 = taffy.new_with_children(style.clone(), &[grandchild_02]).unwrap();
 
         let root = taffy
             .new_with_children(
-                Style { display: Display::None, size: Size::from_lengths(50.0, 50.0), ..Default::default() },
+                Style {
+                    display: Display::None,
+                    size: Size::from_lengths(50.0, 50.0),
+                    ..Default::default()
+                },
                 &[child_00, child_01],
             )
             .unwrap();

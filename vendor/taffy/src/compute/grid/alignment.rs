@@ -26,7 +26,12 @@ pub(super) fn align_tracks(
     let origin = padding.start + border.start;
 
     // Count the number of non-collapsed tracks (not counting gutters)
-    let num_tracks = tracks.iter().skip(1).step_by(2).filter(|track| !track.is_collapsed).count();
+    let num_tracks = tracks
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .filter(|track| !track.is_collapsed)
+        .count();
 
     // Grid layout treats gaps as full tracks rather than applying them at alignment so we
     // simply pass zero here. Grid layout is never reversed.
@@ -47,7 +52,14 @@ pub(super) fn align_tracks(
         let offset = if is_gutter {
             0.0
         } else {
-            compute_alignment_offset(free_space, num_tracks, gap, track_alignment, layout_is_reversed, is_first)
+            compute_alignment_offset(
+                free_space,
+                num_tracks,
+                gap,
+                track_alignment,
+                layout_is_reversed,
+                is_first,
+            )
         };
 
         track.offset = total_offset + offset;
@@ -64,7 +76,10 @@ pub(super) fn align_and_position_item(
     container_alignment_styles: InBothAbsAxis<Option<AlignItems>>,
     baseline_shim: f32,
 ) -> (Size<f32>, f32, f32) {
-    let grid_area_size = Size { width: grid_area.right - grid_area.left, height: grid_area.bottom - grid_area.top };
+    let grid_area_size = Size {
+        width: grid_area.right - grid_area.left,
+        height: grid_area.bottom - grid_area.top,
+    };
 
     let style = tree.get_grid_child_style(node);
 
@@ -83,14 +98,19 @@ pub(super) fn align_and_position_item(
         .inset()
         .vertical_components()
         .map(|size| size.resolve_to_option(grid_area_size.height, |val, basis| tree.calc(val, basis)));
-    let padding =
-        style.padding().map(|p| p.resolve_or_zero(Some(grid_area_size.width), |val, basis| tree.calc(val, basis)));
-    let border =
-        style.border().map(|p| p.resolve_or_zero(Some(grid_area_size.width), |val, basis| tree.calc(val, basis)));
+    let padding = style
+        .padding()
+        .map(|p| p.resolve_or_zero(Some(grid_area_size.width), |val, basis| tree.calc(val, basis)));
+    let border = style
+        .border()
+        .map(|p| p.resolve_or_zero(Some(grid_area_size.width), |val, basis| tree.calc(val, basis)));
     let padding_border_size = (padding + border).sum_axes();
 
-    let box_sizing_adjustment =
-        if style.box_sizing() == BoxSizing::ContentBox { padding_border_size } else { Size::ZERO };
+    let box_sizing_adjustment = if style.box_sizing() == BoxSizing::ContentBox {
+        padding_border_size
+    } else {
+        Size::ZERO
+    };
 
     let inherent_size = style
         .size()
@@ -115,13 +135,15 @@ pub(super) fn align_and_position_item(
     // and the then height is calculated from the width according the aspect ratio
     // See: https://www.w3.org/TR/css-grid-1/#grid-item-sizing
     let alignment_styles = InBothAbsAxis {
-        horizontal: justify_self.or(container_alignment_styles.horizontal).unwrap_or_else(|| {
-            if inherent_size.width.is_some() {
-                AlignSelf::Start
-            } else {
-                AlignSelf::Stretch
-            }
-        }),
+        horizontal: justify_self
+            .or(container_alignment_styles.horizontal)
+            .unwrap_or_else(|| {
+                if inherent_size.width.is_some() {
+                    AlignSelf::Start
+                } else {
+                    AlignSelf::Stretch
+                }
+            }),
         vertical: align_self.or(container_alignment_styles.vertical).unwrap_or_else(|| {
             if inherent_size.height.is_some() || aspect_ratio.is_some() {
                 AlignSelf::Start
@@ -133,8 +155,9 @@ pub(super) fn align_and_position_item(
 
     // Note: This is not a bug. It is part of the CSS spec that both horizontal and vertical margins
     // resolve against the WIDTH of the grid area.
-    let margin =
-        style.margin().map(|margin| margin.resolve_to_option(grid_area_size.width, |val, basis| tree.calc(val, basis)));
+    let margin = style
+        .margin()
+        .map(|margin| margin.resolve_to_option(grid_area_size.width, |val, basis| tree.calc(val, basis)));
 
     let grid_area_minus_item_margins_size = Size {
         width: grid_area_size.width.maybe_sub(margin.left).maybe_sub(margin.right),
@@ -168,7 +191,11 @@ pub(super) fn align_and_position_item(
     });
 
     // Reapply aspect ratio after stretch and absolute position width adjustments
-    let Size { width, height } = Size { width, height: inherent_size.height }.maybe_apply_aspect_ratio(aspect_ratio);
+    let Size { width, height } = Size {
+        width,
+        height: inherent_size.height,
+    }
+    .maybe_apply_aspect_ratio(aspect_ratio);
 
     let height = height.or_else(|| {
         if position == Position::Absolute {
@@ -209,10 +236,15 @@ pub(super) fn align_and_position_item(
     );
 
     // Resolve final size
-    let Size { width, height } = Size { width, height }.unwrap_or(layout_output.size).maybe_clamp(min_size, max_size);
+    let Size { width, height } = Size { width, height }
+        .unwrap_or(layout_output.size)
+        .maybe_clamp(min_size, max_size);
 
     let (x, x_margin) = align_item_within_area(
-        Line { start: grid_area.left, end: grid_area.right },
+        Line {
+            start: grid_area.left,
+            end: grid_area.right,
+        },
         justify_self.unwrap_or(alignment_styles.horizontal),
         width,
         position,
@@ -221,7 +253,10 @@ pub(super) fn align_and_position_item(
         0.0,
     );
     let (y, y_margin) = align_item_within_area(
-        Line { start: grid_area.top, end: grid_area.bottom },
+        Line {
+            start: grid_area.top,
+            end: grid_area.bottom,
+        },
         align_self.unwrap_or(alignment_styles.vertical),
         height,
         position,
@@ -231,11 +266,24 @@ pub(super) fn align_and_position_item(
     );
 
     let scrollbar_size = Size {
-        width: if overflow.y == Overflow::Scroll { scrollbar_width } else { 0.0 },
-        height: if overflow.x == Overflow::Scroll { scrollbar_width } else { 0.0 },
+        width: if overflow.y == Overflow::Scroll {
+            scrollbar_width
+        } else {
+            0.0
+        },
+        height: if overflow.x == Overflow::Scroll {
+            scrollbar_width
+        } else {
+            0.0
+        },
     };
 
-    let resolved_margin = Rect { left: x_margin.start, right: x_margin.end, top: y_margin.start, bottom: y_margin.end };
+    let resolved_margin = Rect {
+        left: x_margin.start,
+        right: x_margin.end,
+        top: y_margin.start,
+        bottom: y_margin.end,
+    };
 
     tree.set_unrounded_layout(
         node,
@@ -253,8 +301,12 @@ pub(super) fn align_and_position_item(
     );
 
     #[cfg(feature = "content_size")]
-    let contribution =
-        compute_content_size_contribution(Point { x, y }, Size { width, height }, layout_output.content_size, overflow);
+    let contribution = compute_content_size_contribution(
+        Point { x, y },
+        Size { width, height },
+        layout_output.content_size,
+        overflow,
+    );
     #[cfg(not(feature = "content_size"))]
     let contribution = Size::ZERO;
 
@@ -272,13 +324,20 @@ pub(super) fn align_item_within_area(
     baseline_shim: f32,
 ) -> (f32, Line<f32>) {
     // Calculate grid area dimension in the axis
-    let non_auto_margin = Line { start: margin.start.unwrap_or(0.0) + baseline_shim, end: margin.end.unwrap_or(0.0) };
+    let non_auto_margin = Line {
+        start: margin.start.unwrap_or(0.0) + baseline_shim,
+        end: margin.end.unwrap_or(0.0),
+    };
     let grid_area_size = f32_max(grid_area.end - grid_area.start, 0.0);
     let free_space = f32_max(grid_area_size - resolved_size - non_auto_margin.sum(), 0.0);
 
     // Expand auto margins to fill available space
     let auto_margin_count = margin.start.is_none() as u8 + margin.end.is_none() as u8;
-    let auto_margin_size = if auto_margin_count > 0 { free_space / auto_margin_count as f32 } else { 0.0 };
+    let auto_margin_size = if auto_margin_count > 0 {
+        free_space / auto_margin_count as f32
+    } else {
+        0.0
+    };
     let resolved_margin = Line {
         start: margin.start.unwrap_or(auto_margin_size) + baseline_shim,
         end: margin.end.unwrap_or(auto_margin_size),

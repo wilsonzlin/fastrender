@@ -210,12 +210,7 @@ impl Display {
     pub fn is_block_level(self) -> bool {
         matches!(
             self,
-            Display::Block
-                | Display::Flex
-                | Display::Grid
-                | Display::Table
-                | Display::ListItem
-                | Display::FlowRoot
+            Display::Block | Display::Flex | Display::Grid | Display::Table | Display::ListItem | Display::FlowRoot
         )
     }
 
@@ -237,11 +232,7 @@ impl Display {
     pub fn is_inline_level(self) -> bool {
         matches!(
             self,
-            Display::Inline
-                | Display::InlineBlock
-                | Display::InlineFlex
-                | Display::InlineGrid
-                | Display::InlineTable
+            Display::Inline | Display::InlineBlock | Display::InlineFlex | Display::InlineGrid | Display::InlineTable
         )
     }
 
@@ -552,10 +543,7 @@ mod tests {
 
     #[test]
     fn test_parse_inline_table() {
-        assert_eq!(
-            Display::parse("inline-table").unwrap(),
-            Display::InlineTable
-        );
+        assert_eq!(Display::parse("inline-table").unwrap(), Display::InlineTable);
     }
 
     #[test]
@@ -586,10 +574,7 @@ mod tests {
     #[test]
     fn test_parse_case_insensitive() {
         assert_eq!(Display::parse("BLOCK").unwrap(), Display::Block);
-        assert_eq!(
-            Display::parse("Inline-Block").unwrap(),
-            Display::InlineBlock
-        );
+        assert_eq!(Display::parse("Inline-Block").unwrap(), Display::InlineBlock);
         assert_eq!(Display::parse("INLINE-FLEX").unwrap(), Display::InlineFlex);
     }
 
@@ -822,29 +807,11 @@ mod tests {
     // Edge cases
     #[test]
     fn test_all_table_types() {
-        assert_eq!(
-            Display::parse("table-row-group").unwrap(),
-            Display::TableRowGroup
-        );
-        assert_eq!(
-            Display::parse("table-header-group").unwrap(),
-            Display::TableHeaderGroup
-        );
-        assert_eq!(
-            Display::parse("table-footer-group").unwrap(),
-            Display::TableFooterGroup
-        );
-        assert_eq!(
-            Display::parse("table-column").unwrap(),
-            Display::TableColumn
-        );
-        assert_eq!(
-            Display::parse("table-column-group").unwrap(),
-            Display::TableColumnGroup
-        );
-        assert_eq!(
-            Display::parse("table-caption").unwrap(),
-            Display::TableCaption
-        );
+        assert_eq!(Display::parse("table-row-group").unwrap(), Display::TableRowGroup);
+        assert_eq!(Display::parse("table-header-group").unwrap(), Display::TableHeaderGroup);
+        assert_eq!(Display::parse("table-footer-group").unwrap(), Display::TableFooterGroup);
+        assert_eq!(Display::parse("table-column").unwrap(), Display::TableColumn);
+        assert_eq!(Display::parse("table-column-group").unwrap(), Display::TableColumnGroup);
+        assert_eq!(Display::parse("table-caption").unwrap(), Display::TableCaption);
     }
 }
