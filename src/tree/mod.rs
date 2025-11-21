@@ -51,7 +51,13 @@
 //! paint(&fragment_tree);
 //! ```
 
-// Module declarations will be added in Wave 2
+// Wave 2 modules
+pub mod box_type;
+
+// Re-exports
+pub use box_type::BoxType;
+
+// Module declarations will be added in future waves
 // pub mod dom;
 // pub mod box_node;
 // pub mod fragment;
