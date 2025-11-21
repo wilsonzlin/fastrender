@@ -1,12 +1,21 @@
+#![allow(unused_variables)]
+#![allow(unused_mut)]
+#![allow(clippy::unnecessary_lazy_evaluations)]
+
 use crate::css::{Color, ColorStop, TextShadow};
 use crate::error::{Error, Result};
 use crate::image_loader::ImageCache;
 use crate::layout::LayoutBox;
-use crate::style::{BackgroundImage, BorderStyle, Display, FontWeight, TextAlign};
+use crate::style::{BackgroundImage, BorderStyle, ComputedStyles, Display, FontWeight, TextAlign};
 use crate::text::{shape_text, FontCache};
 use tiny_skia::*;
 
-pub fn paint(layout_tree: &LayoutBox, width: u32, height: u32, background: Color) -> Result<Pixmap> {
+pub fn paint(
+    layout_tree: &LayoutBox,
+    width: u32,
+    height: u32,
+    background: Color,
+) -> Result<Pixmap> {
     paint_with_scroll(layout_tree, width, height, 0, background, None)
 }
 
@@ -18,8 +27,9 @@ pub fn paint_with_scroll(
     background: Color,
     base_url: Option<String>,
 ) -> Result<Pixmap> {
-    let mut pixmap = Pixmap::new(width, height)
-        .ok_or_else(|| Error::Render(format!("Failed to create pixmap {}x{}", width, height)))?;
+    let mut pixmap = Pixmap::new(width, height).ok_or_else(|| {
+        Error::Render(crate::error::RenderError::CanvasCreationFailed { width, height })
+    })?;
 
     // Use body background if available, otherwise use provided background
     let canvas_background = find_body_background(layout_tree).unwrap_or(background);
@@ -37,7 +47,14 @@ pub fn paint_with_scroll(
     let scroll_offset = scroll_y as f32;
 
     // Paint the layout tree with scroll offset
-    paint_box_with_offset(&mut pixmap, layout_tree, &font_cache, &image_cache, 0.0, -scroll_offset)?;
+    paint_box_with_offset(
+        &mut pixmap,
+        layout_tree,
+        &font_cache,
+        &image_cache,
+        0.0,
+        -scroll_offset,
+    )?;
 
     Ok(pixmap)
 }
@@ -124,9 +141,14 @@ fn paint_box_with_offset(
             || has_zero_width;
 
         // Create clip path if needed
-        let _clip_path_data = if needs_clip {
+        let clip_path_data = if needs_clip {
             // Create a rectangle for clipping
-            if let Some(rect) = Rect::from_xywh(effective_x, effective_y, layout_box.width, layout_box.height) {
+            if let Some(rect) = Rect::from_xywh(
+                effective_x,
+                effective_y,
+                layout_box.width,
+                layout_box.height,
+            ) {
                 let mut pb = PathBuilder::new();
                 pb.push_rect(rect);
                 pb.finish()
@@ -140,10 +162,10 @@ fn paint_box_with_offset(
         // If we have overflow clipping, we need to skip painting children that fall outside the bounds
         if needs_clip {
             // Simple bounds-based clipping: don't paint children that are completely outside parent bounds
-            let _parent_top = layout_box.y;
+            let parent_top = layout_box.y;
             let parent_bottom = layout_box.y + layout_box.height;
-            let _parent_left = layout_box.x;
-            let _parent_right = layout_box.x + layout_box.width;
+            let parent_left = layout_box.x;
+            let parent_right = layout_box.x + layout_box.width;
 
             // Paint img elements
             if let Some(ref tag) = layout_box.element_name {
@@ -378,28 +400,20 @@ fn paint_radial_gradient(
     Ok(())
 }
 
-fn paint_borders(pixmap: &mut Pixmap, layout_box: &LayoutBox, transform: &tiny_skia::Transform) -> Result<()> {
+fn paint_borders(
+    pixmap: &mut Pixmap,
+    layout_box: &LayoutBox,
+    transform: &tiny_skia::Transform,
+) -> Result<()> {
     let x = layout_box.x;
     let y = layout_box.y;
     let width = layout_box.width;
     let height = layout_box.height;
 
-    let top_width = layout_box
-        .styles
-        .border_top_width
-        .to_px(layout_box.styles.font_size, 16.0);
-    let right_width = layout_box
-        .styles
-        .border_right_width
-        .to_px(layout_box.styles.font_size, 16.0);
-    let bottom_width = layout_box
-        .styles
-        .border_bottom_width
-        .to_px(layout_box.styles.font_size, 16.0);
-    let left_width = layout_box
-        .styles
-        .border_left_width
-        .to_px(layout_box.styles.font_size, 16.0);
+    let top_width = layout_box.styles.border_top_width.to_px();
+    let right_width = layout_box.styles.border_right_width.to_px();
+    let bottom_width = layout_box.styles.border_bottom_width.to_px();
+    let left_width = layout_box.styles.border_left_width.to_px();
 
     // Check if border-radius is set
     let has_radius = layout_box.styles.border_top_left_radius.value > 0.0
@@ -577,16 +591,20 @@ fn paint_border_edge(
     Ok(())
 }
 
-fn paint_box_shadows(pixmap: &mut Pixmap, layout_box: &LayoutBox, transform: &tiny_skia::Transform) -> Result<()> {
+fn paint_box_shadows(
+    pixmap: &mut Pixmap,
+    layout_box: &LayoutBox,
+    transform: &tiny_skia::Transform,
+) -> Result<()> {
     for shadow in &layout_box.styles.box_shadow {
         if shadow.inset {
             continue; // Skip inset shadows for now
         }
 
-        let offset_x = shadow.offset_x.to_px(layout_box.styles.font_size, 16.0);
-        let offset_y = shadow.offset_y.to_px(layout_box.styles.font_size, 16.0);
-        let _blur_radius = shadow.blur_radius.to_px(layout_box.styles.font_size, 16.0);
-        let spread_radius = shadow.spread_radius.to_px(layout_box.styles.font_size, 16.0);
+        let offset_x = shadow.offset_x.to_px();
+        let offset_y = shadow.offset_y.to_px();
+        let _blur_radius = shadow.blur_radius.to_px();
+        let spread_radius = shadow.spread_radius.to_px();
 
         let shadow_x = layout_box.x + offset_x - spread_radius;
         let shadow_y = layout_box.y + offset_y - spread_radius;
@@ -639,7 +657,7 @@ fn paint_text(
     // The text has already been collected from inline elements into the block children
     // This prevents duplicate rendering (e.g., UL collecting LI>A text AND LI rendering same text)
     // Get text content first to check for vote arrows
-    let text_content = match &layout_box.text_content {
+    let mut text_content = match &layout_box.text_content {
         Some(text) => text.trim().to_string(),
         None => return Ok(()),
     };
@@ -650,7 +668,8 @@ fn paint_text(
 
     // CRITICAL FIX: Allow vote arrows and navigation text to paint even if they have children
     let is_vote_arrow = text_content == "▲" || text_content == "^";
-    let is_navigation_text = text_content.contains("new | past | comments | ask | show | jobs | submit");
+    let is_navigation_text =
+        text_content.contains("new | past | comments | ask | show | jobs | submit");
 
     // Only skip text painting if there are children AND this is not a special element
     if !layout_box.children.is_empty() && !is_vote_arrow && !is_navigation_text {
@@ -664,7 +683,10 @@ fn paint_text(
         b: 0,
         a: 255,
     };
-    if text_content == "▲" || text_content == "^" || is_navigation_text || layout_box.styles.background_color == red_bg
+    if text_content == "▲"
+        || text_content == "^"
+        || is_navigation_text
+        || layout_box.styles.background_color == red_bg
     {
         eprintln!(
             "DEBUG: About to paint text '{}' at ({}, {}) size {}x{}, bg={:?}",
@@ -682,7 +704,7 @@ fn paint_text(
     // Shape text
     // Don't constrain width if white-space is nowrap or pre
     // CRITICAL FIX: Force nowrap for table cells to prevent excessive wrapping
-    let max_width = if layout_box.styles.white_space == crate::style::WhiteSpace::NoWrap
+    let max_width = if layout_box.styles.white_space == crate::style::WhiteSpace::Nowrap
         || layout_box.styles.white_space == crate::style::WhiteSpace::Pre
         || matches!(layout_box.styles.display, crate::style::Display::TableCell)
     {
@@ -694,16 +716,10 @@ fn paint_text(
     let text_layout = shape_text(&text_content, &layout_box.styles, font_cache, max_width)?;
 
     // Calculate text position based on text-align
-    let padding_left = layout_box.styles.padding_left.to_px(layout_box.styles.font_size, 16.0);
-    let padding_top = layout_box.styles.padding_top.to_px(layout_box.styles.font_size, 16.0);
-    let border_left = layout_box
-        .styles
-        .border_left_width
-        .to_px(layout_box.styles.font_size, 16.0);
-    let border_top = layout_box
-        .styles
-        .border_top_width
-        .to_px(layout_box.styles.font_size, 16.0);
+    let padding_left = layout_box.styles.padding_left.to_px();
+    let padding_top = layout_box.styles.padding_top.to_px();
+    let border_left = layout_box.styles.border_left_width.to_px();
+    let border_top = layout_box.styles.border_top_width.to_px();
 
     let content_x = layout_box.x + border_left + padding_left;
     let content_y = layout_box.y + border_top + padding_top;
@@ -742,18 +758,19 @@ fn paint_text_with_shadow(
     text_layout: &crate::text::TextLayout,
     x: f32,
     y: f32,
-    styles: &crate::style::ComputedStyles,
+    styles: &ComputedStyles,
     shadow: Option<&TextShadow>,
     transform: &tiny_skia::Transform,
     _clip_path: Option<&()>,
 ) -> Result<()> {
-    let color = if let Some(s) = shadow { s.color } else { styles.color };
+    let color = if let Some(s) = shadow {
+        s.color
+    } else {
+        styles.color
+    };
 
     let (shadow_x, shadow_y) = if let Some(s) = shadow {
-        (
-            s.offset_x.to_px(styles.font_size, 16.0),
-            s.offset_y.to_px(styles.font_size, 16.0),
-        )
+        (s.offset_x.to_px(), s.offset_y.to_px())
     } else {
         (0.0, 0.0)
     };
@@ -770,7 +787,8 @@ fn paint_text_with_shadow(
 
         for glyph in &line.glyphs {
             // Parse font and extract glyph outline
-            if let Ok(face) = ttf_parser::Face::parse(&glyph.font_face.data, glyph.font_face.index) {
+            if let Ok(face) = ttf_parser::Face::parse(&glyph.font_face.data, glyph.font_face.index)
+            {
                 let glyph_x = line_x + glyph.x + shadow_x;
                 let glyph_y = line_y + line.baseline + glyph.y + shadow_y;
 
@@ -781,7 +799,9 @@ fn paint_text_with_shadow(
 
                 // Extract glyph outline and convert to path
                 let font_size = styles.font_size;
-                if let Some(glyph_path) = build_glyph_path(&face, glyph.glyph_id, glyph_x, glyph_y, font_size) {
+                if let Some(glyph_path) =
+                    build_glyph_path(&face, glyph.glyph_id, glyph_x, glyph_y, font_size)
+                {
                     pixmap.fill_path(&glyph_path, &paint, FillRule::Winding, *transform, None);
                 }
             }
@@ -803,16 +823,16 @@ fn create_transform_matrix(
     for transform in transforms {
         let t = match transform {
             crate::css::Transform::Translate(x, y) => {
-                let tx = x.to_px(16.0, 16.0);
-                let ty = y.to_px(16.0, 16.0);
+                let tx = x.to_px();
+                let ty = y.to_px();
                 tiny_skia::Transform::from_translate(tx, ty)
             }
             crate::css::Transform::TranslateX(x) => {
-                let tx = x.to_px(16.0, 16.0);
+                let tx = x.to_px();
                 tiny_skia::Transform::from_translate(tx, 0.0)
             }
             crate::css::Transform::TranslateY(y) => {
-                let ty = y.to_px(16.0, 16.0);
+                let ty = y.to_px();
                 tiny_skia::Transform::from_translate(0.0, ty)
             }
             crate::css::Transform::Scale(sx, sy) => tiny_skia::Transform::from_scale(*sx, *sy),
@@ -831,7 +851,9 @@ fn create_transform_matrix(
                 let rad = angle * std::f32::consts::PI / 180.0;
                 tiny_skia::Transform::from_skew(0.0, rad)
             }
-            crate::css::Transform::Matrix(a, b, c, d, e, f) => tiny_skia::Transform::from_row(*a, *b, *c, *d, *e, *f),
+            crate::css::Transform::Matrix(a, b, c, d, e, f) => {
+                tiny_skia::Transform::from_row(*a, *b, *c, *d, *e, *f)
+            }
         };
 
         matrix = matrix.post_concat(t);
@@ -846,22 +868,10 @@ fn create_rounded_rect_path(layout_box: &LayoutBox) -> Option<Path> {
     let width = layout_box.width;
     let height = layout_box.height;
 
-    let tl = layout_box
-        .styles
-        .border_top_left_radius
-        .to_px(layout_box.styles.font_size, 16.0);
-    let tr = layout_box
-        .styles
-        .border_top_right_radius
-        .to_px(layout_box.styles.font_size, 16.0);
-    let bl = layout_box
-        .styles
-        .border_bottom_left_radius
-        .to_px(layout_box.styles.font_size, 16.0);
-    let br = layout_box
-        .styles
-        .border_bottom_right_radius
-        .to_px(layout_box.styles.font_size, 16.0);
+    let tl = layout_box.styles.border_top_left_radius.to_px();
+    let tr = layout_box.styles.border_top_right_radius.to_px();
+    let bl = layout_box.styles.border_bottom_left_radius.to_px();
+    let br = layout_box.styles.border_bottom_right_radius.to_px();
 
     let mut pb = PathBuilder::new();
 
@@ -943,11 +953,13 @@ impl GlyphPathBuilder {
 
 impl ttf_parser::OutlineBuilder for GlyphPathBuilder {
     fn move_to(&mut self, x: f32, y: f32) {
-        self.path_builder.move_to(self.transform_x(x), self.transform_y(y));
+        self.path_builder
+            .move_to(self.transform_x(x), self.transform_y(y));
     }
 
     fn line_to(&mut self, x: f32, y: f32) {
-        self.path_builder.line_to(self.transform_x(x), self.transform_y(y));
+        self.path_builder
+            .line_to(self.transform_x(x), self.transform_y(y));
     }
 
     fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
@@ -975,7 +987,13 @@ impl ttf_parser::OutlineBuilder for GlyphPathBuilder {
     }
 }
 
-fn build_glyph_path(face: &ttf_parser::Face, glyph_id: u16, x: f32, y: f32, font_size: f32) -> Option<Path> {
+fn build_glyph_path(
+    face: &ttf_parser::Face,
+    glyph_id: u16,
+    x: f32,
+    y: f32,
+    font_size: f32,
+) -> Option<Path> {
     let glyph_id = ttf_parser::GlyphId(glyph_id);
 
     // Get the scale factor from font units to pixels
@@ -1021,7 +1039,11 @@ fn build_glyph_path(face: &ttf_parser::Face, glyph_id: u16, x: f32, y: f32, font
         || glyph_name.contains("asciicircum")
         || glyph_name.contains("triangle")
     {
-        eprintln!("DEBUG: Final path for glyph_id={}: {:?}", glyph_id.0, path.is_some());
+        eprintln!(
+            "DEBUG: Final path for glyph_id={}: {:?}",
+            glyph_id.0,
+            path.is_some()
+        );
     }
 
     outline_result?;
@@ -1043,7 +1065,11 @@ fn paint_image(
             Ok(img) => {
                 eprintln!(
                     "DEBUG: Successfully loaded image, painting at ({}, {}) size {}x{}, bg: {:?}",
-                    layout_box.x, layout_box.y, layout_box.width, layout_box.height, layout_box.styles.background_color
+                    layout_box.x,
+                    layout_box.y,
+                    layout_box.width,
+                    layout_box.height,
+                    layout_box.styles.background_color
                 );
                 // Paint the image
                 paint_background_image(pixmap, layout_box, &img, transform)?;
@@ -1145,7 +1171,10 @@ fn paint_background_image(
     }
 
     // Create a tiny-skia pixmap from the image data
-    if let Some(img_pixmap) = Pixmap::from_vec(img_data, IntSize::from_wh(scaled_width, scaled_height).unwrap()) {
+    if let Some(img_pixmap) = Pixmap::from_vec(
+        img_data,
+        IntSize::from_wh(scaled_width, scaled_height).unwrap(),
+    ) {
         // Check if border-radius is set - if so, use clipping
         let has_radius = layout_box.styles.border_top_left_radius.value > 0.0
             || layout_box.styles.border_top_right_radius.value > 0.0

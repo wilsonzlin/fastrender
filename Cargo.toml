@@ -8,8 +8,14 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/fastrender/fastrender"
 keywords = ["html", "css", "renderer", "image", "screenshot"]
 categories = ["rendering", "graphics", "web-programming"]
+readme = "README.md"
+rust-version = "1.70"
 
 [dependencies]
+# ============================================================================
+# HTML/CSS Parsing
+# ============================================================================
+
 # HTML parsing
 html5ever = "0.35"
 markup5ever_rcdom = "0.35"
@@ -19,32 +25,62 @@ cssparser = "0.35"
 selectors = "0.32"
 precomputed-hash = "0.1"
 
-# Layout - vendored locally to fix grid auto-placement
+# ============================================================================
+# Layout
+# ============================================================================
+
+# Layout engine - vendored locally to fix grid auto-placement
 taffy = { path = "vendor/taffy" }
 
-# Text shaping and fonts
+# ============================================================================
+# Text Shaping and Fonts
+# ============================================================================
+
+# Text shaping
 rustybuzz = "0.20"
 ttf-parser = "0.25"
 fontdb = "0.23"
+
+# Unicode text processing
 unicode-linebreak = "0.1"
 unicode-bidi = "0.3"
 
-# 2D rendering
+# ============================================================================
+# 2D Graphics and Rendering
+# ============================================================================
+
+# 2D rendering backend
 tiny-skia = "0.11"
 
-# Image encoding
+# Image encoding/decoding
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
-
-# Utilities
-csscolorparser = "0.6"
-url = "2.5"
-thiserror = "1.0"
-ureq = "3.1"
-base64 = "0.22"
-urlencoding = "2.1"
 
 # SVG rendering
 resvg = "0.43"
+
+# ============================================================================
+# Utilities
+# ============================================================================
+
+# CSS color parsing
+csscolorparser = "0.6"
+
+# URL handling
+url = "2.5"
+urlencoding = "2.1"
+
+# Error handling
+thiserror = "1.0"
+
+# HTTP client for loading resources
+ureq = "3.1"
+
+# Base64 encoding for data URLs
+base64 = "0.22"
+
+# ============================================================================
+# Development Dependencies
+# ============================================================================
 
 [dev-dependencies]
 criterion = "0.5"
@@ -52,6 +88,10 @@ criterion = "0.5"
 [[bench]]
 name = "render_benchmark"
 harness = false
+
+# ============================================================================
+# Release Profile Optimization
+# ============================================================================
 
 [profile.release]
 opt-level = 3

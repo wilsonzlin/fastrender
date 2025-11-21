@@ -1,11 +1,39 @@
-use crate::css::{self, BoxShadow, Color, Declaration, Length, PropertyValue, StyleSheet, TextShadow, Transform};
+//! Style system types
+//!
+//! This module contains types related to CSS styling, including colors,
+//! computed styles, and style properties.
+
+pub mod color;
+pub mod display;
+pub mod position;
+
+// Re-export color types
+pub use color::{Color, ColorParseError, Hsla, Rgba};
+
+// Re-export display types
+pub use display::{Display, DisplayParseError, FormattingContextType, InnerDisplay, OuterDisplay};
+
+// Re-export position types
+pub use position::{Position, PositionParseError};
+
+// Legacy CSS types (will be phased out)
+use crate::css::{
+    self, BoxShadow, Color as LegacyColor, Declaration, PropertyValue, StyleSheet, TextShadow,
+    Transform,
+};
 use crate::dom::{DomNode, ElementRef};
+pub use crate::style::values::{Length, LengthOrAuto, LengthUnit};
 use selectors::context::{QuirksMode, SelectorCaches};
 use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
 use std::collections::HashMap;
 
+pub mod values;
+
+// Re-export common types from values module
+// These are now public via the module system
+
 // User-agent stylesheet
-const USER_AGENT_STYLESHEET: &str = include_str!("user_agent.css");
+const USER_AGENT_STYLESHEET: &str = include_str!("../user_agent.css");
 
 #[derive(Debug, Clone)]
 pub struct StyledNode {
@@ -14,7 +42,7 @@ pub struct StyledNode {
     pub children: Vec<StyledNode>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyles {
     // Display and positioning
     pub display: Display,
@@ -48,10 +76,10 @@ pub struct ComputedStyles {
     pub border_bottom_width: Length,
     pub border_left_width: Length,
 
-    pub border_top_color: Color,
-    pub border_right_color: Color,
-    pub border_bottom_color: Color,
-    pub border_left_color: Color,
+    pub border_top_color: LegacyColor,
+    pub border_right_color: LegacyColor,
+    pub border_bottom_color: LegacyColor,
+    pub border_left_color: LegacyColor,
 
     pub border_top_style: BorderStyle,
     pub border_right_style: BorderStyle,
@@ -103,8 +131,8 @@ pub struct ComputedStyles {
     pub white_space: WhiteSpace,
 
     // Color and background
-    pub color: Color,
-    pub background_color: Color,
+    pub color: LegacyColor,
+    pub background_color: LegacyColor,
     pub background_image: Option<BackgroundImage>,
     pub background_size: BackgroundSize,
     pub background_position: BackgroundPosition,
@@ -122,33 +150,7 @@ pub struct ComputedStyles {
     pub custom_properties: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Display {
-    Block,
-    Inline,
-    InlineBlock,
-    Flex,
-    InlineFlex,
-    Grid,
-    InlineGrid,
-    Table,
-    TableRow,
-    TableCell,
-    TableHeaderGroup,
-    TableRowGroup,
-    TableFooterGroup,
-    None,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Position {
-    Static,
-    Relative,
-    Absolute,
-    Fixed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Overflow {
     Visible,
     Hidden,
@@ -156,7 +158,7 @@ pub enum Overflow {
     Auto,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BorderStyle {
     None,
     Solid,
@@ -165,7 +167,7 @@ pub enum BorderStyle {
     Double,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlexDirection {
     Row,
     RowReverse,
@@ -173,14 +175,14 @@ pub enum FlexDirection {
     ColumnReverse,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlexWrap {
     NoWrap,
     Wrap,
     WrapReverse,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JustifyContent {
     FlexStart,
     FlexEnd,
@@ -190,7 +192,7 @@ pub enum JustifyContent {
     SpaceEvenly,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlignItems {
     FlexStart,
     FlexEnd,
@@ -199,7 +201,7 @@ pub enum AlignItems {
     Stretch,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlignContent {
     FlexStart,
     FlexEnd,
@@ -223,28 +225,30 @@ pub enum GridTrack {
     MinMax(Box<GridTrack>, Box<GridTrack>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontWeight {
     Normal,
     Bold,
-    Weight(u16),
+    Bolder,
+    Lighter,
+    Number(u16),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontStyle {
     Normal,
     Italic,
     Oblique,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LineHeight {
     Normal,
     Number(f32),
     Length(Length),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextAlign {
     Left,
     Right,
@@ -252,7 +256,7 @@ pub enum TextAlign {
     Justify,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextDecoration {
     None,
     Underline,
@@ -260,7 +264,7 @@ pub enum TextDecoration {
     LineThrough,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextTransform {
     None,
     Uppercase,
@@ -268,10 +272,10 @@ pub enum TextTransform {
     Capitalize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WhiteSpace {
     Normal,
-    NoWrap,
+    Nowrap,
     Pre,
     PreWrap,
     PreLine,
@@ -298,7 +302,7 @@ pub enum BackgroundPosition {
     Position(Length, Length),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackgroundRepeat {
     Repeat,
     RepeatX,
@@ -339,10 +343,10 @@ impl Default for ComputedStyles {
             border_bottom_width: Length::px(0.0),
             border_left_width: Length::px(0.0),
 
-            border_top_color: Color::BLACK,
-            border_right_color: Color::BLACK,
-            border_bottom_color: Color::BLACK,
-            border_left_color: Color::BLACK,
+            border_top_color: LegacyColor::BLACK,
+            border_right_color: LegacyColor::BLACK,
+            border_bottom_color: LegacyColor::BLACK,
+            border_left_color: LegacyColor::BLACK,
 
             border_top_style: BorderStyle::None,
             border_right_style: BorderStyle::None,
@@ -389,8 +393,8 @@ impl Default for ComputedStyles {
             word_spacing: 0.0,
             white_space: WhiteSpace::Normal,
 
-            color: Color::BLACK,
-            background_color: Color::TRANSPARENT,
+            color: LegacyColor::BLACK,
+            background_color: LegacyColor::TRANSPARENT,
             background_image: None,
             background_size: BackgroundSize::Auto,
             background_position: BackgroundPosition::Center,
@@ -572,22 +576,10 @@ fn apply_styles_internal_with_ancestors(
         // Check if we're inside an article element (.5rem = 8px)
         let in_article = ancestors.iter().any(|a| a.tag_name() == Some("article"));
         if in_article {
-            styles.border_top_left_radius = Length {
-                value: 8.0,
-                unit: css::LengthUnit::Px,
-            };
-            styles.border_top_right_radius = Length {
-                value: 8.0,
-                unit: css::LengthUnit::Px,
-            };
-            styles.border_bottom_left_radius = Length {
-                value: 8.0,
-                unit: css::LengthUnit::Px,
-            };
-            styles.border_bottom_right_radius = Length {
-                value: 8.0,
-                unit: css::LengthUnit::Px,
-            };
+            styles.border_top_left_radius = Length::px(8.0);
+            styles.border_top_right_radius = Length::px(8.0);
+            styles.border_bottom_left_radius = Length::px(8.0);
+            styles.border_bottom_right_radius = Length::px(8.0);
         }
 
         // Check if we're inside banner-left (avatar image with border-radius: 50%)
@@ -595,90 +587,54 @@ fn apply_styles_internal_with_ancestors(
         if in_banner_left {
             // border-radius: 50% for circular avatar
             // Since the image is 2rem (32px) square, 50% = 16px radius
-            styles.border_top_left_radius = Length {
-                value: 16.0,
-                unit: css::LengthUnit::Px,
-            };
-            styles.border_top_right_radius = Length {
-                value: 16.0,
-                unit: css::LengthUnit::Px,
-            };
-            styles.border_bottom_left_radius = Length {
-                value: 16.0,
-                unit: css::LengthUnit::Px,
-            };
-            styles.border_bottom_right_radius = Length {
-                value: 16.0,
-                unit: css::LengthUnit::Px,
-            };
+            styles.border_top_left_radius = Length::px(16.0);
+            styles.border_top_right_radius = Length::px(16.0);
+            styles.border_bottom_left_radius = Length::px(16.0);
+            styles.border_bottom_right_radius = Length::px(16.0);
         }
     }
 
     // HACK: Style subscribe button - white background, blue border and text
     if node.has_class("subscribe-btn") {
-        styles.padding_top = Length {
-            value: 6.0,
-            unit: css::LengthUnit::Px,
-        }; // .375rem
-        styles.padding_right = Length {
-            value: 12.0,
-            unit: css::LengthUnit::Px,
-        }; // .75rem
-        styles.padding_bottom = Length {
-            value: 6.0,
-            unit: css::LengthUnit::Px,
-        };
-        styles.padding_left = Length {
-            value: 12.0,
-            unit: css::LengthUnit::Px,
-        };
-        styles.background_color = Color {
+        styles.padding_top = Length::px(6.0); // .375rem
+        styles.padding_right = Length::px(12.0); // .75rem
+        styles.padding_bottom = Length::px(6.0);
+        styles.padding_left = Length::px(12.0);
+        styles.background_color = LegacyColor {
             r: 255,
             g: 255,
             b: 255,
             a: 255,
         }; // white background
-        styles.color = Color {
+        styles.color = LegacyColor {
             r: 59,
             g: 130,
             b: 246,
             a: 255,
         }; // #3b82f6 blue text
-        styles.border_top_width = Length {
-            value: 1.0,
-            unit: css::LengthUnit::Px,
-        };
-        styles.border_right_width = Length {
-            value: 1.0,
-            unit: css::LengthUnit::Px,
-        };
-        styles.border_bottom_width = Length {
-            value: 1.0,
-            unit: css::LengthUnit::Px,
-        };
-        styles.border_left_width = Length {
-            value: 1.0,
-            unit: css::LengthUnit::Px,
-        };
-        styles.border_top_color = Color {
+        styles.border_top_width = Length::px(1.0);
+        styles.border_right_width = Length::px(1.0);
+        styles.border_bottom_width = Length::px(1.0);
+        styles.border_left_width = Length::px(1.0);
+        styles.border_top_color = LegacyColor {
             r: 59,
             g: 130,
             b: 246,
             a: 255,
         }; // #3b82f6
-        styles.border_right_color = Color {
+        styles.border_right_color = LegacyColor {
             r: 59,
             g: 130,
             b: 246,
             a: 255,
         };
-        styles.border_bottom_color = Color {
+        styles.border_bottom_color = LegacyColor {
             r: 59,
             g: 130,
             b: 246,
             a: 255,
         };
-        styles.border_left_color = Color {
+        styles.border_left_color = LegacyColor {
             r: 59,
             g: 130,
             b: 246,
@@ -688,22 +644,10 @@ fn apply_styles_internal_with_ancestors(
         styles.border_right_style = BorderStyle::Solid;
         styles.border_bottom_style = BorderStyle::Solid;
         styles.border_left_style = BorderStyle::Solid;
-        styles.border_top_left_radius = Length {
-            value: 4.0,
-            unit: css::LengthUnit::Px,
-        }; // .25rem
-        styles.border_top_right_radius = Length {
-            value: 4.0,
-            unit: css::LengthUnit::Px,
-        };
-        styles.border_bottom_left_radius = Length {
-            value: 4.0,
-            unit: css::LengthUnit::Px,
-        };
-        styles.border_bottom_right_radius = Length {
-            value: 4.0,
-            unit: css::LengthUnit::Px,
-        };
+        styles.border_top_left_radius = Length::px(4.0); // .25rem
+        styles.border_top_right_radius = Length::px(4.0);
+        styles.border_bottom_left_radius = Length::px(4.0);
+        styles.border_bottom_right_radius = Length::px(4.0);
     }
 
     // Recursively style children (passing current node in ancestors)
@@ -741,16 +685,13 @@ fn apply_styles_internal_with_ancestors(
         before_styles.display = Display::Block;
         before_styles.font_size = 12.0; // .75rem = 12px
         before_styles.font_weight = FontWeight::Bold;
-        before_styles.color = Color {
+        before_styles.color = LegacyColor {
             r: 90,
             g: 90,
             b: 90,
             a: 255,
         }; // #5a5a5a (--color-text-muted)
-        before_styles.margin_bottom = Some(Length {
-            value: 8.0,
-            unit: css::LengthUnit::Px,
-        });
+        before_styles.margin_bottom = Some(Length::px(8.0));
         before_styles.line_height = LineHeight::Normal;
 
         // Create styled text child
@@ -839,7 +780,7 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
         // CRITICAL FIX: Prevent text wrapping in table cells
         // This fixes the issue where navigation text and story titles wrap excessively
         if matches!(styles.display, Display::TableCell) {
-            styles.white_space = WhiteSpace::NoWrap;
+            styles.white_space = WhiteSpace::Nowrap;
         }
 
         // CRITICAL FIX: Ensure header navigation is visible
@@ -847,23 +788,20 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
         if node.has_class("pagetop") {
             styles.font_family = vec!["Verdana".to_string(), "Geneva".to_string(), "sans-serif".to_string()];
             styles.font_size = 10.0;
-            styles.color = Color {
+            styles.color = LegacyColor {
                 r: 34,
                 g: 34,
                 b: 34,
                 a: 255,
             }; // #222222
-            styles.line_height = LineHeight::Length(Length {
-                value: 12.0,
-                unit: css::LengthUnit::Px,
-            });
+            styles.line_height = LineHeight::Length(Length::px(12.0));
         }
 
         // CRITICAL FIX: Ensure pagetop links are visible
         // Fix any CSS that might be hiding navigation links in header
         if matches!(node.tag_name(), Some("a")) {
             // For now, make all links visible
-            styles.color = Color {
+            styles.color = LegacyColor {
                 r: 34,
                 g: 34,
                 b: 34,
@@ -875,15 +813,9 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
         // CRITICAL FIX: Ensure votearrow elements are visible with proper styling
         if node.has_class("votearrow") {
             styles.display = Display::Block;
-            styles.width = Some(Length {
-                value: 10.0,
-                unit: css::LengthUnit::Px,
-            });
-            styles.height = Some(Length {
-                value: 10.0,
-                unit: css::LengthUnit::Px,
-            });
-            styles.color = Color {
+            styles.width = Some(Length::px(10.0));
+            styles.height = Some(Length::px(10.0));
+            styles.color = LegacyColor {
                 r: 0,
                 g: 0,
                 b: 0,
@@ -895,17 +827,14 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
 
         // CRITICAL FIX: Ensure vote link cells have proper width
         if node.has_class("votelinks") {
-            styles.width = Some(Length {
-                value: 30.0,
-                unit: css::LengthUnit::Px,
-            }); // Wider for visibility
+            styles.width = Some(Length::px(30.0)); // Wider for visibility
             styles.text_align = TextAlign::Center; // Center content in vote column
         }
 
         // CRITICAL FIX: Ensure story rank numbers are visible
         if node.has_class("rank") {
             styles.display = Display::Block;
-            styles.color = Color {
+            styles.color = LegacyColor {
                 r: 0,
                 g: 0,
                 b: 0,
@@ -922,10 +851,7 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
             if node.get_attribute("align").as_deref() == Some("right")
                 && node.get_attribute("valign").as_deref() == Some("top")
             {
-                styles.width = Some(Length {
-                    value: 30.0,
-                    unit: css::LengthUnit::Px,
-                }); // Wide enough for rank numbers
+                styles.width = Some(Length::px(30.0)); // Wide enough for rank numbers
                 styles.text_align = TextAlign::Right;
                 eprintln!("DEBUG: Applied rank column width to title cell with right alignment");
             }
@@ -934,7 +860,7 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
         // CRITICAL FIX: Ensure header navigation elements are visible and styled
         if node.has_class("pagetop") {
             styles.display = Display::Inline; // Keep inline so text is collected by parent table cell
-            styles.color = Color {
+            styles.color = LegacyColor {
                 r: 255,
                 g: 255,
                 b: 255,
@@ -947,7 +873,7 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
 
         if node.has_class("hnname") {
             styles.display = Display::Inline; // Keep inline so text is collected by parent table cell
-            styles.color = Color {
+            styles.color = LegacyColor {
                 r: 255,
                 g: 255,
                 b: 255,
@@ -974,7 +900,7 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
                         || href.contains("news")
                     {
                         styles.display = Display::Inline;
-                        styles.color = Color {
+                        styles.color = LegacyColor {
                             r: 255,
                             g: 255,
                             b: 255,
@@ -997,25 +923,19 @@ fn parse_dimension_attribute(dim_str: &str) -> Option<Length> {
     // Handle percentage like "85%"
     if dim_str.ends_with('%') {
         if let Ok(value) = dim_str[..dim_str.len() - 1].trim().parse::<f32>() {
-            return Some(Length {
-                value,
-                unit: css::LengthUnit::Percent,
-            });
+            return Some(Length::percent(value));
         }
     }
 
     // Handle pixels (just a number like "18")
     if let Ok(value) = dim_str.parse::<f32>() {
-        return Some(Length {
-            value,
-            unit: css::LengthUnit::Px,
-        });
+        return Some(Length::px(value));
     }
 
     None
 }
 
-fn parse_color_attribute(color_str: &str) -> Option<Color> {
+fn parse_color_attribute(color_str: &str) -> Option<LegacyColor> {
     let color_str = color_str.trim();
 
     // Handle hex colors like #ff6600 or ff6600
@@ -1027,7 +947,7 @@ fn parse_color_attribute(color_str: &str) -> Option<Color> {
                 u8::from_str_radix(&hex[2..4], 16),
                 u8::from_str_radix(&hex[4..6], 16),
             ) {
-                return Some(Color { r, g, b, a: 255 });
+                return Some(LegacyColor { r, g, b, a: 255 });
             }
         } else if hex.len() == 3 {
             // Shorthand like #f60
@@ -1037,7 +957,7 @@ fn parse_color_attribute(color_str: &str) -> Option<Color> {
                 u8::from_str_radix(&hex[2..3], 16),
             ) {
                 // Double each digit: #f60 -> #ff6600
-                return Some(Color {
+                return Some(LegacyColor {
                     r: r * 17,
                     g: g * 17,
                     b: b * 17,
@@ -1056,7 +976,7 @@ fn inherit_styles(styles: &mut ComputedStyles, parent: &ComputedStyles) {
     styles.font_size = parent.font_size;
     styles.font_weight = parent.font_weight;
     styles.font_style = parent.font_style;
-    styles.line_height = parent.line_height;
+    styles.line_height = parent.line_height.clone();
     styles.text_align = parent.text_align;
     styles.text_transform = parent.text_transform;
     styles.letter_spacing = parent.letter_spacing;
@@ -1253,7 +1173,7 @@ fn apply_declaration(styles: &mut ComputedStyles, decl: &Declaration, parent_fon
         let value_str = match &decl.value {
             PropertyValue::Keyword(kw) => kw.clone(),
             PropertyValue::Length(len) => {
-                use crate::css::LengthUnit;
+                use crate::style::LengthUnit;
                 format!(
                     "{}{}",
                     len.value,
@@ -1268,6 +1188,8 @@ fn apply_declaration(styles: &mut ComputedStyles, decl: &Declaration, parent_fon
                         LengthUnit::Cm => "cm",
                         LengthUnit::Mm => "mm",
                         LengthUnit::In => "in",
+                        LengthUnit::Pc => "pc",
+                        _ => "px",
                     }
                 )
             }
@@ -1287,36 +1209,18 @@ fn apply_declaration(styles: &mut ComputedStyles, decl: &Declaration, parent_fon
         // Display
         "display" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.display = match kw.as_str() {
-                    "block" => Display::Block,
-                    "inline" => Display::Inline,
-                    "inline-block" => Display::InlineBlock,
-                    "flex" => Display::Flex,
-                    "inline-flex" => Display::InlineFlex,
-                    "grid" => Display::Grid,
-                    "inline-grid" => Display::InlineGrid,
-                    "table" => Display::Table,
-                    "table-row" => Display::TableRow,
-                    "table-cell" => Display::TableCell,
-                    "table-header-group" => Display::TableHeaderGroup,
-                    "table-row-group" => Display::TableRowGroup,
-                    "table-footer-group" => Display::TableFooterGroup,
-                    "none" => Display::None,
-                    _ => styles.display,
-                };
+                if let Ok(display) = Display::parse(kw) {
+                    styles.display = display;
+                }
             }
         }
 
         // Position
         "position" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.position = match kw.as_str() {
-                    "static" => Position::Static,
-                    "relative" => Position::Relative,
-                    "absolute" => Position::Absolute,
-                    "fixed" => Position::Fixed,
-                    _ => styles.position,
-                };
+                if let Ok(position) = Position::parse(kw) {
+                    styles.position = position;
+                }
             }
         }
 
@@ -1748,7 +1652,22 @@ fn apply_declaration(styles: &mut ComputedStyles, decl: &Declaration, parent_fon
         }
         "font-size" => {
             if let Some(len) = extract_length(&resolved_value) {
-                styles.font_size = len.to_px(parent_font_size, root_font_size);
+                // Resolve font-size against parent font size
+                if len.unit.is_absolute() {
+                    styles.font_size = len.to_px();
+                } else if len.unit == LengthUnit::Em || len.unit == LengthUnit::Percent {
+                    // Em/percent are relative to parent font size
+                    styles.font_size = len.value
+                        / (if len.unit == LengthUnit::Percent {
+                            100.0
+                        } else {
+                            1.0
+                        })
+                        * parent_font_size;
+                } else if len.unit == LengthUnit::Rem {
+                    // Rem is relative to root font size
+                    styles.font_size = len.value * root_font_size;
+                }
             }
         }
         "font-weight" => match &resolved_value {
@@ -1756,13 +1675,13 @@ fn apply_declaration(styles: &mut ComputedStyles, decl: &Declaration, parent_fon
                 styles.font_weight = match kw.as_str() {
                     "normal" => FontWeight::Normal,
                     "bold" => FontWeight::Bold,
-                    "lighter" => FontWeight::Weight(300),
-                    "bolder" => FontWeight::Weight(700),
+                    "lighter" => FontWeight::Number(300),
+                    "bolder" => FontWeight::Number(700),
                     _ => styles.font_weight,
                 };
             }
             PropertyValue::Number(n) => {
-                styles.font_weight = FontWeight::Weight(*n as u16);
+                styles.font_weight = FontWeight::Number(*n as u16);
             }
             _ => {}
         },
@@ -1823,19 +1742,30 @@ fn apply_declaration(styles: &mut ComputedStyles, decl: &Declaration, parent_fon
         }
         "letter-spacing" => {
             if let Some(len) = extract_length(&resolved_value) {
-                styles.letter_spacing = len.to_px(parent_font_size, root_font_size);
+                if len.unit.is_absolute() {
+                    styles.letter_spacing = len.to_px();
+                } else {
+                    // Fallback for relative units in letter-spacing (usually small)
+                    // Em units should be relative to current font size, but we don't have it finalized here easily
+                    // Just use value as if px for now if not absolute, or 0
+                    styles.letter_spacing = len.value;
+                }
             }
         }
         "word-spacing" => {
             if let Some(len) = extract_length(&resolved_value) {
-                styles.word_spacing = len.to_px(parent_font_size, root_font_size);
+                if len.unit.is_absolute() {
+                    styles.word_spacing = len.to_px();
+                } else {
+                    styles.word_spacing = len.value;
+                }
             }
         }
         "white-space" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.white_space = match kw.as_str() {
                     "normal" => WhiteSpace::Normal,
-                    "nowrap" => WhiteSpace::NoWrap,
+                    "nowrap" => WhiteSpace::Nowrap,
                     "pre" => WhiteSpace::Pre,
                     "pre-wrap" => WhiteSpace::PreWrap,
                     "pre-line" => WhiteSpace::PreLine,
