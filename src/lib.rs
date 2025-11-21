@@ -124,8 +124,8 @@ pub use geometry::{EdgeOffsets, Point, Rect, Size};
 // Renderer (main entry point)
 pub use renderer::{ImageFormat, RenderOptions, Renderer};
 
-// Re-export tree types (will be added in Wave 2)
-// pub use tree::{BoxNode, DomNode, FragmentNode};
-
-// Re-export style types (will be added in Wave 2)
-// pub use style::{ComputedStyle, Display, Position};
+// Style types from Wave 1 tasks
+pub use style::color::{ColorParseError, Hsla, Rgba};
+pub use style::display::{Display, DisplayParseError};
+pub use style::position::{Position, PositionParseError};
+pub use style::{Color, Length, LengthOrAuto, LengthUnit};

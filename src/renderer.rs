@@ -137,7 +137,11 @@ impl Renderer {
         base_url: Option<String>,
     ) -> Result<Vec<u8>> {
         if width == 0 || height == 0 {
-            return Err(Error::InvalidDimensions(width, height));
+            return Err(Error::Render(
+                crate::error::RenderError::InvalidParameters {
+                    message: format!("Invalid dimensions: width={}, height={}", width, height),
+                },
+            ));
         }
 
         // Parse HTML
@@ -215,7 +219,11 @@ impl Renderer {
         options: RenderOptions,
     ) -> Result<Vec<u8>> {
         if width == 0 || height == 0 {
-            return Err(Error::InvalidDimensions(width, height));
+            return Err(Error::Render(
+                crate::error::RenderError::InvalidParameters {
+                    message: format!("Invalid dimensions: width={}, height={}", width, height),
+                },
+            ));
         }
 
         // Parse HTML

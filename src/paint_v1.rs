@@ -2,7 +2,7 @@ use crate::css::{Color, ColorStop, TextShadow};
 use crate::error::{Error, Result};
 use crate::image_loader::ImageCache;
 use crate::layout::LayoutBox;
-use crate::style::{BackgroundImage, BorderStyle, Display, FontWeight, TextAlign};
+use crate::style::{BackgroundImage, BorderStyle, ComputedStyles, Display, FontWeight, TextAlign};
 use crate::text::{shape_text, FontCache};
 use tiny_skia::*;
 
@@ -23,8 +23,9 @@ pub fn paint_with_scroll(
     background: Color,
     base_url: Option<String>,
 ) -> Result<Pixmap> {
-    let mut pixmap = Pixmap::new(width, height)
-        .ok_or_else(|| Error::Render(format!("Failed to create pixmap {}x{}", width, height)))?;
+    let mut pixmap = Pixmap::new(width, height).ok_or_else(|| {
+        Error::Render(crate::error::RenderError::CanvasCreationFailed { width, height })
+    })?;
 
     // Use body background if available, otherwise use provided background
     let canvas_background = find_body_background(layout_tree).unwrap_or(background);
@@ -405,22 +406,10 @@ fn paint_borders(
     let width = layout_box.width;
     let height = layout_box.height;
 
-    let top_width = layout_box
-        .styles
-        .border_top_width
-        .to_px(layout_box.styles.font_size, 16.0);
-    let right_width = layout_box
-        .styles
-        .border_right_width
-        .to_px(layout_box.styles.font_size, 16.0);
-    let bottom_width = layout_box
-        .styles
-        .border_bottom_width
-        .to_px(layout_box.styles.font_size, 16.0);
-    let left_width = layout_box
-        .styles
-        .border_left_width
-        .to_px(layout_box.styles.font_size, 16.0);
+    let top_width = layout_box.styles.border_top_width.to_px();
+    let right_width = layout_box.styles.border_right_width.to_px();
+    let bottom_width = layout_box.styles.border_bottom_width.to_px();
+    let left_width = layout_box.styles.border_left_width.to_px();
 
     // Check if border-radius is set
     let has_radius = layout_box.styles.border_top_left_radius.value > 0.0
@@ -608,12 +597,10 @@ fn paint_box_shadows(
             continue; // Skip inset shadows for now
         }
 
-        let offset_x = shadow.offset_x.to_px(layout_box.styles.font_size, 16.0);
-        let offset_y = shadow.offset_y.to_px(layout_box.styles.font_size, 16.0);
-        let _blur_radius = shadow.blur_radius.to_px(layout_box.styles.font_size, 16.0);
-        let spread_radius = shadow
-            .spread_radius
-            .to_px(layout_box.styles.font_size, 16.0);
+        let offset_x = shadow.offset_x.to_px();
+        let offset_y = shadow.offset_y.to_px();
+        let _blur_radius = shadow.blur_radius.to_px();
+        let spread_radius = shadow.spread_radius.to_px();
 
         let shadow_x = layout_box.x + offset_x - spread_radius;
         let shadow_y = layout_box.y + offset_y - spread_radius;
@@ -713,7 +700,7 @@ fn paint_text(
     // Shape text
     // Don't constrain width if white-space is nowrap or pre
     // CRITICAL FIX: Force nowrap for table cells to prevent excessive wrapping
-    let max_width = if layout_box.styles.white_space == crate::style::WhiteSpace::NoWrap
+    let max_width = if layout_box.styles.white_space == crate::style::WhiteSpace::Nowrap
         || layout_box.styles.white_space == crate::style::WhiteSpace::Pre
         || matches!(layout_box.styles.display, crate::style::Display::TableCell)
     {
@@ -725,22 +712,10 @@ fn paint_text(
     let text_layout = shape_text(&text_content, &layout_box.styles, font_cache, max_width)?;
 
     // Calculate text position based on text-align
-    let padding_left = layout_box
-        .styles
-        .padding_left
-        .to_px(layout_box.styles.font_size, 16.0);
-    let padding_top = layout_box
-        .styles
-        .padding_top
-        .to_px(layout_box.styles.font_size, 16.0);
-    let border_left = layout_box
-        .styles
-        .border_left_width
-        .to_px(layout_box.styles.font_size, 16.0);
-    let border_top = layout_box
-        .styles
-        .border_top_width
-        .to_px(layout_box.styles.font_size, 16.0);
+    let padding_left = layout_box.styles.padding_left.to_px();
+    let padding_top = layout_box.styles.padding_top.to_px();
+    let border_left = layout_box.styles.border_left_width.to_px();
+    let border_top = layout_box.styles.border_top_width.to_px();
 
     let content_x = layout_box.x + border_left + padding_left;
     let content_y = layout_box.y + border_top + padding_top;
@@ -779,7 +754,7 @@ fn paint_text_with_shadow(
     text_layout: &crate::text::TextLayout,
     x: f32,
     y: f32,
-    styles: &crate::style::ComputedStyles,
+    styles: &ComputedStyles,
     shadow: Option<&TextShadow>,
     transform: &tiny_skia::Transform,
     _clip_path: Option<&()>,
@@ -791,10 +766,7 @@ fn paint_text_with_shadow(
     };
 
     let (shadow_x, shadow_y) = if let Some(s) = shadow {
-        (
-            s.offset_x.to_px(styles.font_size, 16.0),
-            s.offset_y.to_px(styles.font_size, 16.0),
-        )
+        (s.offset_x.to_px(), s.offset_y.to_px())
     } else {
         (0.0, 0.0)
     };
@@ -847,16 +819,16 @@ fn create_transform_matrix(
     for transform in transforms {
         let t = match transform {
             crate::css::Transform::Translate(x, y) => {
-                let tx = x.to_px(16.0, 16.0);
-                let ty = y.to_px(16.0, 16.0);
+                let tx = x.to_px();
+                let ty = y.to_px();
                 tiny_skia::Transform::from_translate(tx, ty)
             }
             crate::css::Transform::TranslateX(x) => {
-                let tx = x.to_px(16.0, 16.0);
+                let tx = x.to_px();
                 tiny_skia::Transform::from_translate(tx, 0.0)
             }
             crate::css::Transform::TranslateY(y) => {
-                let ty = y.to_px(16.0, 16.0);
+                let ty = y.to_px();
                 tiny_skia::Transform::from_translate(0.0, ty)
             }
             crate::css::Transform::Scale(sx, sy) => tiny_skia::Transform::from_scale(*sx, *sy),
@@ -892,22 +864,10 @@ fn create_rounded_rect_path(layout_box: &LayoutBox) -> Option<Path> {
     let width = layout_box.width;
     let height = layout_box.height;
 
-    let tl = layout_box
-        .styles
-        .border_top_left_radius
-        .to_px(layout_box.styles.font_size, 16.0);
-    let tr = layout_box
-        .styles
-        .border_top_right_radius
-        .to_px(layout_box.styles.font_size, 16.0);
-    let bl = layout_box
-        .styles
-        .border_bottom_left_radius
-        .to_px(layout_box.styles.font_size, 16.0);
-    let br = layout_box
-        .styles
-        .border_bottom_right_radius
-        .to_px(layout_box.styles.font_size, 16.0);
+    let tl = layout_box.styles.border_top_left_radius.to_px();
+    let tr = layout_box.styles.border_top_right_radius.to_px();
+    let bl = layout_box.styles.border_bottom_left_radius.to_px();
+    let br = layout_box.styles.border_bottom_right_radius.to_px();
 
     let mut pb = PathBuilder::new();
 

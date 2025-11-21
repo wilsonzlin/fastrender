@@ -59,7 +59,8 @@ impl FontCache {
         let weight_value = match weight {
             FontWeight::Normal => 400,
             FontWeight::Bold => 700,
-            FontWeight::Weight(w) => w,
+            FontWeight::Number(w) => w,
+            _ => 400, // Fallback
         };
 
         // Map font style
@@ -143,7 +144,12 @@ pub fn shape_text(
     // Get font
     let font_face = font_cache
         .get_font(&styles.font_family, styles.font_weight, styles.font_style)
-        .ok_or_else(|| Error::Font("Failed to load font".to_string()))?;
+        .ok_or_else(|| {
+            Error::Font(crate::error::FontError::LoadFailed {
+                family: styles.font_family.join(", "),
+                reason: "Font not found in cache".to_string(),
+            })
+        })?;
 
     // Transform text based on text-transform
     let transformed_text = apply_text_transform(text, styles.text_transform);
@@ -160,8 +166,11 @@ pub fn shape_text(
     }
 
     // Parse font with ttf-parser
-    let ttf_face = ttf_parser::Face::parse(&font_face.data, font_face.index)
-        .map_err(|e| Error::Font(format!("Failed to parse font: {:?}", e)))?;
+    let ttf_face = ttf_parser::Face::parse(&font_face.data, font_face.index).map_err(|e| {
+        Error::Font(crate::error::FontError::InvalidFontFile {
+            path: format!("font index {}", font_face.index),
+        })
+    })?;
 
     // Get font metrics
     let units_per_em = ttf_face.units_per_em() as f32;
@@ -172,7 +181,7 @@ pub fn shape_text(
     let line_gap = ttf_face.line_gap() as f32 * scale;
 
     let line_height_px = calculate_line_height(
-        styles.line_height,
+        styles.line_height.clone(),
         styles.font_size,
         ascender,
         descender,
@@ -180,13 +189,16 @@ pub fn shape_text(
     );
 
     // Shape text with rustybuzz
-    let rb_face = Face::from_slice(&font_face.data, font_face.index)
-        .ok_or_else(|| Error::Font("Failed to create rustybuzz face".to_string()))?;
+    let rb_face = Face::from_slice(&font_face.data, font_face.index).ok_or_else(|| {
+        Error::Font(crate::error::FontError::InvalidFontFile {
+            path: format!("font index {}", font_face.index),
+        })
+    })?;
 
     // Break into lines if max_width is specified and white-space allows wrapping
     let lines = if let Some(max_w) = max_width {
         // Don't break lines if white-space is nowrap or pre
-        if styles.white_space == WhiteSpace::NoWrap || styles.white_space == WhiteSpace::Pre {
+        if styles.white_space == WhiteSpace::Nowrap || styles.white_space == WhiteSpace::Pre {
             // Single line, no wrapping
             let shaped_line = shape_line(
                 &processed_text,
@@ -261,7 +273,7 @@ fn process_whitespace(text: &str, white_space: WhiteSpace) -> String {
             // Collapse whitespace
             text.split_whitespace().collect::<Vec<_>>().join(" ")
         }
-        WhiteSpace::NoWrap => {
+        WhiteSpace::Nowrap => {
             // Collapse whitespace but don't wrap
             text.split_whitespace().collect::<Vec<_>>().join(" ")
         }
@@ -293,7 +305,13 @@ fn calculate_line_height(
     match line_height {
         LineHeight::Normal => ascender - descender + line_gap,
         LineHeight::Number(n) => font_size * n,
-        LineHeight::Length(len) => len.to_px(font_size, 16.0),
+        LineHeight::Length(len) => {
+            if len.unit.is_absolute() {
+                len.to_px()
+            } else {
+                len.resolve_with_font_size(font_size)
+            }
+        }
     }
 }
 
@@ -396,7 +414,7 @@ fn shape_line(
     let line_gap = ttf_face.line_gap() as f32 * scale;
 
     let line_height = calculate_line_height(
-        styles.line_height,
+        styles.line_height.clone(),
         styles.font_size,
         ascender,
         descender,

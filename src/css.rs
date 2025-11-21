@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::style::{Length, LengthUnit};
 use cssparser::{ParseError, Parser, ParserInput, ToCss, Token};
 use selectors::parser::{SelectorList, SelectorParseErrorKind};
 use selectors::Element;
@@ -245,73 +246,7 @@ impl Color {
     }
 }
 
-/// Length value with unit
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Length {
-    pub value: f32,
-    pub unit: LengthUnit,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum LengthUnit {
-    Px,
-    Em,
-    Rem,
-    Percent,
-    Vw,
-    Vh,
-    Pt,
-    Cm,
-    Mm,
-    In,
-}
-
-impl Length {
-    pub const fn px(value: f32) -> Self {
-        Self {
-            value,
-            unit: LengthUnit::Px,
-        }
-    }
-
-    pub const fn em(value: f32) -> Self {
-        Self {
-            value,
-            unit: LengthUnit::Em,
-        }
-    }
-
-    pub const fn rem(value: f32) -> Self {
-        Self {
-            value,
-            unit: LengthUnit::Rem,
-        }
-    }
-
-    pub const fn percent(value: f32) -> Self {
-        Self {
-            value,
-            unit: LengthUnit::Percent,
-        }
-    }
-
-    pub fn to_px(&self, font_size: f32, root_font_size: f32) -> f32 {
-        match self.unit {
-            LengthUnit::Px => self.value,
-            LengthUnit::Em => self.value * font_size,
-            LengthUnit::Rem => self.value * root_font_size,
-            LengthUnit::Percent => self.value, // Caller handles percentage context
-            LengthUnit::Vw => self.value * 12.0, // Simplified
-            LengthUnit::Vh => self.value * 8.0, // Simplified
-            LengthUnit::Pt => self.value * 1.333,
-            LengthUnit::Cm => self.value * 37.795,
-            LengthUnit::Mm => self.value * 3.7795,
-            LengthUnit::In => self.value * 96.0,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BoxShadow {
     pub offset_x: Length,
     pub offset_y: Length,
@@ -321,7 +256,7 @@ pub struct BoxShadow {
     pub inset: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextShadow {
     pub offset_x: Length,
     pub offset_y: Length,
@@ -335,7 +270,7 @@ pub struct ColorStop {
     pub position: Option<f32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Transform {
     Translate(Length, Length),
     TranslateX(Length),
@@ -894,6 +829,27 @@ fn parse_length(s: &str) -> Option<Length> {
         return rest.parse::<f32>().ok().map(|v| Length {
             value: v,
             unit: LengthUnit::Vh,
+        });
+    }
+
+    if let Some(rest) = s.strip_suffix("cm") {
+        return rest.parse::<f32>().ok().map(|v| Length {
+            value: v,
+            unit: LengthUnit::Cm,
+        });
+    }
+
+    if let Some(rest) = s.strip_suffix("mm") {
+        return rest.parse::<f32>().ok().map(|v| Length {
+            value: v,
+            unit: LengthUnit::Mm,
+        });
+    }
+
+    if let Some(rest) = s.strip_suffix("in") {
+        return rest.parse::<f32>().ok().map(|v| Length {
+            value: v,
+            unit: LengthUnit::In,
         });
     }
 
