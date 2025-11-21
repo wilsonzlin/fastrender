@@ -51,7 +51,12 @@
 //! paint(&fragment_tree);
 //! ```
 
-// Module declarations will be added in Wave 2
-// pub mod dom;
-// pub mod box_node;
-// pub mod fragment;
+// Module declarations
+pub mod box_generation;
+pub mod box_tree;
+// pub mod dom; // Future
+// pub mod fragment; // Future
+
+// Re-exports
+pub use box_generation::{BoxGenerationConfig, BoxGenerationError, BoxGenerator, DOMNode};
+pub use box_tree::{BoxNode, BoxTree, BoxType, ComputedStyle, DebugInfo, ReplacedType};
