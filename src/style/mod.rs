@@ -1,3 +1,13 @@
+//! Style system types
+//!
+//! This module contains types related to CSS styling, including colors,
+//! computed styles, and style properties.
+
+pub mod color;
+
+// Re-export commonly used color types
+pub use color::{Color as NewColor, ColorParseError, Hsla, Rgba};
+
 use crate::css::{
     self, BoxShadow, Color, Declaration, PropertyValue, StyleSheet, TextShadow, Transform,
 };
