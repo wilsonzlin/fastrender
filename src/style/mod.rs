@@ -9,12 +9,18 @@ pub mod color;
 pub use color::{Color as NewColor, ColorParseError, Hsla, Rgba};
 
 use crate::css::{
-    self, BoxShadow, Color, Declaration, Length, PropertyValue, StyleSheet, TextShadow, Transform,
+    self, BoxShadow, Color, Declaration, PropertyValue, StyleSheet, TextShadow, Transform,
 };
 use crate::dom::{DomNode, ElementRef};
+pub use crate::style::values::{Length, LengthUnit, LengthOrAuto};
 use selectors::context::{QuirksMode, SelectorCaches};
 use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
 use std::collections::HashMap;
+
+pub mod values;
+
+// Re-export common types from values module
+// These are now public via the module system
 
 // User-agent stylesheet
 const USER_AGENT_STYLESHEET: &str = include_str!("../user_agent.css");
@@ -26,7 +32,7 @@ pub struct StyledNode {
     pub children: Vec<StyledNode>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyles {
     // Display and positioning
     pub display: Display,
@@ -134,7 +140,7 @@ pub struct ComputedStyles {
     pub custom_properties: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Display {
     Block,
     Inline,
@@ -152,7 +158,7 @@ pub enum Display {
     None,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Position {
     Static,
     Relative,
@@ -160,7 +166,7 @@ pub enum Position {
     Fixed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Overflow {
     Visible,
     Hidden,
@@ -168,7 +174,7 @@ pub enum Overflow {
     Auto,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BorderStyle {
     None,
     Solid,
@@ -177,7 +183,7 @@ pub enum BorderStyle {
     Double,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlexDirection {
     Row,
     RowReverse,
@@ -185,14 +191,14 @@ pub enum FlexDirection {
     ColumnReverse,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlexWrap {
     NoWrap,
     Wrap,
     WrapReverse,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JustifyContent {
     FlexStart,
     FlexEnd,
@@ -202,7 +208,7 @@ pub enum JustifyContent {
     SpaceEvenly,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlignItems {
     FlexStart,
     FlexEnd,
@@ -211,7 +217,7 @@ pub enum AlignItems {
     Stretch,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlignContent {
     FlexStart,
     FlexEnd,
@@ -235,28 +241,30 @@ pub enum GridTrack {
     MinMax(Box<GridTrack>, Box<GridTrack>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontWeight {
     Normal,
     Bold,
-    Weight(u16),
+    Bolder,
+    Lighter,
+    Number(u16),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontStyle {
     Normal,
     Italic,
     Oblique,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LineHeight {
     Normal,
     Number(f32),
     Length(Length),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextAlign {
     Left,
     Right,
@@ -264,7 +272,7 @@ pub enum TextAlign {
     Justify,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextDecoration {
     None,
     Underline,
@@ -272,7 +280,7 @@ pub enum TextDecoration {
     LineThrough,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextTransform {
     None,
     Uppercase,
@@ -280,10 +288,10 @@ pub enum TextTransform {
     Capitalize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WhiteSpace {
     Normal,
-    NoWrap,
+    Nowrap,
     Pre,
     PreWrap,
     PreLine,
@@ -315,7 +323,7 @@ pub enum BackgroundPosition {
     Position(Length, Length),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackgroundRepeat {
     Repeat,
     RepeatX,
@@ -599,22 +607,10 @@ fn apply_styles_internal_with_ancestors(
         // Check if we're inside an article element (.5rem = 8px)
         let in_article = ancestors.iter().any(|a| a.tag_name() == Some("article"));
         if in_article {
-            styles.border_top_left_radius = Length {
-                value: 8.0,
-                unit: css::LengthUnit::Px,
-            };
-            styles.border_top_right_radius = Length {
-                value: 8.0,
-                unit: css::LengthUnit::Px,
-            };
-            styles.border_bottom_left_radius = Length {
-                value: 8.0,
-                unit: css::LengthUnit::Px,
-            };
-            styles.border_bottom_right_radius = Length {
-                value: 8.0,
-                unit: css::LengthUnit::Px,
-            };
+            styles.border_top_left_radius = Length::px(8.0);
+            styles.border_top_right_radius = Length::px(8.0);
+            styles.border_bottom_left_radius = Length::px(8.0);
+            styles.border_bottom_right_radius = Length::px(8.0);
         }
 
         // Check if we're inside banner-left (avatar image with border-radius: 50%)
@@ -622,43 +618,19 @@ fn apply_styles_internal_with_ancestors(
         if in_banner_left {
             // border-radius: 50% for circular avatar
             // Since the image is 2rem (32px) square, 50% = 16px radius
-            styles.border_top_left_radius = Length {
-                value: 16.0,
-                unit: css::LengthUnit::Px,
-            };
-            styles.border_top_right_radius = Length {
-                value: 16.0,
-                unit: css::LengthUnit::Px,
-            };
-            styles.border_bottom_left_radius = Length {
-                value: 16.0,
-                unit: css::LengthUnit::Px,
-            };
-            styles.border_bottom_right_radius = Length {
-                value: 16.0,
-                unit: css::LengthUnit::Px,
-            };
+            styles.border_top_left_radius = Length::px(16.0);
+            styles.border_top_right_radius = Length::px(16.0);
+            styles.border_bottom_left_radius = Length::px(16.0);
+            styles.border_bottom_right_radius = Length::px(16.0);
         }
     }
 
     // HACK: Style subscribe button - white background, blue border and text
     if node.has_class("subscribe-btn") {
-        styles.padding_top = Length {
-            value: 6.0,
-            unit: css::LengthUnit::Px,
-        }; // .375rem
-        styles.padding_right = Length {
-            value: 12.0,
-            unit: css::LengthUnit::Px,
-        }; // .75rem
-        styles.padding_bottom = Length {
-            value: 6.0,
-            unit: css::LengthUnit::Px,
-        };
-        styles.padding_left = Length {
-            value: 12.0,
-            unit: css::LengthUnit::Px,
-        };
+        styles.padding_top = Length::px(6.0); // .375rem
+        styles.padding_right = Length::px(12.0); // .75rem
+        styles.padding_bottom = Length::px(6.0);
+        styles.padding_left = Length::px(12.0);
         styles.background_color = Color {
             r: 255,
             g: 255,
@@ -671,22 +643,10 @@ fn apply_styles_internal_with_ancestors(
             b: 246,
             a: 255,
         }; // #3b82f6 blue text
-        styles.border_top_width = Length {
-            value: 1.0,
-            unit: css::LengthUnit::Px,
-        };
-        styles.border_right_width = Length {
-            value: 1.0,
-            unit: css::LengthUnit::Px,
-        };
-        styles.border_bottom_width = Length {
-            value: 1.0,
-            unit: css::LengthUnit::Px,
-        };
-        styles.border_left_width = Length {
-            value: 1.0,
-            unit: css::LengthUnit::Px,
-        };
+        styles.border_top_width = Length::px(1.0);
+        styles.border_right_width = Length::px(1.0);
+        styles.border_bottom_width = Length::px(1.0);
+        styles.border_left_width = Length::px(1.0);
         styles.border_top_color = Color {
             r: 59,
             g: 130,
@@ -715,22 +675,10 @@ fn apply_styles_internal_with_ancestors(
         styles.border_right_style = BorderStyle::Solid;
         styles.border_bottom_style = BorderStyle::Solid;
         styles.border_left_style = BorderStyle::Solid;
-        styles.border_top_left_radius = Length {
-            value: 4.0,
-            unit: css::LengthUnit::Px,
-        }; // .25rem
-        styles.border_top_right_radius = Length {
-            value: 4.0,
-            unit: css::LengthUnit::Px,
-        };
-        styles.border_bottom_left_radius = Length {
-            value: 4.0,
-            unit: css::LengthUnit::Px,
-        };
-        styles.border_bottom_right_radius = Length {
-            value: 4.0,
-            unit: css::LengthUnit::Px,
-        };
+        styles.border_top_left_radius = Length::px(4.0); // .25rem
+        styles.border_top_right_radius = Length::px(4.0);
+        styles.border_bottom_left_radius = Length::px(4.0);
+        styles.border_bottom_right_radius = Length::px(4.0);
     }
 
     // Recursively style children (passing current node in ancestors)
@@ -782,10 +730,7 @@ fn apply_styles_internal_with_ancestors(
             b: 90,
             a: 255,
         }; // #5a5a5a (--color-text-muted)
-        before_styles.margin_bottom = Some(Length {
-            value: 8.0,
-            unit: css::LengthUnit::Px,
-        });
+        before_styles.margin_bottom = Some(Length::px(8.0));
         before_styles.line_height = LineHeight::Normal;
 
         // Create styled text child
@@ -877,7 +822,7 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
         // CRITICAL FIX: Prevent text wrapping in table cells
         // This fixes the issue where navigation text and story titles wrap excessively
         if matches!(styles.display, Display::TableCell) {
-            styles.white_space = WhiteSpace::NoWrap;
+            styles.white_space = WhiteSpace::Nowrap;
         }
 
         // CRITICAL FIX: Ensure header navigation is visible
@@ -895,10 +840,7 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
                 b: 34,
                 a: 255,
             }; // #222222
-            styles.line_height = LineHeight::Length(Length {
-                value: 12.0,
-                unit: css::LengthUnit::Px,
-            });
+            styles.line_height = LineHeight::Length(Length::px(12.0));
         }
 
         // CRITICAL FIX: Ensure pagetop links are visible
@@ -917,14 +859,8 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
         // CRITICAL FIX: Ensure votearrow elements are visible with proper styling
         if node.has_class("votearrow") {
             styles.display = Display::Block;
-            styles.width = Some(Length {
-                value: 10.0,
-                unit: css::LengthUnit::Px,
-            });
-            styles.height = Some(Length {
-                value: 10.0,
-                unit: css::LengthUnit::Px,
-            });
+            styles.width = Some(Length::px(10.0));
+            styles.height = Some(Length::px(10.0));
             styles.color = Color {
                 r: 0,
                 g: 0,
@@ -937,10 +873,7 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
 
         // CRITICAL FIX: Ensure vote link cells have proper width
         if node.has_class("votelinks") {
-            styles.width = Some(Length {
-                value: 30.0,
-                unit: css::LengthUnit::Px,
-            }); // Wider for visibility
+            styles.width = Some(Length::px(30.0)); // Wider for visibility
             styles.text_align = TextAlign::Center; // Center content in vote column
         }
 
@@ -964,10 +897,7 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
             if node.get_attribute("align").as_deref() == Some("right")
                 && node.get_attribute("valign").as_deref() == Some("top")
             {
-                styles.width = Some(Length {
-                    value: 30.0,
-                    unit: css::LengthUnit::Px,
-                }); // Wide enough for rank numbers
+                styles.width = Some(Length::px(30.0)); // Wide enough for rank numbers
                 styles.text_align = TextAlign::Right;
                 eprintln!("DEBUG: Applied rank column width to title cell with right alignment");
             }
@@ -1039,19 +969,13 @@ fn parse_dimension_attribute(dim_str: &str) -> Option<Length> {
     // Handle percentage like "85%"
     if dim_str.ends_with('%') {
         if let Ok(value) = dim_str[..dim_str.len() - 1].trim().parse::<f32>() {
-            return Some(Length {
-                value,
-                unit: css::LengthUnit::Percent,
-            });
+            return Some(Length::percent(value));
         }
     }
 
     // Handle pixels (just a number like "18")
     if let Ok(value) = dim_str.parse::<f32>() {
-        return Some(Length {
-            value,
-            unit: css::LengthUnit::Px,
-        });
+        return Some(Length::px(value));
     }
 
     None
@@ -1098,7 +1022,7 @@ fn inherit_styles(styles: &mut ComputedStyles, parent: &ComputedStyles) {
     styles.font_size = parent.font_size;
     styles.font_weight = parent.font_weight;
     styles.font_style = parent.font_style;
-    styles.line_height = parent.line_height;
+    styles.line_height = parent.line_height.clone();
     styles.text_align = parent.text_align;
     styles.text_transform = parent.text_transform;
     styles.letter_spacing = parent.letter_spacing;
@@ -1307,7 +1231,7 @@ fn apply_declaration(
         let value_str = match &decl.value {
             PropertyValue::Keyword(kw) => kw.clone(),
             PropertyValue::Length(len) => {
-                use crate::css::LengthUnit;
+                use crate::style::LengthUnit;
                 format!(
                     "{}{}",
                     len.value,
@@ -1322,6 +1246,8 @@ fn apply_declaration(
                         LengthUnit::Cm => "cm",
                         LengthUnit::Mm => "mm",
                         LengthUnit::In => "in",
+                        LengthUnit::Pc => "pc",
+                        _ => "px",
                     }
                 )
             }
@@ -1804,7 +1730,16 @@ fn apply_declaration(
         }
         "font-size" => {
             if let Some(len) = extract_length(&resolved_value) {
-                styles.font_size = len.to_px(parent_font_size, root_font_size);
+                // Resolve font-size against parent font size
+                if len.unit.is_absolute() {
+                    styles.font_size = len.to_px();
+                } else if len.unit == LengthUnit::Em || len.unit == LengthUnit::Percent {
+                     // Em/percent are relative to parent font size
+                     styles.font_size = len.value / (if len.unit == LengthUnit::Percent { 100.0 } else { 1.0 }) * parent_font_size;
+                } else if len.unit == LengthUnit::Rem {
+                     // Rem is relative to root font size
+                     styles.font_size = len.value * root_font_size;
+                }
             }
         }
         "font-weight" => match &resolved_value {
@@ -1812,13 +1747,13 @@ fn apply_declaration(
                 styles.font_weight = match kw.as_str() {
                     "normal" => FontWeight::Normal,
                     "bold" => FontWeight::Bold,
-                    "lighter" => FontWeight::Weight(300),
-                    "bolder" => FontWeight::Weight(700),
+                    "lighter" => FontWeight::Number(300),
+                    "bolder" => FontWeight::Number(700),
                     _ => styles.font_weight,
                 };
             }
             PropertyValue::Number(n) => {
-                styles.font_weight = FontWeight::Weight(*n as u16);
+                styles.font_weight = FontWeight::Number(*n as u16);
             }
             _ => {}
         },
@@ -1879,19 +1814,30 @@ fn apply_declaration(
         }
         "letter-spacing" => {
             if let Some(len) = extract_length(&resolved_value) {
-                styles.letter_spacing = len.to_px(parent_font_size, root_font_size);
+                if len.unit.is_absolute() {
+                     styles.letter_spacing = len.to_px();
+                } else {
+                     // Fallback for relative units in letter-spacing (usually small)
+                     // Em units should be relative to current font size, but we don't have it finalized here easily
+                     // Just use value as if px for now if not absolute, or 0
+                     styles.letter_spacing = len.value;
+                }
             }
         }
         "word-spacing" => {
             if let Some(len) = extract_length(&resolved_value) {
-                styles.word_spacing = len.to_px(parent_font_size, root_font_size);
+                 if len.unit.is_absolute() {
+                     styles.word_spacing = len.to_px();
+                } else {
+                     styles.word_spacing = len.value;
+                }
             }
         }
         "white-space" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.white_space = match kw.as_str() {
                     "normal" => WhiteSpace::Normal,
-                    "nowrap" => WhiteSpace::NoWrap,
+                    "nowrap" => WhiteSpace::Nowrap,
                     "pre" => WhiteSpace::Pre,
                     "pre-wrap" => WhiteSpace::PreWrap,
                     "pre-line" => WhiteSpace::PreLine,

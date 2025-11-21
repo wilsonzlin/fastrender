@@ -16,3 +16,4 @@ pub use renderer::{ImageFormat, RenderOptions, Renderer};
 
 // Re-export new color types from style module
 pub use style::color::{Color as StyleColor, ColorParseError, Hsla, Rgba};
+pub use style::{Length, LengthUnit, LengthOrAuto};
