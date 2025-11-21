@@ -23,8 +23,9 @@ pub fn paint_with_scroll(
     background: Color,
     base_url: Option<String>,
 ) -> Result<Pixmap> {
-    let mut pixmap = Pixmap::new(width, height)
-        .ok_or_else(|| Error::Render(format!("Failed to create pixmap {}x{}", width, height)))?;
+    let mut pixmap = Pixmap::new(width, height).ok_or_else(|| {
+        Error::Render(crate::error::RenderError::CanvasCreationFailed { width, height })
+    })?;
 
     // Use body background if available, otherwise use provided background
     let canvas_background = find_body_background(layout_tree).unwrap_or(background);

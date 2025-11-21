@@ -144,7 +144,12 @@ pub fn shape_text(
     // Get font
     let font_face = font_cache
         .get_font(&styles.font_family, styles.font_weight, styles.font_style)
-        .ok_or_else(|| Error::Font("Failed to load font".to_string()))?;
+        .ok_or_else(|| {
+            Error::Font(crate::error::FontError::LoadFailed {
+                family: styles.font_family.join(", "),
+                reason: "Font not found in cache".to_string(),
+            })
+        })?;
 
     // Transform text based on text-transform
     let transformed_text = apply_text_transform(text, styles.text_transform);
@@ -161,8 +166,11 @@ pub fn shape_text(
     }
 
     // Parse font with ttf-parser
-    let ttf_face = ttf_parser::Face::parse(&font_face.data, font_face.index)
-        .map_err(|e| Error::Font(format!("Failed to parse font: {:?}", e)))?;
+    let ttf_face = ttf_parser::Face::parse(&font_face.data, font_face.index).map_err(|e| {
+        Error::Font(crate::error::FontError::InvalidFontFile {
+            path: format!("font index {}", font_face.index),
+        })
+    })?;
 
     // Get font metrics
     let units_per_em = ttf_face.units_per_em() as f32;
@@ -181,8 +189,11 @@ pub fn shape_text(
     );
 
     // Shape text with rustybuzz
-    let rb_face = Face::from_slice(&font_face.data, font_face.index)
-        .ok_or_else(|| Error::Font("Failed to create rustybuzz face".to_string()))?;
+    let rb_face = Face::from_slice(&font_face.data, font_face.index).ok_or_else(|| {
+        Error::Font(crate::error::FontError::InvalidFontFile {
+            path: format!("font index {}", font_face.index),
+        })
+    })?;
 
     // Break into lines if max_width is specified and white-space allows wrapping
     let lines = if let Some(max_w) = max_width {
