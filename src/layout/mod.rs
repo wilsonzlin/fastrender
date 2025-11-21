@@ -26,6 +26,7 @@
 //! # Module Organization
 //!
 //! This module will contain:
+//! - `contexts/` - Formatting context types and factory
 //! - `block.rs` - Block layout algorithm
 //! - `inline.rs` - Inline layout and line breaking
 //! - `flex.rs` - Flexbox integration with Taffy
@@ -46,6 +47,12 @@
 //! // Run layout on box tree root
 //! let fragment_tree = ctx.layout(&box_tree_root);
 //! ```
+
+// Module declarations
+pub mod contexts;
+
+// Re-exports
+pub use contexts::FormattingContextType;
 
 // Module declarations will be added in Wave 2+
 // pub mod block;
