@@ -306,11 +306,11 @@ fn calculate_line_height(
         LineHeight::Normal => ascender - descender + line_gap,
         LineHeight::Number(n) => font_size * n,
         LineHeight::Length(len) => {
-             if len.unit.is_absolute() {
-                 len.to_px()
-             } else {
-                 len.resolve_with_font_size(font_size)
-             }
+            if len.unit.is_absolute() {
+                len.to_px()
+            } else {
+                len.resolve_with_font_size(font_size)
+            }
         }
     }
 }
