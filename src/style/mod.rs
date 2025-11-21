@@ -18,8 +18,7 @@ pub use position::{Position, PositionParseError};
 
 // Legacy CSS types (will be phased out)
 use crate::css::{
-    self, BoxShadow, Color as LegacyColor, Declaration, PropertyValue, StyleSheet, TextShadow,
-    Transform,
+    self, BoxShadow, Color as LegacyColor, Declaration, PropertyValue, StyleSheet, TextShadow, Transform,
 };
 use crate::dom::{DomNode, ElementRef};
 pub use crate::style::values::{Length, LengthOrAuto, LengthUnit};
@@ -1657,13 +1656,8 @@ fn apply_declaration(styles: &mut ComputedStyles, decl: &Declaration, parent_fon
                     styles.font_size = len.to_px();
                 } else if len.unit == LengthUnit::Em || len.unit == LengthUnit::Percent {
                     // Em/percent are relative to parent font size
-                    styles.font_size = len.value
-                        / (if len.unit == LengthUnit::Percent {
-                            100.0
-                        } else {
-                            1.0
-                        })
-                        * parent_font_size;
+                    styles.font_size =
+                        len.value / (if len.unit == LengthUnit::Percent { 100.0 } else { 1.0 }) * parent_font_size;
                 } else if len.unit == LengthUnit::Rem {
                     // Rem is relative to root font size
                     styles.font_size = len.value * root_font_size;

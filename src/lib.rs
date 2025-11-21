@@ -6,7 +6,6 @@
 #![deny(clippy::all)]
 #![warn(clippy::pedantic)]
 #![warn(clippy::nursery)]
-
 // Allow some pedantic lints that are too strict or not applicable
 
 // Allow module name repetition - often clearer to repeat
@@ -191,21 +190,17 @@
 #![allow(clippy::io_other_error)]
 // Allow len zero - comparison to zero is sometimes clearer
 #![allow(clippy::len_zero)]
-
 // Performance lints - be very strict
 #![deny(clippy::needless_collect)]
 // Note: redundant_clone allowed temporarily - should be fixed eventually
 #![allow(clippy::redundant_clone)]
-
 // Correctness lints - always deny
 #![deny(clippy::absurd_extreme_comparisons)]
 #![deny(clippy::await_holding_lock)]
 #![deny(clippy::inherent_to_string)]
-
 // Style lints - warn to encourage good style
 #![warn(clippy::explicit_into_iter_loop)]
 #![warn(clippy::inconsistent_struct_constructor)]
-
 // Documentation lints
 // Note: missing_docs is currently allowed as the existing codebase needs significant
 // documentation work. Re-enable with #![warn(missing_docs)] once documentation is added.
@@ -282,8 +277,8 @@
 // Foundation Types
 // ============================================================================
 
-pub mod geometry;
 pub mod error;
+pub mod geometry;
 
 // ============================================================================
 // Tree Structures

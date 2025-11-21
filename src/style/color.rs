@@ -351,11 +351,7 @@ impl Hsla {
             // Achromatic (gray)
             (l, l, l)
         } else {
-            let q = if l < 0.5 {
-                l * (1.0 + s)
-            } else {
-                l + s - l * s
-            };
+            let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
             let p = 2.0 * l - q;
 
             (
@@ -399,11 +395,7 @@ impl fmt::Display for Hsla {
         if self.a == 1.0 {
             write!(f, "hsl({:.1}, {:.1}%, {:.1}%)", self.h, self.s, self.l)
         } else {
-            write!(
-                f,
-                "hsla({:.1}, {:.1}%, {:.1}%, {:.3})",
-                self.h, self.s, self.l, self.a
-            )
+            write!(f, "hsla({:.1}, {:.1}%, {:.1}%, {:.3})", self.h, self.s, self.l, self.a)
         }
     }
 }
@@ -580,46 +572,39 @@ fn parse_hex(s: &str) -> Result<Color, ColorParseError> {
     let (r, g, b, a) = match hex.len() {
         3 => {
             // #RGB -> #RRGGBB
-            let r = u8::from_str_radix(&hex[0..1].repeat(2), 16)
-                .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-            let g = u8::from_str_radix(&hex[1..2].repeat(2), 16)
-                .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-            let b = u8::from_str_radix(&hex[2..3].repeat(2), 16)
-                .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
+            let r =
+                u8::from_str_radix(&hex[0..1].repeat(2), 16).map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
+            let g =
+                u8::from_str_radix(&hex[1..2].repeat(2), 16).map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
+            let b =
+                u8::from_str_radix(&hex[2..3].repeat(2), 16).map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
             (r, g, b, 1.0)
         }
         4 => {
             // #RGBA -> #RRGGBBAA
-            let r = u8::from_str_radix(&hex[0..1].repeat(2), 16)
-                .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-            let g = u8::from_str_radix(&hex[1..2].repeat(2), 16)
-                .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-            let b = u8::from_str_radix(&hex[2..3].repeat(2), 16)
-                .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-            let a = u8::from_str_radix(&hex[3..4].repeat(2), 16)
-                .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
+            let r =
+                u8::from_str_radix(&hex[0..1].repeat(2), 16).map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
+            let g =
+                u8::from_str_radix(&hex[1..2].repeat(2), 16).map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
+            let b =
+                u8::from_str_radix(&hex[2..3].repeat(2), 16).map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
+            let a =
+                u8::from_str_radix(&hex[3..4].repeat(2), 16).map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
             (r, g, b, a as f32 / 255.0)
         }
         6 => {
             // #RRGGBB
-            let r = u8::from_str_radix(&hex[0..2], 16)
-                .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-            let g = u8::from_str_radix(&hex[2..4], 16)
-                .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-            let b = u8::from_str_radix(&hex[4..6], 16)
-                .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
+            let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
+            let g = u8::from_str_radix(&hex[2..4], 16).map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
+            let b = u8::from_str_radix(&hex[4..6], 16).map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
             (r, g, b, 1.0)
         }
         8 => {
             // #RRGGBBAA
-            let r = u8::from_str_radix(&hex[0..2], 16)
-                .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-            let g = u8::from_str_radix(&hex[2..4], 16)
-                .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-            let b = u8::from_str_radix(&hex[4..6], 16)
-                .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
-            let a = u8::from_str_radix(&hex[6..8], 16)
-                .map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
+            let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
+            let g = u8::from_str_radix(&hex[2..4], 16).map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
+            let b = u8::from_str_radix(&hex[4..6], 16).map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
+            let a = u8::from_str_radix(&hex[6..8], 16).map_err(|_| ColorParseError::InvalidHex(s.to_string()))?;
             (r, g, b, a as f32 / 255.0)
         }
         _ => return Err(ColorParseError::InvalidHex(s.to_string())),
