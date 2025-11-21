@@ -1257,23 +1257,9 @@ fn apply_declaration(
         // Display
         "display" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.display = match kw.as_str() {
-                    "block" => Display::Block,
-                    "inline" => Display::Inline,
-                    "inline-block" => Display::InlineBlock,
-                    "flex" => Display::Flex,
-                    "inline-flex" => Display::InlineFlex,
-                    "grid" => Display::Grid,
-                    "inline-grid" => Display::InlineGrid,
-                    "table" => Display::Table,
-                    "table-row" => Display::TableRow,
-                    "table-cell" => Display::TableCell,
-                    "table-header-group" => Display::TableHeaderGroup,
-                    "table-row-group" => Display::TableRowGroup,
-                    "table-footer-group" => Display::TableFooterGroup,
-                    "none" => Display::None,
-                    _ => styles.display,
-                };
+                if let Ok(display) = Display::parse(kw) {
+                    styles.display = display;
+                }
             }
         }
 
