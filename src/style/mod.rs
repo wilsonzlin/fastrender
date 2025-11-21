@@ -5,8 +5,13 @@
 
 pub mod color;
 
+pub mod display;
+
 // Re-export commonly used color types
 pub use color::{Color as NewColor, ColorParseError, Hsla, Rgba};
+
+// Re-export commonly used types from display module
+pub use display::{Display, DisplayParseError, FormattingContextType, InnerDisplay, OuterDisplay};
 
 use crate::css::{
     self, BoxShadow, Color, Declaration, PropertyValue, StyleSheet, TextShadow, Transform,
@@ -140,23 +145,6 @@ pub struct ComputedStyles {
     pub custom_properties: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Display {
-    Block,
-    Inline,
-    InlineBlock,
-    Flex,
-    InlineFlex,
-    Grid,
-    InlineGrid,
-    Table,
-    TableRow,
-    TableCell,
-    TableHeaderGroup,
-    TableRowGroup,
-    TableFooterGroup,
-    None,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Position {
@@ -1269,23 +1257,9 @@ fn apply_declaration(
         // Display
         "display" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.display = match kw.as_str() {
-                    "block" => Display::Block,
-                    "inline" => Display::Inline,
-                    "inline-block" => Display::InlineBlock,
-                    "flex" => Display::Flex,
-                    "inline-flex" => Display::InlineFlex,
-                    "grid" => Display::Grid,
-                    "inline-grid" => Display::InlineGrid,
-                    "table" => Display::Table,
-                    "table-row" => Display::TableRow,
-                    "table-cell" => Display::TableCell,
-                    "table-header-group" => Display::TableHeaderGroup,
-                    "table-row-group" => Display::TableRowGroup,
-                    "table-footer-group" => Display::TableFooterGroup,
-                    "none" => Display::None,
-                    _ => styles.display,
-                };
+                if let Ok(display) = Display::parse(kw) {
+                    styles.display = display;
+                }
             }
         }
 

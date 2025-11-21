@@ -385,8 +385,10 @@ fn convert_to_taffy_style(
         style::Display::Grid | style::Display::InlineGrid => taffy::Display::Grid,
         style::Display::None => taffy::Display::None,
         style::Display::Inline | style::Display::InlineBlock => taffy::Display::Block, // Treat as block for now
+        style::Display::ListItem | style::Display::FlowRoot => taffy::Display::Block,
         // Map table to flex column (stack rows)
         style::Display::Table
+        | style::Display::InlineTable
         | style::Display::TableHeaderGroup
         | style::Display::TableRowGroup
         | style::Display::TableFooterGroup => taffy::Display::Flex,
@@ -395,6 +397,12 @@ fn convert_to_taffy_style(
         // Table cell should be block to be a proper flex item
         // But needs to behave like a flex container for its contents
         style::Display::TableCell => taffy::Display::Block,
+        // Table structure elements - treat as block
+        style::Display::TableColumn
+        | style::Display::TableColumnGroup
+        | style::Display::TableCaption => taffy::Display::Block,
+        // Contents - element generates no box, treat as block for now
+        style::Display::Contents => taffy::Display::Block,
     };
 
     // CRITICAL FIX: Force header tables to full viewport width
