@@ -25,8 +25,9 @@
 //!
 //! # Module Organization
 //!
-//! - `formatting_context.rs` - FormattingContext trait (W2.T07)
+//! - `contexts/` - Formatting context types and derivation (W2.T08)
 //! - `constraints.rs` - LayoutConstraints and AvailableSpace (W2.T04)
+//! - `formatting_context.rs` - FormattingContext trait (W2.T07)
 //! - `block.rs` - Block layout algorithm (W3.T04)
 //! - `inline.rs` - Inline layout and line breaking (W4.T12)
 //! - `flex.rs` - Flexbox integration with Taffy (W3.T08)
@@ -49,6 +50,9 @@
 //! let fragment = fc.layout(&box_node, &constraints)?;
 //! ```
 
+// W2.T08 - Formatting context types and derivation
+pub mod contexts;
+
 // W2.T04 - Layout constraints
 pub mod constraints;
 
@@ -57,6 +61,7 @@ pub mod formatting_context;
 
 // Re-exports
 pub use constraints::{AvailableSpace, LayoutConstraints};
+pub use contexts::FormattingContextType;
 pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 
 // Future modules (to be implemented in Wave 3+):
