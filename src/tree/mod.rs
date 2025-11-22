@@ -20,8 +20,10 @@
 //! - Blocks split across columns or pages
 
 pub mod box_tree;
+pub mod debug;
 pub mod fragment_tree;
 
 // Re-exports
 pub use box_tree::{AnonymousType, BoxNode, BoxTree, BoxType, FormattingContextType, ReplacedType};
+pub use debug::{DebugInfo, TreePrinter};
 pub use fragment_tree::{FragmentContent, FragmentIterator, FragmentNode, FragmentTree};
