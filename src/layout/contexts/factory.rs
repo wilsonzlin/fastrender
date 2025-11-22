@@ -18,15 +18,16 @@
 //! - W3.T04: BlockFormattingContext
 //! - W3.T06: TableFormattingContext
 //! - W3.T08: FlexFormattingContext (Taffy-backed)
+//! - W3.T09: GridFormattingContext (Taffy-backed)
 //!
 //! Stubs (to be replaced):
 //! - W4.T12: InlineFormattingContext
-//! - Wave 4+: GridFormattingContext
 
 use crate::geometry::Rect;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::flex::FlexFormattingContext;
+use crate::layout::contexts::grid::GridFormattingContext;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::table::TableFormattingContext;
 use crate::tree::{BoxNode, FormattingContextType, FragmentNode};
@@ -56,30 +57,6 @@ impl FormattingContext for StubInlineFormattingContext {
         _mode: IntrinsicSizingMode,
     ) -> Result<f32, LayoutError> {
         Ok(200.0)
-    }
-}
-
-/// Stub Grid Formatting Context
-///
-/// Placeholder until Wave 4+ implements grid (likely delegating to Taffy).
-struct StubGridFormattingContext;
-
-impl FormattingContext for StubGridFormattingContext {
-    fn layout(&self, _box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
-        let width = constraints.width().unwrap_or(400.0);
-        let height = constraints.height().unwrap_or(400.0);
-        Ok(FragmentNode::new_block(
-            Rect::from_xywh(0.0, 0.0, width, height),
-            vec![],
-        ))
-    }
-
-    fn compute_intrinsic_inline_size(
-        &self,
-        _box_node: &BoxNode,
-        _mode: IntrinsicSizingMode,
-    ) -> Result<f32, LayoutError> {
-        Ok(400.0)
     }
 }
 
@@ -150,7 +127,7 @@ impl FormattingContextFactory {
             FormattingContextType::Block => Box::new(BlockFormattingContext::new()),
             FormattingContextType::Inline => Box::new(StubInlineFormattingContext),
             FormattingContextType::Flex => Box::new(FlexFormattingContext::new()),
-            FormattingContextType::Grid => Box::new(StubGridFormattingContext),
+            FormattingContextType::Grid => Box::new(GridFormattingContext::new()),
             FormattingContextType::Table => Box::new(TableFormattingContext::new()),
         }
     }

@@ -61,7 +61,7 @@ pub mod engine;
 
 // Re-exports
 pub use constraints::{AvailableSpace, LayoutConstraints};
-pub use contexts::FormattingContextFactory;
+pub use contexts::{FormattingContextFactory, GridFormattingContext};
 pub use engine::{LayoutConfig, LayoutEngine, LayoutStats};
 pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 
