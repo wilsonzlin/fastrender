@@ -26,12 +26,12 @@
 //!
 //! # Module Organization
 //!
-//! This module will contain:
-//! - `font.rs` - Font loading and database
-//! - `shaper.rs` - Text shaping integration
-//! - `bidi.rs` - Bidirectional text handling
-//! - `linebreak.rs` - Line breaking algorithm
-//! - `run.rs` - Text run representation
+//! This module contains:
+//! - `font` - Font loading, metrics, and database
+//! - `shaper.rs` - Text shaping integration (future)
+//! - `bidi.rs` - Bidirectional text handling (future)
+//! - `linebreak.rs` - Line breaking algorithm (future)
+//! - `run.rs` - Text run representation (future)
 //!
 //! # Example
 //!
@@ -47,8 +47,13 @@
 //! }
 //! ```
 
-// Module declarations will be added in Wave 3+
-// pub mod font;
+// Font system module (Wave 3)
+pub mod font;
+
+// Re-export font types for convenience
+pub use font::{extract_metrics, FontMetrics, ScaledFontMetrics};
+
+// Future module declarations (Wave 3+)
 // pub mod shaper;
 // pub mod bidi;
 // pub mod linebreak;
