@@ -194,7 +194,11 @@ impl LayoutEngine {
     /// let constraints = LayoutConstraints::definite(800.0, 600.0);
     /// let fragment = engine.layout_subtree(&box_node, &constraints).unwrap();
     /// ```
-    pub fn layout_subtree(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
+    pub fn layout_subtree(
+        &self,
+        box_node: &BoxNode,
+        constraints: &LayoutConstraints,
+    ) -> Result<FragmentNode, LayoutError> {
         // Get the formatting context type for this box
         let fc_type = box_node
             .formatting_context()

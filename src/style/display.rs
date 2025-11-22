@@ -437,15 +437,38 @@ pub enum InnerDisplay {
 }
 
 /// Formatting context types
+///
+/// A formatting context defines how child boxes are laid out.
+///
+/// Reference: CSS Display Module Level 3
+/// https://www.w3.org/TR/css-display-3/#formatting-context
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormattingContextType {
-    /// Block formatting context
+    /// Block formatting context (BFC)
+    ///
+    /// Block-level boxes are laid out vertically, one after another.
+    /// Margins collapse. This is the default for most block containers.
     Block,
+
+    /// Inline formatting context (IFC)
+    ///
+    /// Inline-level boxes are laid out horizontally within lines.
+    /// Text wraps at line boundaries.
+    Inline,
+
     /// Flex formatting context
+    ///
+    /// Children are laid out using the flexbox algorithm.
     Flex,
+
     /// Grid formatting context
+    ///
+    /// Children are positioned in a 2D grid.
     Grid,
+
     /// Table formatting context
+    ///
+    /// Children are laid out as table rows/columns.
     Table,
 }
 

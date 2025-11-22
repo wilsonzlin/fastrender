@@ -19,11 +19,23 @@
 //! - Inline boxes split across lines
 //! - Blocks split across columns or pages
 
+// Module declarations
+pub mod box_generation;
 pub mod box_tree;
 pub mod debug;
 pub mod fragment_tree;
 
-// Re-exports
-pub use box_tree::{AnonymousType, BoxNode, BoxTree, BoxType, FormattingContextType, ReplacedType};
+// Re-exports from box_tree
+pub use box_tree::{AnonymousType, BoxNode, BoxTree, BoxType, ReplacedType};
+
+// Re-export FormattingContextType from style (single source of truth)
+pub use crate::style::display::FormattingContextType;
+
+// Re-exports from debug
 pub use debug::{DebugInfo, TreePrinter};
+
+// Re-exports from fragment_tree
 pub use fragment_tree::{FragmentContent, FragmentIterator, FragmentNode, FragmentTree};
+
+// Re-exports from box_generation
+pub use box_generation::{BoxGenerationConfig, BoxGenerationError, BoxGenerator, DOMNode};

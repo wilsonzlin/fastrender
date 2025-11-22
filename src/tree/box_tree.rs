@@ -21,82 +21,17 @@
 //! Reference: CSS Display Module Level 3
 //! https://www.w3.org/TR/css-display-3/
 
+use crate::geometry::Size;
+use crate::style::display::FormattingContextType;
+use crate::style::ComputedStyles;
 use std::fmt;
 use std::sync::Arc;
-
-// Import types from dependencies
-// NOTE: ComputedStyle will be defined in W2.T05, so we'll use a placeholder
-// In a real implementation, this would come from crate::style::ComputedStyle
 
 // Import DebugInfo from the debug module
 pub use super::debug::DebugInfo;
 
-/// Types of formatting contexts
-///
-/// A formatting context is an environment in which boxes are laid out.
-/// Different formatting contexts have different layout rules.
-///
-/// Reference: CSS 2.1 Section 9.4
-///
-/// # Examples
-///
-/// ```
-/// use fastrender::tree::FormattingContextType;
-///
-/// let fc_type = FormattingContextType::Block;
-/// assert!(matches!(fc_type, FormattingContextType::Block));
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FormattingContextType {
-    /// Block Formatting Context (BFC)
-    ///
-    /// Block-level boxes are laid out vertically, one after another.
-    /// Margins collapse. This is the default for most block containers.
-    ///
-    /// Reference: CSS 2.1 Section 9.4.1
-    Block,
-
-    /// Inline Formatting Context (IFC)
-    ///
-    /// Inline-level boxes are laid out horizontally within lines.
-    /// Text wraps at line boundaries.
-    ///
-    /// Reference: CSS 2.1 Section 9.4.2
-    Inline,
-
-    /// Flex Formatting Context
-    ///
-    /// Children are laid out using the flexbox algorithm.
-    ///
-    /// Reference: CSS Flexbox Module Level 1
-    Flex,
-
-    /// Grid Formatting Context
-    ///
-    /// Children are positioned in a 2D grid.
-    ///
-    /// Reference: CSS Grid Layout Module Level 1
-    Grid,
-
-    /// Table Formatting Context
-    ///
-    /// Children are laid out as table rows/columns.
-    ///
-    /// Reference: CSS 2.1 Section 17
-    Table,
-}
-
-impl fmt::Display for FormattingContextType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Block => write!(f, "BFC"),
-            Self::Inline => write!(f, "IFC"),
-            Self::Flex => write!(f, "Flex"),
-            Self::Grid => write!(f, "Grid"),
-            Self::Table => write!(f, "Table"),
-        }
-    }
-}
+// Re-export ComputedStyles as ComputedStyle for API compatibility
+pub type ComputedStyle = ComputedStyles;
 
 /// A block-level box
 ///
@@ -145,7 +80,7 @@ pub struct TextBox {
 /// Examples: img, canvas, video, iframe
 ///
 /// Reference: CSS 2.1 Section 10.3.2
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ReplacedBox {
     /// Type of replaced element
     pub replaced_type: ReplacedType,
@@ -154,7 +89,7 @@ pub struct ReplacedBox {
     ///
     /// Some replaced elements have intrinsic dimensions (images with width/height),
     /// others don't (iframes without size attributes).
-    pub intrinsic_size: Option<crate::geometry::Size>,
+    pub intrinsic_size: Option<Size>,
 
     /// Intrinsic aspect ratio (width / height)
     ///
@@ -163,7 +98,7 @@ pub struct ReplacedBox {
 }
 
 /// Types of replaced elements
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ReplacedType {
     /// Image element
     Image {
@@ -209,7 +144,7 @@ pub struct AnonymousBox {
 }
 
 /// Types of anonymous boxes
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnonymousType {
     /// Anonymous block box
     ///
@@ -259,12 +194,70 @@ pub enum BoxType {
     Anonymous(AnonymousBox),
 }
 
-// Placeholder for ComputedStyle (will be implemented in W2.T05)
-// For now, use a simple struct
-#[derive(Debug, Clone, Default)]
-pub struct ComputedStyle {
-    // Placeholder
-    _placeholder: (),
+impl BoxType {
+    /// Returns true if this box type is block-level
+    pub fn is_block_level(&self) -> bool {
+        match self {
+            BoxType::Block(_) | BoxType::Replaced(_) => true,
+            BoxType::Anonymous(anon) => matches!(
+                anon.anonymous_type,
+                AnonymousType::Block | AnonymousType::TableWrapper | AnonymousType::TableRow | AnonymousType::TableCell
+            ),
+            _ => false,
+        }
+    }
+
+    /// Returns true if this box type is inline-level
+    pub fn is_inline_level(&self) -> bool {
+        match self {
+            BoxType::Inline(_) | BoxType::Text(_) => true,
+            BoxType::Anonymous(anon) => matches!(anon.anonymous_type, AnonymousType::Inline),
+            _ => false,
+        }
+    }
+
+    /// Returns true if this is a text box
+    pub fn is_text(&self) -> bool {
+        matches!(self, BoxType::Text(_))
+    }
+
+    /// Returns true if this is a replaced element
+    pub fn is_replaced(&self) -> bool {
+        matches!(self, BoxType::Replaced(_))
+    }
+
+    /// Returns true if this is an anonymous box
+    pub fn is_anonymous(&self) -> bool {
+        matches!(self, BoxType::Anonymous(_))
+    }
+
+    /// Gets the formatting context this box establishes (if any)
+    pub fn formatting_context(&self) -> Option<FormattingContextType> {
+        match self {
+            BoxType::Block(block) => Some(block.formatting_context),
+            BoxType::Inline(inline) => inline.formatting_context,
+            BoxType::Replaced(_) => Some(FormattingContextType::Block),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for BoxType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BoxType::Block(_) => write!(f, "Block"),
+            BoxType::Inline(_) => write!(f, "Inline"),
+            BoxType::Text(_) => write!(f, "Text"),
+            BoxType::Replaced(_) => write!(f, "Replaced"),
+            BoxType::Anonymous(anon) => match anon.anonymous_type {
+                AnonymousType::Block => write!(f, "AnonymousBlock"),
+                AnonymousType::Inline => write!(f, "AnonymousInline"),
+                AnonymousType::TableWrapper => write!(f, "AnonymousTableWrapper"),
+                AnonymousType::TableRow => write!(f, "AnonymousTableRow"),
+                AnonymousType::TableCell => write!(f, "AnonymousTableCell"),
+            },
+        }
+    }
 }
 
 /// A single box in the box tree
@@ -283,7 +276,7 @@ pub struct ComputedStyle {
 /// ```
 /// use std::sync::Arc;
 /// use fastrender::tree::{BoxNode, FormattingContextType};
-/// # use fastrender::tree::box_tree::ComputedStyle;
+/// use fastrender::tree::box_tree::ComputedStyle;
 ///
 /// let style = Arc::new(ComputedStyle::default());
 /// let box_node = BoxNode::new_block(
@@ -324,7 +317,7 @@ impl BoxNode {
     /// ```
     /// use std::sync::Arc;
     /// use fastrender::tree::{BoxNode, FormattingContextType};
-    /// # use fastrender::tree::box_tree::ComputedStyle;
+    /// use fastrender::tree::box_tree::ComputedStyle;
     ///
     /// let style = Arc::new(ComputedStyle::default());
     /// let box_node = BoxNode::new_block(
@@ -382,7 +375,7 @@ impl BoxNode {
     pub fn new_replaced(
         style: Arc<ComputedStyle>,
         replaced_type: ReplacedType,
-        intrinsic_size: Option<crate::geometry::Size>,
+        intrinsic_size: Option<Size>,
         aspect_ratio: Option<f32>,
     ) -> Self {
         Self {
@@ -409,6 +402,18 @@ impl BoxNode {
         }
     }
 
+    /// Creates an anonymous inline box
+    pub fn new_anonymous_inline(style: Arc<ComputedStyle>, children: Vec<BoxNode>) -> Self {
+        Self {
+            style,
+            box_type: BoxType::Anonymous(AnonymousBox {
+                anonymous_type: AnonymousType::Inline,
+            }),
+            children,
+            debug_info: None,
+        }
+    }
+
     /// Adds debug information
     ///
     /// This is a builder-style method for convenience.
@@ -423,73 +428,42 @@ impl BoxNode {
     ///
     /// Block-level boxes participate in block formatting context.
     pub fn is_block_level(&self) -> bool {
-        match &self.box_type {
-            BoxType::Block(_) | BoxType::Replaced(_) => true,
-            BoxType::Anonymous(anon) => matches!(
-                anon.anonymous_type,
-                AnonymousType::Block | AnonymousType::TableWrapper | AnonymousType::TableRow | AnonymousType::TableCell
-            ),
-            _ => false,
-        }
+        self.box_type.is_block_level()
     }
 
     /// Returns true if this is an inline-level box
     ///
     /// Inline-level boxes participate in inline formatting context.
     pub fn is_inline_level(&self) -> bool {
-        match &self.box_type {
-            BoxType::Inline(_) | BoxType::Text(_) => true,
-            BoxType::Anonymous(anon) => matches!(anon.anonymous_type, AnonymousType::Inline),
-            _ => false,
-        }
+        self.box_type.is_inline_level()
     }
 
     /// Returns true if this is a text box
     pub fn is_text(&self) -> bool {
-        matches!(&self.box_type, BoxType::Text(_))
+        self.box_type.is_text()
     }
 
     /// Returns true if this is a replaced element
     pub fn is_replaced(&self) -> bool {
-        matches!(&self.box_type, BoxType::Replaced(_))
+        self.box_type.is_replaced()
     }
 
     /// Returns true if this is an anonymous box
     pub fn is_anonymous(&self) -> bool {
-        matches!(&self.box_type, BoxType::Anonymous(_))
+        self.box_type.is_anonymous()
     }
 
     /// Gets the formatting context this box establishes (if any)
     ///
     /// Returns None for inline and text boxes that don't establish contexts.
     pub fn formatting_context(&self) -> Option<FormattingContextType> {
-        match &self.box_type {
-            BoxType::Block(block) => Some(block.formatting_context),
-            BoxType::Inline(inline) => inline.formatting_context,
-            BoxType::Replaced(_) => Some(FormattingContextType::Block),
-            _ => None,
-        }
+        self.box_type.formatting_context()
     }
 
     /// Returns true if this box is a block container
     ///
     /// Block containers can contain block-level children and establish
     /// a block formatting context (or participate in one).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::sync::Arc;
-    /// use fastrender::tree::{BoxNode, FormattingContextType};
-    /// # use fastrender::tree::box_tree::ComputedStyle;
-    ///
-    /// let style = Arc::new(ComputedStyle::default());
-    /// let block = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
-    /// let inline_block = BoxNode::new_inline_block(style, FormattingContextType::Block, vec![]);
-    ///
-    /// assert!(block.is_block_container());
-    /// assert!(inline_block.is_block_container());
-    /// ```
     pub fn is_block_container(&self) -> bool {
         match &self.box_type {
             BoxType::Block(_) => true,
@@ -503,19 +477,6 @@ impl BoxNode {
     ///
     /// Inline containers contain inline-level children and participate
     /// in inline formatting context.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::sync::Arc;
-    /// use fastrender::tree::BoxNode;
-    /// # use fastrender::tree::box_tree::ComputedStyle;
-    ///
-    /// let style = Arc::new(ComputedStyle::default());
-    /// let inline = BoxNode::new_inline(style, vec![]);
-    ///
-    /// assert!(inline.is_inline_container());
-    /// ```
     pub fn is_inline_container(&self) -> bool {
         matches!(&self.box_type, BoxType::Inline(_))
     }
@@ -524,21 +485,6 @@ impl BoxNode {
     ///
     /// Boxes that generate formatting contexts are independent layout roots.
     /// Their internal layout doesn't affect outside, and vice versa.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::sync::Arc;
-    /// use fastrender::tree::{BoxNode, FormattingContextType};
-    /// # use fastrender::tree::box_tree::ComputedStyle;
-    ///
-    /// let style = Arc::new(ComputedStyle::default());
-    /// let block = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
-    /// let inline = BoxNode::new_inline(style, vec![]);
-    ///
-    /// assert!(block.generates_formatting_context());
-    /// assert!(!inline.generates_formatting_context());
-    /// ```
     pub fn generates_formatting_context(&self) -> bool {
         self.formatting_context().is_some()
     }
@@ -546,18 +492,6 @@ impl BoxNode {
     /// Returns true if this is a table-internal box
     ///
     /// Table-internal boxes participate in table layout algorithms.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::sync::Arc;
-    /// use fastrender::tree::{BoxNode, AnonymousType};
-    /// # use fastrender::tree::box_tree::{ComputedStyle, AnonymousBox};
-    ///
-    /// let style = Arc::new(ComputedStyle::default());
-    /// // Table-internal boxes are typically anonymous boxes in the table structure
-    /// // This is a simplified example
-    /// ```
     pub fn is_table_internal(&self) -> bool {
         match &self.box_type {
             BoxType::Anonymous(anon) => matches!(
@@ -597,7 +531,7 @@ impl BoxNode {
 /// ```
 /// use std::sync::Arc;
 /// use fastrender::tree::{BoxTree, BoxNode, FormattingContextType};
-/// # use fastrender::tree::box_tree::ComputedStyle;
+/// use fastrender::tree::box_tree::ComputedStyle;
 ///
 /// let style = Arc::new(ComputedStyle::default());
 /// let root = BoxNode::new_block(
@@ -642,6 +576,7 @@ impl BoxTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::display::FormattingContextType;
 
     fn default_style() -> Arc<ComputedStyle> {
         Arc::new(ComputedStyle::default())
@@ -682,7 +617,7 @@ mod tests {
             ReplacedType::Image {
                 src: "image.png".to_string(),
             },
-            Some(crate::geometry::Size::new(100.0, 50.0)),
+            Some(Size::new(100.0, 50.0)),
             Some(2.0),
         );
 
@@ -746,15 +681,6 @@ mod tests {
     }
 
     #[test]
-    fn test_formatting_context_types() {
-        assert_eq!(format!("{}", FormattingContextType::Block), "BFC");
-        assert_eq!(format!("{}", FormattingContextType::Inline), "IFC");
-        assert_eq!(format!("{}", FormattingContextType::Flex), "Flex");
-        assert_eq!(format!("{}", FormattingContextType::Grid), "Grid");
-        assert_eq!(format!("{}", FormattingContextType::Table), "Table");
-    }
-
-    #[test]
     fn test_anonymous_block_box() {
         let box_node = BoxNode::new_anonymous_block(default_style(), vec![]);
 
@@ -771,8 +697,6 @@ mod tests {
         let count = box_node.children_iter().count();
         assert_eq!(count, 2);
     }
-
-    // W2.T02 categorization method tests
 
     #[test]
     fn test_is_block_container() {
@@ -827,7 +751,6 @@ mod tests {
 
         assert!(!block.is_table_internal());
         assert!(!anon_block.is_table_internal());
-        // Table-internal boxes would be tested when table layout is implemented
     }
 
     #[test]
@@ -868,5 +791,30 @@ mod tests {
             inline_block_grid.formatting_context(),
             Some(FormattingContextType::Grid)
         );
+    }
+
+    #[test]
+    fn test_box_type_display() {
+        let block = BoxType::Block(BlockBox {
+            formatting_context: FormattingContextType::Block,
+        });
+        let inline = BoxType::Inline(InlineBox {
+            formatting_context: None,
+        });
+        let text = BoxType::Text(TextBox {
+            text: "hello".to_string(),
+        });
+        let anon_block = BoxType::Anonymous(AnonymousBox {
+            anonymous_type: AnonymousType::Block,
+        });
+        let anon_inline = BoxType::Anonymous(AnonymousBox {
+            anonymous_type: AnonymousType::Inline,
+        });
+
+        assert_eq!(format!("{}", block), "Block");
+        assert_eq!(format!("{}", inline), "Inline");
+        assert_eq!(format!("{}", text), "Text");
+        assert_eq!(format!("{}", anon_block), "AnonymousBlock");
+        assert_eq!(format!("{}", anon_inline), "AnonymousInline");
     }
 }
