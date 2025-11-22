@@ -64,6 +64,9 @@ pub use contexts::FormattingContextFactory;
 pub use engine::{LayoutConfig, LayoutEngine};
 pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 
+// W3.T13 - Absolute positioning algorithm
+pub mod absolute_positioning;
+
 // Future modules (to be implemented in Wave 3+):
 // pub mod block;        // W3.T04
 // pub mod inline;       // W4.T12
