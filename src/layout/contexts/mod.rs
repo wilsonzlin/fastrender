@@ -2,7 +2,7 @@
 //!
 //! This module contains:
 //! - FormattingContext factory (creates appropriate FC)
-//! - Block Formatting Context implementation (W3.T04)
+//! - Block Formatting Context implementation (W3.T04, W3.T05)
 
 pub mod block;
 pub mod factory;

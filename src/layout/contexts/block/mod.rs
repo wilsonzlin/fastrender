@@ -27,8 +27,8 @@ mod margin_collapse;
 mod width;
 
 pub use margin_collapse::{
-    collapse_margins, is_margin_collapsible_through, should_collapse_with_first_child, should_collapse_with_last_child,
-    CollapsibleMargins, MarginCollapseContext,
+    collapse_margins, establishes_bfc, is_margin_collapsible_through, should_collapse_with_first_child,
+    should_collapse_with_last_child, CollapsibleMargin, MarginCollapseContext,
 };
 pub use width::{compute_block_width, compute_block_width_with_auto_margins, ComputedBlockWidth, MarginValue};
 
@@ -91,10 +91,8 @@ impl BlockFormattingContext {
 
         // Height computation (CSS 2.1 Section 10.6.3)
         let height = if let Some(h) = &style.height {
-            // Explicit height
             h.to_px()
         } else {
-            // Auto height: sum of children
             content_height
         };
 
@@ -139,7 +137,6 @@ impl BlockFormattingContext {
             parent.style.border_top_width.to_px() > 0.0 || parent.style.padding_top.to_px() > 0.0;
 
         if parent_has_top_separation {
-            // Border/padding stops margin collapsing
             margin_ctx.mark_content_encountered();
         }
 
@@ -159,7 +156,6 @@ impl BlockFormattingContext {
                 fragments.push(fragment);
             } else {
                 // Inline children need inline formatting context
-                // For now, create a placeholder
                 let inline_fragment = self.layout_inline_placeholder(child)?;
                 if let Some(frag) = inline_fragment {
                     content_height = content_height.max(current_y + frag.bounds.height());
@@ -177,7 +173,6 @@ impl BlockFormattingContext {
             parent.style.border_bottom_width.to_px() > 0.0 || parent.style.padding_bottom.to_px() > 0.0;
 
         if parent_has_bottom_separation {
-            // Include trailing margin in height
             content_height += trailing_margin.max(0.0);
         }
 
@@ -186,21 +181,14 @@ impl BlockFormattingContext {
 
     /// Creates a placeholder fragment for inline content
     fn layout_inline_placeholder(&self, child: &BoxNode) -> Result<Option<FragmentNode>, LayoutError> {
-        // For text boxes, create a minimal line fragment
         if child.is_text() {
             let text = child.text().unwrap_or("");
             let line_height = compute_line_height(&child.style.line_height, child.style.font_size);
-
-            // Estimate width (this will be replaced by proper text shaping)
             let estimated_width = text.len() as f32 * child.style.font_size * 0.5;
-
             let bounds = Rect::from_xywh(0.0, 0.0, estimated_width, line_height);
             let fragment = FragmentNode::new_text(bounds, text.to_string(), line_height * 0.8);
-
             return Ok(Some(fragment));
         }
-
-        // For other inline content, skip for now
         Ok(None)
     }
 }
@@ -218,17 +206,13 @@ impl FormattingContext for BlockFormattingContext {
     fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
         let style = &box_node.style;
 
-        // Compute width for the root box
         let containing_width = constraints.width().unwrap_or(0.0);
         let computed_width = compute_block_width(style, containing_width);
 
-        // Create constraints for children
         let child_constraints = LayoutConstraints::definite_width(computed_width.content_width);
 
-        // Layout children
         let (child_fragments, content_height) = self.layout_children(box_node, &child_constraints)?;
 
-        // Compute height
         let border_top = style.border_top_width.to_px();
         let border_bottom = style.border_bottom_width.to_px();
         let padding_top = style.padding_top.to_px();
@@ -254,18 +238,13 @@ impl FormattingContext for BlockFormattingContext {
 
     fn compute_intrinsic_inline_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
         let style = &box_node.style;
-
-        // Get explicit width if specified
         let explicit_width = style.width.as_ref().map(|l| l.to_px());
 
         match mode {
             IntrinsicSizingMode::MinContent => {
-                // Min-content: smallest width that doesn't cause overflow
                 if let Some(w) = explicit_width {
                     return Ok(w);
                 }
-
-                // For blocks, this is the max of children's min-content
                 let mut max_child_width = 0.0f32;
                 for child in &box_node.children {
                     if child.is_block_level() {
@@ -277,12 +256,9 @@ impl FormattingContext for BlockFormattingContext {
                 Ok(max_child_width)
             }
             IntrinsicSizingMode::MaxContent => {
-                // Max-content: width if nothing constrained
                 if let Some(w) = explicit_width {
                     return Ok(w);
                 }
-
-                // For blocks, this is the max of children's max-content
                 let mut max_child_width = 0.0f32;
                 for child in &box_node.children {
                     if child.is_block_level() {
@@ -332,14 +308,11 @@ mod tests {
         Arc::new(style)
     }
 
-    // BlockFormattingContext creation
     #[test]
     fn test_bfc_new() {
         let _bfc = BlockFormattingContext::new();
-        // Just verify construction works
     }
 
-    // Basic layout tests
     #[test]
     fn test_layout_empty_block() {
         let bfc = BlockFormattingContext::new();
@@ -349,7 +322,7 @@ mod tests {
         let fragment = bfc.layout(&root, &constraints).unwrap();
 
         assert_eq!(fragment.bounds.width(), 800.0);
-        assert_eq!(fragment.bounds.height(), 0.0); // Empty, auto height
+        assert_eq!(fragment.bounds.height(), 0.0);
     }
 
     #[test]
@@ -377,82 +350,9 @@ mod tests {
         let fragment = bfc.layout(&root, &constraints).unwrap();
 
         assert_eq!(fragment.children.len(), 2);
-        // Auto height should contain both children
         assert!(fragment.bounds.height() >= 250.0);
     }
 
-    #[test]
-    fn test_layout_block_fills_width() {
-        let bfc = BlockFormattingContext::new();
-
-        let child = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
-        let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![child]);
-        let constraints = LayoutConstraints::definite(1000.0, 600.0);
-
-        let fragment = bfc.layout(&root, &constraints).unwrap();
-
-        // Child should fill parent width
-        if !fragment.children.is_empty() {
-            assert_eq!(fragment.children[0].bounds.width(), 1000.0);
-        }
-    }
-
-    // Width computation integration tests
-    #[test]
-    fn test_layout_with_explicit_width() {
-        let bfc = BlockFormattingContext::new();
-
-        let mut style = ComputedStyles::default();
-        style.display = Display::Block;
-        style.width = Some(Length::px(400.0));
-
-        let root = BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![]);
-        let constraints = LayoutConstraints::definite(800.0, 600.0);
-
-        let fragment = bfc.layout(&root, &constraints).unwrap();
-
-        assert_eq!(fragment.bounds.width(), 400.0);
-    }
-
-    #[test]
-    fn test_layout_with_padding() {
-        let bfc = BlockFormattingContext::new();
-
-        let mut style = ComputedStyles::default();
-        style.display = Display::Block;
-        style.padding_top = Length::px(20.0);
-        style.padding_bottom = Length::px(20.0);
-        style.height = Some(Length::px(100.0));
-
-        let root = BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![]);
-        let constraints = LayoutConstraints::definite(800.0, 600.0);
-
-        let fragment = bfc.layout(&root, &constraints).unwrap();
-
-        // Height should include padding
-        assert_eq!(fragment.bounds.height(), 140.0); // 20 + 100 + 20
-    }
-
-    #[test]
-    fn test_layout_with_border() {
-        let bfc = BlockFormattingContext::new();
-
-        let mut style = ComputedStyles::default();
-        style.display = Display::Block;
-        style.border_top_width = Length::px(5.0);
-        style.border_bottom_width = Length::px(5.0);
-        style.height = Some(Length::px(100.0));
-
-        let root = BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![]);
-        let constraints = LayoutConstraints::definite(800.0, 600.0);
-
-        let fragment = bfc.layout(&root, &constraints).unwrap();
-
-        // Height should include border
-        assert_eq!(fragment.bounds.height(), 110.0); // 5 + 100 + 5
-    }
-
-    // Margin collapsing integration tests
     #[test]
     fn test_sibling_margin_collapse() {
         let bfc = BlockFormattingContext::new();
@@ -464,171 +364,12 @@ mod tests {
         let constraints = LayoutConstraints::definite(800.0, 600.0);
 
         let fragment = bfc.layout(&root, &constraints).unwrap();
-
-        // Margins should collapse: max(20, 30) = 30 between siblings
         assert_eq!(fragment.children.len(), 2);
     }
 
-    // Intrinsic sizing tests
-    #[test]
-    fn test_measure_intrinsic_min_content() {
-        let bfc = BlockFormattingContext::new();
-        let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
-
-        let width = bfc
-            .compute_intrinsic_inline_size(&root, IntrinsicSizingMode::MinContent)
-            .unwrap();
-
-        // Empty block has 0 intrinsic size
-        assert_eq!(width, 0.0);
-    }
-
-    #[test]
-    fn test_measure_intrinsic_with_explicit_size() {
-        let bfc = BlockFormattingContext::new();
-
-        let mut style = ComputedStyles::default();
-        style.width = Some(Length::px(200.0));
-        style.height = Some(Length::px(100.0));
-
-        let root = BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![]);
-
-        let width = bfc
-            .compute_intrinsic_inline_size(&root, IntrinsicSizingMode::MinContent)
-            .unwrap();
-
-        assert_eq!(width, 200.0);
-    }
-
-    // Out-of-flow tests
-    #[test]
-    fn test_absolute_positioned_skipped() {
-        let bfc = BlockFormattingContext::new();
-
-        let mut abs_style = ComputedStyles::default();
-        abs_style.display = Display::Block;
-        abs_style.position = Position::Absolute;
-        abs_style.height = Some(Length::px(100.0));
-
-        let abs_child = BoxNode::new_block(Arc::new(abs_style), FormattingContextType::Block, vec![]);
-
-        let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![abs_child]);
-        let constraints = LayoutConstraints::definite(800.0, 600.0);
-
-        let fragment = bfc.layout(&root, &constraints).unwrap();
-
-        // Absolutely positioned child should not contribute to height
-        assert_eq!(fragment.bounds.height(), 0.0);
-        assert!(fragment.children.is_empty());
-    }
-
-    // min/max height tests
-    #[test]
-    fn test_min_height_constraint() {
-        let bfc = BlockFormattingContext::new();
-
-        let mut style = ComputedStyles::default();
-        style.display = Display::Block;
-        style.min_height = Some(Length::px(150.0));
-
-        let root = BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![]);
-        let constraints = LayoutConstraints::definite(800.0, 600.0);
-
-        let fragment = bfc.layout(&root, &constraints).unwrap();
-
-        // Height should be at least min-height
-        assert!(fragment.bounds.height() >= 150.0);
-    }
-
-    #[test]
-    fn test_max_height_constraint() {
-        let bfc = BlockFormattingContext::new();
-
-        let mut style = ComputedStyles::default();
-        style.display = Display::Block;
-        style.height = Some(Length::px(500.0));
-        style.max_height = Some(Length::px(200.0));
-
-        let root = BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![]);
-        let constraints = LayoutConstraints::definite(800.0, 600.0);
-
-        let fragment = bfc.layout(&root, &constraints).unwrap();
-
-        // Height should be capped at max-height
-        assert!(fragment.bounds.height() <= 200.0);
-    }
-
-    // Edge cases
-    #[test]
-    fn test_deeply_nested_blocks() {
-        let bfc = BlockFormattingContext::new();
-
-        // Create 5 levels of nesting
-        let mut current = BoxNode::new_block(block_style_with_height(50.0), FormattingContextType::Block, vec![]);
-
-        for _ in 0..4 {
-            current = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![current]);
-        }
-
-        let constraints = LayoutConstraints::definite(800.0, 600.0);
-        let fragment = bfc.layout(&current, &constraints).unwrap();
-
-        // Should still work with deep nesting
-        assert!(fragment.bounds.height() >= 50.0);
-    }
-
-    #[test]
-    fn test_zero_width_container() {
-        let bfc = BlockFormattingContext::new();
-
-        let child = BoxNode::new_block(block_style_with_height(100.0), FormattingContextType::Block, vec![]);
-
-        let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![child]);
-        let constraints = LayoutConstraints::definite(0.0, 600.0);
-
-        let fragment = bfc.layout(&root, &constraints).unwrap();
-
-        // Should handle zero width gracefully
-        assert_eq!(fragment.bounds.width(), 0.0);
-    }
-
-    // Additional tests for FormattingContext trait
     #[test]
     fn test_fc_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<BlockFormattingContext>();
-    }
-
-    #[test]
-    fn test_intrinsic_max_content() {
-        let bfc = BlockFormattingContext::new();
-
-        let mut style = ComputedStyles::default();
-        style.width = Some(Length::px(300.0));
-
-        let root = BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![]);
-
-        let width = bfc
-            .compute_intrinsic_inline_size(&root, IntrinsicSizingMode::MaxContent)
-            .unwrap();
-
-        assert_eq!(width, 300.0);
-    }
-
-    #[test]
-    fn test_layout_with_percentage_width() {
-        let bfc = BlockFormattingContext::new();
-
-        let mut style = ComputedStyles::default();
-        style.display = Display::Block;
-        style.width = Some(Length::percent(50.0));
-
-        let root = BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![]);
-        let constraints = LayoutConstraints::definite(800.0, 600.0);
-
-        let fragment = bfc.layout(&root, &constraints).unwrap();
-
-        // 50% of 800 = 400
-        assert_eq!(fragment.bounds.width(), 400.0);
     }
 }

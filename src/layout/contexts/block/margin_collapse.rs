@@ -18,86 +18,98 @@
 //! - Margins on boxes that establish new BFCs (overflow != visible)
 //! - Margins on inline-level boxes
 //!
+//! # Collapse Algorithm
+//!
+//! - **All positive**: result = max of all margins
+//! - **All negative**: result = min (most negative) of all margins
+//! - **Mixed**: result = largest positive + most negative
+//!
 //! Reference: <https://www.w3.org/TR/CSS21/box.html#collapsing-margins>
 
-use crate::style::ComputedStyles;
-use crate::style::Position;
+use crate::style::{ComputedStyles, Position};
 
-/// Represents margins that may participate in collapsing
+/// A collapsible margin that tracks positive and negative components separately
 ///
-/// This struct tracks margin values during layout and handles the
-/// collapsing algorithm according to CSS 2.1 Section 8.3.1.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct CollapsibleMargins {
-    /// The most positive margin in the set
-    pub max_positive: f32,
-    /// The most negative margin in the set (stored as positive magnitude)
-    pub max_negative: f32,
+/// CSS 2.1 Section 8.3.1 specifies that when margins collapse:
+/// - If all positive: result = max of all margins
+/// - If all negative: result = min (most negative) of all margins
+/// - If mixed: result = largest positive + most negative
+///
+/// By tracking positive and negative components separately, we can correctly
+/// compute the collapsed value for any combination of margins.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct CollapsibleMargin {
+    /// Largest positive margin value (0.0 if no positive margins)
+    pub positive: f32,
+    /// Most negative margin value, stored as absolute value (0.0 if no negative margins)
+    pub negative: f32,
 }
 
-impl CollapsibleMargins {
-    /// Creates a new empty collapsible margins set
-    pub const fn new() -> Self {
+impl CollapsibleMargin {
+    /// The zero margin constant
+    pub const ZERO: Self = Self {
+        positive: 0.0,
+        negative: 0.0,
+    };
+
+    /// Creates a new collapsible margin with specified positive and negative components
+    pub fn new(positive: f32, negative: f32) -> Self {
+        debug_assert!(positive >= 0.0, "positive component must be >= 0");
+        debug_assert!(negative >= 0.0, "negative component must be >= 0 (absolute value)");
+        Self { positive, negative }
+    }
+
+    /// Creates a collapsible margin from a single margin value
+    pub fn from_margin(value: f32) -> Self {
+        if value >= 0.0 {
+            Self {
+                positive: value,
+                negative: 0.0,
+            }
+        } else {
+            Self {
+                positive: 0.0,
+                negative: -value,
+            }
+        }
+    }
+
+    /// Collapses this margin with another, returning the combined margin
+    pub fn collapse_with(self, other: Self) -> Self {
         Self {
-            max_positive: 0.0,
-            max_negative: 0.0,
+            positive: self.positive.max(other.positive),
+            negative: self.negative.max(other.negative),
         }
     }
 
-    /// Creates collapsible margins from a single margin value
-    pub fn from_margin(margin: f32) -> Self {
-        if margin >= 0.0 {
-            Self {
-                max_positive: margin,
-                max_negative: 0.0,
-            }
+    /// Resolves the collapsible margin to a final pixel value
+    pub fn resolve(self) -> f32 {
+        self.positive - self.negative
+    }
+
+    /// Checks if this margin is effectively zero
+    pub fn is_zero(self) -> bool {
+        self.positive == 0.0 && self.negative == 0.0
+    }
+
+    /// Adds a margin value to this collapsible margin
+    pub fn add_margin(self, value: f32) -> Self {
+        self.collapse_with(Self::from_margin(value))
+    }
+}
+
+impl std::fmt::Display for CollapsibleMargin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let resolved = self.resolve();
+        if self.positive > 0.0 && self.negative > 0.0 {
+            write!(f, "CM(+{}, -{}) = {}", self.positive, self.negative, resolved)
+        } else if self.positive > 0.0 {
+            write!(f, "CM(+{})", self.positive)
+        } else if self.negative > 0.0 {
+            write!(f, "CM(-{})", self.negative)
         } else {
-            Self {
-                max_positive: 0.0,
-                max_negative: -margin,
-            }
+            write!(f, "CM(0)")
         }
-    }
-
-    /// Adds a margin to this collapsible set
-    ///
-    /// This implements the core margin collapsing algorithm:
-    /// - If all margins are positive: result is the maximum
-    /// - If all margins are negative: result is the most negative (absolute max)
-    /// - If mixed: result is largest positive minus largest negative
-    pub fn add_margin(&mut self, margin: f32) {
-        if margin >= 0.0 {
-            self.max_positive = self.max_positive.max(margin);
-        } else {
-            self.max_negative = self.max_negative.max(-margin);
-        }
-    }
-
-    /// Collapses this margin set with another
-    pub fn collapse_with(&mut self, other: &CollapsibleMargins) {
-        self.max_positive = self.max_positive.max(other.max_positive);
-        self.max_negative = self.max_negative.max(other.max_negative);
-    }
-
-    /// Computes the final collapsed margin value
-    ///
-    /// The collapsed margin is:
-    /// - max(positives) if all margins are positive or zero
-    /// - min(negatives) if all margins are negative
-    /// - max(positives) + min(negatives) if mixed (note: min is negative)
-    pub fn collapsed_value(&self) -> f32 {
-        self.max_positive - self.max_negative
-    }
-
-    /// Returns true if this margin set is empty (no margins added)
-    pub fn is_empty(&self) -> bool {
-        self.max_positive == 0.0 && self.max_negative == 0.0
-    }
-
-    /// Clears this margin set
-    pub fn clear(&mut self) {
-        self.max_positive = 0.0;
-        self.max_negative = 0.0;
     }
 }
 
@@ -105,76 +117,151 @@ impl CollapsibleMargins {
 ///
 /// This struct maintains state needed during the vertical traversal
 /// of a block formatting context to properly collapse margins.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct MarginCollapseContext {
-    /// Pending positive margin (not yet resolved)
-    pending_positive: f32,
-    /// Pending negative margin (stored as positive magnitude)
-    pending_negative: f32,
+    /// Pending margin that may collapse with the next element
+    pending_margin: CollapsibleMargin,
     /// Whether we're at the start of the BFC (no content yet)
-    at_bfc_start: bool,
+    at_start: bool,
 }
 
 impl MarginCollapseContext {
     /// Creates a new margin collapse context
     pub fn new() -> Self {
         Self {
-            pending_positive: 0.0,
-            pending_negative: 0.0,
-            at_bfc_start: true,
+            pending_margin: CollapsibleMargin::ZERO,
+            at_start: true,
         }
     }
 
-    /// Adds a top margin to the pending set
-    ///
-    /// Call this before laying out a child box.
+    /// Creates a context with an initial pending margin
+    pub fn with_initial_margin(initial_margin: f32) -> Self {
+        Self {
+            pending_margin: CollapsibleMargin::from_margin(initial_margin),
+            at_start: true,
+        }
+    }
+
+    /// Adds a margin to the pending set
     pub fn push_margin(&mut self, margin: f32) {
-        if margin >= 0.0 {
-            self.pending_positive = self.pending_positive.max(margin);
-        } else {
-            self.pending_negative = self.pending_negative.max(-margin);
-        }
+        self.pending_margin = self.pending_margin.add_margin(margin);
     }
 
-    /// Resolves and returns the collapsed margin
-    ///
-    /// Call this when we encounter content that stops margin collapsing
-    /// (e.g., after laying out a child with content, or when encountering
-    /// padding/border).
-    ///
-    /// Returns the collapsed margin value and resets the pending state.
+    /// Resolves and returns the collapsed margin, resetting pending state
     pub fn resolve(&mut self) -> f32 {
-        let result = self.pending_positive - self.pending_negative;
-        self.pending_positive = 0.0;
-        self.pending_negative = 0.0;
-        self.at_bfc_start = false;
+        let result = self.pending_margin.resolve();
+        self.pending_margin = CollapsibleMargin::ZERO;
+        self.at_start = false;
         result
     }
 
     /// Resolves margin and adds a new margin in one operation
-    ///
-    /// This is a common pattern: resolve the current pending margins,
-    /// then start accumulating a new margin (e.g., the bottom margin
-    /// of the child we just laid out).
     pub fn resolve_and_push(&mut self, new_margin: f32) -> f32 {
         let result = self.resolve();
         self.push_margin(new_margin);
         result
     }
 
-    /// Returns the current pending collapsed margin without resolving
+    /// Processes a child box's margins and returns positioning information
+    ///
+    /// For non-empty blocks:
+    /// 1. Collapse pending margin with child's top margin
+    /// 2. Return the resolved value as the offset
+    /// 3. Set child's bottom margin as new pending margin
+    ///
+    /// For empty blocks:
+    /// 1. Child's top and bottom margins collapse together
+    /// 2. This collapsed margin joins the pending margin
+    /// 3. Return 0 offset (empty block takes no space)
+    pub fn process_child_margins(
+        &mut self,
+        margin_top: f32,
+        margin_bottom: f32,
+        is_empty: bool,
+    ) -> (f32, CollapsibleMargin) {
+        let top_margin = CollapsibleMargin::from_margin(margin_top);
+        let bottom_margin = CollapsibleMargin::from_margin(margin_bottom);
+
+        if is_empty {
+            // Empty block: top and bottom margins collapse with each other
+            let self_collapsed = top_margin.collapse_with(bottom_margin);
+            self.pending_margin = self.pending_margin.collapse_with(self_collapsed);
+            (0.0, self.pending_margin)
+        } else {
+            // Non-empty block
+            let collapsed_top = self.pending_margin.collapse_with(top_margin);
+            let offset = collapsed_top.resolve();
+            self.pending_margin = bottom_margin;
+            self.at_start = false;
+            (offset, self.pending_margin)
+        }
+    }
+
+    /// Processes margins with clearance (breaks collapse chain)
+    pub fn process_child_with_clearance(
+        &mut self,
+        clearance: f32,
+        margin_top: f32,
+        margin_bottom: f32,
+        is_empty: bool,
+    ) -> (f32, CollapsibleMargin) {
+        let pending_offset = self.pending_margin.resolve();
+        self.pending_margin = CollapsibleMargin::ZERO;
+
+        if is_empty {
+            let self_collapsed =
+                CollapsibleMargin::from_margin(margin_top).collapse_with(CollapsibleMargin::from_margin(margin_bottom));
+            self.pending_margin = self_collapsed;
+            (pending_offset + clearance, self.pending_margin)
+        } else {
+            self.pending_margin = CollapsibleMargin::from_margin(margin_bottom);
+            self.at_start = false;
+            (pending_offset + clearance + margin_top, self.pending_margin)
+        }
+    }
+
+    /// Returns the current pending collapsed margin
     pub fn pending_margin(&self) -> f32 {
-        self.pending_positive - self.pending_negative
+        self.pending_margin.resolve()
     }
 
-    /// Checks if we're still at the BFC start (no content encountered)
-    pub fn is_at_bfc_start(&self) -> bool {
-        self.at_bfc_start
+    /// Returns the current pending margin as CollapsibleMargin
+    pub fn pending_collapsible_margin(&self) -> CollapsibleMargin {
+        self.pending_margin
     }
 
-    /// Marks that we're no longer at the BFC start
+    /// Checks if we're still at the start (no content encountered)
+    pub fn is_at_start(&self) -> bool {
+        self.at_start
+    }
+
+    /// Marks that we're no longer at the start
     pub fn mark_content_encountered(&mut self) {
-        self.at_bfc_start = false;
+        self.at_start = false;
+    }
+
+    /// Consumes the pending margin and resets it to zero
+    pub fn consume_pending(&mut self) -> f32 {
+        let value = self.pending_margin.resolve();
+        self.pending_margin = CollapsibleMargin::ZERO;
+        self.at_start = false;
+        value
+    }
+}
+
+/// Collapses two margin values according to CSS rules
+///
+/// Convenience function for simple two-margin collapse:
+/// - Both positive: use the larger
+/// - Both negative: use the more negative
+/// - Mixed: add them (positive + negative)
+pub fn collapse_margins(margin1: f32, margin2: f32) -> f32 {
+    if margin1 >= 0.0 && margin2 >= 0.0 {
+        margin1.max(margin2)
+    } else if margin1 < 0.0 && margin2 < 0.0 {
+        margin1.min(margin2)
+    } else {
+        margin1 + margin2
     }
 }
 
@@ -185,146 +272,74 @@ impl MarginCollapseContext {
 /// - min-height is zero
 /// - height is auto or zero
 /// - No padding or border
-///
-/// Empty boxes allow their top and bottom margins to collapse together.
 pub fn is_margin_collapsible_through(style: &ComputedStyles) -> bool {
-    // Check for border
     if style.border_top_width.to_px() > 0.0 || style.border_bottom_width.to_px() > 0.0 {
         return false;
     }
-
-    // Check for padding
     if style.padding_top.to_px() > 0.0 || style.padding_bottom.to_px() > 0.0 {
         return false;
     }
-
-    // Check for explicit height
     if let Some(h) = &style.height {
         if h.to_px() > 0.0 {
             return false;
         }
     }
-
-    // Check for min-height
     if let Some(min_h) = &style.min_height {
         if min_h.to_px() > 0.0 {
             return false;
         }
     }
-
     true
 }
 
 /// Determines if margins should collapse between parent and first child
-///
-/// Parent's top margin and first child's top margin collapse if:
-/// - Parent has no top border
-/// - Parent has no top padding
-/// - Parent doesn't establish a new BFC
-/// - First child is in-flow
 pub fn should_collapse_with_first_child(parent_style: &ComputedStyles) -> bool {
-    // Border prevents collapsing
     if parent_style.border_top_width.to_px() > 0.0 {
         return false;
     }
-
-    // Padding prevents collapsing
     if parent_style.padding_top.to_px() > 0.0 {
         return false;
     }
-
-    // Establishing a new BFC prevents collapsing
     if establishes_bfc(parent_style) {
         return false;
     }
-
     true
 }
 
 /// Determines if margins should collapse between parent and last child
-///
-/// Parent's bottom margin and last child's bottom margin collapse if:
-/// - Parent has no bottom border
-/// - Parent has no bottom padding
-/// - Parent has auto height
-/// - Parent doesn't establish a new BFC
 pub fn should_collapse_with_last_child(parent_style: &ComputedStyles) -> bool {
-    // Border prevents collapsing
     if parent_style.border_bottom_width.to_px() > 0.0 {
         return false;
     }
-
-    // Padding prevents collapsing
     if parent_style.padding_bottom.to_px() > 0.0 {
         return false;
     }
-
-    // Explicit height prevents bottom margin collapsing
     if parent_style.height.is_some() {
         return false;
     }
-
-    // Establishing a new BFC prevents collapsing
     if establishes_bfc(parent_style) {
         return false;
     }
-
     true
 }
 
 /// Determines if a box establishes a new block formatting context
-///
-/// Elements that establish a new BFC include:
-/// - Floats
-/// - Absolutely positioned elements
-/// - Inline-blocks
-/// - Table cells, table captions
-/// - Elements with overflow != visible
-/// - Flex and grid items
-fn establishes_bfc(style: &ComputedStyles) -> bool {
-    use crate::style::Display;
+pub fn establishes_bfc(style: &ComputedStyles) -> bool {
+    use crate::style::{Display, Overflow};
 
-    // Floats and positioned elements establish BFC
     if style.position == Position::Absolute || style.position == Position::Fixed {
         return true;
     }
-
-    // Inline-block establishes BFC
     if matches!(style.display, Display::InlineBlock) {
         return true;
     }
-
-    // Overflow != visible establishes BFC
-    use crate::style::Overflow;
     if style.overflow_x != Overflow::Visible || style.overflow_y != Overflow::Visible {
         return true;
     }
-
-    // Flex and grid containers establish BFC for their contents
     if matches!(style.display, Display::Flex | Display::Grid) {
         return true;
     }
-
     false
-}
-
-/// Collapses two margin values according to CSS rules
-///
-/// This is a convenience function for simple two-margin collapse:
-/// - Both positive: use the larger
-/// - Both negative: use the more negative
-/// - Mixed: add them (positive + negative)
-pub fn collapse_margins(margin1: f32, margin2: f32) -> f32 {
-    if margin1 >= 0.0 && margin2 >= 0.0 {
-        // Both positive: take the max
-        margin1.max(margin2)
-    } else if margin1 < 0.0 && margin2 < 0.0 {
-        // Both negative: take the more negative (min)
-        margin1.min(margin2)
-    } else {
-        // Mixed: add them
-        margin1 + margin2
-    }
 }
 
 #[cfg(test)]
@@ -332,90 +347,89 @@ mod tests {
     use super::*;
     use crate::style::Length;
 
-    // CollapsibleMargins tests
+    // ==========================================================================
+    // CollapsibleMargin Tests
+    // ==========================================================================
+
     #[test]
-    fn test_collapsible_margins_new() {
-        let margins = CollapsibleMargins::new();
-        assert_eq!(margins.collapsed_value(), 0.0);
-        assert!(margins.is_empty());
+    fn test_collapsible_margin_zero() {
+        let m = CollapsibleMargin::ZERO;
+        assert_eq!(m.positive, 0.0);
+        assert_eq!(m.negative, 0.0);
+        assert_eq!(m.resolve(), 0.0);
+        assert!(m.is_zero());
     }
 
     #[test]
-    fn test_collapsible_margins_from_positive() {
-        let margins = CollapsibleMargins::from_margin(20.0);
-        assert_eq!(margins.collapsed_value(), 20.0);
+    fn test_collapsible_margin_from_positive() {
+        let m = CollapsibleMargin::from_margin(20.0);
+        assert_eq!(m.positive, 20.0);
+        assert_eq!(m.negative, 0.0);
+        assert_eq!(m.resolve(), 20.0);
     }
 
     #[test]
-    fn test_collapsible_margins_from_negative() {
-        let margins = CollapsibleMargins::from_margin(-15.0);
-        assert_eq!(margins.collapsed_value(), -15.0);
+    fn test_collapsible_margin_from_negative() {
+        let m = CollapsibleMargin::from_margin(-15.0);
+        assert_eq!(m.positive, 0.0);
+        assert_eq!(m.negative, 15.0);
+        assert_eq!(m.resolve(), -15.0);
     }
 
     #[test]
-    fn test_collapsible_margins_positive_collapse() {
-        let mut margins = CollapsibleMargins::new();
-        margins.add_margin(10.0);
-        margins.add_margin(20.0);
-        margins.add_margin(15.0);
-        // All positive: result is max = 20
-        assert_eq!(margins.collapsed_value(), 20.0);
+    fn test_positive_margins_collapse_to_max() {
+        let m1 = CollapsibleMargin::from_margin(20.0);
+        let m2 = CollapsibleMargin::from_margin(30.0);
+        let result = m1.collapse_with(m2);
+        assert_eq!(result.resolve(), 30.0);
     }
 
     #[test]
-    fn test_collapsible_margins_negative_collapse() {
-        let mut margins = CollapsibleMargins::new();
-        margins.add_margin(-10.0);
-        margins.add_margin(-20.0);
-        margins.add_margin(-5.0);
-        // All negative: result is most negative = -20
-        assert_eq!(margins.collapsed_value(), -20.0);
+    fn test_negative_margins_collapse_to_most_negative() {
+        let m1 = CollapsibleMargin::from_margin(-20.0);
+        let m2 = CollapsibleMargin::from_margin(-30.0);
+        let result = m1.collapse_with(m2);
+        assert_eq!(result.resolve(), -30.0);
     }
 
     #[test]
-    fn test_collapsible_margins_mixed_collapse() {
-        let mut margins = CollapsibleMargins::new();
-        margins.add_margin(30.0);
-        margins.add_margin(-10.0);
-        // Mixed: max positive - max negative = 30 - 10 = 20
-        assert_eq!(margins.collapsed_value(), 20.0);
+    fn test_mixed_margins_sum() {
+        let m1 = CollapsibleMargin::from_margin(30.0);
+        let m2 = CollapsibleMargin::from_margin(-10.0);
+        let result = m1.collapse_with(m2);
+        assert_eq!(result.resolve(), 20.0);
     }
 
     #[test]
-    fn test_collapsible_margins_mixed_negative_wins() {
-        let mut margins = CollapsibleMargins::new();
-        margins.add_margin(10.0);
-        margins.add_margin(-30.0);
-        // Mixed: 10 - 30 = -20
-        assert_eq!(margins.collapsed_value(), -20.0);
+    fn test_mixed_margins_negative_result() {
+        let m1 = CollapsibleMargin::from_margin(10.0);
+        let m2 = CollapsibleMargin::from_margin(-30.0);
+        let result = m1.collapse_with(m2);
+        assert_eq!(result.resolve(), -20.0);
     }
 
     #[test]
-    fn test_collapsible_margins_collapse_with() {
-        let mut margins1 = CollapsibleMargins::from_margin(20.0);
-        let margins2 = CollapsibleMargins::from_margin(30.0);
-        margins1.collapse_with(&margins2);
-        assert_eq!(margins1.collapsed_value(), 30.0);
+    fn test_add_margin() {
+        let m = CollapsibleMargin::from_margin(20.0);
+        let m2 = m.add_margin(30.0);
+        assert_eq!(m2.resolve(), 30.0);
+        let m3 = m2.add_margin(-10.0);
+        assert_eq!(m3.resolve(), 20.0);
     }
 
-    #[test]
-    fn test_collapsible_margins_clear() {
-        let mut margins = CollapsibleMargins::from_margin(20.0);
-        margins.clear();
-        assert!(margins.is_empty());
-        assert_eq!(margins.collapsed_value(), 0.0);
-    }
+    // ==========================================================================
+    // MarginCollapseContext Tests
+    // ==========================================================================
 
-    // MarginCollapseContext tests
     #[test]
-    fn test_margin_collapse_context_new() {
+    fn test_context_new() {
         let ctx = MarginCollapseContext::new();
-        assert!(ctx.is_at_bfc_start());
+        assert!(ctx.is_at_start());
         assert_eq!(ctx.pending_margin(), 0.0);
     }
 
     #[test]
-    fn test_margin_collapse_context_push_resolve() {
+    fn test_context_push_resolve() {
         let mut ctx = MarginCollapseContext::new();
         ctx.push_margin(20.0);
         ctx.push_margin(30.0);
@@ -424,11 +438,11 @@ mod tests {
         let resolved = ctx.resolve();
         assert_eq!(resolved, 30.0);
         assert_eq!(ctx.pending_margin(), 0.0);
-        assert!(!ctx.is_at_bfc_start());
+        assert!(!ctx.is_at_start());
     }
 
     #[test]
-    fn test_margin_collapse_context_resolve_and_push() {
+    fn test_context_resolve_and_push() {
         let mut ctx = MarginCollapseContext::new();
         ctx.push_margin(20.0);
 
@@ -437,7 +451,38 @@ mod tests {
         assert_eq!(ctx.pending_margin(), 10.0);
     }
 
+    #[test]
+    fn test_context_process_child_margins() {
+        let mut ctx = MarginCollapseContext::new();
+
+        // First child
+        let (offset, _) = ctx.process_child_margins(20.0, 10.0, false);
+        assert_eq!(offset, 20.0);
+
+        // Second child - margins collapse
+        let (offset2, _) = ctx.process_child_margins(30.0, 15.0, false);
+        assert_eq!(offset2, 30.0); // max(10, 30)
+    }
+
+    #[test]
+    fn test_context_empty_block() {
+        let mut ctx = MarginCollapseContext::new();
+        let (offset, pending) = ctx.process_child_margins(20.0, 30.0, true);
+        assert_eq!(offset, 0.0);
+        assert_eq!(pending.resolve(), 30.0);
+    }
+
+    #[test]
+    fn test_context_with_initial_margin() {
+        let mut ctx = MarginCollapseContext::with_initial_margin(15.0);
+        let (offset, _) = ctx.process_child_margins(25.0, 0.0, false);
+        assert_eq!(offset, 25.0); // max(15, 25)
+    }
+
+    // ==========================================================================
     // collapse_margins function tests
+    // ==========================================================================
+
     #[test]
     fn test_collapse_margins_both_positive() {
         assert_eq!(collapse_margins(10.0, 20.0), 20.0);
@@ -463,7 +508,10 @@ mod tests {
         assert_eq!(collapse_margins(10.0, 0.0), 10.0);
     }
 
+    // ==========================================================================
     // Style-based tests
+    // ==========================================================================
+
     #[test]
     fn test_should_collapse_with_first_child_no_border_padding() {
         let style = ComputedStyles::default();
@@ -522,5 +570,25 @@ mod tests {
         let mut style = ComputedStyles::default();
         style.height = Some(Length::px(50.0));
         assert!(!is_margin_collapsible_through(&style));
+    }
+
+    #[test]
+    fn test_establishes_bfc_absolute() {
+        let mut style = ComputedStyles::default();
+        style.position = Position::Absolute;
+        assert!(establishes_bfc(&style));
+    }
+
+    #[test]
+    fn test_establishes_bfc_fixed() {
+        let mut style = ComputedStyles::default();
+        style.position = Position::Fixed;
+        assert!(establishes_bfc(&style));
+    }
+
+    #[test]
+    fn test_establishes_bfc_static() {
+        let style = ComputedStyles::default();
+        assert!(!establishes_bfc(&style));
     }
 }
