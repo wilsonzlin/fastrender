@@ -161,6 +161,11 @@ pub enum AnonymousType {
     /// Generated around tables to contain captions.
     TableWrapper,
 
+    /// Anonymous table row group box (tbody)
+    ///
+    /// Generated when rows aren't in explicit row groups.
+    TableRowGroup,
+
     /// Anonymous table row box
     ///
     /// Generated when table cells aren't in explicit rows.
@@ -201,7 +206,11 @@ impl BoxType {
             BoxType::Block(_) | BoxType::Replaced(_) => true,
             BoxType::Anonymous(anon) => matches!(
                 anon.anonymous_type,
-                AnonymousType::Block | AnonymousType::TableWrapper | AnonymousType::TableRow | AnonymousType::TableCell
+                AnonymousType::Block
+                    | AnonymousType::TableWrapper
+                    | AnonymousType::TableRowGroup
+                    | AnonymousType::TableRow
+                    | AnonymousType::TableCell
             ),
             _ => false,
         }
@@ -253,6 +262,7 @@ impl fmt::Display for BoxType {
                 AnonymousType::Block => write!(f, "AnonymousBlock"),
                 AnonymousType::Inline => write!(f, "AnonymousInline"),
                 AnonymousType::TableWrapper => write!(f, "AnonymousTableWrapper"),
+                AnonymousType::TableRowGroup => write!(f, "AnonymousTableRowGroup"),
                 AnonymousType::TableRow => write!(f, "AnonymousTableRow"),
                 AnonymousType::TableCell => write!(f, "AnonymousTableCell"),
             },
@@ -496,7 +506,10 @@ impl BoxNode {
         match &self.box_type {
             BoxType::Anonymous(anon) => matches!(
                 anon.anonymous_type,
-                AnonymousType::TableWrapper | AnonymousType::TableRow | AnonymousType::TableCell
+                AnonymousType::TableWrapper
+                    | AnonymousType::TableRowGroup
+                    | AnonymousType::TableRow
+                    | AnonymousType::TableCell
             ),
             _ => false,
         }

@@ -42,8 +42,9 @@
 //! use fastrender::tree::BoxTree;
 //! use fastrender::geometry::Size;
 //!
-//! let engine = LayoutEngine::new(LayoutConfig::default());
-//! let fragment_tree = engine.layout_tree(&box_tree, Size::new(1024.0, 768.0))?;
+//! let config = LayoutConfig::for_viewport(Size::new(1024.0, 768.0));
+//! let engine = LayoutEngine::new(config);
+//! let fragment_tree = engine.layout_tree(&box_tree)?;
 //! ```
 
 // W2.T09 - Formatting context factory
@@ -61,7 +62,7 @@ pub mod engine;
 // Re-exports
 pub use constraints::{AvailableSpace, LayoutConstraints};
 pub use contexts::FormattingContextFactory;
-pub use engine::{LayoutConfig, LayoutEngine};
+pub use engine::{LayoutConfig, LayoutEngine, LayoutStats};
 pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 
 // Future modules (to be implemented in Wave 3+):
