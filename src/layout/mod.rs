@@ -25,9 +25,10 @@
 //!
 //! # Module Organization
 //!
-//! - `contexts/` - Formatting context types and derivation (W2.T08)
+//! - `contexts/` - Formatting context factory (W2.T09)
 //! - `constraints.rs` - LayoutConstraints and AvailableSpace (W2.T04)
 //! - `formatting_context.rs` - FormattingContext trait (W2.T07)
+//! - `engine.rs` - LayoutEngine orchestrator (W2.T10)
 //! - `block.rs` - Block layout algorithm (W3.T04)
 //! - `inline.rs` - Inline layout and line breaking (W4.T12)
 //! - `flex.rs` - Flexbox integration with Taffy (W3.T08)
@@ -37,20 +38,15 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use fastrender::layout::{FormattingContext, LayoutConstraints};
-//! use fastrender::tree::BoxNode;
+//! use fastrender::layout::{LayoutEngine, LayoutConfig};
+//! use fastrender::tree::BoxTree;
+//! use fastrender::geometry::Size;
 //!
-//! // Get appropriate formatting context for box
-//! let fc = get_formatting_context(&box_node);
-//!
-//! // Create constraints (viewport size)
-//! let constraints = LayoutConstraints::definite(1024.0, 768.0);
-//!
-//! // Perform layout
-//! let fragment = fc.layout(&box_node, &constraints)?;
+//! let engine = LayoutEngine::new(LayoutConfig::default());
+//! let fragment_tree = engine.layout_tree(&box_tree, Size::new(1024.0, 768.0))?;
 //! ```
 
-// W2.T08 - Formatting context types and derivation
+// W2.T09 - Formatting context factory
 pub mod contexts;
 
 // W2.T04 - Layout constraints
@@ -59,9 +55,13 @@ pub mod constraints;
 // W2.T07 - FormattingContext trait
 pub mod formatting_context;
 
+// W2.T10 - Layout engine orchestrator
+pub mod engine;
+
 // Re-exports
 pub use constraints::{AvailableSpace, LayoutConstraints};
-pub use contexts::{FormattingContextFactory, FormattingContextType};
+pub use contexts::FormattingContextFactory;
+pub use engine::{LayoutConfig, LayoutEngine};
 pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 
 // Future modules (to be implemented in Wave 3+):

@@ -247,9 +247,8 @@ mod tests {
 
     #[test]
     fn test_factory_creation() {
-        let factory = FormattingContextFactory::new();
+        let _factory = FormattingContextFactory::new();
         let _default = FormattingContextFactory::default();
-        drop(factory);
     }
 
     #[test]

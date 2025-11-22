@@ -740,8 +740,7 @@ mod tests {
     fn test_empty_tree_traversal() {
         let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![]);
 
-        let fragments: Vec<_> = fragment.iter_fragments().collect();
-        assert_eq!(fragments.len(), 1);
+        assert_eq!(fragment.iter_fragments().count(), 1);
     }
 
     #[test]
@@ -802,8 +801,7 @@ mod tests {
         let child2 = FragmentNode::new_block(Rect::from_xywh(50.0, 0.0, 50.0, 50.0), vec![]);
         let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![child1, child2]);
 
-        let children: Vec<_> = parent.children().collect();
-        assert_eq!(children.len(), 2);
+        assert_eq!(parent.children().count(), 2);
     }
 
     #[test]

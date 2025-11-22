@@ -1,13 +1,9 @@
-//! Formatting context types and factory
+//! Formatting context factory
 //!
 //! This module contains:
-//! - FormattingContextType enum (discriminator)
 //! - FormattingContext factory (creates appropriate FC)
 
 pub mod factory;
-pub mod types;
 
 // Re-exports
 pub use factory::FormattingContextFactory;
-pub use types::FormattingContextType;
-pub use types::{derive_fc_from_display, establishes_independent_bfc, BfcTriggers};
