@@ -25,6 +25,7 @@ pub mod box_generation;
 pub mod box_tree;
 pub mod debug;
 pub mod fragment_tree;
+pub mod table_fixup;
 
 // Re-exports from box_tree
 pub use box_tree::{AnonymousType, BoxNode, BoxTree, BoxType, ReplacedType};
@@ -43,3 +44,6 @@ pub use anonymous::AnonymousBoxCreator;
 
 // Re-exports from box_generation
 pub use box_generation::{BoxGenerationConfig, BoxGenerationError, BoxGenerator, DOMNode};
+
+// Re-exports from table_fixup
+pub use table_fixup::TableStructureFixer;
