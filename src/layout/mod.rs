@@ -26,7 +26,7 @@
 //! # Module Organization
 //!
 //! - `formatting_context.rs` - FormattingContext trait (W2.T07)
-//! - `constraints.rs` - LayoutConstraints and AvailableSpace (W2.T07)
+//! - `constraints.rs` - LayoutConstraints and AvailableSpace (W2.T04)
 //! - `block.rs` - Block layout algorithm (W3.T04)
 //! - `inline.rs` - Inline layout and line breaking (W4.T12)
 //! - `flex.rs` - Flexbox integration with Taffy (W3.T08)
@@ -43,16 +43,19 @@
 //! let fc = get_formatting_context(&box_node);
 //!
 //! // Create constraints (viewport size)
-//! let constraints = LayoutConstraints::with_definite_size(1024.0, 768.0);
+//! let constraints = LayoutConstraints::definite(1024.0, 768.0);
 //!
 //! // Perform layout
 //! let fragment = fc.layout(&box_node, &constraints)?;
 //! ```
 
-// W2.T07 - FormattingContext trait and infrastructure
+// W2.T04 - Layout constraints
 pub mod constraints;
+
+// W2.T07 - FormattingContext trait
 pub mod formatting_context;
 
+// Re-exports
 pub use constraints::{AvailableSpace, LayoutConstraints};
 pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 

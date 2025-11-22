@@ -4,11 +4,15 @@
 //! computed styles, and style properties.
 
 pub mod color;
+pub mod computed;
 pub mod display;
 pub mod position;
 
 // Re-export color types
 pub use color::{Color, ColorParseError, Hsla, Rgba};
+
+// Re-export computed style types (excluding types that conflict with legacy definitions)
+pub use computed::{BorderColors, ComputedStyle, ComputedStyleBuilder};
 
 // Re-export display types
 pub use display::{Display, DisplayParseError, FormattingContextType, InnerDisplay, OuterDisplay};

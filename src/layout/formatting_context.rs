@@ -25,29 +25,14 @@
 //! - **Parallelization**: Different FCs can be implemented concurrently in different tasks
 //! - **Clarity**: Separates concerns - each FC focuses on one layout mode
 //!
-//! # Architecture
-//!
-//! ```text
-//! LayoutEngine
-//!     │
-//!     ├─> Selects appropriate FormattingContext based on display value
-//!     │
-//!     ├─> BlockFormattingContext (W3.T04)
-//!     ├─> InlineFormattingContext (W4.T12)
-//!     ├─> FlexFormattingContext (W3.T08)
-//!     ├─> GridFormattingContext (W3.T09)
-//!     └─> TableFormattingContext (W3.T06)
-//! ```
-//!
 //! # References
 //!
 //! - CSS 2.1 Section 9.4 - Normal Flow: https://www.w3.org/TR/CSS21/visuren.html#normal-flow
 //! - CSS Flexbox: https://www.w3.org/TR/css-flexbox-1/
 //! - CSS Grid: https://www.w3.org/TR/css-grid-1/
 
-use crate::geometry::Size;
-use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
-use crate::tree::{BoxNode, Fragment};
+use crate::layout::LayoutConstraints;
+use crate::tree::{BoxNode, FragmentNode};
 
 /// Intrinsic sizing mode for content-based size queries
 ///
@@ -96,8 +81,8 @@ pub enum IntrinsicSizingMode {
 /// Implementers must:
 /// 1. Take a BoxNode and LayoutConstraints as input
 /// 2. Recursively layout children using appropriate child formatting contexts
-/// 3. Return a positioned Fragment tree with final sizes and positions
-/// 4. Handle both definite and indefinite sizing (AvailableSpace variants)
+/// 3. Return a positioned FragmentNode tree with final sizes and positions
+/// 4. Handle all AvailableSpace variants (Definite, Indefinite, MinContent, MaxContent)
 /// 5. Support intrinsic size queries (min-content, max-content)
 /// 6. Be stateless and reusable (no mutable state in the FC struct)
 ///
@@ -111,14 +96,14 @@ pub enum IntrinsicSizingMode {
 /// # Example Implementation
 ///
 /// ```rust,ignore
-/// use fastrender::layout::{FormattingContext, LayoutConstraints, IntrinsicSizingMode};
-/// use fastrender::tree::{BoxNode, Fragment};
+/// use fastrender::layout::{FormattingContext, LayoutConstraints, IntrinsicSizingMode, LayoutError};
+/// use fastrender::tree::{BoxNode, FragmentNode};
 ///
 /// struct BlockFormattingContext;
 ///
 /// impl FormattingContext for BlockFormattingContext {
 ///     fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints)
-///         -> Result<Fragment, LayoutError>
+///         -> Result<FragmentNode, LayoutError>
 ///     {
 ///         // 1. Compute box's own size based on constraints
 ///         // 2. Layout children vertically
@@ -153,7 +138,7 @@ pub trait FormattingContext: Send + Sync {
     /// # Arguments
     ///
     /// * `box_node` - The box to layout (must be compatible with this FC)
-    /// * `constraints` - Available space and percentage resolution bases
+    /// * `constraints` - Available space constraints
     ///
     /// # Returns
     ///
@@ -168,31 +153,7 @@ pub trait FormattingContext: Send + Sync {
     /// - Box type is not supported by this formatting context
     /// - Circular dependency detected in sizing
     /// - Required context (fonts, images, etc.) is missing
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let fc = BlockFormattingContext::new();
-    /// let constraints = LayoutConstraints::with_definite_size(800.0, 600.0);
-    ///
-    /// let fragment = fc.layout(&box_node, &constraints)?;
-    /// assert_eq!(fragment.size().width, 800.0); // Fills available width
-    /// ```
-    ///
-    /// # Recursion
-    ///
-    /// Implementations must recursively layout children using the appropriate
-    /// child formatting context. For example:
-    ///
-    /// ```rust,ignore
-    /// // In BlockFormattingContext::layout()
-    /// for child in box_node.children {
-    ///     let child_fc = get_formatting_context_for_box(&child);
-    ///     let child_fragment = child_fc.layout(&child, &child_constraints)?;
-    ///     // Position child_fragment and add to our children
-    /// }
-    /// ```
-    fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<Fragment, LayoutError>;
+    fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError>;
 
     /// Computes intrinsic size for a box in the inline axis
     ///
@@ -219,17 +180,6 @@ pub trait FormattingContext: Send + Sync {
     /// Returns error if:
     /// - Content cannot be measured (missing fonts, images, etc.)
     /// - Box type not supported
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // For a text box containing "Hello World":
-    /// let min = fc.compute_intrinsic_inline_size(&box, IntrinsicSizingMode::MinContent)?;
-    /// // Returns width of "World" (longest word)
-    ///
-    /// let max = fc.compute_intrinsic_inline_size(&box, IntrinsicSizingMode::MaxContent)?;
-    /// // Returns width of "Hello World" (no wrapping)
-    /// ```
     ///
     /// # Performance Note
     ///
@@ -276,7 +226,9 @@ impl std::error::Error for LayoutError {}
 mod tests {
     use super::*;
     use crate::geometry::{Point, Rect, Size};
-    use crate::tree::{ComputedStyle, FormattingContextType};
+    use crate::layout::AvailableSpace;
+    use crate::tree::box_tree::ComputedStyle;
+    use crate::tree::FormattingContextType;
     use std::sync::Arc;
 
     /// Stub formatting context for testing trait requirements
@@ -287,13 +239,9 @@ mod tests {
     struct StubFormattingContext;
 
     impl FormattingContext for StubFormattingContext {
-        fn layout(&self, box_node: &BoxNode, _constraints: &LayoutConstraints) -> Result<Fragment, LayoutError> {
+        fn layout(&self, _box_node: &BoxNode, _constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
             // Stub: just return a fixed-size fragment
-            Ok(Fragment::new_block(
-                Rect::new(Point::ZERO, Size::new(100.0, 50.0)),
-                box_node.style.clone(),
-                vec![],
-            ))
+            Ok(FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 50.0), vec![]))
         }
 
         fn compute_intrinsic_inline_size(
@@ -312,11 +260,11 @@ mod tests {
         let style = Arc::new(ComputedStyle::default());
         let box_node = BoxNode::new_block(style, FormattingContextType::Block, vec![]);
 
-        let constraints = LayoutConstraints::with_definite_size(800.0, 600.0);
+        let constraints = LayoutConstraints::definite(800.0, 600.0);
         let fragment = fc.layout(&box_node, &constraints).unwrap();
 
-        assert_eq!(fragment.size().width, 100.0);
-        assert_eq!(fragment.size().height, 50.0);
+        assert_eq!(fragment.bounds.width(), 100.0);
+        assert_eq!(fragment.bounds.height(), 50.0);
     }
 
     #[test]
@@ -351,11 +299,12 @@ mod tests {
         let style = Arc::new(ComputedStyle::default());
         let box_node = BoxNode::new_block(style, FormattingContextType::Block, vec![]);
 
-        let constraints = LayoutConstraints::with_definite_size(1024.0, 768.0);
+        let constraints = LayoutConstraints::definite(1024.0, 768.0);
         let fragment = fc.layout(&box_node, &constraints).unwrap();
 
         // Fragment should be positioned at origin
-        assert_eq!(fragment.position(), Point::ZERO);
+        assert_eq!(fragment.bounds.x(), 0.0);
+        assert_eq!(fragment.bounds.y(), 0.0);
     }
 
     #[test]
@@ -364,11 +313,11 @@ mod tests {
         let style = Arc::new(ComputedStyle::default());
         let box_node = BoxNode::new_block(style, FormattingContextType::Block, vec![]);
 
-        let constraints = LayoutConstraints::new(AvailableSpace::MaxContent, AvailableSpace::MaxContent);
+        let constraints = LayoutConstraints::indefinite();
         let fragment = fc.layout(&box_node, &constraints).unwrap();
 
         // Should still produce valid fragment
-        assert!(fragment.size().width > 0.0);
+        assert!(fragment.bounds.width() > 0.0);
     }
 
     #[test]

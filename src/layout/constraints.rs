@@ -1,278 +1,769 @@
-//! Layout constraints and available space
+//! Layout constraints
 //!
-//! This module defines how available space is communicated to layout algorithms.
-//! Formatting contexts receive constraints that specify what space is available
-//! for layout and what the percentage resolution bases are.
+//! Constraints describe the available space for layout. Every layout algorithm
+//! takes constraints as input to determine sizing.
+//!
+//! # Available Space
+//!
+//! CSS defines several modes for available space:
+//! - **Definite**: Specific size is available
+//! - **Indefinite**: No constraint, size to content
+//! - **MinContent**: Size to minimum without overflow
+//! - **MaxContent**: Size to maximum without wrapping
+//!
+//! Reference: CSS Sizing Module Level 3, Section 2.4
+//! https://www.w3.org/TR/css-sizing-3/#available
+//!
+//! # Examples
+//!
+//! ```
+//! use fastrender::layout::{AvailableSpace, LayoutConstraints};
+//!
+//! let constraints = LayoutConstraints::new(
+//!     AvailableSpace::Definite(800.0),
+//!     AvailableSpace::Indefinite,
+//! );
+//!
+//! assert!(constraints.is_width_definite());
+//! assert!(!constraints.is_height_definite());
+//! ```
 
-use crate::geometry::Size;
+use std::fmt;
 
-/// Available space in a dimension
+/// Available space for layout
 ///
-/// CSS layout can have three types of available space:
-/// 1. **Definite**: Fixed size (e.g., `width: 800px`)
-/// 2. **MinContent**: Shrink to minimum content size
-/// 3. **MaxContent**: Expand to maximum content size
+/// Represents how much space is available in a particular dimension.
+/// Used to communicate constraints from parent to child during layout.
 ///
-/// These correspond to the three sizing modes defined in CSS Sizing Module Level 3:
-/// - Definite sizing: explicit lengths like `width: 800px`
-/// - Min-content sizing: `width: min-content`
-/// - Max-content sizing: `width: max-content`
+/// # Variants
+///
+/// - **Definite**: Specific amount of space available
+/// - **Indefinite**: No constraint, size to content
+/// - **MinContent**: Size to minimum without overflow
+/// - **MaxContent**: Size to maximum without wrapping
+///
+/// Reference: CSS Sizing Level 3, Section 2.4
 ///
 /// # Examples
 ///
 /// ```
 /// use fastrender::layout::AvailableSpace;
 ///
-/// // Fixed viewport width
-/// let definite = AvailableSpace::Definite(1024.0);
+/// let definite = AvailableSpace::Definite(100.0);
 /// assert!(definite.is_definite());
-/// assert_eq!(definite.definite_value(), Some(1024.0));
+/// assert_eq!(definite.to_option(), Some(100.0));
 ///
-/// // Shrink-to-fit scenarios
-/// let min = AvailableSpace::MinContent;
-/// assert!(!min.is_definite());
-/// assert_eq!(min.definite_value(), None);
+/// let indefinite = AvailableSpace::Indefinite;
+/// assert!(!indefinite.is_definite());
+/// assert_eq!(indefinite.to_option(), None);
 /// ```
-///
-/// # Reference
-///
-/// CSS Sizing Module Level 3: https://www.w3.org/TR/css-sizing-3/
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AvailableSpace {
-    /// Definite size - a specific length value
+    /// Specific amount of space available (in CSS pixels)
     ///
-    /// Used when the containing block has a fixed size.
+    /// Example: Parent is 800px wide, so child has Definite(800.0) available
     Definite(f32),
 
-    /// Shrink to minimum content size
+    /// No constraint on size, should size to content
     ///
-    /// The box should be as narrow as possible without overflowing content.
-    /// For text, this is typically the longest word.
+    /// Example: Height is usually indefinite, size based on content
+    Indefinite,
+
+    /// Size to minimum content without overflow
+    ///
+    /// Used for: Calculating intrinsic sizes, shrink-to-fit
     MinContent,
 
-    /// Expand to maximum content size
+    /// Size to maximum content without wrapping
     ///
-    /// The box should be wide enough to fit all content without wrapping.
-    /// For text, this is the width of the longest line without any line breaks.
+    /// Used for: Calculating intrinsic sizes, preferred widths
     MaxContent,
 }
 
 impl AvailableSpace {
-    /// Returns true if this is a definite (fixed) size
+    /// Returns true if this is a definite space
     ///
     /// # Examples
     ///
     /// ```
     /// use fastrender::layout::AvailableSpace;
     ///
-    /// assert!(AvailableSpace::Definite(800.0).is_definite());
-    /// assert!(!AvailableSpace::MinContent.is_definite());
-    /// assert!(!AvailableSpace::MaxContent.is_definite());
+    /// assert!(AvailableSpace::Definite(100.0).is_definite());
+    /// assert!(!AvailableSpace::Indefinite.is_definite());
     /// ```
-    pub fn is_definite(&self) -> bool {
+    pub fn is_definite(self) -> bool {
         matches!(self, Self::Definite(_))
     }
 
-    /// Returns the definite value if this is Definite, otherwise None
+    /// Returns true if this is indefinite space
+    pub fn is_indefinite(self) -> bool {
+        matches!(self, Self::Indefinite)
+    }
+
+    /// Returns true if this is min-content sizing
+    pub fn is_min_content(self) -> bool {
+        matches!(self, Self::MinContent)
+    }
+
+    /// Returns true if this is max-content sizing
+    pub fn is_max_content(self) -> bool {
+        matches!(self, Self::MaxContent)
+    }
+
+    /// Returns the definite value if available, otherwise None
     ///
     /// # Examples
     ///
     /// ```
     /// use fastrender::layout::AvailableSpace;
     ///
-    /// assert_eq!(AvailableSpace::Definite(800.0).definite_value(), Some(800.0));
-    /// assert_eq!(AvailableSpace::MinContent.definite_value(), None);
+    /// assert_eq!(AvailableSpace::Definite(100.0).to_option(), Some(100.0));
+    /// assert_eq!(AvailableSpace::Indefinite.to_option(), None);
     /// ```
-    pub fn definite_value(&self) -> Option<f32> {
+    pub fn to_option(self) -> Option<f32> {
         match self {
-            Self::Definite(v) => Some(*v),
+            Self::Definite(value) => Some(value),
             _ => None,
+        }
+    }
+
+    /// Returns the definite value, or a default if not definite
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fastrender::layout::AvailableSpace;
+    ///
+    /// assert_eq!(AvailableSpace::Definite(100.0).or_else(50.0), 100.0);
+    /// assert_eq!(AvailableSpace::Indefinite.or_else(50.0), 50.0);
+    /// ```
+    pub fn or_else(self, default: f32) -> f32 {
+        match self {
+            Self::Definite(value) => value,
+            _ => default,
+        }
+    }
+
+    /// Subtracts a value from definite space, returning new space
+    ///
+    /// If space is not definite, returns unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fastrender::layout::AvailableSpace;
+    ///
+    /// let space = AvailableSpace::Definite(100.0);
+    /// let shrunk = space.shrink_by(20.0);
+    /// assert_eq!(shrunk, AvailableSpace::Definite(80.0));
+    ///
+    /// let indefinite = AvailableSpace::Indefinite;
+    /// assert_eq!(indefinite.shrink_by(20.0), AvailableSpace::Indefinite);
+    /// ```
+    pub fn shrink_by(self, amount: f32) -> Self {
+        match self {
+            Self::Definite(value) => Self::Definite((value - amount).max(0.0)),
+            other => other,
+        }
+    }
+
+    /// Maps a definite value, leaving other variants unchanged
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fastrender::layout::AvailableSpace;
+    ///
+    /// let space = AvailableSpace::Definite(100.0);
+    /// let doubled = space.map(|v| v * 2.0);
+    /// assert_eq!(doubled, AvailableSpace::Definite(200.0));
+    /// ```
+    pub fn map<F>(self, f: F) -> Self
+    where
+        F: FnOnce(f32) -> f32,
+    {
+        match self {
+            Self::Definite(value) => Self::Definite(f(value)),
+            other => other,
+        }
+    }
+
+    /// Clamps a definite value between min and max
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fastrender::layout::AvailableSpace;
+    ///
+    /// let space = AvailableSpace::Definite(150.0);
+    /// let clamped = space.clamp(50.0, 100.0);
+    /// assert_eq!(clamped, AvailableSpace::Definite(100.0));
+    /// ```
+    pub fn clamp(self, min: f32, max: f32) -> Self {
+        self.map(|v| v.clamp(min, max))
+    }
+}
+
+impl fmt::Display for AvailableSpace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Definite(value) => write!(f, "{}px", value),
+            Self::Indefinite => write!(f, "auto"),
+            Self::MinContent => write!(f, "min-content"),
+            Self::MaxContent => write!(f, "max-content"),
         }
     }
 }
 
-/// Layout constraints passed to formatting contexts
+/// Layout constraints describing available space
 ///
-/// Contains all the information a layout algorithm needs about available space
-/// and sizing context. This is passed down the tree during layout, with each
-/// formatting context potentially modifying constraints for its children.
-///
-/// # CSS Specification
-///
-/// These constraints implement the "containing block" concept from CSS 2.1 Section 10.1.
-/// The containing block determines:
-/// - How percentage widths/heights are resolved
-/// - What space is available for auto-sizing
+/// Constraints specify how much space is available in each dimension.
+/// Every layout algorithm takes constraints as input.
 ///
 /// # Examples
 ///
 /// ```
-/// use fastrender::layout::{LayoutConstraints, AvailableSpace};
+/// use fastrender::layout::{AvailableSpace, LayoutConstraints};
 ///
-/// // Create constraints for a 1024x768 viewport
-/// let constraints = LayoutConstraints::with_definite_size(1024.0, 768.0);
-/// assert_eq!(constraints.available_width, AvailableSpace::Definite(1024.0));
-/// assert_eq!(constraints.percentage_base_width, 1024.0);
-///
-/// // Create indefinite constraints for intrinsic sizing
-/// let auto = LayoutConstraints::new(
-///     AvailableSpace::MaxContent,
-///     AvailableSpace::MaxContent,
+/// // Fixed width, flexible height (common for blocks)
+/// let constraints = LayoutConstraints::new(
+///     AvailableSpace::Definite(800.0),
+///     AvailableSpace::Indefinite,
 /// );
+///
+/// // Shrink for margins/padding
+/// let inner = constraints.shrink_width_by(40.0);
+/// assert_eq!(inner.available_width, AvailableSpace::Definite(760.0));
 /// ```
-///
-/// # Reference
-///
-/// CSS 2.1 Section 10.1 - Containing Block:
-/// https://www.w3.org/TR/CSS21/visudet.html#containing-block-details
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayoutConstraints {
-    /// Available width for layout
-    ///
-    /// Can be:
-    /// - `Definite(w)`: Containing block has explicit width `w`
-    /// - `MinContent`: Compute minimum content width
-    /// - `MaxContent`: Compute maximum content width
+    /// Available space in the inline direction (width for horizontal-tb)
     pub available_width: AvailableSpace,
 
-    /// Available height for layout
-    ///
-    /// Can be:
-    /// - `Definite(h)`: Containing block has explicit height `h`
-    /// - `MinContent`: Compute minimum content height
-    /// - `MaxContent`: Compute maximum content height
+    /// Available space in the block direction (height for horizontal-tb)
     pub available_height: AvailableSpace,
-
-    /// Percentage base for width calculations
-    ///
-    /// When a child has `width: 50%`, it's 50% of this value.
-    /// This is the containing block's content width.
-    ///
-    /// Note: This can be non-zero even when `available_width` is indefinite.
-    /// For example, in a float context, available width may be indefinite but
-    /// percentage base is still the containing block width.
-    pub percentage_base_width: f32,
-
-    /// Percentage base for height calculations
-    ///
-    /// When a child has `height: 50%`, it's 50% of this value.
-    /// This is the containing block's content height.
-    ///
-    /// Note: Percentage heights are more restricted in CSS than widths.
-    /// They only work if the containing block has an explicit height.
-    pub percentage_base_height: f32,
 }
 
 impl LayoutConstraints {
-    /// Creates new constraints with specified available space
-    ///
-    /// Percentage bases are initialized to 0.0 and should be set explicitly
-    /// if needed.
+    /// Creates new constraints with the given available space
     ///
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::{LayoutConstraints, AvailableSpace};
+    /// use fastrender::layout::{AvailableSpace, LayoutConstraints};
     ///
     /// let constraints = LayoutConstraints::new(
     ///     AvailableSpace::Definite(800.0),
-    ///     AvailableSpace::MaxContent,
+    ///     AvailableSpace::Definite(600.0),
     /// );
+    ///
+    /// assert!(constraints.is_width_definite());
+    /// assert!(constraints.is_height_definite());
     /// ```
-    pub fn new(width: AvailableSpace, height: AvailableSpace) -> Self {
+    pub const fn new(available_width: AvailableSpace, available_height: AvailableSpace) -> Self {
         Self {
-            available_width: width,
-            available_height: height,
-            percentage_base_width: 0.0,
-            percentage_base_height: 0.0,
+            available_width,
+            available_height,
         }
     }
 
-    /// Creates constraints with definite sizes
-    ///
-    /// This is the most common case: a containing block with explicit dimensions.
-    /// Both available space and percentage bases are set to the given sizes.
+    /// Creates constraints with definite width and height
     ///
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::{LayoutConstraints, AvailableSpace};
+    /// use fastrender::layout::LayoutConstraints;
     ///
-    /// let constraints = LayoutConstraints::with_definite_size(1024.0, 768.0);
-    /// assert_eq!(constraints.available_width, AvailableSpace::Definite(1024.0));
-    /// assert_eq!(constraints.percentage_base_width, 1024.0);
+    /// let constraints = LayoutConstraints::definite(800.0, 600.0);
+    /// assert!(constraints.is_width_definite());
+    /// assert!(constraints.is_height_definite());
     /// ```
-    pub fn with_definite_size(width: f32, height: f32) -> Self {
-        Self {
-            available_width: AvailableSpace::Definite(width),
-            available_height: AvailableSpace::Definite(height),
-            percentage_base_width: width,
-            percentage_base_height: height,
-        }
+    pub const fn definite(width: f32, height: f32) -> Self {
+        Self::new(AvailableSpace::Definite(width), AvailableSpace::Definite(height))
     }
 
-    /// Creates constraints with specified percentage bases
+    /// Creates constraints with definite width and indefinite height
     ///
-    /// Useful when available space is indefinite but percentage resolution
-    /// should still work.
-    pub fn with_percentage_bases(mut self, width: f32, height: f32) -> Self {
-        self.percentage_base_width = width;
-        self.percentage_base_height = height;
+    /// This is the most common constraint for block layout.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fastrender::layout::LayoutConstraints;
+    ///
+    /// let constraints = LayoutConstraints::definite_width(800.0);
+    /// assert!(constraints.is_width_definite());
+    /// assert!(constraints.is_height_indefinite());
+    /// ```
+    pub const fn definite_width(width: f32) -> Self {
+        Self::new(AvailableSpace::Definite(width), AvailableSpace::Indefinite)
+    }
+
+    /// Creates constraints with indefinite dimensions
+    ///
+    /// Used for sizing to content in both dimensions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fastrender::layout::LayoutConstraints;
+    ///
+    /// let constraints = LayoutConstraints::indefinite();
+    /// assert!(!constraints.is_width_definite());
+    /// assert!(!constraints.is_height_definite());
+    /// ```
+    pub const fn indefinite() -> Self {
+        Self::new(AvailableSpace::Indefinite, AvailableSpace::Indefinite)
+    }
+
+    /// Creates constraints for min-content sizing
+    ///
+    /// Used to compute the minimum size needed.
+    pub const fn min_content() -> Self {
+        Self::new(AvailableSpace::MinContent, AvailableSpace::MinContent)
+    }
+
+    /// Creates constraints for max-content sizing
+    ///
+    /// Used to compute the preferred size.
+    pub const fn max_content() -> Self {
+        Self::new(AvailableSpace::MaxContent, AvailableSpace::MaxContent)
+    }
+
+    // Modification methods (builder pattern)
+
+    /// Returns new constraints with the specified width
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fastrender::layout::{AvailableSpace, LayoutConstraints};
+    ///
+    /// let constraints = LayoutConstraints::indefinite()
+    ///     .with_width(AvailableSpace::Definite(800.0));
+    ///
+    /// assert!(constraints.is_width_definite());
+    /// ```
+    pub const fn with_width(mut self, width: AvailableSpace) -> Self {
+        self.available_width = width;
         self
+    }
+
+    /// Returns new constraints with the specified height
+    pub const fn with_height(mut self, height: AvailableSpace) -> Self {
+        self.available_height = height;
+        self
+    }
+
+    /// Shrinks the available width by the given amount
+    ///
+    /// Used for accounting for margins, padding, and borders.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fastrender::layout::{AvailableSpace, LayoutConstraints};
+    ///
+    /// let outer = LayoutConstraints::definite_width(800.0);
+    /// let inner = outer.shrink_width_by(40.0); // 20px margins on each side
+    ///
+    /// assert_eq!(inner.available_width, AvailableSpace::Definite(760.0));
+    /// ```
+    pub fn shrink_width_by(mut self, amount: f32) -> Self {
+        self.available_width = self.available_width.shrink_by(amount);
+        self
+    }
+
+    /// Shrinks the available height by the given amount
+    pub fn shrink_height_by(mut self, amount: f32) -> Self {
+        self.available_height = self.available_height.shrink_by(amount);
+        self
+    }
+
+    /// Shrinks both dimensions by the given amounts
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fastrender::layout::LayoutConstraints;
+    ///
+    /// let outer = LayoutConstraints::definite(800.0, 600.0);
+    /// let inner = outer.shrink_by(40.0, 30.0);
+    ///
+    /// // Width: 800 - 40 = 760
+    /// // Height: 600 - 30 = 570
+    /// ```
+    pub fn shrink_by(self, width: f32, height: f32) -> Self {
+        self.shrink_width_by(width).shrink_height_by(height)
+    }
+
+    // Query methods
+
+    /// Returns true if width is definite
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fastrender::layout::LayoutConstraints;
+    ///
+    /// let constraints = LayoutConstraints::definite_width(800.0);
+    /// assert!(constraints.is_width_definite());
+    /// ```
+    pub fn is_width_definite(&self) -> bool {
+        self.available_width.is_definite()
+    }
+
+    /// Returns true if height is definite
+    pub fn is_height_definite(&self) -> bool {
+        self.available_height.is_definite()
+    }
+
+    /// Returns true if width is indefinite
+    pub fn is_width_indefinite(&self) -> bool {
+        self.available_width.is_indefinite()
+    }
+
+    /// Returns true if height is indefinite
+    pub fn is_height_indefinite(&self) -> bool {
+        self.available_height.is_indefinite()
+    }
+
+    /// Returns true if both dimensions are definite
+    pub fn is_fully_definite(&self) -> bool {
+        self.is_width_definite() && self.is_height_definite()
+    }
+
+    /// Returns the definite width, if any
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fastrender::layout::LayoutConstraints;
+    ///
+    /// let constraints = LayoutConstraints::definite_width(800.0);
+    /// assert_eq!(constraints.width(), Some(800.0));
+    /// ```
+    pub fn width(&self) -> Option<f32> {
+        self.available_width.to_option()
+    }
+
+    /// Returns the definite height, if any
+    pub fn height(&self) -> Option<f32> {
+        self.available_height.to_option()
+    }
+
+    /// Clamps a size to fit within definite constraints
+    ///
+    /// If constraints are indefinite, returns the size unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fastrender::layout::LayoutConstraints;
+    /// use fastrender::geometry::Size;
+    ///
+    /// let constraints = LayoutConstraints::definite(800.0, 600.0);
+    /// let size = Size::new(1000.0, 400.0);
+    /// let clamped = constraints.clamp_size(size);
+    ///
+    /// assert_eq!(clamped.width, 800.0); // Clamped to constraint
+    /// assert_eq!(clamped.height, 400.0); // Within constraint
+    /// ```
+    pub fn clamp_size(&self, size: crate::geometry::Size) -> crate::geometry::Size {
+        let width = if let Some(max_width) = self.width() {
+            size.width.min(max_width)
+        } else {
+            size.width
+        };
+
+        let height = if let Some(max_height) = self.height() {
+            size.height.min(max_height)
+        } else {
+            size.height
+        };
+
+        crate::geometry::Size::new(width, height)
+    }
+}
+
+impl fmt::Display for LayoutConstraints {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Constraints(w: {}, h: {})",
+            self.available_width, self.available_height
+        )
+    }
+}
+
+impl Default for LayoutConstraints {
+    /// Default constraints are indefinite in both dimensions
+    fn default() -> Self {
+        Self::indefinite()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::Size;
 
+    // AvailableSpace tests
     #[test]
-    fn test_available_space_definite() {
-        let space = AvailableSpace::Definite(800.0);
-        assert!(space.is_definite());
-        assert_eq!(space.definite_value(), Some(800.0));
+    fn test_available_space_is_definite() {
+        assert!(AvailableSpace::Definite(100.0).is_definite());
+        assert!(!AvailableSpace::Indefinite.is_definite());
+        assert!(!AvailableSpace::MinContent.is_definite());
+        assert!(!AvailableSpace::MaxContent.is_definite());
     }
 
     #[test]
-    fn test_available_space_min_content() {
-        let space = AvailableSpace::MinContent;
-        assert!(!space.is_definite());
-        assert_eq!(space.definite_value(), None);
+    fn test_available_space_to_option() {
+        assert_eq!(AvailableSpace::Definite(100.0).to_option(), Some(100.0));
+        assert_eq!(AvailableSpace::Indefinite.to_option(), None);
+        assert_eq!(AvailableSpace::MinContent.to_option(), None);
     }
 
     #[test]
-    fn test_available_space_max_content() {
-        let space = AvailableSpace::MaxContent;
-        assert!(!space.is_definite());
-        assert_eq!(space.definite_value(), None);
+    fn test_available_space_or_else() {
+        assert_eq!(AvailableSpace::Definite(100.0).or_else(50.0), 100.0);
+        assert_eq!(AvailableSpace::Indefinite.or_else(50.0), 50.0);
+        assert_eq!(AvailableSpace::MinContent.or_else(50.0), 50.0);
     }
 
     #[test]
-    fn test_layout_constraints_new() {
-        let constraints = LayoutConstraints::new(AvailableSpace::Definite(800.0), AvailableSpace::MaxContent);
+    fn test_available_space_shrink_by() {
+        assert_eq!(
+            AvailableSpace::Definite(100.0).shrink_by(20.0),
+            AvailableSpace::Definite(80.0)
+        );
+        assert_eq!(AvailableSpace::Indefinite.shrink_by(20.0), AvailableSpace::Indefinite);
+    }
+
+    #[test]
+    fn test_available_space_shrink_by_negative() {
+        // Shrinking should never go below 0
+        assert_eq!(
+            AvailableSpace::Definite(10.0).shrink_by(20.0),
+            AvailableSpace::Definite(0.0)
+        );
+    }
+
+    #[test]
+    fn test_available_space_map() {
+        let space = AvailableSpace::Definite(100.0);
+        let doubled = space.map(|v| v * 2.0);
+        assert_eq!(doubled, AvailableSpace::Definite(200.0));
+
+        let indefinite = AvailableSpace::Indefinite;
+        let mapped = indefinite.map(|v| v * 2.0);
+        assert_eq!(mapped, AvailableSpace::Indefinite);
+    }
+
+    #[test]
+    fn test_available_space_clamp() {
+        assert_eq!(
+            AvailableSpace::Definite(150.0).clamp(50.0, 100.0),
+            AvailableSpace::Definite(100.0)
+        );
+        assert_eq!(
+            AvailableSpace::Definite(25.0).clamp(50.0, 100.0),
+            AvailableSpace::Definite(50.0)
+        );
+        assert_eq!(
+            AvailableSpace::Definite(75.0).clamp(50.0, 100.0),
+            AvailableSpace::Definite(75.0)
+        );
+    }
+
+    // LayoutConstraints constructor tests
+    #[test]
+    fn test_constraints_new() {
+        let constraints = LayoutConstraints::new(AvailableSpace::Definite(800.0), AvailableSpace::Indefinite);
 
         assert_eq!(constraints.available_width, AvailableSpace::Definite(800.0));
-        assert_eq!(constraints.available_height, AvailableSpace::MaxContent);
-        assert_eq!(constraints.percentage_base_width, 0.0);
-        assert_eq!(constraints.percentage_base_height, 0.0);
+        assert_eq!(constraints.available_height, AvailableSpace::Indefinite);
     }
 
     #[test]
-    fn test_layout_constraints_with_definite_size() {
-        let constraints = LayoutConstraints::with_definite_size(1024.0, 768.0);
+    fn test_constraints_definite() {
+        let constraints = LayoutConstraints::definite(800.0, 600.0);
 
-        assert_eq!(constraints.available_width, AvailableSpace::Definite(1024.0));
-        assert_eq!(constraints.available_height, AvailableSpace::Definite(768.0));
-        assert_eq!(constraints.percentage_base_width, 1024.0);
-        assert_eq!(constraints.percentage_base_height, 768.0);
+        assert!(constraints.is_width_definite());
+        assert!(constraints.is_height_definite());
+        assert_eq!(constraints.width(), Some(800.0));
+        assert_eq!(constraints.height(), Some(600.0));
     }
 
     #[test]
-    fn test_layout_constraints_with_percentage_bases() {
-        let constraints = LayoutConstraints::new(AvailableSpace::MaxContent, AvailableSpace::MaxContent)
-            .with_percentage_bases(800.0, 600.0);
+    fn test_constraints_definite_width() {
+        let constraints = LayoutConstraints::definite_width(800.0);
 
-        assert_eq!(constraints.available_width, AvailableSpace::MaxContent);
-        assert_eq!(constraints.percentage_base_width, 800.0);
+        assert!(constraints.is_width_definite());
+        assert!(constraints.is_height_indefinite());
+    }
+
+    #[test]
+    fn test_constraints_indefinite() {
+        let constraints = LayoutConstraints::indefinite();
+
+        assert!(!constraints.is_width_definite());
+        assert!(!constraints.is_height_definite());
+        assert!(constraints.is_width_indefinite());
+        assert!(constraints.is_height_indefinite());
+    }
+
+    #[test]
+    fn test_constraints_min_content() {
+        let constraints = LayoutConstraints::min_content();
+
+        assert!(constraints.available_width.is_min_content());
+        assert!(constraints.available_height.is_min_content());
+    }
+
+    #[test]
+    fn test_constraints_max_content() {
+        let constraints = LayoutConstraints::max_content();
+
+        assert!(constraints.available_width.is_max_content());
+        assert!(constraints.available_height.is_max_content());
+    }
+
+    // Builder pattern tests
+    #[test]
+    fn test_constraints_with_width() {
+        let constraints = LayoutConstraints::indefinite().with_width(AvailableSpace::Definite(800.0));
+
+        assert!(constraints.is_width_definite());
+        assert!(constraints.is_height_indefinite());
+    }
+
+    #[test]
+    fn test_constraints_with_height() {
+        let constraints = LayoutConstraints::indefinite().with_height(AvailableSpace::Definite(600.0));
+
+        assert!(constraints.is_width_indefinite());
+        assert!(constraints.is_height_definite());
+    }
+
+    // Shrinking tests
+    #[test]
+    fn test_constraints_shrink_width_by() {
+        let outer = LayoutConstraints::definite_width(800.0);
+        let inner = outer.shrink_width_by(40.0);
+
+        assert_eq!(inner.available_width, AvailableSpace::Definite(760.0));
+    }
+
+    #[test]
+    fn test_constraints_shrink_height_by() {
+        let outer = LayoutConstraints::definite(800.0, 600.0);
+        let inner = outer.shrink_height_by(30.0);
+
+        assert_eq!(inner.available_height, AvailableSpace::Definite(570.0));
+    }
+
+    #[test]
+    fn test_constraints_shrink_by() {
+        let outer = LayoutConstraints::definite(800.0, 600.0);
+        let inner = outer.shrink_by(40.0, 30.0);
+
+        assert_eq!(inner.available_width, AvailableSpace::Definite(760.0));
+        assert_eq!(inner.available_height, AvailableSpace::Definite(570.0));
+    }
+
+    #[test]
+    fn test_constraints_shrink_indefinite() {
+        let outer = LayoutConstraints::indefinite();
+        let inner = outer.shrink_by(40.0, 30.0);
+
+        // Shrinking indefinite should remain indefinite
+        assert!(inner.is_width_indefinite());
+        assert!(inner.is_height_indefinite());
+    }
+
+    // Query tests
+    #[test]
+    fn test_is_fully_definite() {
+        assert!(LayoutConstraints::definite(800.0, 600.0).is_fully_definite());
+        assert!(!LayoutConstraints::definite_width(800.0).is_fully_definite());
+        assert!(!LayoutConstraints::indefinite().is_fully_definite());
+    }
+
+    // clamp_size tests
+    #[test]
+    fn test_clamp_size_within_bounds() {
+        let constraints = LayoutConstraints::definite(800.0, 600.0);
+        let size = Size::new(400.0, 300.0);
+        let clamped = constraints.clamp_size(size);
+
+        assert_eq!(clamped.width, 400.0);
+        assert_eq!(clamped.height, 300.0);
+    }
+
+    #[test]
+    fn test_clamp_size_exceeds_width() {
+        let constraints = LayoutConstraints::definite(800.0, 600.0);
+        let size = Size::new(1000.0, 300.0);
+        let clamped = constraints.clamp_size(size);
+
+        assert_eq!(clamped.width, 800.0);
+        assert_eq!(clamped.height, 300.0);
+    }
+
+    #[test]
+    fn test_clamp_size_exceeds_height() {
+        let constraints = LayoutConstraints::definite(800.0, 600.0);
+        let size = Size::new(400.0, 800.0);
+        let clamped = constraints.clamp_size(size);
+
+        assert_eq!(clamped.width, 400.0);
+        assert_eq!(clamped.height, 600.0);
+    }
+
+    #[test]
+    fn test_clamp_size_indefinite() {
+        let constraints = LayoutConstraints::indefinite();
+        let size = Size::new(1000.0, 800.0);
+        let clamped = constraints.clamp_size(size);
+
+        // No clamping for indefinite
+        assert_eq!(clamped.width, 1000.0);
+        assert_eq!(clamped.height, 800.0);
+    }
+
+    #[test]
+    fn test_clamp_size_partial_definite() {
+        let constraints = LayoutConstraints::definite_width(800.0);
+        let size = Size::new(1000.0, 800.0);
+        let clamped = constraints.clamp_size(size);
+
+        assert_eq!(clamped.width, 800.0); // Clamped
+        assert_eq!(clamped.height, 800.0); // Not clamped
+    }
+
+    // Display tests
+    #[test]
+    fn test_available_space_display() {
+        assert_eq!(format!("{}", AvailableSpace::Definite(100.0)), "100px");
+        assert_eq!(format!("{}", AvailableSpace::Indefinite), "auto");
+        assert_eq!(format!("{}", AvailableSpace::MinContent), "min-content");
+        assert_eq!(format!("{}", AvailableSpace::MaxContent), "max-content");
+    }
+
+    #[test]
+    fn test_constraints_display() {
+        let constraints = LayoutConstraints::definite_width(800.0);
+        let display = format!("{}", constraints);
+        assert!(display.contains("800px"));
+        assert!(display.contains("auto"));
+    }
+
+    // Default test
+    #[test]
+    fn test_constraints_default() {
+        let constraints = LayoutConstraints::default();
+        assert!(constraints.is_width_indefinite());
+        assert!(constraints.is_height_indefinite());
     }
 }
