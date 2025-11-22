@@ -238,7 +238,6 @@ impl DebugInfo {
             "#unknown".to_string()
         }
     }
-
 }
 
 // Note: DebugInfo::text() uses the module-level truncate() function below

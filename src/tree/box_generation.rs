@@ -8,6 +8,7 @@
 
 use crate::geometry::Size;
 use crate::style::display::{Display, FormattingContextType};
+use crate::tree::anonymous::AnonymousBoxCreator;
 use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, ComputedStyle, DebugInfo, ReplacedType};
 use std::sync::Arc;
 
@@ -362,7 +363,43 @@ impl BoxGenerator {
         // Generate box for root
         let root_box = self.generate_box_for_element(dom_root)?;
 
-        Ok(BoxTree::new(root_box))
+        // Apply anonymous box fixup if enabled
+        let final_root = if self.config.insert_anonymous_boxes {
+            AnonymousBoxCreator::fixup_tree(root_box)
+        } else {
+            root_box
+        };
+
+        Ok(BoxTree::new(final_root))
+    }
+
+    /// Generates a box tree with anonymous box fixup
+    ///
+    /// This is a convenience method that generates the box tree with
+    /// anonymous box insertion enabled, regardless of the config setting.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - Root element has `display: none`
+    /// - Root element has `display: contents`
+    pub fn generate_with_anonymous_fixup(&self, dom_root: &DOMNode) -> Result<BoxTree, BoxGenerationError> {
+        // Root must generate a box
+        if self.should_skip_element(dom_root) {
+            return Err(BoxGenerationError::RootDisplayNone);
+        }
+
+        if self.is_display_contents(dom_root) {
+            return Err(BoxGenerationError::RootDisplayContents);
+        }
+
+        // Generate box for root
+        let root_box = self.generate_box_for_element(dom_root)?;
+
+        // Always apply anonymous box fixup
+        let fixed_root = AnonymousBoxCreator::fixup_tree(root_box);
+
+        Ok(BoxTree::new(fixed_root))
     }
 
     /// Generates a box for a single DOM node (element or text)
@@ -504,10 +541,8 @@ impl BoxGenerator {
             child_boxes.push(child_box);
         }
 
-        // Future (Wave 3): Insert anonymous boxes here
-        // if self.config.insert_anonymous_boxes {
-        //     child_boxes = self.insert_anonymous_boxes(child_boxes);
-        // }
+        // Note: Anonymous box fixup is now done as a post-processing step
+        // after the entire tree is generated. See AnonymousBoxCreator::fixup_tree()
 
         Ok(child_boxes)
     }

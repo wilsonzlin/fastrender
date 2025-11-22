@@ -20,6 +20,7 @@
 //! - Blocks split across columns or pages
 
 // Module declarations
+pub mod anonymous;
 pub mod box_generation;
 pub mod box_tree;
 pub mod debug;
@@ -36,6 +37,9 @@ pub use debug::{DebugInfo, TreePrinter};
 
 // Re-exports from fragment_tree
 pub use fragment_tree::{FragmentContent, FragmentIterator, FragmentNode, FragmentTree};
+
+// Re-exports from anonymous
+pub use anonymous::AnonymousBoxCreator;
 
 // Re-exports from box_generation
 pub use box_generation::{BoxGenerationConfig, BoxGenerationError, BoxGenerator, DOMNode};

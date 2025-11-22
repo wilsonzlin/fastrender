@@ -395,11 +395,7 @@ impl LayoutEngine {
     ///     IntrinsicSizingMode::MinContent,
     /// ).unwrap();
     /// ```
-    pub fn compute_intrinsic_size(
-        &self,
-        box_node: &BoxNode,
-        mode: IntrinsicSizingMode,
-    ) -> Result<f32, LayoutError> {
+    pub fn compute_intrinsic_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
         let fc_type = box_node
             .formatting_context()
             .ok_or_else(|| LayoutError::MissingContext("Box does not establish a formatting context".to_string()))?;
@@ -622,7 +618,9 @@ mod tests {
         let engine = LayoutEngine::with_defaults();
         let box_node = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
 
-        let size = engine.compute_intrinsic_size(&box_node, IntrinsicSizingMode::MinContent).unwrap();
+        let size = engine
+            .compute_intrinsic_size(&box_node, IntrinsicSizingMode::MinContent)
+            .unwrap();
         // Stub returns 100.0
         assert_eq!(size, 100.0);
     }
@@ -632,7 +630,9 @@ mod tests {
         let engine = LayoutEngine::with_defaults();
         let box_node = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
 
-        let size = engine.compute_intrinsic_size(&box_node, IntrinsicSizingMode::MaxContent).unwrap();
+        let size = engine
+            .compute_intrinsic_size(&box_node, IntrinsicSizingMode::MaxContent)
+            .unwrap();
         assert_eq!(size, 100.0);
     }
 
