@@ -26,6 +26,7 @@
 //! # Module Organization
 //!
 //! This module will contain:
+//! - `constraints.rs` - Layout constraints and available space
 //! - `block.rs` - Block layout algorithm
 //! - `inline.rs` - Inline layout and line breaking
 //! - `flex.rs` - Flexbox integration with Taffy
@@ -47,7 +48,8 @@
 //! let fragment_tree = ctx.layout(&box_tree_root);
 //! ```
 
-// Module declarations will be added in Wave 2+
+// Module declarations (Wave 2+)
+pub mod constraints;
 // pub mod block;
 // pub mod inline;
 // pub mod flex;
@@ -55,6 +57,9 @@
 // pub mod table;
 // pub mod positioned;
 // pub mod context;
+
+// Re-exports
+pub use constraints::{AvailableSpace, LayoutConstraints};
 
 // Temporary re-export of V1 implementation for compatibility
 // This will be removed as Wave 2+ tasks are completed
