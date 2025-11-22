@@ -335,6 +335,9 @@ pub use geometry::{EdgeOffsets, Point, Rect, Size};
 // Renderer (main entry point)
 pub use renderer::{ImageFormat, RenderOptions, Renderer};
 
+// Tree types from Wave 2 tasks
+pub use tree::{BoxNode, BoxTree, BoxType, FormattingContextType};
+
 // Style types from Wave 1 tasks
 pub use style::color::{ColorParseError, Hsla, Rgba};
 pub use style::display::{Display, DisplayParseError};
