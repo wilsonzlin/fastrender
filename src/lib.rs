@@ -287,6 +287,12 @@ pub mod geometry;
 pub mod tree;
 
 // ============================================================================
+// Debug Tools
+// ============================================================================
+
+pub mod debug;
+
+// ============================================================================
 // Style System
 // ============================================================================
 
@@ -337,6 +343,9 @@ pub use renderer::{ImageFormat, RenderOptions, Renderer};
 
 // Tree types from Wave 2 tasks
 pub use tree::{BoxNode, BoxTree, BoxType, FormattingContextType};
+
+// Debug tools from Wave 2
+pub use debug::{ColorMode, DiffMode, DotExporter, EnhancedTreePrinter, PrintConfig, TreeDiff};
 
 // Style types from Wave 1 tasks
 pub use style::color::{ColorParseError, Hsla, Rgba};
