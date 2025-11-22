@@ -65,12 +65,14 @@ pub use contexts::FormattingContextFactory;
 pub use engine::{LayoutConfig, LayoutEngine, LayoutStats};
 pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 
+// W3.T06 - Table layout algorithm
+pub mod table;
+
 // Future modules (to be implemented in Wave 3+):
 // pub mod block;        // W3.T04
 // pub mod inline;       // W4.T12
 // pub mod flex;         // W3.T08
 // pub mod grid;         // W3.T09
-// pub mod table;        // W3.T06
 // pub mod positioned;   // W3.T12
 
 // Temporary re-export of V1 implementation for compatibility
