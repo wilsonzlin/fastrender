@@ -65,7 +65,9 @@ pub mod float_context;
 
 // Re-exports
 pub use constraints::{AvailableSpace, LayoutConstraints};
-pub use contexts::{FormattingContextFactory, GridFormattingContext};
+pub use contexts::{
+    ContainingBlock, FormattingContextFactory, GridFormattingContext, PositionedLayout, StickyConstraints,
+};
 pub use engine::{LayoutConfig, LayoutEngine, LayoutStats};
 pub use float_context::{FloatContext, FloatInfo, FloatSide};
 pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
