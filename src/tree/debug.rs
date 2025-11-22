@@ -117,7 +117,7 @@ impl DebugInfo {
     /// ```
     pub fn text(content: &str) -> Self {
         Self {
-            tag_name: Some(format!("#text({})", Self::truncate(content, 20))),
+            tag_name: Some(format!("#text({})", truncate(content, 20))),
             id: None,
             classes: Vec::new(),
             dom_path: None,
@@ -239,15 +239,9 @@ impl DebugInfo {
         }
     }
 
-    /// Truncates a string to a maximum length
-    fn truncate(s: &str, max_len: usize) -> String {
-        if s.len() <= max_len {
-            s.to_string()
-        } else {
-            format!("{}...", &s[..max_len])
-        }
-    }
 }
+
+// Note: DebugInfo::text() uses the module-level truncate() function below
 
 impl fmt::Display for DebugInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

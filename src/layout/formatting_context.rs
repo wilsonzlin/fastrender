@@ -225,7 +225,7 @@ impl std::error::Error for LayoutError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::{Point, Rect, Size};
+    use crate::geometry::Rect;
     use crate::layout::AvailableSpace;
     use crate::tree::box_tree::ComputedStyle;
     use crate::tree::FormattingContextType;
