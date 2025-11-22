@@ -61,7 +61,7 @@ pub mod formatting_context;
 
 // Re-exports
 pub use constraints::{AvailableSpace, LayoutConstraints};
-pub use contexts::FormattingContextType;
+pub use contexts::{FormattingContextFactory, FormattingContextType};
 pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 
 // Future modules (to be implemented in Wave 3+):
