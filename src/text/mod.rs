@@ -26,24 +26,35 @@
 //!
 //! # Module Organization
 //!
-//! - `font_db` - Font database and discovery
+//! - `font_db` - Font database, discovery, and loading
 //! - `font_loader` - High-level font context
-//! - `shaper` - Text shaping integration (future)
-//! - `bidi` - Bidirectional text handling (future)
-//! - `linebreak` - Line breaking algorithm (future)
+//! - `font_fallback` - Per-character font fallback chain
+//! - Future: `shaper` - Text shaping integration
+//! - Future: `bidi` - Bidirectional text handling
+//! - Future: `linebreak` - Line breaking algorithm
 //!
 //! # Example
 //!
 //! ```rust,ignore
-//! use fastrender::text::{FontContext, FontWeight, FontStyle};
+//! use fastrender::text::{FontContext, FallbackChain, GenericFamily};
 //!
 //! // Create font context (loads system fonts)
 //! let ctx = FontContext::new();
 //!
-//! // Get a font
+//! // Get a font by family list
 //! let families = vec!["Arial".to_string(), "sans-serif".to_string()];
 //! if let Some(font) = ctx.get_font(&families, 400, false, false) {
-//!     println!("Using font: {} ({} bytes)", font.family, font.data.len());
+//!     println!("Using font: {}", font.family);
+//! }
+//!
+//! // Or use fallback chain for per-character resolution
+//! let db = FontDatabase::new();
+//! let chain = FallbackChain::new()
+//!     .add_family("Roboto")
+//!     .add_generic(GenericFamily::SansSerif);
+//!
+//! if let Some(font_id) = chain.resolve('A', &db) {
+//!     println!("Found font for 'A'");
 //! }
 //! ```
 
@@ -52,13 +63,14 @@
 // ============================================================================
 
 pub mod font_db;
+pub mod font_fallback;
 pub mod font_loader;
 
 // Re-export primary types for convenience
 pub use font_db::{
-    FontDatabase, FontMetrics, FontStretch, FontStyle, FontWeight, GenericFamily, LoadedFont,
-    ScaledMetrics,
+    FontDatabase, FontMetrics, FontStretch, FontStyle, FontWeight, GenericFamily, LoadedFont, ScaledMetrics,
 };
+pub use font_fallback::{FallbackChain, FallbackChainBuilder, FamilyEntry, FontId};
 pub use font_loader::FontContext;
 
 // ============================================================================
