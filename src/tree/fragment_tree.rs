@@ -23,7 +23,7 @@
 //! # Usage
 //!
 //! ```
-//! use fastrender::tree::FragmentNode;
+//! use fastrender::tree::{FragmentNode, FragmentContent};
 //! use fastrender::geometry::{Rect, Point, Size};
 //!
 //! let fragment = FragmentNode::new_block(
@@ -31,14 +31,13 @@
 //!     vec![],
 //! );
 //!
-//! assert_eq!(fragment.bounds().x(), 10.0);
+//! assert_eq!(fragment.bounds.x(), 10.0);
 //! assert!(fragment.contains_point(Point::new(50.0, 30.0)));
 //! ```
 
 use crate::geometry::{Point, Rect, Size};
-use crate::tree::box_tree::ComputedStyle;
+use crate::tree::box_tree::ReplacedType;
 use std::fmt;
-use std::sync::Arc;
 
 /// Content type of a fragment
 ///
@@ -104,35 +103,7 @@ pub enum FragmentContent {
     },
 }
 
-/// Types of replaced content
-///
-/// Mirrors the ReplacedType from box_tree but in fragment context
-#[derive(Debug, Clone)]
-pub enum ReplacedType {
-    /// Image
-    Image {
-        /// Image source URL or data
-        src: String,
-    },
-
-    /// Canvas element
-    Canvas {
-        /// Canvas ID for looking up rendered content
-        canvas_id: String,
-    },
-
-    /// Video element
-    Video {
-        /// Video source URL
-        src: String,
-    },
-
-    /// SVG content
-    Svg {
-        /// SVG data
-        content: String,
-    },
-}
+// ReplacedType is imported from box_tree to avoid duplication
 
 impl FragmentContent {
     /// Returns true if this is a block fragment
@@ -176,7 +147,7 @@ impl FragmentContent {
 /// # Examples
 ///
 /// ```
-/// use fastrender::tree::FragmentNode;
+/// use fastrender::tree::{FragmentNode, FragmentContent};
 /// use fastrender::geometry::Rect;
 ///
 /// let fragment = FragmentNode::new_block(
@@ -184,8 +155,8 @@ impl FragmentContent {
 ///     vec![],
 /// );
 ///
-/// assert_eq!(fragment.bounds().width(), 100.0);
-/// assert!(fragment.content().is_block());
+/// assert_eq!(fragment.bounds.width(), 100.0);
+/// assert!(fragment.content.is_block());
 /// ```
 #[derive(Debug, Clone)]
 pub struct FragmentNode {
@@ -193,20 +164,17 @@ pub struct FragmentNode {
     ///
     /// This is the final computed position and size after layout.
     /// All coordinates are in the coordinate space of the containing fragment.
-    bounds: Rect,
+    pub bounds: Rect,
 
     /// The content type of this fragment
-    content: FragmentContent,
-
-    /// Style information (shared with BoxNode)
-    style: Arc<ComputedStyle>,
+    pub content: FragmentContent,
 
     /// Child fragments
     ///
     /// For block fragments: block and line children
     /// For line fragments: inline and text children
     /// For inline/text/replaced: typically empty
-    children: Vec<FragmentNode>,
+    pub children: Vec<FragmentNode>,
 }
 
 impl FragmentNode {
@@ -215,23 +183,19 @@ impl FragmentNode {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// use fastrender::tree::{FragmentNode, fragment_tree::FragmentContent};
-    /// use fastrender::tree::box_tree::ComputedStyle;
+    /// use fastrender::tree::{FragmentNode, FragmentContent};
     /// use fastrender::geometry::Rect;
     ///
     /// let bounds = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
     /// let content = FragmentContent::Block { box_id: None };
-    /// let style = Arc::new(ComputedStyle::default());
-    /// let fragment = FragmentNode::new(bounds, content, style, vec![]);
+    /// let fragment = FragmentNode::new(bounds, content, vec![]);
     ///
-    /// assert_eq!(fragment.bounds().x(), 10.0);
+    /// assert_eq!(fragment.bounds.x(), 10.0);
     /// ```
-    pub fn new(bounds: Rect, content: FragmentContent, style: Arc<ComputedStyle>, children: Vec<FragmentNode>) -> Self {
+    pub fn new(bounds: Rect, content: FragmentContent, children: Vec<FragmentNode>) -> Self {
         Self {
             bounds,
             content,
-            style,
             children,
         }
     }
@@ -241,48 +205,33 @@ impl FragmentNode {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::Arc;
     /// use fastrender::tree::FragmentNode;
-    /// use fastrender::tree::box_tree::ComputedStyle;
     /// use fastrender::geometry::Rect;
     ///
-    /// let style = Arc::new(ComputedStyle::default());
     /// let fragment = FragmentNode::new_block(
     ///     Rect::from_xywh(0.0, 0.0, 200.0, 100.0),
-    ///     style,
     ///     vec![],
     /// );
     ///
-    /// assert!(fragment.content().is_block());
+    /// assert!(fragment.content.is_block());
     /// ```
-    pub fn new_block(bounds: Rect, style: Arc<ComputedStyle>, children: Vec<FragmentNode>) -> Self {
-        Self::new(bounds, FragmentContent::Block { box_id: None }, style, children)
+    pub fn new_block(bounds: Rect, children: Vec<FragmentNode>) -> Self {
+        Self::new(bounds, FragmentContent::Block { box_id: None }, children)
     }
 
     /// Creates a new block fragment with a box ID
-    pub fn new_block_with_id(
-        bounds: Rect,
-        box_id: usize,
-        style: Arc<ComputedStyle>,
-        children: Vec<FragmentNode>,
-    ) -> Self {
-        Self::new(bounds, FragmentContent::Block { box_id: Some(box_id) }, style, children)
+    pub fn new_block_with_id(bounds: Rect, box_id: usize, children: Vec<FragmentNode>) -> Self {
+        Self::new(bounds, FragmentContent::Block { box_id: Some(box_id) }, children)
     }
 
     /// Creates a new inline fragment
-    pub fn new_inline(
-        bounds: Rect,
-        fragment_index: usize,
-        style: Arc<ComputedStyle>,
-        children: Vec<FragmentNode>,
-    ) -> Self {
+    pub fn new_inline(bounds: Rect, fragment_index: usize, children: Vec<FragmentNode>) -> Self {
         Self::new(
             bounds,
             FragmentContent::Inline {
                 box_id: None,
                 fragment_index,
             },
-            style,
             children,
         )
     }
@@ -292,23 +241,19 @@ impl FragmentNode {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::Arc;
     /// use fastrender::tree::FragmentNode;
-    /// use fastrender::tree::box_tree::ComputedStyle;
     /// use fastrender::geometry::Rect;
     ///
-    /// let style = Arc::new(ComputedStyle::default());
     /// let fragment = FragmentNode::new_text(
     ///     Rect::from_xywh(0.0, 0.0, 50.0, 20.0),
     ///     "Hello".to_string(),
-    ///     style,
     ///     16.0, // baseline offset
     /// );
     ///
-    /// assert!(fragment.content().is_text());
-    /// assert_eq!(fragment.content().text(), Some("Hello"));
+    /// assert!(fragment.content.is_text());
+    /// assert_eq!(fragment.content.text(), Some("Hello"));
     /// ```
-    pub fn new_text(bounds: Rect, text: String, style: Arc<ComputedStyle>, baseline_offset: f32) -> Self {
+    pub fn new_text(bounds: Rect, text: String, baseline_offset: f32) -> Self {
         Self::new(
             bounds,
             FragmentContent::Text {
@@ -316,42 +261,25 @@ impl FragmentNode {
                 box_id: None,
                 baseline_offset,
             },
-            style,
             vec![],
         )
     }
 
     /// Creates a new line fragment
-    pub fn new_line(bounds: Rect, baseline: f32, style: Arc<ComputedStyle>, children: Vec<FragmentNode>) -> Self {
-        Self::new(bounds, FragmentContent::Line { baseline }, style, children)
+    pub fn new_line(bounds: Rect, baseline: f32, children: Vec<FragmentNode>) -> Self {
+        Self::new(bounds, FragmentContent::Line { baseline }, children)
     }
 
     /// Creates a new replaced element fragment
-    pub fn new_replaced(bounds: Rect, replaced_type: ReplacedType, style: Arc<ComputedStyle>) -> Self {
+    pub fn new_replaced(bounds: Rect, replaced_type: ReplacedType) -> Self {
         Self::new(
             bounds,
             FragmentContent::Replaced {
                 replaced_type,
                 box_id: None,
             },
-            style,
             vec![],
         )
-    }
-
-    /// Returns the bounds of this fragment
-    pub fn bounds(&self) -> Rect {
-        self.bounds
-    }
-
-    /// Returns the content of this fragment
-    pub fn content(&self) -> &FragmentContent {
-        &self.content
-    }
-
-    /// Returns the style of this fragment
-    pub fn style(&self) -> &Arc<ComputedStyle> {
-        &self.style
     }
 
     /// Returns the number of children
@@ -372,25 +300,19 @@ impl FragmentNode {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::Arc;
     /// use fastrender::tree::FragmentNode;
-    /// use fastrender::tree::box_tree::ComputedStyle;
     /// use fastrender::geometry::Rect;
     ///
-    /// let style = Arc::new(ComputedStyle::default());
     /// let child1 = FragmentNode::new_block(
     ///     Rect::from_xywh(0.0, 0.0, 50.0, 50.0),
-    ///     style.clone(),
     ///     vec![],
     /// );
     /// let child2 = FragmentNode::new_block(
     ///     Rect::from_xywh(60.0, 0.0, 50.0, 50.0),
-    ///     style.clone(),
     ///     vec![],
     /// );
     /// let parent = FragmentNode::new_block(
     ///     Rect::from_xywh(0.0, 0.0, 200.0, 100.0),
-    ///     style,
     ///     vec![child1, child2],
     /// );
     ///
@@ -420,27 +342,22 @@ impl FragmentNode {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::Arc;
     /// use fastrender::tree::FragmentNode;
-    /// use fastrender::tree::box_tree::ComputedStyle;
     /// use fastrender::geometry::{Rect, Point};
     ///
-    /// let style = Arc::new(ComputedStyle::default());
     /// let fragment = FragmentNode::new_block(
     ///     Rect::from_xywh(10.0, 20.0, 100.0, 50.0),
-    ///     style,
     ///     vec![],
     /// );
     ///
     /// let translated = fragment.translate(Point::new(5.0, 10.0));
-    /// assert_eq!(translated.bounds().x(), 15.0);
-    /// assert_eq!(translated.bounds().y(), 30.0);
+    /// assert_eq!(translated.bounds.x(), 15.0);
+    /// assert_eq!(translated.bounds.y(), 30.0);
     /// ```
     pub fn translate(&self, offset: Point) -> Self {
         Self {
             bounds: self.bounds.translate(offset),
             content: self.content.clone(),
-            style: self.style.clone(),
             children: self.children.iter().map(|child| child.translate(offset)).collect(),
         }
     }
@@ -452,15 +369,11 @@ impl FragmentNode {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::Arc;
     /// use fastrender::tree::FragmentNode;
-    /// use fastrender::tree::box_tree::ComputedStyle;
     /// use fastrender::geometry::{Rect, Point};
     ///
-    /// let style = Arc::new(ComputedStyle::default());
     /// let fragment = FragmentNode::new_block(
     ///     Rect::from_xywh(10.0, 10.0, 100.0, 100.0),
-    ///     style,
     ///     vec![],
     /// );
     ///
@@ -479,20 +392,15 @@ impl FragmentNode {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::Arc;
     /// use fastrender::tree::FragmentNode;
-    /// use fastrender::tree::box_tree::ComputedStyle;
     /// use fastrender::geometry::{Rect, Point};
     ///
-    /// let style = Arc::new(ComputedStyle::default());
     /// let child = FragmentNode::new_block(
     ///     Rect::from_xywh(20.0, 20.0, 30.0, 30.0),
-    ///     style.clone(),
     ///     vec![],
     /// );
     /// let parent = FragmentNode::new_block(
     ///     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-    ///     style,
     ///     vec![child],
     /// );
     ///
@@ -521,25 +429,19 @@ impl FragmentNode {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::Arc;
     /// use fastrender::tree::FragmentNode;
-    /// use fastrender::tree::box_tree::ComputedStyle;
     /// use fastrender::geometry::Rect;
     ///
-    /// let style = Arc::new(ComputedStyle::default());
     /// let child1 = FragmentNode::new_block(
     ///     Rect::from_xywh(0.0, 0.0, 50.0, 50.0),
-    ///     style.clone(),
     ///     vec![],
     /// );
     /// let child2 = FragmentNode::new_block(
     ///     Rect::from_xywh(0.0, 50.0, 50.0, 50.0),
-    ///     style.clone(),
     ///     vec![],
     /// );
     /// let parent = FragmentNode::new_block(
     ///     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-    ///     style,
     ///     vec![child1, child2],
     /// );
     ///
@@ -584,15 +486,11 @@ impl<'a> Iterator for FragmentIterator<'a> {
 /// # Examples
 ///
 /// ```
-/// use std::sync::Arc;
 /// use fastrender::tree::{FragmentTree, FragmentNode};
-/// use fastrender::tree::box_tree::ComputedStyle;
 /// use fastrender::geometry::Rect;
 ///
-/// let style = Arc::new(ComputedStyle::default());
 /// let root = FragmentNode::new_block(
 ///     Rect::from_xywh(0.0, 0.0, 800.0, 600.0),
-///     style,
 ///     vec![],
 /// );
 /// let tree = FragmentTree::new(root);
@@ -643,85 +541,59 @@ impl fmt::Display for FragmentTree {
     }
 }
 
-/// Alias for consistency with task description
-pub type Fragment = FragmentNode;
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn default_style() -> Arc<ComputedStyle> {
-        Arc::new(ComputedStyle::default())
-    }
-
     // Constructor tests
     #[test]
     fn test_new_block_fragment() {
-        let fragment = FragmentNode::new_block(Rect::from_xywh(10.0, 20.0, 100.0, 50.0), default_style(), vec![]);
+        let fragment = FragmentNode::new_block(Rect::from_xywh(10.0, 20.0, 100.0, 50.0), vec![]);
 
-        assert_eq!(fragment.bounds().x(), 10.0);
-        assert_eq!(fragment.bounds().y(), 20.0);
-        assert!(fragment.content().is_block());
+        assert_eq!(fragment.bounds.x(), 10.0);
+        assert_eq!(fragment.bounds.y(), 20.0);
+        assert!(fragment.content.is_block());
         assert_eq!(fragment.child_count(), 0);
     }
 
     #[test]
     fn test_new_text_fragment() {
-        let fragment = FragmentNode::new_text(
-            Rect::from_xywh(0.0, 0.0, 50.0, 20.0),
-            "Hello World".to_string(),
-            default_style(),
-            16.0,
-        );
+        let fragment = FragmentNode::new_text(Rect::from_xywh(0.0, 0.0, 50.0, 20.0), "Hello World".to_string(), 16.0);
 
-        assert!(fragment.content().is_text());
-        assert_eq!(fragment.content().text(), Some("Hello World"));
+        assert!(fragment.content.is_text());
+        assert_eq!(fragment.content.text(), Some("Hello World"));
     }
 
     #[test]
     fn test_new_inline_fragment() {
-        let fragment = FragmentNode::new_inline(Rect::from_xywh(0.0, 0.0, 100.0, 20.0), 0, default_style(), vec![]);
+        let fragment = FragmentNode::new_inline(Rect::from_xywh(0.0, 0.0, 100.0, 20.0), 0, vec![]);
 
-        assert!(fragment.content().is_inline());
+        assert!(fragment.content.is_inline());
     }
 
     #[test]
     fn test_new_line_fragment() {
-        let text = FragmentNode::new_text(
-            Rect::from_xywh(0.0, 0.0, 50.0, 20.0),
-            "Text".to_string(),
-            default_style(),
-            16.0,
-        );
-        let line = FragmentNode::new_line(
-            Rect::from_xywh(0.0, 0.0, 200.0, 20.0),
-            16.0,
-            default_style(),
-            vec![text],
-        );
+        let text = FragmentNode::new_text(Rect::from_xywh(0.0, 0.0, 50.0, 20.0), "Text".to_string(), 16.0);
+        let line = FragmentNode::new_line(Rect::from_xywh(0.0, 0.0, 200.0, 20.0), 16.0, vec![text]);
 
-        assert!(line.content().is_line());
+        assert!(line.content.is_line());
         assert_eq!(line.child_count(), 1);
     }
 
     // Bounding box tests
     #[test]
     fn test_bounding_box_single() {
-        let fragment = FragmentNode::new_block(Rect::from_xywh(10.0, 20.0, 100.0, 50.0), default_style(), vec![]);
+        let fragment = FragmentNode::new_block(Rect::from_xywh(10.0, 20.0, 100.0, 50.0), vec![]);
 
         let bbox = fragment.bounding_box();
-        assert_eq!(bbox, fragment.bounds());
+        assert_eq!(bbox, fragment.bounds);
     }
 
     #[test]
     fn test_bounding_box_with_children() {
-        let child1 = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), default_style(), vec![]);
-        let child2 = FragmentNode::new_block(Rect::from_xywh(60.0, 0.0, 50.0, 50.0), default_style(), vec![]);
-        let parent = FragmentNode::new_block(
-            Rect::from_xywh(0.0, 0.0, 200.0, 100.0),
-            default_style(),
-            vec![child1, child2],
-        );
+        let child1 = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), vec![]);
+        let child2 = FragmentNode::new_block(Rect::from_xywh(60.0, 0.0, 50.0, 50.0), vec![]);
+        let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 200.0, 100.0), vec![child1, child2]);
 
         let bbox = parent.bounding_box();
         assert_eq!(bbox.min_x(), 0.0);
@@ -732,13 +604,9 @@ mod tests {
 
     #[test]
     fn test_bounding_box_nested() {
-        let grandchild = FragmentNode::new_block(Rect::from_xywh(150.0, 150.0, 50.0, 50.0), default_style(), vec![]);
-        let child = FragmentNode::new_block(
-            Rect::from_xywh(50.0, 50.0, 100.0, 100.0),
-            default_style(),
-            vec![grandchild],
-        );
-        let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 200.0, 200.0), default_style(), vec![child]);
+        let grandchild = FragmentNode::new_block(Rect::from_xywh(150.0, 150.0, 50.0, 50.0), vec![]);
+        let child = FragmentNode::new_block(Rect::from_xywh(50.0, 50.0, 100.0, 100.0), vec![grandchild]);
+        let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 200.0, 200.0), vec![child]);
 
         let bbox = parent.bounding_box();
         // Should include grandchild at (150, 150) with size (50, 50)
@@ -750,30 +618,30 @@ mod tests {
     // Translation tests
     #[test]
     fn test_translate_single() {
-        let fragment = FragmentNode::new_block(Rect::from_xywh(10.0, 20.0, 100.0, 50.0), default_style(), vec![]);
+        let fragment = FragmentNode::new_block(Rect::from_xywh(10.0, 20.0, 100.0, 50.0), vec![]);
 
         let translated = fragment.translate(Point::new(5.0, 10.0));
-        assert_eq!(translated.bounds().x(), 15.0);
-        assert_eq!(translated.bounds().y(), 30.0);
-        assert_eq!(translated.bounds().width(), 100.0);
+        assert_eq!(translated.bounds.x(), 15.0);
+        assert_eq!(translated.bounds.y(), 30.0);
+        assert_eq!(translated.bounds.width(), 100.0);
     }
 
     #[test]
     fn test_translate_with_children() {
-        let child = FragmentNode::new_block(Rect::from_xywh(10.0, 10.0, 30.0, 30.0), default_style(), vec![]);
-        let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), default_style(), vec![child]);
+        let child = FragmentNode::new_block(Rect::from_xywh(10.0, 10.0, 30.0, 30.0), vec![]);
+        let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![child]);
 
         let translated = parent.translate(Point::new(50.0, 50.0));
-        assert_eq!(translated.bounds().x(), 50.0);
-        assert_eq!(translated.bounds().y(), 50.0);
-        assert_eq!(translated.children().next().unwrap().bounds().x(), 60.0);
-        assert_eq!(translated.children().next().unwrap().bounds().y(), 60.0);
+        assert_eq!(translated.bounds.x(), 50.0);
+        assert_eq!(translated.bounds.y(), 50.0);
+        assert_eq!(translated.children[0].bounds.x(), 60.0);
+        assert_eq!(translated.children[0].bounds.y(), 60.0);
     }
 
     // Hit testing tests
     #[test]
     fn test_contains_point() {
-        let fragment = FragmentNode::new_block(Rect::from_xywh(10.0, 10.0, 100.0, 100.0), default_style(), vec![]);
+        let fragment = FragmentNode::new_block(Rect::from_xywh(10.0, 10.0, 100.0, 100.0), vec![]);
 
         assert!(fragment.contains_point(Point::new(50.0, 50.0)));
         assert!(fragment.contains_point(Point::new(10.0, 10.0))); // Boundary
@@ -784,7 +652,7 @@ mod tests {
 
     #[test]
     fn test_fragments_at_point_single() {
-        let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), default_style(), vec![]);
+        let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![]);
 
         let hits = fragment.fragments_at_point(Point::new(50.0, 50.0));
         assert_eq!(hits.len(), 1);
@@ -792,8 +660,8 @@ mod tests {
 
     #[test]
     fn test_fragments_at_point_with_children() {
-        let child = FragmentNode::new_block(Rect::from_xywh(20.0, 20.0, 30.0, 30.0), default_style(), vec![]);
-        let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), default_style(), vec![child]);
+        let child = FragmentNode::new_block(Rect::from_xywh(20.0, 20.0, 30.0, 30.0), vec![]);
+        let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![child]);
 
         // Point in child
         let hits = parent.fragments_at_point(Point::new(25.0, 25.0));
@@ -806,13 +674,9 @@ mod tests {
 
     #[test]
     fn test_fragments_at_point_overlapping() {
-        let child1 = FragmentNode::new_block(Rect::from_xywh(10.0, 10.0, 50.0, 50.0), default_style(), vec![]);
-        let child2 = FragmentNode::new_block(Rect::from_xywh(30.0, 30.0, 50.0, 50.0), default_style(), vec![]);
-        let parent = FragmentNode::new_block(
-            Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-            default_style(),
-            vec![child1, child2],
-        );
+        let child1 = FragmentNode::new_block(Rect::from_xywh(10.0, 10.0, 50.0, 50.0), vec![]);
+        let child2 = FragmentNode::new_block(Rect::from_xywh(30.0, 30.0, 50.0, 50.0), vec![]);
+        let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![child1, child2]);
 
         // Point in overlapping region
         let hits = parent.fragments_at_point(Point::new(40.0, 40.0));
@@ -823,7 +687,7 @@ mod tests {
     // Tree traversal tests
     #[test]
     fn test_iter_fragments_single() {
-        let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), default_style(), vec![]);
+        let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![]);
 
         let count = fragment.iter_fragments().count();
         assert_eq!(count, 1);
@@ -831,24 +695,20 @@ mod tests {
 
     #[test]
     fn test_iter_fragments_with_children() {
-        let child1 = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), default_style(), vec![]);
-        let child2 = FragmentNode::new_block(Rect::from_xywh(0.0, 50.0, 50.0, 50.0), default_style(), vec![]);
-        let parent = FragmentNode::new_block(
-            Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-            default_style(),
-            vec![child1, child2],
-        );
+        let child1 = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), vec![]);
+        let child2 = FragmentNode::new_block(Rect::from_xywh(0.0, 50.0, 50.0, 50.0), vec![]);
+        let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![child1, child2]);
 
         let fragments: Vec<_> = parent.iter_fragments().collect();
         assert_eq!(fragments.len(), 3); // parent + 2 children
                                         // First should be parent (pre-order)
-        assert_eq!(fragments[0].bounds(), parent.bounds());
+        assert_eq!(fragments[0].bounds, parent.bounds);
     }
 
     // FragmentTree tests
     #[test]
     fn test_fragment_tree_creation() {
-        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 800.0, 600.0), default_style(), vec![]);
+        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 800.0, 600.0), vec![]);
         let tree = FragmentTree::new(root);
 
         assert_eq!(tree.viewport_size().width, 800.0);
@@ -857,8 +717,8 @@ mod tests {
 
     #[test]
     fn test_fragment_tree_hit_test() {
-        let child = FragmentNode::new_block(Rect::from_xywh(100.0, 100.0, 50.0, 50.0), default_style(), vec![]);
-        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 800.0, 600.0), default_style(), vec![child]);
+        let child = FragmentNode::new_block(Rect::from_xywh(100.0, 100.0, 50.0, 50.0), vec![]);
+        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 800.0, 600.0), vec![child]);
         let tree = FragmentTree::new(root);
 
         let hits = tree.hit_test(Point::new(120.0, 120.0));
@@ -867,13 +727,9 @@ mod tests {
 
     #[test]
     fn test_fragment_tree_count() {
-        let child1 = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), default_style(), vec![]);
-        let child2 = FragmentNode::new_block(Rect::from_xywh(0.0, 100.0, 100.0, 100.0), default_style(), vec![]);
-        let root = FragmentNode::new_block(
-            Rect::from_xywh(0.0, 0.0, 800.0, 600.0),
-            default_style(),
-            vec![child1, child2],
-        );
+        let child1 = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![]);
+        let child2 = FragmentNode::new_block(Rect::from_xywh(0.0, 100.0, 100.0, 100.0), vec![]);
+        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 800.0, 600.0), vec![child1, child2]);
         let tree = FragmentTree::new(root);
 
         assert_eq!(tree.fragment_count(), 3);
@@ -882,37 +738,81 @@ mod tests {
     // Edge case tests
     #[test]
     fn test_empty_tree_traversal() {
-        let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), default_style(), vec![]);
+        let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![]);
 
-        let fragments: Vec<_> = fragment.iter_fragments().collect();
-        assert_eq!(fragments.len(), 1);
+        assert_eq!(fragment.iter_fragments().count(), 1);
     }
 
     #[test]
     fn test_is_leaf() {
-        let leaf = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), default_style(), vec![]);
+        let leaf = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![]);
         assert!(leaf.is_leaf());
 
-        let child = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), default_style(), vec![]);
-        let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), default_style(), vec![child]);
+        let child = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), vec![]);
+        let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![child]);
         assert!(!parent.is_leaf());
     }
 
     #[test]
-    fn test_fragment_content_types() {
+    fn test_replaced_fragment() {
+        let replaced = FragmentNode::new_replaced(
+            Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+            ReplacedType::Image {
+                src: "test.png".to_string(),
+            },
+        );
+
+        assert!(replaced.content.is_replaced());
+        assert!(replaced.is_leaf());
+    }
+
+    #[test]
+    fn test_fragment_content_type_checks() {
         let block = FragmentContent::Block { box_id: None };
         assert!(block.is_block());
         assert!(!block.is_inline());
+        assert!(!block.is_text());
+        assert!(!block.is_line());
+        assert!(!block.is_replaced());
 
         let text = FragmentContent::Text {
-            text: "Hello".to_string(),
+            text: "test".to_string(),
             box_id: None,
-            baseline_offset: 16.0,
+            baseline_offset: 0.0,
         };
         assert!(text.is_text());
-        assert_eq!(text.text(), Some("Hello"));
+        assert_eq!(text.text(), Some("test"));
+    }
 
-        let line = FragmentContent::Line { baseline: 16.0 };
-        assert!(line.is_line());
+    #[test]
+    fn test_block_with_id() {
+        let fragment = FragmentNode::new_block_with_id(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 42, vec![]);
+
+        assert!(fragment.content.is_block());
+        match fragment.content {
+            FragmentContent::Block { box_id } => assert_eq!(box_id, Some(42)),
+            _ => panic!("Expected block content"),
+        }
+    }
+
+    #[test]
+    fn test_children_iterator() {
+        let child1 = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), vec![]);
+        let child2 = FragmentNode::new_block(Rect::from_xywh(50.0, 0.0, 50.0, 50.0), vec![]);
+        let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![child1, child2]);
+
+        assert_eq!(parent.children().count(), 2);
+    }
+
+    #[test]
+    fn test_content_size() {
+        let child = FragmentNode::new_block(Rect::from_xywh(50.0, 50.0, 100.0, 100.0), vec![]);
+        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 800.0, 600.0), vec![child]);
+        let tree = FragmentTree::new(root);
+
+        let content = tree.content_size();
+        assert_eq!(content.min_x(), 0.0);
+        assert_eq!(content.max_x(), 800.0);
+        assert_eq!(content.max_y(), 600.0);
     }
 }

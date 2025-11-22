@@ -7,8 +7,8 @@
 //! 4. Returns a positioned fragment tree
 
 use crate::geometry::Size;
-use crate::layout::{AvailableSpace, FormattingContext, FormattingContextFactory, LayoutConstraints, LayoutError};
-use crate::tree::{BoxNode, BoxTree, Fragment, FragmentTree};
+use crate::layout::{FormattingContextFactory, LayoutConstraints, LayoutError};
+use crate::tree::{BoxNode, BoxTree, FragmentNode, FragmentTree};
 
 /// Configuration for layout engine
 #[derive(Debug, Clone)]
@@ -62,7 +62,7 @@ impl Default for LayoutConfig {
 /// let style = Arc::new(ComputedStyle::default());
 /// let root = BoxNode::new_block(
 ///     style,
-///     FormattingContextType::BlockFormatting,
+///     FormattingContextType::Block,
 ///     vec![],
 /// );
 /// let box_tree = BoxTree::new(root);
@@ -130,7 +130,7 @@ impl LayoutEngine {
     /// let style = Arc::new(ComputedStyle::default());
     /// let root = BoxNode::new_block(
     ///     style,
-    ///     FormattingContextType::BlockFormatting,
+    ///     FormattingContextType::Block,
     ///     vec![],
     /// );
     /// let box_tree = BoxTree::new(root);
@@ -142,7 +142,7 @@ impl LayoutEngine {
     /// ```
     pub fn layout_tree(&self, box_tree: &BoxTree, viewport: Size) -> Result<FragmentTree, LayoutError> {
         // Create root constraints from viewport
-        let constraints = LayoutConstraints::with_definite_size(viewport.width, viewport.height);
+        let constraints = LayoutConstraints::definite(viewport.width, viewport.height);
 
         // Layout the root box
         let root_fragment = self.layout_subtree(&box_tree.root, &constraints)?;
@@ -187,21 +187,21 @@ impl LayoutEngine {
     /// let style = Arc::new(ComputedStyle::default());
     /// let box_node = BoxNode::new_block(
     ///     style,
-    ///     FormattingContextType::BlockFormatting,
+    ///     FormattingContextType::Block,
     ///     vec![],
     /// );
     ///
-    /// let constraints = LayoutConstraints::with_definite_size(800.0, 600.0);
+    /// let constraints = LayoutConstraints::definite(800.0, 600.0);
     /// let fragment = engine.layout_subtree(&box_node, &constraints).unwrap();
     /// ```
-    pub fn layout_subtree(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<Fragment, LayoutError> {
+    pub fn layout_subtree(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
         // Get the formatting context type for this box
         let fc_type = box_node
             .formatting_context()
             .ok_or_else(|| LayoutError::MissingContext("Box does not establish a formatting context".to_string()))?;
 
         // Create the appropriate formatting context via factory
-        let fc = self.factory.create(fc_type);
+        let fc = self.factory.create_specific(fc_type);
 
         // Call the FC's layout method
         fc.layout(box_node, constraints)
@@ -266,7 +266,7 @@ mod tests {
         let engine = LayoutEngine::new(LayoutConfig::new());
 
         // Create simple box tree with just root
-        let root = BoxNode::new_block(default_style(), FormattingContextType::BlockFormatting, vec![]);
+        let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
         let box_tree = BoxTree::new(root);
 
         // Layout with viewport
@@ -283,14 +283,10 @@ mod tests {
         let engine = LayoutEngine::new(LayoutConfig::new());
 
         // Create box tree with children
-        let child1 = BoxNode::new_block(default_style(), FormattingContextType::BlockFormatting, vec![]);
-        let child2 = BoxNode::new_block(default_style(), FormattingContextType::BlockFormatting, vec![]);
+        let child1 = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
+        let child2 = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
 
-        let root = BoxNode::new_block(
-            default_style(),
-            FormattingContextType::BlockFormatting,
-            vec![child1, child2],
-        );
+        let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![child1, child2]);
         let box_tree = BoxTree::new(root);
 
         let viewport = Size::new(1024.0, 768.0);
@@ -303,13 +299,13 @@ mod tests {
     fn test_layout_subtree() {
         let engine = LayoutEngine::new(LayoutConfig::new());
 
-        let box_node = BoxNode::new_block(default_style(), FormattingContextType::BlockFormatting, vec![]);
+        let box_node = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
 
-        let constraints = LayoutConstraints::with_definite_size(640.0, 480.0);
+        let constraints = LayoutConstraints::definite(640.0, 480.0);
         let fragment = engine.layout_subtree(&box_node, &constraints).unwrap();
 
-        assert_eq!(fragment.bounds().width(), 640.0);
-        assert_eq!(fragment.bounds().height(), 480.0);
+        assert_eq!(fragment.bounds.width(), 640.0);
+        assert_eq!(fragment.bounds.height(), 480.0);
     }
 
     #[test]
@@ -317,8 +313,8 @@ mod tests {
         let engine = LayoutEngine::new(LayoutConfig::new());
 
         // Test block FC
-        let block_box = BoxNode::new_block(default_style(), FormattingContextType::BlockFormatting, vec![]);
-        let constraints = LayoutConstraints::with_definite_size(800.0, 600.0);
+        let block_box = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
+        let constraints = LayoutConstraints::definite(800.0, 600.0);
         let _fragment = engine.layout_subtree(&block_box, &constraints).unwrap();
 
         // Flex FC would be tested similarly when implemented
@@ -331,7 +327,7 @@ mod tests {
 
         // Text boxes don't establish formatting contexts
         let text_box = BoxNode::new_text(default_style(), "Text".to_string());
-        let constraints = LayoutConstraints::with_definite_size(800.0, 600.0);
+        let constraints = LayoutConstraints::definite(800.0, 600.0);
 
         let result = engine.layout_subtree(&text_box, &constraints);
         assert!(result.is_err());
@@ -341,7 +337,7 @@ mod tests {
     fn test_layout_different_viewport_sizes() {
         let engine = LayoutEngine::new(LayoutConfig::new());
 
-        let root = BoxNode::new_block(default_style(), FormattingContextType::BlockFormatting, vec![]);
+        let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
         let box_tree = BoxTree::new(root);
 
         // Test various viewport sizes

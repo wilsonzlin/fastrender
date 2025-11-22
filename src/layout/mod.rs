@@ -16,42 +16,47 @@
 //!
 //! # Architecture
 //!
-//! Layout is performed in a top-down, recursive tree walk:
+//! Layout is performed through the FormattingContext abstraction:
 //!
-//! 1. **Box Generation**: Create anonymous boxes as needed
-//! 2. **Size Computation**: Calculate intrinsic and definite sizes
-//! 3. **Positioning**: Determine fragment positions
-//! 4. **Fragment Creation**: Generate positioned fragments
+//! 1. **Formatting Context Selection**: Choose appropriate FC based on display type
+//! 2. **Constraint Propagation**: Pass available space down the tree
+//! 3. **Recursive Layout**: Each FC lays out its children using child FCs
+//! 4. **Fragment Tree Construction**: Build positioned fragment tree bottom-up
 //!
 //! # Module Organization
 //!
-//! This module will contain:
-//! - `block.rs` - Block layout algorithm
-//! - `inline.rs` - Inline layout and line breaking
-//! - `flex.rs` - Flexbox integration with Taffy
-//! - `grid.rs` - Grid integration with Taffy
-//! - `table.rs` - Table layout algorithm
-//! - `positioned.rs` - Absolute/fixed positioning
-//! - `context.rs` - Layout context shared across algorithms
+//! - `contexts/` - Formatting context factory (W2.T09)
+//! - `constraints.rs` - LayoutConstraints and AvailableSpace (W2.T04)
+//! - `formatting_context.rs` - FormattingContext trait (W2.T07)
+//! - `engine.rs` - LayoutEngine orchestrator (W2.T10)
+//! - `block.rs` - Block layout algorithm (W3.T04)
+//! - `inline.rs` - Inline layout and line breaking (W4.T12)
+//! - `flex.rs` - Flexbox integration with Taffy (W3.T08)
+//! - `grid.rs` - Grid integration with Taffy (W3.T09)
+//! - `table.rs` - Table layout algorithm (W3.T06)
 //!
 //! # Example
 //!
 //! ```rust,ignore
-//! use fastrender::layout::LayoutContext;
+//! use fastrender::layout::{LayoutEngine, LayoutConfig};
+//! use fastrender::tree::BoxTree;
 //! use fastrender::geometry::Size;
 //!
-//! let viewport = Size::new(1024.0, 768.0);
-//! let mut ctx = LayoutContext::new(viewport);
-//!
-//! // Run layout on box tree root
-//! let fragment_tree = ctx.layout(&box_tree_root);
+//! let engine = LayoutEngine::new(LayoutConfig::default());
+//! let fragment_tree = engine.layout_tree(&box_tree, Size::new(1024.0, 768.0))?;
 //! ```
 
-// Wave 2 modules
-pub mod constraints;
+// W2.T09 - Formatting context factory
 pub mod contexts;
-pub mod engine;
+
+// W2.T04 - Layout constraints
+pub mod constraints;
+
+// W2.T07 - FormattingContext trait
 pub mod formatting_context;
+
+// W2.T10 - Layout engine orchestrator
+pub mod engine;
 
 // Re-exports
 pub use constraints::{AvailableSpace, LayoutConstraints};
@@ -59,13 +64,13 @@ pub use contexts::FormattingContextFactory;
 pub use engine::{LayoutConfig, LayoutEngine};
 pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 
-// Module declarations will be added in Wave 3+
-// pub mod block;
-// pub mod inline;
-// pub mod flex;
-// pub mod grid;
-// pub mod table;
-// pub mod positioned;
+// Future modules (to be implemented in Wave 3+):
+// pub mod block;        // W3.T04
+// pub mod inline;       // W4.T12
+// pub mod flex;         // W3.T08
+// pub mod grid;         // W3.T09
+// pub mod table;        // W3.T06
+// pub mod positioned;   // W3.T12
 
 // Temporary re-export of V1 implementation for compatibility
 // This will be removed as Wave 2+ tasks are completed

@@ -24,6 +24,13 @@
 use std::fmt;
 use std::sync::Arc;
 
+// Import types from dependencies
+// NOTE: ComputedStyle will be defined in W2.T05, so we'll use a placeholder
+// In a real implementation, this would come from crate::style::ComputedStyle
+
+// Import DebugInfo from the debug module
+pub use super::debug::DebugInfo;
+
 /// Types of formatting contexts
 ///
 /// A formatting context is an environment in which boxes are laid out.
@@ -36,8 +43,8 @@ use std::sync::Arc;
 /// ```
 /// use fastrender::tree::FormattingContextType;
 ///
-/// let fc_type = FormattingContextType::BlockFormatting;
-/// assert!(matches!(fc_type, FormattingContextType::BlockFormatting));
+/// let fc_type = FormattingContextType::Block;
+/// assert!(matches!(fc_type, FormattingContextType::Block));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormattingContextType {
@@ -47,7 +54,7 @@ pub enum FormattingContextType {
     /// Margins collapse. This is the default for most block containers.
     ///
     /// Reference: CSS 2.1 Section 9.4.1
-    BlockFormatting,
+    Block,
 
     /// Inline Formatting Context (IFC)
     ///
@@ -55,38 +62,38 @@ pub enum FormattingContextType {
     /// Text wraps at line boundaries.
     ///
     /// Reference: CSS 2.1 Section 9.4.2
-    InlineFormatting,
+    Inline,
 
     /// Flex Formatting Context
     ///
     /// Children are laid out using the flexbox algorithm.
     ///
     /// Reference: CSS Flexbox Module Level 1
-    FlexFormatting,
+    Flex,
 
     /// Grid Formatting Context
     ///
     /// Children are positioned in a 2D grid.
     ///
     /// Reference: CSS Grid Layout Module Level 1
-    GridFormatting,
+    Grid,
 
     /// Table Formatting Context
     ///
     /// Children are laid out as table rows/columns.
     ///
     /// Reference: CSS 2.1 Section 17
-    TableFormatting,
+    Table,
 }
 
 impl fmt::Display for FormattingContextType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::BlockFormatting => write!(f, "BFC"),
-            Self::InlineFormatting => write!(f, "IFC"),
-            Self::FlexFormatting => write!(f, "Flex"),
-            Self::GridFormatting => write!(f, "Grid"),
-            Self::TableFormatting => write!(f, "Table"),
+            Self::Block => write!(f, "BFC"),
+            Self::Inline => write!(f, "IFC"),
+            Self::Flex => write!(f, "Flex"),
+            Self::Grid => write!(f, "Grid"),
+            Self::Table => write!(f, "Table"),
         }
     }
 }
@@ -252,75 +259,12 @@ pub enum BoxType {
     Anonymous(AnonymousBox),
 }
 
-/// Debug information for a box
-///
-/// This information is optional and used only for debugging/dev tools.
-/// It helps identify which DOM element generated a box.
-#[derive(Debug, Clone)]
-pub struct DebugInfo {
-    /// Element tag name (if from element)
-    pub tag_name: Option<String>,
-
-    /// Element classes
-    pub classes: Vec<String>,
-
-    /// Element ID
-    pub id: Option<String>,
-
-    /// DOM tree position (for debugging)
-    pub dom_path: Option<String>,
-}
-
-impl DebugInfo {
-    /// Creates debug info from element attributes
-    pub fn new(tag_name: Option<String>, id: Option<String>, classes: Vec<String>) -> Self {
-        Self {
-            tag_name,
-            classes,
-            id,
-            dom_path: None,
-        }
-    }
-
-    /// Formats as a CSS selector-like string
-    ///
-    /// # Examples
-    ///
-    /// - `div#header.navbar` for div with id="header" class="navbar"
-    /// - `span.highlight` for span with class="highlight"
-    pub fn to_selector(&self) -> String {
-        let mut s = String::new();
-
-        if let Some(tag) = &self.tag_name {
-            s.push_str(tag);
-        }
-
-        if let Some(id) = &self.id {
-            s.push('#');
-            s.push_str(id);
-        }
-
-        for class in &self.classes {
-            s.push('.');
-            s.push_str(class);
-        }
-
-        s
-    }
-}
-
 // Placeholder for ComputedStyle (will be implemented in W2.T05)
 // For now, use a simple struct
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ComputedStyle {
     // Placeholder
     _placeholder: (),
-}
-
-impl Default for ComputedStyle {
-    fn default() -> Self {
-        Self { _placeholder: () }
-    }
 }
 
 /// A single box in the box tree
@@ -339,12 +283,12 @@ impl Default for ComputedStyle {
 /// ```
 /// use std::sync::Arc;
 /// use fastrender::tree::{BoxNode, FormattingContextType};
-/// use fastrender::tree::box_tree::ComputedStyle;
+/// # use fastrender::tree::box_tree::ComputedStyle;
 ///
 /// let style = Arc::new(ComputedStyle::default());
 /// let box_node = BoxNode::new_block(
 ///     style,
-///     FormattingContextType::BlockFormatting,
+///     FormattingContextType::Block,
 ///     vec![],
 /// );
 ///
@@ -380,12 +324,12 @@ impl BoxNode {
     /// ```
     /// use std::sync::Arc;
     /// use fastrender::tree::{BoxNode, FormattingContextType};
-    /// use fastrender::tree::box_tree::ComputedStyle;
+    /// # use fastrender::tree::box_tree::ComputedStyle;
     ///
     /// let style = Arc::new(ComputedStyle::default());
     /// let box_node = BoxNode::new_block(
     ///     style,
-    ///     FormattingContextType::BlockFormatting,
+    ///     FormattingContextType::Block,
     ///     vec![],
     /// );
     ///
@@ -479,14 +423,25 @@ impl BoxNode {
     ///
     /// Block-level boxes participate in block formatting context.
     pub fn is_block_level(&self) -> bool {
-        matches!(&self.box_type, BoxType::Block(_) | BoxType::Replaced(_))
+        match &self.box_type {
+            BoxType::Block(_) | BoxType::Replaced(_) => true,
+            BoxType::Anonymous(anon) => matches!(
+                anon.anonymous_type,
+                AnonymousType::Block | AnonymousType::TableWrapper | AnonymousType::TableRow | AnonymousType::TableCell
+            ),
+            _ => false,
+        }
     }
 
     /// Returns true if this is an inline-level box
     ///
     /// Inline-level boxes participate in inline formatting context.
     pub fn is_inline_level(&self) -> bool {
-        matches!(&self.box_type, BoxType::Inline(_) | BoxType::Text(_))
+        match &self.box_type {
+            BoxType::Inline(_) | BoxType::Text(_) => true,
+            BoxType::Anonymous(anon) => matches!(anon.anonymous_type, AnonymousType::Inline),
+            _ => false,
+        }
     }
 
     /// Returns true if this is a text box
@@ -511,8 +466,105 @@ impl BoxNode {
         match &self.box_type {
             BoxType::Block(block) => Some(block.formatting_context),
             BoxType::Inline(inline) => inline.formatting_context,
-            BoxType::Replaced(_) => Some(FormattingContextType::BlockFormatting),
+            BoxType::Replaced(_) => Some(FormattingContextType::Block),
             _ => None,
+        }
+    }
+
+    /// Returns true if this box is a block container
+    ///
+    /// Block containers can contain block-level children and establish
+    /// a block formatting context (or participate in one).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use fastrender::tree::{BoxNode, FormattingContextType};
+    /// # use fastrender::tree::box_tree::ComputedStyle;
+    ///
+    /// let style = Arc::new(ComputedStyle::default());
+    /// let block = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
+    /// let inline_block = BoxNode::new_inline_block(style, FormattingContextType::Block, vec![]);
+    ///
+    /// assert!(block.is_block_container());
+    /// assert!(inline_block.is_block_container());
+    /// ```
+    pub fn is_block_container(&self) -> bool {
+        match &self.box_type {
+            BoxType::Block(_) => true,
+            BoxType::Inline(inline) => inline.formatting_context.is_some(), // inline-block
+            BoxType::Anonymous(anon) => matches!(anon.anonymous_type, AnonymousType::Block | AnonymousType::TableCell),
+            _ => false,
+        }
+    }
+
+    /// Returns true if this box is an inline container
+    ///
+    /// Inline containers contain inline-level children and participate
+    /// in inline formatting context.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use fastrender::tree::BoxNode;
+    /// # use fastrender::tree::box_tree::ComputedStyle;
+    ///
+    /// let style = Arc::new(ComputedStyle::default());
+    /// let inline = BoxNode::new_inline(style, vec![]);
+    ///
+    /// assert!(inline.is_inline_container());
+    /// ```
+    pub fn is_inline_container(&self) -> bool {
+        matches!(&self.box_type, BoxType::Inline(_))
+    }
+
+    /// Returns true if this box generates a formatting context
+    ///
+    /// Boxes that generate formatting contexts are independent layout roots.
+    /// Their internal layout doesn't affect outside, and vice versa.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use fastrender::tree::{BoxNode, FormattingContextType};
+    /// # use fastrender::tree::box_tree::ComputedStyle;
+    ///
+    /// let style = Arc::new(ComputedStyle::default());
+    /// let block = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
+    /// let inline = BoxNode::new_inline(style, vec![]);
+    ///
+    /// assert!(block.generates_formatting_context());
+    /// assert!(!inline.generates_formatting_context());
+    /// ```
+    pub fn generates_formatting_context(&self) -> bool {
+        self.formatting_context().is_some()
+    }
+
+    /// Returns true if this is a table-internal box
+    ///
+    /// Table-internal boxes participate in table layout algorithms.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use fastrender::tree::{BoxNode, AnonymousType};
+    /// # use fastrender::tree::box_tree::{ComputedStyle, AnonymousBox};
+    ///
+    /// let style = Arc::new(ComputedStyle::default());
+    /// // Table-internal boxes are typically anonymous boxes in the table structure
+    /// // This is a simplified example
+    /// ```
+    pub fn is_table_internal(&self) -> bool {
+        match &self.box_type {
+            BoxType::Anonymous(anon) => matches!(
+                anon.anonymous_type,
+                AnonymousType::TableWrapper | AnonymousType::TableRow | AnonymousType::TableCell
+            ),
+            _ => false,
         }
     }
 
@@ -545,12 +597,12 @@ impl BoxNode {
 /// ```
 /// use std::sync::Arc;
 /// use fastrender::tree::{BoxTree, BoxNode, FormattingContextType};
-/// use fastrender::tree::box_tree::ComputedStyle;
+/// # use fastrender::tree::box_tree::ComputedStyle;
 ///
 /// let style = Arc::new(ComputedStyle::default());
 /// let root = BoxNode::new_block(
 ///     style,
-///     FormattingContextType::BlockFormatting,
+///     FormattingContextType::Block,
 ///     vec![],
 /// );
 ///
@@ -597,14 +649,11 @@ mod tests {
 
     #[test]
     fn test_create_block_box() {
-        let box_node = BoxNode::new_block(default_style(), FormattingContextType::BlockFormatting, vec![]);
+        let box_node = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
 
         assert!(box_node.is_block_level());
         assert!(!box_node.is_inline_level());
-        assert_eq!(
-            box_node.formatting_context(),
-            Some(FormattingContextType::BlockFormatting)
-        );
+        assert_eq!(box_node.formatting_context(), Some(FormattingContextType::Block));
     }
 
     #[test]
@@ -642,17 +691,21 @@ mod tests {
     }
 
     #[test]
+    fn test_create_inline_block() {
+        let box_node = BoxNode::new_inline_block(default_style(), FormattingContextType::Block, vec![]);
+
+        assert!(box_node.is_inline_level());
+        assert_eq!(box_node.formatting_context(), Some(FormattingContextType::Block));
+    }
+
+    #[test]
     fn test_box_hierarchy() {
         let text1 = BoxNode::new_text(default_style(), "Text 1".to_string());
         let text2 = BoxNode::new_text(default_style(), "Text 2".to_string());
 
         let inline_box = BoxNode::new_inline(default_style(), vec![text1, text2]);
 
-        let block_box = BoxNode::new_block(
-            default_style(),
-            FormattingContextType::BlockFormatting,
-            vec![inline_box],
-        );
+        let block_box = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![inline_box]);
 
         assert_eq!(block_box.children.len(), 1);
         assert_eq!(block_box.children[0].children.len(), 2);
@@ -669,8 +722,8 @@ mod tests {
 
         assert_eq!(debug_info.to_selector(), "div#header.navbar.sticky");
 
-        let box_node = BoxNode::new_block(default_style(), FormattingContextType::BlockFormatting, vec![])
-            .with_debug_info(debug_info);
+        let box_node =
+            BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]).with_debug_info(debug_info);
 
         assert!(box_node.debug_info.is_some());
     }
@@ -679,10 +732,10 @@ mod tests {
     fn test_box_tree() {
         let root = BoxNode::new_block(
             default_style(),
-            FormattingContextType::BlockFormatting,
+            FormattingContextType::Block,
             vec![
                 BoxNode::new_text(default_style(), "Text".to_string()),
-                BoxNode::new_block(default_style(), FormattingContextType::BlockFormatting, vec![]),
+                BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]),
             ],
         );
 
@@ -694,41 +747,126 @@ mod tests {
 
     #[test]
     fn test_formatting_context_types() {
-        assert_eq!(format!("{}", FormattingContextType::BlockFormatting), "BFC");
-        assert_eq!(format!("{}", FormattingContextType::InlineFormatting), "IFC");
-        assert_eq!(format!("{}", FormattingContextType::FlexFormatting), "Flex");
+        assert_eq!(format!("{}", FormattingContextType::Block), "BFC");
+        assert_eq!(format!("{}", FormattingContextType::Inline), "IFC");
+        assert_eq!(format!("{}", FormattingContextType::Flex), "Flex");
+        assert_eq!(format!("{}", FormattingContextType::Grid), "Grid");
+        assert_eq!(format!("{}", FormattingContextType::Table), "Table");
     }
 
     #[test]
-    fn test_inline_block() {
-        let box_node = BoxNode::new_inline_block(default_style(), FormattingContextType::BlockFormatting, vec![]);
-
-        assert!(box_node.is_inline_level());
-        assert_eq!(
-            box_node.formatting_context(),
-            Some(FormattingContextType::BlockFormatting)
-        );
-    }
-
-    #[test]
-    fn test_anonymous_box() {
+    fn test_anonymous_block_box() {
         let box_node = BoxNode::new_anonymous_block(default_style(), vec![]);
 
         assert!(box_node.is_anonymous());
+        assert!(box_node.is_block_level());
     }
 
     #[test]
-    fn test_children_iter() {
-        let root = BoxNode::new_block(
+    fn test_children_iterator() {
+        let text1 = BoxNode::new_text(default_style(), "Text 1".to_string());
+        let text2 = BoxNode::new_text(default_style(), "Text 2".to_string());
+        let box_node = BoxNode::new_inline(default_style(), vec![text1, text2]);
+
+        let count = box_node.children_iter().count();
+        assert_eq!(count, 2);
+    }
+
+    // W2.T02 categorization method tests
+
+    #[test]
+    fn test_is_block_container() {
+        let block = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
+        let inline_block = BoxNode::new_inline_block(default_style(), FormattingContextType::Block, vec![]);
+        let inline = BoxNode::new_inline(default_style(), vec![]);
+        let text = BoxNode::new_text(default_style(), "text".to_string());
+
+        assert!(block.is_block_container());
+        assert!(inline_block.is_block_container());
+        assert!(!inline.is_block_container());
+        assert!(!text.is_block_container());
+    }
+
+    #[test]
+    fn test_is_inline_container() {
+        let inline = BoxNode::new_inline(default_style(), vec![]);
+        let block = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
+        let text = BoxNode::new_text(default_style(), "text".to_string());
+
+        assert!(inline.is_inline_container());
+        assert!(!block.is_inline_container());
+        assert!(!text.is_inline_container());
+    }
+
+    #[test]
+    fn test_generates_formatting_context() {
+        let block = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
+        let inline_block = BoxNode::new_inline_block(default_style(), FormattingContextType::Flex, vec![]);
+        let inline = BoxNode::new_inline(default_style(), vec![]);
+        let text = BoxNode::new_text(default_style(), "text".to_string());
+        let replaced = BoxNode::new_replaced(
             default_style(),
-            FormattingContextType::BlockFormatting,
-            vec![
-                BoxNode::new_text(default_style(), "1".to_string()),
-                BoxNode::new_text(default_style(), "2".to_string()),
-            ],
+            ReplacedType::Image {
+                src: "img.png".to_string(),
+            },
+            None,
+            None,
         );
 
-        let count = root.children_iter().count();
-        assert_eq!(count, 2);
+        assert!(block.generates_formatting_context());
+        assert!(inline_block.generates_formatting_context());
+        assert!(replaced.generates_formatting_context());
+        assert!(!inline.generates_formatting_context());
+        assert!(!text.generates_formatting_context());
+    }
+
+    #[test]
+    fn test_is_table_internal() {
+        let block = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
+        let anon_block = BoxNode::new_anonymous_block(default_style(), vec![]);
+
+        assert!(!block.is_table_internal());
+        assert!(!anon_block.is_table_internal());
+        // Table-internal boxes would be tested when table layout is implemented
+    }
+
+    #[test]
+    fn test_block_container_with_flex() {
+        let flex_block = BoxNode::new_block(default_style(), FormattingContextType::Flex, vec![]);
+
+        assert!(flex_block.is_block_container());
+        assert!(flex_block.generates_formatting_context());
+        assert_eq!(flex_block.formatting_context(), Some(FormattingContextType::Flex));
+    }
+
+    #[test]
+    fn test_block_container_with_grid() {
+        let grid_block = BoxNode::new_block(default_style(), FormattingContextType::Grid, vec![]);
+
+        assert!(grid_block.is_block_container());
+        assert!(grid_block.generates_formatting_context());
+        assert_eq!(grid_block.formatting_context(), Some(FormattingContextType::Grid));
+    }
+
+    #[test]
+    fn test_inline_block_formatting_context() {
+        let inline_block_flex = BoxNode::new_inline_block(default_style(), FormattingContextType::Flex, vec![]);
+        let inline_block_grid = BoxNode::new_inline_block(default_style(), FormattingContextType::Grid, vec![]);
+
+        assert!(inline_block_flex.is_block_container());
+        assert!(inline_block_flex.generates_formatting_context());
+        assert!(inline_block_flex.is_inline_level());
+        assert_eq!(
+            inline_block_flex.formatting_context(),
+            Some(FormattingContextType::Flex)
+        );
+
+        assert!(inline_block_grid.is_block_container());
+        assert!(inline_block_grid.generates_formatting_context());
+        assert!(inline_block_grid.is_inline_level());
+        assert_eq!(
+            inline_block_grid.formatting_context(),
+            Some(FormattingContextType::Grid)
+        );
     }
 }
