@@ -26,36 +26,44 @@
 //!
 //! # Module Organization
 //!
-//! This module will contain:
-//! - `font.rs` - Font loading and database
-//! - `shaper.rs` - Text shaping integration
-//! - `bidi.rs` - Bidirectional text handling
-//! - `linebreak.rs` - Line breaking algorithm
-//! - `run.rs` - Text run representation
+//! - `font_db` - Font database and discovery
+//! - `font_loader` - High-level font context
+//! - `shaper` - Text shaping integration (future)
+//! - `bidi` - Bidirectional text handling (future)
+//! - `linebreak` - Line breaking algorithm (future)
 //!
 //! # Example
 //!
 //! ```rust,ignore
-//! use fastrender::text::{FontDatabase, Shaper};
+//! use fastrender::text::{FontContext, FontWeight, FontStyle};
 //!
-//! let font_db = FontDatabase::load_system_fonts();
-//! let shaper = Shaper::new(&font_db);
+//! // Create font context (loads system fonts)
+//! let ctx = FontContext::new();
 //!
-//! let shaped = shaper.shape("Hello, world!", &computed_style);
-//! for glyph in shaped.glyphs() {
-//!     println!("Glyph {} at ({}, {})", glyph.id, glyph.x, glyph.y);
+//! // Get a font
+//! let families = vec!["Arial".to_string(), "sans-serif".to_string()];
+//! if let Some(font) = ctx.get_font(&families, 400, false, false) {
+//!     println!("Using font: {} ({} bytes)", font.family, font.data.len());
 //! }
 //! ```
 
-// Module declarations will be added in Wave 3+
-// pub mod font;
-// pub mod shaper;
-// pub mod bidi;
-// pub mod linebreak;
-// pub mod run;
+// ============================================================================
+// Font System (Wave 3)
+// ============================================================================
 
-// Temporary re-export of V1 implementation for compatibility
-// This will be removed as Wave 3+ tasks are completed
+pub mod font_db;
+pub mod font_loader;
+
+// Re-export primary types for convenience
+pub use font_db::{FontDatabase, FontStretch, FontStyle, FontWeight, GenericFamily, LoadedFont};
+pub use font_loader::FontContext;
+
+// ============================================================================
+// Legacy V1 Implementation (to be refactored in Wave 4+)
+// ============================================================================
+
+// The V1 text module provides temporary compatibility
+// This will be removed as Wave 4 tasks complete the text shaping implementation
 #[path = "../text_v1.rs"]
 mod text_v1;
 pub use text_v1::*;

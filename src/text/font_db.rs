@@ -1,0 +1,952 @@
+//! Font database - font discovery and loading
+//!
+//! This module provides a wrapper around the `fontdb` crate for font
+//! discovery, matching, and loading. It implements CSS-compliant font
+//! matching with fallback chains.
+//!
+//! # Overview
+//!
+//! The font database:
+//! - Discovers system fonts on all platforms (Windows, macOS, Linux)
+//! - Loads font files (TTF, OTF, TTC)
+//! - Queries fonts by family, weight, style, and stretch
+//! - Caches loaded font data with Arc for sharing
+//! - Handles fallback chains (e.g., "Arial, Helvetica, sans-serif")
+//!
+//! # CSS Specification
+//!
+//! Font matching follows CSS Fonts Module Level 4:
+//! - <https://www.w3.org/TR/css-fonts-4/#font-matching-algorithm>
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use fastrender::text::font_db::{FontDatabase, FontWeight, FontStyle};
+//!
+//! let db = FontDatabase::new();
+//!
+//! // Query for a specific font
+//! if let Some(id) = db.query("Arial", FontWeight::NORMAL, FontStyle::Normal) {
+//!     let font = db.load_font(id).expect("Should load font");
+//!     println!("Loaded {} with {} bytes", font.family, font.data.len());
+//! }
+//! ```
+
+use crate::error::{FontError, Result};
+use fontdb::{Database as FontDbDatabase, Family as FontDbFamily, Query as FontDbQuery, ID};
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Arc, RwLock};
+
+/// Font weight (100-900)
+///
+/// CSS font-weight values range from 100 (thinnest) to 900 (heaviest).
+/// Common keywords map to specific values:
+/// - normal: 400
+/// - bold: 700
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use fastrender::text::font_db::FontWeight;
+///
+/// let normal = FontWeight::NORMAL; // 400
+/// let bold = FontWeight::BOLD;     // 700
+/// let custom = FontWeight(550);    // Between medium and semi-bold
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FontWeight(pub u16);
+
+impl FontWeight {
+    /// Thin (100)
+    pub const THIN: Self = Self(100);
+    /// Extra Light (200)
+    pub const EXTRA_LIGHT: Self = Self(200);
+    /// Light (300)
+    pub const LIGHT: Self = Self(300);
+    /// Normal/Regular (400) - CSS `font-weight: normal`
+    pub const NORMAL: Self = Self(400);
+    /// Medium (500)
+    pub const MEDIUM: Self = Self(500);
+    /// Semi Bold (600)
+    pub const SEMI_BOLD: Self = Self(600);
+    /// Bold (700) - CSS `font-weight: bold`
+    pub const BOLD: Self = Self(700);
+    /// Extra Bold (800)
+    pub const EXTRA_BOLD: Self = Self(800);
+    /// Black (900)
+    pub const BLACK: Self = Self(900);
+
+    /// Creates a new font weight, clamping to valid range [100, 900]
+    #[inline]
+    pub fn new(weight: u16) -> Self {
+        Self(weight.clamp(100, 900))
+    }
+
+    /// Returns the numeric weight value
+    #[inline]
+    pub fn value(self) -> u16 {
+        self.0
+    }
+}
+
+impl Default for FontWeight {
+    fn default() -> Self {
+        Self::NORMAL
+    }
+}
+
+impl From<u16> for FontWeight {
+    fn from(weight: u16) -> Self {
+        Self::new(weight)
+    }
+}
+
+/// Font style (normal, italic, or oblique)
+///
+/// CSS font-style property values.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use fastrender::text::font_db::FontStyle;
+///
+/// let normal = FontStyle::Normal;
+/// let italic = FontStyle::Italic;
+/// let oblique = FontStyle::Oblique;
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FontStyle {
+    /// Normal upright text
+    #[default]
+    Normal,
+    /// Italic text (designed italic letterforms)
+    Italic,
+    /// Oblique text (slanted version of normal)
+    Oblique,
+}
+
+/// Font stretch/width (condensed to expanded)
+///
+/// CSS font-stretch property values for width variants.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use fastrender::text::font_db::FontStretch;
+///
+/// let normal = FontStretch::Normal;
+/// let condensed = FontStretch::Condensed;
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FontStretch {
+    /// Ultra Condensed (50%)
+    UltraCondensed,
+    /// Extra Condensed (62.5%)
+    ExtraCondensed,
+    /// Condensed (75%)
+    Condensed,
+    /// Semi Condensed (87.5%)
+    SemiCondensed,
+    /// Normal width (100%)
+    #[default]
+    Normal,
+    /// Semi Expanded (112.5%)
+    SemiExpanded,
+    /// Expanded (125%)
+    Expanded,
+    /// Extra Expanded (150%)
+    ExtraExpanded,
+    /// Ultra Expanded (200%)
+    UltraExpanded,
+}
+
+impl FontStretch {
+    /// Convert to percentage value
+    #[inline]
+    pub fn to_percentage(self) -> f32 {
+        match self {
+            FontStretch::UltraCondensed => 50.0,
+            FontStretch::ExtraCondensed => 62.5,
+            FontStretch::Condensed => 75.0,
+            FontStretch::SemiCondensed => 87.5,
+            FontStretch::Normal => 100.0,
+            FontStretch::SemiExpanded => 112.5,
+            FontStretch::Expanded => 125.0,
+            FontStretch::ExtraExpanded => 150.0,
+            FontStretch::UltraExpanded => 200.0,
+        }
+    }
+
+    /// Create from percentage value
+    pub fn from_percentage(pct: f32) -> Self {
+        if pct <= 56.0 {
+            FontStretch::UltraCondensed
+        } else if pct <= 69.0 {
+            FontStretch::ExtraCondensed
+        } else if pct <= 81.0 {
+            FontStretch::Condensed
+        } else if pct <= 94.0 {
+            FontStretch::SemiCondensed
+        } else if pct <= 106.0 {
+            FontStretch::Normal
+        } else if pct <= 119.0 {
+            FontStretch::SemiExpanded
+        } else if pct <= 137.0 {
+            FontStretch::Expanded
+        } else if pct <= 175.0 {
+            FontStretch::ExtraExpanded
+        } else {
+            FontStretch::UltraExpanded
+        }
+    }
+}
+
+/// A loaded font with cached data
+///
+/// Contains the font binary data (shared via Arc) along with
+/// metadata extracted from the font file.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use fastrender::text::font_db::FontDatabase;
+///
+/// let db = FontDatabase::new();
+/// if let Some(id) = db.query("Arial", FontWeight::NORMAL, FontStyle::Normal) {
+///     let font = db.load_font(id).expect("Should load font");
+///     println!("Family: {}", font.family);
+///     println!("Data size: {} bytes", font.data.len());
+/// }
+/// ```
+#[derive(Debug, Clone)]
+pub struct LoadedFont {
+    /// Font binary data (shared via Arc for efficiency)
+    pub data: Arc<Vec<u8>>,
+    /// Font index within the file (for TTC font collections)
+    pub index: u32,
+    /// Font family name
+    pub family: String,
+    /// Font weight
+    pub weight: FontWeight,
+    /// Font style
+    pub style: FontStyle,
+    /// Font stretch
+    pub stretch: FontStretch,
+}
+
+/// Generic font families as defined by CSS
+///
+/// These are abstract font families that map to actual system fonts.
+///
+/// # CSS Specification
+///
+/// See CSS Fonts Module Level 4, Section 4.2:
+/// <https://www.w3.org/TR/css-fonts-4/#generic-font-families>
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GenericFamily {
+    /// Serif fonts (e.g., Times New Roman, Georgia)
+    Serif,
+    /// Sans-serif fonts (e.g., Arial, Helvetica)
+    SansSerif,
+    /// Monospace fonts (e.g., Courier, Monaco)
+    Monospace,
+    /// Cursive/script fonts
+    Cursive,
+    /// Fantasy/decorative fonts
+    Fantasy,
+    /// System UI font
+    SystemUi,
+}
+
+impl GenericFamily {
+    /// Parse a generic family name from a string
+    ///
+    /// Returns None if the string is not a recognized generic family.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "serif" => Some(GenericFamily::Serif),
+            "sans-serif" => Some(GenericFamily::SansSerif),
+            "monospace" => Some(GenericFamily::Monospace),
+            "cursive" => Some(GenericFamily::Cursive),
+            "fantasy" => Some(GenericFamily::Fantasy),
+            "system-ui" => Some(GenericFamily::SystemUi),
+            _ => None,
+        }
+    }
+
+    /// Get fallback font families for this generic family
+    ///
+    /// Returns a list of common fonts that typically implement this generic family.
+    pub fn fallback_families(self) -> &'static [&'static str] {
+        match self {
+            GenericFamily::Serif => &[
+                "Times New Roman",
+                "Times",
+                "Georgia",
+                "DejaVu Serif",
+                "Liberation Serif",
+                "Noto Serif",
+            ],
+            GenericFamily::SansSerif => &[
+                "Arial",
+                "Helvetica",
+                "Verdana",
+                "DejaVu Sans",
+                "Liberation Sans",
+                "Noto Sans",
+            ],
+            GenericFamily::Monospace => &[
+                "Courier New",
+                "Courier",
+                "Consolas",
+                "Monaco",
+                "DejaVu Sans Mono",
+                "Liberation Mono",
+                "Noto Mono",
+            ],
+            GenericFamily::Cursive => &["Comic Sans MS", "Apple Chancery", "Bradley Hand"],
+            GenericFamily::Fantasy => &["Impact", "Papyrus", "Luminari"],
+            GenericFamily::SystemUi => &[
+                "Segoe UI",
+                "-apple-system",
+                "BlinkMacSystemFont",
+                "Roboto",
+                "Ubuntu",
+                "Cantarell",
+            ],
+        }
+    }
+}
+
+/// Font database
+///
+/// Wraps `fontdb` and provides font loading, caching, and querying.
+/// System fonts are loaded automatically on creation.
+///
+/// # Thread Safety
+///
+/// FontDatabase uses interior mutability with RwLock for thread-safe
+/// cache access. Multiple threads can query fonts concurrently.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use fastrender::text::font_db::{FontDatabase, FontWeight, FontStyle};
+///
+/// // Create database (loads system fonts)
+/// let db = FontDatabase::new();
+///
+/// // Query for a font
+/// if let Some(id) = db.query("Arial", FontWeight::NORMAL, FontStyle::Normal) {
+///     // Load font data
+///     let font = db.load_font(id).expect("Font should load");
+///     println!("Loaded font: {}", font.family);
+/// }
+///
+/// // Use fallback chain
+/// let families = vec![
+///     "NonExistentFont".to_string(),
+///     "Arial".to_string(),
+///     "sans-serif".to_string(),
+/// ];
+/// if let Some(id) = db.resolve_family_list(&families, FontWeight::NORMAL, FontStyle::Normal) {
+///     let font = db.load_font(id).expect("Fallback should work");
+///     println!("Found fallback font: {}", font.family);
+/// }
+/// ```
+pub struct FontDatabase {
+    /// Underlying fontdb database
+    db: FontDbDatabase,
+    /// Cached font data (font ID -> binary data)
+    cache: RwLock<HashMap<ID, Arc<Vec<u8>>>>,
+}
+
+impl FontDatabase {
+    /// Creates a new font database and loads system fonts
+    ///
+    /// This will scan the system font directories:
+    /// - Windows: C:\Windows\Fonts
+    /// - macOS: /Library/Fonts, /System/Library/Fonts, ~/Library/Fonts
+    /// - Linux: /usr/share/fonts, ~/.fonts, ~/.local/share/fonts
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let db = FontDatabase::new();
+    /// ```
+    pub fn new() -> Self {
+        let mut db = FontDbDatabase::new();
+        db.load_system_fonts();
+
+        Self {
+            db,
+            cache: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Creates an empty font database without loading system fonts
+    ///
+    /// Useful for testing or when you want to load specific fonts only.
+    pub fn empty() -> Self {
+        Self {
+            db: FontDbDatabase::new(),
+            cache: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Loads fonts from a directory
+    ///
+    /// Recursively scans the directory for font files.
+    pub fn load_fonts_dir<P: AsRef<Path>>(&mut self, path: P) {
+        self.db.load_fonts_dir(path);
+    }
+
+    /// Loads a font from binary data
+    ///
+    /// Useful for loading embedded fonts or web fonts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the data is not a valid font file.
+    pub fn load_font_data(&mut self, data: Vec<u8>) -> Result<()> {
+        // Validate the data is a valid font
+        ttf_parser::Face::parse(&data, 0).map_err(|e| FontError::InvalidFontFile {
+            path: format!("(memory): {:?}", e),
+        })?;
+
+        self.db.load_font_data(data);
+        Ok(())
+    }
+
+    /// Queries for a font matching the given criteria
+    ///
+    /// Returns the font ID of the best match, or None if no fonts match.
+    /// The fontdb library handles fuzzy matching for weight and style.
+    ///
+    /// # Arguments
+    ///
+    /// * `family` - Font family name (e.g., "Arial") or generic family (e.g., "sans-serif")
+    /// * `weight` - Desired font weight (100-900)
+    /// * `style` - Desired font style (normal, italic, oblique)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let db = FontDatabase::new();
+    ///
+    /// // Query specific font
+    /// let id = db.query("Arial", FontWeight::BOLD, FontStyle::Normal);
+    ///
+    /// // Query generic family
+    /// let id = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal);
+    /// ```
+    pub fn query(&self, family: &str, weight: FontWeight, style: FontStyle) -> Option<ID> {
+        // Check if this is a generic family
+        let families = if let Some(generic) = GenericFamily::parse(family) {
+            // Use fontdb's generic family support
+            match generic {
+                GenericFamily::Serif => vec![FontDbFamily::Serif],
+                GenericFamily::SansSerif => vec![FontDbFamily::SansSerif],
+                GenericFamily::Monospace => vec![FontDbFamily::Monospace],
+                GenericFamily::Cursive => vec![FontDbFamily::Cursive],
+                GenericFamily::Fantasy => vec![FontDbFamily::Fantasy],
+                GenericFamily::SystemUi => vec![FontDbFamily::SansSerif], // Fallback
+            }
+        } else {
+            vec![FontDbFamily::Name(family)]
+        };
+
+        let query = FontDbQuery {
+            families: &families,
+            weight: fontdb::Weight(weight.0),
+            style: Self::style_to_fontdb(style),
+            stretch: fontdb::Stretch::Normal,
+        };
+
+        self.db.query(&query)
+    }
+
+    /// Queries with weight, style, and stretch
+    ///
+    /// Full query with all font properties.
+    pub fn query_full(&self, family: &str, weight: FontWeight, style: FontStyle, stretch: FontStretch) -> Option<ID> {
+        let families = if let Some(generic) = GenericFamily::parse(family) {
+            match generic {
+                GenericFamily::Serif => vec![FontDbFamily::Serif],
+                GenericFamily::SansSerif => vec![FontDbFamily::SansSerif],
+                GenericFamily::Monospace => vec![FontDbFamily::Monospace],
+                GenericFamily::Cursive => vec![FontDbFamily::Cursive],
+                GenericFamily::Fantasy => vec![FontDbFamily::Fantasy],
+                GenericFamily::SystemUi => vec![FontDbFamily::SansSerif],
+            }
+        } else {
+            vec![FontDbFamily::Name(family)]
+        };
+
+        let query = FontDbQuery {
+            families: &families,
+            weight: fontdb::Weight(weight.0),
+            style: Self::style_to_fontdb(style),
+            stretch: Self::stretch_to_fontdb(stretch),
+        };
+
+        self.db.query(&query)
+    }
+
+    /// Loads font data for a given font ID
+    ///
+    /// Caches the data for subsequent requests. The cached data is
+    /// shared via Arc to avoid duplication.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Font ID obtained from `query()`
+    ///
+    /// # Returns
+    ///
+    /// Returns the loaded font with its data, or None if loading fails.
+    pub fn load_font(&self, id: ID) -> Option<LoadedFont> {
+        // Check cache first
+        {
+            let cache = self.cache.read().ok()?;
+            if let Some(data) = cache.get(&id) {
+                return Some(self.create_loaded_font(id, Arc::clone(data)));
+            }
+        }
+
+        // Load from fontdb
+        let face_info = self.db.face(id)?;
+
+        // fontdb stores font data internally, we need to access it via with_face_data
+        let mut data_result: Option<Arc<Vec<u8>>> = None;
+        self.db.with_face_data(id, |font_data, _face_index| {
+            data_result = Some(Arc::new(font_data.to_vec()));
+        });
+
+        let data = data_result?;
+
+        // Cache it
+        {
+            if let Ok(mut cache) = self.cache.write() {
+                cache.insert(id, Arc::clone(&data));
+            }
+        }
+
+        Some(self.create_loaded_font_with_info(id, data, &face_info))
+    }
+
+    /// Creates a LoadedFont from cached data
+    fn create_loaded_font(&self, id: ID, data: Arc<Vec<u8>>) -> LoadedFont {
+        let face_info = self.db.face(id).expect("Font should exist");
+        self.create_loaded_font_with_info(id, data, &face_info)
+    }
+
+    /// Creates a LoadedFont from face info
+    fn create_loaded_font_with_info(&self, _id: ID, data: Arc<Vec<u8>>, face_info: &fontdb::FaceInfo) -> LoadedFont {
+        LoadedFont {
+            data,
+            index: face_info.index,
+            family: face_info
+                .families
+                .first()
+                .map(|(name, _)| name.clone())
+                .unwrap_or_else(|| "Unknown".to_string()),
+            weight: FontWeight(face_info.weight.0),
+            style: Self::fontdb_to_style(face_info.style),
+            stretch: Self::fontdb_to_stretch(face_info.stretch),
+        }
+    }
+
+    /// Resolves a font family list with fallbacks
+    ///
+    /// Tries each family in the list until a match is found.
+    /// This implements CSS font-family fallback behavior.
+    ///
+    /// # Arguments
+    ///
+    /// * `families` - List of font families in priority order
+    /// * `weight` - Desired font weight
+    /// * `style` - Desired font style
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let db = FontDatabase::new();
+    /// let families = vec![
+    ///     "CustomFont".to_string(),  // First choice (may not exist)
+    ///     "Arial".to_string(),       // Second choice
+    ///     "sans-serif".to_string(),  // Final fallback
+    /// ];
+    /// let id = db.resolve_family_list(&families, FontWeight::NORMAL, FontStyle::Normal);
+    /// ```
+    pub fn resolve_family_list(&self, families: &[String], weight: FontWeight, style: FontStyle) -> Option<ID> {
+        for family in families {
+            if let Some(id) = self.query(family, weight, style) {
+                return Some(id);
+            }
+        }
+
+        // Final fallback to sans-serif
+        self.query("sans-serif", weight, style)
+    }
+
+    /// Resolves a font family list with full properties
+    pub fn resolve_family_list_full(
+        &self,
+        families: &[String],
+        weight: FontWeight,
+        style: FontStyle,
+        stretch: FontStretch,
+    ) -> Option<ID> {
+        for family in families {
+            if let Some(id) = self.query_full(family, weight, style, stretch) {
+                return Some(id);
+            }
+        }
+
+        self.query_full("sans-serif", weight, style, stretch)
+    }
+
+    /// Returns the number of fonts in the database
+    #[inline]
+    pub fn font_count(&self) -> usize {
+        self.db.len()
+    }
+
+    /// Returns whether the database is empty
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.db.is_empty()
+    }
+
+    /// Clears the font data cache
+    ///
+    /// Useful to free memory when fonts are no longer needed.
+    pub fn clear_cache(&self) {
+        if let Ok(mut cache) = self.cache.write() {
+            cache.clear();
+        }
+    }
+
+    /// Returns the number of cached fonts
+    pub fn cache_size(&self) -> usize {
+        self.cache.read().map(|c| c.len()).unwrap_or(0)
+    }
+
+    // Internal conversion helpers
+
+    fn style_to_fontdb(style: FontStyle) -> fontdb::Style {
+        match style {
+            FontStyle::Normal => fontdb::Style::Normal,
+            FontStyle::Italic => fontdb::Style::Italic,
+            FontStyle::Oblique => fontdb::Style::Oblique,
+        }
+    }
+
+    fn fontdb_to_style(style: fontdb::Style) -> FontStyle {
+        match style {
+            fontdb::Style::Normal => FontStyle::Normal,
+            fontdb::Style::Italic => FontStyle::Italic,
+            fontdb::Style::Oblique => FontStyle::Oblique,
+        }
+    }
+
+    fn stretch_to_fontdb(stretch: FontStretch) -> fontdb::Stretch {
+        match stretch {
+            FontStretch::UltraCondensed => fontdb::Stretch::UltraCondensed,
+            FontStretch::ExtraCondensed => fontdb::Stretch::ExtraCondensed,
+            FontStretch::Condensed => fontdb::Stretch::Condensed,
+            FontStretch::SemiCondensed => fontdb::Stretch::SemiCondensed,
+            FontStretch::Normal => fontdb::Stretch::Normal,
+            FontStretch::SemiExpanded => fontdb::Stretch::SemiExpanded,
+            FontStretch::Expanded => fontdb::Stretch::Expanded,
+            FontStretch::ExtraExpanded => fontdb::Stretch::ExtraExpanded,
+            FontStretch::UltraExpanded => fontdb::Stretch::UltraExpanded,
+        }
+    }
+
+    fn fontdb_to_stretch(stretch: fontdb::Stretch) -> FontStretch {
+        match stretch {
+            fontdb::Stretch::UltraCondensed => FontStretch::UltraCondensed,
+            fontdb::Stretch::ExtraCondensed => FontStretch::ExtraCondensed,
+            fontdb::Stretch::Condensed => FontStretch::Condensed,
+            fontdb::Stretch::SemiCondensed => FontStretch::SemiCondensed,
+            fontdb::Stretch::Normal => FontStretch::Normal,
+            fontdb::Stretch::SemiExpanded => FontStretch::SemiExpanded,
+            fontdb::Stretch::Expanded => FontStretch::Expanded,
+            fontdb::Stretch::ExtraExpanded => FontStretch::ExtraExpanded,
+            fontdb::Stretch::UltraExpanded => FontStretch::UltraExpanded,
+        }
+    }
+}
+
+impl Default for FontDatabase {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// Make FontDatabase thread-safe
+unsafe impl Send for FontDatabase {}
+unsafe impl Sync for FontDatabase {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_font_weight_constants() {
+        assert_eq!(FontWeight::THIN.value(), 100);
+        assert_eq!(FontWeight::NORMAL.value(), 400);
+        assert_eq!(FontWeight::BOLD.value(), 700);
+        assert_eq!(FontWeight::BLACK.value(), 900);
+    }
+
+    #[test]
+    fn test_font_weight_clamping() {
+        assert_eq!(FontWeight::new(0).value(), 100);
+        assert_eq!(FontWeight::new(50).value(), 100);
+        assert_eq!(FontWeight::new(1000).value(), 900);
+        assert_eq!(FontWeight::new(500).value(), 500);
+    }
+
+    #[test]
+    fn test_font_weight_default() {
+        assert_eq!(FontWeight::default(), FontWeight::NORMAL);
+    }
+
+    #[test]
+    fn test_font_style_default() {
+        assert_eq!(FontStyle::default(), FontStyle::Normal);
+    }
+
+    #[test]
+    fn test_font_stretch_default() {
+        assert_eq!(FontStretch::default(), FontStretch::Normal);
+    }
+
+    #[test]
+    fn test_font_stretch_percentage() {
+        assert_eq!(FontStretch::Normal.to_percentage(), 100.0);
+        assert_eq!(FontStretch::Condensed.to_percentage(), 75.0);
+        assert_eq!(FontStretch::Expanded.to_percentage(), 125.0);
+    }
+
+    #[test]
+    fn test_font_stretch_from_percentage() {
+        assert_eq!(FontStretch::from_percentage(100.0), FontStretch::Normal);
+        assert_eq!(FontStretch::from_percentage(75.0), FontStretch::Condensed);
+        assert_eq!(FontStretch::from_percentage(125.0), FontStretch::Expanded);
+    }
+
+    #[test]
+    fn test_generic_family_from_str() {
+        assert_eq!(GenericFamily::parse("serif"), Some(GenericFamily::Serif));
+        assert_eq!(GenericFamily::parse("sans-serif"), Some(GenericFamily::SansSerif));
+        assert_eq!(GenericFamily::parse("MONOSPACE"), Some(GenericFamily::Monospace));
+        assert_eq!(GenericFamily::parse("Arial"), None);
+    }
+
+    #[test]
+    fn test_generic_family_fallbacks() {
+        let fallbacks = GenericFamily::SansSerif.fallback_families();
+        assert!(fallbacks.contains(&"Arial"));
+        assert!(fallbacks.contains(&"Helvetica"));
+    }
+
+    #[test]
+    fn test_font_database_creation() {
+        let db = FontDatabase::new();
+        // System should have at least some fonts
+        // (may be 0 in minimal CI environments)
+        // font_count() returns usize which is always >= 0
+        let _ = db.font_count(); // Just verify it works
+    }
+
+    #[test]
+    fn test_font_database_empty() {
+        let db = FontDatabase::empty();
+        assert!(db.is_empty());
+        assert_eq!(db.font_count(), 0);
+    }
+
+    #[test]
+    fn test_query_generic_sans_serif() {
+        let db = FontDatabase::new();
+        // Skip if no fonts available (CI environment)
+        if db.is_empty() {
+            return;
+        }
+
+        let id = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal);
+        // Should find at least one sans-serif font on most systems
+        if id.is_some() {
+            let font = db.load_font(id.unwrap());
+            assert!(font.is_some());
+            let font = font.unwrap();
+            assert!(!font.data.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_query_generic_serif() {
+        let db = FontDatabase::new();
+        if db.is_empty() {
+            return;
+        }
+
+        let id = db.query("serif", FontWeight::NORMAL, FontStyle::Normal);
+        if id.is_some() {
+            let font = db.load_font(id.unwrap());
+            assert!(font.is_some());
+        }
+    }
+
+    #[test]
+    fn test_query_generic_monospace() {
+        let db = FontDatabase::new();
+        if db.is_empty() {
+            return;
+        }
+
+        let id = db.query("monospace", FontWeight::NORMAL, FontStyle::Normal);
+        if id.is_some() {
+            let font = db.load_font(id.unwrap());
+            assert!(font.is_some());
+        }
+    }
+
+    #[test]
+    fn test_fallback_chain() {
+        let db = FontDatabase::new();
+        if db.is_empty() {
+            return;
+        }
+
+        let families = vec![
+            "NonExistentFontThatShouldNotExist12345".to_string(),
+            "AnotherNonExistentFont67890".to_string(),
+            "sans-serif".to_string(),
+        ];
+
+        let id = db.resolve_family_list(&families, FontWeight::NORMAL, FontStyle::Normal);
+        // Should fall back to sans-serif
+        if id.is_some() {
+            let font = db.load_font(id.unwrap());
+            assert!(font.is_some());
+        }
+    }
+
+    #[test]
+    fn test_font_caching() {
+        let db = FontDatabase::new();
+        if db.is_empty() {
+            return;
+        }
+
+        let id = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal);
+        if let Some(id) = id {
+            // First load - not cached
+            assert_eq!(db.cache_size(), 0);
+
+            // Load font
+            let font1 = db.load_font(id);
+            assert!(font1.is_some());
+
+            // Should be cached now
+            assert_eq!(db.cache_size(), 1);
+
+            // Load again - should use cache
+            let font2 = db.load_font(id);
+            assert!(font2.is_some());
+
+            // Same data (Arc pointing to same allocation)
+            let font1 = font1.unwrap();
+            let font2 = font2.unwrap();
+            assert!(Arc::ptr_eq(&font1.data, &font2.data));
+        }
+    }
+
+    #[test]
+    fn test_clear_cache() {
+        let db = FontDatabase::new();
+        if db.is_empty() {
+            return;
+        }
+
+        let id = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal);
+        if let Some(id) = id {
+            let _font = db.load_font(id);
+            assert!(db.cache_size() > 0);
+
+            db.clear_cache();
+            assert_eq!(db.cache_size(), 0);
+        }
+    }
+
+    #[test]
+    fn test_loaded_font_properties() {
+        let db = FontDatabase::new();
+        if db.is_empty() {
+            return;
+        }
+
+        if let Some(id) = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal) {
+            let font = db.load_font(id).unwrap();
+
+            // Should have non-empty data
+            assert!(!font.data.is_empty());
+
+            // Should have a family name
+            assert!(!font.family.is_empty());
+
+            // Weight should be reasonable
+            assert!(font.weight.value() >= 100 && font.weight.value() <= 900);
+        }
+    }
+
+    #[test]
+    fn test_query_with_different_weights() {
+        let db = FontDatabase::new();
+        if db.is_empty() {
+            return;
+        }
+
+        // Query for different weights - fontdb does fuzzy matching
+        let weights = [
+            FontWeight::THIN,
+            FontWeight::NORMAL,
+            FontWeight::BOLD,
+            FontWeight::BLACK,
+        ];
+
+        for weight in &weights {
+            let id = db.query("sans-serif", *weight, FontStyle::Normal);
+            // Should find something for each weight (may be same font with fuzzy matching)
+            if id.is_some() {
+                let font = db.load_font(id.unwrap());
+                assert!(font.is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn test_query_with_different_styles() {
+        let db = FontDatabase::new();
+        if db.is_empty() {
+            return;
+        }
+
+        let styles = [FontStyle::Normal, FontStyle::Italic, FontStyle::Oblique];
+
+        for style in &styles {
+            let id = db.query("sans-serif", FontWeight::NORMAL, *style);
+            // Should find something for each style (may use fallback)
+            if id.is_some() {
+                let font = db.load_font(id.unwrap());
+                assert!(font.is_some());
+            }
+        }
+    }
+}
