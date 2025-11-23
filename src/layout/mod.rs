@@ -70,13 +70,13 @@ pub mod float_context;
 pub mod absolute_positioning;
 
 // Re-exports
+pub use absolute_positioning::{AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult, ResolvedMargins};
 pub use constraints::{AvailableSpace, LayoutConstraints};
 pub use contexts::{
     ContainingBlock, FormattingContextFactory, GridFormattingContext, PositionedLayout, StickyConstraints,
 };
 pub use engine::{LayoutConfig, LayoutEngine, LayoutStats};
 pub use float_context::{FloatContext, FloatInfo, FloatSide};
-pub use absolute_positioning::{AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult, ResolvedMargins};
 pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 
 // W3.T06 - Table layout algorithm
