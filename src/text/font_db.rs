@@ -288,6 +288,20 @@ pub enum GenericFamily {
     Fantasy,
     /// System UI font
     SystemUi,
+    /// UI serif font (serif intended for UI text)
+    UiSerif,
+    /// UI sans-serif font (sans-serif intended for UI text)
+    UiSansSerif,
+    /// UI monospace font (monospace intended for UI text)
+    UiMonospace,
+    /// UI rounded font (sans-serif with rounded letterforms)
+    UiRounded,
+    /// Emoji font (colored emoji glyphs)
+    Emoji,
+    /// Math font (mathematical notation)
+    Math,
+    /// Fangsong font (Chinese font style between serif and script)
+    Fangsong,
 }
 
 impl GenericFamily {
@@ -302,6 +316,13 @@ impl GenericFamily {
             "cursive" => Some(GenericFamily::Cursive),
             "fantasy" => Some(GenericFamily::Fantasy),
             "system-ui" => Some(GenericFamily::SystemUi),
+            "ui-serif" => Some(GenericFamily::UiSerif),
+            "ui-sans-serif" => Some(GenericFamily::UiSansSerif),
+            "ui-monospace" => Some(GenericFamily::UiMonospace),
+            "ui-rounded" => Some(GenericFamily::UiRounded),
+            "emoji" => Some(GenericFamily::Emoji),
+            "math" => Some(GenericFamily::Math),
+            "fangsong" => Some(GenericFamily::Fangsong),
             _ => None,
         }
     }
@@ -311,42 +332,92 @@ impl GenericFamily {
     /// Returns a list of common fonts that typically implement this generic family.
     pub fn fallback_families(self) -> &'static [&'static str] {
         match self {
-            GenericFamily::Serif => &[
+            GenericFamily::Serif | GenericFamily::UiSerif => &[
                 "Times New Roman",
                 "Times",
                 "Georgia",
                 "DejaVu Serif",
                 "Liberation Serif",
                 "Noto Serif",
+                "FreeSerif",
             ],
-            GenericFamily::SansSerif => &[
+            GenericFamily::SansSerif | GenericFamily::UiSansSerif | GenericFamily::UiRounded => &[
                 "Arial",
                 "Helvetica",
+                "Helvetica Neue",
                 "Verdana",
                 "DejaVu Sans",
                 "Liberation Sans",
                 "Noto Sans",
+                "FreeSans",
+                "Roboto",
             ],
-            GenericFamily::Monospace => &[
+            GenericFamily::Monospace | GenericFamily::UiMonospace => &[
                 "Courier New",
                 "Courier",
                 "Consolas",
                 "Monaco",
                 "DejaVu Sans Mono",
                 "Liberation Mono",
-                "Noto Mono",
+                "Noto Sans Mono",
+                "FreeMono",
+                "SF Mono",
             ],
-            GenericFamily::Cursive => &["Comic Sans MS", "Apple Chancery", "Bradley Hand"],
-            GenericFamily::Fantasy => &["Impact", "Papyrus", "Luminari"],
+            GenericFamily::Cursive => &[
+                "Comic Sans MS",
+                "Apple Chancery",
+                "Zapf Chancery",
+                "URW Chancery L",
+                "Bradley Hand",
+            ],
+            GenericFamily::Fantasy => &["Impact", "Papyrus", "Copperplate", "Luminari"],
             GenericFamily::SystemUi => &[
+                ".SF NS",
+                "San Francisco",
                 "Segoe UI",
-                "-apple-system",
-                "BlinkMacSystemFont",
                 "Roboto",
                 "Ubuntu",
                 "Cantarell",
+                "DejaVu Sans",
+                "Liberation Sans",
             ],
+            GenericFamily::Emoji => &[
+                "Apple Color Emoji",
+                "Segoe UI Emoji",
+                "Noto Color Emoji",
+                "Twemoji",
+                "EmojiOne",
+                "Symbola",
+            ],
+            GenericFamily::Math => &[
+                "Cambria Math",
+                "STIX Two Math",
+                "Latin Modern Math",
+                "DejaVu Math TeX Gyre",
+            ],
+            GenericFamily::Fangsong => &["FangSong", "STFangsong", "FangSong_GB2312"],
         }
+    }
+
+    /// Converts to fontdb Family for querying.
+    pub fn to_fontdb(self) -> FontDbFamily<'static> {
+        match self {
+            Self::Serif | Self::UiSerif => FontDbFamily::Serif,
+            Self::SansSerif | Self::SystemUi | Self::UiSansSerif | Self::UiRounded => FontDbFamily::SansSerif,
+            Self::Monospace | Self::UiMonospace => FontDbFamily::Monospace,
+            Self::Cursive => FontDbFamily::Cursive,
+            Self::Fantasy => FontDbFamily::Fantasy,
+            // These don't have direct fontdb equivalents, fallback to sans-serif
+            Self::Emoji | Self::Math | Self::Fangsong => FontDbFamily::SansSerif,
+        }
+    }
+}
+
+impl std::str::FromStr for GenericFamily {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Self::parse(s).ok_or(())
     }
 }
 
@@ -475,15 +546,7 @@ impl FontDatabase {
     pub fn query(&self, family: &str, weight: FontWeight, style: FontStyle) -> Option<ID> {
         // Check if this is a generic family
         let families = if let Some(generic) = GenericFamily::parse(family) {
-            // Use fontdb's generic family support
-            match generic {
-                GenericFamily::Serif => vec![FontDbFamily::Serif],
-                GenericFamily::SansSerif => vec![FontDbFamily::SansSerif],
-                GenericFamily::Monospace => vec![FontDbFamily::Monospace],
-                GenericFamily::Cursive => vec![FontDbFamily::Cursive],
-                GenericFamily::Fantasy => vec![FontDbFamily::Fantasy],
-                GenericFamily::SystemUi => vec![FontDbFamily::SansSerif], // Fallback
-            }
+            vec![generic.to_fontdb()]
         } else {
             vec![FontDbFamily::Name(family)]
         };
@@ -503,14 +566,7 @@ impl FontDatabase {
     /// Full query with all font properties.
     pub fn query_full(&self, family: &str, weight: FontWeight, style: FontStyle, stretch: FontStretch) -> Option<ID> {
         let families = if let Some(generic) = GenericFamily::parse(family) {
-            match generic {
-                GenericFamily::Serif => vec![FontDbFamily::Serif],
-                GenericFamily::SansSerif => vec![FontDbFamily::SansSerif],
-                GenericFamily::Monospace => vec![FontDbFamily::Monospace],
-                GenericFamily::Cursive => vec![FontDbFamily::Cursive],
-                GenericFamily::Fantasy => vec![FontDbFamily::Fantasy],
-                GenericFamily::SystemUi => vec![FontDbFamily::SansSerif],
-            }
+            vec![generic.to_fontdb()]
         } else {
             vec![FontDbFamily::Name(family)]
         };
@@ -665,6 +721,125 @@ impl FontDatabase {
         self.cache.read().map(|c| c.len()).unwrap_or(0)
     }
 
+    // ========================================================================
+    // Glyph checking methods (for fallback chain support)
+    // ========================================================================
+
+    /// Returns the underlying fontdb database.
+    ///
+    /// Provides direct access for advanced queries.
+    #[inline]
+    pub fn inner(&self) -> &FontDbDatabase {
+        &self.db
+    }
+
+    /// Returns an iterator over all font faces in the database.
+    #[inline]
+    pub fn faces(&self) -> impl Iterator<Item = &fontdb::FaceInfo> {
+        self.db.faces()
+    }
+
+    /// Checks if a font has a glyph for the given character.
+    ///
+    /// This is used during fallback resolution to find a font that
+    /// can render a specific character.
+    pub fn has_glyph(&self, id: ID, c: char) -> bool {
+        self.db
+            .with_face_data(id, |data, face_index| {
+                if let Ok(face) = ttf_parser::Face::parse(data, face_index) {
+                    face.glyph_index(c).is_some()
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false)
+    }
+
+    /// Checks if a character is an emoji.
+    ///
+    /// Uses Unicode properties to determine if a character should be
+    /// rendered with an emoji font.
+    pub fn is_emoji(c: char) -> bool {
+        let cp = c as u32;
+
+        // Emoticons (U+1F600 - U+1F64F)
+        if (0x1F600..=0x1F64F).contains(&cp) {
+            return true;
+        }
+
+        // Miscellaneous Symbols and Pictographs (U+1F300 - U+1F5FF)
+        if (0x1F300..=0x1F5FF).contains(&cp) {
+            return true;
+        }
+
+        // Transport and Map Symbols (U+1F680 - U+1F6FF)
+        if (0x1F680..=0x1F6FF).contains(&cp) {
+            return true;
+        }
+
+        // Supplemental Symbols and Pictographs (U+1F900 - U+1F9FF)
+        if (0x1F900..=0x1F9FF).contains(&cp) {
+            return true;
+        }
+
+        // Symbols and Pictographs Extended-A (U+1FA00 - U+1FA6F)
+        if (0x1FA00..=0x1FA6F).contains(&cp) {
+            return true;
+        }
+
+        // Symbols and Pictographs Extended-B (U+1FA70 - U+1FAFF)
+        if (0x1FA70..=0x1FAFF).contains(&cp) {
+            return true;
+        }
+
+        // Dingbats (U+2700 - U+27BF)
+        if (0x2700..=0x27BF).contains(&cp) {
+            return true;
+        }
+
+        // Regional Indicator Symbols (U+1F1E0 - U+1F1FF) - flags
+        if (0x1F1E0..=0x1F1FF).contains(&cp) {
+            return true;
+        }
+
+        // Variation Selector-16 (emoji presentation)
+        if cp == 0xFE0F {
+            return true;
+        }
+
+        // Zero Width Joiner (used in emoji sequences)
+        if cp == 0x200D {
+            return true;
+        }
+
+        false
+    }
+
+    /// Finds emoji fonts in the database.
+    ///
+    /// Returns font IDs for fonts that are likely to contain emoji glyphs.
+    pub fn find_emoji_fonts(&self) -> Vec<ID> {
+        let mut emoji_fonts = Vec::new();
+
+        for face in self.db.faces() {
+            let is_emoji_font = face.families.iter().any(|(name, _)| {
+                let name_lower = name.to_lowercase();
+                name_lower.contains("emoji")
+                    || name_lower.contains("symbola")
+                    || name_lower.contains("noto color")
+                    || name_lower.contains("apple color")
+                    || name_lower.contains("segoe ui emoji")
+                    || name_lower.contains("segoe ui symbol")
+            });
+
+            if is_emoji_font {
+                emoji_fonts.push(face.id);
+            }
+        }
+
+        emoji_fonts
+    }
+
     // Internal conversion helpers
 
     fn style_to_fontdb(style: FontStyle) -> fontdb::Style {
@@ -793,11 +968,9 @@ impl FontMetrics {
 
     /// Extract metrics from font data
     pub fn from_data(data: &[u8], index: u32) -> crate::error::Result<Self> {
-        let face = ttf_parser::Face::parse(data, index).map_err(|e| {
-            crate::error::FontError::LoadFailed {
-                family: String::new(),
-                reason: format!("Failed to parse font: {:?}", e),
-            }
+        let face = ttf_parser::Face::parse(data, index).map_err(|e| crate::error::FontError::LoadFailed {
+            family: String::new(),
+            reason: format!("Failed to parse font: {:?}", e),
         })?;
 
         Self::from_face(&face)
