@@ -24,7 +24,8 @@
 //! }
 //! ```
 
-use crate::text::font_db::{FontDatabase, FontStretch, FontStyle, FontWeight, LoadedFont};
+use crate::text::font_db::{FontDatabase, FontMetrics, FontStretch, FontStyle, FontWeight, LoadedFont, ScaledMetrics};
+use rustybuzz::{Direction, Face, UnicodeBuffer};
 use std::sync::Arc;
 
 /// Font context for text operations
@@ -245,12 +246,182 @@ impl FontContext {
     pub fn clear_cache(&self) {
         self.db.clear_cache();
     }
+
+    // ========================================================================
+    // Text Measurement (W3.T18)
+    // ========================================================================
+
+    /// Measures the width of text when rendered with the given font
+    ///
+    /// Uses HarfBuzz (via rustybuzz) for accurate text shaping that accounts
+    /// for kerning, ligatures, and other OpenType features.
+    ///
+    /// # Arguments
+    ///
+    /// * `text` - The text to measure
+    /// * `font` - The loaded font to use for measurement
+    /// * `font_size` - Font size in pixels
+    ///
+    /// # Returns
+    ///
+    /// The width of the text in pixels.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let ctx = FontContext::new();
+    /// if let Some(font) = ctx.get_sans_serif() {
+    ///     let width = ctx.measure_text("Hello, world!", &font, 16.0);
+    ///     println!("Text width: {}px", width);
+    /// }
+    /// ```
+    pub fn measure_text(&self, text: &str, font: &LoadedFont, font_size: f32) -> f32 {
+        if text.is_empty() {
+            return 0.0;
+        }
+
+        // Get rustybuzz face for shaping
+        let rb_face = match Face::from_slice(&font.data, font.index) {
+            Some(face) => face,
+            None => return self.estimate_text_width(text, font_size),
+        };
+
+        // Shape the text
+        let mut buffer = UnicodeBuffer::new();
+        buffer.push_str(text);
+        buffer.set_direction(Direction::LeftToRight);
+
+        let output = rustybuzz::shape(&rb_face, &[], buffer);
+        let positions = output.glyph_positions();
+
+        // Calculate scale from font units to pixels
+        let units_per_em = rb_face.units_per_em() as f32;
+        let scale = font_size / units_per_em;
+
+        // Sum up horizontal advances
+        let mut width: f32 = 0.0;
+        for pos in positions {
+            width += pos.x_advance as f32 * scale;
+        }
+
+        width
+    }
+
+    /// Measures text and returns detailed information
+    ///
+    /// Returns both width and additional shaping information.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let ctx = FontContext::new();
+    /// if let Some(font) = ctx.get_sans_serif() {
+    ///     let measurement = ctx.measure_text_detailed("Hello", &font, 16.0);
+    ///     println!("Width: {}px, Glyphs: {}", measurement.width, measurement.glyph_count);
+    /// }
+    /// ```
+    pub fn measure_text_detailed(&self, text: &str, font: &LoadedFont, font_size: f32) -> TextMeasurement {
+        if text.is_empty() {
+            return TextMeasurement {
+                width: 0.0,
+                glyph_count: 0,
+                is_shaped: false,
+            };
+        }
+
+        // Get rustybuzz face for shaping
+        let rb_face = match Face::from_slice(&font.data, font.index) {
+            Some(face) => face,
+            None => {
+                return TextMeasurement {
+                    width: self.estimate_text_width(text, font_size),
+                    glyph_count: text.chars().count(),
+                    is_shaped: false,
+                };
+            }
+        };
+
+        // Shape the text
+        let mut buffer = UnicodeBuffer::new();
+        buffer.push_str(text);
+        buffer.set_direction(Direction::LeftToRight);
+
+        let output = rustybuzz::shape(&rb_face, &[], buffer);
+        let positions = output.glyph_positions();
+
+        // Calculate scale from font units to pixels
+        let units_per_em = rb_face.units_per_em() as f32;
+        let scale = font_size / units_per_em;
+
+        // Sum up horizontal advances
+        let mut width: f32 = 0.0;
+        for pos in positions {
+            width += pos.x_advance as f32 * scale;
+        }
+
+        TextMeasurement {
+            width,
+            glyph_count: positions.len(),
+            is_shaped: true,
+        }
+    }
+
+    /// Estimates text width without shaping
+    ///
+    /// Used as fallback when font shaping is unavailable.
+    fn estimate_text_width(&self, text: &str, font_size: f32) -> f32 {
+        // Rough estimate: average character width is about 0.5 * font size
+        let char_count = text.chars().count() as f32;
+        char_count * font_size * 0.5
+    }
+
+    /// Gets scaled metrics for a font at a specific size
+    ///
+    /// Convenience method that combines font loading with metric scaling.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let ctx = FontContext::new();
+    /// if let Some(font) = ctx.get_sans_serif() {
+    ///     let metrics = ctx.get_scaled_metrics(&font, 16.0);
+    ///     if let Some(m) = metrics {
+    ///         println!("Line height: {}px", m.line_height);
+    ///     }
+    /// }
+    /// ```
+    pub fn get_scaled_metrics(&self, font: &LoadedFont, font_size: f32) -> Option<ScaledMetrics> {
+        font.metrics().ok().map(|m| m.scale(font_size))
+    }
 }
 
 impl Default for FontContext {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ============================================================================
+// TextMeasurement
+// ============================================================================
+
+/// Result of detailed text measurement
+///
+/// Contains width and additional information about the shaped text.
+#[derive(Debug, Clone)]
+pub struct TextMeasurement {
+    /// Total width in pixels
+    pub width: f32,
+
+    /// Number of glyphs after shaping
+    ///
+    /// May differ from character count due to ligatures, combining marks, etc.
+    pub glyph_count: usize,
+
+    /// Whether text was shaped with HarfBuzz
+    ///
+    /// If false, width is an estimate.
+    pub is_shaped: bool,
 }
 
 #[cfg(test)]
@@ -407,6 +578,191 @@ mod tests {
         let font = ctx.get_sans_serif();
         if font.is_some() {
             assert!(!font.unwrap().data.is_empty());
+        }
+    }
+
+    // ========================================================================
+    // Text Measurement Tests (W3.T18)
+    // ========================================================================
+
+    #[test]
+    fn test_measure_text_empty() {
+        let ctx = FontContext::new();
+        if !ctx.has_fonts() {
+            return;
+        }
+
+        if let Some(font) = ctx.get_sans_serif() {
+            let width = ctx.measure_text("", &font, 16.0);
+            assert_eq!(width, 0.0);
+        }
+    }
+
+    #[test]
+    fn test_measure_text_single_char() {
+        let ctx = FontContext::new();
+        if !ctx.has_fonts() {
+            return;
+        }
+
+        if let Some(font) = ctx.get_sans_serif() {
+            let width = ctx.measure_text("A", &font, 16.0);
+            // Single character should have positive width
+            assert!(width > 0.0);
+            // And reasonable width (not more than font size for most chars)
+            assert!(width < 20.0);
+        }
+    }
+
+    #[test]
+    fn test_measure_text_multiple_chars() {
+        let ctx = FontContext::new();
+        if !ctx.has_fonts() {
+            return;
+        }
+
+        if let Some(font) = ctx.get_sans_serif() {
+            let width1 = ctx.measure_text("A", &font, 16.0);
+            let width5 = ctx.measure_text("AAAAA", &font, 16.0);
+
+            // 5 chars should be wider than 1 char
+            assert!(width5 > width1);
+            // Should be roughly 5x (with some tolerance for kerning)
+            assert!(width5 > width1 * 4.0);
+            assert!(width5 < width1 * 6.0);
+        }
+    }
+
+    #[test]
+    fn test_measure_text_font_size_scaling() {
+        let ctx = FontContext::new();
+        if !ctx.has_fonts() {
+            return;
+        }
+
+        if let Some(font) = ctx.get_sans_serif() {
+            let width16 = ctx.measure_text("Hello", &font, 16.0);
+            let width32 = ctx.measure_text("Hello", &font, 32.0);
+
+            // Double font size should roughly double width
+            assert!(width32 > width16 * 1.8);
+            assert!(width32 < width16 * 2.2);
+        }
+    }
+
+    #[test]
+    fn test_measure_text_detailed_empty() {
+        let ctx = FontContext::new();
+        if !ctx.has_fonts() {
+            return;
+        }
+
+        if let Some(font) = ctx.get_sans_serif() {
+            let measurement = ctx.measure_text_detailed("", &font, 16.0);
+            assert_eq!(measurement.width, 0.0);
+            assert_eq!(measurement.glyph_count, 0);
+            assert!(!measurement.is_shaped);
+        }
+    }
+
+    #[test]
+    fn test_measure_text_detailed_shaped() {
+        let ctx = FontContext::new();
+        if !ctx.has_fonts() {
+            return;
+        }
+
+        if let Some(font) = ctx.get_sans_serif() {
+            let measurement = ctx.measure_text_detailed("Hello", &font, 16.0);
+            assert!(measurement.width > 0.0);
+            assert!(measurement.glyph_count > 0);
+            assert!(measurement.is_shaped);
+        }
+    }
+
+    #[test]
+    fn test_measure_text_detailed_glyph_count() {
+        let ctx = FontContext::new();
+        if !ctx.has_fonts() {
+            return;
+        }
+
+        if let Some(font) = ctx.get_sans_serif() {
+            let measurement = ctx.measure_text_detailed("Hello", &font, 16.0);
+            // For simple ASCII text, glyph count should equal char count
+            assert_eq!(measurement.glyph_count, 5);
+        }
+    }
+
+    #[test]
+    fn test_get_scaled_metrics() {
+        let ctx = FontContext::new();
+        if !ctx.has_fonts() {
+            return;
+        }
+
+        if let Some(font) = ctx.get_sans_serif() {
+            let metrics = ctx.get_scaled_metrics(&font, 16.0);
+            assert!(metrics.is_some());
+
+            let m = metrics.unwrap();
+            assert_eq!(m.font_size, 16.0);
+            assert!(m.ascent > 0.0);
+            assert!(m.descent > 0.0);
+            assert!(m.line_height > 0.0);
+        }
+    }
+
+    #[test]
+    fn test_get_scaled_metrics_different_sizes() {
+        let ctx = FontContext::new();
+        if !ctx.has_fonts() {
+            return;
+        }
+
+        if let Some(font) = ctx.get_sans_serif() {
+            let m16 = ctx.get_scaled_metrics(&font, 16.0);
+            let m32 = ctx.get_scaled_metrics(&font, 32.0);
+
+            assert!(m16.is_some());
+            assert!(m32.is_some());
+
+            let m16 = m16.unwrap();
+            let m32 = m32.unwrap();
+
+            // Double size should roughly double metrics
+            assert!(m32.ascent > m16.ascent * 1.8);
+            assert!(m32.line_height > m16.line_height * 1.8);
+        }
+    }
+
+    #[test]
+    fn test_measure_text_unicode() {
+        let ctx = FontContext::new();
+        if !ctx.has_fonts() {
+            return;
+        }
+
+        if let Some(font) = ctx.get_sans_serif() {
+            // Test with Unicode characters
+            let width = ctx.measure_text("Héllo", &font, 16.0);
+            assert!(width > 0.0);
+        }
+    }
+
+    #[test]
+    fn test_measure_text_spaces() {
+        let ctx = FontContext::new();
+        if !ctx.has_fonts() {
+            return;
+        }
+
+        if let Some(font) = ctx.get_sans_serif() {
+            let width_no_space = ctx.measure_text("AB", &font, 16.0);
+            let width_with_space = ctx.measure_text("A B", &font, 16.0);
+
+            // Text with space should be wider
+            assert!(width_with_space > width_no_space);
         }
     }
 }

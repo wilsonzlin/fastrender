@@ -71,7 +71,7 @@ pub use font_db::{
     FontDatabase, FontMetrics, FontStretch, FontStyle, FontWeight, GenericFamily, LoadedFont, ScaledMetrics,
 };
 pub use font_fallback::{FallbackChain, FallbackChainBuilder, FamilyEntry, FontId};
-pub use font_loader::FontContext;
+pub use font_loader::{FontContext, TextMeasurement};
 
 // ============================================================================
 // Legacy V1 Implementation (to be refactored in Wave 4+)
