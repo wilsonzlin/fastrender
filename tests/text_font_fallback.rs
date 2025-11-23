@@ -4,8 +4,7 @@
 //! CSS Fonts Module Level 4, Section 5.
 
 use fastrender::text::{
-    FallbackChain, FallbackChainBuilder, FamilyEntry, FontDatabase, FontId, FontStretch,
-    FontStyle, GenericFamily,
+    FallbackChain, FallbackChainBuilder, FamilyEntry, FontDatabase, FontId, FontStretch, FontStyle, GenericFamily,
 };
 
 // ============================================================================
@@ -19,18 +18,12 @@ fn test_generic_family_parse_serif() {
 
 #[test]
 fn test_generic_family_parse_sans_serif() {
-    assert_eq!(
-        GenericFamily::parse("sans-serif"),
-        Some(GenericFamily::SansSerif)
-    );
+    assert_eq!(GenericFamily::parse("sans-serif"), Some(GenericFamily::SansSerif));
 }
 
 #[test]
 fn test_generic_family_parse_monospace() {
-    assert_eq!(
-        GenericFamily::parse("monospace"),
-        Some(GenericFamily::Monospace)
-    );
+    assert_eq!(GenericFamily::parse("monospace"), Some(GenericFamily::Monospace));
 }
 
 #[test]
@@ -45,10 +38,7 @@ fn test_generic_family_parse_fantasy() {
 
 #[test]
 fn test_generic_family_parse_system_ui() {
-    assert_eq!(
-        GenericFamily::parse("system-ui"),
-        Some(GenericFamily::SystemUi)
-    );
+    assert_eq!(GenericFamily::parse("system-ui"), Some(GenericFamily::SystemUi));
 }
 
 #[test]
@@ -59,14 +49,8 @@ fn test_generic_family_parse_emoji() {
 #[test]
 fn test_generic_family_parse_case_insensitive() {
     assert_eq!(GenericFamily::parse("SERIF"), Some(GenericFamily::Serif));
-    assert_eq!(
-        GenericFamily::parse("Sans-Serif"),
-        Some(GenericFamily::SansSerif)
-    );
-    assert_eq!(
-        GenericFamily::parse("MONOSPACE"),
-        Some(GenericFamily::Monospace)
-    );
+    assert_eq!(GenericFamily::parse("Sans-Serif"), Some(GenericFamily::SansSerif));
+    assert_eq!(GenericFamily::parse("MONOSPACE"), Some(GenericFamily::Monospace));
 }
 
 #[test]
@@ -151,11 +135,7 @@ fn test_fallback_chain_mixed_families() {
 
 #[test]
 fn test_fallback_chain_from_families() {
-    let families = vec![
-        "Roboto".to_string(),
-        "Arial".to_string(),
-        "sans-serif".to_string(),
-    ];
+    let families = vec!["Roboto".to_string(), "Arial".to_string(), "sans-serif".to_string()];
     let chain = FallbackChain::from_families(&families);
 
     assert_eq!(chain.len(), 3);
@@ -175,11 +155,7 @@ fn test_fallback_chain_from_families() {
 
 #[test]
 fn test_fallback_chain_from_families_all_generic() {
-    let families = vec![
-        "serif".to_string(),
-        "sans-serif".to_string(),
-        "monospace".to_string(),
-    ];
+    let families = vec!["serif".to_string(), "sans-serif".to_string(), "monospace".to_string()];
     let chain = FallbackChain::from_families(&families);
 
     assert_eq!(chain.len(), 3);
@@ -225,29 +201,21 @@ fn test_fallback_chain_with_stretch() {
 
 #[test]
 fn test_fallback_chain_builder_family() {
-    let chain = FallbackChainBuilder::new()
-        .family("Arial")
-        .family("Helvetica")
-        .build();
+    let chain = FallbackChainBuilder::new().family("Arial").family("Helvetica").build();
 
     assert_eq!(chain.len(), 2);
 }
 
 #[test]
 fn test_fallback_chain_builder_generic() {
-    let chain = FallbackChainBuilder::new()
-        .generic(GenericFamily::Serif)
-        .build();
+    let chain = FallbackChainBuilder::new().generic(GenericFamily::Serif).build();
 
     assert_eq!(chain.len(), 1);
 }
 
 #[test]
 fn test_fallback_chain_builder_weight() {
-    let chain = FallbackChainBuilder::new()
-        .family("Arial")
-        .weight(700)
-        .build();
+    let chain = FallbackChainBuilder::new().family("Arial").weight(700).build();
 
     assert_eq!(chain.len(), 1);
 }
