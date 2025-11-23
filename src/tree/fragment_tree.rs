@@ -501,17 +501,34 @@ impl<'a> Iterator for FragmentIterator<'a> {
 pub struct FragmentTree {
     /// The root fragment (usually the viewport or document root)
     pub root: FragmentNode,
+
+    /// The viewport size (may differ from root fragment bounds)
+    viewport: Option<Size>,
 }
 
 impl FragmentTree {
     /// Creates a new fragment tree with the given root
     pub fn new(root: FragmentNode) -> Self {
-        Self { root }
+        Self { root, viewport: None }
     }
 
-    /// Returns the viewport size (root fragment size)
+    /// Creates a new fragment tree with explicit viewport size
+    ///
+    /// Use this when the viewport size should be tracked separately
+    /// from the root fragment's bounds (e.g., for scrollable content).
+    pub fn with_viewport(root: FragmentNode, viewport: Size) -> Self {
+        Self {
+            root,
+            viewport: Some(viewport),
+        }
+    }
+
+    /// Returns the viewport size
+    ///
+    /// If an explicit viewport was set, returns that; otherwise returns
+    /// the root fragment's size.
     pub fn viewport_size(&self) -> Size {
-        self.root.bounds.size
+        self.viewport.unwrap_or(self.root.bounds.size)
     }
 
     /// Computes the total bounding box of all content

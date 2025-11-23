@@ -6,8 +6,10 @@
 //! CSS Specification: CSS 2.1 Section 9.2 - Box Generation
 //! https://www.w3.org/TR/CSS21/visuren.html#box-gen
 
+use crate::geometry::Size;
 use crate::style::display::{Display, FormattingContextType};
-use crate::tree::box_tree::{BoxNode, BoxTree, ComputedStyle, DebugInfo};
+use crate::tree::anonymous::AnonymousBoxCreator;
+use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, ComputedStyle, DebugInfo, ReplacedType};
 use std::sync::Arc;
 
 /// Simplified DOM node representation
@@ -42,6 +44,15 @@ pub struct DOMNode {
 
     /// Child nodes
     pub children: Vec<DOMNode>,
+
+    /// Intrinsic size for replaced elements (images, video, etc.)
+    ///
+    /// This is set when the element has known dimensions (e.g., from
+    /// width/height attributes on <img> or natural dimensions).
+    pub intrinsic_size: Option<Size>,
+
+    /// Source URL for replaced elements (img src, video src, etc.)
+    pub src: Option<String>,
 }
 
 impl DOMNode {
@@ -54,6 +65,8 @@ impl DOMNode {
             style,
             text: None,
             children,
+            intrinsic_size: None,
+            src: None,
         }
     }
 
@@ -66,6 +79,49 @@ impl DOMNode {
             style,
             text: Some(text.into()),
             children: Vec::new(),
+            intrinsic_size: None,
+            src: None,
+        }
+    }
+
+    /// Creates a new replaced element (img, video, canvas, etc.)
+    ///
+    /// # Arguments
+    ///
+    /// * `tag_name` - Element tag (img, video, canvas, svg, iframe)
+    /// * `style` - Computed style for the element
+    /// * `src` - Source URL or data URI
+    /// * `intrinsic_size` - Natural dimensions of the content (if known)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use fastrender::tree::DOMNode;
+    /// use fastrender::tree::box_tree::ComputedStyle;
+    /// use fastrender::geometry::Size;
+    ///
+    /// let style = Arc::new(ComputedStyle::default());
+    /// let img = DOMNode::new_replaced("img", style, "image.png", Some(Size::new(100.0, 50.0)));
+    ///
+    /// assert!(img.is_replaced_element());
+    /// assert_eq!(img.intrinsic_size, Some(Size::new(100.0, 50.0)));
+    /// ```
+    pub fn new_replaced(
+        tag_name: impl Into<String>,
+        style: Arc<ComputedStyle>,
+        src: impl Into<String>,
+        intrinsic_size: Option<Size>,
+    ) -> Self {
+        Self {
+            tag_name: Some(tag_name.into()),
+            id: None,
+            classes: Vec::new(),
+            style,
+            text: None,
+            children: Vec::new(),
+            intrinsic_size,
+            src: Some(src.into()),
         }
     }
 
@@ -81,6 +137,22 @@ impl DOMNode {
         self
     }
 
+    /// Sets intrinsic size (builder pattern)
+    ///
+    /// Used for replaced elements to specify their natural dimensions.
+    pub fn with_intrinsic_size(mut self, size: Size) -> Self {
+        self.intrinsic_size = Some(size);
+        self
+    }
+
+    /// Sets source URL (builder pattern)
+    ///
+    /// Used for replaced elements (img src, video src, etc.)
+    pub fn with_src(mut self, src: impl Into<String>) -> Self {
+        self.src = Some(src.into());
+        self
+    }
+
     /// Returns true if this is a text node
     pub fn is_text(&self) -> bool {
         self.text.is_some()
@@ -91,9 +163,71 @@ impl DOMNode {
         self.tag_name.is_some()
     }
 
+    /// Returns true if this is a replaced element
+    ///
+    /// Replaced elements are elements whose content is outside the scope of
+    /// the CSS formatting model. Examples include:
+    /// - `<img>` - Images
+    /// - `<video>` - Video
+    /// - `<canvas>` - Canvas drawing surface
+    /// - `<svg>` - SVG graphics
+    /// - `<iframe>` - Nested browsing contexts
+    /// - `<embed>` - External content
+    /// - `<object>` - External resources
+    ///
+    /// # CSS 2.1 Section 3.1
+    ///
+    /// "An element whose content is outside the scope of the CSS formatting
+    /// model, such as an image, embedded document, or applet."
+    pub fn is_replaced_element(&self) -> bool {
+        if let Some(tag) = &self.tag_name {
+            matches!(
+                tag.as_str(),
+                "img" | "video" | "canvas" | "svg" | "iframe" | "embed" | "object" | "audio"
+            )
+        } else {
+            false
+        }
+    }
+
     /// Gets the display value from computed style
     pub fn display(&self) -> Display {
         self.style.display
+    }
+
+    /// Computes the aspect ratio from intrinsic size
+    ///
+    /// Returns width / height, or None if intrinsic size is not set
+    /// or height is zero.
+    pub fn aspect_ratio(&self) -> Option<f32> {
+        self.intrinsic_size.and_then(|size| {
+            if size.height > 0.0 {
+                Some(size.width / size.height)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Gets the replaced element type based on tag name
+    ///
+    /// Returns None if this is not a replaced element.
+    pub fn replaced_type(&self) -> Option<ReplacedType> {
+        if !self.is_replaced_element() {
+            return None;
+        }
+
+        let tag = self.tag_name.as_ref()?;
+        let src = self.src.clone().unwrap_or_default();
+
+        match tag.as_str() {
+            "img" => Some(ReplacedType::Image { src }),
+            "video" => Some(ReplacedType::Video { src }),
+            "canvas" => Some(ReplacedType::Canvas),
+            "svg" => Some(ReplacedType::Svg { content: src }),
+            "iframe" => Some(ReplacedType::Iframe { src }),
+            _ => None,
+        }
     }
 }
 
@@ -155,6 +289,11 @@ pub enum BoxGenerationError {
 
     /// Unsupported feature (for future use)
     Unsupported(String),
+
+    /// Invalid box tree structure
+    ///
+    /// Examples: text box with children, replaced box with children
+    InvalidStructure(String),
 }
 
 impl std::fmt::Display for BoxGenerationError {
@@ -164,6 +303,7 @@ impl std::fmt::Display for BoxGenerationError {
             Self::RootDisplayContents => write!(f, "Root element has display: contents"),
             Self::InvalidDisplay(msg) => write!(f, "Invalid display value: {}", msg),
             Self::Unsupported(msg) => write!(f, "Unsupported feature: {}", msg),
+            Self::InvalidStructure(msg) => write!(f, "Invalid structure: {}", msg),
         }
     }
 }
@@ -223,14 +363,63 @@ impl BoxGenerator {
         // Generate box for root
         let root_box = self.generate_box_for_element(dom_root)?;
 
-        Ok(BoxTree::new(root_box))
+        // Apply anonymous box fixup if enabled
+        let final_root = if self.config.insert_anonymous_boxes {
+            AnonymousBoxCreator::fixup_tree(root_box)
+        } else {
+            root_box
+        };
+
+        Ok(BoxTree::new(final_root))
+    }
+
+    /// Generates a box tree with anonymous box fixup
+    ///
+    /// This is a convenience method that generates the box tree with
+    /// anonymous box insertion enabled, regardless of the config setting.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - Root element has `display: none`
+    /// - Root element has `display: contents`
+    pub fn generate_with_anonymous_fixup(&self, dom_root: &DOMNode) -> Result<BoxTree, BoxGenerationError> {
+        // Root must generate a box
+        if self.should_skip_element(dom_root) {
+            return Err(BoxGenerationError::RootDisplayNone);
+        }
+
+        if self.is_display_contents(dom_root) {
+            return Err(BoxGenerationError::RootDisplayContents);
+        }
+
+        // Generate box for root
+        let root_box = self.generate_box_for_element(dom_root)?;
+
+        // Always apply anonymous box fixup
+        let fixed_root = AnonymousBoxCreator::fixup_tree(root_box);
+
+        Ok(BoxTree::new(fixed_root))
     }
 
     /// Generates a box for a single DOM node (element or text)
+    ///
+    /// # CSS 2.1 Section 9.2
+    ///
+    /// Box generation determines what type of box is created based on:
+    /// 1. Element type (text node, element, replaced element)
+    /// 2. Display property value
+    /// 3. Replaced element status (img, video, etc.)
     fn generate_box_for_element(&self, node: &DOMNode) -> Result<BoxNode, BoxGenerationError> {
         // Handle text nodes
         if node.is_text() {
             return Ok(self.create_text_box(node));
+        }
+
+        // Handle replaced elements (img, video, canvas, etc.)
+        // Replaced elements don't have children in the CSS sense
+        if node.is_replaced_element() {
+            return self.create_replaced_box(node);
         }
 
         // Generate boxes for children first
@@ -296,6 +485,34 @@ impl BoxGenerator {
         }
     }
 
+    /// Creates a replaced box for replaced elements (img, video, canvas, etc.)
+    ///
+    /// # CSS 2.1 Section 10.3.2
+    ///
+    /// "Replaced elements are those whose content is outside the scope of
+    /// the CSS formatting model, such as an image, embedded document, or applet."
+    ///
+    /// Replaced elements have intrinsic dimensions and aspect ratios that affect
+    /// how they are sized during layout.
+    fn create_replaced_box(&self, node: &DOMNode) -> Result<BoxNode, BoxGenerationError> {
+        let replaced_type = node
+            .replaced_type()
+            .ok_or_else(|| BoxGenerationError::Unsupported(format!("Not a replaced element: {:?}", node.tag_name)))?;
+
+        let intrinsic_size = node.intrinsic_size;
+        let aspect_ratio = node.aspect_ratio();
+
+        let box_node = BoxNode::new_replaced(node.style.clone(), replaced_type, intrinsic_size, aspect_ratio);
+
+        // Add debug info if enabled
+        if self.config.include_debug_info {
+            let debug_info = self.create_debug_info(node);
+            Ok(box_node.with_debug_info(debug_info))
+        } else {
+            Ok(box_node)
+        }
+    }
+
     /// Generates boxes for all children of a node
     ///
     /// Handles:
@@ -324,10 +541,8 @@ impl BoxGenerator {
             child_boxes.push(child_box);
         }
 
-        // Future (Wave 3): Insert anonymous boxes here
-        // if self.config.insert_anonymous_boxes {
-        //     child_boxes = self.insert_anonymous_boxes(child_boxes);
-        // }
+        // Note: Anonymous box fixup is now done as a post-processing step
+        // after the entire tree is generated. See AnonymousBoxCreator::fixup_tree()
 
         Ok(child_boxes)
     }
@@ -366,6 +581,173 @@ impl BoxGenerator {
         }
 
         matches!(node.display(), Display::Contents)
+    }
+}
+
+// =============================================================================
+// Utility Methods for Box Tree Operations
+// =============================================================================
+
+impl BoxGenerator {
+    /// Counts total boxes in a generated tree (including root)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use fastrender::tree::{BoxNode, FormattingContextType};
+    /// use fastrender::tree::box_tree::ComputedStyle;
+    /// use fastrender::tree::BoxGenerator;
+    ///
+    /// let style = Arc::new(ComputedStyle::default());
+    /// let child = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
+    /// let parent = BoxNode::new_block(style, FormattingContextType::Block, vec![child]);
+    ///
+    /// let count = BoxGenerator::count_boxes(&parent);
+    /// assert_eq!(count, 2); // parent + child
+    /// ```
+    pub fn count_boxes(box_node: &BoxNode) -> usize {
+        1 + box_node
+            .children
+            .iter()
+            .map(|child| Self::count_boxes(child))
+            .sum::<usize>()
+    }
+
+    /// Finds all boxes matching a predicate
+    ///
+    /// Traverses the box tree and returns references to all boxes
+    /// where the predicate returns true.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use fastrender::tree::{BoxNode, BoxType, FormattingContextType};
+    /// use fastrender::tree::box_tree::ComputedStyle;
+    /// use fastrender::tree::BoxGenerator;
+    ///
+    /// let style = Arc::new(ComputedStyle::default());
+    /// let text = BoxNode::new_text(style.clone(), "Hello".to_string());
+    /// let inline = BoxNode::new_inline(style.clone(), vec![text]);
+    /// let block = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![inline]);
+    ///
+    /// // Find all text boxes
+    /// let text_boxes = BoxGenerator::find_boxes_by_predicate(&block, |b| b.is_text());
+    /// assert_eq!(text_boxes.len(), 1);
+    /// ```
+    pub fn find_boxes_by_predicate<'a, F>(box_node: &'a BoxNode, predicate: F) -> Vec<&'a BoxNode>
+    where
+        F: Fn(&BoxNode) -> bool + Copy,
+    {
+        let mut result = Vec::new();
+
+        if predicate(box_node) {
+            result.push(box_node);
+        }
+
+        for child in &box_node.children {
+            result.extend(Self::find_boxes_by_predicate(child, predicate));
+        }
+
+        result
+    }
+
+    /// Finds all boxes of a specific box type
+    ///
+    /// Convenience wrapper around find_boxes_by_predicate for type queries.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use fastrender::tree::{BoxNode, FormattingContextType};
+    /// use fastrender::tree::box_tree::ComputedStyle;
+    /// use fastrender::tree::BoxGenerator;
+    ///
+    /// let style = Arc::new(ComputedStyle::default());
+    /// let child1 = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
+    /// let child2 = BoxNode::new_inline(style.clone(), vec![]);
+    /// let parent = BoxNode::new_block(style, FormattingContextType::Block, vec![child1, child2]);
+    ///
+    /// // Find all block boxes
+    /// let block_boxes = BoxGenerator::find_block_boxes(&parent);
+    /// assert_eq!(block_boxes.len(), 2); // parent + child1
+    /// ```
+    pub fn find_block_boxes(box_node: &BoxNode) -> Vec<&BoxNode> {
+        Self::find_boxes_by_predicate(box_node, |b| b.is_block_level())
+    }
+
+    /// Finds all inline boxes
+    pub fn find_inline_boxes(box_node: &BoxNode) -> Vec<&BoxNode> {
+        Self::find_boxes_by_predicate(box_node, |b| b.is_inline_level())
+    }
+
+    /// Finds all text boxes
+    pub fn find_text_boxes(box_node: &BoxNode) -> Vec<&BoxNode> {
+        Self::find_boxes_by_predicate(box_node, |b| b.is_text())
+    }
+
+    /// Finds all replaced boxes
+    pub fn find_replaced_boxes(box_node: &BoxNode) -> Vec<&BoxNode> {
+        Self::find_boxes_by_predicate(box_node, |b| b.is_replaced())
+    }
+
+    /// Validates box tree structure
+    ///
+    /// Checks for common structural errors:
+    /// - Text boxes with children (invalid)
+    /// - Replaced boxes with children (invalid)
+    ///
+    /// Returns Ok(()) if the tree is valid, Err with description if not.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use fastrender::tree::{BoxNode, FormattingContextType};
+    /// use fastrender::tree::box_tree::ComputedStyle;
+    /// use fastrender::tree::BoxGenerator;
+    ///
+    /// let style = Arc::new(ComputedStyle::default());
+    /// let valid_tree = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![
+    ///     BoxNode::new_text(style.clone(), "Hello".to_string()),
+    /// ]);
+    ///
+    /// assert!(BoxGenerator::validate_box_tree(&valid_tree).is_ok());
+    /// ```
+    pub fn validate_box_tree(box_node: &BoxNode) -> Result<(), BoxGenerationError> {
+        // Text boxes cannot have children
+        if box_node.is_text() && !box_node.children.is_empty() {
+            return Err(BoxGenerationError::InvalidStructure(
+                "Text box cannot have children".to_string(),
+            ));
+        }
+
+        // Replaced boxes cannot have children
+        if box_node.is_replaced() && !box_node.children.is_empty() {
+            return Err(BoxGenerationError::InvalidStructure(
+                "Replaced box cannot have children".to_string(),
+            ));
+        }
+
+        // Recursively validate children
+        for child in &box_node.children {
+            Self::validate_box_tree(child)?;
+        }
+
+        Ok(())
+    }
+
+    /// Returns the depth of the box tree
+    ///
+    /// The depth is the maximum nesting level from root to any leaf.
+    pub fn tree_depth(box_node: &BoxNode) -> usize {
+        if box_node.children.is_empty() {
+            1
+        } else {
+            1 + box_node.children.iter().map(Self::tree_depth).max().unwrap_or(0)
+        }
     }
 }
 
@@ -748,5 +1130,423 @@ mod tests {
         let result = generator.generate(&dom);
         assert!(result.is_err());
         assert!(matches!(result, Err(BoxGenerationError::RootDisplayContents)));
+    }
+
+    // =============================================================================
+    // Replaced Element Tests
+    // =============================================================================
+
+    #[test]
+    fn test_dom_node_is_replaced_element() {
+        let style = default_style();
+
+        // Test replaced elements
+        assert!(DOMNode::new_element("img", style.clone(), vec![]).is_replaced_element());
+        assert!(DOMNode::new_element("video", style.clone(), vec![]).is_replaced_element());
+        assert!(DOMNode::new_element("canvas", style.clone(), vec![]).is_replaced_element());
+        assert!(DOMNode::new_element("svg", style.clone(), vec![]).is_replaced_element());
+        assert!(DOMNode::new_element("iframe", style.clone(), vec![]).is_replaced_element());
+        assert!(DOMNode::new_element("embed", style.clone(), vec![]).is_replaced_element());
+        assert!(DOMNode::new_element("object", style.clone(), vec![]).is_replaced_element());
+        assert!(DOMNode::new_element("audio", style.clone(), vec![]).is_replaced_element());
+
+        // Test non-replaced elements
+        assert!(!DOMNode::new_element("div", style.clone(), vec![]).is_replaced_element());
+        assert!(!DOMNode::new_element("span", style.clone(), vec![]).is_replaced_element());
+        assert!(!DOMNode::new_element("p", style.clone(), vec![]).is_replaced_element());
+        assert!(!DOMNode::new_text("text", style.clone()).is_replaced_element());
+    }
+
+    #[test]
+    fn test_new_replaced_constructor() {
+        let style = default_style();
+        let size = crate::geometry::Size::new(100.0, 50.0);
+
+        let img = DOMNode::new_replaced("img", style.clone(), "image.png", Some(size));
+
+        assert_eq!(img.tag_name.as_deref(), Some("img"));
+        assert_eq!(img.src.as_deref(), Some("image.png"));
+        assert_eq!(img.intrinsic_size, Some(size));
+        assert!(img.is_replaced_element());
+    }
+
+    #[test]
+    fn test_replaced_element_aspect_ratio() {
+        let style = default_style();
+        let size = crate::geometry::Size::new(100.0, 50.0);
+
+        let img = DOMNode::new_replaced("img", style.clone(), "test.png", Some(size));
+        assert_eq!(img.aspect_ratio(), Some(2.0)); // 100/50 = 2
+
+        // Test with no intrinsic size
+        let img_no_size = DOMNode::new_replaced("img", style.clone(), "test.png", None);
+        assert_eq!(img_no_size.aspect_ratio(), None);
+
+        // Test with zero height
+        let zero_height = DOMNode::new_replaced("img", style, "test.png", Some(crate::geometry::Size::new(100.0, 0.0)));
+        assert_eq!(zero_height.aspect_ratio(), None);
+    }
+
+    #[test]
+    fn test_replaced_element_type_detection() {
+        let style = default_style();
+
+        let img = DOMNode::new_replaced("img", style.clone(), "test.png", None);
+        assert!(matches!(
+            img.replaced_type(),
+            Some(crate::tree::ReplacedType::Image { .. })
+        ));
+
+        let video = DOMNode::new_replaced("video", style.clone(), "test.mp4", None);
+        assert!(matches!(
+            video.replaced_type(),
+            Some(crate::tree::ReplacedType::Video { .. })
+        ));
+
+        let canvas = DOMNode::new_element("canvas", style.clone(), vec![]);
+        assert!(matches!(
+            canvas.replaced_type(),
+            Some(crate::tree::ReplacedType::Canvas)
+        ));
+
+        let div = DOMNode::new_element("div", style, vec![]);
+        assert!(div.replaced_type().is_none());
+    }
+
+    #[test]
+    fn test_generate_replaced_box() {
+        let generator = BoxGenerator::new();
+        let style = default_style();
+        let size = crate::geometry::Size::new(200.0, 100.0);
+
+        let img = DOMNode::new_replaced("img", style.clone(), "test.png", Some(size));
+        let wrapper = DOMNode::new_element("div", style_with_display(Display::Block), vec![img]);
+
+        let box_tree = generator.generate(&wrapper).unwrap();
+
+        // Root (div) + img
+        assert_eq!(box_tree.count_boxes(), 2);
+
+        // Check that the img is a replaced box
+        let img_box = &box_tree.root.children[0];
+        assert!(img_box.is_replaced());
+    }
+
+    #[test]
+    fn test_generate_multiple_replaced_elements() {
+        let generator = BoxGenerator::new();
+        let style = default_style();
+
+        let img1 = DOMNode::new_replaced(
+            "img",
+            style.clone(),
+            "img1.png",
+            Some(crate::geometry::Size::new(100.0, 100.0)),
+        );
+        let video = DOMNode::new_replaced(
+            "video",
+            style.clone(),
+            "video.mp4",
+            Some(crate::geometry::Size::new(640.0, 480.0)),
+        );
+        let img2 = DOMNode::new_replaced("img", style.clone(), "img2.png", None);
+
+        let container = DOMNode::new_element("div", style_with_display(Display::Block), vec![img1, video, img2]);
+
+        let box_tree = generator.generate(&container).unwrap();
+
+        assert_eq!(box_tree.count_boxes(), 4); // container + 3 replaced
+        assert_eq!(BoxGenerator::find_replaced_boxes(&box_tree.root).len(), 3);
+    }
+
+    #[test]
+    fn test_replaced_element_with_display_none_child() {
+        let generator = BoxGenerator::new();
+        let style = default_style();
+
+        // Even though img has children (which shouldn't happen in real HTML),
+        // the generator should handle replaced elements without processing children
+        let img = DOMNode::new_replaced("img", style.clone(), "test.png", None);
+        let container = DOMNode::new_element("div", style_with_display(Display::Block), vec![img]);
+
+        let box_tree = generator.generate(&container).unwrap();
+
+        assert_eq!(box_tree.count_boxes(), 2);
+        let replaced_boxes = BoxGenerator::find_replaced_boxes(&box_tree.root);
+        assert_eq!(replaced_boxes.len(), 1);
+        assert!(replaced_boxes[0].children.is_empty());
+    }
+
+    #[test]
+    fn test_replaced_element_inline_context() {
+        let generator = BoxGenerator::new();
+        let style = default_style();
+
+        // img in inline context
+        let text = DOMNode::new_text("Hello ", style.clone());
+        let img = DOMNode::new_replaced(
+            "img",
+            style.clone(),
+            "icon.png",
+            Some(crate::geometry::Size::new(16.0, 16.0)),
+        );
+        let text2 = DOMNode::new_text(" World", style.clone());
+
+        let span = DOMNode::new_element("span", style_with_display(Display::Inline), vec![text, img, text2]);
+        let p = DOMNode::new_element("p", style_with_display(Display::Block), vec![span]);
+
+        let box_tree = generator.generate(&p).unwrap();
+
+        // p + span + 2 text + 1 img = 5
+        assert_eq!(box_tree.count_boxes(), 5);
+        assert_eq!(BoxGenerator::find_replaced_boxes(&box_tree.root).len(), 1);
+        assert_eq!(BoxGenerator::find_text_boxes(&box_tree.root).len(), 2);
+    }
+
+    // =============================================================================
+    // Utility Method Tests
+    // =============================================================================
+
+    #[test]
+    fn test_count_boxes_utility() {
+        let style = default_style();
+
+        // Single box
+        let single = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
+        assert_eq!(BoxGenerator::count_boxes(&single), 1);
+
+        // Parent with 3 children
+        let children = vec![
+            BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]),
+            BoxNode::new_inline(style.clone(), vec![]),
+            BoxNode::new_text(style.clone(), "text".to_string()),
+        ];
+        let parent = BoxNode::new_block(style, FormattingContextType::Block, children);
+        assert_eq!(BoxGenerator::count_boxes(&parent), 4);
+    }
+
+    #[test]
+    fn test_find_boxes_by_predicate() {
+        let style = default_style();
+
+        let text1 = BoxNode::new_text(style.clone(), "Hello".to_string());
+        let text2 = BoxNode::new_text(style.clone(), "World".to_string());
+        let inline = BoxNode::new_inline(style.clone(), vec![text1]);
+        let block = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![inline, text2]);
+
+        // Find all text boxes
+        let text_boxes = BoxGenerator::find_boxes_by_predicate(&block, |b| b.is_text());
+        assert_eq!(text_boxes.len(), 2);
+
+        // Find inline boxes (inline + 2 text boxes since text is inline-level)
+        let inline_boxes = BoxGenerator::find_boxes_by_predicate(&block, |b| b.is_inline_level());
+        assert_eq!(inline_boxes.len(), 3); // 1 inline + 2 text boxes
+    }
+
+    #[test]
+    fn test_find_block_boxes() {
+        let style = default_style();
+
+        let text = BoxNode::new_text(style.clone(), "text".to_string());
+        let inline = BoxNode::new_inline(style.clone(), vec![]);
+        let block1 = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
+        let block2 = BoxNode::new_block(style.clone(), FormattingContextType::Flex, vec![]);
+        let root = BoxNode::new_block(style, FormattingContextType::Block, vec![text, inline, block1, block2]);
+
+        let blocks = BoxGenerator::find_block_boxes(&root);
+        assert_eq!(blocks.len(), 3); // root + block1 + block2
+    }
+
+    #[test]
+    fn test_find_inline_boxes() {
+        let style = default_style();
+
+        let text = BoxNode::new_text(style.clone(), "text".to_string());
+        let inline1 = BoxNode::new_inline(style.clone(), vec![text]);
+        let inline2 = BoxNode::new_inline(style.clone(), vec![]);
+        let root = BoxNode::new_block(style, FormattingContextType::Block, vec![inline1, inline2]);
+
+        // inline1 + inline2 + text (text is also inline-level)
+        let inlines = BoxGenerator::find_inline_boxes(&root);
+        assert_eq!(inlines.len(), 3);
+    }
+
+    #[test]
+    fn test_find_text_boxes() {
+        let style = default_style();
+
+        let text1 = BoxNode::new_text(style.clone(), "Hello".to_string());
+        let text2 = BoxNode::new_text(style.clone(), "World".to_string());
+        let inline = BoxNode::new_inline(style.clone(), vec![text1]);
+        let root = BoxNode::new_block(style, FormattingContextType::Block, vec![inline, text2]);
+
+        let texts = BoxGenerator::find_text_boxes(&root);
+        assert_eq!(texts.len(), 2);
+    }
+
+    #[test]
+    fn test_find_replaced_boxes_utility() {
+        let style = default_style();
+
+        let img = BoxNode::new_replaced(
+            style.clone(),
+            crate::tree::ReplacedType::Image {
+                src: "test.png".to_string(),
+            },
+            Some(crate::geometry::Size::new(100.0, 100.0)),
+            Some(1.0),
+        );
+        let video = BoxNode::new_replaced(
+            style.clone(),
+            crate::tree::ReplacedType::Video {
+                src: "test.mp4".to_string(),
+            },
+            None,
+            None,
+        );
+        let text = BoxNode::new_text(style.clone(), "text".to_string());
+        let root = BoxNode::new_block(style, FormattingContextType::Block, vec![img, video, text]);
+
+        let replaced = BoxGenerator::find_replaced_boxes(&root);
+        assert_eq!(replaced.len(), 2);
+    }
+
+    #[test]
+    fn test_validate_box_tree_valid() {
+        let style = default_style();
+
+        let text = BoxNode::new_text(style.clone(), "Hello".to_string());
+        let inline = BoxNode::new_inline(style.clone(), vec![text]);
+        let root = BoxNode::new_block(style, FormattingContextType::Block, vec![inline]);
+
+        assert!(BoxGenerator::validate_box_tree(&root).is_ok());
+    }
+
+    #[test]
+    fn test_tree_depth() {
+        let style = default_style();
+
+        // Single node = depth 1
+        let single = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
+        assert_eq!(BoxGenerator::tree_depth(&single), 1);
+
+        // 2 levels
+        let child = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
+        let root = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![child]);
+        assert_eq!(BoxGenerator::tree_depth(&root), 2);
+
+        // 4 levels deep
+        let leaf = BoxNode::new_text(style.clone(), "text".to_string());
+        let level3 = BoxNode::new_inline(style.clone(), vec![leaf]);
+        let level2 = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![level3]);
+        let level1 = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![level2]);
+        assert_eq!(BoxGenerator::tree_depth(&level1), 4);
+    }
+
+    #[test]
+    fn test_with_builder_methods() {
+        let style = default_style();
+        let size = crate::geometry::Size::new(50.0, 25.0);
+
+        let node = DOMNode::new_element("img", style, vec![])
+            .with_id("my-image")
+            .with_class("thumbnail")
+            .with_class("responsive")
+            .with_src("path/to/image.png")
+            .with_intrinsic_size(size);
+
+        assert_eq!(node.id.as_deref(), Some("my-image"));
+        assert_eq!(node.classes.len(), 2);
+        assert_eq!(node.src.as_deref(), Some("path/to/image.png"));
+        assert_eq!(node.intrinsic_size, Some(size));
+    }
+
+    // =============================================================================
+    // Edge Case Tests
+    // =============================================================================
+
+    #[test]
+    fn test_empty_replaced_src() {
+        let style = default_style();
+
+        let img = DOMNode::new_replaced("img", style.clone(), "", None);
+        let wrapper = DOMNode::new_element("div", style_with_display(Display::Block), vec![img]);
+
+        let generator = BoxGenerator::new();
+        let box_tree = generator.generate(&wrapper).unwrap();
+
+        assert_eq!(box_tree.count_boxes(), 2);
+    }
+
+    #[test]
+    fn test_mixed_content_with_replaced() {
+        let generator = BoxGenerator::new();
+        let style = default_style();
+
+        // Create: div > text + img + text + video + div
+        let text1 = DOMNode::new_text("Before image ", style.clone());
+        let img = DOMNode::new_replaced(
+            "img",
+            style.clone(),
+            "test.png",
+            Some(crate::geometry::Size::new(100.0, 50.0)),
+        );
+        let text2 = DOMNode::new_text(" after image ", style.clone());
+        let video = DOMNode::new_replaced("video", style.clone(), "test.mp4", None);
+        let nested_div = DOMNode::new_element(
+            "div",
+            style_with_display(Display::Block),
+            vec![DOMNode::new_text("Nested", style.clone())],
+        );
+
+        let root = DOMNode::new_element(
+            "div",
+            style_with_display(Display::Block),
+            vec![text1, img, text2, video, nested_div],
+        );
+
+        let box_tree = generator.generate(&root).unwrap();
+
+        // root + 2 text + img + video + nested_div + nested_text = 7
+        assert_eq!(box_tree.count_boxes(), 7);
+        assert_eq!(BoxGenerator::find_replaced_boxes(&box_tree.root).len(), 2);
+        assert_eq!(BoxGenerator::find_text_boxes(&box_tree.root).len(), 3);
+    }
+
+    #[test]
+    fn test_svg_replaced_element() {
+        let generator = BoxGenerator::new();
+        let style = default_style();
+
+        let svg = DOMNode::new_replaced(
+            "svg",
+            style.clone(),
+            "<svg>...</svg>",
+            Some(crate::geometry::Size::new(100.0, 100.0)),
+        );
+        let wrapper = DOMNode::new_element("div", style_with_display(Display::Block), vec![svg]);
+
+        let box_tree = generator.generate(&wrapper).unwrap();
+
+        assert_eq!(BoxGenerator::find_replaced_boxes(&box_tree.root).len(), 1);
+    }
+
+    #[test]
+    fn test_iframe_replaced_element() {
+        let generator = BoxGenerator::new();
+        let style = default_style();
+
+        let iframe = DOMNode::new_replaced(
+            "iframe",
+            style.clone(),
+            "https://example.com",
+            Some(crate::geometry::Size::new(300.0, 200.0)),
+        );
+        let wrapper = DOMNode::new_element("div", style_with_display(Display::Block), vec![iframe]);
+
+        let box_tree = generator.generate(&wrapper).unwrap();
+
+        let replaced = BoxGenerator::find_replaced_boxes(&box_tree.root);
+        assert_eq!(replaced.len(), 1);
     }
 }

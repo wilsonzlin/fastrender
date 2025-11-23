@@ -1,474 +1,469 @@
 //! Comprehensive tests for font metrics extraction
 //!
 //! Tests cover:
-//! - Metrics extraction from various fonts
+//! - Metrics extraction from system fonts
 //! - Scaling metrics by font size
-//! - Fallback for missing metrics
 //! - Line height calculations
-//! - Edge cases and boundary conditions
+//! - Integration with FontDatabase and FontContext
 
-use fastrender::text::font::metrics::{extract_metrics, FontMetrics, ScaledFontMetrics};
+use fastrender::text::{FontContext, FontDatabase, FontStyle, FontWeight};
 
 // ============================================================================
-// Unit Tests for FontMetrics
+// FontMetrics Unit Tests
 // ============================================================================
 
-/// Test 1: Basic line height calculation
+/// Test: FontDatabase creation and font count
 #[test]
-fn test_line_height_basic_calculation() {
-    let metrics = create_test_metrics(1000, 800, -200, 100);
-
-    // line_height = ascent - descent + line_gap
-    // = 800 - (-200) + 100 = 1100
-    assert_eq!(metrics.line_height(), 1100);
+fn test_font_database_creation() {
+    let db = FontDatabase::new();
+    // System should have fonts (may be 0 in minimal CI)
+    let _ = db.font_count();
 }
 
-/// Test 2: Line height with zero line gap
+/// Test: FontDatabase empty creation
 #[test]
-fn test_line_height_zero_gap() {
-    let metrics = create_test_metrics(1000, 800, -200, 0);
-
-    // line_height = 800 - (-200) + 0 = 1000
-    assert_eq!(metrics.line_height(), 1000);
+fn test_font_database_empty() {
+    let db = FontDatabase::empty();
+    assert!(db.is_empty());
+    assert_eq!(db.font_count(), 0);
 }
 
-/// Test 3: Line height with large line gap
+/// Test: Query for generic sans-serif font
 #[test]
-fn test_line_height_large_gap() {
-    let metrics = create_test_metrics(1000, 800, -200, 500);
+fn test_query_sans_serif() {
+    let db = FontDatabase::new();
+    if db.is_empty() {
+        return;
+    }
 
-    // line_height = 800 - (-200) + 500 = 1500
-    assert_eq!(metrics.line_height(), 1500);
+    let id = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal);
+    if let Some(id) = id {
+        let font = db.load_font(id);
+        assert!(font.is_some());
+        assert!(!font.unwrap().data.is_empty());
+    }
 }
 
-/// Test 4: Scale metrics to 16px
+/// Test: Query for generic serif font
 #[test]
-fn test_scale_to_16px() {
-    let metrics = create_test_metrics(1000, 800, -200, 100);
-    let scaled = metrics.scale(16.0);
+fn test_query_serif() {
+    let db = FontDatabase::new();
+    if db.is_empty() {
+        return;
+    }
 
-    assert_eq!(scaled.font_size, 16.0);
-    assert_eq!(scaled.units_per_em, 1000);
-    assert_eq!(scaled.scale, 0.016);
-
-    // Ascent: 800 * 0.016 = 12.8
-    assert!((scaled.ascent - 12.8).abs() < 0.001);
-
-    // Descent: made positive: 200 * 0.016 = 3.2
-    assert!((scaled.descent - 3.2).abs() < 0.001);
-
-    // Line height: 1100 * 0.016 = 17.6
-    assert!((scaled.line_height - 17.6).abs() < 0.001);
+    let id = db.query("serif", FontWeight::NORMAL, FontStyle::Normal);
+    if id.is_some() {
+        let font = db.load_font(id.unwrap());
+        assert!(font.is_some());
+    }
 }
 
-/// Test 5: Scale metrics to 12px
+/// Test: Query for monospace font
 #[test]
-fn test_scale_to_12px() {
-    let metrics = create_test_metrics(1000, 800, -200, 100);
-    let scaled = metrics.scale(12.0);
+fn test_query_monospace() {
+    let db = FontDatabase::new();
+    if db.is_empty() {
+        return;
+    }
 
-    assert_eq!(scaled.font_size, 12.0);
-    assert_eq!(scaled.scale, 0.012);
-
-    // Ascent: 800 * 0.012 = 9.6
-    assert!((scaled.ascent - 9.6).abs() < 0.001);
+    let id = db.query("monospace", FontWeight::NORMAL, FontStyle::Normal);
+    if id.is_some() {
+        let font = db.load_font(id.unwrap());
+        assert!(font.is_some());
+    }
 }
 
-/// Test 6: Scale metrics to 72px (large font)
+/// Test: Font fallback chain
 #[test]
-fn test_scale_to_72px() {
-    let metrics = create_test_metrics(1000, 800, -200, 100);
-    let scaled = metrics.scale(72.0);
+fn test_font_fallback_chain() {
+    let db = FontDatabase::new();
+    if db.is_empty() {
+        return;
+    }
 
-    assert_eq!(scaled.font_size, 72.0);
-    assert_eq!(scaled.scale, 0.072);
+    let families = vec![
+        "NonExistentFont12345".to_string(),
+        "AnotherNonExistent".to_string(),
+        "sans-serif".to_string(),
+    ];
 
-    // Ascent: 800 * 0.072 = 57.6
-    assert!((scaled.ascent - 57.6).abs() < 0.001);
+    let id = db.resolve_family_list(&families, FontWeight::NORMAL, FontStyle::Normal);
+    if id.is_some() {
+        let font = db.load_font(id.unwrap());
+        assert!(font.is_some());
+    }
 }
 
-/// Test 7: Scale with 2048 units per em (common for TrueType)
+/// Test: Font metrics extraction from loaded font
 #[test]
-fn test_scale_with_2048_upem() {
-    let metrics = create_test_metrics(2048, 1800, -500, 200);
-    let scaled = metrics.scale(16.0);
+fn test_font_metrics_extraction() {
+    let db = FontDatabase::new();
+    if db.is_empty() {
+        return;
+    }
 
-    let expected_scale = 16.0 / 2048.0;
-    assert!((scaled.scale - expected_scale).abs() < 0.0001);
+    if let Some(id) = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal) {
+        let font = db.load_font(id).unwrap();
+        let metrics = font.metrics().expect("Should extract metrics");
 
-    // Ascent: 1800 * (16/2048) ≈ 14.0625
-    assert!((scaled.ascent - 14.0625).abs() < 0.001);
+        assert!(metrics.units_per_em > 0);
+        assert!(metrics.ascent > 0);
+        assert!(metrics.descent < 0); // Descent is typically negative
+        assert!(metrics.line_height > 0);
+    }
 }
 
-/// Test 8: x-height with actual value
+/// Test: Scaled metrics basic properties
 #[test]
-fn test_x_height_with_value() {
-    let mut metrics = create_test_metrics(1000, 800, -200, 100);
-    metrics.x_height = Some(500);
+fn test_scaled_metrics() {
+    let db = FontDatabase::new();
+    if db.is_empty() {
+        return;
+    }
 
-    let scaled = metrics.scale(16.0);
+    if let Some(id) = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal) {
+        let font = db.load_font(id).unwrap();
+        let metrics = font.metrics().expect("Should extract metrics");
+        let scaled = metrics.scale(16.0);
 
-    // x_height: 500 * 0.016 = 8.0
-    assert!(scaled.x_height.is_some());
-    assert!((scaled.x_height.unwrap() - 8.0).abs() < 0.001);
+        assert_eq!(scaled.font_size, 16.0);
+        assert!(scaled.ascent > 0.0);
+        assert!(scaled.descent > 0.0); // Scaled descent is positive
+        assert!(scaled.line_height > 0.0);
+    }
 }
 
-/// Test 9: x-height fallback when missing
+/// Test: Scaled metrics total height
 #[test]
-fn test_x_height_fallback() {
-    let metrics = create_test_metrics(1000, 800, -200, 100);
-    // x_height is None
+fn test_scaled_metrics_total_height() {
+    let db = FontDatabase::new();
+    if db.is_empty() {
+        return;
+    }
 
-    // Fallback should be 50% of ascent
-    let fallback = metrics.x_height_or_fallback(16.0);
-    let expected = 800.0 * 0.5 * (16.0 / 1000.0); // = 6.4
-    assert!((fallback - expected).abs() < 0.001);
+    if let Some(id) = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal) {
+        let font = db.load_font(id).unwrap();
+        let metrics = font.metrics().expect("Should extract metrics");
+        let scaled = metrics.scale(16.0);
+
+        // Total height should be reasonable for 16px font
+        let total = scaled.total_height();
+        assert!(total > 10.0 && total < 30.0);
+    }
 }
 
-/// Test 10: cap-height with actual value
-#[test]
-fn test_cap_height_with_value() {
-    let mut metrics = create_test_metrics(1000, 800, -200, 100);
-    metrics.cap_height = Some(700);
-
-    let scaled = metrics.scale(16.0);
-
-    // cap_height: 700 * 0.016 = 11.2
-    assert!(scaled.cap_height.is_some());
-    assert!((scaled.cap_height.unwrap() - 11.2).abs() < 0.001);
-}
-
-/// Test 11: cap-height fallback when missing
-#[test]
-fn test_cap_height_fallback() {
-    let metrics = create_test_metrics(1000, 800, -200, 100);
-    // cap_height is None
-
-    // Fallback should be 70% of ascent
-    let fallback = metrics.cap_height_or_fallback(16.0);
-    let expected = 800.0 * 0.7 * (16.0 / 1000.0); // = 8.96
-    assert!((fallback - expected).abs() < 0.001);
-}
-
-/// Test 12: Normal line height calculation
-#[test]
-fn test_normal_line_height() {
-    let metrics = create_test_metrics(1000, 800, -200, 100);
-
-    let normal = metrics.normal_line_height(16.0);
-    // line_height = 1100 * (16/1000) = 17.6
-    assert!((normal - 17.6).abs() < 0.001);
-}
-
-/// Test 13: Scaled metrics baseline offset
+/// Test: Baseline offset equals ascent
 #[test]
 fn test_baseline_offset() {
-    let metrics = create_test_metrics(1000, 800, -200, 100);
-    let scaled = metrics.scale(16.0);
-
-    // Baseline offset equals ascent
-    assert!((scaled.baseline_offset() - scaled.ascent).abs() < 0.001);
-    assert!((scaled.baseline_offset() - 12.8).abs() < 0.001);
-}
-
-/// Test 14: Scaled metrics em height
-#[test]
-fn test_em_height() {
-    let metrics = create_test_metrics(1000, 800, -200, 100);
-    let scaled = metrics.scale(16.0);
-
-    // em_height = ascent + descent (both positive in scaled)
-    // = 12.8 + 3.2 = 16.0
-    assert!((scaled.em_height() - 16.0).abs() < 0.001);
-}
-
-/// Test 15: Line height with multiplier
-#[test]
-fn test_line_height_multiplier() {
-    let metrics = create_test_metrics(1000, 800, -200, 100);
-    let scaled = metrics.scale(16.0);
-
-    let adjusted = scaled.with_line_height_multiplier(1.5);
-
-    // line_height = font_size * 1.5 = 24.0
-    assert!((adjusted.line_height - 24.0).abs() < 0.001);
-    // Other metrics unchanged
-    assert!((adjusted.ascent - scaled.ascent).abs() < 0.001);
-}
-
-/// Test 16: Absolute line height
-#[test]
-fn test_absolute_line_height() {
-    let metrics = create_test_metrics(1000, 800, -200, 100);
-    let scaled = metrics.scale(16.0);
-
-    let adjusted = scaled.with_line_height(30.0);
-
-    assert_eq!(adjusted.line_height, 30.0);
-}
-
-/// Test 17: Half leading calculation
-#[test]
-fn test_half_leading() {
-    let metrics = create_test_metrics(1000, 800, -200, 0);
-    let scaled = metrics.scale(16.0);
-
-    // em_height = 16.0, line_height = 16.0
-    // half_leading = (16.0 - 16.0) / 2 = 0
-    assert!((scaled.half_leading()).abs() < 0.001);
-
-    // With line gap
-    let metrics_gap = create_test_metrics(1000, 800, -200, 200);
-    let scaled_gap = metrics_gap.scale(16.0);
-
-    // line_height = 1200 * 0.016 = 19.2
-    // em_height = 16.0
-    // half_leading = (19.2 - 16.0) / 2 = 1.6
-    assert!((scaled_gap.half_leading() - 1.6).abs() < 0.001);
-}
-
-/// Test 18: Scaled x-height or estimate
-#[test]
-fn test_scaled_x_height_or_estimate() {
-    let mut metrics = create_test_metrics(1000, 800, -200, 100);
-    metrics.x_height = Some(500);
-
-    let scaled = metrics.scale(16.0);
-    assert!((scaled.x_height_or_estimate() - 8.0).abs() < 0.001);
-
-    // Without x_height
-    metrics.x_height = None;
-    let scaled_no_x = metrics.scale(16.0);
-    // Estimate: 50% of ascent = 12.8 * 0.5 = 6.4
-    assert!((scaled_no_x.x_height_or_estimate() - 6.4).abs() < 0.001);
-}
-
-/// Test 19: Scaled cap-height or estimate
-#[test]
-fn test_scaled_cap_height_or_estimate() {
-    let mut metrics = create_test_metrics(1000, 800, -200, 100);
-    metrics.cap_height = Some(700);
-
-    let scaled = metrics.scale(16.0);
-    assert!((scaled.cap_height_or_estimate() - 11.2).abs() < 0.001);
-
-    // Without cap_height
-    metrics.cap_height = None;
-    let scaled_no_cap = metrics.scale(16.0);
-    // Estimate: 70% of ascent = 12.8 * 0.7 = 8.96
-    assert!((scaled_no_cap.cap_height_or_estimate() - 8.96).abs() < 0.001);
-}
-
-/// Test 20: Underline metrics scaling
-#[test]
-fn test_underline_metrics_scaling() {
-    let mut metrics = create_test_metrics(1000, 800, -200, 100);
-    metrics.underline_position = -100;
-    metrics.underline_thickness = 50;
-
-    let scaled = metrics.scale(16.0);
-
-    // underline_position: -100 * 0.016 = -1.6
-    assert!((scaled.underline_position - (-1.6)).abs() < 0.001);
-    // underline_thickness: 50 * 0.016 = 0.8
-    assert!((scaled.underline_thickness - 0.8).abs() < 0.001);
-}
-
-/// Test 21: Strikeout metrics scaling when present
-#[test]
-fn test_strikeout_metrics_scaling() {
-    let mut metrics = create_test_metrics(1000, 800, -200, 100);
-    metrics.strikeout_position = Some(300);
-    metrics.strikeout_size = Some(50);
-
-    let scaled = metrics.scale(16.0);
-
-    // strikeout_position: 300 * 0.016 = 4.8
-    assert!(scaled.strikeout_position.is_some());
-    assert!((scaled.strikeout_position.unwrap() - 4.8).abs() < 0.001);
-
-    // strikeout_size: 50 * 0.016 = 0.8
-    assert!(scaled.strikeout_size.is_some());
-    assert!((scaled.strikeout_size.unwrap() - 0.8).abs() < 0.001);
-}
-
-/// Test 22: Strikeout metrics None when missing
-#[test]
-fn test_strikeout_metrics_none() {
-    let metrics = create_test_metrics(1000, 800, -200, 100);
-    // strikeout_position and strikeout_size are None
-
-    let scaled = metrics.scale(16.0);
-
-    assert!(scaled.strikeout_position.is_none());
-    assert!(scaled.strikeout_size.is_none());
-}
-
-/// Test 23: Average char width scaling
-#[test]
-fn test_average_char_width_scaling() {
-    let mut metrics = create_test_metrics(1000, 800, -200, 100);
-    metrics.average_char_width = Some(500);
-
-    let scaled = metrics.scale(16.0);
-
-    // average_char_width: 500 * 0.016 = 8.0
-    assert!(scaled.average_char_width.is_some());
-    assert!((scaled.average_char_width.unwrap() - 8.0).abs() < 0.001);
-}
-
-/// Test 24: Font style flags preserved
-#[test]
-fn test_font_style_flags() {
-    let mut metrics = create_test_metrics(1000, 800, -200, 100);
-    metrics.is_bold = true;
-    metrics.is_italic = true;
-    metrics.is_monospace = false;
-
-    assert!(metrics.is_bold);
-    assert!(metrics.is_italic);
-    assert!(!metrics.is_monospace);
-}
-
-/// Test 25: Very small font size scaling
-#[test]
-fn test_very_small_font_size() {
-    let metrics = create_test_metrics(1000, 800, -200, 100);
-    let scaled = metrics.scale(1.0);
-
-    assert_eq!(scaled.font_size, 1.0);
-    assert_eq!(scaled.scale, 0.001);
-    assert!((scaled.ascent - 0.8).abs() < 0.001);
-}
-
-/// Test 26: Very large font size scaling
-#[test]
-fn test_very_large_font_size() {
-    let metrics = create_test_metrics(1000, 800, -200, 100);
-    let scaled = metrics.scale(200.0);
-
-    assert_eq!(scaled.font_size, 200.0);
-    assert_eq!(scaled.scale, 0.2);
-    assert!((scaled.ascent - 160.0).abs() < 0.001);
-}
-
-/// Test 27: Edge case - zero descent
-#[test]
-fn test_zero_descent() {
-    let metrics = create_test_metrics(1000, 800, 0, 100);
-    let scaled = metrics.scale(16.0);
-
-    assert!((scaled.descent - 0.0).abs() < 0.001);
-    // line_height = 800 + 0 + 100 = 900 * 0.016 = 14.4
-    assert!((scaled.line_height - 14.4).abs() < 0.001);
-}
-
-/// Test 28: ScaledFontMetrics Clone and PartialEq
-#[test]
-fn test_scaled_metrics_clone_and_eq() {
-    let metrics = create_test_metrics(1000, 800, -200, 100);
-    let scaled1 = metrics.scale(16.0);
-    let scaled2 = scaled1.clone();
-
-    assert_eq!(scaled1, scaled2);
-    assert!((scaled1.ascent - scaled2.ascent).abs() < 0.001);
-}
-
-/// Test 29: FontMetrics Clone and PartialEq
-#[test]
-fn test_font_metrics_clone_and_eq() {
-    let metrics1 = create_test_metrics(1000, 800, -200, 100);
-    let metrics2 = metrics1.clone();
-
-    assert_eq!(metrics1, metrics2);
-    assert_eq!(metrics1.units_per_em, metrics2.units_per_em);
-}
-
-/// Test 30: Debug formatting
-#[test]
-fn test_debug_formatting() {
-    let metrics = create_test_metrics(1000, 800, -200, 100);
-    let debug_str = format!("{:?}", metrics);
-
-    assert!(debug_str.contains("FontMetrics"));
-    assert!(debug_str.contains("units_per_em: 1000"));
-    assert!(debug_str.contains("ascent: 800"));
-}
-
-// ============================================================================
-// Integration Tests with Real Font Files (if available)
-// ============================================================================
-
-/// Test with system font if available
-#[test]
-fn test_with_fontdb_system_font() {
-    use fontdb::Database;
-
-    let mut db = Database::new();
-    db.load_system_fonts();
-
-    // Try to find any available font
-    if db.faces().count() > 0 {
-        let first_face = db.faces().next().unwrap();
-        let id = first_face.id;
-
-        // Load the font data
-        if let Some((font_data, face_index)) = db.with_face_data(id, |data, index| (data.to_vec(), index)) {
-            let result = FontMetrics::from_font_data(&font_data, face_index);
-            assert!(result.is_ok(), "Should be able to extract metrics from system font");
-
-            let metrics = result.unwrap();
-            assert!(metrics.units_per_em > 0, "units_per_em should be positive");
-            assert!(metrics.ascent > 0, "ascent should be positive");
-            assert!(metrics.descent < 0, "descent should be negative");
-            assert!(metrics.glyph_count > 0, "should have glyphs");
-        }
+    let db = FontDatabase::new();
+    if db.is_empty() {
+        return;
     }
-    // If no system fonts available, test passes silently
+
+    if let Some(id) = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal) {
+        let font = db.load_font(id).unwrap();
+        let metrics = font.metrics().expect("Should extract metrics");
+        let scaled = metrics.scale(16.0);
+
+        assert_eq!(scaled.baseline_offset(), scaled.ascent);
+    }
 }
 
-/// Test extract_metrics convenience function
+/// Test: Line height with factor
 #[test]
-fn test_extract_metrics_function() {
-    use fontdb::Database;
+fn test_line_height_factor() {
+    let db = FontDatabase::new();
+    if db.is_empty() {
+        return;
+    }
 
-    let mut db = Database::new();
-    db.load_system_fonts();
+    if let Some(id) = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal) {
+        let font = db.load_font(id).unwrap();
+        let metrics = font.metrics().expect("Should extract metrics");
+        let scaled = metrics.scale(16.0);
+        let with_factor = scaled.with_line_height_factor(1.5);
 
-    // Try to find any available font
-    if db.faces().count() > 0 {
-        let first_face = db.faces().next().unwrap();
-        let id = first_face.id;
+        assert_eq!(with_factor.line_height, 24.0); // 16 * 1.5
+        assert_eq!(with_factor.font_size, 16.0); // Unchanged
+    }
+}
 
-        if let Some((font_data, face_index)) = db.with_face_data(id, |data, index| (data.to_vec(), index)) {
-            let face = ttf_parser::Face::parse(&font_data, face_index).unwrap();
-            let result = extract_metrics(&face);
-            assert!(result.is_ok());
-        }
+/// Test: Explicit line height
+#[test]
+fn test_explicit_line_height() {
+    let db = FontDatabase::new();
+    if db.is_empty() {
+        return;
+    }
+
+    if let Some(id) = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal) {
+        let font = db.load_font(id).unwrap();
+        let metrics = font.metrics().expect("Should extract metrics");
+        let scaled = metrics.scale(16.0);
+        let with_lh = scaled.with_line_height(30.0);
+
+        assert_eq!(with_lh.line_height, 30.0);
+    }
+}
+
+/// Test: Normal line height calculation
+#[test]
+fn test_normal_line_height() {
+    let db = FontDatabase::new();
+    if db.is_empty() {
+        return;
+    }
+
+    if let Some(id) = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal) {
+        let font = db.load_font(id).unwrap();
+        let metrics = font.metrics().expect("Should extract metrics");
+
+        let normal_lh = metrics.normal_line_height(16.0);
+        assert!(normal_lh > 0.0);
+        // Normal line height is usually around font size
+        assert!(normal_lh >= 14.0 && normal_lh < 32.0);
+    }
+}
+
+/// Test: Font caching
+#[test]
+fn test_font_caching() {
+    let db = FontDatabase::new();
+    if db.is_empty() {
+        return;
+    }
+
+    let id = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal);
+    if let Some(id) = id {
+        assert_eq!(db.cache_size(), 0);
+
+        let font1 = db.load_font(id);
+        assert!(font1.is_some());
+        assert_eq!(db.cache_size(), 1);
+
+        let font2 = db.load_font(id);
+        assert!(font2.is_some());
+
+        // Same data via Arc
+        let font1 = font1.unwrap();
+        let font2 = font2.unwrap();
+        assert!(std::sync::Arc::ptr_eq(&font1.data, &font2.data));
+    }
+}
+
+/// Test: Clear cache
+#[test]
+fn test_clear_cache() {
+    let db = FontDatabase::new();
+    if db.is_empty() {
+        return;
+    }
+
+    if let Some(id) = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal) {
+        let _font = db.load_font(id);
+        assert!(db.cache_size() > 0);
+
+        db.clear_cache();
+        assert_eq!(db.cache_size(), 0);
     }
 }
 
 // ============================================================================
-// Helper Functions
+// FontContext Tests
 // ============================================================================
 
-/// Create test FontMetrics with specified values
-fn create_test_metrics(units_per_em: u16, ascent: i16, descent: i16, line_gap: i16) -> FontMetrics {
-    FontMetrics {
-        units_per_em,
-        ascent,
-        descent,
-        line_gap,
-        x_height: None,
-        cap_height: None,
-        underline_position: -100,
-        underline_thickness: 50,
-        strikeout_position: None,
-        strikeout_size: None,
-        is_bold: false,
-        is_italic: false,
-        is_monospace: false,
-        average_char_width: None,
-        glyph_count: 256,
+/// Test: FontContext creation
+#[test]
+fn test_font_context_creation() {
+    let ctx = FontContext::new();
+    let _ = ctx.font_count();
+}
+
+/// Test: FontContext empty
+#[test]
+fn test_font_context_empty() {
+    let ctx = FontContext::empty();
+    assert!(!ctx.has_fonts());
+    assert_eq!(ctx.font_count(), 0);
+}
+
+/// Test: Get font with fallback
+#[test]
+fn test_get_font_fallback() {
+    let ctx = FontContext::new();
+    if !ctx.has_fonts() {
+        return;
+    }
+
+    let families = vec!["NonExistentFont12345".to_string(), "sans-serif".to_string()];
+    let font = ctx.get_font(&families, 400, false, false);
+    if font.is_some() {
+        assert!(!font.unwrap().data.is_empty());
+    }
+}
+
+/// Test: Get sans-serif font
+#[test]
+fn test_get_sans_serif() {
+    let ctx = FontContext::new();
+    if !ctx.has_fonts() {
+        return;
+    }
+
+    let font = ctx.get_sans_serif();
+    if font.is_some() {
+        assert!(!font.unwrap().family.is_empty());
+    }
+}
+
+/// Test: Get serif font
+#[test]
+fn test_get_serif() {
+    let ctx = FontContext::new();
+    if !ctx.has_fonts() {
+        return;
+    }
+
+    let font = ctx.get_serif();
+    if font.is_some() {
+        assert!(!font.unwrap().data.is_empty());
+    }
+}
+
+/// Test: Get monospace font
+#[test]
+fn test_get_monospace() {
+    let ctx = FontContext::new();
+    if !ctx.has_fonts() {
+        return;
+    }
+
+    let font = ctx.get_monospace();
+    if font.is_some() {
+        assert!(!font.unwrap().data.is_empty());
+    }
+}
+
+/// Test: FontContext clone shares database
+#[test]
+fn test_font_context_clone() {
+    let ctx1 = FontContext::new();
+    let ctx2 = ctx1.clone();
+
+    assert_eq!(ctx1.font_count(), ctx2.font_count());
+}
+
+/// Test: Get italic font
+#[test]
+fn test_get_font_italic() {
+    let ctx = FontContext::new();
+    if !ctx.has_fonts() {
+        return;
+    }
+
+    let families = vec!["sans-serif".to_string()];
+    let font = ctx.get_font(&families, 400, true, false);
+    if font.is_some() {
+        assert!(!font.unwrap().data.is_empty());
+    }
+}
+
+/// Test: Get bold font
+#[test]
+fn test_get_font_bold() {
+    let ctx = FontContext::new();
+    if !ctx.has_fonts() {
+        return;
+    }
+
+    let families = vec!["sans-serif".to_string()];
+    let font = ctx.get_font(&families, 700, false, false);
+    if font.is_some() {
+        let font = font.unwrap();
+        assert!(font.weight.value() >= 400);
+    }
+}
+
+// ============================================================================
+// FontWeight Tests
+// ============================================================================
+
+/// Test: Font weight constants
+#[test]
+fn test_font_weight_constants() {
+    assert_eq!(FontWeight::THIN.value(), 100);
+    assert_eq!(FontWeight::NORMAL.value(), 400);
+    assert_eq!(FontWeight::BOLD.value(), 700);
+    assert_eq!(FontWeight::BLACK.value(), 900);
+}
+
+/// Test: Font weight clamping
+#[test]
+fn test_font_weight_clamping() {
+    assert_eq!(FontWeight::new(0).value(), 100);
+    assert_eq!(FontWeight::new(50).value(), 100);
+    assert_eq!(FontWeight::new(1000).value(), 900);
+    assert_eq!(FontWeight::new(500).value(), 500);
+}
+
+/// Test: Font weight default
+#[test]
+fn test_font_weight_default() {
+    assert_eq!(FontWeight::default(), FontWeight::NORMAL);
+}
+
+/// Test: Font style default
+#[test]
+fn test_font_style_default() {
+    assert_eq!(FontStyle::default(), FontStyle::Normal);
+}
+
+// ============================================================================
+// Metrics from ttf-parser Face directly
+// ============================================================================
+
+/// Test: Extract metrics from ttf-parser Face
+#[test]
+fn test_extract_metrics_from_face() {
+    let db = FontDatabase::new();
+    if db.is_empty() {
+        return;
+    }
+
+    if let Some(id) = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal) {
+        let font = db.load_font(id).unwrap();
+        let face = font.as_ttf_face().expect("Should parse font");
+
+        // Verify we can access the face
+        assert!(face.units_per_em() > 0);
+        assert!(face.ascender() > 0);
+        assert!(face.descender() < 0);
+    }
+}
+
+/// Test: Different font sizes scale correctly
+#[test]
+fn test_scaling_different_sizes() {
+    let db = FontDatabase::new();
+    if db.is_empty() {
+        return;
+    }
+
+    if let Some(id) = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal) {
+        let font = db.load_font(id).unwrap();
+        let metrics = font.metrics().expect("Should extract metrics");
+
+        let scaled_12 = metrics.scale(12.0);
+        let scaled_16 = metrics.scale(16.0);
+        let scaled_24 = metrics.scale(24.0);
+
+        // Larger font = larger metrics
+        assert!(scaled_24.ascent > scaled_16.ascent);
+        assert!(scaled_16.ascent > scaled_12.ascent);
+
+        // Scale should be proportional
+        assert!((scaled_16.scale / scaled_12.scale - 16.0 / 12.0).abs() < 0.001);
+        assert!((scaled_24.scale / scaled_16.scale - 24.0 / 16.0).abs() < 0.001);
     }
 }

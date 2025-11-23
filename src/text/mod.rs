@@ -26,41 +26,47 @@
 //!
 //! # Module Organization
 //!
-//! This module contains:
-//! - `font` - Font loading, metrics, and database
-//! - `shaper.rs` - Text shaping integration (future)
-//! - `bidi.rs` - Bidirectional text handling (future)
-//! - `linebreak.rs` - Line breaking algorithm (future)
-//! - `run.rs` - Text run representation (future)
+//! - `font_db` - Font database and discovery
+//! - `font_loader` - High-level font context
+//! - `shaper` - Text shaping integration (future)
+//! - `bidi` - Bidirectional text handling (future)
+//! - `linebreak` - Line breaking algorithm (future)
 //!
 //! # Example
 //!
 //! ```rust,ignore
-//! use fastrender::text::{FontDatabase, Shaper};
+//! use fastrender::text::{FontContext, FontWeight, FontStyle};
 //!
-//! let font_db = FontDatabase::load_system_fonts();
-//! let shaper = Shaper::new(&font_db);
+//! // Create font context (loads system fonts)
+//! let ctx = FontContext::new();
 //!
-//! let shaped = shaper.shape("Hello, world!", &computed_style);
-//! for glyph in shaped.glyphs() {
-//!     println!("Glyph {} at ({}, {})", glyph.id, glyph.x, glyph.y);
+//! // Get a font
+//! let families = vec!["Arial".to_string(), "sans-serif".to_string()];
+//! if let Some(font) = ctx.get_font(&families, 400, false, false) {
+//!     println!("Using font: {} ({} bytes)", font.family, font.data.len());
 //! }
 //! ```
 
-// Font system module (Wave 3)
-pub mod font;
+// ============================================================================
+// Font System (Wave 3)
+// ============================================================================
 
-// Re-export font types for convenience
-pub use font::{extract_metrics, FontMetrics, ScaledFontMetrics};
+pub mod font_db;
+pub mod font_loader;
 
-// Future module declarations (Wave 3+)
-// pub mod shaper;
-// pub mod bidi;
-// pub mod linebreak;
-// pub mod run;
+// Re-export primary types for convenience
+pub use font_db::{
+    FontDatabase, FontMetrics, FontStretch, FontStyle, FontWeight, GenericFamily, LoadedFont,
+    ScaledMetrics,
+};
+pub use font_loader::FontContext;
 
-// Temporary re-export of V1 implementation for compatibility
-// This will be removed as Wave 3+ tasks are completed
+// ============================================================================
+// Legacy V1 Implementation (to be refactored in Wave 4+)
+// ============================================================================
+
+// The V1 text module provides temporary compatibility
+// This will be removed as Wave 4 tasks complete the text shaping implementation
 #[path = "../text_v1.rs"]
 mod text_v1;
 pub use text_v1::*;

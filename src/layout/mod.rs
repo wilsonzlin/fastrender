@@ -29,6 +29,7 @@
 //! - `constraints.rs` - LayoutConstraints and AvailableSpace (W2.T04)
 //! - `formatting_context.rs` - FormattingContext trait (W2.T07)
 //! - `engine.rs` - LayoutEngine orchestrator (W2.T10)
+//! - `float_context.rs` - Float context and placement algorithm (W3.T10/W3.T11)
 //! - `block.rs` - Block layout algorithm (W3.T04)
 //! - `inline.rs` - Inline layout and line breaking (W4.T12)
 //! - `flex.rs` - Flexbox integration with Taffy (W3.T08)
@@ -42,8 +43,9 @@
 //! use fastrender::tree::BoxTree;
 //! use fastrender::geometry::Size;
 //!
-//! let engine = LayoutEngine::new(LayoutConfig::default());
-//! let fragment_tree = engine.layout_tree(&box_tree, Size::new(1024.0, 768.0))?;
+//! let config = LayoutConfig::for_viewport(Size::new(1024.0, 768.0));
+//! let engine = LayoutEngine::new(config);
+//! let fragment_tree = engine.layout_tree(&box_tree)?;
 //! ```
 
 // W2.T09 - Formatting context factory
@@ -58,18 +60,26 @@ pub mod formatting_context;
 // W2.T10 - Layout engine orchestrator
 pub mod engine;
 
+// W3.T10 - Float context for BFC float management
+pub mod float_context;
+
 // Re-exports
 pub use constraints::{AvailableSpace, LayoutConstraints};
-pub use contexts::FormattingContextFactory;
-pub use engine::{LayoutConfig, LayoutEngine};
+pub use contexts::{
+    ContainingBlock, FormattingContextFactory, GridFormattingContext, PositionedLayout, StickyConstraints,
+};
+pub use engine::{LayoutConfig, LayoutEngine, LayoutStats};
+pub use float_context::{FloatContext, FloatInfo, FloatSide};
 pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
+
+// W3.T06 - Table layout algorithm
+pub mod table;
 
 // Future modules (to be implemented in Wave 3+):
 // pub mod block;        // W3.T04
 // pub mod inline;       // W4.T12
 // pub mod flex;         // W3.T08
 // pub mod grid;         // W3.T09
-// pub mod table;        // W3.T06
 // pub mod positioned;   // W3.T12
 
 // Temporary re-export of V1 implementation for compatibility

@@ -6,6 +6,7 @@
 pub mod color;
 pub mod computed;
 pub mod display;
+pub mod float;
 pub mod position;
 
 // Re-export color types
@@ -16,6 +17,9 @@ pub use computed::{BorderColors, ComputedStyle, ComputedStyleBuilder};
 
 // Re-export display types
 pub use display::{Display, DisplayParseError, FormattingContextType, InnerDisplay, OuterDisplay};
+
+// Re-export float types
+pub use float::{Clear, ClearParseError, Float, FloatParseError};
 
 // Re-export position types
 pub use position::{Position, PositionParseError};
