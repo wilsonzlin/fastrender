@@ -634,10 +634,7 @@ pub fn calculate_row_heights(structure: &mut TableStructure, _available_height: 
             let span_start = cell.row;
             let span_end = (cell.row + cell.rowspan).min(structure.row_count);
 
-            let current_height: f32 = structure.rows[span_start..span_end]
-                .iter()
-                .map(|r| r.min_height)
-                .sum();
+            let current_height: f32 = structure.rows[span_start..span_end].iter().map(|r| r.min_height).sum();
 
             let spacing = structure.border_spacing.1 * (cell.rowspan - 1) as f32;
 
@@ -700,11 +697,7 @@ impl TableFormattingContext {
     }
 
     /// Measures cell content for min/max width calculation
-    fn measure_cell_intrinsic_widths(
-        &self,
-        _cell_box: &BoxNode,
-        _mode: IntrinsicSizingMode,
-    ) -> (f32, f32) {
+    fn measure_cell_intrinsic_widths(&self, _cell_box: &BoxNode, _mode: IntrinsicSizingMode) -> (f32, f32) {
         // Simplified implementation - in reality we'd recursively layout cell content
         // For now, return default minimums
         let min_width = 10.0; // Minimum cell width
@@ -798,12 +791,7 @@ impl TableFormattingContext {
     }
 
     /// Creates fragments for cell content
-    fn create_cell_content_fragments(
-        &self,
-        _cell_node: &BoxNode,
-        _width: f32,
-        _height: f32,
-    ) -> Vec<FragmentNode> {
+    fn create_cell_content_fragments(&self, _cell_node: &BoxNode, _width: f32, _height: f32) -> Vec<FragmentNode> {
         // Simplified - would recursively layout cell content
         Vec::new()
     }
@@ -855,43 +843,30 @@ impl FormattingContext for TableFormattingContext {
         let cell_fragments = self.create_cell_fragments(box_node, &structure);
 
         // Calculate final table size
-        let table_width: f32 = structure.columns.iter().map(|c| c.computed_width).sum::<f32>()
-            + structure.total_horizontal_spacing();
+        let table_width: f32 =
+            structure.columns.iter().map(|c| c.computed_width).sum::<f32>() + structure.total_horizontal_spacing();
 
-        let table_height: f32 = structure.rows.iter().map(|r| r.computed_height).sum::<f32>()
-            + structure.total_vertical_spacing();
+        let table_height: f32 =
+            structure.rows.iter().map(|r| r.computed_height).sum::<f32>() + structure.total_vertical_spacing();
 
         // Create table fragment
         let table_bounds = Rect::from_xywh(0.0, 0.0, table_width, table_height);
-        let table_fragment = FragmentNode::new(
-            table_bounds,
-            FragmentContent::Block { box_id: None },
-            cell_fragments,
-        );
+        let table_fragment = FragmentNode::new(table_bounds, FragmentContent::Block { box_id: None }, cell_fragments);
 
         Ok(table_fragment)
     }
 
     /// Calculates intrinsic inline size for the table
-    fn compute_intrinsic_inline_size(
-        &self,
-        box_node: &BoxNode,
-        mode: IntrinsicSizingMode,
-    ) -> Result<f32, LayoutError> {
+    fn compute_intrinsic_inline_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
         let mut structure = TableStructure::from_box_tree(box_node);
         self.populate_cell_intrinsic_widths(box_node, &mut structure);
 
         let width = match mode {
             IntrinsicSizingMode::MinContent => {
-                structure.columns.iter().map(|c| c.min_width).sum::<f32>()
-                    + structure.total_horizontal_spacing()
+                structure.columns.iter().map(|c| c.min_width).sum::<f32>() + structure.total_horizontal_spacing()
             }
             IntrinsicSizingMode::MaxContent => {
-                structure
-                    .columns
-                    .iter()
-                    .map(|c| c.max_width.min(1000.0))
-                    .sum::<f32>()
+                structure.columns.iter().map(|c| c.max_width.min(1000.0)).sum::<f32>()
                     + structure.total_horizontal_spacing()
             }
         };
@@ -1019,9 +994,11 @@ mod tests {
     #[test]
     fn test_table_structure_empty_table() {
         let style = create_test_style();
-        let table = BoxNode::new_block(style, FormattingContextType::Table, vec![]).with_debug_info(
-            DebugInfo::new(Some("table".to_string()), None, vec![]),
-        );
+        let table = BoxNode::new_block(style, FormattingContextType::Table, vec![]).with_debug_info(DebugInfo::new(
+            Some("table".to_string()),
+            None,
+            vec![],
+        ));
 
         let structure = TableStructure::from_box_tree(&table);
         assert_eq!(structure.row_count, 0);
@@ -1446,9 +1423,11 @@ mod tests {
     fn test_table_layout_empty() {
         let tfc = TableFormattingContext::new();
         let style = create_test_style();
-        let table = BoxNode::new_block(style, FormattingContextType::Table, vec![]).with_debug_info(
-            DebugInfo::new(Some("table".to_string()), None, vec![]),
-        );
+        let table = BoxNode::new_block(style, FormattingContextType::Table, vec![]).with_debug_info(DebugInfo::new(
+            Some("table".to_string()),
+            None,
+            vec![],
+        ));
         let constraints = LayoutConstraints::definite_width(400.0);
 
         let result = tfc.layout(&table, &constraints);
