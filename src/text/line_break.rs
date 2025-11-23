@@ -26,7 +26,7 @@
 //! use fastrender::text::line_break::{find_break_opportunities, BreakOpportunity};
 //!
 //! let text = "Hello world";
-//! let _breaks = find_break_opportunities(text);
+//! let breaks = find_break_opportunities(text);
 //!
 //! // There's a break opportunity after "Hello " (at byte position 6)
 //! assert!(breaks.iter().any(|b| b.byte_offset == 6));
@@ -178,7 +178,7 @@ impl BreakOpportunity {
 /// use fastrender::text::line_break::{find_break_opportunities, BreakType};
 ///
 /// let text = "Hello world";
-/// let _breaks = find_break_opportunities(text);
+/// let breaks = find_break_opportunities(text);
 ///
 /// // Break opportunity after "Hello " at byte 6
 /// let space_break = breaks.iter().find(|b| b.byte_offset == 6);
@@ -192,7 +192,7 @@ impl BreakOpportunity {
 /// use fastrender::text::line_break::{find_break_opportunities, BreakType};
 ///
 /// let text = "Line 1\nLine 2";
-/// let _breaks = find_break_opportunities(text);
+/// let breaks = find_break_opportunities(text);
 ///
 /// // Mandatory break after newline at byte 7
 /// let newline_break = breaks.iter().find(|b| b.byte_offset == 7);
@@ -206,7 +206,7 @@ impl BreakOpportunity {
 /// use fastrender::text::line_break::find_break_opportunities;
 ///
 /// let text = "你好世界"; // Chinese: "Hello World"
-/// let _breaks = find_break_opportunities(text);
+/// let breaks = find_break_opportunities(text);
 ///
 /// // CJK text allows breaks between characters
 /// // Each Chinese character is 3 bytes in UTF-8
@@ -219,7 +219,7 @@ impl BreakOpportunity {
 /// use fastrender::text::line_break::find_break_opportunities;
 ///
 /// let text = "Hello\u{00A0}world"; // Non-breaking space
-/// let _breaks = find_break_opportunities(text);
+/// let breaks = find_break_opportunities(text);
 ///
 /// // There should be NO break opportunity at the NBSP position
 /// // NBSP is 2 bytes (C2 A0), "Hello" is 5 bytes
@@ -593,12 +593,7 @@ pub fn break_lines_greedy(
                 line_builder = LineBuilder::new(max_width);
 
                 // Re-add glyphs from break point to current glyph (inclusive)
-                for (i, g) in glyphs
-                    .iter()
-                    .enumerate()
-                    .take(glyph_idx + 1)
-                    .skip(brk.glyph_index)
-                {
+                for (i, g) in glyphs.iter().enumerate().take(glyph_idx + 1).skip(brk.glyph_index) {
                     line_builder.add_glyph(i, g.advance);
                 }
             } else {
@@ -650,9 +645,7 @@ pub struct GreedyLineBreaker {
 impl GreedyLineBreaker {
     /// Create a new greedy line breaker with default settings
     pub fn new() -> Self {
-        Self {
-            allow_overflow: true,
-        }
+        Self { allow_overflow: true }
     }
 
     /// Set whether to allow overflow
@@ -767,14 +760,14 @@ mod tests {
 
     #[test]
     fn test_empty_string() {
-        let _breaks = find_break_opportunities("");
+        let breaks = find_break_opportunities("");
         // Empty string should have no break opportunities
         assert!(breaks.is_empty());
     }
 
     #[test]
     fn test_single_character() {
-        let _breaks = find_break_opportunities("a");
+        let breaks = find_break_opportunities("a");
         // Single character has a break at the end
         assert_eq!(breaks.len(), 1);
         assert_eq!(breaks[0].byte_offset, 1);
@@ -783,7 +776,7 @@ mod tests {
     #[test]
     fn test_simple_words() {
         let text = "Hello world";
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Should have break after "Hello " (byte 6) and at end (byte 11)
         assert!(breaks.iter().any(|b| b.byte_offset == 6));
@@ -793,7 +786,7 @@ mod tests {
     #[test]
     fn test_multiple_spaces() {
         let text = "Hello  world"; // Two spaces
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Should have breaks after each space
         assert!(breaks.iter().any(|b| b.byte_offset == 6 || b.byte_offset == 7));
@@ -806,7 +799,7 @@ mod tests {
     #[test]
     fn test_newline_is_mandatory() {
         let text = "Line 1\nLine 2";
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Find the break after the newline
         let newline_break = breaks.iter().find(|b| b.byte_offset == 7); // "Line 1\n" = 7 bytes
@@ -818,7 +811,7 @@ mod tests {
     #[test]
     fn test_carriage_return_newline() {
         let text = "Line 1\r\nLine 2";
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Should have mandatory break after CR+LF
         let has_mandatory = breaks.iter().any(|b| b.is_mandatory());
@@ -828,7 +821,7 @@ mod tests {
     #[test]
     fn test_line_separator() {
         let text = "Part 1\u{2028}Part 2"; // Line separator
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Line separator (U+2028) creates mandatory break
         let has_mandatory = breaks.iter().any(|b| b.is_mandatory());
@@ -838,7 +831,7 @@ mod tests {
     #[test]
     fn test_paragraph_separator() {
         let text = "Para 1\u{2029}Para 2"; // Paragraph separator
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Paragraph separator (U+2029) creates mandatory break
         let has_mandatory = breaks.iter().any(|b| b.is_mandatory());
@@ -852,7 +845,7 @@ mod tests {
     #[test]
     fn test_non_breaking_space() {
         let text = "Hello\u{00A0}world"; // Non-breaking space
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // NBSP should NOT create a break opportunity at position 7
         // "Hello" = 5 bytes, NBSP = 2 bytes (C2 A0), so position 7 is after NBSP
@@ -865,7 +858,7 @@ mod tests {
     #[test]
     fn test_word_joiner() {
         let text = "Hello\u{2060}world"; // Word joiner (WJ)
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Word joiner prevents breaks on both sides
         let interior = find_interior_breaks(text);
@@ -879,7 +872,7 @@ mod tests {
     #[test]
     fn test_chinese_text() {
         let text = "你好世界"; // "Hello World" in Chinese
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Chinese characters allow breaks between them
         // Each character is 3 bytes in UTF-8
@@ -895,7 +888,7 @@ mod tests {
     #[test]
     fn test_japanese_text() {
         let text = "これはテストです"; // "This is a test" in Japanese
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Japanese hiragana/katakana allows breaks between characters
         assert!(breaks.len() >= 5);
@@ -904,7 +897,7 @@ mod tests {
     #[test]
     fn test_mixed_cjk_latin() {
         let text = "Hello世界world";
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Should have breaks around CJK characters
         assert!(breaks.len() >= 2);
@@ -917,7 +910,7 @@ mod tests {
     #[test]
     fn test_zero_width_space() {
         let text = "Hello\u{200B}world"; // Zero-width space
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Zero-width space (ZWSP) allows breaks
         let zwsp_position = 5 + 3; // "Hello" + ZWSP (3 bytes)
@@ -928,7 +921,7 @@ mod tests {
     #[test]
     fn test_soft_hyphen() {
         let text = "super\u{00AD}cali"; // Soft hyphen
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Soft hyphen (U+00AD) allows breaks
         let interior = find_interior_breaks(text);
@@ -938,7 +931,7 @@ mod tests {
     #[test]
     fn test_hyphen_minus() {
         let text = "self-aware";
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Regular hyphen allows break after it
         let hyphen_pos = 5; // After "self-"
@@ -953,7 +946,7 @@ mod tests {
     #[test]
     fn test_url_breaking() {
         let text = "https://example.com/path/to/page";
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // URLs should have break opportunities after slashes
         let interior = find_interior_breaks(text);
@@ -963,7 +956,7 @@ mod tests {
     #[test]
     fn test_file_path() {
         let text = "/home/user/documents/file.txt";
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // File paths have break opportunities after slashes
         let interior = find_interior_breaks(text);
@@ -977,7 +970,7 @@ mod tests {
     #[test]
     fn test_simple_emoji() {
         let text = "Hello 👋 world";
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Should have breaks around the emoji
         assert!(breaks.len() >= 2);
@@ -986,7 +979,7 @@ mod tests {
     #[test]
     fn test_emoji_zwj_sequence() {
         let text = "👨‍👩‍👧‍👦"; // Family emoji with ZWJ
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // ZWJ sequences should stay together (no interior breaks)
         let interior = find_interior_breaks(text);
@@ -996,7 +989,7 @@ mod tests {
     #[test]
     fn test_emoji_with_skin_tone() {
         let text = "👋🏽"; // Waving hand with skin tone modifier
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Emoji with modifier should not break in middle
         let interior = find_interior_breaks(text);
@@ -1006,7 +999,7 @@ mod tests {
     #[test]
     fn test_flag_emoji() {
         let text = "🇺🇸"; // US flag (regional indicators)
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Flag should not break between regional indicators
         let interior = find_interior_breaks(text);
@@ -1107,7 +1100,7 @@ mod tests {
     #[test]
     fn test_only_whitespace() {
         let text = "   "; // Three spaces
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // UAX #14 treats spaces as "break after" class
         // With only spaces, there should be at least one break (at end)
@@ -1120,7 +1113,7 @@ mod tests {
     #[test]
     fn test_only_newlines() {
         let text = "\n\n\n";
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Each newline creates a mandatory break
         let mandatory_count = breaks.iter().filter(|b| b.is_mandatory()).count();
@@ -1130,7 +1123,7 @@ mod tests {
     #[test]
     fn test_tab_character() {
         let text = "Hello\tworld";
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Tab allows break
         let interior = find_interior_breaks(text);
@@ -1140,7 +1133,7 @@ mod tests {
     #[test]
     fn test_very_long_word() {
         let text = "supercalifragilisticexpialidocious";
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Long word without spaces should only have break at end
         let interior = find_interior_breaks(text);
@@ -1150,7 +1143,7 @@ mod tests {
     #[test]
     fn test_numbers() {
         let text = "Price: $1,234.56";
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Should have some break opportunities
         assert!(!breaks.is_empty());
@@ -1159,7 +1152,7 @@ mod tests {
     #[test]
     fn test_punctuation_sequences() {
         let text = "Hello... World!!!";
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Should have breaks around punctuation
         let interior = find_interior_breaks(text);
@@ -1173,7 +1166,7 @@ mod tests {
     #[test]
     fn test_byte_offsets_are_valid() {
         let text = "Hello 世界 world"; // Mixed ASCII and CJK
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // All byte offsets should be valid UTF-8 boundaries
         for brk in &breaks {
@@ -1188,7 +1181,7 @@ mod tests {
     #[test]
     fn test_byte_offsets_are_sorted() {
         let text = "The quick brown fox jumps over the lazy dog";
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // Breaks should be in ascending order
         for window in breaks.windows(2) {
@@ -1202,7 +1195,7 @@ mod tests {
     #[test]
     fn test_byte_offsets_within_bounds() {
         let text = "Test string";
-        let _breaks = find_break_opportunities(text);
+        let breaks = find_break_opportunities(text);
 
         // All offsets should be <= text length
         for brk in &breaks {

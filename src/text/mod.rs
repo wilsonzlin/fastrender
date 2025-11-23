@@ -90,18 +90,16 @@ pub mod shaper;
 
 // Font types
 pub use font_db::{
-    FontDatabase, FontMetrics, FontStretch, FontStyle, FontWeight, GenericFamily, LoadedFont,
-    ScaledMetrics,
+    FontDatabase, FontMetrics, FontStretch, FontStyle, FontWeight, GenericFamily, LoadedFont, ScaledMetrics,
 };
 pub use font_fallback::{FallbackChain, FallbackChainBuilder, FamilyEntry, FontId};
 pub use font_loader::{FontContext, TextMeasurement};
 
 // Justification types (Note: GlyphPosition not re-exported to avoid conflict with shaper::GlyphPosition)
 pub use justify::{
-    apply_alignment, calculate_line_width, detect_justification_mode, is_cjk_character,
-    justify_line, justify_line_with_options, justify_lines, mark_word_boundaries,
-    mark_word_boundaries_by_glyph_id, JustificationMode, JustificationOptions,
-    JustificationResult, TextAlignment,
+    apply_alignment, calculate_line_width, detect_justification_mode, is_cjk_character, justify_line,
+    justify_line_with_options, justify_lines, mark_word_boundaries, mark_word_boundaries_by_glyph_id,
+    JustificationMode, JustificationOptions, JustificationResult, TextAlignment,
 };
 
 // Shaper types
@@ -115,28 +113,26 @@ pub use bidi::{analyze_bidi, BidiAnalysis, BidiAnalyzer, BidiRun, Direction};
 
 // Emoji types
 pub use emoji::{
-    find_emoji_sequences, is_emoji_modifier, is_emoji_modifier_base, is_emoji_presentation,
-    is_regional_indicator, EmojiSequence, EmojiSequenceType,
+    find_emoji_sequences, is_emoji_modifier, is_emoji_modifier_base, is_emoji_presentation, is_regional_indicator,
+    EmojiSequence, EmojiSequenceType,
 };
 
 // Hyphenation types
 pub use hyphenation::{
-    find_soft_hyphens, is_soft_hyphen, remove_soft_hyphens, HyphenationPatterns, Hyphenator,
-    HyphensMode, SupportedLanguage,
+    find_soft_hyphens, is_soft_hyphen, remove_soft_hyphens, HyphenationPatterns, Hyphenator, HyphensMode,
+    SupportedLanguage,
 };
 
 // Line break types
 pub use line_break::{
-    break_lines, break_lines_greedy, find_break_opportunities, find_interior_breaks,
-    find_mandatory_breaks, has_break_at, BreakIterator, BreakOpportunity, BreakType,
-    GreedyLineBreaker, Line, LineSegment,
+    break_lines, break_lines_greedy, find_break_opportunities, find_interior_breaks, find_mandatory_breaks,
+    has_break_at, BreakIterator, BreakOpportunity, BreakType, GreedyLineBreaker, Line, LineSegment,
 };
 
 // Clustering utilities
 pub use clustering::{
-    byte_offset_to_x, cluster_end_position, cluster_range_advance, cluster_start_position,
-    count_chars_in_range, find_cluster_at_byte, find_cluster_for_glyph, get_selection,
-    x_to_byte_offset, ClusterLookup, ClusterSelection,
+    byte_offset_to_x, cluster_end_position, cluster_range_advance, cluster_start_position, count_chars_in_range,
+    find_cluster_at_byte, find_cluster_for_glyph, get_selection, x_to_byte_offset, ClusterLookup, ClusterSelection,
 };
 
 // Pipeline types

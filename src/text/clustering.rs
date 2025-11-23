@@ -352,7 +352,13 @@ mod tests {
     use super::*;
 
     // Helper to create a test cluster
-    fn cluster(text_start: usize, text_len: usize, glyph_start: usize, glyph_count: usize, advance: f32) -> GlyphCluster {
+    fn cluster(
+        text_start: usize,
+        text_len: usize,
+        glyph_start: usize,
+        glyph_count: usize,
+        advance: f32,
+    ) -> GlyphCluster {
         GlyphCluster::new(text_start, text_len, glyph_start, glyph_count, advance)
     }
 
