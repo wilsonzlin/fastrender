@@ -78,7 +78,12 @@ pub struct ResolvedMargins {
 impl ResolvedMargins {
     /// Creates resolved margins from specified values
     pub fn new(top: f32, right: f32, bottom: f32, left: f32) -> Self {
-        Self { top, right, bottom, left }
+        Self {
+            top,
+            right,
+            bottom,
+            left,
+        }
     }
 
     /// Creates zero margins
@@ -171,26 +176,15 @@ impl AbsoluteLayout {
         let cb_height = containing_block.height();
 
         // Resolve horizontal position and width
-        let (x, width, margin_left, margin_right) = self.compute_horizontal(
-            style,
-            cb_width,
-            input.intrinsic_size.width,
-            input.static_position.x,
-        )?;
+        let (x, width, margin_left, margin_right) =
+            self.compute_horizontal(style, cb_width, input.intrinsic_size.width, input.static_position.x)?;
 
         // Resolve vertical position and height
-        let (y, height, margin_top, margin_bottom) = self.compute_vertical(
-            style,
-            cb_height,
-            input.intrinsic_size.height,
-            input.static_position.y,
-        )?;
+        let (y, height, margin_top, margin_bottom) =
+            self.compute_vertical(style, cb_height, input.intrinsic_size.height, input.static_position.y)?;
 
         // Position relative to containing block origin
-        let position = Point::new(
-            containing_block.origin().x + x,
-            containing_block.origin().y + y,
-        );
+        let position = Point::new(containing_block.origin().x + x, containing_block.origin().y + y);
 
         Ok(AbsoluteLayoutResult {
             position,
@@ -384,12 +378,7 @@ impl AbsoluteLayout {
     /// "If both 'left' and 'right' are set, and 'width' is not 'auto', and
     /// 'margin-left' or 'margin-right' are 'auto', solve the equation to
     /// distribute the remaining space equally."
-    pub fn compute_centered_horizontal(
-        &self,
-        style: &ComputedStyle,
-        cb_width: f32,
-        width: f32,
-    ) -> (f32, f32, f32) {
+    pub fn compute_centered_horizontal(&self, style: &ComputedStyle, cb_width: f32, width: f32) -> (f32, f32, f32) {
         let left = resolve_offset(&style.left, cb_width).unwrap_or(0.0);
         let right = resolve_offset(&style.right, cb_width).unwrap_or(0.0);
 
@@ -430,12 +419,7 @@ impl AbsoluteLayout {
     }
 
     /// Computes centering for vertical axis
-    pub fn compute_centered_vertical(
-        &self,
-        style: &ComputedStyle,
-        cb_height: f32,
-        height: f32,
-    ) -> (f32, f32, f32) {
+    pub fn compute_centered_vertical(&self, style: &ComputedStyle, cb_height: f32, height: f32) -> (f32, f32, f32) {
         let top = resolve_offset(&style.top, cb_height).unwrap_or(0.0);
         let bottom = resolve_offset(&style.bottom, cb_height).unwrap_or(0.0);
 
@@ -471,15 +455,8 @@ impl AbsoluteLayout {
     /// Creates a fragment from the layout result
     ///
     /// Convenience method to create a FragmentNode from the computed layout.
-    pub fn create_fragment(
-        &self,
-        result: &AbsoluteLayoutResult,
-        children: Vec<FragmentNode>,
-    ) -> FragmentNode {
-        FragmentNode::new_block(
-            Rect::new(result.position, result.size),
-            children,
-        )
+    pub fn create_fragment(&self, result: &AbsoluteLayoutResult, children: Vec<FragmentNode>) -> FragmentNode {
+        FragmentNode::new_block(Rect::new(result.position, result.size), children)
     }
 
     /// Checks if an element should use absolute positioning
@@ -526,11 +503,7 @@ mod tests {
         style.width = LengthOrAuto::px(100.0);
         style.height = LengthOrAuto::px(80.0);
 
-        let input = AbsoluteLayoutInput::new(
-            style,
-            Size::new(50.0, 50.0),
-            Point::ZERO,
-        );
+        let input = AbsoluteLayoutInput::new(style, Size::new(50.0, 50.0), Point::ZERO);
         let cb = create_containing_block(800.0, 600.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -552,11 +525,7 @@ mod tests {
         style.width = LengthOrAuto::px(100.0);
         style.height = LengthOrAuto::px(100.0);
 
-        let input = AbsoluteLayoutInput::new(
-            style,
-            Size::new(50.0, 50.0),
-            Point::ZERO,
-        );
+        let input = AbsoluteLayoutInput::new(style, Size::new(50.0, 50.0), Point::ZERO);
         let cb = create_containing_block(400.0, 400.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -577,11 +546,7 @@ mod tests {
         style.right = LengthOrAuto::px(50.0);
         // width auto - should stretch
 
-        let input = AbsoluteLayoutInput::new(
-            style,
-            Size::new(100.0, 100.0),
-            Point::ZERO,
-        );
+        let input = AbsoluteLayoutInput::new(style, Size::new(100.0, 100.0), Point::ZERO);
         let cb = create_containing_block(500.0, 400.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -601,11 +566,7 @@ mod tests {
         style.bottom = LengthOrAuto::px(25.0);
         // height auto - should stretch
 
-        let input = AbsoluteLayoutInput::new(
-            style,
-            Size::new(100.0, 100.0),
-            Point::ZERO,
-        );
+        let input = AbsoluteLayoutInput::new(style, Size::new(100.0, 100.0), Point::ZERO);
         let cb = create_containing_block(400.0, 300.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -622,11 +583,7 @@ mod tests {
         let style = default_style();
         // All auto
 
-        let input = AbsoluteLayoutInput::new(
-            style,
-            Size::new(150.0, 100.0),
-            Point::ZERO,
-        );
+        let input = AbsoluteLayoutInput::new(style, Size::new(150.0, 100.0), Point::ZERO);
         let cb = create_containing_block(800.0, 600.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -670,11 +627,7 @@ mod tests {
         style.width = LengthOrAuto::px(50.0);
         style.height = LengthOrAuto::px(50.0);
 
-        let input = AbsoluteLayoutInput::new(
-            style,
-            Size::new(50.0, 50.0),
-            Point::ZERO,
-        );
+        let input = AbsoluteLayoutInput::new(style, Size::new(50.0, 50.0), Point::ZERO);
         let cb = create_containing_block_at(100.0, 100.0, 400.0, 300.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -694,11 +647,7 @@ mod tests {
         style.width = LengthOrAuto::px(100.0);
         style.right = LengthOrAuto::px(999.0); // Should be ignored for LTR
 
-        let input = AbsoluteLayoutInput::new(
-            style,
-            Size::new(50.0, 50.0),
-            Point::ZERO,
-        );
+        let input = AbsoluteLayoutInput::new(style, Size::new(50.0, 50.0), Point::ZERO);
         let cb = create_containing_block(400.0, 300.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -718,11 +667,7 @@ mod tests {
         style.height = LengthOrAuto::px(80.0);
         style.bottom = LengthOrAuto::px(888.0); // Should be ignored
 
-        let input = AbsoluteLayoutInput::new(
-            style,
-            Size::new(50.0, 50.0),
-            Point::ZERO,
-        );
+        let input = AbsoluteLayoutInput::new(style, Size::new(50.0, 50.0), Point::ZERO);
         let cb = create_containing_block(400.0, 300.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -738,16 +683,12 @@ mod tests {
 
         let mut style = default_style();
         style.position = Position::Absolute;
-        style.left = LengthOrAuto::percent(10.0);  // 10% of 500 = 50
-        style.top = LengthOrAuto::percent(20.0);   // 20% of 400 = 80
+        style.left = LengthOrAuto::percent(10.0); // 10% of 500 = 50
+        style.top = LengthOrAuto::percent(20.0); // 20% of 400 = 80
         style.width = LengthOrAuto::percent(50.0); // 50% of 500 = 250
         style.height = LengthOrAuto::percent(25.0); // 25% of 400 = 100
 
-        let input = AbsoluteLayoutInput::new(
-            style,
-            Size::new(100.0, 100.0),
-            Point::ZERO,
-        );
+        let input = AbsoluteLayoutInput::new(style, Size::new(100.0, 100.0), Point::ZERO);
         let cb = create_containing_block(500.0, 400.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -767,11 +708,7 @@ mod tests {
         style.left = LengthOrAuto::px(100.0);
         // width, right auto
 
-        let input = AbsoluteLayoutInput::new(
-            style,
-            Size::new(150.0, 80.0),
-            Point::ZERO,
-        );
+        let input = AbsoluteLayoutInput::new(style, Size::new(150.0, 80.0), Point::ZERO);
         let cb = create_containing_block(800.0, 600.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -789,11 +726,7 @@ mod tests {
         style.right = LengthOrAuto::px(75.0);
         // width, left auto
 
-        let input = AbsoluteLayoutInput::new(
-            style,
-            Size::new(100.0, 50.0),
-            Point::ZERO,
-        );
+        let input = AbsoluteLayoutInput::new(style, Size::new(100.0, 50.0), Point::ZERO);
         let cb = create_containing_block(400.0, 300.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -811,11 +744,7 @@ mod tests {
         style.position = Position::Absolute;
         style.top = LengthOrAuto::px(50.0);
 
-        let input = AbsoluteLayoutInput::new(
-            style,
-            Size::new(100.0, 60.0),
-            Point::ZERO,
-        );
+        let input = AbsoluteLayoutInput::new(style, Size::new(100.0, 60.0), Point::ZERO);
         let cb = create_containing_block(800.0, 600.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -832,11 +761,7 @@ mod tests {
         style.position = Position::Absolute;
         style.bottom = LengthOrAuto::px(40.0);
 
-        let input = AbsoluteLayoutInput::new(
-            style,
-            Size::new(100.0, 70.0),
-            Point::ZERO,
-        );
+        let input = AbsoluteLayoutInput::new(style, Size::new(100.0, 70.0), Point::ZERO);
         let cb = create_containing_block(800.0, 500.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -932,11 +857,7 @@ mod tests {
         style.left = LengthOrAuto::percent(50.0);
         style.top = LengthOrAuto::percent(50.0);
 
-        let input = AbsoluteLayoutInput::new(
-            style,
-            Size::new(100.0, 100.0),
-            Point::ZERO,
-        );
+        let input = AbsoluteLayoutInput::new(style, Size::new(100.0, 100.0), Point::ZERO);
         let cb = create_containing_block(0.0, 0.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -955,11 +876,7 @@ mod tests {
         style.right = LengthOrAuto::px(200.0);
         // In a 300px wide CB, this would give -100px width
 
-        let input = AbsoluteLayoutInput::new(
-            style,
-            Size::new(50.0, 50.0),
-            Point::ZERO,
-        );
+        let input = AbsoluteLayoutInput::new(style, Size::new(50.0, 50.0), Point::ZERO);
         let cb = create_containing_block(300.0, 300.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -978,11 +895,7 @@ mod tests {
         style.width = LengthOrAuto::px(10_000.0);
         style.height = LengthOrAuto::px(10_000.0);
 
-        let input = AbsoluteLayoutInput::new(
-            style,
-            Size::new(100.0, 100.0),
-            Point::ZERO,
-        );
+        let input = AbsoluteLayoutInput::new(style, Size::new(100.0, 100.0), Point::ZERO);
         let cb = create_containing_block(800.0, 600.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();

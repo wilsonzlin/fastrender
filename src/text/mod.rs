@@ -66,12 +66,19 @@ pub mod font_db;
 pub mod font_fallback;
 pub mod font_loader;
 
+// ============================================================================
+// Text Shaping Pipeline (Wave 4)
+// ============================================================================
+
+pub mod script;
+
 // Re-export primary types for convenience
 pub use font_db::{
     FontDatabase, FontMetrics, FontStretch, FontStyle, FontWeight, GenericFamily, LoadedFont, ScaledMetrics,
 };
 pub use font_fallback::{FallbackChain, FallbackChainBuilder, FamilyEntry, FontId};
 pub use font_loader::{FontContext, TextMeasurement};
+pub use script::{is_emoji, is_skin_tone_modifier, is_variation_selector, is_zwj, itemize_scripts, ScriptRun};
 
 // ============================================================================
 // Legacy V1 Implementation (to be refactored in Wave 4+)
