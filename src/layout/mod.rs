@@ -69,15 +69,19 @@ pub mod float_context;
 // W3.T13 - Absolute positioning algorithm
 pub mod absolute_positioning;
 
+// W4.T13 - Inline layout baseline alignment
+pub mod inline;
+
 // Re-exports
+pub use absolute_positioning::{AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult, ResolvedMargins};
 pub use constraints::{AvailableSpace, LayoutConstraints};
 pub use contexts::{
     ContainingBlock, FormattingContextFactory, GridFormattingContext, PositionedLayout, StickyConstraints,
 };
 pub use engine::{LayoutConfig, LayoutEngine, LayoutStats};
 pub use float_context::{FloatContext, FloatInfo, FloatSide};
-pub use absolute_positioning::{AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult, ResolvedMargins};
 pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
+pub use inline::{BaselineAligner, InlineBoxMetrics, LineMetrics, PositionedInlineBox, VerticalAlign};
 
 // W3.T06 - Table layout algorithm
 pub mod table;

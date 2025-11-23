@@ -2,3 +2,4 @@
 
 mod test_positioned;
 mod test_absolute;
+mod test_baseline;
