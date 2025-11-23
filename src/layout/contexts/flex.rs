@@ -108,11 +108,7 @@ impl FormattingContext for FlexFormattingContext {
     }
 
     /// Computes intrinsic size by running Taffy with appropriate constraints
-    fn compute_intrinsic_inline_size(
-        &self,
-        box_node: &BoxNode,
-        mode: IntrinsicSizingMode,
-    ) -> Result<f32, LayoutError> {
+    fn compute_intrinsic_inline_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
         // Create a fresh Taffy tree
         let mut taffy_tree: TaffyTree<()> = TaffyTree::new();
 
@@ -518,7 +514,11 @@ mod tests {
         let item2 = BoxNode::new_block(create_item_style(100.0, 50.0), FormattingContextType::Block, vec![]);
         let item3 = BoxNode::new_block(create_item_style(100.0, 50.0), FormattingContextType::Block, vec![]);
 
-        let container = BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, vec![item1, item2, item3]);
+        let container = BoxNode::new_block(
+            create_flex_style(),
+            FormattingContextType::Flex,
+            vec![item1, item2, item3],
+        );
 
         let constraints = LayoutConstraints::definite(400.0, 600.0);
         let fragment = fc.layout(&container, &constraints).unwrap();
@@ -707,8 +707,11 @@ mod tests {
         let inner_item1 = BoxNode::new_block(create_item_style(50.0, 30.0), FormattingContextType::Block, vec![]);
         let inner_item2 = BoxNode::new_block(create_item_style(50.0, 30.0), FormattingContextType::Block, vec![]);
 
-        let inner_container =
-            BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, vec![inner_item1, inner_item2]);
+        let inner_container = BoxNode::new_block(
+            create_flex_style(),
+            FormattingContextType::Flex,
+            vec![inner_item1, inner_item2],
+        );
 
         // Outer flex container
         let outer_item = BoxNode::new_block(create_item_style(100.0, 50.0), FormattingContextType::Block, vec![]);
@@ -777,10 +780,7 @@ mod tests {
     fn test_style_conversion_flex_wrap() {
         let fc = FlexFormattingContext::new();
 
-        assert_eq!(
-            fc.flex_wrap_to_taffy(FlexWrap::NoWrap),
-            taffy::style::FlexWrap::NoWrap
-        );
+        assert_eq!(fc.flex_wrap_to_taffy(FlexWrap::NoWrap), taffy::style::FlexWrap::NoWrap);
         assert_eq!(fc.flex_wrap_to_taffy(FlexWrap::Wrap), taffy::style::FlexWrap::Wrap);
         assert_eq!(
             fc.flex_wrap_to_taffy(FlexWrap::WrapReverse),
