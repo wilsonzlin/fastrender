@@ -314,8 +314,8 @@ impl FallbackChain {
         let query = Query {
             families: &[Family::Name(name)],
             weight: fontdb::Weight(self.weight.value()),
-            stretch: Self::stretch_to_fontdb(self.stretch),
-            style: Self::style_to_fontdb(self.style),
+            stretch: self.stretch.into(),
+            style: self.style.into(),
         };
 
         if let Some(id) = db.inner().query(&query) {
@@ -333,8 +333,8 @@ impl FallbackChain {
         let query = Query {
             families: &[generic.to_fontdb()],
             weight: fontdb::Weight(self.weight.value()),
-            stretch: Self::stretch_to_fontdb(self.stretch),
-            style: Self::style_to_fontdb(self.style),
+            stretch: self.stretch.into(),
+            style: self.style.into(),
         };
 
         if let Some(id) = db.inner().query(&query) {
@@ -371,8 +371,8 @@ impl FallbackChain {
             let query = Query {
                 families: std::slice::from_ref(family),
                 weight: fontdb::Weight(self.weight.value()),
-                stretch: Self::stretch_to_fontdb(self.stretch),
-                style: Self::style_to_fontdb(self.style),
+                stretch: self.stretch.into(),
+                style: self.style.into(),
             };
 
             if let Some(id) = db.inner().query(&query) {
@@ -391,30 +391,6 @@ impl FallbackChain {
             }
         }
         None
-    }
-
-    // Conversion helpers
-
-    fn style_to_fontdb(style: FontStyle) -> fontdb::Style {
-        match style {
-            FontStyle::Normal => fontdb::Style::Normal,
-            FontStyle::Italic => fontdb::Style::Italic,
-            FontStyle::Oblique => fontdb::Style::Oblique,
-        }
-    }
-
-    fn stretch_to_fontdb(stretch: FontStretch) -> fontdb::Stretch {
-        match stretch {
-            FontStretch::UltraCondensed => fontdb::Stretch::UltraCondensed,
-            FontStretch::ExtraCondensed => fontdb::Stretch::ExtraCondensed,
-            FontStretch::Condensed => fontdb::Stretch::Condensed,
-            FontStretch::SemiCondensed => fontdb::Stretch::SemiCondensed,
-            FontStretch::Normal => fontdb::Stretch::Normal,
-            FontStretch::SemiExpanded => fontdb::Stretch::SemiExpanded,
-            FontStretch::Expanded => fontdb::Stretch::Expanded,
-            FontStretch::ExtraExpanded => fontdb::Stretch::ExtraExpanded,
-            FontStretch::UltraExpanded => fontdb::Stretch::UltraExpanded,
-        }
     }
 }
 

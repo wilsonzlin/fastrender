@@ -48,6 +48,9 @@
 //! let fragment_tree = engine.layout_tree(&box_tree)?;
 //! ```
 
+// Shared layout utilities
+pub mod utils;
+
 // W2.T09 - Formatting context factory
 pub mod contexts;
 
