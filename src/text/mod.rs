@@ -33,7 +33,8 @@
 //! - `script` - Script itemization (UAX #24)
 //! - `shaper` - Text shaping using HarfBuzz (rustybuzz)
 //! - `emoji` - Emoji detection and sequence parsing (UTS #51)
-//! - Future: `linebreak` - Line breaking algorithm
+//! - `clustering` - Cursor positioning and hit testing utilities
+//! - `pipeline` - Unified text shaping pipeline
 //!
 //! # Example
 //!
@@ -73,11 +74,17 @@ pub mod font_loader;
 // ============================================================================
 
 pub mod bidi;
+pub mod clustering;
 pub mod emoji;
+pub mod pipeline;
 pub mod script;
 pub mod shaper;
 
-// Re-export primary types for convenience
+// ============================================================================
+// Re-exports
+// ============================================================================
+
+// Font types
 pub use font_db::{
     FontDatabase, FontMetrics, FontStretch, FontStyle, FontWeight, GenericFamily, LoadedFont,
     ScaledMetrics,
@@ -85,7 +92,7 @@ pub use font_db::{
 pub use font_fallback::{FallbackChain, FallbackChainBuilder, FamilyEntry, FontId};
 pub use font_loader::{FontContext, TextMeasurement};
 
-// Shaper types (TextDirection to avoid conflict with bidi::Direction)
+// Shaper types
 pub use shaper::{GlyphCluster, GlyphPosition, Script, ShapedGlyphs, TextDirection, TextShaper};
 
 // Script itemization types
@@ -94,23 +101,21 @@ pub use script::{itemize_scripts, ScriptRun};
 // Bidi types
 pub use bidi::{analyze_bidi, BidiAnalysis, BidiAnalyzer, BidiRun, Direction};
 
-// Emoji types (comprehensive emoji detection)
+// Emoji types
 pub use emoji::{
     find_emoji_sequences, is_emoji_modifier, is_emoji_modifier_base, is_emoji_presentation,
     is_regional_indicator, EmojiSequence, EmojiSequenceType,
 };
 
-// ============================================================================
-// Text Shaping Pipeline (Wave 4)
-// ============================================================================
-
-pub mod pipeline;
-
-// Re-export shaping types
-pub use pipeline::{
-    assign_fonts, itemize_text, BidiAnalysis, ClusterMap, Direction, FontRun, GlyphPosition,
-    ItemizedRun, Script, ShapedRun, ShapingPipeline,
+// Clustering utilities
+pub use clustering::{
+    byte_offset_to_x, cluster_end_position, cluster_range_advance, cluster_start_position,
+    count_chars_in_range, find_cluster_at_byte, find_cluster_for_glyph, get_selection,
+    x_to_byte_offset, ClusterLookup, ClusterSelection,
 };
+
+// Pipeline types
+pub use pipeline::{assign_fonts, itemize_text, FontRun, ItemizedRun, ShapedRun, ShapingPipeline};
 
 // ============================================================================
 // Legacy V1 Implementation (to be refactored in Wave 4+)
