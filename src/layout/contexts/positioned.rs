@@ -40,8 +40,9 @@
 //! ```
 
 use crate::geometry::{Point, Rect, Size};
+use crate::layout::utils::resolve_offset;
 use crate::layout::{LayoutConstraints, LayoutError};
-use crate::style::{ComputedStyle, LengthOrAuto, Position};
+use crate::style::{ComputedStyle, Position};
 use crate::tree::{BoxNode, FragmentNode};
 
 /// Represents a containing block for positioned elements
@@ -571,33 +572,12 @@ impl PositionedLayout {
     }
 }
 
-/// Resolves an offset property (top/right/bottom/left) to pixels
-///
-/// Returns None if the value is `auto`.
-fn resolve_offset(value: &LengthOrAuto, percentage_base: f32) -> Option<f32> {
-    match value {
-        LengthOrAuto::Auto => None,
-        LengthOrAuto::Length(length) => {
-            // Check if it's a percentage
-            if length.unit.is_percentage() {
-                Some(length.resolve_against(percentage_base))
-            } else if length.unit.is_absolute() {
-                Some(length.to_px())
-            } else {
-                // For relative units (em, rem, etc.), we'd need font context
-                // For now, treat as 0 - this should be resolved earlier in the pipeline
-                Some(0.0)
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::geometry::EdgeOffsets;
     use crate::style::computed::ComputedStyle;
-    use crate::style::{Display, Length};
+    use crate::style::{Display, Length, LengthOrAuto};
     use std::sync::Arc;
 
     fn default_style() -> ComputedStyle {

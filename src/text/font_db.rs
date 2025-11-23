@@ -126,6 +126,28 @@ pub enum FontStyle {
     Oblique,
 }
 
+// Conversion traits for fontdb interoperability
+
+impl From<FontStyle> for fontdb::Style {
+    fn from(style: FontStyle) -> Self {
+        match style {
+            FontStyle::Normal => fontdb::Style::Normal,
+            FontStyle::Italic => fontdb::Style::Italic,
+            FontStyle::Oblique => fontdb::Style::Oblique,
+        }
+    }
+}
+
+impl From<fontdb::Style> for FontStyle {
+    fn from(style: fontdb::Style) -> Self {
+        match style {
+            fontdb::Style::Normal => FontStyle::Normal,
+            fontdb::Style::Italic => FontStyle::Italic,
+            fontdb::Style::Oblique => FontStyle::Oblique,
+        }
+    }
+}
+
 /// Font stretch/width (condensed to expanded)
 ///
 /// CSS font-stretch property values for width variants.
@@ -198,6 +220,38 @@ impl FontStretch {
             FontStretch::ExtraExpanded
         } else {
             FontStretch::UltraExpanded
+        }
+    }
+}
+
+impl From<FontStretch> for fontdb::Stretch {
+    fn from(stretch: FontStretch) -> Self {
+        match stretch {
+            FontStretch::UltraCondensed => fontdb::Stretch::UltraCondensed,
+            FontStretch::ExtraCondensed => fontdb::Stretch::ExtraCondensed,
+            FontStretch::Condensed => fontdb::Stretch::Condensed,
+            FontStretch::SemiCondensed => fontdb::Stretch::SemiCondensed,
+            FontStretch::Normal => fontdb::Stretch::Normal,
+            FontStretch::SemiExpanded => fontdb::Stretch::SemiExpanded,
+            FontStretch::Expanded => fontdb::Stretch::Expanded,
+            FontStretch::ExtraExpanded => fontdb::Stretch::ExtraExpanded,
+            FontStretch::UltraExpanded => fontdb::Stretch::UltraExpanded,
+        }
+    }
+}
+
+impl From<fontdb::Stretch> for FontStretch {
+    fn from(stretch: fontdb::Stretch) -> Self {
+        match stretch {
+            fontdb::Stretch::UltraCondensed => FontStretch::UltraCondensed,
+            fontdb::Stretch::ExtraCondensed => FontStretch::ExtraCondensed,
+            fontdb::Stretch::Condensed => FontStretch::Condensed,
+            fontdb::Stretch::SemiCondensed => FontStretch::SemiCondensed,
+            fontdb::Stretch::Normal => FontStretch::Normal,
+            fontdb::Stretch::SemiExpanded => FontStretch::SemiExpanded,
+            fontdb::Stretch::Expanded => FontStretch::Expanded,
+            fontdb::Stretch::ExtraExpanded => FontStretch::ExtraExpanded,
+            fontdb::Stretch::UltraExpanded => FontStretch::UltraExpanded,
         }
     }
 }
@@ -554,7 +608,7 @@ impl FontDatabase {
         let query = FontDbQuery {
             families: &families,
             weight: fontdb::Weight(weight.0),
-            style: Self::style_to_fontdb(style),
+            style: style.into(),
             stretch: fontdb::Stretch::Normal,
         };
 
@@ -574,8 +628,8 @@ impl FontDatabase {
         let query = FontDbQuery {
             families: &families,
             weight: fontdb::Weight(weight.0),
-            style: Self::style_to_fontdb(style),
-            stretch: Self::stretch_to_fontdb(stretch),
+            style: style.into(),
+            stretch: stretch.into(),
         };
 
         self.db.query(&query)
@@ -640,8 +694,8 @@ impl FontDatabase {
                 .map(|(name, _)| name.clone())
                 .unwrap_or_else(|| "Unknown".to_string()),
             weight: FontWeight(face_info.weight.0),
-            style: Self::fontdb_to_style(face_info.style),
-            stretch: Self::fontdb_to_stretch(face_info.stretch),
+            style: face_info.style.into(),
+            stretch: face_info.stretch.into(),
         }
     }
 
@@ -838,52 +892,6 @@ impl FontDatabase {
         }
 
         emoji_fonts
-    }
-
-    // Internal conversion helpers
-
-    fn style_to_fontdb(style: FontStyle) -> fontdb::Style {
-        match style {
-            FontStyle::Normal => fontdb::Style::Normal,
-            FontStyle::Italic => fontdb::Style::Italic,
-            FontStyle::Oblique => fontdb::Style::Oblique,
-        }
-    }
-
-    fn fontdb_to_style(style: fontdb::Style) -> FontStyle {
-        match style {
-            fontdb::Style::Normal => FontStyle::Normal,
-            fontdb::Style::Italic => FontStyle::Italic,
-            fontdb::Style::Oblique => FontStyle::Oblique,
-        }
-    }
-
-    fn stretch_to_fontdb(stretch: FontStretch) -> fontdb::Stretch {
-        match stretch {
-            FontStretch::UltraCondensed => fontdb::Stretch::UltraCondensed,
-            FontStretch::ExtraCondensed => fontdb::Stretch::ExtraCondensed,
-            FontStretch::Condensed => fontdb::Stretch::Condensed,
-            FontStretch::SemiCondensed => fontdb::Stretch::SemiCondensed,
-            FontStretch::Normal => fontdb::Stretch::Normal,
-            FontStretch::SemiExpanded => fontdb::Stretch::SemiExpanded,
-            FontStretch::Expanded => fontdb::Stretch::Expanded,
-            FontStretch::ExtraExpanded => fontdb::Stretch::ExtraExpanded,
-            FontStretch::UltraExpanded => fontdb::Stretch::UltraExpanded,
-        }
-    }
-
-    fn fontdb_to_stretch(stretch: fontdb::Stretch) -> FontStretch {
-        match stretch {
-            fontdb::Stretch::UltraCondensed => FontStretch::UltraCondensed,
-            fontdb::Stretch::ExtraCondensed => FontStretch::ExtraCondensed,
-            fontdb::Stretch::Condensed => FontStretch::Condensed,
-            fontdb::Stretch::SemiCondensed => FontStretch::SemiCondensed,
-            fontdb::Stretch::Normal => FontStretch::Normal,
-            fontdb::Stretch::SemiExpanded => FontStretch::SemiExpanded,
-            fontdb::Stretch::Expanded => FontStretch::Expanded,
-            fontdb::Stretch::ExtraExpanded => FontStretch::ExtraExpanded,
-            fontdb::Stretch::UltraExpanded => FontStretch::UltraExpanded,
-        }
     }
 }
 
