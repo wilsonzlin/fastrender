@@ -29,6 +29,7 @@
 //! - `constraints.rs` - LayoutConstraints and AvailableSpace (W2.T04)
 //! - `formatting_context.rs` - FormattingContext trait (W2.T07)
 //! - `engine.rs` - LayoutEngine orchestrator (W2.T10)
+//! - `float_context.rs` - Float context and placement algorithm (W3.T10/W3.T11)
 //! - `block.rs` - Block layout algorithm (W3.T04)
 //! - `inline.rs` - Inline layout and line breaking (W4.T12)
 //! - `flex.rs` - Flexbox integration with Taffy (W3.T08)
