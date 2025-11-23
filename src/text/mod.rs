@@ -66,12 +66,22 @@ pub mod font_db;
 pub mod font_fallback;
 pub mod font_loader;
 
+// ============================================================================
+// Line Breaking (Wave 4)
+// ============================================================================
+
+pub mod line_break;
+
 // Re-export primary types for convenience
 pub use font_db::{
     FontDatabase, FontMetrics, FontStretch, FontStyle, FontWeight, GenericFamily, LoadedFont, ScaledMetrics,
 };
 pub use font_fallback::{FallbackChain, FallbackChainBuilder, FamilyEntry, FontId};
 pub use font_loader::{FontContext, TextMeasurement};
+pub use line_break::{
+    find_break_opportunities, find_interior_breaks, find_mandatory_breaks, has_break_at, BreakIterator,
+    BreakOpportunity, BreakType,
+};
 
 // ============================================================================
 // Legacy V1 Implementation (to be refactored in Wave 4+)
