@@ -66,17 +66,20 @@ pub mod engine;
 // W3.T10 - Float context for BFC float management
 pub mod float_context;
 
+// W4.T15 - Inline layout with float integration
+pub mod inline;
+
 // W3.T13 - Absolute positioning algorithm
 pub mod absolute_positioning;
 
 // Re-exports
+pub use absolute_positioning::{AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult, ResolvedMargins};
 pub use constraints::{AvailableSpace, LayoutConstraints};
 pub use contexts::{
     ContainingBlock, FormattingContextFactory, GridFormattingContext, PositionedLayout, StickyConstraints,
 };
 pub use engine::{LayoutConfig, LayoutEngine, LayoutStats};
 pub use float_context::{FloatContext, FloatInfo, FloatSide};
-pub use absolute_positioning::{AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult, ResolvedMargins};
 pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 
 // W3.T06 - Table layout algorithm
