@@ -29,7 +29,7 @@
 //! - `font_db` - Font database, discovery, and loading
 //! - `font_loader` - High-level font context
 //! - `font_fallback` - Per-character font fallback chain
-//! - Future: `shaper` - Text shaping integration
+//! - `shaper` - Text shaping using HarfBuzz (rustybuzz)
 //! - Future: `bidi` - Bidirectional text handling
 //! - Future: `linebreak` - Line breaking algorithm
 //!
@@ -66,12 +66,19 @@ pub mod font_db;
 pub mod font_fallback;
 pub mod font_loader;
 
+// ============================================================================
+// Text Shaping (Wave 4)
+// ============================================================================
+
+pub mod shaper;
+
 // Re-export primary types for convenience
 pub use font_db::{
     FontDatabase, FontMetrics, FontStretch, FontStyle, FontWeight, GenericFamily, LoadedFont, ScaledMetrics,
 };
 pub use font_fallback::{FallbackChain, FallbackChainBuilder, FamilyEntry, FontId};
 pub use font_loader::{FontContext, TextMeasurement};
+pub use shaper::{Direction, GlyphCluster, GlyphPosition, Script, ShapedGlyphs, TextShaper};
 
 // ============================================================================
 // Legacy V1 Implementation (to be refactored in Wave 4+)
