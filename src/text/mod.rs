@@ -66,12 +66,21 @@ pub mod font_db;
 pub mod font_fallback;
 pub mod font_loader;
 
+// ============================================================================
+// Bidirectional Text (Wave 4)
+// ============================================================================
+
+pub mod bidi;
+
 // Re-export primary types for convenience
 pub use font_db::{
     FontDatabase, FontMetrics, FontStretch, FontStyle, FontWeight, GenericFamily, LoadedFont, ScaledMetrics,
 };
 pub use font_fallback::{FallbackChain, FallbackChainBuilder, FamilyEntry, FontId};
 pub use font_loader::{FontContext, TextMeasurement};
+
+// Bidi types
+pub use bidi::{analyze_bidi, BidiAnalysis, BidiAnalyzer, BidiRun, Direction};
 
 // ============================================================================
 // Legacy V1 Implementation (to be refactored in Wave 4+)
