@@ -59,10 +59,14 @@ pub mod formatting_context;
 // W2.T10 - Layout engine orchestrator
 pub mod engine;
 
+// W3.T10 - Float context for BFC float management
+pub mod float_context;
+
 // Re-exports
 pub use constraints::{AvailableSpace, LayoutConstraints};
 pub use contexts::{FormattingContextFactory, GridFormattingContext};
 pub use engine::{LayoutConfig, LayoutEngine, LayoutStats};
+pub use float_context::{FloatContext, FloatInfo, FloatSide};
 pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 
 // W3.T06 - Table layout algorithm
