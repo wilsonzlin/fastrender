@@ -55,7 +55,10 @@ pub mod font_db;
 pub mod font_loader;
 
 // Re-export primary types for convenience
-pub use font_db::{FontDatabase, FontStretch, FontStyle, FontWeight, GenericFamily, LoadedFont};
+pub use font_db::{
+    FontDatabase, FontMetrics, FontStretch, FontStyle, FontWeight, GenericFamily, LoadedFont,
+    ScaledMetrics,
+};
 pub use font_loader::FontContext;
 
 // ============================================================================

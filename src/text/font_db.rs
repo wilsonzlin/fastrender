@@ -235,6 +235,37 @@ pub struct LoadedFont {
     pub stretch: FontStretch,
 }
 
+impl LoadedFont {
+    /// Extract font metrics
+    ///
+    /// Parses the font tables to extract dimensional information.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let font = ctx.get_sans_serif().unwrap();
+    /// let metrics = font.metrics().unwrap();
+    /// let scaled = metrics.scale(16.0);
+    /// println!("Ascent: {}px", scaled.ascent);
+    /// ```
+    pub fn metrics(&self) -> crate::error::Result<FontMetrics> {
+        FontMetrics::from_font(self)
+    }
+
+    /// Get ttf-parser Face for advanced operations
+    ///
+    /// Returns a parsed font face for accessing glyph data, kerning, etc.
+    pub fn as_ttf_face(&self) -> crate::error::Result<ttf_parser::Face<'_>> {
+        ttf_parser::Face::parse(&self.data, self.index).map_err(|e| {
+            crate::error::FontError::LoadFailed {
+                family: self.family.clone(),
+                reason: format!("Failed to parse font: {:?}", e),
+            }
+            .into()
+        })
+    }
+}
+
 /// Generic font families as defined by CSS
 ///
 /// These are abstract font families that map to actual system fonts.
@@ -691,6 +722,213 @@ impl Default for FontDatabase {
 unsafe impl Send for FontDatabase {}
 unsafe impl Sync for FontDatabase {}
 
+// ============================================================================
+// Font Metrics
+// ============================================================================
+
+/// Font metrics in font units
+///
+/// Contains dimensional information extracted from font tables.
+/// All values are in font design units and must be scaled by font size.
+///
+/// # CSS Specification
+///
+/// These metrics are used for CSS line-height calculations:
+/// - <https://www.w3.org/TR/css-inline-3/#line-height>
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use fastrender::text::font_db::{FontDatabase, FontWeight, FontStyle, FontMetrics};
+///
+/// let db = FontDatabase::new();
+/// if let Some(id) = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal) {
+///     let font = db.load_font(id).unwrap();
+///     let metrics = FontMetrics::from_font(&font).unwrap();
+///     let scaled = metrics.scale(16.0); // 16px font
+///     println!("Line height: {}px", scaled.line_height);
+/// }
+/// ```
+#[derive(Debug, Clone)]
+pub struct FontMetrics {
+    /// Units per em (typically 1000 or 2048)
+    pub units_per_em: u16,
+    /// Ascent (distance from baseline to top, positive)
+    pub ascent: i16,
+    /// Descent (distance from baseline to bottom, typically negative)
+    pub descent: i16,
+    /// Line gap (additional spacing between lines)
+    pub line_gap: i16,
+    /// Calculated line height (ascent - descent + line_gap)
+    pub line_height: i16,
+    /// x-height (height of lowercase 'x')
+    pub x_height: Option<i16>,
+    /// Cap height (height of uppercase letters)
+    pub cap_height: Option<i16>,
+    /// Underline position (negative = below baseline)
+    pub underline_position: i16,
+    /// Underline thickness
+    pub underline_thickness: i16,
+    /// Strikeout position
+    pub strikeout_position: Option<i16>,
+    /// Strikeout thickness
+    pub strikeout_thickness: Option<i16>,
+    /// Is bold (from OS/2 table)
+    pub is_bold: bool,
+    /// Is italic (from OS/2 table)
+    pub is_italic: bool,
+    /// Is monospace
+    pub is_monospace: bool,
+}
+
+impl FontMetrics {
+    /// Extract metrics from a loaded font
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the font data cannot be parsed.
+    pub fn from_font(font: &LoadedFont) -> crate::error::Result<Self> {
+        Self::from_data(&font.data, font.index)
+    }
+
+    /// Extract metrics from font data
+    pub fn from_data(data: &[u8], index: u32) -> crate::error::Result<Self> {
+        let face = ttf_parser::Face::parse(data, index).map_err(|e| {
+            crate::error::FontError::LoadFailed {
+                family: String::new(),
+                reason: format!("Failed to parse font: {:?}", e),
+            }
+        })?;
+
+        Self::from_face(&face)
+    }
+
+    /// Extract metrics from ttf-parser Face
+    pub fn from_face(face: &ttf_parser::Face) -> crate::error::Result<Self> {
+        let units_per_em = face.units_per_em();
+        let ascent = face.ascender();
+        let descent = face.descender();
+        let line_gap = face.line_gap();
+
+        // CSS spec: line-height = ascent - descent + line-gap
+        let line_height = ascent - descent + line_gap;
+
+        let x_height = face.x_height();
+        let cap_height = face.capital_height();
+
+        // Underline metrics
+        let (underline_position, underline_thickness) = face
+            .underline_metrics()
+            .map(|m| (m.position, m.thickness))
+            .unwrap_or((-(units_per_em as i16) / 10, (units_per_em as i16) / 20));
+
+        // Strikeout metrics
+        let (strikeout_position, strikeout_thickness) = face
+            .strikeout_metrics()
+            .map(|m| (Some(m.position), Some(m.thickness)))
+            .unwrap_or((None, None));
+
+        Ok(Self {
+            units_per_em,
+            ascent,
+            descent,
+            line_gap,
+            line_height,
+            x_height,
+            cap_height,
+            underline_position,
+            underline_thickness,
+            strikeout_position,
+            strikeout_thickness,
+            is_bold: face.is_bold(),
+            is_italic: face.is_italic(),
+            is_monospace: face.is_monospaced(),
+        })
+    }
+
+    /// Scale metrics to pixel size
+    ///
+    /// Converts font units to pixels for a given font size.
+    pub fn scale(&self, font_size: f32) -> ScaledMetrics {
+        let scale = font_size / (self.units_per_em as f32);
+
+        ScaledMetrics {
+            font_size,
+            scale,
+            ascent: (self.ascent as f32) * scale,
+            descent: -(self.descent as f32) * scale, // Make positive
+            line_gap: (self.line_gap as f32) * scale,
+            line_height: (self.line_height as f32) * scale,
+            x_height: self.x_height.map(|h| (h as f32) * scale),
+            cap_height: self.cap_height.map(|h| (h as f32) * scale),
+            underline_position: (self.underline_position as f32) * scale,
+            underline_thickness: (self.underline_thickness as f32) * scale,
+        }
+    }
+
+    /// Calculate normal line height for a font size
+    ///
+    /// CSS 'line-height: normal' uses font metrics.
+    #[inline]
+    pub fn normal_line_height(&self, font_size: f32) -> f32 {
+        (self.line_height as f32) * font_size / (self.units_per_em as f32)
+    }
+}
+
+/// Scaled font metrics in pixels
+///
+/// Pre-computed metrics for a specific font size, ready for layout.
+#[derive(Debug, Clone)]
+pub struct ScaledMetrics {
+    /// Font size in pixels
+    pub font_size: f32,
+    /// Scale factor (font_size / units_per_em)
+    pub scale: f32,
+    /// Ascent in pixels (above baseline)
+    pub ascent: f32,
+    /// Descent in pixels (positive, below baseline)
+    pub descent: f32,
+    /// Line gap in pixels
+    pub line_gap: f32,
+    /// Line height in pixels
+    pub line_height: f32,
+    /// x-height in pixels
+    pub x_height: Option<f32>,
+    /// Cap height in pixels
+    pub cap_height: Option<f32>,
+    /// Underline position (positive = below baseline)
+    pub underline_position: f32,
+    /// Underline thickness
+    pub underline_thickness: f32,
+}
+
+impl ScaledMetrics {
+    /// Baseline offset from top of line box
+    #[inline]
+    pub fn baseline_offset(&self) -> f32 {
+        self.ascent
+    }
+
+    /// Total height (ascent + descent)
+    #[inline]
+    pub fn total_height(&self) -> f32 {
+        self.ascent + self.descent
+    }
+
+    /// Apply line-height factor (e.g., 1.5 for 150%)
+    pub fn with_line_height_factor(&self, factor: f32) -> Self {
+        Self {
+            line_height: self.font_size * factor,
+            ..*self
+        }
+    }
+
+    /// Apply explicit line height
+    pub fn with_line_height(&self, line_height: f32) -> Self {
+        Self { line_height, ..*self }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -947,6 +1185,134 @@ mod tests {
                 let font = db.load_font(id.unwrap());
                 assert!(font.is_some());
             }
+        }
+    }
+
+    // ========================================================================
+    // Font Metrics Tests
+    // ========================================================================
+
+    #[test]
+    fn test_font_metrics_extraction() {
+        let db = FontDatabase::new();
+        if db.is_empty() {
+            return;
+        }
+
+        if let Some(id) = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal) {
+            let font = db.load_font(id).unwrap();
+            let metrics = font.metrics().expect("Should extract metrics");
+
+            assert!(metrics.units_per_em > 0);
+            assert!(metrics.ascent > 0);
+            assert!(metrics.descent < 0); // Descent is typically negative
+            assert!(metrics.line_height > 0);
+        }
+    }
+
+    #[test]
+    fn test_scaled_metrics() {
+        let db = FontDatabase::new();
+        if db.is_empty() {
+            return;
+        }
+
+        if let Some(id) = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal) {
+            let font = db.load_font(id).unwrap();
+            let metrics = font.metrics().expect("Should extract metrics");
+            let scaled = metrics.scale(16.0);
+
+            assert_eq!(scaled.font_size, 16.0);
+            assert!(scaled.ascent > 0.0);
+            assert!(scaled.descent > 0.0); // Scaled descent is positive
+            assert!(scaled.line_height > 0.0);
+        }
+    }
+
+    #[test]
+    fn test_scaled_metrics_total_height() {
+        let db = FontDatabase::new();
+        if db.is_empty() {
+            return;
+        }
+
+        if let Some(id) = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal) {
+            let font = db.load_font(id).unwrap();
+            let metrics = font.metrics().expect("Should extract metrics");
+            let scaled = metrics.scale(16.0);
+
+            // Total height should be reasonable for 16px font
+            let total = scaled.total_height();
+            assert!(total > 10.0 && total < 30.0);
+        }
+    }
+
+    #[test]
+    fn test_scaled_metrics_baseline_offset() {
+        let db = FontDatabase::new();
+        if db.is_empty() {
+            return;
+        }
+
+        if let Some(id) = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal) {
+            let font = db.load_font(id).unwrap();
+            let metrics = font.metrics().expect("Should extract metrics");
+            let scaled = metrics.scale(16.0);
+
+            // Baseline offset equals ascent
+            assert_eq!(scaled.baseline_offset(), scaled.ascent);
+        }
+    }
+
+    #[test]
+    fn test_scaled_metrics_with_line_height_factor() {
+        let db = FontDatabase::new();
+        if db.is_empty() {
+            return;
+        }
+
+        if let Some(id) = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal) {
+            let font = db.load_font(id).unwrap();
+            let metrics = font.metrics().expect("Should extract metrics");
+            let scaled = metrics.scale(16.0);
+            let with_factor = scaled.with_line_height_factor(1.5);
+
+            assert_eq!(with_factor.line_height, 24.0); // 16 * 1.5
+            assert_eq!(with_factor.font_size, 16.0); // Unchanged
+        }
+    }
+
+    #[test]
+    fn test_normal_line_height() {
+        let db = FontDatabase::new();
+        if db.is_empty() {
+            return;
+        }
+
+        if let Some(id) = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal) {
+            let font = db.load_font(id).unwrap();
+            let metrics = font.metrics().expect("Should extract metrics");
+
+            let normal_lh = metrics.normal_line_height(16.0);
+            assert!(normal_lh > 0.0);
+            // Normal line height is usually >= font size
+            assert!(normal_lh >= 14.0 && normal_lh < 32.0);
+        }
+    }
+
+    #[test]
+    fn test_loaded_font_as_ttf_face() {
+        let db = FontDatabase::new();
+        if db.is_empty() {
+            return;
+        }
+
+        if let Some(id) = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal) {
+            let font = db.load_font(id).unwrap();
+            let face = font.as_ttf_face().expect("Should parse font");
+
+            // Verify we can access the face
+            assert!(face.units_per_em() > 0);
         }
     }
 }
