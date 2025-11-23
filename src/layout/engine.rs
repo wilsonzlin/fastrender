@@ -559,8 +559,9 @@ mod tests {
         let constraints = LayoutConstraints::definite(640.0, 480.0);
         let fragment = engine.layout_subtree(&box_node, &constraints).unwrap();
 
+        // Real BlockFormattingContext: empty block uses available width, 0 height
         assert_eq!(fragment.bounds.width(), 640.0);
-        assert_eq!(fragment.bounds.height(), 480.0);
+        assert_eq!(fragment.bounds.height(), 0.0);
     }
 
     #[test]
@@ -621,8 +622,8 @@ mod tests {
         let size = engine
             .compute_intrinsic_size(&box_node, IntrinsicSizingMode::MinContent)
             .unwrap();
-        // Stub returns 100.0
-        assert_eq!(size, 100.0);
+        // Real BlockFormattingContext: empty block has 0 intrinsic size
+        assert_eq!(size, 0.0);
     }
 
     #[test]
@@ -633,7 +634,8 @@ mod tests {
         let size = engine
             .compute_intrinsic_size(&box_node, IntrinsicSizingMode::MaxContent)
             .unwrap();
-        assert_eq!(size, 100.0);
+        // Real BlockFormattingContext: empty block has 0 intrinsic size
+        assert_eq!(size, 0.0);
     }
 
     #[test]
