@@ -101,6 +101,18 @@ pub use emoji::{
 };
 
 // ============================================================================
+// Text Shaping Pipeline (Wave 4)
+// ============================================================================
+
+pub mod pipeline;
+
+// Re-export shaping types
+pub use pipeline::{
+    assign_fonts, itemize_text, BidiAnalysis, ClusterMap, Direction, FontRun, GlyphPosition,
+    ItemizedRun, Script, ShapedRun, ShapingPipeline,
+};
+
+// ============================================================================
 // Legacy V1 Implementation (to be refactored in Wave 4+)
 // ============================================================================
 
