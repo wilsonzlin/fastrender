@@ -11,7 +11,7 @@
 //! - Cluster tracking
 //! - Hit testing
 
-use fastrender::text::shaper::{Direction, GlyphCluster, GlyphPosition, Script, ShapedGlyphs, TextShaper};
+use fastrender::text::shaper::{TextDirection, GlyphCluster, GlyphPosition, Script, ShapedGlyphs, TextShaper};
 use fastrender::text::FontContext;
 
 // ============================================================================
@@ -37,30 +37,30 @@ fn get_shaper_and_font() -> Option<(TextShaper, fastrender::text::LoadedFont)> {
 
 #[test]
 fn test_direction_default_is_ltr() {
-    assert_eq!(Direction::default(), Direction::LeftToRight);
+    assert_eq!(TextDirection::default(), TextDirection::Ltr);
 }
 
 #[test]
 fn test_direction_horizontal_detection() {
-    assert!(Direction::LeftToRight.is_horizontal());
-    assert!(Direction::RightToLeft.is_horizontal());
-    assert!(!Direction::TopToBottom.is_horizontal());
-    assert!(!Direction::BottomToTop.is_horizontal());
+    assert!(TextDirection::Ltr.is_horizontal());
+    assert!(TextDirection::Rtl.is_horizontal());
+    assert!(!TextDirection::Ttb.is_horizontal());
+    assert!(!TextDirection::Btt.is_horizontal());
 }
 
 #[test]
 fn test_direction_vertical_detection() {
-    assert!(!Direction::LeftToRight.is_vertical());
-    assert!(!Direction::RightToLeft.is_vertical());
-    assert!(Direction::TopToBottom.is_vertical());
-    assert!(Direction::BottomToTop.is_vertical());
+    assert!(!TextDirection::Ltr.is_vertical());
+    assert!(!TextDirection::Rtl.is_vertical());
+    assert!(TextDirection::Ttb.is_vertical());
+    assert!(TextDirection::Btt.is_vertical());
 }
 
 #[test]
 fn test_direction_rtl_detection() {
-    assert!(!Direction::LeftToRight.is_rtl());
-    assert!(Direction::RightToLeft.is_rtl());
-    assert!(!Direction::TopToBottom.is_rtl());
+    assert!(!TextDirection::Ltr.is_rtl());
+    assert!(TextDirection::Rtl.is_rtl());
+    assert!(!TextDirection::Ttb.is_rtl());
 }
 
 // ============================================================================
@@ -185,11 +185,11 @@ fn test_script_detect_text_mixed_defaults_to_most_common() {
 
 #[test]
 fn test_script_default_direction() {
-    assert_eq!(Script::Latin.default_direction(), Direction::LeftToRight);
-    assert_eq!(Script::Arabic.default_direction(), Direction::RightToLeft);
-    assert_eq!(Script::Hebrew.default_direction(), Direction::RightToLeft);
-    assert_eq!(Script::Cyrillic.default_direction(), Direction::LeftToRight);
-    assert_eq!(Script::Han.default_direction(), Direction::LeftToRight);
+    assert_eq!(Script::Latin.default_direction(), TextDirection::Ltr);
+    assert_eq!(Script::Arabic.default_direction(), TextDirection::Rtl);
+    assert_eq!(Script::Hebrew.default_direction(), TextDirection::Rtl);
+    assert_eq!(Script::Cyrillic.default_direction(), TextDirection::Ltr);
+    assert_eq!(Script::Han.default_direction(), TextDirection::Ltr);
 }
 
 // ============================================================================
@@ -294,7 +294,7 @@ fn test_shaped_glyphs_cluster_at_text_pos() {
         ],
         total_advance: 30.0,
         total_advance_y: 0.0,
-        direction: Direction::LeftToRight,
+        direction: TextDirection::Ltr,
         script: Script::Latin,
         font_size: 16.0,
     };
@@ -337,13 +337,13 @@ fn test_shape_latin_simple() {
     };
 
     let shaped = shaper
-        .shape_text("Hello", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("Hello", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should shape Latin text");
 
     assert_eq!(shaped.text, "Hello");
     assert_eq!(shaped.glyphs.len(), 5);
     assert!(shaped.total_advance > 0.0);
-    assert_eq!(shaped.direction, Direction::LeftToRight);
+    assert_eq!(shaped.direction, TextDirection::Ltr);
     assert_eq!(shaped.script, Script::Latin);
 }
 
@@ -354,7 +354,7 @@ fn test_shape_latin_empty_string() {
     };
 
     let shaped = shaper
-        .shape_text("", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should handle empty string");
 
     assert!(shaped.is_empty());
@@ -368,7 +368,7 @@ fn test_shape_latin_single_char() {
     };
 
     let shaped = shaper
-        .shape_text("A", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("A", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should shape single character");
 
     assert_eq!(shaped.glyphs.len(), 1);
@@ -383,7 +383,7 @@ fn test_shape_latin_with_spaces() {
     };
 
     let shaped = shaper
-        .shape_text("A B C", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("A B C", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should shape text with spaces");
 
     assert_eq!(shaped.glyphs.len(), 5); // A, space, B, space, C
@@ -397,7 +397,7 @@ fn test_shape_latin_accented() {
     };
 
     let shaped = shaper
-        .shape_text("café", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("café", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should shape accented Latin text");
 
     assert!(!shaped.is_empty());
@@ -411,11 +411,11 @@ fn test_shape_latin_font_size_scaling() {
     };
 
     let shaped_16 = shaper
-        .shape_text("Hello", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("Hello", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should shape at 16px");
 
     let shaped_32 = shaper
-        .shape_text("Hello", &font, 32.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("Hello", &font, 32.0, Script::Latin, TextDirection::Ltr)
         .expect("Should shape at 32px");
 
     // Double font size should roughly double the advance
@@ -434,7 +434,7 @@ fn test_shape_potential_ligature_fi() {
     };
 
     let shaped = shaper
-        .shape_text("office", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("office", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should shape text with potential ligatures");
 
     // The word "office" contains "ffi" which might be ligatured
@@ -451,7 +451,7 @@ fn test_shape_potential_ligature_ff() {
     };
 
     let shaped = shaper
-        .shape_text("affect", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("affect", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should shape text with ff");
 
     assert!(!shaped.is_empty());
@@ -465,7 +465,7 @@ fn test_shape_potential_ligature_fl() {
     };
 
     let shaped = shaper
-        .shape_text("flower", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("flower", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should shape text with fl");
 
     assert!(!shaped.is_empty());
@@ -484,7 +484,7 @@ fn test_shape_kerning_av() {
 
     // "AV" and "VA" are common kerning pairs
     let shaped = shaper
-        .shape_text("AVATAR", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("AVATAR", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should shape text with kerning pairs");
 
     assert!(!shaped.is_empty());
@@ -500,7 +500,7 @@ fn test_shape_kerning_to() {
 
     // "To" is a common kerning pair
     let shaped = shaper
-        .shape_text("To", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("To", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should shape kerning pair");
 
     assert!(!shaped.is_empty());
@@ -518,12 +518,12 @@ fn test_shape_arabic_basic() {
     };
 
     // Arabic: "مرحبا" (Hello)
-    let result = shaper.shape_text("مرحبا", &font, 16.0, Script::Arabic, Direction::RightToLeft);
+    let result = shaper.shape_text("مرحبا", &font, 16.0, Script::Arabic, TextDirection::Rtl);
 
     // This might fail if font doesn't have Arabic glyphs, which is OK
     if let Ok(shaped) = result {
         assert!(!shaped.is_empty());
-        assert_eq!(shaped.direction, Direction::RightToLeft);
+        assert_eq!(shaped.direction, TextDirection::Rtl);
         assert_eq!(shaped.script, Script::Arabic);
         // Arabic has contextual shaping - glyph count may differ from char count
         assert!(shaped.glyphs.len() > 0);
@@ -537,11 +537,11 @@ fn test_shape_hebrew_basic() {
     };
 
     // Hebrew: "שלום" (Hello)
-    let result = shaper.shape_text("שלום", &font, 16.0, Script::Hebrew, Direction::RightToLeft);
+    let result = shaper.shape_text("שלום", &font, 16.0, Script::Hebrew, TextDirection::Rtl);
 
     if let Ok(shaped) = result {
         assert!(!shaped.is_empty());
-        assert_eq!(shaped.direction, Direction::RightToLeft);
+        assert_eq!(shaped.direction, TextDirection::Rtl);
         assert_eq!(shaped.script, Script::Hebrew);
     }
 }
@@ -553,10 +553,10 @@ fn test_shape_rtl_direction_property() {
     };
 
     let shaped = shaper
-        .shape_text("test", &font, 16.0, Script::Latin, Direction::RightToLeft)
+        .shape_text("test", &font, 16.0, Script::Latin, TextDirection::Rtl)
         .expect("Should shape with RTL direction");
 
-    assert_eq!(shaped.direction, Direction::RightToLeft);
+    assert_eq!(shaped.direction, TextDirection::Rtl);
 }
 
 // ============================================================================
@@ -570,7 +570,7 @@ fn test_shape_devanagari() {
     };
 
     // Devanagari: "नमस्ते" (Hello)
-    let result = shaper.shape_text("नमस्ते", &font, 16.0, Script::Devanagari, Direction::LeftToRight);
+    let result = shaper.shape_text("नमस्ते", &font, 16.0, Script::Devanagari, TextDirection::Ltr);
 
     // May fail if font doesn't support Devanagari
     if let Ok(shaped) = result {
@@ -586,7 +586,7 @@ fn test_shape_cyrillic() {
     };
 
     // Cyrillic: "Привет" (Hello)
-    let result = shaper.shape_text("Привет", &font, 16.0, Script::Cyrillic, Direction::LeftToRight);
+    let result = shaper.shape_text("Привет", &font, 16.0, Script::Cyrillic, TextDirection::Ltr);
 
     if let Ok(shaped) = result {
         assert!(!shaped.is_empty());
@@ -609,7 +609,7 @@ fn test_shape_text_auto_latin() {
         .expect("Should auto-detect Latin");
 
     assert_eq!(shaped.script, Script::Latin);
-    assert_eq!(shaped.direction, Direction::LeftToRight);
+    assert_eq!(shaped.direction, TextDirection::Ltr);
 }
 
 #[test]
@@ -622,7 +622,7 @@ fn test_shape_text_auto_arabic() {
 
     if let Ok(shaped) = result {
         assert_eq!(shaped.script, Script::Arabic);
-        assert_eq!(shaped.direction, Direction::RightToLeft);
+        assert_eq!(shaped.direction, TextDirection::Rtl);
     }
 }
 
@@ -637,7 +637,7 @@ fn test_shape_text_simple() {
         .expect("Should shape simple text");
 
     assert_eq!(shaped.script, Script::Latin);
-    assert_eq!(shaped.direction, Direction::LeftToRight);
+    assert_eq!(shaped.direction, TextDirection::Ltr);
 }
 
 // ============================================================================
@@ -653,7 +653,7 @@ fn test_shape_combining_acute() {
     // "e" followed by combining acute accent
     let text = "e\u{0301}"; // e + combining acute
     let shaped = shaper
-        .shape_text(text, &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text(text, &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should shape combining marks");
 
     // The combined character should form a cluster
@@ -669,12 +669,12 @@ fn test_shape_precomposed_vs_combining() {
 
     // Precomposed é
     let precomposed = shaper
-        .shape_text("é", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("é", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should shape precomposed");
 
     // Combining e + acute
     let combining = shaper
-        .shape_text("e\u{0301}", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("e\u{0301}", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should shape combining");
 
     // Both should have similar width
@@ -693,7 +693,7 @@ fn test_cluster_tracking_simple() {
     };
 
     let shaped = shaper
-        .shape_text("abc", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("abc", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should track clusters");
 
     // For simple Latin, each character should be its own cluster
@@ -713,7 +713,7 @@ fn test_cluster_advances_sum_to_total() {
     };
 
     let shaped = shaper
-        .shape_text("Hello", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("Hello", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should shape text");
 
     let cluster_sum: f32 = shaped.clusters.iter().map(|c| c.advance).sum();
@@ -729,7 +729,7 @@ fn test_glyph_advances_sum_to_total() {
     };
 
     let shaped = shaper
-        .shape_text("Hello", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("Hello", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should shape text");
 
     let glyph_sum: f32 = shaped.glyphs.iter().map(|g| g.advance).sum();
@@ -749,7 +749,7 @@ fn test_x_position_for_text_offset() {
     };
 
     let shaped = shaper
-        .shape_text("abc", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("abc", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should shape text");
 
     // Position at start should be 0
@@ -777,7 +777,7 @@ fn test_text_offset_for_x_position() {
     };
 
     let shaped = shaper
-        .shape_text("abc", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("abc", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should shape text");
 
     // Click at 0 should return 0
@@ -856,7 +856,7 @@ fn test_shape_mixed_scripts() {
 
     // Mixed Latin and numbers
     let shaped = shaper
-        .shape_text("ABC123", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("ABC123", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should shape mixed");
 
     assert_eq!(shaped.glyphs.len(), 6);
@@ -870,7 +870,7 @@ fn test_shape_newlines() {
 
     // Text with newline
     let shaped = shaper
-        .shape_text("a\nb", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("a\nb", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should handle newlines");
 
     // Should have 3 glyphs (a, newline, b)
@@ -885,7 +885,7 @@ fn test_shape_tabs() {
 
     // Text with tab
     let shaped = shaper
-        .shape_text("a\tb", &font, 16.0, Script::Latin, Direction::LeftToRight)
+        .shape_text("a\tb", &font, 16.0, Script::Latin, TextDirection::Ltr)
         .expect("Should handle tabs");
 
     assert!(!shaped.is_empty());

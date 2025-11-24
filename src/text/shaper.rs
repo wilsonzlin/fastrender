@@ -18,7 +18,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use fastrender::text::shaper::{TextShaper, Direction, Script};
+//! use fastrender::text::shaper::{TextShaper, TextDirection, Script};
 //! use fastrender::text::FontContext;
 //!
 //! let ctx = FontContext::new();
@@ -30,7 +30,7 @@
 //!         &font,
 //!         16.0,
 //!         Script::Latin,
-//!         Direction::LeftToRight,
+//!         TextDirection::Ltr,
 //!     ).unwrap();
 //!
 //!     println!("Total advance: {}px", shaped.total_advance);
@@ -55,56 +55,70 @@ use std::sync::Arc;
 // Direction
 // ============================================================================
 
-/// Text direction for shaping
+/// Text direction for shaping (includes vertical text support)
 ///
 /// Determines the primary direction of text flow, which affects how
 /// glyphs are positioned and how bidirectional text is handled.
 ///
+/// This is distinct from `bidi::Direction` which only handles LTR/RTL for
+/// bidirectional text analysis. `TextDirection` additionally supports
+/// vertical text modes for CJK and other scripts.
+///
 /// # CSS Specification
 ///
-/// Maps to CSS `direction` property:
-/// - `ltr` → `Direction::LeftToRight`
-/// - `rtl` → `Direction::RightToLeft`
+/// Maps to CSS `writing-mode` and `direction` properties:
+/// - `ltr` → `TextDirection::Ltr`
+/// - `rtl` → `TextDirection::Rtl`
+/// - `vertical-rl` → `TextDirection::Ttb`
+/// - `vertical-lr` → `TextDirection::Ttb`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum Direction {
+pub enum TextDirection {
     /// Left-to-right text (English, French, etc.)
     #[default]
-    LeftToRight,
+    Ltr,
     /// Right-to-left text (Arabic, Hebrew, etc.)
-    RightToLeft,
+    Rtl,
     /// Top-to-bottom (vertical CJK)
-    TopToBottom,
+    Ttb,
     /// Bottom-to-top
-    BottomToTop,
+    Btt,
 }
 
-impl Direction {
+impl TextDirection {
     /// Convert to rustybuzz Direction
     fn to_rustybuzz(self) -> rustybuzz::Direction {
         match self {
-            Direction::LeftToRight => rustybuzz::Direction::LeftToRight,
-            Direction::RightToLeft => rustybuzz::Direction::RightToLeft,
-            Direction::TopToBottom => rustybuzz::Direction::TopToBottom,
-            Direction::BottomToTop => rustybuzz::Direction::BottomToTop,
+            TextDirection::Ltr => rustybuzz::Direction::LeftToRight,
+            TextDirection::Rtl => rustybuzz::Direction::RightToLeft,
+            TextDirection::Ttb => rustybuzz::Direction::TopToBottom,
+            TextDirection::Btt => rustybuzz::Direction::BottomToTop,
         }
     }
 
     /// Check if this is a horizontal direction
     #[inline]
     pub fn is_horizontal(self) -> bool {
-        matches!(self, Direction::LeftToRight | Direction::RightToLeft)
+        matches!(self, TextDirection::Ltr | TextDirection::Rtl)
     }
 
     /// Check if this is a vertical direction
     #[inline]
     pub fn is_vertical(self) -> bool {
-        matches!(self, Direction::TopToBottom | Direction::BottomToTop)
+        matches!(self, TextDirection::Ttb | TextDirection::Btt)
     }
 
     /// Check if this is a right-to-left direction
     #[inline]
     pub fn is_rtl(self) -> bool {
-        self == Direction::RightToLeft
+        self == TextDirection::Rtl
+    }
+
+    /// Convert from bidi Direction
+    pub fn from_bidi(dir: crate::text::bidi::Direction) -> Self {
+        match dir {
+            crate::text::bidi::Direction::Ltr => TextDirection::Ltr,
+            crate::text::bidi::Direction::Rtl => TextDirection::Rtl,
+        }
     }
 }
 
@@ -342,10 +356,10 @@ impl Script {
     }
 
     /// Get the default direction for this script
-    pub fn default_direction(self) -> Direction {
+    pub fn default_direction(self) -> TextDirection {
         match self {
-            Script::Arabic | Script::Hebrew => Direction::RightToLeft,
-            _ => Direction::LeftToRight,
+            Script::Arabic | Script::Hebrew => TextDirection::Rtl,
+            _ => TextDirection::Ltr,
         }
     }
 }
@@ -492,7 +506,7 @@ impl GlyphCluster {
 /// # Example
 ///
 /// ```rust,ignore
-/// let shaped = shaper.shape_text("Hello", &font, 16.0, Script::Latin, Direction::LeftToRight)?;
+/// let shaped = shaper.shape_text("Hello", &font, 16.0, Script::Latin, TextDirection::Ltr)?;
 ///
 /// // Iterate glyphs for rendering
 /// let mut x = 0.0;
@@ -521,7 +535,7 @@ pub struct ShapedGlyphs {
     pub total_advance_y: f32,
 
     /// Direction the text was shaped with
-    pub direction: Direction,
+    pub direction: TextDirection,
 
     /// Script the text was shaped with
     pub script: Script,
@@ -539,7 +553,7 @@ impl ShapedGlyphs {
             clusters: Vec::new(),
             total_advance: 0.0,
             total_advance_y: 0.0,
-            direction: Direction::LeftToRight,
+            direction: TextDirection::Ltr,
             script: Script::Latin,
             font_size: 0.0,
         }
@@ -632,7 +646,7 @@ impl ShapedGlyphs {
 /// # Example
 ///
 /// ```rust,ignore
-/// use fastrender::text::shaper::{TextShaper, Direction, Script};
+/// use fastrender::text::shaper::{TextShaper, TextDirection, Script};
 ///
 /// let shaper = TextShaper::new();
 ///
@@ -642,7 +656,7 @@ impl ShapedGlyphs {
 ///     &font,
 ///     16.0,
 ///     Script::Latin,
-///     Direction::LeftToRight,
+///     TextDirection::Ltr,
 /// )?;
 ///
 /// // Shape Arabic text (RTL)
@@ -651,7 +665,7 @@ impl ShapedGlyphs {
 ///     &font,
 ///     16.0,
 ///     Script::Arabic,
-///     Direction::RightToLeft,
+///     TextDirection::Rtl,
 /// )?;
 /// ```
 #[derive(Debug, Clone, Default)]
@@ -691,7 +705,7 @@ impl TextShaper {
     ///     &font,
     ///     16.0,
     ///     Script::Latin,
-    ///     Direction::LeftToRight,
+    ///     TextDirection::Ltr,
     /// )?;
     /// ```
     pub fn shape_text(
@@ -700,7 +714,7 @@ impl TextShaper {
         font: &LoadedFont,
         font_size: f32,
         script: Script,
-        direction: Direction,
+        direction: TextDirection,
     ) -> Result<ShapedGlyphs> {
         // Handle empty text
         if text.is_empty() {
@@ -801,7 +815,7 @@ impl TextShaper {
     ///
     /// Convenience method for simple Latin text.
     pub fn shape_text_simple(&self, text: &str, font: &LoadedFont, font_size: f32) -> Result<ShapedGlyphs> {
-        self.shape_text(text, font, font_size, Script::Latin, Direction::LeftToRight)
+        self.shape_text(text, font, font_size, Script::Latin, TextDirection::Ltr)
     }
 
     /// Build cluster information from glyphs
@@ -909,29 +923,29 @@ mod tests {
 
     #[test]
     fn test_direction_default() {
-        assert_eq!(Direction::default(), Direction::LeftToRight);
+        assert_eq!(TextDirection::default(), TextDirection::Ltr);
     }
 
     #[test]
     fn test_direction_is_horizontal() {
-        assert!(Direction::LeftToRight.is_horizontal());
-        assert!(Direction::RightToLeft.is_horizontal());
-        assert!(!Direction::TopToBottom.is_horizontal());
-        assert!(!Direction::BottomToTop.is_horizontal());
+        assert!(TextDirection::Ltr.is_horizontal());
+        assert!(TextDirection::Rtl.is_horizontal());
+        assert!(!TextDirection::Ttb.is_horizontal());
+        assert!(!TextDirection::Btt.is_horizontal());
     }
 
     #[test]
     fn test_direction_is_vertical() {
-        assert!(!Direction::LeftToRight.is_vertical());
-        assert!(!Direction::RightToLeft.is_vertical());
-        assert!(Direction::TopToBottom.is_vertical());
-        assert!(Direction::BottomToTop.is_vertical());
+        assert!(!TextDirection::Ltr.is_vertical());
+        assert!(!TextDirection::Rtl.is_vertical());
+        assert!(TextDirection::Ttb.is_vertical());
+        assert!(TextDirection::Btt.is_vertical());
     }
 
     #[test]
     fn test_direction_is_rtl() {
-        assert!(!Direction::LeftToRight.is_rtl());
-        assert!(Direction::RightToLeft.is_rtl());
+        assert!(!TextDirection::Ltr.is_rtl());
+        assert!(TextDirection::Rtl.is_rtl());
     }
 
     // ========================================================================
@@ -1003,10 +1017,10 @@ mod tests {
 
     #[test]
     fn test_script_default_direction() {
-        assert_eq!(Script::Latin.default_direction(), Direction::LeftToRight);
-        assert_eq!(Script::Arabic.default_direction(), Direction::RightToLeft);
-        assert_eq!(Script::Hebrew.default_direction(), Direction::RightToLeft);
-        assert_eq!(Script::Han.default_direction(), Direction::LeftToRight);
+        assert_eq!(Script::Latin.default_direction(), TextDirection::Ltr);
+        assert_eq!(Script::Arabic.default_direction(), TextDirection::Rtl);
+        assert_eq!(Script::Hebrew.default_direction(), TextDirection::Rtl);
+        assert_eq!(Script::Han.default_direction(), TextDirection::Ltr);
     }
 
     // ========================================================================
@@ -1084,7 +1098,7 @@ mod tests {
             ],
             total_advance: 30.0,
             total_advance_y: 0.0,
-            direction: Direction::LeftToRight,
+            direction: TextDirection::Ltr,
             script: Script::Latin,
             font_size: 16.0,
         };
@@ -1111,7 +1125,7 @@ mod tests {
             ],
             total_advance: 30.0,
             total_advance_y: 0.0,
-            direction: Direction::LeftToRight,
+            direction: TextDirection::Ltr,
             script: Script::Latin,
             font_size: 16.0,
         };

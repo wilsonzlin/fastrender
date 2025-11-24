@@ -29,8 +29,9 @@
 //! - `font_db` - Font database, discovery, and loading
 //! - `font_loader` - High-level font context
 //! - `font_fallback` - Per-character font fallback chain
+//! - `bidi` - Bidirectional text handling (UAX #9)
+//! - `script` - Script itemization (UAX #24)
 //! - `shaper` - Text shaping using HarfBuzz (rustybuzz)
-//! - Future: `bidi` - Bidirectional text handling
 //! - Future: `linebreak` - Line breaking algorithm
 //!
 //! # Example
@@ -67,9 +68,11 @@ pub mod font_fallback;
 pub mod font_loader;
 
 // ============================================================================
-// Text Shaping (Wave 4)
+// Text Shaping Pipeline (Wave 4)
 // ============================================================================
 
+pub mod bidi;
+pub mod script;
 pub mod shaper;
 
 // Re-export primary types for convenience
@@ -78,7 +81,15 @@ pub use font_db::{
 };
 pub use font_fallback::{FallbackChain, FallbackChainBuilder, FamilyEntry, FontId};
 pub use font_loader::{FontContext, TextMeasurement};
-pub use shaper::{Direction, GlyphCluster, GlyphPosition, Script, ShapedGlyphs, TextShaper};
+
+// Shaper types (TextDirection to avoid conflict with bidi::Direction)
+pub use shaper::{GlyphCluster, GlyphPosition, Script, ShapedGlyphs, TextDirection, TextShaper};
+
+// Script itemization types
+pub use script::{is_emoji, is_skin_tone_modifier, is_variation_selector, is_zwj, itemize_scripts, ScriptRun};
+
+// Bidi types
+pub use bidi::{analyze_bidi, BidiAnalysis, BidiAnalyzer, BidiRun, Direction};
 
 // ============================================================================
 // Legacy V1 Implementation (to be refactored in Wave 4+)
