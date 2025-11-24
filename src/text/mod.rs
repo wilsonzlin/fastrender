@@ -32,6 +32,7 @@
 //! - `bidi` - Bidirectional text handling (UAX #9)
 //! - `script` - Script itemization (UAX #24)
 //! - `shaper` - Text shaping using HarfBuzz (rustybuzz)
+//! - `emoji` - Emoji detection and sequence parsing (UTS #51)
 //! - Future: `linebreak` - Line breaking algorithm
 //!
 //! # Example
@@ -72,12 +73,14 @@ pub mod font_loader;
 // ============================================================================
 
 pub mod bidi;
+pub mod emoji;
 pub mod script;
 pub mod shaper;
 
 // Re-export primary types for convenience
 pub use font_db::{
-    FontDatabase, FontMetrics, FontStretch, FontStyle, FontWeight, GenericFamily, LoadedFont, ScaledMetrics,
+    FontDatabase, FontMetrics, FontStretch, FontStyle, FontWeight, GenericFamily, LoadedFont,
+    ScaledMetrics,
 };
 pub use font_fallback::{FallbackChain, FallbackChainBuilder, FamilyEntry, FontId};
 pub use font_loader::{FontContext, TextMeasurement};
@@ -86,10 +89,16 @@ pub use font_loader::{FontContext, TextMeasurement};
 pub use shaper::{GlyphCluster, GlyphPosition, Script, ShapedGlyphs, TextDirection, TextShaper};
 
 // Script itemization types
-pub use script::{is_emoji, is_skin_tone_modifier, is_variation_selector, is_zwj, itemize_scripts, ScriptRun};
+pub use script::{itemize_scripts, ScriptRun};
 
 // Bidi types
 pub use bidi::{analyze_bidi, BidiAnalysis, BidiAnalyzer, BidiRun, Direction};
+
+// Emoji types (comprehensive emoji detection)
+pub use emoji::{
+    find_emoji_sequences, is_emoji_modifier, is_emoji_modifier_base, is_emoji_presentation,
+    is_regional_indicator, EmojiSequence, EmojiSequenceType,
+};
 
 // ============================================================================
 // Legacy V1 Implementation (to be refactored in Wave 4+)
