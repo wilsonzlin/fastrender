@@ -29,8 +29,9 @@
 //! - `font_db` - Font database, discovery, and loading
 //! - `font_loader` - High-level font context
 //! - `font_fallback` - Per-character font fallback chain
+//! - `bidi` - Bidirectional text handling (UAX #9)
+//! - `script` - Script itemization (UAX #24)
 //! - Future: `shaper` - Text shaping integration
-//! - Future: `bidi` - Bidirectional text handling
 //! - Future: `linebreak` - Line breaking algorithm
 //!
 //! # Example
@@ -70,6 +71,7 @@ pub mod font_loader;
 // Text Shaping Pipeline (Wave 4)
 // ============================================================================
 
+pub mod bidi;
 pub mod script;
 
 // Re-export primary types for convenience
@@ -78,7 +80,12 @@ pub use font_db::{
 };
 pub use font_fallback::{FallbackChain, FallbackChainBuilder, FamilyEntry, FontId};
 pub use font_loader::{FontContext, TextMeasurement};
+
+// Script itemization types
 pub use script::{is_emoji, is_skin_tone_modifier, is_variation_selector, is_zwj, itemize_scripts, ScriptRun};
+
+// Bidi types
+pub use bidi::{analyze_bidi, BidiAnalysis, BidiAnalyzer, BidiRun, Direction};
 
 // ============================================================================
 // Legacy V1 Implementation (to be refactored in Wave 4+)
