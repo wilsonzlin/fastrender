@@ -1,7 +1,7 @@
-//! Inline Layout Module
+//! Inline layout module
 //!
-//! This module contains implementations for inline formatting context (IFC)
-//! layout and related functionality.
+//! This module implements inline formatting context (IFC) components
+//! for horizontal text flow, line breaking, and baseline alignment.
 //!
 //! # Overview
 //!
@@ -11,39 +11,35 @@
 //! - Inline-block elements
 //! - Line breaking and wrapping
 //! - Baseline alignment
+//! - Float integration
 //!
-//! # Float Integration
+//! # CSS Specification
 //!
-//! The `float_integration` submodule provides the integration layer between
-//! inline layout and float positioning. When inline content is laid out in a
-//! block formatting context containing floats, lines must wrap around those
-//! floats. See CSS 2.1 Section 9.5 for float specification.
+//! Implements CSS 2.1 Section 9.4.2 - Inline Formatting Contexts:
+//! <https://www.w3.org/TR/CSS21/visuren.html#inline-formatting>
 //!
-//! # CSS Specification References
+//! And CSS Inline Layout Module Level 3:
+//! <https://www.w3.org/TR/css-inline-3/>
 //!
-//! - CSS 2.1 Section 9.4.2: Inline formatting contexts
-//! - CSS 2.1 Section 10.8: Line height calculations
-//! - CSS Inline Layout Module Level 3: https://www.w3.org/TR/css-inline-3/
+//! # Module Organization
 //!
-//! # Example
-//!
-//! ```rust,ignore
-//! use fastrender::layout::FloatContext;
-//! use fastrender::layout::inline::{InlineFloatIntegration, LineSpace};
-//!
-//! // During inline layout, use InlineFloatIntegration to query available space
-//! let float_ctx = FloatContext::new(800.0);
-//! let integration = InlineFloatIntegration::new(&float_ctx);
-//!
-//! // Find space for a line at y=0
-//! let space = integration.get_line_space(0.0);
-//! println!("Line can start at x={} with width {}", space.left_edge, space.width);
-//! ```
+//! - `baseline` - Baseline alignment algorithm (W4.T13)
+//! - `text_run` - Text run generation from shaped glyphs (W4.T14)
+//! - `float_integration` - Float integration for inline layout (W4.T15)
 
+// W4.T13 - Baseline alignment algorithm
+pub mod baseline;
+
+// W4.T14 - Text run generation
+pub mod text_run;
+
+// W4.T15 - Float integration
 pub mod float_integration;
 
-// Re-export main types for convenience
+// Re-export primary types
+pub use baseline::{BaselineAligner, InlineBoxMetrics, LineMetrics, PositionedInlineBox, VerticalAlign};
 pub use float_integration::{
     line_spaces, InlineFloatIntegration, InlineFloatIntegrationMut, LineSpace, LineSpaceIterator, LineSpaceOptions,
     PlacedInlineFloat,
 };
+pub use text_run::{GlyphInfo, InlineItem, TextRun, TextRunBuilder};

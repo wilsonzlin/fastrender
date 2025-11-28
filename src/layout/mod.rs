@@ -66,7 +66,7 @@ pub mod engine;
 // W3.T10 - Float context for BFC float management
 pub mod float_context;
 
-// W4.T15 - Inline layout with float integration
+// W4 - Inline layout module (W4.T13 Baseline, W4.T14 Text Run, W4.T15 Float Integration)
 pub mod inline;
 
 // W3.T13 - Absolute positioning algorithm
@@ -81,13 +81,17 @@ pub use contexts::{
 pub use engine::{LayoutConfig, LayoutEngine, LayoutStats};
 pub use float_context::{FloatContext, FloatInfo, FloatSide};
 pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
+pub use inline::{
+    BaselineAligner, GlyphInfo, InlineBoxMetrics, InlineItem, LineMetrics, PositionedInlineBox, TextRun,
+    TextRunBuilder, VerticalAlign, InlineFloatIntegration, InlineFloatIntegrationMut, LineSpace,
+    LineSpaceIterator, LineSpaceOptions, PlacedInlineFloat, line_spaces,
+};
 
 // W3.T06 - Table layout algorithm
 pub mod table;
 
 // Future modules (to be implemented in Wave 3+):
 // pub mod block;        // W3.T04
-// pub mod inline;       // W4.T12
 // pub mod flex;         // W3.T08
 // pub mod grid;         // W3.T09
 // pub mod positioned;   // W3.T12

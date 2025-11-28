@@ -44,6 +44,10 @@ fontdb = "0.23"
 # Unicode text processing
 unicode-linebreak = "0.1"
 unicode-bidi = "0.3"
+unicode-script = "0.5"
+
+# Hyphenation
+hyphenation = { version = "0.8", features = ["embed_en-us"] }
 
 # ============================================================================
 # 2D Graphics and Rendering
