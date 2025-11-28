@@ -15,7 +15,7 @@ use fastrender::text::line_break::{
 #[test]
 fn test_english_sentence_breaks() {
     let text = "The quick brown fox jumps over the lazy dog.";
-    let breaks = find_break_opportunities(text);
+    let _breaks = find_break_opportunities(text);
 
     // Should have multiple break opportunities (at spaces)
     assert!(breaks.len() >= 8, "Expected at least 8 breaks, got {}", breaks.len());
@@ -30,7 +30,7 @@ fn test_english_sentence_breaks() {
 #[test]
 fn test_simple_two_words() {
     let text = "Hello world";
-    let breaks = find_break_opportunities(text);
+    let _breaks = find_break_opportunities(text);
 
     // Should have break after "Hello " (position 6) and at end (position 11)
     let break_positions: Vec<usize> = breaks.iter().map(|b| b.byte_offset).collect();
@@ -54,7 +54,7 @@ fn test_no_breaks_in_single_word() {
 #[test]
 fn test_newline_creates_mandatory_break() {
     let text = "First line\nSecond line";
-    let breaks = find_break_opportunities(text);
+    let _breaks = find_break_opportunities(text);
 
     // Find break after newline
     let mandatory = breaks.iter().find(|b| b.is_mandatory());
@@ -79,7 +79,7 @@ fn test_windows_crlf() {
     let mandatory = find_mandatory_breaks(text);
 
     // CRLF should be treated as single mandatory break
-    assert!(mandatory.len() >= 1, "CRLF should create mandatory break");
+    assert!(!mandatory.is_empty(), "CRLF should create mandatory break");
 }
 
 #[test]
@@ -119,7 +119,7 @@ fn test_word_joiner_prevents_break() {
 #[test]
 fn test_chinese_characters_break() {
     let text = "你好世界"; // Hello World in Chinese
-    let breaks = find_break_opportunities(text);
+    let _breaks = find_break_opportunities(text);
 
     // Chinese text allows breaks between characters
     // 4 characters = at least 3 interior break opportunities + 1 end
@@ -129,7 +129,7 @@ fn test_chinese_characters_break() {
 #[test]
 fn test_japanese_hiragana_breaks() {
     let text = "こんにちは"; // Hello in Japanese hiragana
-    let breaks = find_break_opportunities(text);
+    let _breaks = find_break_opportunities(text);
 
     // Japanese hiragana allows breaks between characters
     assert!(breaks.len() >= 4, "Japanese text should have multiple breaks");
@@ -138,7 +138,7 @@ fn test_japanese_hiragana_breaks() {
 #[test]
 fn test_korean_breaks() {
     let text = "안녕하세요"; // Hello in Korean
-    let breaks = find_break_opportunities(text);
+    let _breaks = find_break_opportunities(text);
 
     // Korean allows breaks between syllables
     assert!(breaks.len() >= 4, "Korean text should have multiple breaks");
@@ -147,7 +147,7 @@ fn test_korean_breaks() {
 #[test]
 fn test_mixed_english_chinese() {
     let text = "Hello世界world";
-    let breaks = find_break_opportunities(text);
+    let _breaks = find_break_opportunities(text);
 
     // Should have breaks around CJK portion
     assert!(breaks.len() >= 3, "Mixed text should have multiple breaks");
@@ -160,7 +160,7 @@ fn test_mixed_english_chinese() {
 #[test]
 fn test_hyphen_allows_break() {
     let text = "self-aware";
-    let breaks = find_break_opportunities(text);
+    let _breaks = find_break_opportunities(text);
 
     // Hyphen allows break after it (position 5)
     let has_hyphen_break = breaks.iter().any(|b| b.byte_offset == 5);
@@ -201,7 +201,7 @@ fn test_url_has_breaks() {
 #[test]
 fn test_email_has_breaks() {
     let text = "user@example.com";
-    let breaks = find_break_opportunities(text);
+    let _breaks = find_break_opportunities(text);
 
     // Email addresses have at least one break (at end of string)
     // UAX #14 may or may not provide interior breaks in email addresses
@@ -215,7 +215,7 @@ fn test_email_has_breaks() {
 #[test]
 fn test_simple_emoji_surrounded() {
     let text = "Hi 👋 there";
-    let breaks = find_break_opportunities(text);
+    let _breaks = find_break_opportunities(text);
 
     // Should have breaks around emoji (at spaces)
     assert!(breaks.len() >= 3, "Text with emoji should have multiple breaks");
@@ -307,20 +307,20 @@ fn test_find_interior_breaks() {
 
 #[test]
 fn test_empty_string() {
-    let breaks = find_break_opportunities("");
+    let _breaks = find_break_opportunities("");
     assert!(breaks.is_empty(), "Empty string should have no breaks");
 }
 
 #[test]
 fn test_single_character() {
-    let breaks = find_break_opportunities("a");
+    let _breaks = find_break_opportunities("a");
     assert_eq!(breaks.len(), 1, "Single char should have one break at end");
 }
 
 #[test]
 fn test_only_spaces() {
     let text = "     ";
-    let breaks = find_break_opportunities(text);
+    let _breaks = find_break_opportunities(text);
 
     // Spaces should have at least one break opportunity (at end)
     // UAX #14 may not provide breaks between spaces without content
@@ -339,7 +339,7 @@ fn test_only_newlines() {
 #[test]
 fn test_unicode_byte_boundaries() {
     let text = "Hello 世界 world";
-    let breaks = find_break_opportunities(text);
+    let _breaks = find_break_opportunities(text);
 
     // All breaks should be at valid UTF-8 boundaries
     for brk in &breaks {
@@ -354,7 +354,7 @@ fn test_unicode_byte_boundaries() {
 #[test]
 fn test_breaks_are_sorted() {
     let text = "The quick brown fox jumps";
-    let breaks = find_break_opportunities(text);
+    let _breaks = find_break_opportunities(text);
 
     // Breaks should be in ascending order
     let mut prev = 0;
@@ -372,7 +372,7 @@ fn test_breaks_are_sorted() {
 #[test]
 fn test_breaks_within_bounds() {
     let text = "Test string here";
-    let breaks = find_break_opportunities(text);
+    let _breaks = find_break_opportunities(text);
 
     for brk in &breaks {
         assert!(
@@ -391,7 +391,7 @@ fn test_breaks_within_bounds() {
 #[test]
 fn test_opening_bracket() {
     let text = "Hello (world)";
-    let breaks = find_break_opportunities(text);
+    let _breaks = find_break_opportunities(text);
 
     // Should have break before opening bracket
     let interior = find_interior_breaks(text);
@@ -433,7 +433,7 @@ fn test_percent_stays_with_number() {
 fn test_paragraph_text() {
     let text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. \
                 Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.";
-    let breaks = find_break_opportunities(text);
+    let _breaks = find_break_opportunities(text);
 
     // Long paragraph should have many break opportunities
     assert!(breaks.len() >= 15, "Paragraph should have many breaks");
@@ -442,7 +442,7 @@ fn test_paragraph_text() {
 #[test]
 fn test_mixed_script_paragraph() {
     let text = "English text, 日本語テキスト, and more English.";
-    let breaks = find_break_opportunities(text);
+    let _breaks = find_break_opportunities(text);
 
     // Mixed script should have breaks in both scripts
     assert!(breaks.len() >= 10, "Mixed script should have many breaks");
@@ -451,7 +451,7 @@ fn test_mixed_script_paragraph() {
 #[test]
 fn test_code_snippet() {
     let text = "function_name(arg1, arg2)";
-    let breaks = find_break_opportunities(text);
+    let _breaks = find_break_opportunities(text);
 
     // Code should have some break opportunities
     assert!(!breaks.is_empty());

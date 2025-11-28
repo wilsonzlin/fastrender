@@ -322,7 +322,7 @@ fn test_text_shaper_creation() {
 
 #[test]
 fn test_text_shaper_default() {
-    let shaper = TextShaper::default();
+    let shaper = TextShaper;
     assert_eq!(std::mem::size_of_val(&shaper), 0);
 }
 
@@ -526,7 +526,7 @@ fn test_shape_arabic_basic() {
         assert_eq!(shaped.direction, TextDirection::Rtl);
         assert_eq!(shaped.script, Script::Arabic);
         // Arabic has contextual shaping - glyph count may differ from char count
-        assert!(shaped.glyphs.len() > 0);
+        assert!(!shaped.glyphs.is_empty());
     }
 }
 

@@ -222,7 +222,7 @@ fn test_normal_line_height() {
         let normal_lh = metrics.normal_line_height(16.0);
         assert!(normal_lh > 0.0);
         // Normal line height is usually around font size
-        assert!(normal_lh >= 14.0 && normal_lh < 32.0);
+        assert!((14.0..32.0).contains(&normal_lh));
     }
 }
 

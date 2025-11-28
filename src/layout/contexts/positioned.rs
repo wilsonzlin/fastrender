@@ -791,7 +791,7 @@ mod tests {
         let cb = create_containing_block(800.0, 600.0);
         let intrinsic = Size::new(100.0, 100.0);
 
-        let (pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+        let (_pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
 
         assert_eq!(pos.x, 50.0);
         assert_eq!(size.width, 200.0);
@@ -810,7 +810,7 @@ mod tests {
         let cb = create_containing_block(400.0, 600.0);
         let intrinsic = Size::new(100.0, 100.0);
 
-        let (pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+        let (_pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
 
         // Width should be: 400 - 50 - 50 = 300
         assert_eq!(pos.x, 50.0);
@@ -829,7 +829,7 @@ mod tests {
         let cb = create_containing_block(400.0, 600.0);
         let intrinsic = Size::new(100.0, 100.0);
 
-        let (pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+        let (_pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
 
         // x = 400 - 50 - 200 = 150
         assert_eq!(pos.x, 150.0);
@@ -848,7 +848,7 @@ mod tests {
         let cb = create_containing_block(800.0, 600.0);
         let intrinsic = Size::new(100.0, 50.0);
 
-        let (pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+        let (_pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
 
         assert_eq!(pos.y, 30.0);
         assert_eq!(size.height, 100.0);
@@ -867,7 +867,7 @@ mod tests {
         let cb = create_containing_block(800.0, 400.0);
         let intrinsic = Size::new(100.0, 50.0);
 
-        let (pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+        let (_pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
 
         // Height should be: 400 - 50 - 50 = 300
         assert_eq!(pos.y, 50.0);
@@ -882,7 +882,7 @@ mod tests {
         let cb = create_containing_block(800.0, 600.0);
         let intrinsic = Size::new(150.0, 75.0);
 
-        let (pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+        let (_pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
 
         // Should use intrinsic size when everything is auto
         assert_eq!(size.width, 150.0);
@@ -895,22 +895,22 @@ mod tests {
     fn test_determine_containing_block_static() {
         let layout = PositionedLayout::new();
         let viewport = Size::new(1024.0, 768.0);
-        let block_rect = Some(Rect::from_xywh(10.0, 10.0, 500.0, 400.0));
+        let block_rect = Rect::from_xywh(10.0, 10.0, 500.0, 400.0);
 
-        let cb = layout.determine_containing_block(Position::Static, viewport, None, block_rect);
+        let cb = layout.determine_containing_block(Position::Static, viewport, None, Some(block_rect));
 
-        assert_eq!(cb.rect, block_rect.unwrap());
+        assert_eq!(cb.rect, block_rect);
     }
 
     #[test]
     fn test_determine_containing_block_absolute() {
         let layout = PositionedLayout::new();
         let viewport = Size::new(1024.0, 768.0);
-        let positioned_rect = Some(Rect::from_xywh(20.0, 20.0, 300.0, 200.0));
+        let positioned_rect = Rect::from_xywh(20.0, 20.0, 300.0, 200.0);
 
-        let cb = layout.determine_containing_block(Position::Absolute, viewport, positioned_rect, None);
+        let cb = layout.determine_containing_block(Position::Absolute, viewport, Some(positioned_rect), None);
 
-        assert_eq!(cb.rect, positioned_rect.unwrap());
+        assert_eq!(cb.rect, positioned_rect);
     }
 
     #[test]
@@ -942,12 +942,12 @@ mod tests {
     fn test_determine_containing_block_sticky() {
         let layout = PositionedLayout::new();
         let viewport = Size::new(1024.0, 768.0);
-        let block_rect = Some(Rect::from_xywh(10.0, 10.0, 500.0, 400.0));
+        let block_rect = Rect::from_xywh(10.0, 10.0, 500.0, 400.0);
 
-        let cb = layout.determine_containing_block(Position::Sticky, viewport, None, block_rect);
+        let cb = layout.determine_containing_block(Position::Sticky, viewport, None, Some(block_rect));
 
         // Sticky uses block container like relative
-        assert_eq!(cb.rect, block_rect.unwrap());
+        assert_eq!(cb.rect, block_rect);
     }
 
     // ========== Stacking context tests ==========

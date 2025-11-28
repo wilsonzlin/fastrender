@@ -197,7 +197,7 @@ fn test_variation_selector_changes_presentation() {
     let seqs = find_emoji_sequences("❤️");
     assert_eq!(seqs.len(), 1);
     // Should contain VS16
-    assert!(seqs[0].chars.iter().any(|&c| c == '\u{FE0F}'));
+    assert!(seqs[0].chars.contains(&'\u{FE0F}'));
 }
 
 // =============================================================================

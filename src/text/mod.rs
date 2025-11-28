@@ -71,7 +71,6 @@ pub mod font_db;
 pub mod font_fallback;
 pub mod font_loader;
 
-// ============================================================================
 // Text Shaping Pipeline (Wave 4)
 // ============================================================================
 
@@ -79,6 +78,7 @@ pub mod bidi;
 pub mod clustering;
 pub mod emoji;
 pub mod hyphenation;
+pub mod justify;
 pub mod line_break;
 pub mod pipeline;
 pub mod script;
@@ -95,6 +95,14 @@ pub use font_db::{
 };
 pub use font_fallback::{FallbackChain, FallbackChainBuilder, FamilyEntry, FontId};
 pub use font_loader::{FontContext, TextMeasurement};
+
+// Justification types (Note: GlyphPosition not re-exported to avoid conflict with shaper::GlyphPosition)
+pub use justify::{
+    apply_alignment, calculate_line_width, detect_justification_mode, is_cjk_character,
+    justify_line, justify_line_with_options, justify_lines, mark_word_boundaries,
+    mark_word_boundaries_by_glyph_id, JustificationMode, JustificationOptions,
+    JustificationResult, TextAlignment,
+};
 
 // Shaper types
 pub use shaper::{GlyphCluster, GlyphPosition, Script, ShapedGlyphs, TextDirection, TextShaper};

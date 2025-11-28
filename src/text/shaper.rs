@@ -1150,7 +1150,7 @@ mod tests {
 
     #[test]
     fn test_text_shaper_default() {
-        let shaper = TextShaper::default();
+        let shaper = TextShaper;
         assert_eq!(std::mem::size_of_val(&shaper), 0);
     }
 }
