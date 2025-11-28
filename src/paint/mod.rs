@@ -65,8 +65,3 @@
 // pub mod text_paint;
 // pub mod image_paint;
 
-// Temporary re-export of V1 implementation for compatibility
-// This will be removed as Wave 4+ tasks are completed
-#[path = "../paint_v1.rs"]
-mod paint_v1;
-pub use paint_v1::*;

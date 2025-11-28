@@ -96,8 +96,3 @@ pub mod table;
 // pub mod grid;         // W3.T09
 // pub mod positioned;   // W3.T12
 
-// Temporary re-export of V1 implementation for compatibility
-// This will be removed as Wave 2+ tasks are completed
-#[path = "../layout_v1.rs"]
-mod layout_v1;
-pub use layout_v1::*;

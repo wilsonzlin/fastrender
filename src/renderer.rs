@@ -1,10 +1,13 @@
-use crate::css::{self, Color};
-use crate::dom;
+//! HTML to image renderer
+//!
+//! This module provides the main entry point for rendering HTML/CSS to images.
+//!
+//! Note: The renderer is currently non-functional as the V1 rendering pipeline
+//! has been removed. The W4+ implementations for layout and paint need to be
+//! integrated to restore rendering functionality.
+
+use crate::css::Color;
 use crate::error::{Error, Result};
-use crate::image_output;
-use crate::layout;
-use crate::paint;
-use crate::style;
 
 pub use crate::image_output::OutputFormat as ImageFormat;
 
@@ -30,6 +33,12 @@ impl Default for RenderOptions {
     }
 }
 
+fn not_implemented() -> Error {
+    Error::Render(crate::error::RenderError::InvalidParameters {
+        message: "Renderer not implemented: V1 pipeline removed, W4+ integration pending".to_string(),
+    })
+}
+
 impl Renderer {
     pub fn new() -> Self {
         Self {
@@ -43,173 +52,43 @@ impl Renderer {
         RendererBuilder::new()
     }
 
-    pub fn render_to_png(&self, html: &str, width: u32, height: u32) -> Result<Vec<u8>> {
-        let options = RenderOptions {
-            format: ImageFormat::Png,
-            background_color: self.background_color,
-        };
-
-        self.render_with_size(html, width, height, options)
+    pub fn render_to_png(&self, _html: &str, _width: u32, _height: u32) -> Result<Vec<u8>> {
+        Err(not_implemented())
     }
 
-    /// Renders HTML to PNG with automatic height based on content
-    pub fn render_to_png_auto_height(&self, html: &str, width: u32) -> Result<Vec<u8>> {
-        // First pass: compute layout with a very large viewport to get actual content height
-        let dom = dom::parse_html(html)?;
-        let stylesheet = extract_css(&dom)?;
-        let styled_tree = style::apply_styles(&dom, &stylesheet);
-
-        // Use a very large height for initial layout computation
-        let temp_height = 100000.0;
-        let layout_tree = layout::compute_layout(&styled_tree, width as f32, temp_height);
-
-        // Calculate actual content height from layout tree
-        let actual_height = calculate_content_height(&layout_tree.root);
-        let height = (actual_height.ceil() as u32).max(100); // Ensure minimum height
-
-        // Second pass: render with actual content height
-        let options = RenderOptions {
-            format: ImageFormat::Png,
-            background_color: self.background_color,
-        };
-
-        self.render_with_size(html, width, height, options)
+    pub fn render_to_png_auto_height(&self, _html: &str, _width: u32) -> Result<Vec<u8>> {
+        Err(not_implemented())
     }
 
-    /// Renders HTML to PNG with viewport and optional scroll offset
-    pub fn render_to_png_with_scroll(&self, html: &str, width: u32, height: u32, scroll_y: u32) -> Result<Vec<u8>> {
-        let options = RenderOptions {
-            format: ImageFormat::Png,
-            background_color: self.background_color,
-        };
-
-        self.render_with_size_and_scroll(html, width, height, scroll_y, options)
+    pub fn render_to_png_with_scroll(&self, _html: &str, _width: u32, _height: u32, _scroll_y: u32) -> Result<Vec<u8>> {
+        Err(not_implemented())
     }
 
-    /// Renders HTML to PNG with viewport, scroll offset, and base URL for resolving relative image paths
     pub fn render_to_png_with_scroll_and_base_url(
         &self,
-        html: &str,
-        width: u32,
-        height: u32,
-        scroll_y: u32,
-        base_url: String,
+        _html: &str,
+        _width: u32,
+        _height: u32,
+        _scroll_y: u32,
+        _base_url: String,
     ) -> Result<Vec<u8>> {
-        let options = RenderOptions {
-            format: ImageFormat::Png,
-            background_color: self.background_color,
-        };
-
-        self.render_with_size_scroll_and_base_url(html, width, height, scroll_y, options, Some(base_url))
+        Err(not_implemented())
     }
 
-    fn render_with_size_and_scroll(
-        &self,
-        html: &str,
-        width: u32,
-        height: u32,
-        scroll_y: u32,
-        options: RenderOptions,
-    ) -> Result<Vec<u8>> {
-        self.render_with_size_scroll_and_base_url(html, width, height, scroll_y, options, None)
+    pub fn render_to_jpeg(&self, _html: &str, _width: u32, _height: u32, _quality: u8) -> Result<Vec<u8>> {
+        Err(not_implemented())
     }
 
-    fn render_with_size_scroll_and_base_url(
-        &self,
-        html: &str,
-        width: u32,
-        height: u32,
-        scroll_y: u32,
-        options: RenderOptions,
-        base_url: Option<String>,
-    ) -> Result<Vec<u8>> {
-        if width == 0 || height == 0 {
-            return Err(Error::Render(crate::error::RenderError::InvalidParameters {
-                message: format!("Invalid dimensions: width={}, height={}", width, height),
-            }));
-        }
-
-        // Parse HTML
-        let dom = dom::parse_html(html)?;
-
-        // Extract and parse CSS
-        let stylesheet = extract_css(&dom)?;
-
-        // Apply styles
-        let styled_tree = style::apply_styles(&dom, &stylesheet);
-
-        // Compute layout with large viewport height to get full content
-        let full_height = 100000.0;
-        let layout_tree = layout::compute_layout(&styled_tree, width as f32, full_height);
-
-        // Paint to pixmap with scroll offset and base URL for image resolution
-        let pixmap = paint::paint_with_scroll(
-            &layout_tree.root,
-            width,
-            height,
-            scroll_y,
-            options.background_color,
-            base_url,
-        )?;
-
-        // Encode to image format
-        let image_data = image_output::encode_image(&pixmap, options.format)?;
-
-        Ok(image_data)
+    pub fn render_to_webp(&self, _html: &str, _width: u32, _height: u32, _quality: u8) -> Result<Vec<u8>> {
+        Err(not_implemented())
     }
 
-    pub fn render_to_jpeg(&self, html: &str, width: u32, height: u32, quality: u8) -> Result<Vec<u8>> {
-        let options = RenderOptions {
-            format: ImageFormat::Jpeg(quality),
-            background_color: self.background_color,
-        };
-
-        self.render_with_size(html, width, height, options)
+    pub fn render(&self, _html: &str) -> Result<Vec<u8>> {
+        Err(not_implemented())
     }
 
-    pub fn render_to_webp(&self, html: &str, width: u32, height: u32, quality: u8) -> Result<Vec<u8>> {
-        let options = RenderOptions {
-            format: ImageFormat::WebP(quality),
-            background_color: self.background_color,
-        };
-
-        self.render_with_size(html, width, height, options)
-    }
-
-    pub fn render(&self, html: &str) -> Result<Vec<u8>> {
-        self.render_to_png(html, self.viewport_width, self.viewport_height)
-    }
-
-    pub fn render_with_options(&self, html: &str, options: RenderOptions) -> Result<Vec<u8>> {
-        self.render_with_size(html, self.viewport_width, self.viewport_height, options)
-    }
-
-    fn render_with_size(&self, html: &str, width: u32, height: u32, options: RenderOptions) -> Result<Vec<u8>> {
-        if width == 0 || height == 0 {
-            return Err(Error::Render(crate::error::RenderError::InvalidParameters {
-                message: format!("Invalid dimensions: width={}, height={}", width, height),
-            }));
-        }
-
-        // Parse HTML
-        let dom = dom::parse_html(html)?;
-
-        // Extract and parse CSS
-        let stylesheet = extract_css(&dom)?;
-
-        // Apply styles
-        let styled_tree = style::apply_styles(&dom, &stylesheet);
-
-        // Compute layout
-        let layout_tree = layout::compute_layout(&styled_tree, width as f32, height as f32);
-
-        // Paint to pixmap
-        let pixmap = paint::paint(&layout_tree.root, width, height, options.background_color)?;
-
-        // Encode to image format
-        let image_data = image_output::encode_image(&pixmap, options.format)?;
-
-        Ok(image_data)
+    pub fn render_with_options(&self, _html: &str, _options: RenderOptions) -> Result<Vec<u8>> {
+        Err(not_implemented())
     }
 }
 
@@ -267,44 +146,5 @@ impl RendererBuilder {
 impl Default for RendererBuilder {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-fn calculate_content_height(layout_box: &layout::LayoutBox) -> f32 {
-    // Calculate the maximum y + height from this box and all its children
-    let box_bottom = layout_box.y + layout_box.height;
-
-    let children_bottom = layout_box
-        .children
-        .iter()
-        .map(|child| calculate_content_height(child))
-        .fold(box_bottom, f32::max);
-
-    children_bottom
-}
-
-fn extract_css(dom: &dom::DomNode) -> Result<css::StyleSheet> {
-    let mut css_content = String::new();
-
-    // Recursively find <style> tags
-    dom.walk_tree(&mut |node| {
-        if let Some(tag) = node.tag_name() {
-            if tag == "style" {
-                // Collect text content from children
-                for child in &node.children {
-                    if let Some(text) = child.text_content() {
-                        css_content.push_str(text);
-                        css_content.push('\n');
-                    }
-                }
-            }
-        }
-    });
-
-    // Parse CSS
-    if css_content.is_empty() {
-        Ok(css::StyleSheet { rules: Vec::new() })
-    } else {
-        css::parse_stylesheet(&css_content)
     }
 }

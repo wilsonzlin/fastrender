@@ -164,7 +164,7 @@ impl TextItem {
                 .break_opportunities
                 .iter()
                 .filter(|b| b.byte_offset <= byte_offset)
-                .cloned()
+                .copied()
                 .collect(),
             text: before_text.to_string(),
             font_size: self.font_size,

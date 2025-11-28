@@ -138,12 +138,3 @@ pub use clustering::{
 // Pipeline types
 pub use pipeline::{assign_fonts, itemize_text, FontRun, ItemizedRun, ShapedRun, ShapingPipeline};
 
-// ============================================================================
-// Legacy V1 Implementation (to be refactored in Wave 4+)
-// ============================================================================
-
-// The V1 text module provides temporary compatibility
-// This will be removed as Wave 4 tasks complete the text shaping implementation
-#[path = "../text_v1.rs"]
-mod text_v1;
-pub use text_v1::*;
