@@ -283,6 +283,7 @@ impl InlineFormattingContext {
     }
 
     /// Creates a fragment for an inline item
+    #[allow(clippy::only_used_in_recursion)]
     fn create_item_fragment(&self, item: &InlineItem, x: f32, y: f32) -> FragmentNode {
         match item {
             InlineItem::Text(text_item) => {

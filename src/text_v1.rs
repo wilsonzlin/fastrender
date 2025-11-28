@@ -395,14 +395,6 @@ fn shape_line(
     for (info, pos) in glyph_infos.iter().zip(glyph_positions.iter()) {
         let glyph_id = info.glyph_id as u16;
 
-        // DEBUG: Log glyph shaping for vote arrows
-        if text.contains("^") {
-            eprintln!(
-                "DEBUG: Shaping '{}' char at cluster {} -> glyph_id={}",
-                text, info.cluster, glyph_id
-            );
-        }
-
         let x_offset = pos.x_offset as f32 * scale;
         let y_offset = pos.y_offset as f32 * scale;
         let x_advance = pos.x_advance as f32 * scale;
