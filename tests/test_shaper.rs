@@ -11,7 +11,7 @@
 //! - Cluster tracking
 //! - Hit testing
 
-use fastrender::text::shaper::{TextDirection, GlyphCluster, GlyphPosition, Script, ShapedGlyphs, TextShaper};
+use fastrender::text::shaper::{GlyphCluster, GlyphPosition, Script, ShapedGlyphs, TextDirection, TextShaper};
 use fastrender::text::FontContext;
 
 // ============================================================================
@@ -800,7 +800,9 @@ fn test_measure_width() {
         return;
     };
 
-    let width = shaper.measure_width("Hello", &font, 16.0).expect("Should measure width");
+    let width = shaper
+        .measure_width("Hello", &font, 16.0)
+        .expect("Should measure width");
 
     assert!(width > 0.0);
     assert!(width < 100.0); // Reasonable bound for 16px "Hello"

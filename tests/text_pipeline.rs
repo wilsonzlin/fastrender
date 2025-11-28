@@ -8,9 +8,7 @@
 //! - Mixed script handling
 
 use fastrender::style::ComputedStyle;
-use fastrender::text::pipeline::{
-    itemize_text, BidiAnalysis, Direction, ItemizedRun, Script, ShapingPipeline,
-};
+use fastrender::text::pipeline::{itemize_text, BidiAnalysis, Direction, ItemizedRun, Script, ShapingPipeline};
 use fastrender::text::FontContext;
 
 // ============================================================================
@@ -514,9 +512,7 @@ fn test_pipeline_measure_width_longer_text() {
     }
 
     let short_width = pipeline.measure_width("Hi", &style, &font_context).unwrap();
-    let long_width = pipeline
-        .measure_width("Hello, world!", &style, &font_context)
-        .unwrap();
+    let long_width = pipeline.measure_width("Hello, world!", &style, &font_context).unwrap();
 
     assert!(long_width > short_width);
 }

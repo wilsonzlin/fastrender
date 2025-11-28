@@ -467,9 +467,7 @@ pub fn itemize_text(text: &str, bidi: &BidiAnalysis) -> Vec<ItemizedRun> {
             (None, _, _) => false, // First character, no current run
             (Some(script), Some(dir), Some(level)) => {
                 // New run if direction, level, or script changes
-                dir != char_direction
-                    || level != char_level
-                    || (!char_script.is_neutral() && script != resolved_script)
+                dir != char_direction || level != char_level || (!char_script.is_neutral() && script != resolved_script)
             }
             _ => false,
         };
@@ -578,7 +576,12 @@ fn get_font_for_run(run: &ItemizedRun, style: &ComputedStyle, font_context: &Fon
     };
 
     // Try the font family list first
-    if let Some(font) = font_context.get_font(&style.font_family, style.font_weight, font_style == FontStyle::Italic, font_style == FontStyle::Oblique) {
+    if let Some(font) = font_context.get_font(
+        &style.font_family,
+        style.font_weight,
+        font_style == FontStyle::Italic,
+        font_style == FontStyle::Oblique,
+    ) {
         // Verify the font has glyphs for at least the first character
         if let Some(ch) = run.text.chars().next() {
             if let Ok(face) = font.as_ttf_face() {
@@ -599,7 +602,12 @@ fn get_font_for_run(run: &ItemizedRun, style: &ComputedStyle, font_context: &Fon
         _ => vec!["sans-serif".to_string()],
     };
 
-    if let Some(font) = font_context.get_font(&generic_families, style.font_weight, font_style == FontStyle::Italic, font_style == FontStyle::Oblique) {
+    if let Some(font) = font_context.get_font(
+        &generic_families,
+        style.font_weight,
+        font_style == FontStyle::Italic,
+        font_style == FontStyle::Oblique,
+    ) {
         return Ok(font);
     }
 

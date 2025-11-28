@@ -13,9 +13,15 @@
 //!
 //! # Module Organization
 //!
-//! - `baseline` - Baseline alignment algorithm (vertical-align property)
+//! - `baseline` - Baseline alignment algorithm (W4.T13)
+//! - `text_run` - Text run generation from shaped glyphs (W4.T14)
 
+// W4.T13 - Baseline alignment algorithm
 pub mod baseline;
+
+// W4.T14 - Text run generation
+pub mod text_run;
 
 // Re-export primary types
 pub use baseline::{BaselineAligner, InlineBoxMetrics, LineMetrics, PositionedInlineBox, VerticalAlign};
+pub use text_run::{GlyphInfo, InlineItem, TextRun, TextRunBuilder};
