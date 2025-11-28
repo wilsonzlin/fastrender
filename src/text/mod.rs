@@ -111,8 +111,9 @@ pub use emoji::{
 
 // Line break types
 pub use line_break::{
-    find_break_opportunities, find_interior_breaks, find_mandatory_breaks, has_break_at,
-    BreakIterator, BreakOpportunity, BreakType,
+    break_lines, break_lines_greedy, find_break_opportunities, find_interior_breaks,
+    find_mandatory_breaks, has_break_at, BreakIterator, BreakOpportunity, BreakType,
+    GreedyLineBreaker, Line, LineSegment,
 };
 
 // Clustering utilities

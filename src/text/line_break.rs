@@ -368,6 +368,395 @@ impl ExactSizeIterator for BreakIterator {
     }
 }
 
+// ============================================================================
+// Greedy Line Breaking Algorithm (W4.T09)
+// ============================================================================
+
+use crate::text::shaper::GlyphPosition;
+
+/// A segment within a line
+///
+/// Represents a contiguous run of glyphs that belongs to a single line.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LineSegment {
+    /// Start index in the original glyph array
+    pub glyph_start: usize,
+
+    /// Number of glyphs in this segment
+    pub glyph_count: usize,
+
+    /// Width of this segment in pixels
+    pub width: f32,
+
+    /// X offset within the line
+    pub x_offset: f32,
+}
+
+impl LineSegment {
+    /// Create a new line segment
+    pub fn new(glyph_start: usize, glyph_count: usize, width: f32) -> Self {
+        Self {
+            glyph_start,
+            glyph_count,
+            width,
+            x_offset: 0.0,
+        }
+    }
+
+    /// End index (exclusive) in the original glyph array
+    #[inline]
+    pub fn glyph_end(&self) -> usize {
+        self.glyph_start + self.glyph_count
+    }
+
+    /// Check if segment is empty
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.glyph_count == 0
+    }
+}
+
+/// A line of text
+///
+/// Represents a single line containing one or more segments of glyphs.
+/// Lines are the output of the line breaking algorithm.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Line {
+    /// Segments of glyphs in this line
+    pub segments: Vec<LineSegment>,
+
+    /// Total content width (sum of segment widths)
+    pub width: f32,
+
+    /// Maximum available width for this line
+    pub max_width: f32,
+
+    /// Whether this is the last line in the paragraph
+    pub is_last: bool,
+}
+
+impl Line {
+    /// Create a new empty line with given max width
+    pub fn new(max_width: f32) -> Self {
+        Self {
+            segments: Vec::new(),
+            width: 0.0,
+            max_width,
+            is_last: false,
+        }
+    }
+
+    /// Check if line is empty
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
+
+    /// Get total glyph count across all segments
+    pub fn glyph_count(&self) -> usize {
+        self.segments.iter().map(|s| s.glyph_count).sum()
+    }
+
+    /// Get remaining space on the line
+    #[inline]
+    pub fn remaining_space(&self) -> f32 {
+        (self.max_width - self.width).max(0.0)
+    }
+
+    /// Get fill ratio (how much of max_width is used)
+    #[inline]
+    pub fn fill_ratio(&self) -> f32 {
+        if self.max_width > 0.0 {
+            self.width / self.max_width
+        } else {
+            1.0
+        }
+    }
+}
+
+impl Default for Line {
+    fn default() -> Self {
+        Self::new(f32::INFINITY)
+    }
+}
+
+/// Break glyphs into lines using a greedy algorithm
+///
+/// The greedy algorithm fits as many glyphs as possible on each line,
+/// breaking at the last valid opportunity when the line is full.
+///
+/// # Algorithm
+///
+/// 1. Start with an empty line
+/// 2. For each glyph:
+///    - If glyph fits on current line, add it
+///    - If glyph doesn't fit:
+///      - Break at last opportunity (if any)
+///      - Start new line with remaining glyphs
+/// 3. Handle hard breaks (must break regardless of width)
+///
+/// # Arguments
+///
+/// * `glyphs` - Positioned glyphs from text shaping
+/// * `max_width` - Maximum line width in pixels
+/// * `break_opportunities` - Valid break positions (sorted by byte_offset)
+///
+/// # Returns
+///
+/// Vector of lines containing the broken text.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use fastrender::text::{break_lines_greedy, GlyphPosition, BreakOpportunity};
+///
+/// let glyphs = vec![
+///     GlyphPosition { glyph_id: 1, cluster: 0, advance: 10.0, ..Default::default() },
+///     GlyphPosition { glyph_id: 2, cluster: 1, advance: 10.0, ..Default::default() },
+/// ];
+///
+/// let opportunities = vec![
+///     BreakOpportunity::allowed(5),  // Break after word
+///     BreakOpportunity::allowed(10), // Break after another word
+/// ];
+///
+/// let lines = break_lines_greedy(&glyphs, 100.0, &opportunities);
+/// ```
+pub fn break_lines_greedy(
+    glyphs: &[GlyphPosition],
+    max_width: f32,
+    break_opportunities: &[BreakOpportunity],
+) -> Vec<Line> {
+    // Handle empty input
+    if glyphs.is_empty() {
+        let mut line = Line::new(max_width);
+        line.is_last = true;
+        return vec![line];
+    }
+
+    // Handle infinite or very large max_width (no wrapping needed)
+    if max_width == f32::INFINITY || max_width > 1e9 {
+        return vec![create_single_line(glyphs, max_width)];
+    }
+
+    let mut lines = Vec::new();
+    let mut line_builder = LineBuilder::new(max_width);
+
+    // Track break opportunities
+    let mut opp_index = 0;
+    let mut last_break: Option<BreakState> = None;
+
+    for (glyph_idx, glyph) in glyphs.iter().enumerate() {
+        // Check for break opportunities at or before this glyph's cluster
+        while opp_index < break_opportunities.len()
+            && break_opportunities[opp_index].byte_offset <= glyph.cluster as usize
+        {
+            let opp = &break_opportunities[opp_index];
+
+            // Handle hard (mandatory) breaks
+            if opp.is_mandatory() {
+                // Finalize current line
+                let line = line_builder.finish();
+                if !line.is_empty() || lines.is_empty() {
+                    lines.push(line);
+                }
+                line_builder = LineBuilder::new(max_width);
+                last_break = None;
+            } else if opp.is_allowed() {
+                // Record as potential break point
+                last_break = Some(BreakState {
+                    glyph_index: glyph_idx,
+                    line_width: line_builder.current_width,
+                    glyph_count: line_builder.glyph_count,
+                });
+            }
+
+            opp_index += 1;
+        }
+
+        // Try to add glyph to current line
+        let glyph_width = glyph.advance;
+
+        if line_builder.can_fit(glyph_width) {
+            line_builder.add_glyph(glyph_idx, glyph_width);
+        } else {
+            // Glyph doesn't fit - need to break
+
+            if let Some(brk) = last_break.take() {
+                // Break at last opportunity
+                line_builder.truncate_to(brk.glyph_count, brk.line_width);
+
+                let line = line_builder.finish();
+                lines.push(line);
+
+                // Start new line, add glyphs from break point
+                line_builder = LineBuilder::new(max_width);
+
+                // Re-add glyphs from break point to current glyph (inclusive)
+                for (i, g) in glyphs
+                    .iter()
+                    .enumerate()
+                    .take(glyph_idx + 1)
+                    .skip(brk.glyph_index)
+                {
+                    line_builder.add_glyph(i, g.advance);
+                }
+            } else {
+                // No break opportunity - overflow
+                // Add glyph anyway (will overflow)
+                line_builder.add_glyph(glyph_idx, glyph_width);
+            }
+
+            last_break = None;
+        }
+    }
+
+    // Finalize last line
+    let mut final_line = line_builder.finish();
+    final_line.is_last = true;
+    if !final_line.is_empty() {
+        lines.push(final_line);
+    } else if lines.is_empty() {
+        // Ensure at least one line
+        final_line.is_last = true;
+        lines.push(final_line);
+    } else {
+        // Mark previous line as last
+        if let Some(last) = lines.last_mut() {
+            last.is_last = true;
+        }
+    }
+
+    lines
+}
+
+/// Alias for `break_lines_greedy`
+///
+/// Provides a shorter name for the most common line breaking function.
+pub fn break_lines(glyphs: &[GlyphPosition], max_width: f32, break_opportunities: &[BreakOpportunity]) -> Vec<Line> {
+    break_lines_greedy(glyphs, max_width, break_opportunities)
+}
+
+/// Greedy line breaker
+///
+/// Provides an object-oriented interface to the greedy line breaking
+/// algorithm with configurable options.
+#[derive(Debug, Clone)]
+pub struct GreedyLineBreaker {
+    /// Allow overflow when no break opportunity exists
+    pub allow_overflow: bool,
+}
+
+impl GreedyLineBreaker {
+    /// Create a new greedy line breaker with default settings
+    pub fn new() -> Self {
+        Self {
+            allow_overflow: true,
+        }
+    }
+
+    /// Set whether to allow overflow
+    pub fn with_overflow(mut self, allow: bool) -> Self {
+        self.allow_overflow = allow;
+        self
+    }
+
+    /// Break lines using the greedy algorithm
+    pub fn break_lines(
+        &self,
+        glyphs: &[GlyphPosition],
+        max_width: f32,
+        break_opportunities: &[BreakOpportunity],
+    ) -> Vec<Line> {
+        break_lines_greedy(glyphs, max_width, break_opportunities)
+    }
+}
+
+impl Default for GreedyLineBreaker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ============================================================================
+// Helper Types
+// ============================================================================
+
+/// State saved at a break opportunity
+#[derive(Debug, Clone, Copy)]
+struct BreakState {
+    glyph_index: usize,
+    line_width: f32,
+    glyph_count: usize,
+}
+
+/// Builder for constructing a line
+struct LineBuilder {
+    max_width: f32,
+    glyph_start: usize,
+    glyph_count: usize,
+    current_width: f32,
+}
+
+impl LineBuilder {
+    fn new(max_width: f32) -> Self {
+        Self {
+            max_width,
+            glyph_start: 0,
+            glyph_count: 0,
+            current_width: 0.0,
+        }
+    }
+
+    fn can_fit(&self, width: f32) -> bool {
+        // First glyph always fits (to avoid infinite loops)
+        if self.glyph_count == 0 {
+            return true;
+        }
+        self.current_width + width <= self.max_width
+    }
+
+    fn add_glyph(&mut self, glyph_idx: usize, width: f32) {
+        if self.glyph_count == 0 {
+            self.glyph_start = glyph_idx;
+        }
+        self.glyph_count += 1;
+        self.current_width += width;
+    }
+
+    fn truncate_to(&mut self, count: usize, width: f32) {
+        self.glyph_count = count;
+        self.current_width = width;
+    }
+
+    fn finish(self) -> Line {
+        let segment = LineSegment::new(self.glyph_start, self.glyph_count, self.current_width);
+
+        Line {
+            segments: if self.glyph_count > 0 {
+                vec![segment]
+            } else {
+                Vec::new()
+            },
+            width: self.current_width,
+            max_width: self.max_width,
+            is_last: false,
+        }
+    }
+}
+
+/// Create a single line containing all glyphs (no wrapping)
+fn create_single_line(glyphs: &[GlyphPosition], max_width: f32) -> Line {
+    let total_width: f32 = glyphs.iter().map(|g| g.advance).sum();
+
+    Line {
+        segments: vec![LineSegment::new(0, glyphs.len(), total_width)],
+        width: total_width,
+        max_width,
+        is_last: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
