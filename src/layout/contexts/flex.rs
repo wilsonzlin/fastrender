@@ -496,13 +496,10 @@ mod tests {
 
     #[test]
     fn test_flex_context_creation() {
-        let fc = FlexFormattingContext::new();
-        let fc_default = FlexFormattingContext::default();
+        let _fc = FlexFormattingContext::new();
+        let _fc_default = FlexFormattingContext::default();
         // Both methods should create valid contexts
         // (PhantomData<()> is zero-sized, so we just verify creation works)
-        assert!(std::mem::size_of::<FlexFormattingContext>() >= 0);
-        drop(fc);
-        drop(fc_default);
     }
 
     #[test]

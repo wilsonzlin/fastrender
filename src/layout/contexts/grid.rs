@@ -455,7 +455,7 @@ mod tests {
     #[test]
     fn test_grid_fc_creation() {
         let fc = GridFormattingContext::new();
-        let default_fc = GridFormattingContext::default();
+        let default_fc = GridFormattingContext;
         // Both should exist
         assert!(std::mem::size_of_val(&fc) == std::mem::size_of_val(&default_fc));
     }
