@@ -35,6 +35,7 @@
 //! - `emoji` - Emoji detection and sequence parsing (UTS #51)
 //! - `clustering` - Cursor positioning and hit testing utilities
 //! - `pipeline` - Unified text shaping pipeline
+//! - `line_break` - Line break opportunity detection (UAX #14)
 //!
 //! # Example
 //!
@@ -76,6 +77,7 @@ pub mod font_loader;
 pub mod bidi;
 pub mod clustering;
 pub mod emoji;
+pub mod line_break;
 pub mod pipeline;
 pub mod script;
 pub mod shaper;
@@ -105,6 +107,12 @@ pub use bidi::{analyze_bidi, BidiAnalysis, BidiAnalyzer, BidiRun, Direction};
 pub use emoji::{
     find_emoji_sequences, is_emoji_modifier, is_emoji_modifier_base, is_emoji_presentation,
     is_regional_indicator, EmojiSequence, EmojiSequenceType,
+};
+
+// Line break types
+pub use line_break::{
+    find_break_opportunities, find_interior_breaks, find_mandatory_breaks, has_break_at,
+    BreakIterator, BreakOpportunity, BreakType,
 };
 
 // Clustering utilities
