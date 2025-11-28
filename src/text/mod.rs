@@ -36,6 +36,7 @@
 //! - `clustering` - Cursor positioning and hit testing utilities
 //! - `pipeline` - Unified text shaping pipeline
 //! - `line_break` - Line break opportunity detection (UAX #14)
+//! - `hyphenation` - Word hyphenation for improved line breaking
 //!
 //! # Example
 //!
@@ -77,6 +78,7 @@ pub mod font_loader;
 pub mod bidi;
 pub mod clustering;
 pub mod emoji;
+pub mod hyphenation;
 pub mod line_break;
 pub mod pipeline;
 pub mod script;
@@ -107,6 +109,12 @@ pub use bidi::{analyze_bidi, BidiAnalysis, BidiAnalyzer, BidiRun, Direction};
 pub use emoji::{
     find_emoji_sequences, is_emoji_modifier, is_emoji_modifier_base, is_emoji_presentation,
     is_regional_indicator, EmojiSequence, EmojiSequenceType,
+};
+
+// Hyphenation types
+pub use hyphenation::{
+    find_soft_hyphens, is_soft_hyphen, remove_soft_hyphens, HyphenationPatterns, Hyphenator,
+    HyphensMode, SupportedLanguage,
 };
 
 // Line break types

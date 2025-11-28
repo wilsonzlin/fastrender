@@ -245,6 +245,10 @@ pub enum TextError {
     /// Glyph not found in font
     #[error("Glyph not found for character U+{codepoint:04X}")]
     GlyphNotFound { codepoint: u32 },
+
+    /// Hyphenation failed
+    #[error("Hyphenation failed for language '{language}': {reason}")]
+    HyphenationFailed { language: String, reason: String },
 }
 
 /// Errors that occur during image loading and decoding
@@ -520,6 +524,17 @@ mod tests {
             codepoint: 0x1F600, // 😀
         };
         assert!(format!("{}", error).contains("1F600"));
+    }
+
+    #[test]
+    fn test_text_error_hyphenation_failed() {
+        let error = TextError::HyphenationFailed {
+            language: "xyz-lang".to_string(),
+            reason: "Unsupported language".to_string(),
+        };
+        let display = format!("{}", error);
+        assert!(display.contains("xyz-lang"));
+        assert!(display.contains("Unsupported language"));
     }
 
     // ImageError tests
