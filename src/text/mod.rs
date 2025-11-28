@@ -29,9 +29,13 @@
 //! - `font_db` - Font database, discovery, and loading
 //! - `font_loader` - High-level font context
 //! - `font_fallback` - Per-character font fallback chain
-//! - Future: `shaper` - Text shaping integration
-//! - Future: `bidi` - Bidirectional text handling
-//! - Future: `linebreak` - Line breaking algorithm
+//! - `bidi` - Bidirectional text handling (UAX #9)
+//! - `script` - Script itemization (UAX #24)
+//! - `shaper` - Text shaping using HarfBuzz (rustybuzz)
+//! - `emoji` - Emoji detection and sequence parsing (UTS #51)
+//! - `clustering` - Cursor positioning and hit testing utilities
+//! - `pipeline` - Unified text shaping pipeline
+//! - `line_break` - Line break opportunity detection (UAX #14)
 //!
 //! # Example
 //!
@@ -67,20 +71,60 @@ pub mod font_fallback;
 pub mod font_loader;
 
 // ============================================================================
-// Line Breaking (Wave 4)
+// Text Shaping Pipeline (Wave 4)
 // ============================================================================
 
-pub mod line_breaker;
+pub mod bidi;
+pub mod clustering;
+pub mod emoji;
+pub mod line_break;
+pub mod pipeline;
+pub mod script;
+pub mod shaper;
 
-// Re-export primary types for convenience
+// ============================================================================
+// Re-exports
+// ============================================================================
+
+// Font types
 pub use font_db::{
-    FontDatabase, FontMetrics, FontStretch, FontStyle, FontWeight, GenericFamily, LoadedFont, ScaledMetrics,
+    FontDatabase, FontMetrics, FontStretch, FontStyle, FontWeight, GenericFamily, LoadedFont,
+    ScaledMetrics,
 };
 pub use font_fallback::{FallbackChain, FallbackChainBuilder, FamilyEntry, FontId};
 pub use font_loader::{FontContext, TextMeasurement};
-pub use line_breaker::{
-    break_lines, break_lines_checked, BreakOpportunity, BreakType, GlyphPosition, GreedyLineBreaker, Line, LineSegment,
+
+// Shaper types
+pub use shaper::{GlyphCluster, GlyphPosition, Script, ShapedGlyphs, TextDirection, TextShaper};
+
+// Script itemization types
+pub use script::{itemize_scripts, ScriptRun};
+
+// Bidi types
+pub use bidi::{analyze_bidi, BidiAnalysis, BidiAnalyzer, BidiRun, Direction};
+
+// Emoji types
+pub use emoji::{
+    find_emoji_sequences, is_emoji_modifier, is_emoji_modifier_base, is_emoji_presentation,
+    is_regional_indicator, EmojiSequence, EmojiSequenceType,
 };
+
+// Line break types
+pub use line_break::{
+    break_lines, break_lines_greedy, find_break_opportunities, find_interior_breaks,
+    find_mandatory_breaks, has_break_at, BreakIterator, BreakOpportunity, BreakType,
+    GreedyLineBreaker, Line, LineSegment,
+};
+
+// Clustering utilities
+pub use clustering::{
+    byte_offset_to_x, cluster_end_position, cluster_range_advance, cluster_start_position,
+    count_chars_in_range, find_cluster_at_byte, find_cluster_for_glyph, get_selection,
+    x_to_byte_offset, ClusterLookup, ClusterSelection,
+};
+
+// Pipeline types
+pub use pipeline::{assign_fonts, itemize_text, FontRun, ItemizedRun, ShapedRun, ShapingPipeline};
 
 // ============================================================================
 // Legacy V1 Implementation (to be refactored in Wave 4+)
