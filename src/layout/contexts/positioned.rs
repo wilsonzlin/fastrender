@@ -882,7 +882,7 @@ mod tests {
         let cb = create_containing_block(800.0, 600.0);
         let intrinsic = Size::new(150.0, 75.0);
 
-        let (pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+        let (_pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
 
         // Should use intrinsic size when everything is auto
         assert_eq!(size.width, 150.0);
