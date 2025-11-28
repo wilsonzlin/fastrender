@@ -284,10 +284,7 @@ impl Script {
         }
 
         // Hangul
-        if (0xAC00..=0xD7AF).contains(&cp)
-            || (0x1100..=0x11FF).contains(&cp)
-            || (0x3130..=0x318F).contains(&cp)
-        {
+        if (0xAC00..=0xD7AF).contains(&cp) || (0x1100..=0x11FF).contains(&cp) || (0x3130..=0x318F).contains(&cp) {
             return Script::Hangul;
         }
 
