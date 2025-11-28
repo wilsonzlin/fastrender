@@ -66,11 +66,11 @@ pub mod engine;
 // W3.T10 - Float context for BFC float management
 pub mod float_context;
 
+// W4 - Inline layout module (W4.T13 Baseline, W4.T14 Text Run, W4.T15 Float Integration)
+pub mod inline;
+
 // W3.T13 - Absolute positioning algorithm
 pub mod absolute_positioning;
-
-// W4 - Inline layout module (W4.T13 Baseline Alignment, W4.T14 Text Run Generation)
-pub mod inline;
 
 // Re-exports
 pub use absolute_positioning::{AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult, ResolvedMargins};
@@ -83,7 +83,8 @@ pub use float_context::{FloatContext, FloatInfo, FloatSide};
 pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 pub use inline::{
     BaselineAligner, GlyphInfo, InlineBoxMetrics, InlineItem, LineMetrics, PositionedInlineBox, TextRun,
-    TextRunBuilder, VerticalAlign,
+    TextRunBuilder, VerticalAlign, InlineFloatIntegration, InlineFloatIntegrationMut, LineSpace,
+    LineSpaceIterator, LineSpaceOptions, PlacedInlineFloat, line_spaces,
 };
 
 // W3.T06 - Table layout algorithm

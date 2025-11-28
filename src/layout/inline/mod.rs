@@ -3,6 +3,16 @@
 //! This module implements inline formatting context (IFC) components
 //! for horizontal text flow, line breaking, and baseline alignment.
 //!
+//! # Overview
+//!
+//! Inline layout handles the horizontal flow of inline-level content including:
+//! - Text runs
+//! - Inline boxes (`<span>`, etc.)
+//! - Inline-block elements
+//! - Line breaking and wrapping
+//! - Baseline alignment
+//! - Float integration
+//!
 //! # CSS Specification
 //!
 //! Implements CSS 2.1 Section 9.4.2 - Inline Formatting Contexts:
@@ -15,6 +25,7 @@
 //!
 //! - `baseline` - Baseline alignment algorithm (W4.T13)
 //! - `text_run` - Text run generation from shaped glyphs (W4.T14)
+//! - `float_integration` - Float integration for inline layout (W4.T15)
 
 // W4.T13 - Baseline alignment algorithm
 pub mod baseline;
@@ -22,6 +33,13 @@ pub mod baseline;
 // W4.T14 - Text run generation
 pub mod text_run;
 
+// W4.T15 - Float integration
+pub mod float_integration;
+
 // Re-export primary types
 pub use baseline::{BaselineAligner, InlineBoxMetrics, LineMetrics, PositionedInlineBox, VerticalAlign};
+pub use float_integration::{
+    line_spaces, InlineFloatIntegration, InlineFloatIntegrationMut, LineSpace, LineSpaceIterator, LineSpaceOptions,
+    PlacedInlineFloat,
+};
 pub use text_run::{GlyphInfo, InlineItem, TextRun, TextRunBuilder};
