@@ -7,6 +7,7 @@ pub mod color;
 pub mod computed;
 pub mod display;
 pub mod float;
+pub mod media;
 pub mod position;
 
 // Re-export color types
@@ -23,6 +24,13 @@ pub use float::{Clear, ClearParseError, Float, FloatParseError};
 
 // Re-export position types
 pub use position::{Position, PositionParseError};
+
+// Re-export media types
+pub use media::{
+    ColorScheme, ContrastPreference, HoverCapability, MediaContext, MediaFeature, MediaModifier,
+    MediaParseError, MediaQuery, MediaType, Orientation, PointerCapability, ReducedMotion,
+    ReducedTransparency, Resolution, ResolutionUnit,
+};
 
 // Legacy CSS types (will be phased out)
 use crate::css::{
