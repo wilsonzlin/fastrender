@@ -85,6 +85,7 @@ pub mod display_list;
 pub mod display_list_builder;
 pub mod optimize;
 pub mod painter;
+pub mod rasterize;
 pub mod stacking;
 
 // Re-export canvas (W5.T06)
@@ -115,4 +116,12 @@ pub use stacking::{
     build_stacking_tree, build_stacking_tree_with_styles, creates_stacking_context,
     get_stacking_context_reason, PaintOrderIterator, StackingContext, StackingContextReason,
     StyledFragmentRef,
+};
+
+// Re-export rasterize types (W5.T07)
+// Note: BorderRadii is already exported from display_list
+pub use rasterize::{
+    draw_line, fill_circle, fill_ellipse, fill_rect, fill_rect_from_rect, fill_rounded_rect,
+    render_borders, render_box_shadow, stroke_rect, stroke_rounded_rect, BorderColors,
+    BorderWidths, BoxShadow,
 };
