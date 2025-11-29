@@ -25,6 +25,7 @@ pub mod box_generation;
 pub mod box_tree;
 pub mod debug;
 pub mod fragment_tree;
+pub mod pseudo_elements;
 pub mod table_fixup;
 
 // Re-exports from box_tree
@@ -47,3 +48,9 @@ pub use box_generation::{BoxGenerationConfig, BoxGenerationError, BoxGenerator, 
 
 // Re-exports from table_fixup
 pub use table_fixup::TableStructureFixer;
+
+// Re-exports from pseudo_elements
+pub use pseudo_elements::{
+    count_pseudo_boxes, find_pseudo_boxes, get_pseudo_type, is_pseudo_box, PseudoContent, PseudoContentItem,
+    PseudoElementConfig, PseudoElementGenerator, PseudoElementStyle, PseudoElementType,
+};
