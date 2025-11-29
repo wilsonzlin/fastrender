@@ -20,12 +20,36 @@ fn test_bootstrap_breakpoints() {
     // xxl: >= 1400px
 
     let breakpoints = [
-        ("(max-width: 575.98px)", vec![320.0, 480.0, 575.0], vec![576.0, 768.0, 1024.0]),
-        ("(min-width: 576px)", vec![576.0, 768.0, 1024.0], vec![320.0, 480.0, 575.0]),
-        ("(min-width: 768px)", vec![768.0, 992.0, 1200.0], vec![320.0, 576.0, 767.0]),
-        ("(min-width: 992px)", vec![992.0, 1024.0, 1200.0], vec![320.0, 768.0, 991.0]),
-        ("(min-width: 1200px)", vec![1200.0, 1400.0, 1920.0], vec![320.0, 992.0, 1199.0]),
-        ("(min-width: 1400px)", vec![1400.0, 1920.0, 2560.0], vec![320.0, 1200.0, 1399.0]),
+        (
+            "(max-width: 575.98px)",
+            vec![320.0, 480.0, 575.0],
+            vec![576.0, 768.0, 1024.0],
+        ),
+        (
+            "(min-width: 576px)",
+            vec![576.0, 768.0, 1024.0],
+            vec![320.0, 480.0, 575.0],
+        ),
+        (
+            "(min-width: 768px)",
+            vec![768.0, 992.0, 1200.0],
+            vec![320.0, 576.0, 767.0],
+        ),
+        (
+            "(min-width: 992px)",
+            vec![992.0, 1024.0, 1200.0],
+            vec![320.0, 768.0, 991.0],
+        ),
+        (
+            "(min-width: 1200px)",
+            vec![1200.0, 1400.0, 1920.0],
+            vec![320.0, 992.0, 1199.0],
+        ),
+        (
+            "(min-width: 1400px)",
+            vec![1400.0, 1920.0, 2560.0],
+            vec![320.0, 1200.0, 1399.0],
+        ),
     ];
 
     for (query_str, should_match, should_not_match) in breakpoints {
@@ -101,10 +125,7 @@ fn test_mobile_first_pattern() {
         "(min-width: 1280px)", // Large desktops
     ];
 
-    let parsed_queries: Vec<MediaQuery> = queries
-        .iter()
-        .map(|q| MediaQuery::parse(q).unwrap())
-        .collect();
+    let parsed_queries: Vec<MediaQuery> = queries.iter().map(|q| MediaQuery::parse(q).unwrap()).collect();
 
     // Mobile (375px) - no queries match
     let mobile = MediaContext::screen(375.0, 667.0);
@@ -150,8 +171,7 @@ fn test_device_viewports() {
     ];
 
     let mobile_query = MediaQuery::parse("(max-width: 767px)").unwrap();
-    let tablet_query =
-        MediaQuery::parse("(min-width: 768px) and (max-width: 1023px)").unwrap();
+    let tablet_query = MediaQuery::parse("(min-width: 768px) and (max-width: 1023px)").unwrap();
     let desktop_query = MediaQuery::parse("(min-width: 1024px)").unwrap();
 
     for (name, width, height, _is_mobile) in devices {
@@ -401,20 +421,15 @@ fn test_complex_queries() {
         .with_color_scheme(ColorScheme::Dark);
 
     // Multiple conditions
-    let query = MediaQuery::parse(
-        "screen and (min-width: 768px) and (orientation: landscape)",
-    )
-    .unwrap();
+    let query = MediaQuery::parse("screen and (min-width: 768px) and (orientation: landscape)").unwrap();
     assert!(ctx.evaluate(&query));
 
     // Width range
-    let range_query =
-        MediaQuery::parse("(min-width: 768px) and (max-width: 1200px)").unwrap();
+    let range_query = MediaQuery::parse("(min-width: 768px) and (max-width: 1200px)").unwrap();
     assert!(ctx.evaluate(&range_query));
 
     // Out of range
-    let out_of_range =
-        MediaQuery::parse("(min-width: 1200px) and (max-width: 1400px)").unwrap();
+    let out_of_range = MediaQuery::parse("(min-width: 1200px) and (max-width: 1400px)").unwrap();
     assert!(!ctx.evaluate(&out_of_range));
 }
 
@@ -551,13 +566,8 @@ fn test_whitespace_handling() {
     ];
 
     for query_str in queries {
-        let query = MediaQuery::parse(query_str)
-            .expect(&format!("Failed to parse: '{}'", query_str));
-        assert!(
-            ctx.evaluate(&query),
-            "Query '{}' should match",
-            query_str
-        );
+        let query = MediaQuery::parse(query_str).expect(&format!("Failed to parse: '{}'", query_str));
+        assert!(ctx.evaluate(&query), "Query '{}' should match", query_str);
     }
 }
 
@@ -576,13 +586,8 @@ fn test_case_insensitivity() {
     ];
 
     for query_str in queries {
-        let query = MediaQuery::parse(query_str)
-            .expect(&format!("Failed to parse: '{}'", query_str));
-        assert!(
-            ctx.evaluate(&query),
-            "Query '{}' should match",
-            query_str
-        );
+        let query = MediaQuery::parse(query_str).expect(&format!("Failed to parse: '{}'", query_str));
+        assert!(ctx.evaluate(&query), "Query '{}' should match", query_str);
     }
 }
 
@@ -632,7 +637,12 @@ fn test_real_world_patterns() {
     for (query_str, viewport_width) in container_queries {
         let query = MediaQuery::parse(query_str).unwrap();
         let ctx = MediaContext::screen(viewport_width, 768.0);
-        assert!(ctx.evaluate(&query), "Viewport {} should trigger {}", viewport_width, query_str);
+        assert!(
+            ctx.evaluate(&query),
+            "Viewport {} should trigger {}",
+            viewport_width,
+            query_str
+        );
     }
 }
 

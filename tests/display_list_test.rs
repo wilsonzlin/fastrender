@@ -5,10 +5,9 @@
 
 use fastrender::geometry::{Point, Rect};
 use fastrender::paint::{
-    BlendMode, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem,
-    FillRoundedRectItem, GlyphInstance, GradientStop, ImageData, ImageItem, LinearGradientItem,
-    OpacityItem, RadialGradientItem, StrokeRectItem, StrokeRoundedRectItem, TextItem,
-    Transform2D, TransformItem,
+    BlendMode, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FillRoundedRectItem,
+    GlyphInstance, GradientStop, ImageData, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem,
+    StrokeRectItem, StrokeRoundedRectItem, TextItem, Transform2D, TransformItem,
 };
 use fastrender::style::Rgba;
 use std::sync::Arc;

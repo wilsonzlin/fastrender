@@ -286,11 +286,9 @@ impl StackingContext {
     /// Returns child stacking contexts with negative z-index, sorted (most negative first)
     pub fn negative_z_children(&self) -> Vec<&StackingContext> {
         let mut negative: Vec<_> = self.children.iter().filter(|c| c.z_index < 0).collect();
-        negative.sort_by(|a, b| {
-            match a.z_index.cmp(&b.z_index) {
-                Ordering::Equal => a.tree_order.cmp(&b.tree_order),
-                other => other,
-            }
+        negative.sort_by(|a, b| match a.z_index.cmp(&b.z_index) {
+            Ordering::Equal => a.tree_order.cmp(&b.tree_order),
+            other => other,
         });
         negative
     }
@@ -305,22 +303,18 @@ impl StackingContext {
     /// Returns child stacking contexts with positive z-index, sorted (least positive first)
     pub fn positive_z_children(&self) -> Vec<&StackingContext> {
         let mut positive: Vec<_> = self.children.iter().filter(|c| c.z_index > 0).collect();
-        positive.sort_by(|a, b| {
-            match a.z_index.cmp(&b.z_index) {
-                Ordering::Equal => a.tree_order.cmp(&b.tree_order),
-                other => other,
-            }
+        positive.sort_by(|a, b| match a.z_index.cmp(&b.z_index) {
+            Ordering::Equal => a.tree_order.cmp(&b.tree_order),
+            other => other,
         });
         positive
     }
 
     /// Sorts all child stacking contexts by z-index (for paint order)
     pub fn sort_children(&mut self) {
-        self.children.sort_by(|a, b| {
-            match a.z_index.cmp(&b.z_index) {
-                Ordering::Equal => a.tree_order.cmp(&b.tree_order),
-                other => other,
-            }
+        self.children.sort_by(|a, b| match a.z_index.cmp(&b.z_index) {
+            Ordering::Equal => a.tree_order.cmp(&b.tree_order),
+            other => other,
         });
 
         // Recursively sort grandchildren
@@ -403,11 +397,7 @@ impl StackingContext {
 ///
 /// assert!(creates_stacking_context(&style, None, false));
 /// ```
-pub fn creates_stacking_context(
-    style: &ComputedStyles,
-    parent_style: Option<&ComputedStyles>,
-    is_root: bool,
-) -> bool {
+pub fn creates_stacking_context(style: &ComputedStyles, parent_style: Option<&ComputedStyles>, is_root: bool) -> bool {
     // 1. Root element always creates stacking context
     if is_root {
         return true;
@@ -639,11 +629,8 @@ fn build_stacking_tree_internal(
         // Process children
         for child in &fragment.children {
             let child_context = build_stacking_tree_internal(
-                child,
-                None, // We don't have style for children without external mapping
-                style,
-                false,
-                tree_order,
+                child, None, // We don't have style for children without external mapping
+                style, false, tree_order,
             );
 
             // If child created its own stacking context, add as child
@@ -945,13 +932,15 @@ impl<'a> Iterator for PaintOrderIterator<'a> {
                 }
                 PaintOrderItem::NegativeChildren(children, idx) => {
                     if idx < children.len() {
-                        self.stack.push(PaintOrderItem::NegativeChildren(children.clone(), idx + 1));
+                        self.stack
+                            .push(PaintOrderItem::NegativeChildren(children.clone(), idx + 1));
                         self.stack.push(PaintOrderItem::Context(children[idx]));
                     }
                 }
                 PaintOrderItem::PositiveChildren(children, idx) => {
                     if idx < children.len() {
-                        self.stack.push(PaintOrderItem::PositiveChildren(children.clone(), idx + 1));
+                        self.stack
+                            .push(PaintOrderItem::PositiveChildren(children.clone(), idx + 1));
                         self.stack.push(PaintOrderItem::Context(children[idx]));
                     }
                 }
@@ -1106,10 +1095,22 @@ mod tests {
     #[test]
     fn test_stacking_context_negative_z_children() {
         let mut parent = StackingContext::new(0);
-        parent.add_child(StackingContext::with_reason(-5, StackingContextReason::PositionedWithZIndex, 1));
-        parent.add_child(StackingContext::with_reason(-1, StackingContextReason::PositionedWithZIndex, 2));
+        parent.add_child(StackingContext::with_reason(
+            -5,
+            StackingContextReason::PositionedWithZIndex,
+            1,
+        ));
+        parent.add_child(StackingContext::with_reason(
+            -1,
+            StackingContextReason::PositionedWithZIndex,
+            2,
+        ));
         parent.add_child(StackingContext::with_reason(0, StackingContextReason::Root, 3));
-        parent.add_child(StackingContext::with_reason(1, StackingContextReason::PositionedWithZIndex, 4));
+        parent.add_child(StackingContext::with_reason(
+            1,
+            StackingContextReason::PositionedWithZIndex,
+            4,
+        ));
 
         let negative = parent.negative_z_children();
         assert_eq!(negative.len(), 2);
@@ -1120,9 +1121,21 @@ mod tests {
     #[test]
     fn test_stacking_context_positive_z_children() {
         let mut parent = StackingContext::new(0);
-        parent.add_child(StackingContext::with_reason(-1, StackingContextReason::PositionedWithZIndex, 1));
-        parent.add_child(StackingContext::with_reason(5, StackingContextReason::PositionedWithZIndex, 2));
-        parent.add_child(StackingContext::with_reason(1, StackingContextReason::PositionedWithZIndex, 3));
+        parent.add_child(StackingContext::with_reason(
+            -1,
+            StackingContextReason::PositionedWithZIndex,
+            1,
+        ));
+        parent.add_child(StackingContext::with_reason(
+            5,
+            StackingContextReason::PositionedWithZIndex,
+            2,
+        ));
+        parent.add_child(StackingContext::with_reason(
+            1,
+            StackingContextReason::PositionedWithZIndex,
+            3,
+        ));
         parent.add_child(StackingContext::with_reason(0, StackingContextReason::Root, 4));
 
         let positive = parent.positive_z_children();
@@ -1136,7 +1149,11 @@ mod tests {
         let mut parent = StackingContext::new(0);
         parent.add_child(StackingContext::with_reason(0, StackingContextReason::Opacity, 1));
         parent.add_child(StackingContext::with_reason(0, StackingContextReason::Transform, 2));
-        parent.add_child(StackingContext::with_reason(1, StackingContextReason::PositionedWithZIndex, 3));
+        parent.add_child(StackingContext::with_reason(
+            1,
+            StackingContextReason::PositionedWithZIndex,
+            3,
+        ));
 
         let zero = parent.zero_z_children();
         assert_eq!(zero.len(), 2);
@@ -1148,10 +1165,22 @@ mod tests {
     #[test]
     fn test_stacking_context_sort_children() {
         let mut parent = StackingContext::new(0);
-        parent.add_child(StackingContext::with_reason(5, StackingContextReason::PositionedWithZIndex, 1));
-        parent.add_child(StackingContext::with_reason(-2, StackingContextReason::PositionedWithZIndex, 2));
+        parent.add_child(StackingContext::with_reason(
+            5,
+            StackingContextReason::PositionedWithZIndex,
+            1,
+        ));
+        parent.add_child(StackingContext::with_reason(
+            -2,
+            StackingContextReason::PositionedWithZIndex,
+            2,
+        ));
         parent.add_child(StackingContext::with_reason(0, StackingContextReason::Opacity, 3));
-        parent.add_child(StackingContext::with_reason(1, StackingContextReason::PositionedWithZIndex, 4));
+        parent.add_child(StackingContext::with_reason(
+            1,
+            StackingContextReason::PositionedWithZIndex,
+            4,
+        ));
 
         parent.sort_children();
 
@@ -1166,7 +1195,11 @@ mod tests {
         let mut parent = StackingContext::new(0);
         parent.add_child(StackingContext::with_reason(0, StackingContextReason::Opacity, 3));
         parent.add_child(StackingContext::with_reason(0, StackingContextReason::Transform, 1));
-        parent.add_child(StackingContext::with_reason(0, StackingContextReason::FixedPositioning, 2));
+        parent.add_child(StackingContext::with_reason(
+            0,
+            StackingContextReason::FixedPositioning,
+            2,
+        ));
 
         parent.sort_children();
 
@@ -1219,7 +1252,8 @@ mod tests {
         let mut sc = StackingContext::new(0);
         sc.fragments.push(create_block_fragment(0.0, 0.0, 10.0, 10.0));
         sc.layer3_blocks.push(create_block_fragment(0.0, 0.0, 10.0, 10.0));
-        sc.layer5_inlines.push(create_text_fragment(0.0, 0.0, 10.0, 10.0, "test"));
+        sc.layer5_inlines
+            .push(create_text_fragment(0.0, 0.0, 10.0, 10.0, "test"));
 
         assert_eq!(sc.fragment_count(), 3);
     }
@@ -1261,7 +1295,8 @@ mod tests {
         let mut sc = StackingContext::new(0);
         sc.fragments.push(create_block_fragment(0.0, 0.0, 10.0, 10.0)); // Layer 1
         sc.layer3_blocks.push(create_block_fragment(10.0, 0.0, 10.0, 10.0)); // Layer 3
-        sc.layer5_inlines.push(create_text_fragment(20.0, 0.0, 10.0, 10.0, "test")); // Layer 5
+        sc.layer5_inlines
+            .push(create_text_fragment(20.0, 0.0, 10.0, 10.0, "test")); // Layer 5
 
         let fragments: Vec<_> = sc.iter_paint_order().collect();
         assert_eq!(fragments.len(), 3);

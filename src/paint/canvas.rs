@@ -44,11 +44,10 @@
 use crate::css::Color;
 use crate::error::{RenderError, Result};
 use crate::geometry::{Point, Rect, Size};
-use crate::text::shaper::GlyphPosition;
 use crate::text::font_db::LoadedFont;
+use crate::text::shaper::GlyphPosition;
 use tiny_skia::{
-    FillRule, Paint, PathBuilder, Pixmap, Rect as SkiaRect, Stroke, Transform,
-    BlendMode as SkiaBlendMode,
+    BlendMode as SkiaBlendMode, FillRule, Paint, PathBuilder, Pixmap, Rect as SkiaRect, Stroke, Transform,
 };
 
 // Re-export display_list types that canvas uses
@@ -390,13 +389,8 @@ impl Canvas {
         if let Some(skia_rect) = self.to_skia_rect(rect) {
             let path = PathBuilder::from_rect(skia_rect);
             let paint = self.current_state.create_paint(color);
-            self.pixmap.fill_path(
-                &path,
-                &paint,
-                FillRule::Winding,
-                self.current_state.transform,
-                None,
-            );
+            self.pixmap
+                .fill_path(&path, &paint, FillRule::Winding, self.current_state.transform, None);
         }
     }
 
@@ -425,13 +419,8 @@ impl Canvas {
                 width,
                 ..Default::default()
             };
-            self.pixmap.stroke_path(
-                &path,
-                &paint,
-                &stroke,
-                self.current_state.transform,
-                None,
-            );
+            self.pixmap
+                .stroke_path(&path, &paint, &stroke, self.current_state.transform, None);
         }
     }
 
@@ -461,13 +450,8 @@ impl Canvas {
 
         if let Some(path) = self.build_rounded_rect_path(rect, radii) {
             let paint = self.current_state.create_paint(color);
-            self.pixmap.fill_path(
-                &path,
-                &paint,
-                FillRule::Winding,
-                self.current_state.transform,
-                None,
-            );
+            self.pixmap
+                .fill_path(&path, &paint, FillRule::Winding, self.current_state.transform, None);
         }
     }
 
@@ -487,13 +471,8 @@ impl Canvas {
                 width,
                 ..Default::default()
             };
-            self.pixmap.stroke_path(
-                &path,
-                &paint,
-                &stroke,
-                self.current_state.transform,
-                None,
-            );
+            self.pixmap
+                .stroke_path(&path, &paint, &stroke, self.current_state.transform, None);
         }
     }
 
@@ -546,13 +525,8 @@ impl Canvas {
 
             // Get the glyph outline
             if let Some(path) = self.build_glyph_path(&face, glyph.glyph_id as u16, glyph_x, glyph_y, scale) {
-                self.pixmap.fill_path(
-                    &path,
-                    &paint,
-                    FillRule::Winding,
-                    self.current_state.transform,
-                    None,
-                );
+                self.pixmap
+                    .fill_path(&path, &paint, FillRule::Winding, self.current_state.transform, None);
             }
 
             x += glyph.advance;
@@ -582,13 +556,8 @@ impl Canvas {
                 width,
                 ..Default::default()
             };
-            self.pixmap.stroke_path(
-                &path,
-                &paint,
-                &stroke,
-                self.current_state.transform,
-                None,
-            );
+            self.pixmap
+                .stroke_path(&path, &paint, &stroke, self.current_state.transform, None);
         }
     }
 
@@ -606,13 +575,8 @@ impl Canvas {
 
         if let Some(path) = self.build_circle_path(center, radius) {
             let paint = self.current_state.create_paint(color);
-            self.pixmap.fill_path(
-                &path,
-                &paint,
-                FillRule::Winding,
-                self.current_state.transform,
-                None,
-            );
+            self.pixmap
+                .fill_path(&path, &paint, FillRule::Winding, self.current_state.transform, None);
         }
     }
 
@@ -628,13 +592,8 @@ impl Canvas {
                 width,
                 ..Default::default()
             };
-            self.pixmap.stroke_path(
-                &path,
-                &paint,
-                &stroke,
-                self.current_state.transform,
-                None,
-            );
+            self.pixmap
+                .stroke_path(&path, &paint, &stroke, self.current_state.transform, None);
         }
     }
 
@@ -733,30 +692,42 @@ impl Canvas {
 
         // Top-right quadrant
         pb.cubic_to(
-            center.x + k, center.y - radius,
-            center.x + radius, center.y - k,
-            center.x + radius, center.y,
+            center.x + k,
+            center.y - radius,
+            center.x + radius,
+            center.y - k,
+            center.x + radius,
+            center.y,
         );
 
         // Bottom-right quadrant
         pb.cubic_to(
-            center.x + radius, center.y + k,
-            center.x + k, center.y + radius,
-            center.x, center.y + radius,
+            center.x + radius,
+            center.y + k,
+            center.x + k,
+            center.y + radius,
+            center.x,
+            center.y + radius,
         );
 
         // Bottom-left quadrant
         pb.cubic_to(
-            center.x - k, center.y + radius,
-            center.x - radius, center.y + k,
-            center.x - radius, center.y,
+            center.x - k,
+            center.y + radius,
+            center.x - radius,
+            center.y + k,
+            center.x - radius,
+            center.y,
         );
 
         // Top-left quadrant
         pb.cubic_to(
-            center.x - radius, center.y - k,
-            center.x - k, center.y - radius,
-            center.x, center.y - radius,
+            center.x - radius,
+            center.y - k,
+            center.x - k,
+            center.y - radius,
+            center.x,
+            center.y - radius,
         );
 
         pb.close();
@@ -938,10 +909,10 @@ mod tests {
         // tiny-skia uses premultiplied RGBA format
         // Verify first pixel is red
         let data = canvas.pixmap().data();
-        assert_eq!(data[0], 255);  // R
-        assert_eq!(data[1], 0);    // G
-        assert_eq!(data[2], 0);    // B
-        assert_eq!(data[3], 255);  // A
+        assert_eq!(data[0], 255); // R
+        assert_eq!(data[1], 0); // G
+        assert_eq!(data[2], 0); // B
+        assert_eq!(data[3], 255); // A
     }
 
     #[test]
@@ -1058,12 +1029,7 @@ mod tests {
     #[test]
     fn test_canvas_draw_line() {
         let mut canvas = Canvas::new(100, 100, Color::WHITE).unwrap();
-        canvas.draw_line(
-            Point::new(10.0, 10.0),
-            Point::new(90.0, 90.0),
-            Color::BLACK,
-            1.0,
-        );
+        canvas.draw_line(Point::new(10.0, 10.0), Point::new(90.0, 90.0), Color::BLACK, 1.0);
 
         let _ = canvas.into_pixmap();
     }
@@ -1093,10 +1059,7 @@ mod tests {
         let mut canvas = Canvas::new(100, 100, Color::WHITE).unwrap();
 
         // Drawing with transparent color should not crash
-        canvas.draw_rect(
-            Rect::from_xywh(10.0, 10.0, 20.0, 20.0),
-            Color::TRANSPARENT,
-        );
+        canvas.draw_rect(Rect::from_xywh(10.0, 10.0, 20.0, 20.0), Color::TRANSPARENT);
 
         let _ = canvas.into_pixmap();
     }
@@ -1108,10 +1071,7 @@ mod tests {
         canvas.set_clip(Rect::from_xywh(20.0, 20.0, 60.0, 60.0));
 
         // Draw a rectangle that extends beyond the clip
-        canvas.draw_rect(
-            Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-            Color::rgb(255, 0, 0),
-        );
+        canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), Color::rgb(255, 0, 0));
 
         canvas.clear_clip();
 

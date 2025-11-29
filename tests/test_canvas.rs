@@ -6,7 +6,7 @@
 use fastrender::css::Color;
 use fastrender::geometry::{Point, Rect};
 use fastrender::paint::{BlendMode, BorderRadii, Canvas};
-use fastrender::text::{FontContext, TextShaper, Script, TextDirection};
+use fastrender::text::{FontContext, Script, TextDirection, TextShaper};
 
 // ============================================================================
 // Canvas Creation Tests
@@ -81,10 +81,10 @@ fn test_draw_rect_at_origin() {
 
     let data = canvas.pixmap().data();
     // First pixel should be green
-    assert_eq!(data[0], 0);    // R
-    assert_eq!(data[1], 255);  // G
-    assert_eq!(data[2], 0);    // B
-    assert_eq!(data[3], 255);  // A
+    assert_eq!(data[0], 0); // R
+    assert_eq!(data[1], 255); // G
+    assert_eq!(data[2], 0); // B
+    assert_eq!(data[3], 255); // A
 }
 
 #[test]
@@ -189,12 +189,7 @@ fn test_stroke_circle() {
 fn test_draw_line() {
     let mut canvas = Canvas::new(100, 100, Color::WHITE).unwrap();
 
-    canvas.draw_line(
-        Point::new(10.0, 10.0),
-        Point::new(90.0, 90.0),
-        Color::BLACK,
-        1.0,
-    );
+    canvas.draw_line(Point::new(10.0, 10.0), Point::new(90.0, 90.0), Color::BLACK, 1.0);
 
     let _ = canvas.into_pixmap();
 }
@@ -428,22 +423,12 @@ fn test_draw_text_with_glyphs() {
 
     // Shape some text
     let shaper = TextShaper::new();
-    let shaped = shaper.shape_text(
-        "Hello, World!",
-        &font,
-        16.0,
-        Script::Latin,
-        TextDirection::Ltr,
-    ).unwrap();
+    let shaped = shaper
+        .shape_text("Hello, World!", &font, 16.0, Script::Latin, TextDirection::Ltr)
+        .unwrap();
 
     // Draw the glyphs
-    canvas.draw_text(
-        Point::new(10.0, 30.0),
-        &shaped.glyphs,
-        &font,
-        16.0,
-        Color::BLACK,
-    );
+    canvas.draw_text(Point::new(10.0, 30.0), &shaped.glyphs, &font, 16.0, Color::BLACK);
 
     let pixmap = canvas.into_pixmap();
     assert!(pixmap.data().iter().any(|&b| b != 255)); // Some non-white pixels
@@ -461,8 +446,16 @@ fn test_draw_text_colored() {
     let font = font_ctx.get_sans_serif().unwrap();
     let shaper = TextShaper::new();
 
-    let shaped = shaper.shape_text("Red Text", &font, 20.0, Script::Latin, TextDirection::Ltr).unwrap();
-    canvas.draw_text(Point::new(10.0, 35.0), &shaped.glyphs, &font, 20.0, Color::rgb(255, 0, 0));
+    let shaped = shaper
+        .shape_text("Red Text", &font, 20.0, Script::Latin, TextDirection::Ltr)
+        .unwrap();
+    canvas.draw_text(
+        Point::new(10.0, 35.0),
+        &shaped.glyphs,
+        &font,
+        20.0,
+        Color::rgb(255, 0, 0),
+    );
 
     let _ = canvas.into_pixmap();
 }
@@ -481,7 +474,9 @@ fn test_draw_text_with_opacity() {
 
     canvas.set_opacity(0.5);
 
-    let shaped = shaper.shape_text("Faded", &font, 24.0, Script::Latin, TextDirection::Ltr).unwrap();
+    let shaped = shaper
+        .shape_text("Faded", &font, 24.0, Script::Latin, TextDirection::Ltr)
+        .unwrap();
     canvas.draw_text(Point::new(10.0, 35.0), &shaped.glyphs, &font, 24.0, Color::BLACK);
 
     let _ = canvas.into_pixmap();
@@ -555,10 +550,18 @@ fn test_complex_scene() {
 
     // Rounded header
     let radii = BorderRadii::new(5.0, 5.0, 0.0, 0.0);
-    canvas.draw_rounded_rect(Rect::from_xywh(10.0, 10.0, 180.0, 40.0), radii, Color::rgb(51, 102, 204));
+    canvas.draw_rounded_rect(
+        Rect::from_xywh(10.0, 10.0, 180.0, 40.0),
+        radii,
+        Color::rgb(51, 102, 204),
+    );
 
     // Content area with border
-    canvas.stroke_rect(Rect::from_xywh(20.0, 60.0, 160.0, 120.0), Color::rgb(200, 200, 200), 1.0);
+    canvas.stroke_rect(
+        Rect::from_xywh(20.0, 60.0, 160.0, 120.0),
+        Color::rgb(200, 200, 200),
+        1.0,
+    );
 
     // Decorative circles
     canvas.draw_circle(Point::new(50.0, 100.0), 15.0, Color::rgb(255, 100, 100));
@@ -566,8 +569,18 @@ fn test_complex_scene() {
     canvas.draw_circle(Point::new(150.0, 100.0), 15.0, Color::rgb(100, 100, 255));
 
     // Lines
-    canvas.draw_line(Point::new(30.0, 140.0), Point::new(170.0, 140.0), Color::rgb(150, 150, 150), 1.0);
-    canvas.draw_line(Point::new(30.0, 160.0), Point::new(170.0, 160.0), Color::rgb(150, 150, 150), 1.0);
+    canvas.draw_line(
+        Point::new(30.0, 140.0),
+        Point::new(170.0, 140.0),
+        Color::rgb(150, 150, 150),
+        1.0,
+    );
+    canvas.draw_line(
+        Point::new(30.0, 160.0),
+        Point::new(170.0, 160.0),
+        Color::rgb(150, 150, 150),
+        1.0,
+    );
 
     let pixmap = canvas.into_pixmap();
     assert_eq!(pixmap.width(), 200);

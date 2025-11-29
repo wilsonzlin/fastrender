@@ -8,8 +8,7 @@
 
 use fastrender::geometry::Rect;
 use fastrender::paint::{
-    build_stacking_tree, creates_stacking_context, get_stacking_context_reason,
-    StackingContext, StackingContextReason,
+    build_stacking_tree, creates_stacking_context, get_stacking_context_reason, StackingContext, StackingContextReason,
 };
 use fastrender::style::{ComputedStyles, Display, Overflow, Position};
 use fastrender::tree::FragmentNode;
@@ -226,11 +225,27 @@ fn test_z_index_sorting() {
     let mut parent = StackingContext::root();
 
     // Add children with various z-indices
-    parent.add_child(StackingContext::with_reason(5, StackingContextReason::PositionedWithZIndex, 1));
-    parent.add_child(StackingContext::with_reason(-3, StackingContextReason::PositionedWithZIndex, 2));
+    parent.add_child(StackingContext::with_reason(
+        5,
+        StackingContextReason::PositionedWithZIndex,
+        1,
+    ));
+    parent.add_child(StackingContext::with_reason(
+        -3,
+        StackingContextReason::PositionedWithZIndex,
+        2,
+    ));
     parent.add_child(StackingContext::with_reason(0, StackingContextReason::Opacity, 3));
-    parent.add_child(StackingContext::with_reason(2, StackingContextReason::PositionedWithZIndex, 4));
-    parent.add_child(StackingContext::with_reason(-1, StackingContextReason::PositionedWithZIndex, 5));
+    parent.add_child(StackingContext::with_reason(
+        2,
+        StackingContextReason::PositionedWithZIndex,
+        4,
+    ));
+    parent.add_child(StackingContext::with_reason(
+        -1,
+        StackingContextReason::PositionedWithZIndex,
+        5,
+    ));
 
     parent.sort_children();
 
@@ -248,10 +263,26 @@ fn test_z_index_sorting() {
 fn test_negative_z_children() {
     let mut parent = StackingContext::root();
 
-    parent.add_child(StackingContext::with_reason(-1, StackingContextReason::PositionedWithZIndex, 1));
-    parent.add_child(StackingContext::with_reason(-10, StackingContextReason::PositionedWithZIndex, 2));
-    parent.add_child(StackingContext::with_reason(-5, StackingContextReason::PositionedWithZIndex, 3));
-    parent.add_child(StackingContext::with_reason(1, StackingContextReason::PositionedWithZIndex, 4));
+    parent.add_child(StackingContext::with_reason(
+        -1,
+        StackingContextReason::PositionedWithZIndex,
+        1,
+    ));
+    parent.add_child(StackingContext::with_reason(
+        -10,
+        StackingContextReason::PositionedWithZIndex,
+        2,
+    ));
+    parent.add_child(StackingContext::with_reason(
+        -5,
+        StackingContextReason::PositionedWithZIndex,
+        3,
+    ));
+    parent.add_child(StackingContext::with_reason(
+        1,
+        StackingContextReason::PositionedWithZIndex,
+        4,
+    ));
 
     let negative = parent.negative_z_children();
 
@@ -268,10 +299,26 @@ fn test_negative_z_children() {
 fn test_positive_z_children() {
     let mut parent = StackingContext::root();
 
-    parent.add_child(StackingContext::with_reason(10, StackingContextReason::PositionedWithZIndex, 1));
-    parent.add_child(StackingContext::with_reason(1, StackingContextReason::PositionedWithZIndex, 2));
-    parent.add_child(StackingContext::with_reason(5, StackingContextReason::PositionedWithZIndex, 3));
-    parent.add_child(StackingContext::with_reason(-1, StackingContextReason::PositionedWithZIndex, 4));
+    parent.add_child(StackingContext::with_reason(
+        10,
+        StackingContextReason::PositionedWithZIndex,
+        1,
+    ));
+    parent.add_child(StackingContext::with_reason(
+        1,
+        StackingContextReason::PositionedWithZIndex,
+        2,
+    ));
+    parent.add_child(StackingContext::with_reason(
+        5,
+        StackingContextReason::PositionedWithZIndex,
+        3,
+    ));
+    parent.add_child(StackingContext::with_reason(
+        -1,
+        StackingContextReason::PositionedWithZIndex,
+        4,
+    ));
 
     let positive = parent.positive_z_children();
 
@@ -291,7 +338,11 @@ fn test_tree_order_for_equal_z_index() {
     // All same z-index, different tree orders
     parent.add_child(StackingContext::with_reason(0, StackingContextReason::Opacity, 3));
     parent.add_child(StackingContext::with_reason(0, StackingContextReason::Transform, 1));
-    parent.add_child(StackingContext::with_reason(0, StackingContextReason::FixedPositioning, 2));
+    parent.add_child(StackingContext::with_reason(
+        0,
+        StackingContextReason::FixedPositioning,
+        2,
+    ));
 
     parent.sort_children();
 
@@ -449,8 +500,7 @@ fn test_multiple_triggers_precedence() {
     assert!(creates_stacking_context(&style, None, false));
     // The first matching reason is returned
     let reason = get_stacking_context_reason(&style, None, false);
-    assert!(reason == Some(StackingContextReason::FixedPositioning)
-            || reason == Some(StackingContextReason::Opacity));
+    assert!(reason == Some(StackingContextReason::FixedPositioning) || reason == Some(StackingContextReason::Opacity));
 }
 
 // Test: Empty stacking context

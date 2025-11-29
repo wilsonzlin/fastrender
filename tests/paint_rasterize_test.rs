@@ -5,9 +5,8 @@
 
 use fastrender::css::Color;
 use fastrender::paint::rasterize::{
-    fill_rect, fill_rounded_rect, stroke_rect, stroke_rounded_rect,
-    render_borders, render_box_shadow, draw_line, fill_circle, fill_ellipse,
-    BorderRadii, BorderWidths, BorderColors, BoxShadow,
+    draw_line, fill_circle, fill_ellipse, fill_rect, fill_rounded_rect, render_borders, render_box_shadow, stroke_rect,
+    stroke_rounded_rect, BorderColors, BorderRadii, BorderWidths, BoxShadow,
 };
 use tiny_skia::Pixmap;
 
@@ -643,12 +642,23 @@ mod integration {
         render_box_shadow(&mut pixmap, 50.0, 50.0, 100.0, 100.0, &BorderRadii::zero(), &shadow);
 
         // Draw main box
-        fill_rounded_rect(&mut pixmap, 50.0, 50.0, 100.0, 100.0, &BorderRadii::uniform(10.0), Color::rgb(255, 255, 255));
+        fill_rounded_rect(
+            &mut pixmap,
+            50.0,
+            50.0,
+            100.0,
+            100.0,
+            &BorderRadii::uniform(10.0),
+            Color::rgb(255, 255, 255),
+        );
 
         // Draw border
         render_borders(
             &mut pixmap,
-            50.0, 50.0, 100.0, 100.0,
+            50.0,
+            50.0,
+            100.0,
+            100.0,
             &BorderWidths::uniform(2.0),
             &BorderColors::uniform(Color::rgb(0, 0, 0)),
             &BorderRadii::uniform(10.0),
@@ -671,7 +681,10 @@ mod integration {
         // Button border
         render_borders(
             &mut pixmap,
-            0.0, 0.0, 120.0, 40.0,
+            0.0,
+            0.0,
+            120.0,
+            40.0,
             &BorderWidths::uniform(1.0),
             &BorderColors::uniform(Color::rgb(41, 98, 195)),
             &radii,

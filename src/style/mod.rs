@@ -10,6 +10,7 @@ pub mod display;
 pub mod float;
 pub mod media;
 pub mod position;
+pub mod variables;
 
 // Re-export color types
 pub use color::{Color, ColorParseError, Hsla, Rgba};
@@ -31,10 +32,13 @@ pub use position::{Position, PositionParseError};
 
 // Re-export media types
 pub use media::{
-    ColorScheme, ContrastPreference, HoverCapability, MediaContext, MediaFeature, MediaModifier,
-    MediaParseError, MediaQuery, MediaType, Orientation, PointerCapability, ReducedMotion,
-    ReducedTransparency, Resolution, ResolutionUnit,
+    ColorScheme, ContrastPreference, HoverCapability, MediaContext, MediaFeature, MediaModifier, MediaParseError,
+    MediaQuery, MediaType, Orientation, PointerCapability, ReducedMotion, ReducedTransparency, Resolution,
+    ResolutionUnit,
 };
+
+// Re-export CSS variables types
+pub use variables::CssVariables;
 
 // Legacy CSS types (will be phased out)
 use crate::css::{
