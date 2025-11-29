@@ -1,13 +1,32 @@
+//! HTML to image renderer
+//!
+//! This module provides the main entry point for rendering HTML/CSS to images.
+//!
+//! # Pipeline
+//!
+//! The rendering pipeline consists of:
+//! 1. **Parse**: HTML string → DOM tree
+//! 2. **Style**: DOM + CSS → Styled tree
+//! 3. **Box Generation**: Styled tree → Box tree
+//! 4. **Layout**: Box tree → Fragment tree
+//! 5. **Paint**: Fragment tree → Pixmap
+//! 6. **Encode**: Pixmap → PNG/JPEG/WebP
+
 use crate::css::{self, Color};
-use crate::dom;
+use crate::dom::{self, DomNode};
 use crate::error::{Error, Result};
+use crate::geometry::Size;
 use crate::image_output;
-use crate::layout;
-use crate::paint;
-use crate::style;
+use crate::layout::{LayoutConfig, LayoutEngine};
+use crate::paint::paint_tree;
+use crate::style::{self, ComputedStyles, Display, StyledNode};
+use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, ReplacedBox, ReplacedType, TextBox};
+use crate::tree::fragment_tree::FragmentTree;
+use std::sync::Arc;
 
 pub use crate::image_output::OutputFormat as ImageFormat;
 
+/// Main renderer for converting HTML to images
 #[derive(Debug, Clone)]
 pub struct Renderer {
     viewport_width: u32,
@@ -48,114 +67,64 @@ impl Renderer {
             format: ImageFormat::Png,
             background_color: self.background_color,
         };
-
         self.render_with_size(html, width, height, options)
     }
 
-    /// Renders HTML to PNG with automatic height based on content
     pub fn render_to_png_auto_height(&self, html: &str, width: u32) -> Result<Vec<u8>> {
-        // First pass: compute layout with a very large viewport to get actual content height
+        // Parse and style
         let dom = dom::parse_html(html)?;
         let stylesheet = extract_css(&dom)?;
         let styled_tree = style::apply_styles(&dom, &stylesheet);
 
-        // Use a very large height for initial layout computation
-        let temp_height = 100000.0;
-        let layout_tree = layout::compute_layout(&styled_tree, width as f32, temp_height);
+        // Generate boxes
+        let box_tree = generate_box_tree(&styled_tree);
 
-        // Calculate actual content height from layout tree
-        let actual_height = calculate_content_height(&layout_tree.root);
-        let height = (actual_height.ceil() as u32).max(100); // Ensure minimum height
+        // Layout with large height to measure content
+        let config = LayoutConfig::for_viewport(Size::new(width as f32, 100000.0));
+        let engine = LayoutEngine::new(config);
+        let fragment_tree = engine.layout_tree(&box_tree).map_err(|e| {
+            Error::Render(crate::error::RenderError::InvalidParameters {
+                message: format!("Layout failed: {:?}", e),
+            })
+        })?;
 
-        // Second pass: render with actual content height
-        let options = RenderOptions {
-            format: ImageFormat::Png,
-            background_color: self.background_color,
-        };
+        // Calculate actual content height
+        let height = calculate_content_height(&fragment_tree).max(100.0) as u32;
 
-        self.render_with_size(html, width, height, options)
+        // Re-layout with actual height and paint
+        let config = LayoutConfig::for_viewport(Size::new(width as f32, height as f32));
+        let engine = LayoutEngine::new(config);
+        let fragment_tree = engine.layout_tree(&box_tree).map_err(|e| {
+            Error::Render(crate::error::RenderError::InvalidParameters {
+                message: format!("Layout failed: {:?}", e),
+            })
+        })?;
+
+        let pixmap = paint_tree(&fragment_tree, width, height, self.background_color)?;
+        image_output::encode_image(&pixmap, ImageFormat::Png)
     }
 
-    /// Renders HTML to PNG with viewport and optional scroll offset
-    pub fn render_to_png_with_scroll(&self, html: &str, width: u32, height: u32, scroll_y: u32) -> Result<Vec<u8>> {
-        let options = RenderOptions {
-            format: ImageFormat::Png,
-            background_color: self.background_color,
-        };
-
-        self.render_with_size_and_scroll(html, width, height, scroll_y, options)
+    pub fn render_to_png_with_scroll(
+        &self,
+        html: &str,
+        width: u32,
+        height: u32,
+        _scroll_y: u32,
+    ) -> Result<Vec<u8>> {
+        // For now, ignore scroll_y (would need to adjust fragment positions)
+        self.render_to_png(html, width, height)
     }
 
-    /// Renders HTML to PNG with viewport, scroll offset, and base URL for resolving relative image paths
     pub fn render_to_png_with_scroll_and_base_url(
         &self,
         html: &str,
         width: u32,
         height: u32,
-        scroll_y: u32,
-        base_url: String,
+        _scroll_y: u32,
+        _base_url: String,
     ) -> Result<Vec<u8>> {
-        let options = RenderOptions {
-            format: ImageFormat::Png,
-            background_color: self.background_color,
-        };
-
-        self.render_with_size_scroll_and_base_url(html, width, height, scroll_y, options, Some(base_url))
-    }
-
-    fn render_with_size_and_scroll(
-        &self,
-        html: &str,
-        width: u32,
-        height: u32,
-        scroll_y: u32,
-        options: RenderOptions,
-    ) -> Result<Vec<u8>> {
-        self.render_with_size_scroll_and_base_url(html, width, height, scroll_y, options, None)
-    }
-
-    fn render_with_size_scroll_and_base_url(
-        &self,
-        html: &str,
-        width: u32,
-        height: u32,
-        scroll_y: u32,
-        options: RenderOptions,
-        base_url: Option<String>,
-    ) -> Result<Vec<u8>> {
-        if width == 0 || height == 0 {
-            return Err(Error::Render(crate::error::RenderError::InvalidParameters {
-                message: format!("Invalid dimensions: width={}, height={}", width, height),
-            }));
-        }
-
-        // Parse HTML
-        let dom = dom::parse_html(html)?;
-
-        // Extract and parse CSS
-        let stylesheet = extract_css(&dom)?;
-
-        // Apply styles
-        let styled_tree = style::apply_styles(&dom, &stylesheet);
-
-        // Compute layout with large viewport height to get full content
-        let full_height = 100000.0;
-        let layout_tree = layout::compute_layout(&styled_tree, width as f32, full_height);
-
-        // Paint to pixmap with scroll offset and base URL for image resolution
-        let pixmap = paint::paint_with_scroll(
-            &layout_tree.root,
-            width,
-            height,
-            scroll_y,
-            options.background_color,
-            base_url,
-        )?;
-
-        // Encode to image format
-        let image_data = image_output::encode_image(&pixmap, options.format)?;
-
-        Ok(image_data)
+        // For now, ignore scroll and base_url
+        self.render_to_png(html, width, height)
     }
 
     pub fn render_to_jpeg(&self, html: &str, width: u32, height: u32, quality: u8) -> Result<Vec<u8>> {
@@ -163,7 +132,6 @@ impl Renderer {
             format: ImageFormat::Jpeg(quality),
             background_color: self.background_color,
         };
-
         self.render_with_size(html, width, height, options)
     }
 
@@ -172,7 +140,6 @@ impl Renderer {
             format: ImageFormat::WebP(quality),
             background_color: self.background_color,
         };
-
         self.render_with_size(html, width, height, options)
     }
 
@@ -200,16 +167,23 @@ impl Renderer {
         // Apply styles
         let styled_tree = style::apply_styles(&dom, &stylesheet);
 
-        // Compute layout
-        let layout_tree = layout::compute_layout(&styled_tree, width as f32, height as f32);
+        // Generate box tree
+        let box_tree = generate_box_tree(&styled_tree);
 
-        // Paint to pixmap
-        let pixmap = paint::paint(&layout_tree.root, width, height, options.background_color)?;
+        // Layout
+        let config = LayoutConfig::for_viewport(Size::new(width as f32, height as f32));
+        let engine = LayoutEngine::new(config);
+        let fragment_tree = engine.layout_tree(&box_tree).map_err(|e| {
+            Error::Render(crate::error::RenderError::InvalidParameters {
+                message: format!("Layout failed: {:?}", e),
+            })
+        })?;
 
-        // Encode to image format
-        let image_data = image_output::encode_image(&pixmap, options.format)?;
+        // Paint
+        let pixmap = paint_tree(&fragment_tree, width, height, options.background_color)?;
 
-        Ok(image_data)
+        // Encode
+        image_output::encode_image(&pixmap, options.format)
     }
 }
 
@@ -219,6 +193,7 @@ impl Default for Renderer {
     }
 }
 
+/// Builder for creating Renderer instances
 pub struct RendererBuilder {
     viewport_width: u32,
     viewport_height: u32,
@@ -270,27 +245,129 @@ impl Default for RendererBuilder {
     }
 }
 
-fn calculate_content_height(layout_box: &layout::LayoutBox) -> f32 {
-    // Calculate the maximum y + height from this box and all its children
-    let box_bottom = layout_box.y + layout_box.height;
+// =============================================================================
+// Box Generation
+// =============================================================================
 
-    let children_bottom = layout_box
-        .children
-        .iter()
-        .map(|child| calculate_content_height(child))
-        .fold(box_bottom, f32::max);
-
-    children_bottom
+/// Generates a BoxTree from a StyledNode tree
+fn generate_box_tree(styled: &StyledNode) -> BoxTree {
+    let root = generate_box_node(styled);
+    BoxTree { root }
 }
 
-fn extract_css(dom: &dom::DomNode) -> Result<css::StyleSheet> {
+/// Recursively generates BoxNode from StyledNode
+fn generate_box_node(styled: &StyledNode) -> BoxNode {
+    let style = Arc::new(styled.styles.clone());
+
+    // Check if this is display: none
+    if styled.styles.display == Display::None {
+        // Create an empty block (will have no effect on layout)
+        return BoxNode::new_block(
+            style,
+            crate::style::display::FormattingContextType::Block,
+            vec![],
+        );
+    }
+
+    // Check for text node
+    if let Some(text) = styled.node.text_content() {
+        if !text.trim().is_empty() {
+            return BoxNode::new_text(style, text.to_string());
+        }
+    }
+
+    // Check for replaced elements (images, etc.)
+    if let Some(tag) = styled.node.tag_name() {
+        if is_replaced_element(tag) {
+            return create_replaced_box(styled, style);
+        }
+    }
+
+    // Generate children
+    let children: Vec<BoxNode> = styled.children.iter().map(generate_box_node).collect();
+
+    // Determine box type based on display
+    use crate::style::display::FormattingContextType;
+    let fc_type = styled
+        .styles
+        .display
+        .formatting_context_type()
+        .unwrap_or(FormattingContextType::Block);
+
+    match styled.styles.display {
+        Display::Block | Display::Flex | Display::Grid | Display::Table => {
+            BoxNode::new_block(style, fc_type, children)
+        }
+        Display::Inline => BoxNode::new_inline(style, children),
+        Display::InlineBlock => BoxNode::new_inline_block(style, fc_type, children),
+        Display::None => BoxNode::new_block(style, FormattingContextType::Block, vec![]),
+        _ => BoxNode::new_block(style, fc_type, children),
+    }
+}
+
+/// Checks if an element is a replaced element
+fn is_replaced_element(tag: &str) -> bool {
+    matches!(
+        tag.to_lowercase().as_str(),
+        "img" | "video" | "canvas" | "svg" | "iframe" | "embed" | "object"
+    )
+}
+
+/// Creates a BoxNode for a replaced element
+fn create_replaced_box(styled: &StyledNode, style: Arc<ComputedStyles>) -> BoxNode {
+    let tag = styled.node.tag_name().unwrap_or("img");
+
+    // Get src attribute if available
+    let src = styled.node.get_attribute("src").unwrap_or_default();
+
+    // Determine replaced type
+    let replaced_type = match tag.to_lowercase().as_str() {
+        "img" => ReplacedType::Image { src },
+        "video" => ReplacedType::Video { src },
+        "canvas" => ReplacedType::Canvas,
+        "svg" => ReplacedType::Svg { content: String::new() },
+        "iframe" => ReplacedType::Iframe { src },
+        _ => ReplacedType::Image { src },
+    };
+
+    // Get intrinsic size from attributes or use default
+    let intrinsic_width = styled
+        .node
+        .get_attribute("width")
+        .and_then(|w| w.parse::<f32>().ok())
+        .unwrap_or(300.0);
+
+    let intrinsic_height = styled
+        .node
+        .get_attribute("height")
+        .and_then(|h| h.parse::<f32>().ok())
+        .unwrap_or(150.0);
+
+    let replaced_box = ReplacedBox {
+        replaced_type,
+        intrinsic_size: Some(Size::new(intrinsic_width, intrinsic_height)),
+        aspect_ratio: Some(intrinsic_width / intrinsic_height),
+    };
+
+    BoxNode {
+        box_type: BoxType::Replaced(replaced_box),
+        style,
+        children: vec![],
+        debug_info: None,
+    }
+}
+
+// =============================================================================
+// CSS Extraction
+// =============================================================================
+
+/// Extracts CSS from style tags in the DOM
+fn extract_css(dom: &DomNode) -> Result<css::StyleSheet> {
     let mut css_content = String::new();
 
-    // Recursively find <style> tags
     dom.walk_tree(&mut |node| {
         if let Some(tag) = node.tag_name() {
             if tag == "style" {
-                // Collect text content from children
                 for child in &node.children {
                     if let Some(text) = child.text_content() {
                         css_content.push_str(text);
@@ -301,10 +378,31 @@ fn extract_css(dom: &dom::DomNode) -> Result<css::StyleSheet> {
         }
     });
 
-    // Parse CSS
     if css_content.is_empty() {
         Ok(css::StyleSheet { rules: Vec::new() })
     } else {
         css::parse_stylesheet(&css_content)
     }
+}
+
+// =============================================================================
+// Utilities
+// =============================================================================
+
+/// Calculates the content height from a fragment tree
+fn calculate_content_height(tree: &FragmentTree) -> f32 {
+    calculate_fragment_bottom(&tree.root)
+}
+
+/// Recursively finds the maximum bottom coordinate
+fn calculate_fragment_bottom(fragment: &crate::tree::fragment_tree::FragmentNode) -> f32 {
+    let own_bottom = fragment.bounds.y() + fragment.bounds.height();
+
+    let children_bottom = fragment
+        .children
+        .iter()
+        .map(calculate_fragment_bottom)
+        .fold(own_bottom, f32::max);
+
+    children_bottom
 }
