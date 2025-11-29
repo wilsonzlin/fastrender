@@ -723,7 +723,7 @@ impl Canvas {
     fn build_circle_path(&self, center: Point, radius: f32) -> Option<tiny_skia::Path> {
         // Use the cubic bezier approximation for a circle
         // Magic number for circle approximation: 4/3 * tan(π/8) ≈ 0.5522847498
-        const KAPPA: f32 = 0.5522847498;
+        const KAPPA: f32 = 0.552_284_8;
         let k = radius * KAPPA;
 
         let mut pb = PathBuilder::new();

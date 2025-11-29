@@ -296,6 +296,54 @@ impl BorderRadii {
             .max(self.bottom_right)
             .max(self.bottom_left)
     }
+
+    /// Check if all radii are zero
+    pub fn is_zero(&self) -> bool {
+        !self.has_radius()
+    }
+
+    /// Create zero border radii
+    pub const fn zero() -> Self {
+        Self::ZERO
+    }
+
+    /// Clamps radii to prevent overlap
+    ///
+    /// Per CSS spec, if the sum of any two adjacent radii exceeds
+    /// the box dimension, all radii are scaled down proportionally.
+    pub fn clamped(self, width: f32, height: f32) -> Self {
+        if width <= 0.0 || height <= 0.0 {
+            return Self::ZERO;
+        }
+
+        // Calculate scaling factors to prevent overlap
+        let top_scale = width / (self.top_left + self.top_right).max(width);
+        let right_scale = height / (self.top_right + self.bottom_right).max(height);
+        let bottom_scale = width / (self.bottom_left + self.bottom_right).max(width);
+        let left_scale = height / (self.top_left + self.bottom_left).max(height);
+
+        // Use the minimum scale factor
+        let scale = top_scale.min(right_scale).min(bottom_scale).min(left_scale);
+
+        Self {
+            top_left: (self.top_left * scale).max(0.0),
+            top_right: (self.top_right * scale).max(0.0),
+            bottom_right: (self.bottom_right * scale).max(0.0),
+            bottom_left: (self.bottom_left * scale).max(0.0),
+        }
+    }
+
+    /// Shrinks radii by a given amount (for inset borders)
+    ///
+    /// Used when calculating inner radii for borders.
+    pub fn shrink(self, amount: f32) -> Self {
+        Self {
+            top_left: (self.top_left - amount).max(0.0),
+            top_right: (self.top_right - amount).max(0.0),
+            bottom_right: (self.bottom_right - amount).max(0.0),
+            bottom_left: (self.bottom_left - amount).max(0.0),
+        }
+    }
 }
 
 impl Default for BorderRadii {
