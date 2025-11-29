@@ -37,10 +37,8 @@ pub struct Painter {
 impl Painter {
     /// Creates a new painter with the given dimensions
     pub fn new(width: u32, height: u32, background: Color) -> Result<Self> {
-        let pixmap = Pixmap::new(width, height).ok_or_else(|| {
-            RenderError::InvalidParameters {
-                message: format!("Failed to create pixmap {}x{}", width, height),
-            }
+        let pixmap = Pixmap::new(width, height).ok_or_else(|| RenderError::InvalidParameters {
+            message: format!("Failed to create pixmap {}x{}", width, height),
         })?;
 
         Ok(Self { pixmap, background })
@@ -84,7 +82,9 @@ impl Painter {
             FragmentContent::Inline { .. } => {
                 // Inline fragments may have backgrounds/borders
             }
-            FragmentContent::Text { text, baseline_offset, .. } => {
+            FragmentContent::Text {
+                text, baseline_offset, ..
+            } => {
                 self.paint_text(text, x, y + baseline_offset, height);
             }
             FragmentContent::Line { .. } => {
@@ -131,7 +131,8 @@ impl Painter {
             // Create a small rectangle for each character
             if let Some(rect) = SkiaRect::from_xywh(char_x, y, char_width * 0.8, char_height * 0.7) {
                 let path = PathBuilder::from_rect(rect);
-                self.pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+                self.pixmap
+                    .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
             }
         }
     }
@@ -152,7 +153,8 @@ impl Painter {
 
         if let Some(rect) = SkiaRect::from_xywh(x, y, width, height) {
             let path = PathBuilder::from_rect(rect);
-            self.pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+            self.pixmap
+                .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
 
             // Draw border
             let mut stroke_paint = Paint::default();
@@ -163,7 +165,8 @@ impl Painter {
                 width: 1.0,
                 ..Default::default()
             };
-            self.pixmap.stroke_path(&path, &stroke_paint, &stroke, Transform::identity(), None);
+            self.pixmap
+                .stroke_path(&path, &stroke_paint, &stroke, Transform::identity(), None);
         }
 
         // Would load and render actual image here for ReplacedType::Image
@@ -210,11 +213,7 @@ mod tests {
 
     #[test]
     fn test_paint_with_text() {
-        let text_fragment = FragmentNode::new_text(
-            Rect::from_xywh(10.0, 10.0, 50.0, 16.0),
-            "Hello".to_string(),
-            12.0,
-        );
+        let text_fragment = FragmentNode::new_text(Rect::from_xywh(10.0, 10.0, 50.0, 16.0), "Hello".to_string(), 12.0);
         let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![text_fragment]);
         let tree = FragmentTree::new(root);
 

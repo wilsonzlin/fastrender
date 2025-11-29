@@ -104,13 +104,7 @@ impl Renderer {
         image_output::encode_image(&pixmap, ImageFormat::Png)
     }
 
-    pub fn render_to_png_with_scroll(
-        &self,
-        html: &str,
-        width: u32,
-        height: u32,
-        _scroll_y: u32,
-    ) -> Result<Vec<u8>> {
+    pub fn render_to_png_with_scroll(&self, html: &str, width: u32, height: u32, _scroll_y: u32) -> Result<Vec<u8>> {
         // For now, ignore scroll_y (would need to adjust fragment positions)
         self.render_to_png(html, width, height)
     }
@@ -262,11 +256,7 @@ fn generate_box_node(styled: &StyledNode) -> BoxNode {
     // Check if this is display: none
     if styled.styles.display == Display::None {
         // Create an empty block (will have no effect on layout)
-        return BoxNode::new_block(
-            style,
-            crate::style::display::FormattingContextType::Block,
-            vec![],
-        );
+        return BoxNode::new_block(style, crate::style::display::FormattingContextType::Block, vec![]);
     }
 
     // Check for text node
@@ -295,9 +285,7 @@ fn generate_box_node(styled: &StyledNode) -> BoxNode {
         .unwrap_or(FormattingContextType::Block);
 
     match styled.styles.display {
-        Display::Block | Display::Flex | Display::Grid | Display::Table => {
-            BoxNode::new_block(style, fc_type, children)
-        }
+        Display::Block | Display::Flex | Display::Grid | Display::Table => BoxNode::new_block(style, fc_type, children),
         Display::Inline => BoxNode::new_inline(style, children),
         Display::InlineBlock => BoxNode::new_inline_block(style, fc_type, children),
         Display::None => BoxNode::new_block(style, FormattingContextType::Block, vec![]),
