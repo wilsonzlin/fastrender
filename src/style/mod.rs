@@ -6,6 +6,7 @@
 pub mod color;
 pub mod computed;
 pub mod content;
+pub mod counters;
 pub mod display;
 pub mod float;
 pub mod position;
@@ -18,6 +19,9 @@ pub use computed::{BorderColors, ComputedStyle, ComputedStyleBuilder};
 
 // Re-export content generation types
 pub use content::{parse_content, ContentContext, ContentGenerator, ContentItem, ContentValue, CounterStyle};
+
+// Re-export counter system types
+pub use counters::{CounterManager, CounterProperties, CounterSet, CounterSetItem};
 
 // Re-export display types
 pub use display::{Display, DisplayParseError, FormattingContextType, InnerDisplay, OuterDisplay};
