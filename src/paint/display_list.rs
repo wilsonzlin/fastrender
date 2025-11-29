@@ -447,11 +447,7 @@ impl ImageData {
     /// * `height` - Image height in pixels
     /// * `pixels` - Pixel data in RGBA8 format
     pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Self {
-        debug_assert_eq!(
-            pixels.len(),
-            (width * height * 4) as usize,
-            "Pixel data size mismatch"
-        );
+        debug_assert_eq!(pixels.len(), (width * height * 4) as usize, "Pixel data size mismatch");
         Self {
             width,
             height,

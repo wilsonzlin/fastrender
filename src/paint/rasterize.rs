@@ -34,9 +34,7 @@
 use crate::css::Color;
 use crate::error::{RenderError, Result};
 use crate::geometry::Rect;
-use tiny_skia::{
-    FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform,
-};
+use tiny_skia::{FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
 
 // Re-export BorderRadii from display_list (canonical definition)
 pub use super::display_list::BorderRadii;
@@ -141,13 +139,7 @@ pub struct BoxShadow {
 
 impl BoxShadow {
     /// Creates a new outset box shadow
-    pub const fn new(
-        offset_x: f32,
-        offset_y: f32,
-        blur_radius: f32,
-        spread_radius: f32,
-        color: Color,
-    ) -> Self {
+    pub const fn new(offset_x: f32, offset_y: f32, blur_radius: f32, spread_radius: f32, color: Color) -> Self {
         Self {
             offset_x,
             offset_y,
@@ -159,13 +151,7 @@ impl BoxShadow {
     }
 
     /// Creates a new inset box shadow
-    pub const fn inset(
-        offset_x: f32,
-        offset_y: f32,
-        blur_radius: f32,
-        spread_radius: f32,
-        color: Color,
-    ) -> Self {
+    pub const fn inset(offset_x: f32, offset_y: f32, blur_radius: f32, spread_radius: f32, color: Color) -> Self {
         Self {
             offset_x,
             offset_y,
@@ -224,14 +210,7 @@ fn make_stroke(width: f32) -> Stroke {
 ///
 /// Returns `true` if the rectangle was drawn, `false` if it couldn't be rendered
 /// (e.g., zero dimensions or completely transparent color).
-pub fn fill_rect(
-    pixmap: &mut Pixmap,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    color: Color,
-) -> bool {
+pub fn fill_rect(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, color: Color) -> bool {
     // Skip if completely transparent or zero-sized
     if color.a == 0 || width <= 0.0 || height <= 0.0 {
         return false;
@@ -312,13 +291,7 @@ pub fn stroke_rect(
 ///
 /// Creates a path with circular arcs at each corner. The radii are
 /// automatically clamped to prevent overlap.
-fn build_rounded_rect_path(
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    radii: &BorderRadii,
-) -> Option<Path> {
+fn build_rounded_rect_path(x: f32, y: f32, width: f32, height: f32, radii: &BorderRadii) -> Option<Path> {
     if width <= 0.0 || height <= 0.0 {
         return None;
     }
@@ -349,14 +322,7 @@ fn build_rounded_rect_path(
         // Control point factor for 90-degree arc: 0.5522847498
         let k = 0.552_284_8;
         let r = radii.top_right;
-        pb.cubic_to(
-            right - r * (1.0 - k),
-            y,
-            right,
-            y + r * (1.0 - k),
-            right,
-            y + r,
-        );
+        pb.cubic_to(right - r * (1.0 - k), y, right, y + r * (1.0 - k), right, y + r);
     }
 
     // Right edge to bottom-right corner
@@ -383,14 +349,7 @@ fn build_rounded_rect_path(
     if radii.bottom_left > 0.0 {
         let k = 0.552_284_8;
         let r = radii.bottom_left;
-        pb.cubic_to(
-            x + r * (1.0 - k),
-            bottom,
-            x,
-            bottom - r * (1.0 - k),
-            x,
-            bottom - r,
-        );
+        pb.cubic_to(x + r * (1.0 - k), bottom, x, bottom - r * (1.0 - k), x, bottom - r);
     }
 
     // Left edge to top-left corner
@@ -548,14 +507,7 @@ pub fn render_borders(
 }
 
 /// Renders the top border as a trapezoid
-fn render_top_border(
-    pixmap: &mut Pixmap,
-    x: f32,
-    y: f32,
-    width: f32,
-    widths: &BorderWidths,
-    color: Color,
-) -> bool {
+fn render_top_border(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, widths: &BorderWidths, color: Color) -> bool {
     if widths.top <= 0.0 || color.a == 0 {
         return false;
     }
@@ -658,14 +610,7 @@ fn render_bottom_border(
 }
 
 /// Renders the left border as a trapezoid
-fn render_left_border(
-    pixmap: &mut Pixmap,
-    x: f32,
-    y: f32,
-    height: f32,
-    widths: &BorderWidths,
-    color: Color,
-) -> bool {
+fn render_left_border(pixmap: &mut Pixmap, x: f32, y: f32, height: f32, widths: &BorderWidths, color: Color) -> bool {
     if widths.left <= 0.0 || color.a == 0 {
         return false;
     }
@@ -774,13 +719,7 @@ fn render_rounded_borders(
 }
 
 /// Builds path for top border segment (with rounded corners)
-fn build_top_border_path(
-    x: f32,
-    y: f32,
-    width: f32,
-    widths: &BorderWidths,
-    radii: &BorderRadii,
-) -> Option<Path> {
+fn build_top_border_path(x: f32, y: f32, width: f32, widths: &BorderWidths, radii: &BorderRadii) -> Option<Path> {
     let half_top = widths.top / 2.0;
     let half_left = widths.left / 2.0;
     let half_right = widths.right / 2.0;
@@ -855,13 +794,7 @@ fn build_bottom_border_path(
 }
 
 /// Builds path for left border segment (with rounded corners)
-fn build_left_border_path(
-    x: f32,
-    y: f32,
-    height: f32,
-    widths: &BorderWidths,
-    radii: &BorderRadii,
-) -> Option<Path> {
+fn build_left_border_path(x: f32, y: f32, height: f32, widths: &BorderWidths, radii: &BorderRadii) -> Option<Path> {
     let half_top = widths.top / 2.0;
     let half_left = widths.left / 2.0;
     let half_bottom = widths.bottom / 2.0;
@@ -1143,10 +1076,8 @@ fn render_blurred_inset_shadow(
         let layer_radii = BorderRadii {
             top_left: inner_radii.top_left + (outer_radii.top_left - inner_radii.top_left) * t,
             top_right: inner_radii.top_right + (outer_radii.top_right - inner_radii.top_right) * t,
-            bottom_right: inner_radii.bottom_right
-                + (outer_radii.bottom_right - inner_radii.bottom_right) * t,
-            bottom_left: inner_radii.bottom_left
-                + (outer_radii.bottom_left - inner_radii.bottom_left) * t,
+            bottom_right: inner_radii.bottom_right + (outer_radii.bottom_right - inner_radii.bottom_right) * t,
+            bottom_left: inner_radii.bottom_left + (outer_radii.bottom_left - inner_radii.bottom_left) * t,
         };
 
         // Calculate opacity
@@ -1181,15 +1112,7 @@ fn render_blurred_inset_shadow(
 // ============================================================================
 
 /// Renders a simple line
-pub fn draw_line(
-    pixmap: &mut Pixmap,
-    x1: f32,
-    y1: f32,
-    x2: f32,
-    y2: f32,
-    color: Color,
-    width: f32,
-) -> bool {
+pub fn draw_line(pixmap: &mut Pixmap, x1: f32, y1: f32, x2: f32, y2: f32, color: Color, width: f32) -> bool {
     if color.a == 0 || width <= 0.0 {
         return false;
     }
@@ -1211,14 +1134,7 @@ pub fn draw_line(
 }
 
 /// Fills an ellipse
-pub fn fill_ellipse(
-    pixmap: &mut Pixmap,
-    cx: f32,
-    cy: f32,
-    rx: f32,
-    ry: f32,
-    color: Color,
-) -> bool {
+pub fn fill_ellipse(pixmap: &mut Pixmap, cx: f32, cy: f32, rx: f32, ry: f32, color: Color) -> bool {
     if color.a == 0 || rx <= 0.0 || ry <= 0.0 {
         return false;
     }
@@ -1344,15 +1260,7 @@ mod tests {
     fn test_fill_rounded_rect() {
         let mut pixmap = Pixmap::new(100, 100).unwrap();
         let radii = BorderRadii::uniform(10.0);
-        let result = fill_rounded_rect(
-            &mut pixmap,
-            10.0,
-            10.0,
-            50.0,
-            50.0,
-            &radii,
-            Color::rgb(0, 255, 0),
-        );
+        let result = fill_rounded_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, &radii, Color::rgb(0, 255, 0));
         assert!(result);
     }
 
@@ -1360,15 +1268,7 @@ mod tests {
     fn test_fill_rounded_rect_no_radii() {
         let mut pixmap = Pixmap::new(100, 100).unwrap();
         let radii = BorderRadii::zero();
-        let result = fill_rounded_rect(
-            &mut pixmap,
-            10.0,
-            10.0,
-            50.0,
-            50.0,
-            &radii,
-            Color::rgb(0, 255, 0),
-        );
+        let result = fill_rounded_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, &radii, Color::rgb(0, 255, 0));
         assert!(result);
     }
 

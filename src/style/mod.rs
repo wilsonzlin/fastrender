@@ -32,9 +32,9 @@ pub use position::{Position, PositionParseError};
 
 // Re-export media types
 pub use media::{
-    ColorScheme, ContrastPreference, HoverCapability, MediaContext, MediaFeature, MediaModifier,
-    MediaParseError, MediaQuery, MediaType, Orientation, PointerCapability, ReducedMotion,
-    ReducedTransparency, Resolution, ResolutionUnit,
+    ColorScheme, ContrastPreference, HoverCapability, MediaContext, MediaFeature, MediaModifier, MediaParseError,
+    MediaQuery, MediaType, Orientation, PointerCapability, ReducedMotion, ReducedTransparency, Resolution,
+    ResolutionUnit,
 };
 
 // Re-export CSS variables types

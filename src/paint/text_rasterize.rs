@@ -242,7 +242,7 @@ impl GlyphCache {
 
     /// Gets a cached glyph path or builds and caches it.
     fn get_or_build(
-        &mut self,
+        &self,
         font: &LoadedFont,
         glyph_id: u32,
         font_size: f32,
@@ -410,13 +410,10 @@ impl TextRasterizer {
             let glyph_y = baseline_y + glyph.y_offset;
 
             // Get or build glyph path
-            if let Some(path) = self.cache.get_or_build(
-                &run.font,
-                glyph.glyph_id,
-                run.font_size,
-                glyph_x,
-                glyph_y,
-            ) {
+            if let Some(path) = self
+                .cache
+                .get_or_build(&run.font, glyph.glyph_id, run.font_size, glyph_x, glyph_y)
+            {
                 // Render the path
                 pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
             }
@@ -495,9 +492,9 @@ impl TextRasterizer {
             let glyph_x = cursor_x + glyph.x_offset;
             let glyph_y = baseline_y + glyph.y_offset;
 
-            if let Some(path) =
-                self.cache
-                    .get_or_build(font, glyph.glyph_id, font_size, glyph_x, glyph_y)
+            if let Some(path) = self
+                .cache
+                .get_or_build(font, glyph.glyph_id, font_size, glyph_x, glyph_y)
             {
                 pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
             }
@@ -747,8 +744,7 @@ mod tests {
         pixmap.fill(tiny_skia::Color::WHITE);
 
         let mut rasterizer = TextRasterizer::new();
-        let result =
-            rasterizer.render_glyphs(&glyphs, &font, 16.0, 10.0, 80.0, Color::BLACK, &mut pixmap);
+        let result = rasterizer.render_glyphs(&glyphs, &font, 16.0, 10.0, 80.0, Color::BLACK, &mut pixmap);
 
         assert!(result.is_ok());
     }

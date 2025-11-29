@@ -6,9 +6,9 @@
 
 use fastrender::css::Color;
 use fastrender::paint::{GlyphCache, TextRasterizer};
-use fastrender::text::font_loader::FontContext;
-use fastrender::text::pipeline::{GlyphPosition, ShapedRun, ShapingPipeline, Direction};
 use fastrender::style::computed::ComputedStyle;
+use fastrender::text::font_loader::FontContext;
+use fastrender::text::pipeline::{Direction, GlyphPosition, ShapedRun, ShapingPipeline};
 use std::sync::Arc;
 use tiny_skia::Pixmap;
 
@@ -29,9 +29,10 @@ fn create_test_pixmap(width: u32, height: u32) -> Pixmap {
 
 fn has_changed_pixels(pixmap: &Pixmap) -> bool {
     // Check if any pixel is not white (indicating something was rendered)
-    pixmap.data().chunks(4).any(|pixel| {
-        pixel[0] != 255 || pixel[1] != 255 || pixel[2] != 255
-    })
+    pixmap
+        .data()
+        .chunks(4)
+        .any(|pixel| pixel[0] != 255 || pixel[1] != 255 || pixel[2] != 255)
 }
 
 // ============================================================================
@@ -380,11 +381,7 @@ fn test_render_multiple_runs() {
         }
     };
 
-    let runs = vec![
-        create_run("Hello", 0),
-        create_run(" ", 5),
-        create_run("World", 6),
-    ];
+    let runs = vec![create_run("Hello", 0), create_run(" ", 5), create_run("World", 6)];
 
     let mut pixmap = create_test_pixmap(300, 100);
     let mut rasterizer = TextRasterizer::new();

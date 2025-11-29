@@ -401,9 +401,7 @@ impl MediaFeature {
 
             // Orientation
             "orientation" => {
-                let value = value.ok_or_else(|| {
-                    MediaParseError::MissingValue(name.clone())
-                })?;
+                let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
                 let orientation = Orientation::parse(value)?;
                 Ok(MediaFeature::Orientation(orientation))
             }
@@ -492,62 +490,46 @@ impl MediaFeature {
 
             // Hover capability
             "hover" => {
-                let value = value.ok_or_else(|| {
-                    MediaParseError::MissingValue(name.clone())
-                })?;
+                let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
                 let capability = HoverCapability::parse(value)?;
                 Ok(MediaFeature::Hover(capability))
             }
             "any-hover" => {
-                let value = value.ok_or_else(|| {
-                    MediaParseError::MissingValue(name.clone())
-                })?;
+                let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
                 let capability = HoverCapability::parse(value)?;
                 Ok(MediaFeature::AnyHover(capability))
             }
 
             // Pointer capability
             "pointer" => {
-                let value = value.ok_or_else(|| {
-                    MediaParseError::MissingValue(name.clone())
-                })?;
+                let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
                 let capability = PointerCapability::parse(value)?;
                 Ok(MediaFeature::Pointer(capability))
             }
             "any-pointer" => {
-                let value = value.ok_or_else(|| {
-                    MediaParseError::MissingValue(name.clone())
-                })?;
+                let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
                 let capability = PointerCapability::parse(value)?;
                 Ok(MediaFeature::AnyPointer(capability))
             }
 
             // User preferences
             "prefers-color-scheme" => {
-                let value = value.ok_or_else(|| {
-                    MediaParseError::MissingValue(name.clone())
-                })?;
+                let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
                 let scheme = ColorScheme::parse(value)?;
                 Ok(MediaFeature::PrefersColorScheme(scheme))
             }
             "prefers-reduced-motion" => {
-                let value = value.ok_or_else(|| {
-                    MediaParseError::MissingValue(name.clone())
-                })?;
+                let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
                 let motion = ReducedMotion::parse(value)?;
                 Ok(MediaFeature::PrefersReducedMotion(motion))
             }
             "prefers-contrast" => {
-                let value = value.ok_or_else(|| {
-                    MediaParseError::MissingValue(name.clone())
-                })?;
+                let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
                 let contrast = ContrastPreference::parse(value)?;
                 Ok(MediaFeature::PrefersContrast(contrast))
             }
             "prefers-reduced-transparency" => {
-                let value = value.ok_or_else(|| {
-                    MediaParseError::MissingValue(name.clone())
-                })?;
+                let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
                 let transparency = ReducedTransparency::parse(value)?;
                 Ok(MediaFeature::PrefersReducedTransparency(transparency))
             }
@@ -675,31 +657,35 @@ impl Resolution {
 
         // Try each unit suffix
         if let Some(value_str) = s.strip_suffix("dppx") {
-            let value = value_str.trim().parse::<f32>().map_err(|_| {
-                MediaParseError::InvalidResolution(s.clone())
-            })?;
+            let value = value_str
+                .trim()
+                .parse::<f32>()
+                .map_err(|_| MediaParseError::InvalidResolution(s.clone()))?;
             return Ok(Resolution::new(value, ResolutionUnit::Dppx));
         }
 
         if let Some(value_str) = s.strip_suffix("dpcm") {
-            let value = value_str.trim().parse::<f32>().map_err(|_| {
-                MediaParseError::InvalidResolution(s.clone())
-            })?;
+            let value = value_str
+                .trim()
+                .parse::<f32>()
+                .map_err(|_| MediaParseError::InvalidResolution(s.clone()))?;
             return Ok(Resolution::new(value, ResolutionUnit::Dpcm));
         }
 
         if let Some(value_str) = s.strip_suffix("dpi") {
-            let value = value_str.trim().parse::<f32>().map_err(|_| {
-                MediaParseError::InvalidResolution(s.clone())
-            })?;
+            let value = value_str
+                .trim()
+                .parse::<f32>()
+                .map_err(|_| MediaParseError::InvalidResolution(s.clone()))?;
             return Ok(Resolution::new(value, ResolutionUnit::Dpi));
         }
 
         // Try 'x' as alias for dppx
         if let Some(value_str) = s.strip_suffix('x') {
-            let value = value_str.trim().parse::<f32>().map_err(|_| {
-                MediaParseError::InvalidResolution(s.clone())
-            })?;
+            let value = value_str
+                .trim()
+                .parse::<f32>()
+                .map_err(|_| MediaParseError::InvalidResolution(s.clone()))?;
             return Ok(Resolution::new(value, ResolutionUnit::Dppx));
         }
 
@@ -711,7 +697,7 @@ impl Resolution {
         match self.unit {
             ResolutionUnit::Dppx => self.value,
             ResolutionUnit::Dpi => self.value / 96.0,
-            ResolutionUnit::Dpcm => self.value / 37.79527559, // ~37.8 dpcm = 1 dppx
+            ResolutionUnit::Dpcm => self.value / 37.795_277, // ~37.8 dpcm = 1 dppx
         }
     }
 }
@@ -1276,9 +1262,7 @@ impl MediaContext {
             }
 
             // User preferences
-            MediaFeature::PrefersColorScheme(scheme) => {
-                self.prefers_color_scheme == Some(*scheme)
-            }
+            MediaFeature::PrefersColorScheme(scheme) => self.prefers_color_scheme == Some(*scheme),
             MediaFeature::PrefersReducedMotion(motion) => match motion {
                 ReducedMotion::NoPreference => !self.prefers_reduced_motion,
                 ReducedMotion::Reduce => self.prefers_reduced_motion,
@@ -1316,8 +1300,8 @@ impl MediaContext {
             LengthUnit::Mm => length.value * 96.0 / 25.4,
             LengthUnit::In => length.value * 96.0,
             LengthUnit::Pc => length.value * 16.0,
-            LengthUnit::Ex => length.value * 8.0,  // Approximate: half of em
-            LengthUnit::Ch => length.value * 8.0,  // Approximate: width of '0'
+            LengthUnit::Ex => length.value * 8.0, // Approximate: half of em
+            LengthUnit::Ch => length.value * 8.0, // Approximate: width of '0'
         }
     }
 }
@@ -1596,19 +1580,35 @@ impl fmt::Display for MediaParseError {
                 write!(f, "Invalid hover capability: '{}' (expected 'none' or 'hover')", s)
             }
             MediaParseError::InvalidPointerCapability(s) => {
-                write!(f, "Invalid pointer capability: '{}' (expected 'none', 'coarse', or 'fine')", s)
+                write!(
+                    f,
+                    "Invalid pointer capability: '{}' (expected 'none', 'coarse', or 'fine')",
+                    s
+                )
             }
             MediaParseError::InvalidColorScheme(s) => {
                 write!(f, "Invalid color scheme: '{}' (expected 'light' or 'dark')", s)
             }
             MediaParseError::InvalidReducedMotion(s) => {
-                write!(f, "Invalid reduced motion: '{}' (expected 'no-preference' or 'reduce')", s)
+                write!(
+                    f,
+                    "Invalid reduced motion: '{}' (expected 'no-preference' or 'reduce')",
+                    s
+                )
             }
             MediaParseError::InvalidContrastPreference(s) => {
-                write!(f, "Invalid contrast preference: '{}' (expected 'no-preference', 'more', 'less', or 'custom')", s)
+                write!(
+                    f,
+                    "Invalid contrast preference: '{}' (expected 'no-preference', 'more', 'less', or 'custom')",
+                    s
+                )
             }
             MediaParseError::InvalidReducedTransparency(s) => {
-                write!(f, "Invalid reduced transparency: '{}' (expected 'no-preference' or 'reduce')", s)
+                write!(
+                    f,
+                    "Invalid reduced transparency: '{}' (expected 'no-preference' or 'reduce')",
+                    s
+                )
             }
             MediaParseError::EmptyQuery => {
                 write!(f, "Empty media query")

@@ -196,10 +196,7 @@ impl DisplayListOptimizer {
 
     /// Remove fully transparent items
     fn remove_transparent_items(&self, items: Vec<DisplayItem>) -> Vec<DisplayItem> {
-        items
-            .into_iter()
-            .filter(|item| !Self::is_transparent(item))
-            .collect()
+        items.into_iter().filter(|item| !Self::is_transparent(item)).collect()
     }
 
     /// Check if an item is fully transparent
@@ -303,12 +300,9 @@ impl DisplayListOptimizer {
                 DisplayItem::FillRect(i) => viewport.intersects(i.rect),
                 DisplayItem::StrokeRect(i) => viewport.intersects(i.rect.inflate(i.width / 2.0)),
                 DisplayItem::FillRoundedRect(i) => viewport.intersects(i.rect),
-                DisplayItem::StrokeRoundedRect(i) => {
-                    viewport.intersects(i.rect.inflate(i.width / 2.0))
-                }
+                DisplayItem::StrokeRoundedRect(i) => viewport.intersects(i.rect.inflate(i.width / 2.0)),
                 DisplayItem::Text(item) => {
-                    let bounds =
-                        Rect::from_xywh(item.origin.x, item.origin.y, item.advance_width, item.font_size);
+                    let bounds = Rect::from_xywh(item.origin.x, item.origin.y, item.advance_width, item.font_size);
                     viewport.intersects(bounds)
                 }
                 DisplayItem::Image(i) => viewport.intersects(i.dest_rect),
