@@ -82,9 +82,9 @@ pub use engine::{LayoutConfig, LayoutEngine, LayoutStats};
 pub use float_context::{FloatContext, FloatInfo, FloatSide};
 pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 pub use inline::{
-    BaselineAligner, GlyphInfo, InlineBoxMetrics, InlineItem, LineMetrics, PositionedInlineBox, TextRun,
-    TextRunBuilder, VerticalAlign, InlineFloatIntegration, InlineFloatIntegrationMut, LineSpace,
-    LineSpaceIterator, LineSpaceOptions, PlacedInlineFloat, line_spaces,
+    line_spaces, BaselineAligner, GlyphInfo, InlineBoxMetrics, InlineFloatIntegration, InlineFloatIntegrationMut,
+    InlineItem, LineMetrics, LineSpace, LineSpaceIterator, LineSpaceOptions, PlacedInlineFloat, PositionedInlineBox,
+    TextRun, TextRunBuilder, VerticalAlign,
 };
 
 // W3.T06 - Table layout algorithm
@@ -95,4 +95,3 @@ pub mod table;
 // pub mod flex;         // W3.T08
 // pub mod grid;         // W3.T09
 // pub mod positioned;   // W3.T12
-
