@@ -6,44 +6,49 @@
 //!
 //! - **Display List**: Intermediate representation of paint commands
 //! - **Display List Builder**: Convert fragment tree to display list
+//! - **Stacking Contexts**: CSS stacking context tree for paint order
 //! - **Painting**: Execute paint commands via rasterization
 //!
 //! # Architecture
 //!
-//! The paint system uses a two-phase approach:
+//! The paint system uses a multi-phase approach:
 //!
 //! ```text
-//! Fragment Tree → Display List Builder → Display List → Rasterizer → Pixels
+//! Fragment Tree → Stacking Tree → Display List → Rasterizer → Pixels
 //! ```
 //!
-//! 1. **Display List Building**: Convert fragment tree to flat list of paint commands
-//! 2. **Rasterization**: Execute paint commands to produce pixels
+//! 1. **Stacking Tree Building**: Build stacking context hierarchy from fragment tree
+//! 2. **Display List Building**: Convert stacking tree to flat list of paint commands
+//! 3. **Rasterization**: Execute paint commands to produce pixels
 //!
 //! The display list provides:
 //! - Viewport culling (skip items outside visible area)
 //! - Effect stack management (opacity, transforms, clips)
 //! - Optimization opportunities (batching, merging)
 //!
-//! # Painting Order
+//! # Painting Order (CSS 2.1 Appendix E)
 //!
-//! CSS defines a specific painting order (CSS 2.1 Appendix E):
+//! Within each stacking context, elements are painted in this order (back to front):
 //!
-//! 1. Background colors and images
-//! 2. Borders
-//! 3. Child stacking contexts (negative z-index)
-//! 4. In-flow non-positioned blocks
-//! 5. Floats
-//! 6. In-flow inline content
-//! 7. Child stacking contexts (z-index: 0 and auto)
-//! 8. Positioned descendants (positive z-index)
+//! 1. **Layer 1**: Background and borders of the stacking context root
+//! 2. **Layer 2**: Child stacking contexts with negative z-index (most negative first)
+//! 3. **Layer 3**: In-flow, non-inline-level descendants (block-level, tree order)
+//! 4. **Layer 4**: Non-positioned floats (tree order)
+//! 5. **Layer 5**: In-flow, inline-level descendants (tree order)
+//! 6. **Layer 6**: Positioned descendants with z-index 0 or auto (tree order)
+//! 7. **Layer 7**: Child stacking contexts with positive z-index (least positive first)
 //!
 //! # Example
 //!
 //! ```rust,ignore
-//! use fastrender::paint::{DisplayListBuilder, DisplayList};
+//! use fastrender::paint::{DisplayListBuilder, DisplayList, build_stacking_tree};
 //!
+//! // Build stacking tree from fragment tree
+//! let stacking_tree = build_stacking_tree(&fragment_tree.root, None, true);
+//!
+//! // Build display list from stacking tree
 //! let builder = DisplayListBuilder::new();
-//! let display_list = builder.build(&fragment_tree);
+//! let display_list = builder.build(&stacking_tree);
 //! ```
 
 pub mod display_list;
@@ -53,10 +58,10 @@ pub mod stacking;
 
 // Re-export display list types (W5.T01)
 pub use display_list::{
-    BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem,
-    FillRoundedRectItem, FontId, GlyphInstance, GradientStop, ImageData, ImageItem, LinearGradientItem, OpacityItem,
-    RadialGradientItem, StackingContextItem, StrokeRectItem, StrokeRoundedRectItem, TextItem, Transform2D,
-    TransformItem,
+    BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList,
+    FillRectItem, FillRoundedRectItem, FontId, GlyphInstance, GradientStop, ImageData, ImageItem,
+    LinearGradientItem, OpacityItem, RadialGradientItem, StackingContextItem, StrokeRectItem,
+    StrokeRoundedRectItem, TextItem, Transform2D, TransformItem,
 };
 
 // Re-export display list builder (W5.T02)
@@ -64,6 +69,8 @@ pub use display_list_builder::DisplayListBuilder;
 
 // Re-export painter
 pub use painter::{paint_tree, Painter};
+
+// Re-export stacking context types (W5.T03/T04)
 pub use stacking::{
     build_stacking_tree, build_stacking_tree_with_styles, creates_stacking_context,
     get_stacking_context_reason, PaintOrderIterator, StackingContext, StackingContextReason,
