@@ -1200,8 +1200,8 @@ mod tests {
 
         let id = db.query("sans-serif", FontWeight::NORMAL, FontStyle::Normal);
         // Should find at least one sans-serif font on most systems
-        if id.is_some() {
-            let font = db.load_font(id.unwrap());
+        if let Some(id) = id {
+            let font = db.load_font(id);
             assert!(font.is_some());
             let font = font.unwrap();
             assert!(!font.data.is_empty());
@@ -1216,8 +1216,8 @@ mod tests {
         }
 
         let id = db.query("serif", FontWeight::NORMAL, FontStyle::Normal);
-        if id.is_some() {
-            let font = db.load_font(id.unwrap());
+        if let Some(id) = id {
+            let font = db.load_font(id);
             assert!(font.is_some());
         }
     }
@@ -1230,8 +1230,8 @@ mod tests {
         }
 
         let id = db.query("monospace", FontWeight::NORMAL, FontStyle::Normal);
-        if id.is_some() {
-            let font = db.load_font(id.unwrap());
+        if let Some(id) = id {
+            let font = db.load_font(id);
             assert!(font.is_some());
         }
     }
@@ -1251,8 +1251,8 @@ mod tests {
 
         let id = db.resolve_family_list(&families, FontWeight::NORMAL, FontStyle::Normal);
         // Should fall back to sans-serif
-        if id.is_some() {
-            let font = db.load_font(id.unwrap());
+        if let Some(id) = id {
+            let font = db.load_font(id);
             assert!(font.is_some());
         }
     }
@@ -1343,8 +1343,8 @@ mod tests {
         for weight in &weights {
             let id = db.query("sans-serif", *weight, FontStyle::Normal);
             // Should find something for each weight (may be same font with fuzzy matching)
-            if id.is_some() {
-                let font = db.load_font(id.unwrap());
+            if let Some(id) = id {
+                let font = db.load_font(id);
                 assert!(font.is_some());
             }
         }
@@ -1362,8 +1362,8 @@ mod tests {
         for style in &styles {
             let id = db.query("sans-serif", FontWeight::NORMAL, *style);
             // Should find something for each style (may use fallback)
-            if id.is_some() {
-                let font = db.load_font(id.unwrap());
+            if let Some(id) = id {
+                let font = db.load_font(id);
                 assert!(font.is_some());
             }
         }

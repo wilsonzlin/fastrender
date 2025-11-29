@@ -462,8 +462,7 @@ mod tests {
         let families = vec!["NonExistentFont123456".to_string(), "sans-serif".to_string()];
 
         let font = ctx.get_font(&families, 400, false, false);
-        if font.is_some() {
-            let font = font.unwrap();
+        if let Some(font) = font {
             assert!(!font.data.is_empty());
         }
     }
@@ -540,8 +539,7 @@ mod tests {
 
         let families = vec!["sans-serif".to_string()];
         let font = ctx.get_font(&families, 700, false, false);
-        if font.is_some() {
-            let font = font.unwrap();
+        if let Some(font) = font {
             // Weight may not be exactly 700 due to fuzzy matching
             assert!(font.weight.value() >= 400);
         }

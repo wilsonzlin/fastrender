@@ -441,19 +441,6 @@ impl Default for ComputedStyles {
 }
 
 pub fn apply_styles(dom: &DomNode, stylesheet: &StyleSheet) -> StyledNode {
-    // Debug: check if we have .toc rules with grid-column
-    let mut _found_toc_grid = false;
-    for rule in &stylesheet.rules {
-        let selector_str = format!("{:?}", rule.selectors);
-        if selector_str.contains("toc") && selector_str.contains("article") {
-            for decl in &rule.declarations {
-                if decl.property == "grid-column" {
-                    _found_toc_grid = true;
-                }
-            }
-        }
-    }
-
     // Parse user-agent stylesheet
     let ua_stylesheet =
         css::parse_stylesheet(USER_AGENT_STYLESHEET).unwrap_or_else(|_| StyleSheet { rules: Vec::new() });
@@ -500,7 +487,6 @@ fn apply_styles_internal(
     finalize_grid_placement(&mut styles);
 
     // Recursively style children (passing current node in ancestors)
-    let _current_font_size = styles.font_size;
     let mut new_ancestors = ancestors.clone();
     new_ancestors.push(node);
     let children = node
@@ -546,11 +532,8 @@ fn apply_styles_internal_with_ancestors(
 
     // Parse legacy HTML presentation attributes (bgcolor, width, height, etc.)
     if let Some(bgcolor) = node.get_attribute("bgcolor") {
-        eprintln!("DEBUG: Found bgcolor attribute: {}", bgcolor);
-        // Parse color from attribute (can be hex like #ff6600 or named color)
         if let Some(color) = parse_color_attribute(&bgcolor) {
             styles.background_color = color;
-            eprintln!("DEBUG: Applied bgcolor {} -> color {:?}", bgcolor, color);
         }
     }
 
@@ -679,7 +662,6 @@ fn apply_styles_internal_with_ancestors(
     }
 
     // Recursively style children (passing current node in ancestors)
-    let _current_font_size = styles.font_size;
     let mut new_ancestors = ancestors.to_vec();
     new_ancestors.push(node);
     let mut children: Vec<StyledNode> = node
@@ -790,8 +772,7 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
 
                     // Force spacer rows to be minimal
                     if node.has_class("spacer") {
-                        styles.height = Some(Length::px(2.0)); // Much smaller than 5px
-                        eprintln!("DEBUG: Setting spacer row height to 2px");
+                        styles.height = Some(Length::px(2.0));
                     }
                 }
                 "td" | "th" => {
@@ -867,10 +848,9 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
                 g: 0,
                 b: 0,
                 a: 255,
-            }; // Black text
-            styles.font_size = 10.0; // Small like HN
-            styles.text_align = TextAlign::Right; // Right-align like HN
-            eprintln!("DEBUG: Applied rank styling to rank element");
+            };
+            styles.font_size = 10.0;
+            styles.text_align = TextAlign::Right;
         }
 
         // CRITICAL FIX: Ensure rank column (title cell with rank content) has proper width
@@ -879,9 +859,8 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
             if node.get_attribute("align").as_deref() == Some("right")
                 && node.get_attribute("valign").as_deref() == Some("top")
             {
-                styles.width = Some(Length::px(30.0)); // Wide enough for rank numbers
+                styles.width = Some(Length::px(30.0));
                 styles.text_align = TextAlign::Right;
-                eprintln!("DEBUG: Applied rank column width to title cell with right alignment");
             }
         }
 
@@ -893,10 +872,8 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
                 g: 255,
                 b: 255,
                 a: 255,
-            }; // White text for orange header
-            styles.font_size = 10.0; // Small navigation font
-                                     // Remove forced width/height so it remains inline
-            eprintln!("DEBUG: Applied pagetop navigation styling as inline");
+            };
+            styles.font_size = 10.0;
         }
 
         if node.has_class("hnname") {
@@ -906,11 +883,9 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
                 g: 255,
                 b: 255,
                 a: 255,
-            }; // White text
+            };
             styles.font_weight = crate::style::FontWeight::Bold;
             styles.font_size = 10.0;
-            // Remove forced dimensions so it remains inline
-            eprintln!("DEBUG: Applied hnname styling as inline");
         }
 
         // Style navigation links
@@ -933,9 +908,8 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
                             g: 255,
                             b: 255,
                             a: 255,
-                        }; // White text
+                        };
                         styles.font_size = 10.0;
-                        eprintln!("DEBUG: Applied navigation link styling for href: {}", href);
                     }
                 }
             }
@@ -1956,10 +1930,6 @@ fn parse_grid_tracks_with_names(tracks_str: &str) -> (Vec<GridTrack>, HashMap<St
     if !current_token.trim().is_empty() {
         process_track_token(&current_token, &mut tracks);
     }
-
-    // Add final line position (after all tracks)
-    // This allows "screen-end" etc. to work
-    let _final_line = tracks.len();
 
     (tracks, named_lines)
 }
