@@ -6,6 +6,7 @@
 //!
 //! - **Display List**: Intermediate representation of paint commands
 //! - **Display List Builder**: Convert fragment tree to display list
+//! - **Display List Optimization**: Culling, merging, and other optimizations
 //! - **Stacking Contexts**: CSS stacking context tree for paint order
 //! - **Painting**: Execute paint commands via rasterization
 //!
@@ -14,12 +15,13 @@
 //! The paint system uses a multi-phase approach:
 //!
 //! ```text
-//! Fragment Tree → Stacking Tree → Display List → Rasterizer → Pixels
+//! Fragment Tree → Stacking Tree → Display List → Optimize → Rasterizer → Pixels
 //! ```
 //!
 //! 1. **Stacking Tree Building**: Build stacking context hierarchy from fragment tree
 //! 2. **Display List Building**: Convert stacking tree to flat list of paint commands
-//! 3. **Rasterization**: Execute paint commands to produce pixels
+//! 3. **Optimization**: Cull offscreen items, merge adjacent fills, remove no-ops
+//! 4. **Rasterization**: Execute paint commands to produce pixels
 //!
 //! The display list provides:
 //! - Viewport culling (skip items outside visible area)
@@ -42,6 +44,7 @@
 //!
 //! ```rust,ignore
 //! use fastrender::paint::{DisplayListBuilder, DisplayList, build_stacking_tree};
+//! use fastrender::paint::{DisplayListOptimizer, OptimizationConfig};
 //!
 //! // Build stacking tree from fragment tree
 //! let stacking_tree = build_stacking_tree(&fragment_tree.root, None, true);
@@ -49,10 +52,16 @@
 //! // Build display list from stacking tree
 //! let builder = DisplayListBuilder::new();
 //! let display_list = builder.build(&stacking_tree);
+//!
+//! // Optimize display list
+//! let optimizer = DisplayListOptimizer::new();
+//! let viewport = Rect::from_xywh(0.0, 0.0, 800.0, 600.0);
+//! let (optimized, stats) = optimizer.optimize(display_list, viewport);
 //! ```
 
 pub mod display_list;
 pub mod display_list_builder;
+pub mod optimize;
 pub mod painter;
 pub mod stacking;
 
@@ -66,6 +75,11 @@ pub use display_list::{
 
 // Re-export display list builder (W5.T02)
 pub use display_list_builder::DisplayListBuilder;
+
+// Re-export optimizer types (W5.T05)
+pub use optimize::{
+    optimize, optimize_with_stats, DisplayListOptimizer, OptimizationConfig, OptimizationStats,
+};
 
 // Re-export painter
 pub use painter::{paint_tree, Painter};
