@@ -5,12 +5,17 @@
 //! # Responsibilities
 //!
 //! - **Display List**: Intermediate representation of paint commands
-//! - **Painting**: Draw backgrounds, borders, text, images
-//! - **Rasterization**: Convert vector graphics to pixels using tiny-skia
+//! - **Display List Builder**: Convert fragment tree to display list
+//! - **Painting**: Execute paint commands via rasterization
 //!
 //! # Architecture
 //!
 //! The paint system uses a two-phase approach:
+//!
+//! ```text
+//! Fragment Tree → Display List Builder → Display List → Rasterizer → Pixels
+//! ```
+//!
 //! 1. **Display List Building**: Convert fragment tree to flat list of paint commands
 //! 2. **Rasterization**: Execute paint commands to produce pixels
 //!
@@ -35,21 +40,26 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use fastrender::paint::{Painter, paint_tree};
-//! use fastrender::css::Color;
+//! use fastrender::paint::{DisplayListBuilder, DisplayList};
 //!
-//! let pixmap = paint_tree(&fragment_tree, 800, 600, Color::WHITE)?;
+//! let builder = DisplayListBuilder::new();
+//! let display_list = builder.build(&fragment_tree);
 //! ```
 
 pub mod display_list;
+pub mod display_list_builder;
 pub mod painter;
 
-// Re-export display list types
+// Re-export display list types (W5.T01)
 pub use display_list::{
-    BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList,
-    FillRectItem, FillRoundedRectItem, FontId, GlyphInstance, GradientStop, ImageData, ImageItem,
-    LinearGradientItem, OpacityItem, RadialGradientItem, StackingContextItem, StrokeRectItem,
-    StrokeRoundedRectItem, TextItem, Transform2D, TransformItem,
+    BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem,
+    FillRoundedRectItem, FontId, GlyphInstance, GradientStop, ImageData, ImageItem, LinearGradientItem, OpacityItem,
+    RadialGradientItem, StackingContextItem, StrokeRectItem, StrokeRoundedRectItem, TextItem, Transform2D,
+    TransformItem,
 };
 
+// Re-export display list builder (W5.T02)
+pub use display_list_builder::DisplayListBuilder;
+
+// Re-export painter
 pub use painter::{paint_tree, Painter};
