@@ -4,15 +4,20 @@
 //!
 //! # Responsibilities
 //!
+//! - **Display List**: Intermediate representation of paint commands
 //! - **Painting**: Draw backgrounds, borders, text, images
 //! - **Rasterization**: Convert vector graphics to pixels using tiny-skia
 //!
 //! # Architecture
 //!
-//! The painter walks the fragment tree depth-first, painting each
-//! fragment's content. Future work will add:
-//! - Display list building for optimization
-//! - Stacking context sorting for z-index
+//! The paint system uses a two-phase approach:
+//! 1. **Display List Building**: Convert fragment tree to flat list of paint commands
+//! 2. **Rasterization**: Execute paint commands to produce pixels
+//!
+//! The display list provides:
+//! - Viewport culling (skip items outside visible area)
+//! - Effect stack management (opacity, transforms, clips)
+//! - Optimization opportunities (batching, merging)
 //!
 //! # Painting Order
 //!
@@ -36,6 +41,15 @@
 //! let pixmap = paint_tree(&fragment_tree, 800, 600, Color::WHITE)?;
 //! ```
 
+pub mod display_list;
 pub mod painter;
+
+// Re-export display list types
+pub use display_list::{
+    BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList,
+    FillRectItem, FillRoundedRectItem, FontId, GlyphInstance, GradientStop, ImageData, ImageItem,
+    LinearGradientItem, OpacityItem, RadialGradientItem, StackingContextItem, StrokeRectItem,
+    StrokeRoundedRectItem, TextItem, Transform2D, TransformItem,
+};
 
 pub use painter::{paint_tree, Painter};
