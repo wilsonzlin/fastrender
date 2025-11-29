@@ -5,6 +5,7 @@
 
 pub mod color;
 pub mod computed;
+pub mod counters;
 pub mod display;
 pub mod float;
 pub mod position;
@@ -23,6 +24,9 @@ pub use float::{Clear, ClearParseError, Float, FloatParseError};
 
 // Re-export position types
 pub use position::{Position, PositionParseError};
+
+// Re-export counter types
+pub use counters::{CounterIncrement, CounterReset, CounterSet, CounterStyle, CounterSystem};
 
 // Legacy CSS types (will be phased out)
 use crate::css::{
