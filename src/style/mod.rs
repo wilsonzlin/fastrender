@@ -10,6 +10,7 @@ pub mod display;
 pub mod float;
 pub mod media;
 pub mod position;
+pub mod var_resolution;
 pub mod variables;
 
 // Re-export color types
@@ -1017,119 +1018,16 @@ fn inherit_styles(styles: &mut ComputedStyles, parent: &ComputedStyles) {
     styles.grid_row_names = parent.grid_row_names.clone();
 }
 
-/// Resolve var() references in a PropertyValue (with recursion limit)
+/// Resolve var() references in a PropertyValue
+///
+/// This is a thin wrapper around the var_resolution module's resolve_var function.
+/// It handles CSS custom property (variable) substitution including:
+/// - Simple var(--name) references
+/// - Fallback values: var(--name, fallback)
+/// - Nested var() references
+/// - var() embedded in other CSS functions
 fn resolve_var(value: &PropertyValue, custom_properties: &HashMap<String, String>) -> PropertyValue {
-    resolve_var_with_depth(value, custom_properties, 0)
-}
-
-fn resolve_var_with_depth(
-    value: &PropertyValue,
-    custom_properties: &HashMap<String, String>,
-    depth: usize,
-) -> PropertyValue {
-    const MAX_DEPTH: usize = 10;
-
-    if depth >= MAX_DEPTH {
-        // Too deep - return as-is to prevent stack overflow
-        return value.clone();
-    }
-
-    match value {
-        PropertyValue::Keyword(kw) => {
-            // Check if it's a simple var() reference
-            if kw.starts_with("var(") && kw.ends_with(')') && !kw[4..kw.len() - 1].contains("var(") {
-                let var_name = &kw[4..kw.len() - 1]; // Extract variable name from var(...)
-
-                // Handle fallback values: var(--name, fallback)
-                let (var_name, fallback) = if let Some(comma_pos) = var_name.find(',') {
-                    (var_name[..comma_pos].trim(), Some(var_name[comma_pos + 1..].trim()))
-                } else {
-                    (var_name.trim(), None)
-                };
-
-                // Look up the variable
-                if let Some(resolved) = custom_properties.get(var_name) {
-                    // Try to parse the resolved value properly
-                    if let Some(mut parsed) = parse_resolved_value(resolved) {
-                        // Recursively resolve in case the value contains another var()
-                        parsed = resolve_var_with_depth(&parsed, custom_properties, depth + 1);
-                        return parsed;
-                    }
-                    // If parsing fails, return as keyword and try to resolve recursively
-                    let as_keyword = PropertyValue::Keyword(resolved.clone());
-                    return resolve_var_with_depth(&as_keyword, custom_properties, depth + 1);
-                } else if let Some(fb) = fallback {
-                    // Use fallback and resolve recursively
-                    if let Some(mut parsed) = parse_resolved_value(fb) {
-                        parsed = resolve_var_with_depth(&parsed, custom_properties, depth + 1);
-                        return parsed;
-                    }
-                    let as_keyword = PropertyValue::Keyword(fb.to_string());
-                    return resolve_var_with_depth(&as_keyword, custom_properties, depth + 1);
-                }
-            } else if kw.contains("var(") {
-                // String contains var() references - do string replacement
-                let mut resolved_str = kw.clone();
-
-                // Find and replace all var() occurrences
-                while let Some(start) = resolved_str.find("var(") {
-                    // Find the matching closing paren
-                    let mut depth = 0;
-                    let mut end = start + 4;
-                    for (i, ch) in resolved_str[start + 4..].chars().enumerate() {
-                        match ch {
-                            '(' => depth += 1,
-                            ')' => {
-                                if depth == 0 {
-                                    end = start + 4 + i;
-                                    break;
-                                }
-                                depth -= 1;
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    // Extract the var call to avoid borrow issues
-                    let var_call = resolved_str[start..=end].to_string();
-                    let var_name_full = var_call[4..var_call.len() - 1].to_string();
-
-                    // Handle fallback
-                    let (var_name, fallback) = if let Some(comma_pos) = var_name_full.find(',') {
-                        (
-                            var_name_full[..comma_pos].trim().to_string(),
-                            Some(var_name_full[comma_pos + 1..].trim().to_string()),
-                        )
-                    } else {
-                        (var_name_full.trim().to_string(), None)
-                    };
-
-                    // Look up and replace
-                    if let Some(resolved) = custom_properties.get(&var_name) {
-                        resolved_str.replace_range(start..=end, resolved);
-                    } else if let Some(ref fb) = fallback {
-                        resolved_str.replace_range(start..=end, fb);
-                    } else {
-                        // Can't resolve - skip this one
-                        break;
-                    }
-                }
-
-                // Return the resolved string as a keyword and recursively resolve
-                let as_keyword = PropertyValue::Keyword(resolved_str);
-                return resolve_var_with_depth(&as_keyword, custom_properties, depth + 1);
-            }
-            value.clone()
-        }
-        _ => value.clone(),
-    }
-}
-
-/// Parse a resolved CSS variable value
-fn parse_resolved_value(value: &str) -> Option<PropertyValue> {
-    use crate::css::parse_property_value;
-    // Try to parse as a proper CSS value
-    parse_property_value("", value)
+    var_resolution::resolve_var(value, custom_properties)
 }
 
 fn find_matching_rules_with_ancestors(
