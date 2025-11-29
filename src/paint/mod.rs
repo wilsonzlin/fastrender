@@ -49,6 +49,7 @@
 pub mod display_list;
 pub mod display_list_builder;
 pub mod painter;
+pub mod stacking;
 
 // Re-export display list types (W5.T01)
 pub use display_list::{
@@ -63,3 +64,8 @@ pub use display_list_builder::DisplayListBuilder;
 
 // Re-export painter
 pub use painter::{paint_tree, Painter};
+pub use stacking::{
+    build_stacking_tree, build_stacking_tree_with_styles, creates_stacking_context,
+    get_stacking_context_reason, PaintOrderIterator, StackingContext, StackingContextReason,
+    StyledFragmentRef,
+};
