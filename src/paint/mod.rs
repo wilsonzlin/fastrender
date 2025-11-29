@@ -37,5 +37,11 @@
 //! ```
 
 pub mod painter;
+pub mod stacking;
 
 pub use painter::{paint_tree, Painter};
+pub use stacking::{
+    build_stacking_tree, build_stacking_tree_with_styles, creates_stacking_context,
+    get_stacking_context_reason, PaintOrderIterator, StackingContext, StackingContextReason,
+    StyledFragmentRef,
+};
