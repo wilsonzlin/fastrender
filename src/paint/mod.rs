@@ -9,6 +9,8 @@
 //! - **Display List Optimization**: Culling, merging, and other optimizations
 //! - **Stacking Contexts**: CSS stacking context tree for paint order
 //! - **Canvas**: Low-level 2D graphics wrapper for tiny-skia
+//! - **Path Rendering**: Shape and border rasterization
+//! - **Text Rasterization**: Glyph outline to pixel conversion
 //! - **Painting**: Execute paint commands via rasterization
 //!
 //! # Architecture
@@ -23,6 +25,12 @@
 //! 2. **Display List Building**: Convert stacking tree to flat list of paint commands
 //! 3. **Optimization**: Cull offscreen items, merge adjacent fills, remove no-ops
 //! 4. **Rasterization**: Execute paint commands via Canvas to produce pixels
+//!
+//! Text rendering follows this pipeline:
+//! 1. Get shaped text with glyph positions (from text shaping pipeline)
+//! 2. Extract glyph outlines from fonts using ttf-parser
+//! 3. Convert outlines to tiny-skia paths
+//! 4. Render paths with anti-aliasing
 //!
 //! The display list provides:
 //! - Viewport culling (skip items outside visible area)
@@ -53,7 +61,9 @@
 //! - `display_list_builder` - Build display list from stacking tree
 //! - `optimize` - Display list optimization passes
 //! - `painter` - Main painting interface
+//! - `rasterize` - Path and shape rasterization
 //! - `stacking` - Stacking context tree for paint order
+//! - `text_rasterize` - Text glyph rasterization
 //!
 //! # Example
 //!
@@ -87,6 +97,7 @@ pub mod optimize;
 pub mod painter;
 pub mod rasterize;
 pub mod stacking;
+pub mod text_rasterize;
 
 // Re-export canvas (W5.T06)
 pub use canvas::Canvas;
@@ -125,3 +136,6 @@ pub use rasterize::{
     render_borders, render_box_shadow, stroke_rect, stroke_rounded_rect, BorderColors,
     BorderWidths, BoxShadow,
 };
+
+// Re-export text rasterize types (W5.T08)
+pub use text_rasterize::{GlyphCache, TextRasterizer};
