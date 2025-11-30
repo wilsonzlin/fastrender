@@ -9,21 +9,28 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Minimum supported Rust version
+  MSRV: "1.70"
 
 jobs:
   # ===========================================================================
-  # Test Job - Run all tests
+  # Test Job - Run all tests across multiple platforms and Rust versions
   # ===========================================================================
   test:
-    name: Test
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.os }} / ${{ matrix.rust }})
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        rust:
-          - stable
-          - beta
-          # Uncomment to test on nightly
-          # - nightly
+        os: [ubuntu-latest]
+        rust: [stable, beta]
+        include:
+          # Test on macOS with stable
+          - os: macos-latest
+            rust: stable
+          # Test on Windows with stable
+          - os: windows-latest
+            rust: stable
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -56,6 +63,41 @@ jobs:
 
       - name: Run doc tests
         run: cargo test --doc --all-features --verbose
+
+  # ===========================================================================
+  # MSRV Job - Verify minimum supported Rust version
+  # ===========================================================================
+  msrv:
+    name: MSRV (${{ env.MSRV }})
+    runs-on: ubuntu-latest
+    env:
+      MSRV: "1.70"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install MSRV toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.MSRV }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-msrv-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-msrv-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build with MSRV
+        run: cargo build --all-features
+
+      - name: Run tests with MSRV
+        run: cargo test --all-features
 
   # ===========================================================================
   # Clippy Job - Linting
@@ -167,26 +209,103 @@ jobs:
         run: cargo audit
 
   # ===========================================================================
-  # Coverage Job (Optional) - Measure test coverage
+  # Coverage Job - Measure test coverage
   # ===========================================================================
-  # Uncomment when ready to track coverage
-  # coverage:
-  #   name: Coverage
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #
-  #     - name: Install Rust toolchain
-  #       uses: dtolnay/rust-toolchain@stable
-  #
-  #     - name: Install tarpaulin
-  #       run: cargo install cargo-tarpaulin
-  #
-  #     - name: Generate coverage
-  #       run: cargo tarpaulin --out Xml --all-features
-  #
-  #     - name: Upload coverage to Codecov
-  #       uses: codecov/codecov-action@v3
-  #       with:
-  #         files: ./cobertura.xml
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-coverage-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-coverage-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate coverage
+        run: cargo llvm-cov --all-features --lcov --output-path lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  # ===========================================================================
+  # Benchmark Job - Run performance benchmarks (on main branch only)
+  # ===========================================================================
+  benchmark:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-bench-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-bench-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run benchmarks
+        run: cargo bench --no-run
+
+      - name: Run benchmarks and save baseline
+        run: cargo bench -- --noplot --save-baseline main 2>&1 | tee benchmark-results.txt
+        continue-on-error: true
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            benchmark-results.txt
+            target/criterion
+
+  # ===========================================================================
+  # CI Status - Final check that all jobs passed
+  # ===========================================================================
+  ci-status:
+    name: CI Status
+    runs-on: ubuntu-latest
+    needs: [test, msrv, clippy, format, docs, audit]
+    if: always()
+    steps:
+      - name: Check CI Status
+        run: |
+          if [ "${{ needs.test.result }}" != "success" ] || \
+             [ "${{ needs.msrv.result }}" != "success" ] || \
+             [ "${{ needs.clippy.result }}" != "success" ] || \
+             [ "${{ needs.format.result }}" != "success" ] || \
+             [ "${{ needs.docs.result }}" != "success" ] || \
+             [ "${{ needs.audit.result }}" != "success" ]; then
+            echo "One or more CI jobs failed"
+            exit 1
+          fi
+          echo "All CI jobs passed!"
