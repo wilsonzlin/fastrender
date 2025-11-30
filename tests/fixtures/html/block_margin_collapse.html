@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Block Layout - Margin Collapsing</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+        }
+        .container {
+            width: 400px;
+            background-color: #f0f0f0;
+        }
+        /* Test adjacent sibling margin collapsing */
+        .sibling-1 {
+            height: 50px;
+            margin-bottom: 30px;
+            background-color: #ff6b6b;
+        }
+        .sibling-2 {
+            height: 50px;
+            margin-top: 20px;  /* Should collapse with sibling-1's margin-bottom */
+            margin-bottom: 40px;
+            background-color: #51cf66;
+        }
+        .sibling-3 {
+            height: 50px;
+            margin-top: 25px;  /* Should collapse with sibling-2's margin-bottom */
+            background-color: #339af0;
+        }
+        /* Test parent-child margin collapsing */
+        .parent {
+            margin-top: 50px;
+            background-color: #e9ecef;
+        }
+        .child {
+            height: 50px;
+            margin-top: 30px;  /* Should collapse with parent's margin */
+            background-color: #fcc419;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="sibling-1"></div>
+        <div class="sibling-2"></div>
+        <div class="sibling-3"></div>
+        <div class="parent">
+            <div class="child"></div>
+        </div>
+    </div>
+</body>
+</html>

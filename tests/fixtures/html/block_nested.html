@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Block Layout - Nested Blocks</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+        }
+        .outer {
+            width: 400px;
+            padding: 20px;
+            background-color: #e9ecef;
+        }
+        .middle {
+            padding: 15px;
+            background-color: #dee2e6;
+        }
+        .inner {
+            padding: 10px;
+            background-color: #ced4da;
+        }
+        .deepest {
+            height: 50px;
+            background-color: #339af0;
+        }
+    </style>
+</head>
+<body>
+    <div class="outer">
+        <div class="middle">
+            <div class="inner">
+                <div class="deepest"></div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

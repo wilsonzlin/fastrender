@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Positioned - Absolute Positioning</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+        }
+        .label {
+            margin: 10px 0 5px 0;
+            font-weight: bold;
+            color: #495057;
+        }
+        .container {
+            position: relative;
+            width: 300px;
+            height: 200px;
+            background-color: #f0f0f0;
+            margin-bottom: 20px;
+            border: 2px solid #dee2e6;
+        }
+        .abs-box {
+            position: absolute;
+            width: 60px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+        .red { background-color: #ff6b6b; }
+        .green { background-color: #51cf66; }
+        .blue { background-color: #339af0; }
+        .yellow { background-color: #fcc419; }
+        .purple { background-color: #cc5de8; }
+    </style>
+</head>
+<body>
+    <div class="label">Corner positioning</div>
+    <div class="container">
+        <div class="abs-box red" style="top: 0; left: 0;">TL</div>
+        <div class="abs-box green" style="top: 0; right: 0;">TR</div>
+        <div class="abs-box blue" style="bottom: 0; left: 0;">BL</div>
+        <div class="abs-box yellow" style="bottom: 0; right: 0;">BR</div>
+    </div>
+
+    <div class="label">Centered (using all four offsets)</div>
+    <div class="container">
+        <div class="abs-box purple" style="top: 0; right: 0; bottom: 0; left: 0; margin: auto; width: 100px; height: 60px;">Center</div>
+    </div>
+
+    <div class="label">Pixel offsets</div>
+    <div class="container">
+        <div class="abs-box red" style="top: 20px; left: 30px;">1</div>
+        <div class="abs-box green" style="top: 50px; left: 100px;">2</div>
+        <div class="abs-box blue" style="bottom: 40px; right: 50px;">3</div>
+    </div>
+
+    <div class="label">Percentage offsets</div>
+    <div class="container">
+        <div class="abs-box red" style="top: 10%; left: 10%;">10%</div>
+        <div class="abs-box green" style="top: 50%; left: 50%;">50%</div>
+        <div class="abs-box blue" style="top: 25%; right: 25%;">25%</div>
+    </div>
+
+    <div class="label">Stretching with left+right or top+bottom</div>
+    <div class="container">
+        <div class="abs-box red" style="top: 10px; left: 20px; right: 20px; width: auto;">Stretch H</div>
+        <div class="abs-box green" style="top: 60px; bottom: 60px; left: 120px; height: auto; width: 60px;">V</div>
+    </div>
+
+    <div class="label">z-index layering</div>
+    <div class="container">
+        <div class="abs-box red" style="top: 30px; left: 50px; z-index: 1; width: 80px; height: 80px;">z:1</div>
+        <div class="abs-box green" style="top: 50px; left: 70px; z-index: 3; width: 80px; height: 80px;">z:3</div>
+        <div class="abs-box blue" style="top: 70px; left: 90px; z-index: 2; width: 80px; height: 80px;">z:2</div>
+    </div>
+
+    <div class="label">Nested positioned elements</div>
+    <div class="container">
+        <div class="abs-box red" style="top: 20px; left: 20px; width: 150px; height: 120px; position: relative;">
+            Parent
+            <div class="abs-box blue" style="bottom: 10px; right: 10px; width: 50px; height: 30px;">Child</div>
+        </div>
+    </div>
+</body>
+</html>

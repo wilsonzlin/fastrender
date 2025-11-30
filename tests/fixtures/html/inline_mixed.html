@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Inline Layout - Mixed Inline/Block</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+            font-size: 16px;
+        }
+        .container {
+            width: 400px;
+            background-color: #f0f0f0;
+            padding: 10px;
+        }
+        .inline-box {
+            display: inline-block;
+            width: 80px;
+            height: 40px;
+            background-color: #339af0;
+            vertical-align: middle;
+        }
+        span.highlight {
+            background-color: #fcc419;
+            padding: 2px 4px;
+        }
+        span.bold {
+            font-weight: bold;
+            color: #e03131;
+        }
+        span.italic {
+            font-style: italic;
+            color: #2f9e44;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <p>
+            This is text with <span class="highlight">highlighted</span> inline content,
+            <span class="bold">bold text</span>, and <span class="italic">italic text</span>
+            mixed with <span class="inline-box"></span> inline-block elements.
+        </p>
+    </div>
+</body>
+</html>

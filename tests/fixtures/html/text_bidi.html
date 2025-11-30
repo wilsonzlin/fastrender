@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Text - Bidirectional Text</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: "Noto Sans", "Arial Unicode MS", sans-serif;
+            font-size: 16px;
+            line-height: 1.8;
+        }
+        .label {
+            margin: 15px 0 5px 0;
+            font-weight: bold;
+            color: #495057;
+            font-size: 14px;
+        }
+        .container {
+            width: 500px;
+            background-color: #f8f9fa;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+        }
+        .rtl {
+            direction: rtl;
+        }
+        .ltr {
+            direction: ltr;
+        }
+    </style>
+</head>
+<body>
+    <div class="label">LTR base with RTL text embedded</div>
+    <div class="container ltr">
+        <p>This is English text with Hebrew שלום עולם embedded in the middle.</p>
+    </div>
+
+    <div class="label">RTL base with LTR text embedded</div>
+    <div class="container rtl">
+        <p>זהו טקסט בעברית עם English text מוטמע באמצע.</p>
+    </div>
+
+    <div class="label">Mixed LTR and RTL with numbers</div>
+    <div class="container ltr">
+        <p>The price is $100 or ₪350 שקלים for the item.</p>
+    </div>
+
+    <div class="label">Deeply nested bidi (multiple direction changes)</div>
+    <div class="container ltr">
+        <p>English start שלום Hello again مرحبا back to English.</p>
+    </div>
+
+    <div class="label">RTL with numbers and punctuation</div>
+    <div class="container rtl">
+        <p>המחיר הוא 100$ או 350₪. טלפון: 054-1234567</p>
+    </div>
+
+    <div class="label">Mixed Arabic and English</div>
+    <div class="container rtl">
+        <p>مرحبا Welcome to our website مرحبا بكم في موقعنا</p>
+    </div>
+
+    <div class="label">URL in RTL context</div>
+    <div class="container rtl">
+        <p>בקרו באתר שלנו: https://example.com/page</p>
+    </div>
+
+    <div class="label">Email in RTL context</div>
+    <div class="container rtl">
+        <p>שלחו מייל אל: user@example.com</p>
+    </div>
+
+    <div class="label">Explicit bidi overrides</div>
+    <div class="container ltr">
+        <p>Normal text <bdo dir="rtl">forced RTL text</bdo> back to normal.</p>
+    </div>
+
+    <div class="label">Isolated bidi (unicode isolation)</div>
+    <div class="container ltr">
+        <p>Product: <span dir="rtl">מוצר א</span> - Price: $50</p>
+    </div>
+</body>
+</html>

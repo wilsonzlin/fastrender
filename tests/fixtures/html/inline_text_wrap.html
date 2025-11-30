@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Inline Layout - Text Wrapping</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+            font-size: 16px;
+        }
+        .container {
+            width: 300px;
+            background-color: #f0f0f0;
+            padding: 10px;
+        }
+        .narrow {
+            width: 150px;
+        }
+        p {
+            margin: 10px 0;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <p>This is a paragraph with text that should wrap to multiple lines because the container width is limited.</p>
+    </div>
+    <div class="container narrow">
+        <p>Very narrow container forces more wrapping of content.</p>
+    </div>
+</body>
+</html>

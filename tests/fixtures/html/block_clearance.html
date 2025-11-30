@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Block Layout - Float Clearance</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+        }
+        .container {
+            width: 400px;
+            background-color: #f0f0f0;
+            padding: 10px;
+        }
+        .float-left {
+            float: left;
+            width: 100px;
+            height: 80px;
+            margin-right: 10px;
+            background-color: #ff6b6b;
+        }
+        .float-right {
+            float: right;
+            width: 100px;
+            height: 60px;
+            margin-left: 10px;
+            background-color: #51cf66;
+        }
+        .clear-left {
+            clear: left;
+            height: 30px;
+            background-color: #339af0;
+        }
+        .clear-right {
+            clear: right;
+            height: 30px;
+            background-color: #fcc419;
+        }
+        .clear-both {
+            clear: both;
+            height: 40px;
+            background-color: #cc5de8;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="float-left"></div>
+        <div class="float-right"></div>
+        <div class="clear-left"></div>
+        <div class="float-left"></div>
+        <div class="clear-right"></div>
+        <div class="clear-both"></div>
+    </div>
+</body>
+</html>

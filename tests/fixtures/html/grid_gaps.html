@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Grid Layout - Grid Gaps</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+        }
+        .label {
+            margin: 10px 0 5px 0;
+            font-weight: bold;
+            color: #495057;
+        }
+        .grid {
+            display: grid;
+            width: 400px;
+            background-color: #e9ecef;
+            margin-bottom: 20px;
+            grid-template-columns: repeat(3, 1fr);
+            grid-template-rows: repeat(2, 60px);
+        }
+        .item {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+        .item-1 { background-color: #ff6b6b; }
+        .item-2 { background-color: #51cf66; }
+        .item-3 { background-color: #339af0; }
+        .item-4 { background-color: #fcc419; }
+        .item-5 { background-color: #cc5de8; }
+        .item-6 { background-color: #20c997; }
+
+        /* No gap */
+        .gap-none {
+            gap: 0;
+        }
+
+        /* Uniform gap */
+        .gap-10 {
+            gap: 10px;
+        }
+
+        /* Large gap */
+        .gap-20 {
+            gap: 20px;
+        }
+
+        /* Different row and column gap */
+        .gap-mixed {
+            row-gap: 20px;
+            column-gap: 5px;
+        }
+
+        /* Percentage gap */
+        .gap-percent {
+            gap: 5%;
+        }
+    </style>
+</head>
+<body>
+    <div class="label">gap: 0</div>
+    <div class="grid gap-none">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+        <div class="item item-4">4</div>
+        <div class="item item-5">5</div>
+        <div class="item item-6">6</div>
+    </div>
+
+    <div class="label">gap: 10px</div>
+    <div class="grid gap-10">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+        <div class="item item-4">4</div>
+        <div class="item item-5">5</div>
+        <div class="item item-6">6</div>
+    </div>
+
+    <div class="label">gap: 20px</div>
+    <div class="grid gap-20">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+        <div class="item item-4">4</div>
+        <div class="item item-5">5</div>
+        <div class="item item-6">6</div>
+    </div>
+
+    <div class="label">row-gap: 20px, column-gap: 5px</div>
+    <div class="grid gap-mixed">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+        <div class="item item-4">4</div>
+        <div class="item item-5">5</div>
+        <div class="item item-6">6</div>
+    </div>
+
+    <div class="label">gap: 5%</div>
+    <div class="grid gap-percent">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+        <div class="item item-4">4</div>
+        <div class="item item-5">5</div>
+        <div class="item item-6">6</div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Table Layout - Auto Layout</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+        }
+        .label {
+            margin: 10px 0 5px 0;
+            font-weight: bold;
+            color: #495057;
+        }
+        table {
+            border-collapse: collapse;
+            margin-bottom: 20px;
+            background-color: white;
+        }
+        th, td {
+            border: 1px solid #dee2e6;
+            padding: 8px 12px;
+            text-align: left;
+        }
+        th {
+            background-color: #e9ecef;
+            font-weight: bold;
+        }
+        /* Auto layout table (default) */
+        .auto {
+            table-layout: auto;
+        }
+        .constrained {
+            width: 400px;
+        }
+    </style>
+</head>
+<body>
+    <div class="label">table-layout: auto (default) - columns size to content</div>
+    <table class="auto">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Product Name</th>
+                <th>Price</th>
+                <th>Availability</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>1</td>
+                <td>Widget</td>
+                <td>$9.99</td>
+                <td>In Stock</td>
+            </tr>
+            <tr>
+                <td>2</td>
+                <td>Super Deluxe Premium Widget with Extended Warranty</td>
+                <td>$99.99</td>
+                <td>Limited</td>
+            </tr>
+            <tr>
+                <td>3</td>
+                <td>Basic</td>
+                <td>$4.99</td>
+                <td>Available</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="label">Auto layout - constrained width</div>
+    <table class="auto constrained">
+        <thead>
+            <tr>
+                <th>Column A</th>
+                <th>Column B</th>
+                <th>Column C</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>Short</td>
+                <td>This column has much more content than the others</td>
+                <td>Med</td>
+            </tr>
+            <tr>
+                <td>X</td>
+                <td>Y</td>
+                <td>Z</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="label">Auto layout - varying content lengths</div>
+    <table class="auto">
+        <tbody>
+            <tr>
+                <td>A</td>
+                <td>B</td>
+                <td>C</td>
+            </tr>
+            <tr>
+                <td>AAAAAAAAAA</td>
+                <td>BB</td>
+                <td>CCC</td>
+            </tr>
+            <tr>
+                <td>AA</td>
+                <td>BBBBBBBBBBBBBBBBB</td>
+                <td>C</td>
+            </tr>
+        </tbody>
+    </table>
+</body>
+</html>

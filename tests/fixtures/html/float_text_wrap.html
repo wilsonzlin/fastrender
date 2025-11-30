@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Floats - Text Wrapping Around Floats</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        .label {
+            margin: 10px 0 5px 0;
+            font-weight: bold;
+            color: #495057;
+            clear: both;
+        }
+        .container {
+            width: 400px;
+            background-color: #f0f0f0;
+            padding: 10px;
+            margin-bottom: 20px;
+        }
+        .float-left {
+            float: left;
+            width: 100px;
+            height: 80px;
+            background-color: #ff6b6b;
+            margin: 0 10px 10px 0;
+        }
+        .float-right {
+            float: right;
+            width: 100px;
+            height: 80px;
+            background-color: #51cf66;
+            margin: 0 0 10px 10px;
+        }
+        .image-float {
+            width: 120px;
+            height: 90px;
+            background-color: #339af0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="label">Text wrapping around left float</div>
+    <div class="container">
+        <div class="float-left"></div>
+        <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p>
+    </div>
+
+    <div class="label">Text wrapping around right float</div>
+    <div class="container">
+        <div class="float-right"></div>
+        <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p>
+    </div>
+
+    <div class="label">Text wrapping around both floats</div>
+    <div class="container">
+        <div class="float-left"></div>
+        <div class="float-right"></div>
+        <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate.</p>
+    </div>
+
+    <div class="label">Image-like float with caption text</div>
+    <div class="container">
+        <div class="float-left image-float">Image</div>
+        <p><strong>Figure 1:</strong> This is a caption for the image. The text wraps naturally around the floated element, creating a magazine-style layout. Additional text continues to flow around the image until there is enough content to extend below it.</p>
+    </div>
+</body>
+</html>
