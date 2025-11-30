@@ -8,10 +8,7 @@
 //! - CSS 2.1 Section 10.1: Definition of "containing block"
 
 use fastrender::geometry::{EdgeOffsets, Point, Rect, Size};
-use fastrender::layout::{
-    AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult,
-    ContainingBlock, ResolvedMargins,
-};
+use fastrender::layout::{AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult, ContainingBlock, ResolvedMargins};
 use fastrender::style::computed::ComputedStyle;
 use fastrender::style::{LengthOrAuto, Position};
 use fastrender::tree::FragmentNode;
@@ -179,16 +176,12 @@ fn test_absolute_all_auto_uses_intrinsic_and_static_position() {
     let style = default_style();
     // All auto
 
-    let input = create_input_with_static(
-        style,
-        Size::new(150.0, 100.0),
-        Point::new(80.0, 120.0),
-    );
+    let input = create_input_with_static(style, Size::new(150.0, 100.0), Point::new(80.0, 120.0));
     let cb = create_cb(800.0, 600.0);
 
     let result = layout.layout_absolute(&input, &cb).unwrap();
 
-    assert_eq!(result.position.x, 80.0);  // static
+    assert_eq!(result.position.x, 80.0); // static
     assert_eq!(result.position.y, 120.0); // static
     assert_eq!(result.size.width, 150.0);
     assert_eq!(result.size.height, 100.0);
@@ -285,11 +278,7 @@ fn test_static_position_with_only_width() {
     style.width = LengthOrAuto::px(200.0);
     // left, right auto
 
-    let input = create_input_with_static(
-        style,
-        Size::new(100.0, 100.0),
-        Point::new(50.0, 100.0),
-    );
+    let input = create_input_with_static(style, Size::new(100.0, 100.0), Point::new(50.0, 100.0));
     let cb = create_cb(800.0, 600.0);
 
     let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -307,11 +296,7 @@ fn test_static_position_with_only_height() {
     style.height = LengthOrAuto::px(150.0);
     // top, bottom auto
 
-    let input = create_input_with_static(
-        style,
-        Size::new(100.0, 100.0),
-        Point::new(30.0, 80.0),
-    );
+    let input = create_input_with_static(style, Size::new(100.0, 100.0), Point::new(30.0, 80.0));
     let cb = create_cb(800.0, 600.0);
 
     let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -330,8 +315,8 @@ fn test_percentage_left_and_top() {
     let layout = AbsoluteLayout::new();
 
     let mut style = default_style();
-    style.left = LengthOrAuto::percent(10.0);   // 10% of 500 = 50
-    style.top = LengthOrAuto::percent(25.0);    // 25% of 400 = 100
+    style.left = LengthOrAuto::percent(10.0); // 10% of 500 = 50
+    style.top = LengthOrAuto::percent(25.0); // 25% of 400 = 100
     style.width = LengthOrAuto::px(100.0);
     style.height = LengthOrAuto::px(80.0);
 
@@ -349,7 +334,7 @@ fn test_percentage_right_and_bottom() {
     let layout = AbsoluteLayout::new();
 
     let mut style = default_style();
-    style.right = LengthOrAuto::percent(20.0);  // 20% of 400 = 80
+    style.right = LengthOrAuto::percent(20.0); // 20% of 400 = 80
     style.bottom = LengthOrAuto::percent(10.0); // 10% of 300 = 30
     style.width = LengthOrAuto::px(100.0);
     style.height = LengthOrAuto::px(50.0);
@@ -372,7 +357,7 @@ fn test_percentage_width_and_height() {
     let mut style = default_style();
     style.left = LengthOrAuto::px(0.0);
     style.top = LengthOrAuto::px(0.0);
-    style.width = LengthOrAuto::percent(50.0);  // 50% of 800 = 400
+    style.width = LengthOrAuto::percent(50.0); // 50% of 800 = 400
     style.height = LengthOrAuto::percent(25.0); // 25% of 600 = 150
 
     let input = create_input(style, Size::new(100.0, 100.0));
@@ -559,10 +544,7 @@ fn test_create_fragment_with_children() {
         margins: ResolvedMargins::zero(),
     };
 
-    let child = FragmentNode::new_block(
-        Rect::from_xywh(10.0, 10.0, 50.0, 50.0),
-        vec![],
-    );
+    let child = FragmentNode::new_block(Rect::from_xywh(10.0, 10.0, 50.0, 50.0), vec![]);
 
     let fragment = layout.create_fragment(&result, vec![child]);
 
@@ -597,7 +579,7 @@ fn test_resolved_margins_horizontal_vertical() {
     let margins = ResolvedMargins::new(10.0, 20.0, 30.0, 40.0);
 
     assert_eq!(margins.horizontal(), 60.0); // 20 + 40
-    assert_eq!(margins.vertical(), 40.0);   // 10 + 30
+    assert_eq!(margins.vertical(), 40.0); // 10 + 30
 }
 
 // ============================================================================
@@ -650,7 +632,7 @@ fn test_complex_all_sides_and_size() {
     style.position = Position::Absolute;
     style.left = LengthOrAuto::px(10.0);
     style.top = LengthOrAuto::px(20.0);
-    style.right = LengthOrAuto::px(30.0);  // Ignored (overconstrained)
+    style.right = LengthOrAuto::px(30.0); // Ignored (overconstrained)
     style.bottom = LengthOrAuto::px(40.0); // Ignored (overconstrained)
     style.width = LengthOrAuto::px(100.0);
     style.height = LengthOrAuto::px(80.0);
@@ -694,7 +676,7 @@ fn test_mixed_percentages_and_pixels() {
 
     let mut style = default_style();
     style.position = Position::Absolute;
-    style.left = LengthOrAuto::percent(10.0);  // 10% of 600 = 60
+    style.left = LengthOrAuto::percent(10.0); // 10% of 600 = 60
     style.top = LengthOrAuto::px(50.0);
     style.width = LengthOrAuto::px(200.0);
     style.height = LengthOrAuto::percent(20.0); // 20% of 400 = 80

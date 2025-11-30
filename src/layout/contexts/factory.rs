@@ -92,6 +92,38 @@ impl FormattingContextFactory {
     /// Lower-level method for when the FC type is already known.
     /// Useful for testing or when bypassing box analysis.
     pub fn create_specific(&self, fc_type: FormattingContextType) -> Box<dyn FormattingContext> {
+        self.create(fc_type)
+    }
+
+    /// Creates a formatting context for the specified type
+    ///
+    /// This is the primary factory method that maps formatting context types
+    /// to their concrete implementations:
+    ///
+    /// - `Block` → `BlockFormattingContext` (CSS 2.1 §9.4.1)
+    /// - `Inline` → `InlineFormattingContext` (CSS 2.1 §9.4.2)
+    /// - `Flex` → `FlexFormattingContext` (CSS Flexbox via Taffy)
+    /// - `Grid` → `GridFormattingContext` (CSS Grid via Taffy)
+    /// - `Table` → `TableFormattingContext` (CSS 2.1 §17)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fastrender::layout::contexts::FormattingContextFactory;
+    /// use fastrender::tree::FormattingContextType;
+    ///
+    /// let factory = FormattingContextFactory::new();
+    /// let block_fc = factory.create(FormattingContextType::Block);
+    /// let flex_fc = factory.create(FormattingContextType::Flex);
+    /// ```
+    ///
+    /// # Implementation Notes
+    ///
+    /// All formatting contexts are:
+    /// - Stateless (no internal mutable state)
+    /// - Thread-safe (`Send + Sync`)
+    /// - Reusable (can be used for multiple layouts)
+    pub fn create(&self, fc_type: FormattingContextType) -> Box<dyn FormattingContext> {
         match fc_type {
             FormattingContextType::Block => Box::new(BlockFormattingContext::new()),
             FormattingContextType::Inline => Box::new(InlineFormattingContext::new()),
@@ -99,6 +131,46 @@ impl FormattingContextFactory {
             FormattingContextType::Grid => Box::new(GridFormattingContext::new()),
             FormattingContextType::Table => Box::new(TableFormattingContext::new()),
         }
+    }
+
+    /// Returns all supported formatting context types
+    ///
+    /// Useful for iteration, testing, or introspection of supported layout modes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fastrender::layout::contexts::FormattingContextFactory;
+    ///
+    /// let factory = FormattingContextFactory::new();
+    /// for fc_type in factory.supported_types() {
+    ///     let _fc = factory.create(fc_type);
+    /// }
+    /// ```
+    pub fn supported_types(&self) -> &'static [FormattingContextType] {
+        &[
+            FormattingContextType::Block,
+            FormattingContextType::Inline,
+            FormattingContextType::Flex,
+            FormattingContextType::Grid,
+            FormattingContextType::Table,
+        ]
+    }
+
+    /// Checks if a formatting context type is supported
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fastrender::layout::contexts::FormattingContextFactory;
+    /// use fastrender::tree::FormattingContextType;
+    ///
+    /// let factory = FormattingContextFactory::new();
+    /// assert!(factory.is_supported(FormattingContextType::Block));
+    /// assert!(factory.is_supported(FormattingContextType::Flex));
+    /// ```
+    pub fn is_supported(&self, fc_type: FormattingContextType) -> bool {
+        self.supported_types().contains(&fc_type)
     }
 }
 
@@ -221,6 +293,18 @@ mod tests {
     }
 
     #[test]
+    fn test_create_all_types() {
+        let factory = FormattingContextFactory::new();
+
+        for &fc_type in factory.supported_types() {
+            let fc = factory.create(fc_type);
+            let box_node = BoxNode::new_block(default_style(), fc_type, vec![]);
+            let constraints = LayoutConstraints::definite(800.0, 600.0);
+            assert!(fc.layout(&box_node, &constraints).is_ok());
+        }
+    }
+
+    #[test]
     fn test_factory_reuse() {
         let factory = FormattingContextFactory::new();
 
@@ -229,6 +313,69 @@ mod tests {
             let box_node = BoxNode::new_block(default_style(), FormattingContextType::Flex, vec![]);
             let constraints = LayoutConstraints::definite(800.0, 600.0);
             assert!(fc.layout(&box_node, &constraints).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_supported_types() {
+        let factory = FormattingContextFactory::new();
+        let types = factory.supported_types();
+
+        assert_eq!(types.len(), 5);
+        assert!(types.contains(&FormattingContextType::Block));
+        assert!(types.contains(&FormattingContextType::Inline));
+        assert!(types.contains(&FormattingContextType::Flex));
+        assert!(types.contains(&FormattingContextType::Grid));
+        assert!(types.contains(&FormattingContextType::Table));
+    }
+
+    #[test]
+    fn test_is_supported() {
+        let factory = FormattingContextFactory::new();
+
+        assert!(factory.is_supported(FormattingContextType::Block));
+        assert!(factory.is_supported(FormattingContextType::Inline));
+        assert!(factory.is_supported(FormattingContextType::Flex));
+        assert!(factory.is_supported(FormattingContextType::Grid));
+        assert!(factory.is_supported(FormattingContextType::Table));
+    }
+
+    #[test]
+    fn test_create_and_create_specific_equivalent() {
+        let factory = FormattingContextFactory::new();
+
+        for &fc_type in factory.supported_types() {
+            let fc1 = factory.create(fc_type);
+            let fc2 = factory.create_specific(fc_type);
+
+            let box_node = BoxNode::new_block(default_style(), fc_type, vec![]);
+            let constraints = LayoutConstraints::definite(800.0, 600.0);
+
+            let fragment1 = fc1.layout(&box_node, &constraints).unwrap();
+            let fragment2 = fc2.layout(&box_node, &constraints).unwrap();
+
+            // Both should produce same result
+            assert_eq!(fragment1.bounds.width(), fragment2.bounds.width());
+            assert_eq!(fragment1.bounds.height(), fragment2.bounds.height());
+        }
+    }
+
+    #[test]
+    fn test_factory_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<FormattingContextFactory>();
+    }
+
+    #[test]
+    fn test_created_fc_is_send_sync() {
+        let factory = FormattingContextFactory::new();
+
+        for &fc_type in factory.supported_types() {
+            let fc = factory.create(fc_type);
+            // This verifies that Box<dyn FormattingContext> is Send + Sync
+            let _ = std::thread::spawn(move || {
+                let _ = fc;
+            });
         }
     }
 }
