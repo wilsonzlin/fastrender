@@ -93,6 +93,18 @@ criterion = "0.5"
 name = "render_benchmark"
 harness = false
 
+[[bench]]
+name = "comprehensive"
+harness = false
+
+[[bench]]
+name = "layout_benches"
+harness = false
+
+[[bench]]
+name = "paint_benches"
+harness = false
+
 # ============================================================================
 # Release Profile Optimization
 # ============================================================================
