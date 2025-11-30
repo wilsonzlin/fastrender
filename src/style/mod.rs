@@ -1871,13 +1871,6 @@ fn extract_box_values(value: &PropertyValue) -> Option<Vec<Length>> {
     }
 }
 
-/// Parse grid track list (e.g., "200px 1fr 2fr" or "repeat(3, 1fr)")
-/// Returns tracks and a map of named grid lines to their positions
-fn parse_grid_tracks(tracks_str: &str) -> Vec<GridTrack> {
-    let (tracks, _) = parse_grid_tracks_with_names(tracks_str);
-    tracks
-}
-
 fn parse_grid_tracks_with_names(tracks_str: &str) -> (Vec<GridTrack>, HashMap<String, Vec<usize>>) {
     let mut tracks = Vec::new();
     let mut named_lines: HashMap<String, Vec<usize>> = HashMap::new();

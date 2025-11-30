@@ -167,6 +167,9 @@ impl ttf_parser::OutlineBuilder for GlyphOutlineBuilder {
 /// Glyphs are cached by font data pointer + glyph ID + font size.
 /// Using the font data pointer avoids comparing large font binaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+// Note: Glyph caching infrastructure prepared but not yet integrated.
+// These types will be used when implementing full glyph caching.
+#[allow(dead_code)]
 struct GlyphCacheKey {
     /// Pointer to font data (used as unique identifier)
     font_ptr: usize,
@@ -179,6 +182,7 @@ struct GlyphCacheKey {
 }
 
 impl GlyphCacheKey {
+    #[allow(dead_code)]
     fn new(font: &LoadedFont, glyph_id: u32, font_size: f32) -> Self {
         Self {
             font_ptr: Arc::as_ptr(&font.data) as usize,
@@ -300,6 +304,7 @@ impl GlyphCache {
     }
 
     /// Evicts old entries if cache is full.
+    #[allow(dead_code)]
     fn evict_if_needed(&mut self) {
         if self.glyphs.len() >= self.max_size {
             // Simple strategy: clear half the cache
