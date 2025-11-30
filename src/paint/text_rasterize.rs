@@ -34,7 +34,7 @@
 //!     &shaped_run,
 //!     100.0,  // x position
 //!     200.0,  // baseline y position
-//!     Color::BLACK,
+//!     Rgba::BLACK,
 //!     &mut pixmap,
 //! );
 //! ```
@@ -50,7 +50,7 @@
 //! - ttf-parser: <https://docs.rs/ttf-parser/>
 //! - tiny-skia: <https://docs.rs/tiny-skia/>
 
-use crate::css::Color;
+use crate::style::Rgba;
 use crate::error::{RenderError, Result};
 use crate::text::font_db::LoadedFont;
 use crate::text::pipeline::{GlyphPosition, ShapedRun};
@@ -332,7 +332,7 @@ impl GlyphCache {
 ///     &shaped_run,
 ///     10.0,   // x position
 ///     100.0,  // baseline y position
-///     Color::BLACK,
+///     Rgba::BLACK,
 ///     &mut pixmap,
 /// )?;
 /// ```
@@ -383,7 +383,7 @@ impl TextRasterizer {
     ///     &run,
     ///     100.0,      // x
     ///     200.0,      // baseline y
-    ///     Color::BLACK,
+    ///     Rgba::BLACK,
     ///     &mut pixmap,
     /// )?;
     /// println!("Rendered {} pixels wide", advance);
@@ -393,12 +393,12 @@ impl TextRasterizer {
         run: &ShapedRun,
         x: f32,
         baseline_y: f32,
-        color: Color,
+        color: Rgba,
         pixmap: &mut Pixmap,
     ) -> Result<f32> {
         // Create paint with text color
         let mut paint = Paint::default();
-        paint.set_color_rgba8(color.r, color.g, color.b, color.a);
+        paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
         paint.anti_alias = true;
 
         let mut cursor_x = x;
@@ -445,7 +445,7 @@ impl TextRasterizer {
         runs: &[ShapedRun],
         x: f32,
         baseline_y: f32,
-        color: Color,
+        color: Rgba,
         pixmap: &mut Pixmap,
     ) -> Result<f32> {
         let mut cursor_x = x;
@@ -479,11 +479,11 @@ impl TextRasterizer {
         font_size: f32,
         x: f32,
         baseline_y: f32,
-        color: Color,
+        color: Rgba,
         pixmap: &mut Pixmap,
     ) -> Result<f32> {
         let mut paint = Paint::default();
-        paint.set_color_rgba8(color.r, color.g, color.b, color.a);
+        paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
         paint.anti_alias = true;
 
         let mut cursor_x = x;
@@ -523,10 +523,10 @@ impl TextRasterizer {
 // Utility Functions
 // ============================================================================
 
-/// Converts a Color to a tiny-skia color.
+/// Converts an Rgba to a tiny-skia color.
 #[inline]
-pub fn to_skia_color(color: Color) -> tiny_skia::Color {
-    tiny_skia::Color::from_rgba8(color.r, color.g, color.b, color.a)
+pub fn to_skia_color(color: Rgba) -> tiny_skia::Color {
+    tiny_skia::Color::from_rgba8(color.r, color.g, color.b, color.alpha_u8())
 }
 
 /// Renders a single glyph to a pixmap (standalone function).
@@ -553,7 +553,7 @@ pub fn render_glyph(
     font_size: f32,
     x: f32,
     y: f32,
-    color: Color,
+    color: Rgba,
     pixmap: &mut Pixmap,
 ) -> Result<f32> {
     // Parse font
@@ -581,7 +581,7 @@ pub fn render_glyph(
     // Render path
     if let Some(path) = builder.finish() {
         let mut paint = Paint::default();
-        paint.set_color_rgba8(color.r, color.g, color.b, color.a);
+        paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
         paint.anti_alias = true;
 
         pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
@@ -669,7 +669,7 @@ mod tests {
         let glyph_id = face.glyph_index('A').map(|g| g.0 as u32).unwrap_or(0);
 
         // Render the glyph
-        let result = render_glyph(&font, glyph_id, 16.0, 10.0, 80.0, Color::BLACK, &mut pixmap);
+        let result = render_glyph(&font, glyph_id, 16.0, 10.0, 80.0, Rgba::BLACK, &mut pixmap);
 
         assert!(result.is_ok());
         let advance = result.unwrap();
@@ -691,7 +691,7 @@ mod tests {
         let glyph_id = face.glyph_index(' ').map(|g| g.0 as u32).unwrap_or(0);
 
         // Render (should succeed even though space has no outline)
-        let result = render_glyph(&font, glyph_id, 16.0, 10.0, 80.0, Color::BLACK, &mut pixmap);
+        let result = render_glyph(&font, glyph_id, 16.0, 10.0, 80.0, Rgba::BLACK, &mut pixmap);
 
         assert!(result.is_ok());
         // Space should have positive advance
@@ -744,19 +744,14 @@ mod tests {
         pixmap.fill(tiny_skia::Color::WHITE);
 
         let mut rasterizer = TextRasterizer::new();
-        let result = rasterizer.render_glyphs(&glyphs, &font, 16.0, 10.0, 80.0, Color::BLACK, &mut pixmap);
+        let result = rasterizer.render_glyphs(&glyphs, &font, 16.0, 10.0, 80.0, Rgba::BLACK, &mut pixmap);
 
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_to_skia_color() {
-        let color = Color {
-            r: 255,
-            g: 128,
-            b: 64,
-            a: 200,
-        };
+        let color = Rgba::from_rgba8(255, 128, 64, 200);
         let skia_color = to_skia_color(color);
 
         // tiny-skia Color methods return f32 in 0.0-1.0 range
@@ -805,11 +800,11 @@ mod tests {
 
     #[test]
     fn test_color_black() {
-        let black = Color::BLACK;
+        let black = Rgba::BLACK;
         assert_eq!(black.r, 0);
         assert_eq!(black.g, 0);
         assert_eq!(black.b, 0);
-        assert_eq!(black.a, 255);
+        assert_eq!(black.a, 1.0);
     }
 
     #[test]

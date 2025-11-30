@@ -71,7 +71,7 @@
 //! use fastrender::paint::{DisplayListBuilder, DisplayList, build_stacking_tree};
 //! use fastrender::paint::{DisplayListOptimizer, OptimizationConfig};
 //! use fastrender::paint::{Canvas, BorderRadii};
-//! use fastrender::css::Color;
+//! use fastrender::style::Rgba;
 //!
 //! // Build stacking tree from fragment tree
 //! let stacking_tree = build_stacking_tree(&fragment_tree.root, None, true);
@@ -86,7 +86,7 @@
 //! let (optimized, stats) = optimizer.optimize(display_list, viewport);
 //!
 //! // Render to canvas
-//! let mut canvas = Canvas::new(800, 600, Color::WHITE)?;
+//! let mut canvas = Canvas::new(800, 600, Rgba::WHITE)?;
 //! // ... iterate display list and draw to canvas
 //! ```
 

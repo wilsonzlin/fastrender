@@ -12,7 +12,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use fastrender::Renderer;
+//! use fastrender::FastRender;
 //! use crate::wpt::runner::WptRunner;
 //! use std::path::Path;
 //!
@@ -57,7 +57,7 @@ use super::harness::{
 /// # Example
 ///
 /// ```rust,ignore
-/// use fastrender::Renderer;
+/// use fastrender::FastRender;
 /// use crate::wpt::runner::WptRunner;
 ///
 /// let renderer = Renderer::new();
@@ -69,7 +69,7 @@ use super::harness::{
 /// ```
 pub struct WptRunner {
     /// The FastRender renderer instance
-    renderer: fastrender::Renderer,
+    renderer: fastrender::FastRender,
     /// Configuration for the test harness
     config: HarnessConfig,
     /// Statistics about test runs
@@ -134,7 +134,7 @@ impl WptRunner {
     /// let renderer = Renderer::new();
     /// let runner = WptRunner::new(renderer);
     /// ```
-    pub fn new(renderer: fastrender::Renderer) -> Self {
+    pub fn new(renderer: fastrender::FastRender) -> Self {
         Self {
             renderer,
             config: HarnessConfig::default(),
@@ -157,7 +157,7 @@ impl WptRunner {
     ///     .with_max_diff(0.1);
     /// let runner = WptRunner::with_config(Renderer::new(), config);
     /// ```
-    pub fn with_config(renderer: fastrender::Renderer, config: HarnessConfig) -> Self {
+    pub fn with_config(renderer: fastrender::FastRender, config: HarnessConfig) -> Self {
         Self {
             renderer,
             config,
@@ -525,7 +525,7 @@ impl WptRunner {
     }
 
     /// Renders HTML and returns PNG bytes
-    fn render_html(&self, html: &str, metadata: &TestMetadata) -> Result<Vec<u8>, String> {
+    fn render_html(&mut self, html: &str, metadata: &TestMetadata) -> Result<Vec<u8>, String> {
         self.renderer
             .render_to_png(html, metadata.viewport_width, metadata.viewport_height)
             .map_err(|e| format!("Render error: {}", e))
@@ -620,7 +620,7 @@ impl WptRunner {
 
 /// Builder for creating WptRunner instances with fluent API
 pub struct WptRunnerBuilder {
-    renderer: Option<fastrender::Renderer>,
+    renderer: Option<fastrender::FastRender>,
     config: HarnessConfig,
 }
 
@@ -634,7 +634,7 @@ impl WptRunnerBuilder {
     }
 
     /// Sets the renderer
-    pub fn renderer(mut self, renderer: fastrender::Renderer) -> Self {
+    pub fn renderer(mut self, renderer: fastrender::FastRender) -> Self {
         self.renderer = Some(renderer);
         self
     }
@@ -724,8 +724,8 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn create_test_renderer() -> fastrender::Renderer {
-        fastrender::Renderer::new()
+    fn create_test_renderer() -> fastrender::FastRender {
+        fastrender::FastRender::new().unwrap()
     }
 
     #[test]

@@ -9,7 +9,7 @@
 //! in integration_test.rs).
 
 use fastrender::api::{FastRender, FastRenderConfig};
-use fastrender::css::Color;
+use fastrender::style::Rgba;
 
 // =============================================================================
 // FastRender Creation Tests
@@ -32,7 +32,7 @@ fn test_fastrender_with_default_config() {
 #[test]
 fn test_fastrender_with_custom_config() {
     let config = FastRenderConfig::new()
-        .with_default_background(Color::rgb(240, 240, 240))
+        .with_default_background(Rgba::rgb(240, 240, 240))
         .with_default_viewport(1920, 1080);
 
     let result = FastRender::with_config(config);
@@ -51,7 +51,7 @@ fn test_fastrender_with_custom_config() {
 #[test]
 fn test_config_default_values() {
     let config = FastRenderConfig::default();
-    assert_eq!(config.background_color, Color::WHITE);
+    assert_eq!(config.background_color, Rgba::WHITE);
     assert_eq!(config.default_width, 800);
     assert_eq!(config.default_height, 600);
 }
@@ -59,7 +59,7 @@ fn test_config_default_values() {
 #[test]
 fn test_config_builder_pattern() {
     let config = FastRenderConfig::new()
-        .with_default_background(Color::rgb(100, 150, 200))
+        .with_default_background(Rgba::rgb(100, 150, 200))
         .with_default_viewport(1024, 768);
 
     assert_eq!(config.background_color.r, 100);
@@ -158,10 +158,10 @@ fn test_background_color_get_set() {
     let mut renderer = FastRender::new().unwrap();
 
     // Default is white
-    assert_eq!(renderer.background_color(), Color::WHITE);
+    assert_eq!(renderer.background_color(), Rgba::WHITE);
 
     // Set to custom color
-    renderer.set_background_color(Color::rgb(50, 100, 150));
+    renderer.set_background_color(Rgba::rgb(50, 100, 150));
     assert_eq!(renderer.background_color().r, 50);
     assert_eq!(renderer.background_color().g, 100);
     assert_eq!(renderer.background_color().b, 150);
@@ -215,10 +215,10 @@ fn test_fragment_tree_type_reexport() {
 }
 
 #[test]
-fn test_css_color_available() {
-    // css::Color should be accessible for public API
-    use fastrender::css::Color;
-    let color = Color::rgb(100, 150, 200);
+fn test_rgba_available() {
+    // style::Rgba should be accessible for public API
+    use fastrender::style::Rgba;
+    let color = Rgba::rgb(100, 150, 200);
     assert_eq!(color.r, 100);
 }
 
@@ -294,11 +294,11 @@ fn test_render_html_with_background() {
     let mut renderer = FastRender::new().unwrap();
     let html = "<div>Test</div>";
 
-    let result = renderer.render_html_with_background(html, 100, 100, Color::rgb(255, 0, 0));
+    let result = renderer.render_html_with_background(html, 100, 100, Rgba::rgb(255, 0, 0));
     assert!(result.is_ok());
 
     // Background color should be restored
-    assert_eq!(renderer.background_color(), Color::WHITE);
+    assert_eq!(renderer.background_color(), Rgba::WHITE);
 }
 
 #[test]

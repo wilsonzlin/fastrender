@@ -30,8 +30,12 @@ use std::sync::Arc;
 // Import DebugInfo from the debug module
 pub use super::debug::DebugInfo;
 
-// Re-export ComputedStyles as ComputedStyle for API compatibility
-pub type ComputedStyle = ComputedStyles;
+// Re-export ComputedStyles for backward compatibility
+// Note: There are two computed style types in the codebase:
+// - style::ComputedStyles (used by tree module, cascade system)
+// - style::computed::ComputedStyle (used by layout, text pipeline)
+// These should be consolidated in a future refactoring.
+pub use crate::style::ComputedStyles as ComputedStyle;
 
 /// A block-level box
 ///

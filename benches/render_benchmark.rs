@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use fastrender::Renderer;
+use fastrender::FastRender;
 
 fn simple_html_benchmark(c: &mut Criterion) {
     let html = r#"
@@ -18,7 +18,7 @@ fn simple_html_benchmark(c: &mut Criterion) {
     "#;
 
     c.bench_function("simple html render", |b| {
-        let renderer = Renderer::new();
+        let mut renderer = FastRender::new().unwrap();
         b.iter(|| renderer.render_to_png(black_box(html), 800, 600).unwrap());
     });
 }
@@ -55,7 +55,7 @@ fn complex_html_benchmark(c: &mut Criterion) {
     "#;
 
     c.bench_function("complex html render", |b| {
-        let renderer = Renderer::new();
+        let mut renderer = FastRender::new().unwrap();
         b.iter(|| renderer.render_to_png(black_box(html), 1920, 1080).unwrap());
     });
 }
@@ -93,7 +93,7 @@ fn grid_layout_benchmark(c: &mut Criterion) {
     "#;
 
     c.bench_function("grid layout render", |b| {
-        let renderer = Renderer::new();
+        let mut renderer = FastRender::new().unwrap();
         b.iter(|| renderer.render_to_png(black_box(html), 1200, 800).unwrap());
     });
 }

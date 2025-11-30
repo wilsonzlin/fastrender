@@ -46,7 +46,7 @@
 //! ```
 
 use super::compare::{compare_images, CompareConfig, ImageDiff};
-use fastrender::Renderer;
+use fastrender::FastRender;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -274,7 +274,7 @@ impl RefTestResults {
 /// Manages the FastRender renderer and provides methods for running
 /// reference tests against expected images.
 pub struct RefTestHarness {
-    renderer: Renderer,
+    renderer: FastRender,
     config: RefTestConfig,
 }
 
@@ -282,7 +282,7 @@ impl RefTestHarness {
     /// Creates a new reference test harness with default configuration
     pub fn new() -> Self {
         Self {
-            renderer: Renderer::new(),
+            renderer: FastRender::new().expect("Failed to create renderer"),
             config: RefTestConfig::default(),
         }
     }
@@ -290,7 +290,7 @@ impl RefTestHarness {
     /// Creates a new harness with custom configuration
     pub fn with_config(config: RefTestConfig) -> Self {
         Self {
-            renderer: Renderer::new(),
+            renderer: FastRender::new().expect("Failed to create renderer"),
             config,
         }
     }
@@ -313,7 +313,7 @@ impl RefTestHarness {
     ///
     /// # Returns
     /// `RefTestResult` with detailed information about the test outcome
-    pub fn run_ref_test(&self, test_dir: &Path, reference_path: &Path) -> RefTestResult {
+    pub fn run_ref_test(&mut self, test_dir: &Path, reference_path: &Path) -> RefTestResult {
         let test_name = test_dir
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -404,7 +404,7 @@ impl RefTestHarness {
     ///
     /// # Returns
     /// `RefTestResult` with detailed information about the test outcome
-    pub fn run_ref_test_inline(&self, test_name: &str, html: &str, reference_path: &Path) -> RefTestResult {
+    pub fn run_ref_test_inline(&mut self, test_name: &str, html: &str, reference_path: &Path) -> RefTestResult {
         // Load reference image
         let expected = match super::compare::load_png(reference_path) {
             Ok(pixmap) => pixmap,
@@ -460,7 +460,7 @@ impl RefTestHarness {
     ///
     /// # Returns
     /// `RefTestResults` with results for all discovered tests
-    pub fn run_all_tests(&self, test_root: &Path) -> Result<RefTestResults, String> {
+    pub fn run_all_tests(&mut self, test_root: &Path) -> Result<RefTestResults, String> {
         let total_start = Instant::now();
         let mut results = Vec::new();
 
@@ -510,7 +510,7 @@ impl RefTestHarness {
     }
 
     /// Renders HTML to a Pixmap
-    fn render_html(&self, html: &str) -> Result<Pixmap, String> {
+    fn render_html(&mut self, html: &str) -> Result<Pixmap, String> {
         let result = self
             .renderer
             .render_to_png(html, self.config.viewport_width, self.config.viewport_height);
@@ -571,7 +571,7 @@ impl RefTestHarness {
     ///
     /// # Returns
     /// `Ok(())` if saved successfully, `Err` with message otherwise
-    pub fn create_reference(&self, html: &str, output_path: &Path) -> Result<(), String> {
+    pub fn create_reference(&mut self, html: &str, output_path: &Path) -> Result<(), String> {
         let pixmap = self.render_html(html)?;
         pixmap
             .save_png(output_path)
@@ -585,7 +585,7 @@ impl RefTestHarness {
     ///
     /// # Returns
     /// `Ok(())` if updated successfully, `Err` with message otherwise
-    pub fn update_reference(&self, test_dir: &Path) -> Result<(), String> {
+    pub fn update_reference(&mut self, test_dir: &Path) -> Result<(), String> {
         let html_path = test_dir.join("input.html");
         let css_path = test_dir.join("style.css");
         let reference_path = test_dir.join("reference.png");
@@ -882,7 +882,7 @@ mod tests {
 
     #[test]
     fn test_run_ref_test_missing_html() {
-        let harness = RefTestHarness::new();
+        let mut harness = RefTestHarness::new();
         let test_dir = Path::new("/nonexistent/test/dir");
         let reference = Path::new("/nonexistent/reference.png");
 

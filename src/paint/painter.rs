@@ -21,7 +21,7 @@
 //! fragment's background, borders, and content. Text is rendered
 //! using the system's default font.
 
-use crate::css::Color;
+use crate::style::Rgba;
 use crate::error::{RenderError, Result};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 use tiny_skia::{Paint, PathBuilder, Pixmap, Rect as SkiaRect, Transform};
@@ -31,12 +31,12 @@ pub struct Painter {
     /// The pixmap being painted to
     pixmap: Pixmap,
     /// Background color
-    background: Color,
+    background: Rgba,
 }
 
 impl Painter {
     /// Creates a new painter with the given dimensions
-    pub fn new(width: u32, height: u32, background: Color) -> Result<Self> {
+    pub fn new(width: u32, height: u32, background: Rgba) -> Result<Self> {
         let pixmap = Pixmap::new(width, height).ok_or_else(|| RenderError::InvalidParameters {
             message: format!("Failed to create pixmap {}x{}", width, height),
         })?;
@@ -61,7 +61,7 @@ impl Painter {
             self.background.r,
             self.background.g,
             self.background.b,
-            self.background.a,
+            self.background.alpha_u8(),
         );
         self.pixmap.fill(color);
     }
@@ -179,7 +179,7 @@ impl Painter {
 /// Paints a fragment tree to a pixmap
 ///
 /// This is the main entry point for painting.
-pub fn paint_tree(tree: &FragmentTree, width: u32, height: u32, background: Color) -> Result<Pixmap> {
+pub fn paint_tree(tree: &FragmentTree, width: u32, height: u32, background: Rgba) -> Result<Pixmap> {
     let painter = Painter::new(width, height, background)?;
     painter.paint(tree)
 }
@@ -196,14 +196,14 @@ mod tests {
 
     #[test]
     fn test_painter_creation() {
-        let painter = Painter::new(100, 100, Color::WHITE);
+        let painter = Painter::new(100, 100, Rgba::WHITE);
         assert!(painter.is_ok());
     }
 
     #[test]
     fn test_paint_empty_tree() {
         let tree = make_empty_tree();
-        let result = paint_tree(&tree, 100, 100, Color::WHITE);
+        let result = paint_tree(&tree, 100, 100, Rgba::WHITE);
         assert!(result.is_ok());
 
         let pixmap = result.unwrap();
@@ -217,7 +217,7 @@ mod tests {
         let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![text_fragment]);
         let tree = FragmentTree::new(root);
 
-        let result = paint_tree(&tree, 100, 100, Color::WHITE);
+        let result = paint_tree(&tree, 100, 100, Rgba::WHITE);
         assert!(result.is_ok());
     }
 
@@ -227,14 +227,14 @@ mod tests {
         let outer = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), vec![inner]);
         let tree = FragmentTree::new(outer);
 
-        let result = paint_tree(&tree, 100, 100, Color::WHITE);
+        let result = paint_tree(&tree, 100, 100, Rgba::WHITE);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_background_white() {
         let tree = make_empty_tree();
-        let result = paint_tree(&tree, 10, 10, Color::WHITE);
+        let result = paint_tree(&tree, 10, 10, Rgba::WHITE);
         assert!(result.is_ok());
 
         let pixmap = result.unwrap();

@@ -19,17 +19,17 @@
 //! ```rust,ignore
 //! use fastrender::paint::canvas::Canvas;
 //! use fastrender::geometry::{Point, Rect, Size};
-//! use fastrender::css::Color;
+//! use fastrender::style::Rgba;
 //!
 //! // Create a canvas
-//! let mut canvas = Canvas::new(800, 600, Color::WHITE)?;
+//! let mut canvas = Canvas::new(800, 600, Rgba::WHITE)?;
 //!
 //! // Draw a red rectangle
 //! let rect = Rect::from_xywh(100.0, 100.0, 200.0, 150.0);
-//! canvas.draw_rect(rect, Color::rgb(255, 0, 0));
+//! canvas.draw_rect(rect, Rgba::rgb(255, 0, 0));
 //!
 //! // Draw a rounded rectangle
-//! canvas.draw_rounded_rect(rect, 10.0, Color::rgb(0, 255, 0));
+//! canvas.draw_rounded_rect(rect, 10.0, Rgba::rgb(0, 255, 0));
 //!
 //! // Get the resulting pixels
 //! let pixmap = canvas.into_pixmap();
@@ -41,7 +41,7 @@
 //! - CSS Color Level 4: Color handling
 //! - CSS 2.1 Appendix E: Paint order
 
-use crate::css::Color;
+use crate::style::Rgba;
 use crate::error::{RenderError, Result};
 use crate::geometry::{Point, Rect, Size};
 use crate::text::font_db::LoadedFont;
@@ -85,10 +85,10 @@ impl CanvasState {
     }
 
     /// Creates a paint with the current state applied
-    fn create_paint(&self, color: Color) -> Paint<'static> {
+    fn create_paint(&self, color: Rgba) -> Paint<'static> {
         let mut paint = Paint::default();
-        // Apply opacity to alpha
-        let alpha = (color.a as f32 / 255.0) * self.opacity;
+        // Apply opacity to alpha (color.a is already 0.0-1.0)
+        let alpha = color.a * self.opacity;
         paint.set_color_rgba8(color.r, color.g, color.b, (alpha * 255.0) as u8);
         paint.anti_alias = true;
         paint.blend_mode = self.blend_mode;
@@ -154,13 +154,13 @@ impl Canvas {
     ///
     /// ```rust,ignore
     /// use fastrender::paint::canvas::Canvas;
-    /// use fastrender::css::Color;
+    /// use fastrender::style::Rgba;
     ///
-    /// let canvas = Canvas::new(800, 600, Color::WHITE)?;
+    /// let canvas = Canvas::new(800, 600, Rgba::WHITE)?;
     /// assert_eq!(canvas.width(), 800);
     /// assert_eq!(canvas.height(), 600);
     /// ```
-    pub fn new(width: u32, height: u32, background: Color) -> Result<Self> {
+    pub fn new(width: u32, height: u32, background: Rgba) -> Result<Self> {
         let pixmap = Pixmap::new(width, height).ok_or_else(|| RenderError::InvalidParameters {
             message: format!("Failed to create canvas {}x{}", width, height),
         })?;
@@ -185,7 +185,7 @@ impl Canvas {
     /// let canvas = Canvas::new_transparent(400, 300)?;
     /// ```
     pub fn new_transparent(width: u32, height: u32) -> Result<Self> {
-        Self::new(width, height, Color::TRANSPARENT)
+        Self::new(width, height, Rgba::TRANSPARENT)
     }
 
     /// Returns the canvas width in pixels
@@ -217,10 +217,10 @@ impl Canvas {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// canvas.clear(Color::WHITE);
+    /// canvas.clear(Rgba::WHITE);
     /// ```
-    pub fn clear(&mut self, color: Color) {
-        let skia_color = tiny_skia::Color::from_rgba8(color.r, color.g, color.b, color.a);
+    pub fn clear(&mut self, color: Rgba) {
+        let skia_color = tiny_skia::Color::from_rgba8(color.r, color.g, color.b, color.alpha_u8());
         self.pixmap.fill(skia_color);
     }
 
@@ -262,7 +262,7 @@ impl Canvas {
     /// ```rust,ignore
     /// canvas.save();
     /// canvas.set_opacity(0.5);
-    /// canvas.draw_rect(rect, Color::RED);
+    /// canvas.draw_rect(rect, Rgba::RED);
     /// canvas.restore(); // Opacity is back to 1.0
     /// ```
     pub fn save(&mut self) {
@@ -293,7 +293,7 @@ impl Canvas {
     ///
     /// ```rust,ignore
     /// canvas.set_opacity(0.5); // 50% opacity
-    /// canvas.draw_rect(rect, Color::RED); // Draws at 50% opacity
+    /// canvas.draw_rect(rect, Rgba::RED); // Draws at 50% opacity
     /// ```
     pub fn set_opacity(&mut self, opacity: f32) {
         self.current_state.opacity = opacity.clamp(0.0, 1.0);
@@ -328,7 +328,7 @@ impl Canvas {
     ///
     /// ```rust,ignore
     /// canvas.translate(100.0, 50.0);
-    /// canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), Color::RED);
+    /// canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), Rgba::RED);
     /// // Rectangle is drawn at (100, 50)
     /// ```
     pub fn translate(&mut self, dx: f32, dy: f32) {
@@ -372,11 +372,11 @@ impl Canvas {
     ///
     /// ```rust,ignore
     /// let rect = Rect::from_xywh(10.0, 10.0, 100.0, 50.0);
-    /// canvas.draw_rect(rect, Color::rgb(255, 0, 0));
+    /// canvas.draw_rect(rect, Rgba::rgb(255, 0, 0));
     /// ```
-    pub fn draw_rect(&mut self, rect: Rect, color: Color) {
+    pub fn draw_rect(&mut self, rect: Rect, color: Rgba) {
         // Skip fully transparent colors
-        if color.a == 0 && self.current_state.opacity == 0.0 {
+        if color.a == 0.0 && self.current_state.opacity == 0.0 {
             return;
         }
 
@@ -405,10 +405,10 @@ impl Canvas {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// canvas.stroke_rect(rect, Color::BLACK, 2.0);
+    /// canvas.stroke_rect(rect, Rgba::BLACK, 2.0);
     /// ```
-    pub fn stroke_rect(&mut self, rect: Rect, color: Color, width: f32) {
-        if color.a == 0 && self.current_state.opacity == 0.0 {
+    pub fn stroke_rect(&mut self, rect: Rect, color: Rgba, width: f32) {
+        if color.a == 0.0 && self.current_state.opacity == 0.0 {
             return;
         }
 
@@ -436,10 +436,10 @@ impl Canvas {
     ///
     /// ```rust,ignore
     /// let radii = BorderRadii::uniform(10.0);
-    /// canvas.draw_rounded_rect(rect, radii, Color::BLUE);
+    /// canvas.draw_rounded_rect(rect, radii, Rgba::BLUE);
     /// ```
-    pub fn draw_rounded_rect(&mut self, rect: Rect, radii: BorderRadii, color: Color) {
-        if color.a == 0 && self.current_state.opacity == 0.0 {
+    pub fn draw_rounded_rect(&mut self, rect: Rect, radii: BorderRadii, color: Rgba) {
+        if color.a == 0.0 && self.current_state.opacity == 0.0 {
             return;
         }
 
@@ -456,8 +456,8 @@ impl Canvas {
     }
 
     /// Draws a stroked rounded rectangle outline
-    pub fn stroke_rounded_rect(&mut self, rect: Rect, radii: BorderRadii, color: Color, width: f32) {
-        if color.a == 0 && self.current_state.opacity == 0.0 {
+    pub fn stroke_rounded_rect(&mut self, rect: Rect, radii: BorderRadii, color: Rgba, width: f32) {
+        if color.a == 0.0 && self.current_state.opacity == 0.0 {
             return;
         }
 
@@ -493,7 +493,7 @@ impl Canvas {
     ///
     /// ```rust,ignore
     /// let shaped = shaper.shape_text("Hello", &font, 16.0, Script::Latin, TextDirection::Ltr)?;
-    /// canvas.draw_text(Point::new(10.0, 50.0), &shaped.glyphs, &font, 16.0, Color::BLACK);
+    /// canvas.draw_text(Point::new(10.0, 50.0), &shaped.glyphs, &font, 16.0, Rgba::BLACK);
     /// ```
     pub fn draw_text(
         &mut self,
@@ -501,9 +501,9 @@ impl Canvas {
         glyphs: &[GlyphPosition],
         font: &LoadedFont,
         font_size: f32,
-        color: Color,
+        color: Rgba,
     ) {
-        if glyphs.is_empty() || (color.a == 0 && self.current_state.opacity == 0.0) {
+        if glyphs.is_empty() || (color.a == 0.0 && self.current_state.opacity == 0.0) {
             return;
         }
 
@@ -541,8 +541,8 @@ impl Canvas {
     /// * `end` - Ending point
     /// * `color` - Line color
     /// * `width` - Line width in pixels
-    pub fn draw_line(&mut self, start: Point, end: Point, color: Color, width: f32) {
-        if color.a == 0 && self.current_state.opacity == 0.0 {
+    pub fn draw_line(&mut self, start: Point, end: Point, color: Rgba, width: f32) {
+        if color.a == 0.0 && self.current_state.opacity == 0.0 {
             return;
         }
 
@@ -568,8 +568,8 @@ impl Canvas {
     /// * `center` - Center point of the circle
     /// * `radius` - Circle radius in pixels
     /// * `color` - Fill color
-    pub fn draw_circle(&mut self, center: Point, radius: f32, color: Color) {
-        if color.a == 0 || radius <= 0.0 {
+    pub fn draw_circle(&mut self, center: Point, radius: f32, color: Rgba) {
+        if color.a == 0.0 || radius <= 0.0 {
             return;
         }
 
@@ -581,8 +581,8 @@ impl Canvas {
     }
 
     /// Strokes a circle outline
-    pub fn stroke_circle(&mut self, center: Point, radius: f32, color: Color, width: f32) {
-        if color.a == 0 || radius <= 0.0 {
+    pub fn stroke_circle(&mut self, center: Point, radius: f32, color: Rgba, width: f32) {
+        if color.a == 0.0 || radius <= 0.0 {
             return;
         }
 
@@ -867,7 +867,7 @@ mod tests {
 
     #[test]
     fn test_canvas_creation() {
-        let canvas = Canvas::new(100, 100, Color::WHITE);
+        let canvas = Canvas::new(100, 100, Rgba::WHITE);
         assert!(canvas.is_ok());
 
         let canvas = canvas.unwrap();
@@ -883,7 +883,7 @@ mod tests {
 
     #[test]
     fn test_canvas_bounds() {
-        let canvas = Canvas::new(200, 150, Color::WHITE).unwrap();
+        let canvas = Canvas::new(200, 150, Rgba::WHITE).unwrap();
         let bounds = canvas.bounds();
 
         assert_eq!(bounds.x(), 0.0);
@@ -894,7 +894,7 @@ mod tests {
 
     #[test]
     fn test_canvas_size() {
-        let canvas = Canvas::new(300, 200, Color::WHITE).unwrap();
+        let canvas = Canvas::new(300, 200, Rgba::WHITE).unwrap();
         let size = canvas.size();
 
         assert_eq!(size.width, 300.0);
@@ -903,8 +903,8 @@ mod tests {
 
     #[test]
     fn test_canvas_clear() {
-        let mut canvas = Canvas::new(10, 10, Color::WHITE).unwrap();
-        canvas.clear(Color::rgb(255, 0, 0));
+        let mut canvas = Canvas::new(10, 10, Rgba::WHITE).unwrap();
+        canvas.clear(Rgba::rgb(255, 0, 0));
 
         // tiny-skia uses premultiplied RGBA format
         // Verify first pixel is red
@@ -917,9 +917,9 @@ mod tests {
 
     #[test]
     fn test_canvas_draw_rect() {
-        let mut canvas = Canvas::new(100, 100, Color::WHITE).unwrap();
+        let mut canvas = Canvas::new(100, 100, Rgba::WHITE).unwrap();
         let rect = Rect::from_xywh(10.0, 10.0, 20.0, 20.0);
-        canvas.draw_rect(rect, Color::rgb(255, 0, 0));
+        canvas.draw_rect(rect, Rgba::rgb(255, 0, 0));
 
         // Verify the pixmap was modified
         let pixmap = canvas.into_pixmap();
@@ -928,7 +928,7 @@ mod tests {
 
     #[test]
     fn test_canvas_state_save_restore() {
-        let mut canvas = Canvas::new(100, 100, Color::WHITE).unwrap();
+        let mut canvas = Canvas::new(100, 100, Rgba::WHITE).unwrap();
 
         assert_eq!(canvas.state_depth(), 0);
 
@@ -952,7 +952,7 @@ mod tests {
 
     #[test]
     fn test_canvas_opacity() {
-        let mut canvas = Canvas::new(100, 100, Color::WHITE).unwrap();
+        let mut canvas = Canvas::new(100, 100, Rgba::WHITE).unwrap();
 
         assert_eq!(canvas.opacity(), 1.0);
 
@@ -969,7 +969,7 @@ mod tests {
 
     #[test]
     fn test_canvas_transform() {
-        let mut canvas = Canvas::new(100, 100, Color::WHITE).unwrap();
+        let mut canvas = Canvas::new(100, 100, Rgba::WHITE).unwrap();
 
         // Default is identity
         let t = canvas.transform();
@@ -1008,10 +1008,10 @@ mod tests {
 
     #[test]
     fn test_canvas_draw_rounded_rect() {
-        let mut canvas = Canvas::new(100, 100, Color::WHITE).unwrap();
+        let mut canvas = Canvas::new(100, 100, Rgba::WHITE).unwrap();
         let rect = Rect::from_xywh(10.0, 10.0, 50.0, 50.0);
         let radii = BorderRadii::uniform(5.0);
-        canvas.draw_rounded_rect(rect, radii, Color::rgb(0, 0, 255));
+        canvas.draw_rounded_rect(rect, radii, Rgba::rgb(0, 0, 255));
 
         // Just verify it doesn't crash
         let _ = canvas.into_pixmap();
@@ -1019,25 +1019,25 @@ mod tests {
 
     #[test]
     fn test_canvas_stroke_rect() {
-        let mut canvas = Canvas::new(100, 100, Color::WHITE).unwrap();
+        let mut canvas = Canvas::new(100, 100, Rgba::WHITE).unwrap();
         let rect = Rect::from_xywh(10.0, 10.0, 50.0, 50.0);
-        canvas.stroke_rect(rect, Color::BLACK, 2.0);
+        canvas.stroke_rect(rect, Rgba::BLACK, 2.0);
 
         let _ = canvas.into_pixmap();
     }
 
     #[test]
     fn test_canvas_draw_line() {
-        let mut canvas = Canvas::new(100, 100, Color::WHITE).unwrap();
-        canvas.draw_line(Point::new(10.0, 10.0), Point::new(90.0, 90.0), Color::BLACK, 1.0);
+        let mut canvas = Canvas::new(100, 100, Rgba::WHITE).unwrap();
+        canvas.draw_line(Point::new(10.0, 10.0), Point::new(90.0, 90.0), Rgba::BLACK, 1.0);
 
         let _ = canvas.into_pixmap();
     }
 
     #[test]
     fn test_canvas_draw_circle() {
-        let mut canvas = Canvas::new(100, 100, Color::WHITE).unwrap();
-        canvas.draw_circle(Point::new(50.0, 50.0), 20.0, Color::rgb(0, 255, 0));
+        let mut canvas = Canvas::new(100, 100, Rgba::WHITE).unwrap();
+        canvas.draw_circle(Point::new(50.0, 50.0), 20.0, Rgba::rgb(0, 255, 0));
 
         let _ = canvas.into_pixmap();
     }
@@ -1056,22 +1056,22 @@ mod tests {
 
     #[test]
     fn test_canvas_skip_transparent() {
-        let mut canvas = Canvas::new(100, 100, Color::WHITE).unwrap();
+        let mut canvas = Canvas::new(100, 100, Rgba::WHITE).unwrap();
 
         // Drawing with transparent color should not crash
-        canvas.draw_rect(Rect::from_xywh(10.0, 10.0, 20.0, 20.0), Color::TRANSPARENT);
+        canvas.draw_rect(Rect::from_xywh(10.0, 10.0, 20.0, 20.0), Rgba::TRANSPARENT);
 
         let _ = canvas.into_pixmap();
     }
 
     #[test]
     fn test_canvas_clip() {
-        let mut canvas = Canvas::new(100, 100, Color::WHITE).unwrap();
+        let mut canvas = Canvas::new(100, 100, Rgba::WHITE).unwrap();
 
         canvas.set_clip(Rect::from_xywh(20.0, 20.0, 60.0, 60.0));
 
         // Draw a rectangle that extends beyond the clip
-        canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), Color::rgb(255, 0, 0));
+        canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), Rgba::rgb(255, 0, 0));
 
         canvas.clear_clip();
 

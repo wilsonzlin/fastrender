@@ -54,8 +54,9 @@
 //! caches that are not thread-safe. For multi-threaded use, create one
 //! instance per thread.
 
-use crate::box_generation::{extract_css, generate_box_tree};
-use crate::css::Color;
+use crate::css::extract_css;
+use crate::tree::generate_box_tree;
+use crate::style::Rgba;
 use crate::dom::{self, DomNode};
 use crate::error::{Error, RenderError, Result};
 use crate::geometry::Size;
@@ -91,7 +92,7 @@ pub use tiny_skia::Pixmap;
 /// use fastrender::api::{FastRender, FastRenderConfig};
 ///
 /// let config = FastRenderConfig::new()
-///     .with_default_background(Color::WHITE);
+///     .with_default_background(Rgba::WHITE);
 ///
 /// let mut renderer = FastRender::with_config(config)?;
 /// let pixmap = renderer.render_html(html, 1024, 768)?;
@@ -121,7 +122,7 @@ pub struct FastRender {
     layout_engine: LayoutEngine,
 
     /// Default background color for rendering
-    background_color: Color,
+    background_color: Rgba,
 }
 
 impl std::fmt::Debug for FastRender {
@@ -140,15 +141,15 @@ impl std::fmt::Debug for FastRender {
 ///
 /// ```rust,ignore
 /// use fastrender::api::FastRenderConfig;
-/// use fastrender::css::Color;
+/// use fastrender::style::Rgba;
 ///
 /// let config = FastRenderConfig::new()
-///     .with_default_background(Color::rgb(240, 240, 240));
+///     .with_default_background(Rgba::rgb(240, 240, 240));
 /// ```
 #[derive(Debug, Clone)]
 pub struct FastRenderConfig {
     /// Default background color for rendered images
-    pub background_color: Color,
+    pub background_color: Rgba,
 
     /// Default viewport width (used when not specified)
     pub default_width: u32,
@@ -160,7 +161,7 @@ pub struct FastRenderConfig {
 impl Default for FastRenderConfig {
     fn default() -> Self {
         Self {
-            background_color: Color::WHITE,
+            background_color: Rgba::WHITE,
             default_width: 800,
             default_height: 600,
         }
@@ -172,19 +173,83 @@ impl FastRenderConfig {
     pub fn new() -> Self {
         Self::default()
     }
+}
 
+/// Builder for creating FastRender instances
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use fastrender::FastRender;
+///
+/// let mut renderer = FastRender::builder()
+///     .viewport_size(1024, 768)
+///     .background_color(Rgba::WHITE)
+///     .build()?;
+/// ```
+#[derive(Debug, Clone)]
+pub struct FastRenderBuilder {
+    config: FastRenderConfig,
+}
+
+impl FastRenderBuilder {
+    /// Creates a new builder with default configuration
+    pub fn new() -> Self {
+        Self {
+            config: FastRenderConfig::default(),
+        }
+    }
+
+    /// Sets the viewport size
+    pub fn viewport_size(mut self, width: u32, height: u32) -> Self {
+        self.config.default_width = width;
+        self.config.default_height = height;
+        self
+    }
+
+    /// Sets the viewport width
+    pub fn viewport_width(mut self, width: u32) -> Self {
+        self.config.default_width = width;
+        self
+    }
+
+    /// Sets the viewport height
+    pub fn viewport_height(mut self, height: u32) -> Self {
+        self.config.default_height = height;
+        self
+    }
+
+    /// Sets the background color
+    pub fn background_color(mut self, color: Rgba) -> Self {
+        self.config.background_color = color;
+        self
+    }
+
+    /// Builds the FastRender instance
+    pub fn build(self) -> Result<FastRender> {
+        FastRender::with_config(self.config)
+    }
+}
+
+impl Default for FastRenderBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FastRenderConfig {
     /// Sets the default background color
     ///
     /// # Examples
     ///
     /// ```rust,ignore
     /// use fastrender::api::FastRenderConfig;
-    /// use fastrender::css::Color;
+    /// use fastrender::style::Rgba;
     ///
     /// let config = FastRenderConfig::new()
-    ///     .with_default_background(Color::rgb(255, 255, 255));
+    ///     .with_default_background(Rgba::rgb(255, 255, 255));
     /// ```
-    pub fn with_default_background(mut self, color: Color) -> Self {
+    pub fn with_default_background(mut self, color: Rgba) -> Self {
         self.background_color = color;
         self
     }
@@ -228,6 +293,22 @@ impl FastRender {
         Self::with_config(FastRenderConfig::default())
     }
 
+    /// Creates a builder for configuring FastRender
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use fastrender::FastRender;
+    ///
+    /// let mut renderer = FastRender::builder()
+    ///     .viewport_size(1024, 768)
+    ///     .background_color(Rgba::WHITE)
+    ///     .build()?;
+    /// ```
+    pub fn builder() -> FastRenderBuilder {
+        FastRenderBuilder::new()
+    }
+
     /// Creates a new FastRender instance with custom configuration
     ///
     /// # Arguments
@@ -242,10 +323,10 @@ impl FastRender {
     ///
     /// ```rust,ignore
     /// use fastrender::api::{FastRender, FastRenderConfig};
-    /// use fastrender::css::Color;
+    /// use fastrender::style::Rgba;
     ///
     /// let config = FastRenderConfig::new()
-    ///     .with_default_background(Color::rgb(240, 240, 240))
+    ///     .with_default_background(Rgba::rgb(240, 240, 240))
     ///     .with_default_viewport(1024, 768);
     ///
     /// let mut renderer = FastRender::with_config(config)?;
@@ -346,14 +427,14 @@ impl FastRender {
     ///
     /// ```rust,ignore
     /// use fastrender::api::FastRender;
-    /// use fastrender::css::Color;
+    /// use fastrender::style::Rgba;
     ///
     /// let mut renderer = FastRender::new()?;
     /// let pixmap = renderer.render_html_with_background(
     ///     "<h1>Hello!</h1>",
     ///     800,
     ///     600,
-    ///     Color::rgb(240, 240, 240),
+    ///     Rgba::rgb(240, 240, 240),
     /// )?;
     /// ```
     pub fn render_html_with_background(
@@ -361,7 +442,7 @@ impl FastRender {
         html: &str,
         width: u32,
         height: u32,
-        background: Color,
+        background: Rgba,
     ) -> Result<Pixmap> {
         let original_background = self.background_color;
         self.background_color = background;
@@ -499,13 +580,69 @@ impl FastRender {
     }
 
     /// Gets the default background color
-    pub fn background_color(&self) -> Color {
+    pub fn background_color(&self) -> Rgba {
         self.background_color
     }
 
     /// Sets the default background color
-    pub fn set_background_color(&mut self, color: Color) {
+    pub fn set_background_color(&mut self, color: Rgba) {
         self.background_color = color;
+    }
+
+    // =========================================================================
+    // Convenience methods for encoding to image formats
+    // =========================================================================
+
+    /// Renders HTML to PNG bytes
+    ///
+    /// This is a convenience method that renders and encodes in one step.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use fastrender::FastRender;
+    /// use std::fs;
+    ///
+    /// let mut renderer = FastRender::new()?;
+    /// let png_bytes = renderer.render_to_png("<h1>Hello!</h1>", 800, 600)?;
+    /// fs::write("output.png", &png_bytes)?;
+    /// ```
+    pub fn render_to_png(&mut self, html: &str, width: u32, height: u32) -> Result<Vec<u8>> {
+        let pixmap = self.render_html(html, width, height)?;
+        crate::image_output::encode_image(&pixmap, crate::image_output::OutputFormat::Png)
+    }
+
+    /// Renders HTML to JPEG bytes with specified quality (0-100)
+    ///
+    /// # Arguments
+    ///
+    /// * `html` - HTML source code
+    /// * `width` - Viewport width in pixels
+    /// * `height` - Viewport height in pixels
+    /// * `quality` - JPEG quality (0-100, where 100 is highest quality)
+    pub fn render_to_jpeg(&mut self, html: &str, width: u32, height: u32, quality: u8) -> Result<Vec<u8>> {
+        let pixmap = self.render_html(html, width, height)?;
+        crate::image_output::encode_image(&pixmap, crate::image_output::OutputFormat::Jpeg(quality))
+    }
+
+    /// Renders HTML to WebP bytes with specified quality (0-100)
+    ///
+    /// # Arguments
+    ///
+    /// * `html` - HTML source code
+    /// * `width` - Viewport width in pixels
+    /// * `height` - Viewport height in pixels
+    /// * `quality` - WebP quality (0-100, where 100 is highest quality)
+    pub fn render_to_webp(&mut self, html: &str, width: u32, height: u32, quality: u8) -> Result<Vec<u8>> {
+        let pixmap = self.render_html(html, width, height)?;
+        crate::image_output::encode_image(&pixmap, crate::image_output::OutputFormat::WebP(quality))
+    }
+
+    /// Renders HTML using default viewport size
+    ///
+    /// Uses the viewport size configured in `FastRenderConfig` (default: 800x600).
+    pub fn render(&mut self, html: &str) -> Result<Vec<u8>> {
+        self.render_to_png(html, 800, 600)
     }
 }
 
@@ -526,7 +663,7 @@ mod tests {
     #[test]
     fn test_fastrender_with_config() {
         let config = FastRenderConfig::new()
-            .with_default_background(Color::rgb(128, 128, 128))
+            .with_default_background(Rgba::rgb(128, 128, 128))
             .with_default_viewport(1024, 768);
 
         let result = FastRender::with_config(config);
@@ -561,7 +698,7 @@ mod tests {
     #[test]
     fn test_config_builder() {
         let config = FastRenderConfig::new()
-            .with_default_background(Color::rgb(100, 100, 100))
+            .with_default_background(Rgba::rgb(100, 100, 100))
             .with_default_viewport(1920, 1080);
 
         assert_eq!(config.background_color.r, 100);
@@ -572,7 +709,7 @@ mod tests {
     #[test]
     fn test_set_background_color() {
         let mut renderer = FastRender::new().unwrap();
-        renderer.set_background_color(Color::rgb(50, 50, 50));
+        renderer.set_background_color(Rgba::rgb(50, 50, 50));
         assert_eq!(renderer.background_color().r, 50);
     }
 
@@ -659,7 +796,7 @@ mod tests {
             "<div>Test</div>",
             100,
             100,
-            Color::rgb(255, 0, 0), // Red background
+            Rgba::rgb(255, 0, 0), // Red background
         );
         assert!(result.is_ok());
     }

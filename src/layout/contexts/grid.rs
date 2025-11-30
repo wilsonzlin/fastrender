@@ -41,7 +41,7 @@ use taffy::tree::{NodeId as TaffyNodeId, TaffyTree};
 use crate::geometry::Rect;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::style::{AlignContent as LegacyAlignContent, Display as CssDisplay, GridTrack as LegacyGridTrack, Length};
+use crate::style::{AlignContent, Display as CssDisplay, GridTrack, Length};
 use crate::tree::box_tree::ComputedStyle;
 use crate::tree::{BoxNode, FragmentNode};
 
@@ -174,8 +174,8 @@ impl GridFormattingContext {
         // Grid container properties
         if is_grid {
             // Grid template columns/rows
-            taffy_style.grid_template_columns = self.convert_legacy_grid_template(&style.grid_template_columns);
-            taffy_style.grid_template_rows = self.convert_legacy_grid_template(&style.grid_template_rows);
+            taffy_style.grid_template_columns = self.convert_grid_template(&style.grid_template_columns);
+            taffy_style.grid_template_rows = self.convert_grid_template(&style.grid_template_rows);
 
             // Gap
             taffy_style.gap = taffy::geometry::Size {
@@ -184,7 +184,7 @@ impl GridFormattingContext {
             };
 
             // Alignment
-            taffy_style.align_content = Some(self.convert_legacy_align_content(&style.align_content));
+            taffy_style.align_content = Some(self.convert_align_content(&style.align_content));
         }
 
         // Grid item properties using raw line numbers
@@ -232,34 +232,34 @@ impl GridFormattingContext {
         }
     }
 
-    /// Converts legacy GridTrack Vec to Taffy track list
-    fn convert_legacy_grid_template(&self, tracks: &[LegacyGridTrack]) -> Vec<GridTemplateComponent<String>> {
+    /// Converts GridTrack Vec to Taffy track list
+    fn convert_grid_template(&self, tracks: &[GridTrack]) -> Vec<GridTemplateComponent<String>> {
         tracks
             .iter()
-            .map(|t| self.convert_legacy_track_to_component(t))
+            .map(|t| self.convert_track_to_component(t))
             .collect()
     }
 
-    /// Converts a single legacy GridTrack to GridTemplateComponent
-    fn convert_legacy_track_to_component(&self, track: &LegacyGridTrack) -> GridTemplateComponent<String> {
-        GridTemplateComponent::Single(self.convert_legacy_track_size(track))
+    /// Converts a single GridTrack to GridTemplateComponent
+    fn convert_track_to_component(&self, track: &GridTrack) -> GridTemplateComponent<String> {
+        GridTemplateComponent::Single(self.convert_track_size(track))
     }
 
-    /// Converts a single legacy GridTrack to TrackSizingFunction
-    fn convert_legacy_track_size(&self, track: &LegacyGridTrack) -> TrackSizingFunction {
+    /// Converts a single GridTrack to TrackSizingFunction
+    fn convert_track_size(&self, track: &GridTrack) -> TrackSizingFunction {
         match track {
-            LegacyGridTrack::Length(len) => {
+            GridTrack::Length(len) => {
                 let lp = self.convert_length_to_lp(len);
                 TrackSizingFunction::from(lp)
             }
-            LegacyGridTrack::Fr(fr) => TrackSizingFunction {
+            GridTrack::Fr(fr) => TrackSizingFunction {
                 min: MinTrackSizingFunction::AUTO,
                 max: MaxTrackSizingFunction::fr(*fr),
             },
-            LegacyGridTrack::Auto => TrackSizingFunction::AUTO,
-            LegacyGridTrack::MinMax(min, max) => {
-                let min_fn = self.convert_legacy_min_track(min);
-                let max_fn = self.convert_legacy_max_track(max);
+            GridTrack::Auto => TrackSizingFunction::AUTO,
+            GridTrack::MinMax(min, max) => {
+                let min_fn = self.convert_min_track(min);
+                let max_fn = self.convert_max_track(max);
                 TrackSizingFunction {
                     min: min_fn,
                     max: max_fn,
@@ -268,29 +268,29 @@ impl GridFormattingContext {
         }
     }
 
-    /// Converts legacy GridTrack to MinTrackSizingFunction
-    fn convert_legacy_min_track(&self, track: &LegacyGridTrack) -> MinTrackSizingFunction {
+    /// Converts GridTrack to MinTrackSizingFunction
+    fn convert_min_track(&self, track: &GridTrack) -> MinTrackSizingFunction {
         use crate::style::LengthUnit;
         match track {
-            LegacyGridTrack::Length(len) => match len.unit {
+            GridTrack::Length(len) => match len.unit {
                 LengthUnit::Percent => MinTrackSizingFunction::percent(len.value / 100.0),
                 _ => MinTrackSizingFunction::length(len.to_px()),
             },
-            LegacyGridTrack::Auto => MinTrackSizingFunction::auto(),
+            GridTrack::Auto => MinTrackSizingFunction::auto(),
             _ => MinTrackSizingFunction::auto(),
         }
     }
 
-    /// Converts legacy GridTrack to MaxTrackSizingFunction
-    fn convert_legacy_max_track(&self, track: &LegacyGridTrack) -> MaxTrackSizingFunction {
+    /// Converts GridTrack to MaxTrackSizingFunction
+    fn convert_max_track(&self, track: &GridTrack) -> MaxTrackSizingFunction {
         use crate::style::LengthUnit;
         match track {
-            LegacyGridTrack::Length(len) => match len.unit {
+            GridTrack::Length(len) => match len.unit {
                 LengthUnit::Percent => MaxTrackSizingFunction::percent(len.value / 100.0),
                 _ => MaxTrackSizingFunction::length(len.to_px()),
             },
-            LegacyGridTrack::Fr(fr) => MaxTrackSizingFunction::fr(*fr),
-            LegacyGridTrack::Auto | LegacyGridTrack::MinMax(..) => MaxTrackSizingFunction::auto(),
+            GridTrack::Fr(fr) => MaxTrackSizingFunction::fr(*fr),
+            GridTrack::Auto | GridTrack::MinMax(..) => MaxTrackSizingFunction::auto(),
         }
     }
 
@@ -310,15 +310,15 @@ impl GridFormattingContext {
         }
     }
 
-    /// Converts legacy AlignContent to Taffy AlignContent
-    fn convert_legacy_align_content(&self, align: &LegacyAlignContent) -> TaffyAlignContent {
+    /// Converts AlignContent to Taffy AlignContent
+    fn convert_align_content(&self, align: &AlignContent) -> TaffyAlignContent {
         match align {
-            LegacyAlignContent::FlexStart => TaffyAlignContent::Start,
-            LegacyAlignContent::FlexEnd => TaffyAlignContent::End,
-            LegacyAlignContent::Center => TaffyAlignContent::Center,
-            LegacyAlignContent::Stretch => TaffyAlignContent::Stretch,
-            LegacyAlignContent::SpaceBetween => TaffyAlignContent::SpaceBetween,
-            LegacyAlignContent::SpaceAround => TaffyAlignContent::SpaceAround,
+            AlignContent::FlexStart => TaffyAlignContent::Start,
+            AlignContent::FlexEnd => TaffyAlignContent::End,
+            AlignContent::Center => TaffyAlignContent::Center,
+            AlignContent::Stretch => TaffyAlignContent::Stretch,
+            AlignContent::SpaceBetween => TaffyAlignContent::SpaceBetween,
+            AlignContent::SpaceAround => TaffyAlignContent::SpaceAround,
         }
     }
 
@@ -699,7 +699,7 @@ mod tests {
 
         let mut style = ComputedStyle::default();
         style.display = CssDisplay::Grid;
-        style.align_content = LegacyAlignContent::Center;
+        style.align_content = AlignContent::Center;
         style.grid_template_columns = vec![GridTrack::Fr(1.0)];
         let style = Arc::new(style);
 

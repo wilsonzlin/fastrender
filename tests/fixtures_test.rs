@@ -36,8 +36,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-#[allow(unused_imports)]
-use fastrender::Renderer;
+use fastrender::FastRender;
 
 /// Test configuration for fixtures
 const FIXTURE_WIDTH: u32 = 600;
@@ -95,7 +94,7 @@ fn should_update_golden() -> bool {
 /// or golden was updated).
 fn test_fixture(name: &str) -> Result<(), String> {
     let html = load_fixture(name);
-    let renderer = Renderer::new();
+    let mut renderer = FastRender::new().map_err(|e| format!("Failed to create renderer: {:?}", e))?;
 
     // Render the fixture
     let rendered = renderer
@@ -219,25 +218,21 @@ fn test_fixture_files_are_valid_html() {
 // =============================================================================
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_block_simple() {
     test_fixture("block_simple").expect("block_simple fixture should render");
 }
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_block_nested() {
     test_fixture("block_nested").expect("block_nested fixture should render");
 }
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_block_margin_collapse() {
     test_fixture("block_margin_collapse").expect("block_margin_collapse fixture should render");
 }
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_block_clearance() {
     test_fixture("block_clearance").expect("block_clearance fixture should render");
 }
@@ -247,19 +242,16 @@ fn test_fixture_block_clearance() {
 // =============================================================================
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_inline_text_wrap() {
     test_fixture("inline_text_wrap").expect("inline_text_wrap fixture should render");
 }
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_inline_mixed() {
     test_fixture("inline_mixed").expect("inline_mixed fixture should render");
 }
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_inline_baseline() {
     test_fixture("inline_baseline").expect("inline_baseline fixture should render");
 }
@@ -269,19 +261,16 @@ fn test_fixture_inline_baseline() {
 // =============================================================================
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_flex_direction() {
     test_fixture("flex_direction").expect("flex_direction fixture should render");
 }
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_flex_justify_align() {
     test_fixture("flex_justify_align").expect("flex_justify_align fixture should render");
 }
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_flex_grow_shrink() {
     test_fixture("flex_grow_shrink").expect("flex_grow_shrink fixture should render");
 }
@@ -291,19 +280,16 @@ fn test_fixture_flex_grow_shrink() {
 // =============================================================================
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_grid_template() {
     test_fixture("grid_template").expect("grid_template fixture should render");
 }
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_grid_auto_flow() {
     test_fixture("grid_auto_flow").expect("grid_auto_flow fixture should render");
 }
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_grid_gaps() {
     test_fixture("grid_gaps").expect("grid_gaps fixture should render");
 }
@@ -313,19 +299,16 @@ fn test_fixture_grid_gaps() {
 // =============================================================================
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_table_fixed() {
     test_fixture("table_fixed").expect("table_fixed fixture should render");
 }
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_table_auto() {
     test_fixture("table_auto").expect("table_auto fixture should render");
 }
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_table_span() {
     test_fixture("table_span").expect("table_span fixture should render");
 }
@@ -335,19 +318,16 @@ fn test_fixture_table_span() {
 // =============================================================================
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_float_basic() {
     test_fixture("float_basic").expect("float_basic fixture should render");
 }
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_float_text_wrap() {
     test_fixture("float_text_wrap").expect("float_text_wrap fixture should render");
 }
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_float_clearance() {
     test_fixture("float_clearance").expect("float_clearance fixture should render");
 }
@@ -357,13 +337,11 @@ fn test_fixture_float_clearance() {
 // =============================================================================
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_positioned_relative() {
     test_fixture("positioned_relative").expect("positioned_relative fixture should render");
 }
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_positioned_absolute() {
     test_fixture("positioned_absolute").expect("positioned_absolute fixture should render");
 }
@@ -373,19 +351,16 @@ fn test_fixture_positioned_absolute() {
 // =============================================================================
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_text_complex_scripts() {
     test_fixture("text_complex_scripts").expect("text_complex_scripts fixture should render");
 }
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_text_bidi() {
     test_fixture("text_bidi").expect("text_bidi fixture should render");
 }
 
 #[test]
-#[ignore = "V1 pipeline removed, W4+ integration pending"]
 fn test_fixture_text_line_break() {
     test_fixture("text_line_break").expect("text_line_break fixture should render");
 }

@@ -17,8 +17,9 @@ pub mod variables;
 // Re-export color types
 pub use color::{Color, ColorParseError, Hsla, Rgba};
 
-// Re-export computed style types (excluding types that conflict with legacy definitions)
-pub use computed::{BorderColors, ComputedStyle, ComputedStyleBuilder};
+// Re-export computed style types
+// Note: BorderColors is not re-exported to avoid conflict with paint::BorderColors
+pub use computed::{ComputedStyle, ComputedStyleBuilder};
 
 // Re-export content generation types
 pub use content::{parse_content, ContentContext, ContentGenerator, ContentItem, ContentValue, CounterStyle};
@@ -1704,7 +1705,9 @@ fn apply_declaration(styles: &mut ComputedStyles, decl: &Declaration, parent_fon
                 });
             }
             PropertyValue::RadialGradient { stops } => {
-                styles.background_image = Some(BackgroundImage::RadialGradient { stops: stops.clone() });
+                styles.background_image = Some(BackgroundImage::RadialGradient {
+                    stops: stops.clone(),
+                });
             }
             PropertyValue::Keyword(kw) if kw == "none" => {
                 styles.background_image = None;
@@ -1749,7 +1752,9 @@ fn apply_declaration(styles: &mut ComputedStyles, decl: &Declaration, parent_fon
                     stops: stops.clone(),
                 });
             } else if let PropertyValue::RadialGradient { stops } = &resolved_value {
-                styles.background_image = Some(BackgroundImage::RadialGradient { stops: stops.clone() });
+                styles.background_image = Some(BackgroundImage::RadialGradient {
+                    stops: stops.clone(),
+                });
             }
         }
 
