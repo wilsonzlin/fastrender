@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Table Layout - Colspan and Rowspan</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+        }
+        .label {
+            margin: 10px 0 5px 0;
+            font-weight: bold;
+            color: #495057;
+        }
+        table {
+            border-collapse: collapse;
+            margin-bottom: 20px;
+            background-color: white;
+        }
+        th, td {
+            border: 1px solid #dee2e6;
+            padding: 8px 12px;
+            text-align: center;
+        }
+        th {
+            background-color: #e9ecef;
+            font-weight: bold;
+        }
+        .highlight-1 { background-color: #ffe3e3; }
+        .highlight-2 { background-color: #d3f9d8; }
+        .highlight-3 { background-color: #d0ebff; }
+        .highlight-4 { background-color: #fff3bf; }
+    </style>
+</head>
+<body>
+    <div class="label">colspan - spanning columns</div>
+    <table>
+        <thead>
+            <tr>
+                <th colspan="3" class="highlight-1">Header spanning 3 columns</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>A1</td>
+                <td>A2</td>
+                <td>A3</td>
+            </tr>
+            <tr>
+                <td colspan="2" class="highlight-2">Spans 2</td>
+                <td>B3</td>
+            </tr>
+            <tr>
+                <td>C1</td>
+                <td colspan="2" class="highlight-3">Spans 2</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="label">rowspan - spanning rows</div>
+    <table>
+        <tbody>
+            <tr>
+                <td rowspan="3" class="highlight-1">Spans 3 rows</td>
+                <td>A2</td>
+                <td>A3</td>
+            </tr>
+            <tr>
+                <td>B2</td>
+                <td rowspan="2" class="highlight-2">Spans 2</td>
+            </tr>
+            <tr>
+                <td>C2</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="label">Mixed colspan and rowspan</div>
+    <table>
+        <thead>
+            <tr>
+                <th></th>
+                <th colspan="2" class="highlight-1">Group A</th>
+                <th colspan="2" class="highlight-2">Group B</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td rowspan="2" class="highlight-3">Row Header</td>
+                <td>1</td>
+                <td>2</td>
+                <td>3</td>
+                <td>4</td>
+            </tr>
+            <tr>
+                <td>5</td>
+                <td>6</td>
+                <td>7</td>
+                <td>8</td>
+            </tr>
+            <tr>
+                <td class="highlight-4">Footer</td>
+                <td colspan="4" class="highlight-4">Spanning footer row</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="label">Complex spanning pattern</div>
+    <table>
+        <tbody>
+            <tr>
+                <td colspan="2" rowspan="2" class="highlight-1">2x2</td>
+                <td>C</td>
+            </tr>
+            <tr>
+                <td>D</td>
+            </tr>
+            <tr>
+                <td>E</td>
+                <td>F</td>
+                <td>G</td>
+            </tr>
+        </tbody>
+    </table>
+</body>
+</html>

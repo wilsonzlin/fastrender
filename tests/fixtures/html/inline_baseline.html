@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Inline Layout - Baseline Alignment</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+        }
+        .container {
+            width: 500px;
+            background-color: #f0f0f0;
+            padding: 10px;
+            line-height: 2;
+        }
+        .large {
+            font-size: 32px;
+            background-color: #ff6b6b;
+        }
+        .medium {
+            font-size: 20px;
+            background-color: #51cf66;
+        }
+        .small {
+            font-size: 12px;
+            background-color: #339af0;
+        }
+        .inline-box {
+            display: inline-block;
+            width: 30px;
+            height: 50px;
+            background-color: #fcc419;
+        }
+        .va-top {
+            vertical-align: top;
+        }
+        .va-middle {
+            vertical-align: middle;
+        }
+        .va-bottom {
+            vertical-align: bottom;
+        }
+        .va-baseline {
+            vertical-align: baseline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <p>
+            <span class="large">Large</span>
+            <span class="medium">Medium</span>
+            <span class="small">Small</span>
+            text at different sizes.
+        </p>
+        <p>
+            Text with
+            <span class="inline-box va-baseline"></span>baseline
+            <span class="inline-box va-top"></span>top
+            <span class="inline-box va-middle"></span>middle
+            <span class="inline-box va-bottom"></span>bottom
+            alignment.
+        </p>
+    </div>
+</body>
+</html>

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Grid Layout - Auto Flow</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+        }
+        .label {
+            margin: 10px 0 5px 0;
+            font-weight: bold;
+            color: #495057;
+        }
+        .grid {
+            display: grid;
+            width: 400px;
+            background-color: #e9ecef;
+            margin-bottom: 20px;
+            grid-template-columns: repeat(3, 1fr);
+        }
+        .item {
+            padding: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+        .item-1 { background-color: #ff6b6b; }
+        .item-2 { background-color: #51cf66; }
+        .item-3 { background-color: #339af0; }
+        .item-4 { background-color: #fcc419; }
+        .item-5 { background-color: #cc5de8; }
+        .item-6 { background-color: #20c997; }
+        .item-7 { background-color: #f06595; }
+        .item-8 { background-color: #748ffc; }
+
+        /* Auto flow row (default) */
+        .flow-row {
+            grid-auto-flow: row;
+        }
+
+        /* Auto flow column */
+        .flow-column {
+            grid-auto-flow: column;
+            grid-template-columns: none;
+            grid-template-rows: repeat(3, 50px);
+        }
+
+        /* Auto flow dense */
+        .flow-dense {
+            grid-auto-flow: dense;
+        }
+        .flow-dense .item-1 {
+            grid-column: span 2;
+        }
+        .flow-dense .item-3 {
+            grid-column: span 2;
+        }
+
+        /* Auto rows */
+        .auto-rows {
+            grid-auto-rows: 60px;
+        }
+
+        /* Auto columns */
+        .auto-cols {
+            grid-auto-flow: column;
+            grid-template-columns: none;
+            grid-template-rows: repeat(2, 1fr);
+            grid-auto-columns: 80px;
+            height: 120px;
+        }
+    </style>
+</head>
+<body>
+    <div class="label">grid-auto-flow: row (default)</div>
+    <div class="grid flow-row">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+        <div class="item item-4">4</div>
+        <div class="item item-5">5</div>
+        <div class="item item-6">6</div>
+    </div>
+
+    <div class="label">grid-auto-flow: column</div>
+    <div class="grid flow-column">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+        <div class="item item-4">4</div>
+        <div class="item item-5">5</div>
+        <div class="item item-6">6</div>
+    </div>
+
+    <div class="label">grid-auto-flow: dense (with spanning items)</div>
+    <div class="grid flow-dense">
+        <div class="item item-1">1 (span 2)</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3 (span 2)</div>
+        <div class="item item-4">4</div>
+        <div class="item item-5">5</div>
+        <div class="item item-6">6</div>
+    </div>
+
+    <div class="label">grid-auto-rows: 60px</div>
+    <div class="grid auto-rows">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+        <div class="item item-4">4</div>
+        <div class="item item-5">5</div>
+        <div class="item item-6">6</div>
+        <div class="item item-7">7</div>
+        <div class="item item-8">8</div>
+    </div>
+
+    <div class="label">grid-auto-columns: 80px</div>
+    <div class="grid auto-cols">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+        <div class="item item-4">4</div>
+        <div class="item item-5">5</div>
+        <div class="item item-6">6</div>
+    </div>
+</body>
+</html>

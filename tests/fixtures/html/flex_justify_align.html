@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Flexbox - Justify Content and Align Items</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+        }
+        .label {
+            margin: 10px 0 5px 0;
+            font-weight: bold;
+            color: #495057;
+        }
+        .container {
+            display: flex;
+            width: 400px;
+            height: 80px;
+            background-color: #e9ecef;
+            margin-bottom: 15px;
+        }
+        .item {
+            width: 50px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+        .item-1 { background-color: #ff6b6b; }
+        .item-2 { background-color: #51cf66; height: 40px; }
+        .item-3 { background-color: #339af0; height: 50px; }
+
+        /* justify-content variations */
+        .jc-flex-start { justify-content: flex-start; }
+        .jc-flex-end { justify-content: flex-end; }
+        .jc-center { justify-content: center; }
+        .jc-space-between { justify-content: space-between; }
+        .jc-space-around { justify-content: space-around; }
+        .jc-space-evenly { justify-content: space-evenly; }
+
+        /* align-items variations */
+        .ai-flex-start { align-items: flex-start; }
+        .ai-flex-end { align-items: flex-end; }
+        .ai-center { align-items: center; }
+        .ai-stretch { align-items: stretch; }
+        .ai-stretch .item { height: auto; }
+    </style>
+</head>
+<body>
+    <div class="label">justify-content: flex-start</div>
+    <div class="container jc-flex-start">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+    </div>
+
+    <div class="label">justify-content: flex-end</div>
+    <div class="container jc-flex-end">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+    </div>
+
+    <div class="label">justify-content: center</div>
+    <div class="container jc-center">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+    </div>
+
+    <div class="label">justify-content: space-between</div>
+    <div class="container jc-space-between">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+    </div>
+
+    <div class="label">justify-content: space-around</div>
+    <div class="container jc-space-around">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+    </div>
+
+    <div class="label">align-items: flex-start</div>
+    <div class="container ai-flex-start">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+    </div>
+
+    <div class="label">align-items: flex-end</div>
+    <div class="container ai-flex-end">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+    </div>
+
+    <div class="label">align-items: center</div>
+    <div class="container ai-center">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+    </div>
+
+    <div class="label">align-items: stretch</div>
+    <div class="container ai-stretch">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Table Layout - Fixed Layout</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+        }
+        .label {
+            margin: 10px 0 5px 0;
+            font-weight: bold;
+            color: #495057;
+        }
+        table {
+            border-collapse: collapse;
+            margin-bottom: 20px;
+            background-color: white;
+        }
+        th, td {
+            border: 1px solid #dee2e6;
+            padding: 8px 12px;
+            text-align: left;
+        }
+        th {
+            background-color: #e9ecef;
+            font-weight: bold;
+        }
+        /* Fixed layout table */
+        .fixed {
+            table-layout: fixed;
+            width: 400px;
+        }
+        .col-narrow { width: 80px; }
+        .col-medium { width: 120px; }
+        .col-wide { width: 200px; }
+    </style>
+</head>
+<body>
+    <div class="label">table-layout: fixed with explicit column widths</div>
+    <table class="fixed">
+        <col class="col-narrow">
+        <col class="col-medium">
+        <col class="col-wide">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>1</td>
+                <td>Item A</td>
+                <td>This is a long description that should be truncated or wrapped</td>
+            </tr>
+            <tr>
+                <td>2</td>
+                <td>Item B</td>
+                <td>Another description</td>
+            </tr>
+            <tr>
+                <td>3</td>
+                <td>Item C</td>
+                <td>Short</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="label">Fixed layout - equal columns</div>
+    <table class="fixed" style="width: 300px;">
+        <thead>
+            <tr>
+                <th style="width: 100px;">Col 1</th>
+                <th style="width: 100px;">Col 2</th>
+                <th style="width: 100px;">Col 3</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>Short</td>
+                <td>Medium text here</td>
+                <td>Very long content that exceeds column width</td>
+            </tr>
+        </tbody>
+    </table>
+</body>
+</html>

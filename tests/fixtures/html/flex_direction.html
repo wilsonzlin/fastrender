@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Flexbox - Direction Variations</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+        }
+        .label {
+            margin: 10px 0 5px 0;
+            font-weight: bold;
+            color: #495057;
+        }
+        .container {
+            display: flex;
+            width: 300px;
+            height: 100px;
+            background-color: #e9ecef;
+            margin-bottom: 20px;
+        }
+        .item {
+            width: 60px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+        .item-1 { background-color: #ff6b6b; }
+        .item-2 { background-color: #51cf66; }
+        .item-3 { background-color: #339af0; }
+
+        .row { flex-direction: row; }
+        .row-reverse { flex-direction: row-reverse; }
+        .column {
+            flex-direction: column;
+            height: 200px;
+            width: 150px;
+        }
+        .column-reverse {
+            flex-direction: column-reverse;
+            height: 200px;
+            width: 150px;
+        }
+    </style>
+</head>
+<body>
+    <div class="label">flex-direction: row</div>
+    <div class="container row">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+    </div>
+
+    <div class="label">flex-direction: row-reverse</div>
+    <div class="container row-reverse">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+    </div>
+
+    <div class="label">flex-direction: column</div>
+    <div class="container column">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+    </div>
+
+    <div class="label">flex-direction: column-reverse</div>
+    <div class="container column-reverse">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+    </div>
+</body>
+</html>

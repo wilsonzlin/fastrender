@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Grid Layout - Template Tracks</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+        }
+        .label {
+            margin: 10px 0 5px 0;
+            font-weight: bold;
+            color: #495057;
+        }
+        .grid {
+            display: grid;
+            width: 400px;
+            background-color: #e9ecef;
+            margin-bottom: 20px;
+        }
+        .item {
+            padding: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+        .item-1 { background-color: #ff6b6b; }
+        .item-2 { background-color: #51cf66; }
+        .item-3 { background-color: #339af0; }
+        .item-4 { background-color: #fcc419; }
+        .item-5 { background-color: #cc5de8; }
+        .item-6 { background-color: #20c997; }
+
+        /* Fixed pixel columns */
+        .grid-fixed {
+            grid-template-columns: 100px 150px 100px;
+        }
+
+        /* Fr units */
+        .grid-fr {
+            grid-template-columns: 1fr 2fr 1fr;
+        }
+
+        /* Mixed fixed and fr */
+        .grid-mixed {
+            grid-template-columns: 100px 1fr 100px;
+        }
+
+        /* Percentage columns */
+        .grid-percent {
+            grid-template-columns: 25% 50% 25%;
+        }
+
+        /* Auto columns */
+        .grid-auto {
+            grid-template-columns: auto auto auto;
+        }
+
+        /* Explicit rows */
+        .grid-rows {
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 50px 80px 50px;
+        }
+    </style>
+</head>
+<body>
+    <div class="label">grid-template-columns: 100px 150px 100px</div>
+    <div class="grid grid-fixed">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+    </div>
+
+    <div class="label">grid-template-columns: 1fr 2fr 1fr</div>
+    <div class="grid grid-fr">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+    </div>
+
+    <div class="label">grid-template-columns: 100px 1fr 100px</div>
+    <div class="grid grid-mixed">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+    </div>
+
+    <div class="label">grid-template-columns: 25% 50% 25%</div>
+    <div class="grid grid-percent">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+    </div>
+
+    <div class="label">grid-template-columns: auto auto auto</div>
+    <div class="grid grid-auto">
+        <div class="item item-1">Short</div>
+        <div class="item item-2">Medium text</div>
+        <div class="item item-3">X</div>
+    </div>
+
+    <div class="label">Explicit rows: 50px 80px 50px</div>
+    <div class="grid grid-rows">
+        <div class="item item-1">1</div>
+        <div class="item item-2">2</div>
+        <div class="item item-3">3</div>
+        <div class="item item-4">4</div>
+        <div class="item item-5">5</div>
+        <div class="item item-6">6</div>
+    </div>
+</body>
+</html>

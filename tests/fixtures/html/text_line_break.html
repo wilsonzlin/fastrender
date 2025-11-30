@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Text - Line Breaking</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        .label {
+            margin: 15px 0 5px 0;
+            font-weight: bold;
+            color: #495057;
+        }
+        .container {
+            width: 300px;
+            background-color: #f8f9fa;
+            padding: 10px;
+            margin-bottom: 15px;
+            border: 1px solid #dee2e6;
+        }
+        .narrow {
+            width: 150px;
+        }
+        /* Word break variations */
+        .break-normal { word-break: normal; }
+        .break-all { word-break: break-all; }
+        .break-keep { word-break: keep-all; }
+
+        /* White space variations */
+        .ws-normal { white-space: normal; }
+        .ws-nowrap { white-space: nowrap; }
+        .ws-pre { white-space: pre; }
+        .ws-pre-wrap { white-space: pre-wrap; }
+        .ws-pre-line { white-space: pre-line; }
+
+        /* Overflow handling */
+        .overflow-visible { overflow: visible; }
+        .overflow-hidden { overflow: hidden; }
+        .overflow-ellipsis {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Hyphenation */
+        .hyphens-auto {
+            hyphens: auto;
+            -webkit-hyphens: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="label">word-break: normal (default)</div>
+    <div class="container break-normal">
+        <p>Supercalifragilisticexpialidocious is an extraordinarily long word.</p>
+    </div>
+
+    <div class="label">word-break: break-all</div>
+    <div class="container break-all narrow">
+        <p>Supercalifragilisticexpialidocious is an extraordinarily long word.</p>
+    </div>
+
+    <div class="label">white-space: normal (default)</div>
+    <div class="container ws-normal">
+        <p>Multiple    spaces    and
+line breaks    are    collapsed.</p>
+    </div>
+
+    <div class="label">white-space: nowrap</div>
+    <div class="container ws-nowrap" style="overflow: hidden;">
+        <p>This text will not wrap and will overflow if too long for container.</p>
+    </div>
+
+    <div class="label">white-space: pre</div>
+    <div class="container ws-pre" style="overflow: auto;">
+        <p>Spaces   are   preserved.
+Line breaks too.</p>
+    </div>
+
+    <div class="label">white-space: pre-wrap</div>
+    <div class="container ws-pre-wrap">
+        <p>Spaces   preserved   but
+text wraps when needed at container edge.</p>
+    </div>
+
+    <div class="label">white-space: pre-line</div>
+    <div class="container ws-pre-line">
+        <p>Multiple    spaces    collapse.
+But line breaks are preserved.</p>
+    </div>
+
+    <div class="label">text-overflow: ellipsis</div>
+    <div class="container overflow-ellipsis">
+        <p>This is a very long text that should be truncated with an ellipsis when it overflows the container.</p>
+    </div>
+
+    <div class="label">Long URL handling</div>
+    <div class="container narrow break-all">
+        <p>https://example.com/very/long/path/to/resource/that/needs/wrapping</p>
+    </div>
+
+    <div class="label">CJK text (no spaces)</div>
+    <div class="container narrow">
+        <p>这是一段中文文本它没有空格但应该能够自动换行在字符之间进行分割</p>
+    </div>
+
+    <div class="label">Soft hyphen (shy)</div>
+    <div class="container narrow">
+        <p>Super&shy;cali&shy;fragil&shy;istic&shy;expi&shy;ali&shy;docious</p>
+    </div>
+
+    <div class="label">Non-breaking space</div>
+    <div class="container narrow">
+        <p>These&nbsp;words&nbsp;stay&nbsp;together but other words can break normally.</p>
+    </div>
+</body>
+</html>

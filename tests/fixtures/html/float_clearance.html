@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Floats - Clearance</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+        }
+        .label {
+            margin: 10px 0 5px 0;
+            font-weight: bold;
+            color: #495057;
+            clear: both;
+        }
+        .container {
+            width: 400px;
+            background-color: #f0f0f0;
+            padding: 10px;
+            margin-bottom: 20px;
+        }
+        .float-left {
+            float: left;
+            width: 100px;
+            height: 80px;
+            background-color: #ff6b6b;
+            margin: 5px;
+        }
+        .float-right {
+            float: right;
+            width: 100px;
+            height: 60px;
+            background-color: #51cf66;
+            margin: 5px;
+        }
+        .float-tall {
+            height: 120px;
+        }
+        .box {
+            height: 40px;
+            background-color: #339af0;
+            margin: 5px 0;
+        }
+        .clear-left {
+            clear: left;
+        }
+        .clear-right {
+            clear: right;
+        }
+        .clear-both {
+            clear: both;
+        }
+        .clearfix::after {
+            content: "";
+            display: table;
+            clear: both;
+        }
+    </style>
+</head>
+<body>
+    <div class="label">clear: left</div>
+    <div class="container">
+        <div class="float-left float-tall"></div>
+        <div class="float-right"></div>
+        <div class="box clear-left">clear: left</div>
+    </div>
+
+    <div class="label">clear: right</div>
+    <div class="container">
+        <div class="float-left"></div>
+        <div class="float-right float-tall"></div>
+        <div class="box clear-right">clear: right</div>
+    </div>
+
+    <div class="label">clear: both</div>
+    <div class="container">
+        <div class="float-left float-tall"></div>
+        <div class="float-right float-tall"></div>
+        <div class="box clear-both">clear: both</div>
+    </div>
+
+    <div class="label">Multiple clears</div>
+    <div class="container">
+        <div class="float-left"></div>
+        <div class="float-right"></div>
+        <div class="box clear-left">clear: left</div>
+        <div class="float-right"></div>
+        <div class="box clear-right">clear: right</div>
+        <div class="float-left"></div>
+        <div class="float-right"></div>
+        <div class="box clear-both">clear: both</div>
+    </div>
+
+    <div class="label">Clearfix pattern (container contains floats)</div>
+    <div class="container clearfix">
+        <div class="float-left"></div>
+        <div class="float-right"></div>
+        <div class="float-left"></div>
+    </div>
+    <div class="box" style="width: 400px;">After clearfix container</div>
+</body>
+</html>

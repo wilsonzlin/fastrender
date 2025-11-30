@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Positioned - Relative Positioning</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: sans-serif;
+        }
+        .label {
+            margin: 10px 0 5px 0;
+            font-weight: bold;
+            color: #495057;
+        }
+        .container {
+            width: 400px;
+            background-color: #f0f0f0;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .box {
+            width: 80px;
+            height: 50px;
+            display: inline-block;
+            margin: 5px;
+        }
+        .red { background-color: #ff6b6b; }
+        .green { background-color: #51cf66; }
+        .blue { background-color: #339af0; }
+        .yellow { background-color: #fcc419; }
+
+        /* Relative positioning variations */
+        .rel-top-left {
+            position: relative;
+            top: 20px;
+            left: 30px;
+        }
+        .rel-bottom-right {
+            position: relative;
+            bottom: 15px;
+            right: 25px;
+        }
+        .rel-negative {
+            position: relative;
+            top: -10px;
+            left: -10px;
+        }
+        .rel-percent {
+            position: relative;
+            top: 10%;
+            left: 5%;
+        }
+    </style>
+</head>
+<body>
+    <div class="label">No positioning (reference)</div>
+    <div class="container">
+        <div class="box red">1</div>
+        <div class="box green">2</div>
+        <div class="box blue">3</div>
+    </div>
+
+    <div class="label">position: relative; top: 20px; left: 30px;</div>
+    <div class="container">
+        <div class="box red">1</div>
+        <div class="box green rel-top-left">2</div>
+        <div class="box blue">3</div>
+    </div>
+
+    <div class="label">position: relative; bottom: 15px; right: 25px;</div>
+    <div class="container">
+        <div class="box red">1</div>
+        <div class="box green rel-bottom-right">2</div>
+        <div class="box blue">3</div>
+    </div>
+
+    <div class="label">Negative offset (top: -10px; left: -10px;)</div>
+    <div class="container">
+        <div class="box red">1</div>
+        <div class="box green rel-negative">2</div>
+        <div class="box blue">3</div>
+    </div>
+
+    <div class="label">Percentage offset (top: 10%; left: 5%;)</div>
+    <div class="container">
+        <div class="box red">1</div>
+        <div class="box green rel-percent">2</div>
+        <div class="box blue">3</div>
+    </div>
+
+    <div class="label">Overlapping with relative positioning</div>
+    <div class="container">
+        <div class="box red" style="position: relative; z-index: 1;">1</div>
+        <div class="box green" style="position: relative; left: -40px; z-index: 2;">2</div>
+        <div class="box blue" style="position: relative; left: -80px; z-index: 3;">3</div>
+    </div>
+</body>
+</html>
