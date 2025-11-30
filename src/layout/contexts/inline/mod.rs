@@ -72,7 +72,8 @@ use crate::tree::fragment_tree::FragmentNode;
 /// 4. Create text fragments with baseline offsets
 #[derive(Debug, Default)]
 pub struct InlineFormattingContext {
-    /// Text shaper instance
+    /// Text shaper instance (reserved for future text shaping integration)
+    #[allow(dead_code)]
     shaper: TextShaper,
 }
 

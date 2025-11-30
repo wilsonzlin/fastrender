@@ -93,11 +93,7 @@
 #![allow(clippy::stable_sort_primitive)]
 #![allow(clippy::io_other_error)]
 #![allow(clippy::elidable_lifetime_names)]
-// Temporary allows during development
-#![allow(dead_code)]
-#![allow(unused_imports)]
-#![allow(unused_assignments)]
-#![allow(deprecated)]
+// Allow missing docs - documentation can be added incrementally
 #![allow(missing_docs)]
 // Performance - strict
 #![deny(clippy::needless_collect)]

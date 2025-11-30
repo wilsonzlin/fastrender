@@ -188,7 +188,8 @@ impl ImageCache {
 
         // Check if base64 encoded
         if header.contains("base64") {
-            let bytes = base64::decode(data).map_err(|e| {
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD.decode(data).map_err(|e| {
                 Error::Image(crate::error::ImageError::InvalidDataUrl {
                     reason: format!("Failed to decode base64: {}", e),
                 })

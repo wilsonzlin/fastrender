@@ -593,6 +593,7 @@ pub fn find_emoji_sequences(text: &str) -> Vec<EmojiSequence> {
 }
 
 /// Try to parse a keycap sequence (e.g., 1️⃣)
+#[allow(unused_assignments)]
 fn try_parse_keycap_sequence(
     chars: &mut std::iter::Peekable<std::str::CharIndices>,
     start_idx: usize,

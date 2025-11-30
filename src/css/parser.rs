@@ -91,7 +91,6 @@ fn preprocess_media_queries(css: &str) -> String {
                 if remaining.starts_with("media") {
                     in_media = true;
                     media_buf.clear();
-                    media_applies = false;
 
                     // Skip "@media"
                     for _ in 0..5 {

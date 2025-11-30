@@ -82,7 +82,8 @@ impl Default for PrintConfig {
     }
 }
 
-/// ANSI color codes
+/// ANSI color codes (debug infrastructure)
+#[allow(dead_code)]
 mod colors {
     pub const RESET: &str = "\x1b[0m";
     pub const GRAY: &str = "\x1b[90m";
@@ -339,7 +340,9 @@ pub enum DiffMode {
 
 /// Tree differ - compares two trees
 pub struct TreeDiff {
+    #[allow(dead_code)]
     config: PrintConfig,
+    #[allow(dead_code)]
     mode: DiffMode,
 }
 

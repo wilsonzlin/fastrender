@@ -6,18 +6,16 @@
 //! Reference: CSS Cascading and Inheritance Level 4
 //! https://www.w3.org/TR/css-cascade-4/
 
-use crate::css::{self, Declaration, PropertyValue, StyleSheet};
-use crate::dom::{DomNode, DomNodeType, ElementRef};
+use crate::css::{self, Declaration, StyleSheet};
+use crate::dom::{DomNode, ElementRef};
 use crate::style::defaults::{get_default_styles_for_element, parse_color_attribute, parse_dimension_attribute};
 use crate::style::grid::finalize_grid_placement;
 use crate::style::properties::apply_declaration;
 use crate::style::types::{BorderStyle, FontWeight, LineHeight};
-use crate::style::var_resolution;
 use crate::style::values::Length;
 use crate::style::{ComputedStyle, Display, Rgba};
 use selectors::context::{QuirksMode, SelectorCaches};
 use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
-use std::collections::HashMap;
 
 /// User-agent stylesheet containing default browser styles
 const USER_AGENT_STYLESHEET: &str = include_str!("../user_agent.css");
@@ -340,18 +338,6 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     // Grid line names inherit (so children can reference parent's named grid lines)
     styles.grid_column_names = parent.grid_column_names.clone();
     styles.grid_row_names = parent.grid_row_names.clone();
-}
-
-/// Resolve var() references in a PropertyValue
-///
-/// This is a thin wrapper around the var_resolution module's resolve_var function.
-/// It handles CSS custom property (variable) substitution including:
-/// - Simple var(--name) references
-/// - Fallback values: var(--name, fallback)
-/// - Nested var() references
-/// - var() embedded in other CSS functions
-fn resolve_var(value: &PropertyValue, custom_properties: &HashMap<String, String>) -> PropertyValue {
-    var_resolution::resolve_var(value, custom_properties)
 }
 
 fn find_matching_rules_with_ancestors(

@@ -312,7 +312,8 @@ impl Script {
 /// whether reordering is needed.
 #[derive(Debug)]
 pub struct BidiAnalysis {
-    /// The original text being analyzed.
+    /// The original text being analyzed (reserved for future RTL improvements).
+    #[allow(dead_code)]
     text: String,
     /// Bidi levels for each byte position (matching BidiInfo).
     levels: Vec<Level>,
