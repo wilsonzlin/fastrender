@@ -37,8 +37,8 @@
 //! manager.apply_reset(&reset);
 //! assert_eq!(manager.get("chapter"), Some(0));
 //!
-//! // Increment the counter
-//! let increment = CounterSet::parse("chapter").unwrap();
+//! // Increment the counter (use parse_increment for default increment of 1)
+//! let increment = CounterSet::parse_increment("chapter").unwrap();
 //! manager.apply_increment(&increment);
 //! assert_eq!(manager.get("chapter"), Some(1));
 //!

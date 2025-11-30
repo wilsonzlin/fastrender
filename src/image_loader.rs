@@ -83,12 +83,6 @@ impl ImageCache {
                 // Relative path without ./
                 // For base URLs like https://news.ycombinator.com, append directly
                 let resolved_url = format!("{}/{}", base.trim_end_matches('/'), url);
-
-                // DEBUG: Log final resolved URL for y18.svg
-                if url.contains("y18") {
-                    eprintln!("DEBUG: Final resolved URL: {}", resolved_url);
-                }
-
                 return resolved_url;
             }
         }
@@ -226,8 +220,6 @@ impl ImageCache {
     fn render_svg_to_image(&self, svg_content: &str) -> Result<DynamicImage> {
         use resvg::usvg;
 
-        eprintln!("DEBUG: Rendering SVG: {}", svg_content);
-
         // Parse SVG
         let options = usvg::Options::default();
         let tree = usvg::Tree::from_str(svg_content, &options).map_err(|e| {
@@ -240,8 +232,6 @@ impl ImageCache {
         let size = tree.size();
         let width = size.width() as u32;
         let height = size.height() as u32;
-
-        eprintln!("DEBUG: SVG parsed successfully, size: {}x{}", width, height);
 
         // Render SVG to pixmap
         let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or(Error::Render(
@@ -259,7 +249,6 @@ impl ImageCache {
             })
         })?;
 
-        eprintln!("DEBUG: SVG rendered to {}x{} image", width, height);
         Ok(image::DynamicImage::ImageRgba8(img))
     }
 }

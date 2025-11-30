@@ -411,10 +411,10 @@ fn test_non_keyword_value_unchanged() {
     let props = make_props(&[("--unused", "value")]);
 
     // Number should pass through unchanged
-    let value = PropertyValue::Number(3.14);
+    let value = PropertyValue::Number(42.5);
     let resolved = resolve_var(&value, &props);
     match resolved {
-        PropertyValue::Number(n) => assert!((n - 3.14).abs() < 0.001),
+        PropertyValue::Number(n) => assert!((n - 42.5).abs() < 0.001),
         _ => panic!("Expected Number, got {:?}", resolved),
     }
 

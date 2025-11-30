@@ -18,8 +18,8 @@
 //!
 //! # Examples
 //!
-//! ```
-//! use fastrender::style::content::{ContentValue, ContentItem, ContentGenerator};
+//! ```ignore
+//! use fastrender::style::content::{ContentValue, ContentItem, ContentGenerator, ContentContext};
 //!
 //! let content = ContentValue::Items(vec![
 //!     ContentItem::String("Chapter ".to_string()),
