@@ -12,17 +12,16 @@
 //! 5. **Paint**: Fragment tree → Pixmap
 //! 6. **Encode**: Pixmap → PNG/JPEG/WebP
 
-use crate::css::{self, Color};
-use crate::dom::{self, DomNode};
+use crate::box_generation::{extract_css, generate_box_tree};
+use crate::css::Color;
+use crate::dom;
 use crate::error::{Error, Result};
 use crate::geometry::Size;
 use crate::image_output;
 use crate::layout::{LayoutConfig, LayoutEngine};
 use crate::paint::paint_tree;
-use crate::style::{self, ComputedStyles, Display, StyledNode};
-use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, ReplacedBox, ReplacedType, TextBox};
+use crate::style;
 use crate::tree::fragment_tree::FragmentTree;
-use std::sync::Arc;
 
 pub use crate::image_output::OutputFormat as ImageFormat;
 
@@ -236,140 +235,6 @@ impl RendererBuilder {
 impl Default for RendererBuilder {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-// =============================================================================
-// Box Generation
-// =============================================================================
-
-/// Generates a BoxTree from a StyledNode tree
-fn generate_box_tree(styled: &StyledNode) -> BoxTree {
-    let root = generate_box_node(styled);
-    BoxTree { root }
-}
-
-/// Recursively generates BoxNode from StyledNode
-fn generate_box_node(styled: &StyledNode) -> BoxNode {
-    let style = Arc::new(styled.styles.clone());
-
-    // Check if this is display: none
-    if styled.styles.display == Display::None {
-        // Create an empty block (will have no effect on layout)
-        return BoxNode::new_block(style, crate::style::display::FormattingContextType::Block, vec![]);
-    }
-
-    // Check for text node
-    if let Some(text) = styled.node.text_content() {
-        if !text.trim().is_empty() {
-            return BoxNode::new_text(style, text.to_string());
-        }
-    }
-
-    // Check for replaced elements (images, etc.)
-    if let Some(tag) = styled.node.tag_name() {
-        if is_replaced_element(tag) {
-            return create_replaced_box(styled, style);
-        }
-    }
-
-    // Generate children
-    let children: Vec<BoxNode> = styled.children.iter().map(generate_box_node).collect();
-
-    // Determine box type based on display
-    use crate::style::display::FormattingContextType;
-    let fc_type = styled
-        .styles
-        .display
-        .formatting_context_type()
-        .unwrap_or(FormattingContextType::Block);
-
-    match styled.styles.display {
-        Display::Block | Display::Flex | Display::Grid | Display::Table => BoxNode::new_block(style, fc_type, children),
-        Display::Inline => BoxNode::new_inline(style, children),
-        Display::InlineBlock => BoxNode::new_inline_block(style, fc_type, children),
-        Display::None => BoxNode::new_block(style, FormattingContextType::Block, vec![]),
-        _ => BoxNode::new_block(style, fc_type, children),
-    }
-}
-
-/// Checks if an element is a replaced element
-fn is_replaced_element(tag: &str) -> bool {
-    matches!(
-        tag.to_lowercase().as_str(),
-        "img" | "video" | "canvas" | "svg" | "iframe" | "embed" | "object"
-    )
-}
-
-/// Creates a BoxNode for a replaced element
-fn create_replaced_box(styled: &StyledNode, style: Arc<ComputedStyles>) -> BoxNode {
-    let tag = styled.node.tag_name().unwrap_or("img");
-
-    // Get src attribute if available
-    let src = styled.node.get_attribute("src").unwrap_or_default();
-
-    // Determine replaced type
-    let replaced_type = match tag.to_lowercase().as_str() {
-        "img" => ReplacedType::Image { src },
-        "video" => ReplacedType::Video { src },
-        "canvas" => ReplacedType::Canvas,
-        "svg" => ReplacedType::Svg { content: String::new() },
-        "iframe" => ReplacedType::Iframe { src },
-        _ => ReplacedType::Image { src },
-    };
-
-    // Get intrinsic size from attributes or use default
-    let intrinsic_width = styled
-        .node
-        .get_attribute("width")
-        .and_then(|w| w.parse::<f32>().ok())
-        .unwrap_or(300.0);
-
-    let intrinsic_height = styled
-        .node
-        .get_attribute("height")
-        .and_then(|h| h.parse::<f32>().ok())
-        .unwrap_or(150.0);
-
-    let replaced_box = ReplacedBox {
-        replaced_type,
-        intrinsic_size: Some(Size::new(intrinsic_width, intrinsic_height)),
-        aspect_ratio: Some(intrinsic_width / intrinsic_height),
-    };
-
-    BoxNode {
-        box_type: BoxType::Replaced(replaced_box),
-        style,
-        children: vec![],
-        debug_info: None,
-    }
-}
-
-// =============================================================================
-// CSS Extraction
-// =============================================================================
-
-/// Extracts CSS from style tags in the DOM
-fn extract_css(dom: &DomNode) -> Result<css::StyleSheet> {
-    let mut css_content = String::new();
-
-    dom.walk_tree(&mut |node| {
-        if let Some(tag) = node.tag_name() {
-            if tag == "style" {
-                for child in &node.children {
-                    if let Some(text) = child.text_content() {
-                        css_content.push_str(text);
-                        css_content.push('\n');
-                    }
-                }
-            }
-        }
-    });
-
-    if css_content.is_empty() {
-        Ok(css::StyleSheet { rules: Vec::new() })
-    } else {
-        css::parse_stylesheet(&css_content)
     }
 }
 
