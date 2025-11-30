@@ -489,7 +489,7 @@ fn truncate(s: &str, max_len: usize) -> String {
 mod tests {
     use super::*;
     use crate::geometry::{Point, Rect, Size};
-    use crate::tree::box_tree::ComputedStyle;
+    use crate::style::ComputedStyle;
     use crate::tree::{DebugInfo, FormattingContextType};
     use std::sync::Arc;
 

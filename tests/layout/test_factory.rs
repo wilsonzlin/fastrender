@@ -7,7 +7,7 @@
 use fastrender::geometry::Rect;
 use fastrender::layout::contexts::FormattingContextFactory;
 use fastrender::layout::{FormattingContext, IntrinsicSizingMode, LayoutConstraints};
-use fastrender::tree::box_tree::ComputedStyle;
+use fastrender::style::ComputedStyle;
 #[allow(unused_imports)]
 use fastrender::tree::{BoxNode, FormattingContextType, FragmentNode};
 use std::sync::Arc;

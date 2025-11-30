@@ -425,11 +425,11 @@ impl FormattingContext for InlineFormattingContext {
 mod tests {
     use super::*;
     use crate::style::display::FormattingContextType;
-    use crate::style::ComputedStyles;
+    use crate::style::ComputedStyle;
     use std::sync::Arc;
 
-    fn default_style() -> Arc<ComputedStyles> {
-        let mut style = ComputedStyles::default();
+    fn default_style() -> Arc<ComputedStyle> {
+        let mut style = ComputedStyle::default();
         style.font_size = 16.0;
         Arc::new(style)
     }

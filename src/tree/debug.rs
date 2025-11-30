@@ -513,7 +513,7 @@ mod tests {
 
     #[test]
     fn test_tree_printer_single_node() {
-        use crate::tree::box_tree::ComputedStyle;
+        use crate::style::ComputedStyle;
         use crate::tree::{BoxNode, FormattingContextType};
         use std::sync::Arc;
 
@@ -531,7 +531,7 @@ mod tests {
 
     #[test]
     fn test_tree_printer_with_children() {
-        use crate::tree::box_tree::ComputedStyle;
+        use crate::style::ComputedStyle;
         use crate::tree::{BoxNode, FormattingContextType};
         use std::sync::Arc;
 

@@ -48,7 +48,7 @@
 //! - rustybuzz documentation: <https://docs.rs/rustybuzz/>
 
 use crate::error::{Result, TextError};
-use crate::style::computed::{ComputedStyle, FontStyle as CssFontStyle};
+use crate::style::{ComputedStyle, FontStyle as CssFontStyle};
 use crate::text::font_db::{FontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
 use rustybuzz::{Direction as HbDirection, Face, UnicodeBuffer};
@@ -578,7 +578,7 @@ fn get_font_for_run(run: &ItemizedRun, style: &ComputedStyle, font_context: &Fon
     // Try the font family list first
     if let Some(font) = font_context.get_font(
         &style.font_family,
-        style.font_weight,
+        style.font_weight.to_u16(),
         font_style == FontStyle::Italic,
         font_style == FontStyle::Oblique,
     ) {
@@ -604,7 +604,7 @@ fn get_font_for_run(run: &ItemizedRun, style: &ComputedStyle, font_context: &Fon
 
     if let Some(font) = font_context.get_font(
         &generic_families,
-        style.font_weight,
+        style.font_weight.to_u16(),
         font_style == FontStyle::Italic,
         font_style == FontStyle::Oblique,
     ) {

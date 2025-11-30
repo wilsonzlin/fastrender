@@ -50,7 +50,7 @@
 use crate::geometry::{Point, Rect, Size};
 use crate::layout::utils::resolve_offset;
 use crate::layout::{LayoutConstraints, LayoutError};
-use crate::style::{ComputedStyle, Position};
+use crate::style::{Position, PositionedStyle};
 use crate::tree::FragmentNode;
 
 use super::contexts::positioned::ContainingBlock;
@@ -111,7 +111,7 @@ impl ResolvedMargins {
 #[derive(Debug, Clone)]
 pub struct AbsoluteLayoutInput {
     /// The computed style of the absolutely positioned element
-    pub style: ComputedStyle,
+    pub style: PositionedStyle,
     /// The intrinsic size (used when width/height are auto)
     pub intrinsic_size: Size,
     /// The static position (where element would be in normal flow)
@@ -120,7 +120,7 @@ pub struct AbsoluteLayoutInput {
 
 impl AbsoluteLayoutInput {
     /// Creates a new absolute layout input
-    pub fn new(style: ComputedStyle, intrinsic_size: Size, static_position: Point) -> Self {
+    pub fn new(style: PositionedStyle, intrinsic_size: Size, static_position: Point) -> Self {
         Self {
             style,
             intrinsic_size,
@@ -215,7 +215,7 @@ impl AbsoluteLayout {
     /// - If left + right + width specified with auto margins → center
     fn compute_horizontal(
         &self,
-        style: &ComputedStyle,
+        style: &PositionedStyle,
         cb_width: f32,
         intrinsic_width: f32,
         static_x: f32,
@@ -296,7 +296,7 @@ impl AbsoluteLayout {
     /// Implements CSS 2.1 Section 10.6.4 constraint equation
     fn compute_vertical(
         &self,
-        style: &ComputedStyle,
+        style: &PositionedStyle,
         cb_height: f32,
         intrinsic_height: f32,
         static_y: f32,
@@ -378,7 +378,7 @@ impl AbsoluteLayout {
     /// "If both 'left' and 'right' are set, and 'width' is not 'auto', and
     /// 'margin-left' or 'margin-right' are 'auto', solve the equation to
     /// distribute the remaining space equally."
-    pub fn compute_centered_horizontal(&self, style: &ComputedStyle, cb_width: f32, width: f32) -> (f32, f32, f32) {
+    pub fn compute_centered_horizontal(&self, style: &PositionedStyle, cb_width: f32, width: f32) -> (f32, f32, f32) {
         let left = resolve_offset(&style.left, cb_width).unwrap_or(0.0);
         let right = resolve_offset(&style.right, cb_width).unwrap_or(0.0);
 
@@ -419,7 +419,7 @@ impl AbsoluteLayout {
     }
 
     /// Computes centering for vertical axis
-    pub fn compute_centered_vertical(&self, style: &ComputedStyle, cb_height: f32, height: f32) -> (f32, f32, f32) {
+    pub fn compute_centered_vertical(&self, style: &PositionedStyle, cb_height: f32, height: f32) -> (f32, f32, f32) {
         let top = resolve_offset(&style.top, cb_height).unwrap_or(0.0);
         let bottom = resolve_offset(&style.bottom, cb_height).unwrap_or(0.0);
 
@@ -460,12 +460,12 @@ impl AbsoluteLayout {
     }
 
     /// Checks if an element should use absolute positioning
-    pub fn is_absolutely_positioned(style: &ComputedStyle) -> bool {
+    pub fn is_absolutely_positioned(style: &PositionedStyle) -> bool {
         matches!(style.position, Position::Absolute | Position::Fixed)
     }
 
     /// Checks if an element should be laid out with absolute positioning
-    pub fn should_layout_absolute(style: &ComputedStyle) -> bool {
+    pub fn should_layout_absolute(style: &PositionedStyle) -> bool {
         style.position.is_absolutely_positioned()
     }
 }
@@ -476,8 +476,8 @@ mod tests {
     use crate::geometry::EdgeOffsets;
     use crate::style::LengthOrAuto;
 
-    fn default_style() -> ComputedStyle {
-        let mut style = ComputedStyle::default();
+    fn default_style() -> PositionedStyle {
+        let mut style = PositionedStyle::default();
         style.border_width = EdgeOffsets::ZERO;
         style
     }

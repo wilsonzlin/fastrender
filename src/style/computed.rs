@@ -1,6 +1,6 @@
 //! Computed style values
 //!
-//! This module provides the ComputedStyle struct which contains resolved
+//! This module provides the PositionedStyle struct which contains resolved
 //! CSS property values for a single element.
 //!
 //! # Computed Values
@@ -17,9 +17,9 @@
 //! # Example
 //!
 //! ```
-//! use fastrender::style::ComputedStyle;
+//! use fastrender::style::PositionedStyle;
 //!
-//! let style = ComputedStyle::default();
+//! let style = PositionedStyle::default();
 //! assert_eq!(style.font_size, 16.0); // Default font size
 //! ```
 
@@ -48,15 +48,15 @@ use crate::style::{Color, Display, Length, LengthOrAuto, Position, Rgba};
 /// # Examples
 ///
 /// ```
-/// use fastrender::style::ComputedStyle;
+/// use fastrender::style::PositionedStyle;
 ///
-/// let mut style = ComputedStyle::default();
+/// let mut style = PositionedStyle::default();
 /// // Modify as needed
 /// // Then wrap in Arc for sharing
 /// let shared = std::sync::Arc::new(style);
 /// ```
 #[derive(Debug, Clone)]
-pub struct ComputedStyle {
+pub struct PositionedStyle {
     // ===== BOX MODEL =====
     /// Width property
     ///
@@ -377,8 +377,8 @@ pub enum AlignItems {
     Stretch,
 }
 
-impl Default for ComputedStyle {
-    /// Creates a ComputedStyle with CSS initial values
+impl Default for PositionedStyle {
+    /// Creates a PositionedStyle with CSS initial values
     ///
     /// This represents the default styling when no CSS is applied.
     /// Values match CSS specifications for initial values.
@@ -433,7 +433,7 @@ impl Default for ComputedStyle {
     }
 }
 
-impl ComputedStyle {
+impl PositionedStyle {
     // === Box Model Helpers ===
 
     /// Returns the total horizontal margin
@@ -554,10 +554,10 @@ impl ComputedStyle {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::ComputedStyle;
+    /// use fastrender::style::PositionedStyle;
     /// use fastrender::style::Display;
     ///
-    /// let style = ComputedStyle::builder()
+    /// let style = PositionedStyle::builder()
     ///     .display(Display::Block)
     ///     .font_size(20.0)
     ///     .build();
@@ -565,20 +565,20 @@ impl ComputedStyle {
     /// assert_eq!(style.display, Display::Block);
     /// assert_eq!(style.font_size, 20.0);
     /// ```
-    pub fn builder() -> ComputedStyleBuilder {
-        ComputedStyleBuilder::new()
+    pub fn builder() -> PositionedStyleBuilder {
+        PositionedStyleBuilder::new()
     }
 }
 
-/// Builder for ComputedStyle (useful for tests)
-pub struct ComputedStyleBuilder {
-    style: ComputedStyle,
+/// Builder for PositionedStyle (useful for tests)
+pub struct PositionedStyleBuilder {
+    style: PositionedStyle,
 }
 
-impl ComputedStyleBuilder {
+impl PositionedStyleBuilder {
     pub fn new() -> Self {
         Self {
-            style: ComputedStyle::default(),
+            style: PositionedStyle::default(),
         }
     }
 
@@ -617,12 +617,12 @@ impl ComputedStyleBuilder {
         self
     }
 
-    pub fn build(self) -> ComputedStyle {
+    pub fn build(self) -> PositionedStyle {
         self.style
     }
 }
 
-impl Default for ComputedStyleBuilder {
+impl Default for PositionedStyleBuilder {
     fn default() -> Self {
         Self::new()
     }
@@ -634,7 +634,7 @@ mod tests {
 
     #[test]
     fn test_default_values() {
-        let style = ComputedStyle::default();
+        let style = PositionedStyle::default();
 
         // Box model
         assert!(matches!(style.width, LengthOrAuto::Auto));
@@ -654,7 +654,7 @@ mod tests {
 
     #[test]
     fn test_spacing_helpers() {
-        let mut style = ComputedStyle::default();
+        let mut style = PositionedStyle::default();
         style.margin = EdgeOffsets::all(10.0);
         style.padding = EdgeOffsets::all(5.0);
         style.border_width = EdgeOffsets::all(2.0);
@@ -667,7 +667,7 @@ mod tests {
 
     #[test]
     fn test_is_positioned() {
-        let mut style = ComputedStyle::default();
+        let mut style = PositionedStyle::default();
         assert!(!style.is_positioned());
 
         style.position = Position::Relative;
@@ -679,7 +679,7 @@ mod tests {
 
     #[test]
     fn test_is_visible() {
-        let mut style = ComputedStyle::default();
+        let mut style = PositionedStyle::default();
         assert!(style.is_visible());
 
         style.display = Display::None;
@@ -692,7 +692,7 @@ mod tests {
 
     #[test]
     fn test_text_helpers() {
-        let mut style = ComputedStyle::default();
+        let mut style = PositionedStyle::default();
         assert!(!style.is_bold());
         assert!(!style.is_italic());
 
@@ -705,7 +705,7 @@ mod tests {
 
     #[test]
     fn test_computed_line_height() {
-        let mut style = ComputedStyle::default();
+        let mut style = PositionedStyle::default();
         style.font_size = 20.0;
 
         // Normal
@@ -723,7 +723,7 @@ mod tests {
 
     #[test]
     fn test_flex_helpers() {
-        let mut style = ComputedStyle::default();
+        let mut style = PositionedStyle::default();
         assert!(!style.is_flex_container());
 
         style.display = Display::Flex;
@@ -739,7 +739,7 @@ mod tests {
 
     #[test]
     fn test_builder() {
-        let style = ComputedStyle::builder()
+        let style = PositionedStyle::builder()
             .display(Display::Block)
             .font_size(20.0)
             .color(Color::Rgba(Rgba::RED))
@@ -752,14 +752,14 @@ mod tests {
 
     #[test]
     fn test_creates_stacking_context() {
-        let mut style = ComputedStyle::default();
+        let mut style = PositionedStyle::default();
         assert!(!style.creates_stacking_context());
 
         style.position = Position::Relative;
         style.z_index = Some(1);
         assert!(style.creates_stacking_context());
 
-        style = ComputedStyle::default();
+        style = PositionedStyle::default();
         style.opacity = 0.5;
         assert!(style.creates_stacking_context());
     }
@@ -775,7 +775,7 @@ mod tests {
 
     #[test]
     fn test_vertical_spacing() {
-        let mut style = ComputedStyle::default();
+        let mut style = PositionedStyle::default();
         style.margin = EdgeOffsets::new(10.0, 5.0, 15.0, 5.0);
         style.padding = EdgeOffsets::new(3.0, 2.0, 4.0, 2.0);
         style.border_width = EdgeOffsets::new(1.0, 1.0, 2.0, 1.0);
@@ -819,7 +819,7 @@ mod tests {
 
     #[test]
     fn test_builder_chaining() {
-        let style = ComputedStyle::builder()
+        let style = PositionedStyle::builder()
             .display(Display::Flex)
             .width(LengthOrAuto::Length(Length::px(100.0)))
             .height(LengthOrAuto::Length(Length::px(50.0)))

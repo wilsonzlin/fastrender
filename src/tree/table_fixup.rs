@@ -36,11 +36,11 @@
 //! ```
 //! use fastrender::tree::table_fixup::TableStructureFixer;
 //! use fastrender::tree::{BoxNode, FormattingContextType};
-//! use fastrender::style::ComputedStyles;
+//! use fastrender::style::ComputedStyle;
 //! use std::sync::Arc;
 //!
 //! // Create a simple table with cells (missing rows and row-groups)
-//! let style = Arc::new(ComputedStyles::default());
+//! let style = Arc::new(ComputedStyle::default());
 //! let table = BoxNode::new_block(
 //!     style,
 //!     FormattingContextType::Table,
@@ -53,7 +53,7 @@
 
 use crate::error::{LayoutError, Result};
 use crate::style::display::{Display, FormattingContextType};
-use crate::style::ComputedStyles;
+use crate::style::ComputedStyle;
 use crate::tree::box_tree::{AnonymousBox, AnonymousType, BlockBox, BoxNode, BoxType};
 use std::sync::Arc;
 
@@ -205,7 +205,7 @@ impl TableStructureFixer {
 
     /// Creates an anonymous table row
     fn create_anonymous_row(cells: Vec<BoxNode>) -> BoxNode {
-        let style = Arc::new(ComputedStyles::default());
+        let style = Arc::new(ComputedStyle::default());
 
         BoxNode {
             style,
@@ -219,7 +219,7 @@ impl TableStructureFixer {
 
     /// Creates an anonymous table row group (tbody)
     fn create_anonymous_row_group(rows: Vec<BoxNode>) -> BoxNode {
-        let style = Arc::new(ComputedStyles::default());
+        let style = Arc::new(ComputedStyle::default());
 
         BoxNode {
             style,
@@ -233,7 +233,7 @@ impl TableStructureFixer {
 
     /// Creates an anonymous table cell
     fn create_anonymous_cell(children: Vec<BoxNode>) -> BoxNode {
-        let style = Arc::new(ComputedStyles::default());
+        let style = Arc::new(ComputedStyle::default());
 
         BoxNode {
             style,
@@ -247,7 +247,7 @@ impl TableStructureFixer {
 
     /// Creates an anonymous table wrapper
     fn create_anonymous_wrapper(table: BoxNode) -> BoxNode {
-        let style = Arc::new(ComputedStyles::default());
+        let style = Arc::new(ComputedStyle::default());
 
         BoxNode {
             style,
@@ -537,34 +537,34 @@ mod tests {
     use crate::tree::debug::DebugInfo;
 
     // Helper to create a default style
-    fn default_style() -> Arc<ComputedStyles> {
-        Arc::new(ComputedStyles::default())
+    fn default_style() -> Arc<ComputedStyle> {
+        Arc::new(ComputedStyle::default())
     }
 
     // Helper to create a table-row style
-    fn table_row_style() -> Arc<ComputedStyles> {
-        let mut style = ComputedStyles::default();
+    fn table_row_style() -> Arc<ComputedStyle> {
+        let mut style = ComputedStyle::default();
         style.display = Display::TableRow;
         Arc::new(style)
     }
 
     // Helper to create a table-cell style
-    fn table_cell_style() -> Arc<ComputedStyles> {
-        let mut style = ComputedStyles::default();
+    fn table_cell_style() -> Arc<ComputedStyle> {
+        let mut style = ComputedStyle::default();
         style.display = Display::TableCell;
         Arc::new(style)
     }
 
     // Helper to create a table-row-group style
-    fn table_row_group_style() -> Arc<ComputedStyles> {
-        let mut style = ComputedStyles::default();
+    fn table_row_group_style() -> Arc<ComputedStyle> {
+        let mut style = ComputedStyle::default();
         style.display = Display::TableRowGroup;
         Arc::new(style)
     }
 
     // Helper to create a caption style
-    fn table_caption_style() -> Arc<ComputedStyles> {
-        let mut style = ComputedStyles::default();
+    fn table_caption_style() -> Arc<ComputedStyle> {
+        let mut style = ComputedStyle::default();
         style.display = Display::TableCaption;
         Arc::new(style)
     }

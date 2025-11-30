@@ -10,16 +10,15 @@
 
 use fastrender::geometry::{EdgeOffsets, Point, Rect, Size};
 use fastrender::layout::{ContainingBlock, PositionedLayout, StickyConstraints};
-use fastrender::style::computed::ComputedStyle;
-use fastrender::style::{LengthOrAuto, Position};
+use fastrender::style::{LengthOrAuto, Position, PositionedStyle};
 use fastrender::tree::FragmentNode;
 
 // ============================================================================
 // Test Fixtures
 // ============================================================================
 
-fn default_style() -> ComputedStyle {
-    let mut style = ComputedStyle::default();
+fn default_style() -> PositionedStyle {
+    let mut style = PositionedStyle::default();
     // Reset border width to 0 for cleaner test expectations
     style.border_width = EdgeOffsets::ZERO;
     style

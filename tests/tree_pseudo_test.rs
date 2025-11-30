@@ -11,7 +11,7 @@
 //! - Integration with box generation pipeline
 
 use fastrender::style::display::{Display, FormattingContextType};
-use fastrender::style::ComputedStyles;
+use fastrender::style::ComputedStyle;
 use fastrender::tree::{
     count_pseudo_boxes, find_pseudo_boxes, get_pseudo_type, is_pseudo_box, BoxNode, PseudoContent, PseudoContentItem,
     PseudoElementConfig, PseudoElementGenerator, PseudoElementStyle, PseudoElementType,
@@ -22,8 +22,8 @@ use std::sync::Arc;
 // Helper Functions
 // =============================================================================
 
-fn default_style() -> Arc<ComputedStyles> {
-    Arc::new(ComputedStyles::default())
+fn default_style() -> Arc<ComputedStyle> {
+    Arc::new(ComputedStyle::default())
 }
 
 // =============================================================================

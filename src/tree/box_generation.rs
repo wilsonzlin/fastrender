@@ -8,8 +8,9 @@
 
 use crate::geometry::Size;
 use crate::style::display::{Display, FormattingContextType};
+use crate::style::ComputedStyle;
 use crate::tree::anonymous::AnonymousBoxCreator;
-use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, ComputedStyle, DebugInfo, ReplacedType};
+use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, DebugInfo, ReplacedType};
 use std::sync::Arc;
 
 /// Simplified DOM node representation
@@ -836,7 +837,7 @@ pub fn is_replaced_element(tag: &str) -> bool {
 }
 
 /// Creates a BoxNode for a replaced element from a StyledNode
-fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<crate::style::ComputedStyles>) -> BoxNode {
+fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<crate::style::ComputedStyle>) -> BoxNode {
     let tag = styled.node.tag_name().unwrap_or("img");
 
     // Get src attribute if available

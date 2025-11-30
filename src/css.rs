@@ -172,7 +172,7 @@ pub struct Declaration {
 /// CSS property values
 #[derive(Debug, Clone)]
 pub enum PropertyValue {
-    Color(Color),
+    Color(Rgba),
     Length(Length),
     Percentage(f32),
     Number(f32),
@@ -186,51 +186,6 @@ pub enum PropertyValue {
     Transform(Vec<Transform>),
     LinearGradient { angle: f32, stops: Vec<ColorStop> },
     RadialGradient { stops: Vec<ColorStop> },
-}
-
-/// Color representation
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Color {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-    pub a: u8,
-}
-
-impl Color {
-    pub const TRANSPARENT: Self = Self { r: 0, g: 0, b: 0, a: 0 };
-    pub const WHITE: Self = Self {
-        r: 255,
-        g: 255,
-        b: 255,
-        a: 255,
-    };
-    pub const BLACK: Self = Self {
-        r: 0,
-        g: 0,
-        b: 0,
-        a: 255,
-    };
-
-    pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
-        Self { r, g, b, a }
-    }
-
-    pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
-        Self { r, g, b, a: 255 }
-    }
-
-    pub const fn transparent() -> Self {
-        Self { r: 0, g: 0, b: 0, a: 0 }
-    }
-
-    pub const fn black() -> Self {
-        Self::rgb(0, 0, 0)
-    }
-
-    pub const fn white() -> Self {
-        Self::rgb(255, 255, 255)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -713,10 +668,11 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
             | "border-left-color"
     ) {
         if let Ok(color) = csscolorparser::parse(value_str) {
-            return Some(PropertyValue::Color(Color::rgb(
+            return Some(PropertyValue::Color(Rgba::new(
                 (color.r * 255.0) as u8,
                 (color.g * 255.0) as u8,
                 (color.b * 255.0) as u8,
+                color.a as f32,
             )));
         }
     }

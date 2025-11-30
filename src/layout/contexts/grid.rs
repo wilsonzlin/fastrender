@@ -42,7 +42,7 @@ use crate::geometry::Rect;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::{AlignContent, Display as CssDisplay, GridTrack, Length};
-use crate::tree::box_tree::ComputedStyle;
+use crate::style::ComputedStyle;
 use crate::tree::{BoxNode, FragmentNode};
 
 /// Grid Formatting Context

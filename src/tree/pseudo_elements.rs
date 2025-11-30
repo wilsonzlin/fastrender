@@ -39,7 +39,7 @@
 
 use crate::geometry::Size;
 use crate::style::display::{Display, FormattingContextType};
-use crate::style::ComputedStyles;
+use crate::style::ComputedStyle;
 use crate::tree::box_tree::{BoxNode, BoxType, DebugInfo, InlineBox, TextBox};
 use std::sync::Arc;
 
@@ -270,12 +270,12 @@ pub struct PseudoElementStyle {
     pub display: Display,
 
     /// Full computed styles (inherits from originating element)
-    pub computed: Arc<ComputedStyles>,
+    pub computed: Arc<ComputedStyle>,
 }
 
 impl PseudoElementStyle {
     /// Creates a new pseudo-element style with string content
-    pub fn with_string(content: impl Into<String>, computed: Arc<ComputedStyles>) -> Self {
+    pub fn with_string(content: impl Into<String>, computed: Arc<ComputedStyle>) -> Self {
         Self {
             content: PseudoContent::String(content.into()),
             display: computed.display,
@@ -284,7 +284,7 @@ impl PseudoElementStyle {
     }
 
     /// Creates a new pseudo-element style with no content (doesn't generate box)
-    pub fn none(computed: Arc<ComputedStyles>) -> Self {
+    pub fn none(computed: Arc<ComputedStyle>) -> Self {
         Self {
             content: PseudoContent::None,
             display: Display::Inline,
@@ -610,12 +610,12 @@ pub fn get_pseudo_type(box_node: &BoxNode) -> Option<PseudoElementType> {
 mod tests {
     use super::*;
 
-    fn default_style() -> Arc<ComputedStyles> {
-        Arc::new(ComputedStyles::default())
+    fn default_style() -> Arc<ComputedStyle> {
+        Arc::new(ComputedStyle::default())
     }
 
-    fn style_with_display(display: Display) -> Arc<ComputedStyles> {
-        let mut style = ComputedStyles::default();
+    fn style_with_display(display: Display) -> Arc<ComputedStyle> {
+        let mut style = ComputedStyle::default();
         style.display = display;
         Arc::new(style)
     }

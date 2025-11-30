@@ -9,16 +9,15 @@
 
 use fastrender::geometry::{EdgeOffsets, Point, Rect, Size};
 use fastrender::layout::{AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult, ContainingBlock, ResolvedMargins};
-use fastrender::style::computed::ComputedStyle;
-use fastrender::style::{LengthOrAuto, Position};
+use fastrender::style::{LengthOrAuto, Position, PositionedStyle};
 use fastrender::tree::FragmentNode;
 
 // ============================================================================
 // Test Fixtures
 // ============================================================================
 
-fn default_style() -> ComputedStyle {
-    let mut style = ComputedStyle::default();
+fn default_style() -> PositionedStyle {
+    let mut style = PositionedStyle::default();
     style.border_width = EdgeOffsets::ZERO;
     style
 }
@@ -31,11 +30,11 @@ fn create_cb_at(x: f32, y: f32, width: f32, height: f32) -> ContainingBlock {
     ContainingBlock::new(Rect::from_xywh(x, y, width, height))
 }
 
-fn create_input(style: ComputedStyle, intrinsic: Size) -> AbsoluteLayoutInput {
+fn create_input(style: PositionedStyle, intrinsic: Size) -> AbsoluteLayoutInput {
     AbsoluteLayoutInput::new(style, intrinsic, Point::ZERO)
 }
 
-fn create_input_with_static(style: ComputedStyle, intrinsic: Size, static_pos: Point) -> AbsoluteLayoutInput {
+fn create_input_with_static(style: PositionedStyle, intrinsic: Size, static_pos: Point) -> AbsoluteLayoutInput {
     AbsoluteLayoutInput::new(style, intrinsic, static_pos)
 }
 

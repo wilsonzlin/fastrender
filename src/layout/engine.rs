@@ -449,8 +449,8 @@ mod tests {
     use crate::tree::FormattingContextType;
     use std::sync::Arc;
 
-    fn default_style() -> Arc<crate::tree::box_tree::ComputedStyle> {
-        Arc::new(crate::tree::box_tree::ComputedStyle::default())
+    fn default_style() -> Arc<crate::style::ComputedStyle> {
+        Arc::new(crate::style::ComputedStyle::default())
     }
 
     // === LayoutConfig Tests ===

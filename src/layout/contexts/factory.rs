@@ -177,7 +177,7 @@ impl Default for FormattingContextFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tree::box_tree::ComputedStyle;
+    use crate::style::ComputedStyle;
     use std::sync::Arc;
 
     fn default_style() -> Arc<ComputedStyle> {

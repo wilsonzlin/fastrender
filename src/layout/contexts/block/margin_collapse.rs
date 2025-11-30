@@ -26,7 +26,7 @@
 //!
 //! Reference: <https://www.w3.org/TR/CSS21/box.html#collapsing-margins>
 
-use crate::style::{ComputedStyles, Position};
+use crate::style::{ComputedStyle, Position};
 
 /// A collapsible margin that tracks positive and negative components separately
 ///
@@ -272,7 +272,7 @@ pub fn collapse_margins(margin1: f32, margin2: f32) -> f32 {
 /// - min-height is zero
 /// - height is auto or zero
 /// - No padding or border
-pub fn is_margin_collapsible_through(style: &ComputedStyles) -> bool {
+pub fn is_margin_collapsible_through(style: &ComputedStyle) -> bool {
     if style.border_top_width.to_px() > 0.0 || style.border_bottom_width.to_px() > 0.0 {
         return false;
     }
@@ -293,7 +293,7 @@ pub fn is_margin_collapsible_through(style: &ComputedStyles) -> bool {
 }
 
 /// Determines if margins should collapse between parent and first child
-pub fn should_collapse_with_first_child(parent_style: &ComputedStyles) -> bool {
+pub fn should_collapse_with_first_child(parent_style: &ComputedStyle) -> bool {
     if parent_style.border_top_width.to_px() > 0.0 {
         return false;
     }
@@ -307,7 +307,7 @@ pub fn should_collapse_with_first_child(parent_style: &ComputedStyles) -> bool {
 }
 
 /// Determines if margins should collapse between parent and last child
-pub fn should_collapse_with_last_child(parent_style: &ComputedStyles) -> bool {
+pub fn should_collapse_with_last_child(parent_style: &ComputedStyle) -> bool {
     if parent_style.border_bottom_width.to_px() > 0.0 {
         return false;
     }
@@ -324,7 +324,7 @@ pub fn should_collapse_with_last_child(parent_style: &ComputedStyles) -> bool {
 }
 
 /// Determines if a box establishes a new block formatting context
-pub fn establishes_bfc(style: &ComputedStyles) -> bool {
+pub fn establishes_bfc(style: &ComputedStyle) -> bool {
     use crate::style::{Display, Overflow};
 
     if style.position == Position::Absolute || style.position == Position::Fixed {
@@ -514,81 +514,81 @@ mod tests {
 
     #[test]
     fn test_should_collapse_with_first_child_no_border_padding() {
-        let style = ComputedStyles::default();
+        let style = ComputedStyle::default();
         assert!(should_collapse_with_first_child(&style));
     }
 
     #[test]
     fn test_should_collapse_with_first_child_has_border() {
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.border_top_width = Length::px(1.0);
         assert!(!should_collapse_with_first_child(&style));
     }
 
     #[test]
     fn test_should_collapse_with_first_child_has_padding() {
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.padding_top = Length::px(10.0);
         assert!(!should_collapse_with_first_child(&style));
     }
 
     #[test]
     fn test_should_collapse_with_last_child_no_border_padding() {
-        let style = ComputedStyles::default();
+        let style = ComputedStyle::default();
         assert!(should_collapse_with_last_child(&style));
     }
 
     #[test]
     fn test_should_collapse_with_last_child_has_border() {
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.border_bottom_width = Length::px(1.0);
         assert!(!should_collapse_with_last_child(&style));
     }
 
     #[test]
     fn test_should_collapse_with_last_child_explicit_height() {
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.height = Some(Length::px(100.0));
         assert!(!should_collapse_with_last_child(&style));
     }
 
     #[test]
     fn test_is_margin_collapsible_through_empty() {
-        let style = ComputedStyles::default();
+        let style = ComputedStyle::default();
         assert!(is_margin_collapsible_through(&style));
     }
 
     #[test]
     fn test_is_margin_collapsible_through_has_border() {
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.border_top_width = Length::px(1.0);
         assert!(!is_margin_collapsible_through(&style));
     }
 
     #[test]
     fn test_is_margin_collapsible_through_has_height() {
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.height = Some(Length::px(50.0));
         assert!(!is_margin_collapsible_through(&style));
     }
 
     #[test]
     fn test_establishes_bfc_absolute() {
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.position = Position::Absolute;
         assert!(establishes_bfc(&style));
     }
 
     #[test]
     fn test_establishes_bfc_fixed() {
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.position = Position::Fixed;
         assert!(establishes_bfc(&style));
     }
 
     #[test]
     fn test_establishes_bfc_static() {
-        let style = ComputedStyles::default();
+        let style = ComputedStyle::default();
         assert!(!establishes_bfc(&style));
     }
 }

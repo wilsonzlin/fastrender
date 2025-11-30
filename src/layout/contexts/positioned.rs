@@ -42,7 +42,7 @@
 use crate::geometry::{Point, Rect, Size};
 use crate::layout::utils::resolve_offset;
 use crate::layout::{LayoutConstraints, LayoutError};
-use crate::style::{ComputedStyle, Position};
+use crate::style::{Position, PositionedStyle};
 use crate::tree::{BoxNode, FragmentNode};
 
 /// Represents a containing block for positioned elements
@@ -138,7 +138,7 @@ impl StickyConstraints {
     }
 
     /// Creates sticky constraints from computed style
-    pub fn from_style(style: &ComputedStyle, containing_block: &ContainingBlock) -> Self {
+    pub fn from_style(style: &PositionedStyle, containing_block: &ContainingBlock) -> Self {
         Self {
             top: resolve_offset(&style.top, containing_block.height()),
             right: resolve_offset(&style.right, containing_block.width()),
@@ -214,7 +214,7 @@ impl PositionedLayout {
     pub fn apply_relative_positioning(
         &self,
         fragment: &FragmentNode,
-        style: &ComputedStyle,
+        style: &PositionedStyle,
         containing_block: &ContainingBlock,
     ) -> Result<FragmentNode, LayoutError> {
         // Only apply to position: relative
@@ -242,7 +242,7 @@ impl PositionedLayout {
     /// CSS 2.1 Section 9.3.2:
     /// - If both `top` and `bottom` are specified, `top` wins
     /// - If both `left` and `right` are specified, `left` wins (LTR)
-    fn compute_relative_offset(&self, style: &ComputedStyle, containing_block: &ContainingBlock) -> Point {
+    fn compute_relative_offset(&self, style: &PositionedStyle, containing_block: &ContainingBlock) -> Point {
         let mut offset_x = 0.0;
         let mut offset_y = 0.0;
 
@@ -288,7 +288,7 @@ impl PositionedLayout {
     /// Tuple of (position, size) in containing block coordinates
     pub fn compute_absolute_position(
         &self,
-        style: &ComputedStyle,
+        style: &PositionedStyle,
         containing_block: &ContainingBlock,
         intrinsic_size: Size,
     ) -> Result<(Point, Size), LayoutError> {
@@ -313,7 +313,7 @@ impl PositionedLayout {
     /// specified/auto values for left, right, width.
     fn compute_absolute_horizontal(
         &self,
-        style: &ComputedStyle,
+        style: &PositionedStyle,
         cb_width: f32,
         intrinsic_width: f32,
     ) -> Result<(f32, f32), LayoutError> {
@@ -392,7 +392,7 @@ impl PositionedLayout {
     /// Computes vertical position and height for absolutely positioned element
     fn compute_absolute_vertical(
         &self,
-        style: &ComputedStyle,
+        style: &PositionedStyle,
         cb_height: f32,
         intrinsic_height: f32,
     ) -> Result<(f32, f32), LayoutError> {
@@ -530,7 +530,7 @@ impl PositionedLayout {
     /// Sticky constraints for the renderer
     pub fn compute_sticky_constraints(
         &self,
-        style: &ComputedStyle,
+        style: &PositionedStyle,
         containing_block: &ContainingBlock,
     ) -> StickyConstraints {
         if !style.position.is_sticky() {
@@ -555,7 +555,7 @@ impl PositionedLayout {
     /// # Returns
     ///
     /// True if the element creates a stacking context
-    pub fn creates_stacking_context(&self, style: &ComputedStyle) -> bool {
+    pub fn creates_stacking_context(&self, style: &PositionedStyle) -> bool {
         // Positioned with z-index
         if style.position.is_positioned() && style.z_index.is_some() {
             return true;
@@ -576,12 +576,12 @@ impl PositionedLayout {
 mod tests {
     use super::*;
     use crate::geometry::EdgeOffsets;
-    use crate::style::computed::ComputedStyle;
+    use crate::style::PositionedStyle;
     use crate::style::{Display, Length, LengthOrAuto};
     use std::sync::Arc;
 
-    fn default_style() -> ComputedStyle {
-        let mut style = ComputedStyle::default();
+    fn default_style() -> PositionedStyle {
+        let mut style = PositionedStyle::default();
         // Reset border width to 0 for cleaner test expectations
         // (default is medium = 3px)
         style.border_width = EdgeOffsets::ZERO;

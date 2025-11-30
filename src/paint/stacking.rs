@@ -57,7 +57,7 @@
 //! ```
 
 use crate::geometry::{Point, Rect};
-use crate::style::{ComputedStyles, Display, Overflow, Position};
+use crate::style::{ComputedStyle, Display, Overflow, Position};
 use crate::tree::{FragmentContent, FragmentNode};
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -73,7 +73,7 @@ pub struct StyledFragmentRef<'a> {
     pub fragment: &'a FragmentNode,
 
     /// The computed style for this fragment (if available)
-    pub style: Option<Arc<ComputedStyles>>,
+    pub style: Option<Arc<ComputedStyle>>,
 
     /// Tree order index (for sorting tie-breaking)
     pub tree_order: usize,
@@ -81,7 +81,7 @@ pub struct StyledFragmentRef<'a> {
 
 impl<'a> StyledFragmentRef<'a> {
     /// Creates a new styled fragment reference
-    pub fn new(fragment: &'a FragmentNode, style: Option<Arc<ComputedStyles>>, tree_order: usize) -> Self {
+    pub fn new(fragment: &'a FragmentNode, style: Option<Arc<ComputedStyle>>, tree_order: usize) -> Self {
         Self {
             fragment,
             style,
@@ -251,7 +251,7 @@ impl StackingContext {
     }
 
     /// Adds a fragment to the appropriate layer based on its properties
-    pub fn add_fragment_to_layer(&mut self, fragment: FragmentNode, style: Option<&ComputedStyles>) {
+    pub fn add_fragment_to_layer(&mut self, fragment: FragmentNode, style: Option<&ComputedStyle>) {
         if let Some(style) = style {
             // Determine which layer this fragment belongs to
             if is_positioned(style) && !creates_stacking_context(style, None, false) {
@@ -390,21 +390,21 @@ impl StackingContext {
 ///
 /// ```ignore
 /// use fastrender::paint::stacking::creates_stacking_context;
-/// use fastrender::style::ComputedStyles;
+/// use fastrender::style::ComputedStyle;
 ///
-/// let mut style = ComputedStyles::default();
+/// let mut style = ComputedStyle::default();
 /// style.opacity = 0.5;
 ///
 /// assert!(creates_stacking_context(&style, None, false));
 /// ```
-pub fn creates_stacking_context(style: &ComputedStyles, parent_style: Option<&ComputedStyles>, is_root: bool) -> bool {
+pub fn creates_stacking_context(style: &ComputedStyle, parent_style: Option<&ComputedStyle>, is_root: bool) -> bool {
     // 1. Root element always creates stacking context
     if is_root {
         return true;
     }
 
     // 2. Positioned element with z-index != auto
-    // Note: In ComputedStyles, z_index is i32 with default 0
+    // Note: In ComputedStyle, z_index is i32 with default 0
     // We need to check if it was explicitly set (non-zero implies explicit)
     if is_positioned(style) && style.z_index != 0 {
         return true;
@@ -454,7 +454,7 @@ pub fn creates_stacking_context(style: &ComputedStyles, parent_style: Option<&Co
         }
     }
 
-    // Note: The following conditions are not currently tracked in ComputedStyles
+    // Note: The following conditions are not currently tracked in ComputedStyle
     // but would create stacking contexts if implemented:
     // - filter property (except none)
     // - clip-path property (except none)
@@ -475,8 +475,8 @@ pub fn creates_stacking_context(style: &ComputedStyles, parent_style: Option<&Co
 ///
 /// Returns `None` if the element doesn't create a stacking context.
 pub fn get_stacking_context_reason(
-    style: &ComputedStyles,
-    parent_style: Option<&ComputedStyles>,
+    style: &ComputedStyle,
+    parent_style: Option<&ComputedStyle>,
     is_root: bool,
 ) -> Option<StackingContextReason> {
     if is_root {
@@ -526,21 +526,21 @@ pub fn get_stacking_context_reason(
 }
 
 /// Checks if an element is positioned (not static)
-fn is_positioned(style: &ComputedStyles) -> bool {
+fn is_positioned(style: &ComputedStyle) -> bool {
     !matches!(style.position, Position::Static)
 }
 
 /// Checks if an element is a float
 ///
-/// Note: Float is not currently in ComputedStyles, so we return false.
+/// Note: Float is not currently in ComputedStyle, so we return false.
 /// When Float support is added, this should check style.float != Float::None
-fn is_float(_style: &ComputedStyles) -> bool {
-    // TODO: Check style.float when Float is added to ComputedStyles
+fn is_float(_style: &ComputedStyle) -> bool {
+    // TODO: Check style.float when Float is added to ComputedStyle
     false
 }
 
 /// Checks if an element is inline-level
-fn is_inline_level(style: &ComputedStyles, fragment: &FragmentNode) -> bool {
+fn is_inline_level(style: &ComputedStyle, fragment: &FragmentNode) -> bool {
     // Check display property
     let is_inline_display = matches!(
         style.display,
@@ -581,7 +581,7 @@ fn is_inline_level(style: &ComputedStyles, fragment: &FragmentNode) -> bool {
 /// ```
 pub fn build_stacking_tree(
     root: &FragmentNode,
-    root_style: Option<&ComputedStyles>,
+    root_style: Option<&ComputedStyle>,
     is_root_context: bool,
 ) -> StackingContext {
     let mut tree_order_counter = 0;
@@ -599,8 +599,8 @@ pub fn build_stacking_tree(
 /// Internal recursive function to build stacking context tree
 fn build_stacking_tree_internal(
     fragment: &FragmentNode,
-    style: Option<&ComputedStyles>,
-    parent_style: Option<&ComputedStyles>,
+    style: Option<&ComputedStyle>,
+    parent_style: Option<&ComputedStyle>,
     is_root: bool,
     tree_order: &mut usize,
 ) -> StackingContext {
@@ -696,7 +696,7 @@ fn build_stacking_tree_internal(
 
 /// Builds a stacking context tree with style information from a styled tree
 ///
-/// This version takes a style lookup function to get ComputedStyles for each fragment.
+/// This version takes a style lookup function to get ComputedStyle for each fragment.
 ///
 /// # Arguments
 ///
@@ -708,7 +708,7 @@ fn build_stacking_tree_internal(
 /// A `StackingContext` representing the stacking context tree
 pub fn build_stacking_tree_with_styles<F>(root: &FragmentNode, get_style: F) -> StackingContext
 where
-    F: Fn(&FragmentNode) -> Option<Arc<ComputedStyles>> + Clone,
+    F: Fn(&FragmentNode) -> Option<Arc<ComputedStyle>> + Clone,
 {
     let root_style = get_style(root);
     let mut tree_order_counter = 0;
@@ -730,14 +730,14 @@ where
 /// Internal recursive function to build stacking context tree with styles
 fn build_stacking_tree_with_styles_internal<F>(
     fragment: &FragmentNode,
-    style: Option<&ComputedStyles>,
-    parent_style: Option<&ComputedStyles>,
+    style: Option<&ComputedStyle>,
+    parent_style: Option<&ComputedStyle>,
     is_root: bool,
     tree_order: &mut usize,
     get_style: &F,
 ) -> StackingContext
 where
-    F: Fn(&FragmentNode) -> Option<Arc<ComputedStyles>>,
+    F: Fn(&FragmentNode) -> Option<Arc<ComputedStyle>>,
 {
     let current_order = *tree_order;
     *tree_order += 1;
@@ -975,19 +975,19 @@ mod tests {
 
     #[test]
     fn test_creates_stacking_context_root() {
-        let style = ComputedStyles::default();
+        let style = ComputedStyle::default();
         assert!(creates_stacking_context(&style, None, true));
     }
 
     #[test]
     fn test_creates_stacking_context_not_root() {
-        let style = ComputedStyles::default();
+        let style = ComputedStyle::default();
         assert!(!creates_stacking_context(&style, None, false));
     }
 
     #[test]
     fn test_creates_stacking_context_positioned_with_z_index() {
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.position = Position::Relative;
         style.z_index = 1;
         assert!(creates_stacking_context(&style, None, false));
@@ -995,7 +995,7 @@ mod tests {
 
     #[test]
     fn test_creates_stacking_context_positioned_with_zero_z_index() {
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.position = Position::Relative;
         style.z_index = 0; // z-index: 0 doesn't create stacking context in this impl
         assert!(!creates_stacking_context(&style, None, false));
@@ -1003,45 +1003,45 @@ mod tests {
 
     #[test]
     fn test_creates_stacking_context_fixed() {
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.position = Position::Fixed;
         assert!(creates_stacking_context(&style, None, false));
     }
 
     #[test]
     fn test_creates_stacking_context_sticky() {
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.position = Position::Sticky;
         assert!(creates_stacking_context(&style, None, false));
     }
 
     #[test]
     fn test_creates_stacking_context_opacity() {
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.opacity = 0.5;
         assert!(creates_stacking_context(&style, None, false));
     }
 
     #[test]
     fn test_creates_stacking_context_opacity_zero() {
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.opacity = 0.0;
         assert!(creates_stacking_context(&style, None, false));
     }
 
     #[test]
     fn test_creates_stacking_context_opacity_one() {
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.opacity = 1.0;
         assert!(!creates_stacking_context(&style, None, false));
     }
 
     #[test]
     fn test_creates_stacking_context_flex_item_with_z_index() {
-        let mut parent_style = ComputedStyles::default();
+        let mut parent_style = ComputedStyle::default();
         parent_style.display = Display::Flex;
 
-        let mut child_style = ComputedStyles::default();
+        let mut child_style = ComputedStyle::default();
         child_style.z_index = 1;
 
         assert!(creates_stacking_context(&child_style, Some(&parent_style), false));
@@ -1049,10 +1049,10 @@ mod tests {
 
     #[test]
     fn test_creates_stacking_context_grid_item_with_z_index() {
-        let mut parent_style = ComputedStyles::default();
+        let mut parent_style = ComputedStyle::default();
         parent_style.display = Display::Grid;
 
-        let mut child_style = ComputedStyles::default();
+        let mut child_style = ComputedStyle::default();
         child_style.z_index = 1;
 
         assert!(creates_stacking_context(&child_style, Some(&parent_style), false));
@@ -1238,7 +1238,7 @@ mod tests {
     fn test_build_stacking_tree_with_style() {
         let fragment = create_block_fragment(0.0, 0.0, 100.0, 100.0);
 
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.opacity = 0.5;
 
         let tree = build_stacking_tree(&fragment, Some(&style), false);
@@ -1335,14 +1335,14 @@ mod tests {
 
     #[test]
     fn test_get_stacking_context_reason_root() {
-        let style = ComputedStyles::default();
+        let style = ComputedStyle::default();
         let reason = get_stacking_context_reason(&style, None, true);
         assert_eq!(reason, Some(StackingContextReason::Root));
     }
 
     #[test]
     fn test_get_stacking_context_reason_opacity() {
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.opacity = 0.5;
         let reason = get_stacking_context_reason(&style, None, false);
         assert_eq!(reason, Some(StackingContextReason::Opacity));
@@ -1350,7 +1350,7 @@ mod tests {
 
     #[test]
     fn test_get_stacking_context_reason_positioned_with_z_index() {
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.position = Position::Relative;
         style.z_index = 5;
         let reason = get_stacking_context_reason(&style, None, false);
@@ -1359,7 +1359,7 @@ mod tests {
 
     #[test]
     fn test_get_stacking_context_reason_none() {
-        let style = ComputedStyles::default();
+        let style = ComputedStyle::default();
         let reason = get_stacking_context_reason(&style, None, false);
         assert_eq!(reason, None);
     }
@@ -1387,7 +1387,7 @@ mod tests {
     fn test_add_fragment_to_layer_block() {
         let mut sc = StackingContext::new(0);
         let fragment = create_block_fragment(0.0, 0.0, 100.0, 100.0);
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.display = Display::Block; // Default is Inline, need Block for block layer
 
         sc.add_fragment_to_layer(fragment, Some(&style));
@@ -1399,7 +1399,7 @@ mod tests {
     fn test_add_fragment_to_layer_inline() {
         let mut sc = StackingContext::new(0);
         let fragment = create_text_fragment(0.0, 0.0, 50.0, 20.0, "test");
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.display = Display::Inline;
 
         sc.add_fragment_to_layer(fragment, Some(&style));
@@ -1411,7 +1411,7 @@ mod tests {
     fn test_add_fragment_to_layer_positioned() {
         let mut sc = StackingContext::new(0);
         let fragment = create_block_fragment(0.0, 0.0, 100.0, 100.0);
-        let mut style = ComputedStyles::default();
+        let mut style = ComputedStyle::default();
         style.position = Position::Relative;
         // z_index = 0 (default), so goes to layer 6
 

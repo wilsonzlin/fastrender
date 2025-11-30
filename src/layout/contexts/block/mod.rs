@@ -305,24 +305,24 @@ fn is_out_of_flow(box_node: &BoxNode) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::{ComputedStyles, Display, Length};
+    use crate::style::{ComputedStyle, Display, Length};
     use std::sync::Arc;
 
-    fn default_style() -> Arc<ComputedStyles> {
-        let mut style = ComputedStyles::default();
+    fn default_style() -> Arc<ComputedStyle> {
+        let mut style = ComputedStyle::default();
         style.display = Display::Block;
         Arc::new(style)
     }
 
-    fn block_style_with_height(height: f32) -> Arc<ComputedStyles> {
-        let mut style = ComputedStyles::default();
+    fn block_style_with_height(height: f32) -> Arc<ComputedStyle> {
+        let mut style = ComputedStyle::default();
         style.display = Display::Block;
         style.height = Some(Length::px(height));
         Arc::new(style)
     }
 
-    fn block_style_with_margin(margin: f32) -> Arc<ComputedStyles> {
-        let mut style = ComputedStyles::default();
+    fn block_style_with_margin(margin: f32) -> Arc<ComputedStyle> {
+        let mut style = ComputedStyle::default();
         style.display = Display::Block;
         style.margin_top = Some(Length::px(margin));
         style.margin_bottom = Some(Length::px(margin));

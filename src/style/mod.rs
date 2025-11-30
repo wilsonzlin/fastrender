@@ -17,9 +17,8 @@ pub mod variables;
 // Re-export color types
 pub use color::{Color, ColorParseError, Hsla, Rgba};
 
-// Re-export computed style types
-// Note: BorderColors is not re-exported to avoid conflict with paint::BorderColors
-pub use computed::{ComputedStyle, ComputedStyleBuilder};
+// Re-export positioned style types (used for absolute positioning layout)
+pub use computed::{PositionedStyle, PositionedStyleBuilder};
 
 // Re-export content generation types
 pub use content::{parse_content, ContentContext, ContentGenerator, ContentItem, ContentValue, CounterStyle};
@@ -46,10 +45,8 @@ pub use media::{
 // Re-export CSS variables types
 pub use variables::CssVariables;
 
-// Legacy CSS types (will be phased out)
-use crate::css::{
-    self, BoxShadow, Color as LegacyColor, Declaration, PropertyValue, StyleSheet, TextShadow, Transform,
-};
+// CSS types
+use crate::css::{self, BoxShadow, Declaration, PropertyValue, StyleSheet, TextShadow, Transform};
 use crate::dom::{DomNode, ElementRef};
 pub use crate::style::values::{Length, LengthOrAuto, LengthUnit};
 use selectors::context::{QuirksMode, SelectorCaches};
@@ -67,12 +64,12 @@ const USER_AGENT_STYLESHEET: &str = include_str!("../user_agent.css");
 #[derive(Debug, Clone)]
 pub struct StyledNode {
     pub node: DomNode,
-    pub styles: ComputedStyles,
+    pub styles: ComputedStyle,
     pub children: Vec<StyledNode>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ComputedStyles {
+pub struct ComputedStyle {
     // Display and positioning
     pub display: Display,
     pub position: Position,
@@ -105,10 +102,10 @@ pub struct ComputedStyles {
     pub border_bottom_width: Length,
     pub border_left_width: Length,
 
-    pub border_top_color: LegacyColor,
-    pub border_right_color: LegacyColor,
-    pub border_bottom_color: LegacyColor,
-    pub border_left_color: LegacyColor,
+    pub border_top_color: Rgba,
+    pub border_right_color: Rgba,
+    pub border_bottom_color: Rgba,
+    pub border_left_color: Rgba,
 
     pub border_top_style: BorderStyle,
     pub border_right_style: BorderStyle,
@@ -160,8 +157,8 @@ pub struct ComputedStyles {
     pub white_space: WhiteSpace,
 
     // Color and background
-    pub color: LegacyColor,
-    pub background_color: LegacyColor,
+    pub color: Rgba,
+    pub background_color: Rgba,
     pub background_image: Option<BackgroundImage>,
     pub background_size: BackgroundSize,
     pub background_position: BackgroundPosition,
@@ -263,6 +260,19 @@ pub enum FontWeight {
     Number(u16),
 }
 
+impl FontWeight {
+    /// Converts font weight to numeric u16 value (100-900)
+    pub fn to_u16(self) -> u16 {
+        match self {
+            FontWeight::Normal => 400,
+            FontWeight::Bold => 700,
+            FontWeight::Bolder => 700, // Simplified - should be relative to parent
+            FontWeight::Lighter => 300, // Simplified - should be relative to parent
+            FontWeight::Number(n) => n,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontStyle {
     Normal,
@@ -339,7 +349,7 @@ pub enum BackgroundRepeat {
     NoRepeat,
 }
 
-impl Default for ComputedStyles {
+impl Default for ComputedStyle {
     fn default() -> Self {
         Self {
             display: Display::Inline,
@@ -372,10 +382,10 @@ impl Default for ComputedStyles {
             border_bottom_width: Length::px(0.0),
             border_left_width: Length::px(0.0),
 
-            border_top_color: LegacyColor::BLACK,
-            border_right_color: LegacyColor::BLACK,
-            border_bottom_color: LegacyColor::BLACK,
-            border_left_color: LegacyColor::BLACK,
+            border_top_color: Rgba::BLACK,
+            border_right_color: Rgba::BLACK,
+            border_bottom_color: Rgba::BLACK,
+            border_left_color: Rgba::BLACK,
 
             border_top_style: BorderStyle::None,
             border_right_style: BorderStyle::None,
@@ -422,8 +432,8 @@ impl Default for ComputedStyles {
             word_spacing: 0.0,
             white_space: WhiteSpace::Normal,
 
-            color: LegacyColor::BLACK,
-            background_color: LegacyColor::TRANSPARENT,
+            color: Rgba::BLACK,
+            background_color: Rgba::TRANSPARENT,
             background_image: None,
             background_size: BackgroundSize::Auto,
             background_position: BackgroundPosition::Center,
@@ -453,13 +463,13 @@ pub fn apply_styles(dom: &DomNode, stylesheet: &StyleSheet) -> StyledNode {
 
     let merged_stylesheet = StyleSheet { rules: merged_rules };
 
-    apply_styles_internal(dom, &merged_stylesheet, &ComputedStyles::default(), 16.0)
+    apply_styles_internal(dom, &merged_stylesheet, &ComputedStyle::default(), 16.0)
 }
 
 fn apply_styles_internal(
     node: &DomNode,
     stylesheet: &StyleSheet,
-    parent_styles: &ComputedStyles,
+    parent_styles: &ComputedStyle,
     root_font_size: f32,
 ) -> StyledNode {
     let mut styles = get_default_styles_for_element(node);
@@ -506,7 +516,7 @@ fn apply_styles_internal(
 fn apply_styles_internal_with_ancestors(
     node: &DomNode,
     stylesheet: &StyleSheet,
-    parent_styles: &ComputedStyles,
+    parent_styles: &ComputedStyle,
     root_font_size: f32,
     ancestors: &[&DomNode],
 ) -> StyledNode {
@@ -612,45 +622,45 @@ fn apply_styles_internal_with_ancestors(
         styles.padding_right = Length::px(12.0); // .75rem
         styles.padding_bottom = Length::px(6.0);
         styles.padding_left = Length::px(12.0);
-        styles.background_color = LegacyColor {
+        styles.background_color = Rgba {
             r: 255,
             g: 255,
             b: 255,
-            a: 255,
+            a: 1.0,
         }; // white background
-        styles.color = LegacyColor {
+        styles.color = Rgba {
             r: 59,
             g: 130,
             b: 246,
-            a: 255,
+            a: 1.0,
         }; // #3b82f6 blue text
         styles.border_top_width = Length::px(1.0);
         styles.border_right_width = Length::px(1.0);
         styles.border_bottom_width = Length::px(1.0);
         styles.border_left_width = Length::px(1.0);
-        styles.border_top_color = LegacyColor {
+        styles.border_top_color = Rgba {
             r: 59,
             g: 130,
             b: 246,
-            a: 255,
+            a: 1.0,
         }; // #3b82f6
-        styles.border_right_color = LegacyColor {
+        styles.border_right_color = Rgba {
             r: 59,
             g: 130,
             b: 246,
-            a: 255,
+            a: 1.0,
         };
-        styles.border_bottom_color = LegacyColor {
+        styles.border_bottom_color = Rgba {
             r: 59,
             g: 130,
             b: 246,
-            a: 255,
+            a: 1.0,
         };
-        styles.border_left_color = LegacyColor {
+        styles.border_left_color = Rgba {
             r: 59,
             g: 130,
             b: 246,
-            a: 255,
+            a: 1.0,
         };
         styles.border_top_style = BorderStyle::Solid;
         styles.border_right_style = BorderStyle::Solid;
@@ -692,15 +702,15 @@ fn apply_styles_internal_with_ancestors(
         };
 
         // Create styles for the ::before pseudo-element matching the CSS
-        let mut before_styles = ComputedStyles::default();
+        let mut before_styles = ComputedStyle::default();
         before_styles.display = Display::Block;
         before_styles.font_size = 12.0; // .75rem = 12px
         before_styles.font_weight = FontWeight::Bold;
-        before_styles.color = LegacyColor {
+        before_styles.color = Rgba {
             r: 90,
             g: 90,
             b: 90,
-            a: 255,
+            a: 1.0,
         }; // #5a5a5a (--color-text-muted)
         before_styles.margin_bottom = Some(Length::px(8.0));
         before_styles.line_height = LineHeight::Normal;
@@ -708,7 +718,7 @@ fn apply_styles_internal_with_ancestors(
         // Create styled text child
         let text_styled = StyledNode {
             node: text_node.clone(),
-            styles: ComputedStyles::default(),
+            styles: ComputedStyle::default(),
             children: vec![],
         };
 
@@ -729,8 +739,8 @@ fn apply_styles_internal_with_ancestors(
     }
 }
 
-fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
-    let mut styles = ComputedStyles::default();
+fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
+    let mut styles = ComputedStyle::default();
 
     // Handle Document node type - must be block to establish formatting context at root
     if matches!(node.node_type, crate::dom::DomNodeType::Document) {
@@ -810,11 +820,11 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
         if node.has_class("pagetop") {
             styles.font_family = vec!["Verdana".to_string(), "Geneva".to_string(), "sans-serif".to_string()];
             styles.font_size = 10.0;
-            styles.color = LegacyColor {
+            styles.color = Rgba {
                 r: 34,
                 g: 34,
                 b: 34,
-                a: 255,
+                a: 1.0,
             }; // #222222
             styles.line_height = LineHeight::Length(Length::px(12.0));
         }
@@ -823,11 +833,11 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
         // Fix any CSS that might be hiding navigation links in header
         if matches!(node.tag_name(), Some("a")) {
             // For now, make all links visible
-            styles.color = LegacyColor {
+            styles.color = Rgba {
                 r: 34,
                 g: 34,
                 b: 34,
-                a: 255,
+                a: 1.0,
             }; // #222222
             styles.display = Display::Inline;
         }
@@ -837,11 +847,11 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
             styles.display = Display::Block;
             styles.width = Some(Length::px(10.0));
             styles.height = Some(Length::px(10.0));
-            styles.color = LegacyColor {
+            styles.color = Rgba {
                 r: 0,
                 g: 0,
                 b: 0,
-                a: 255,
+                a: 1.0,
             }; // BLACK for visibility
             styles.font_size = 20.0; // LARGER for visibility
             styles.text_align = TextAlign::Center; // Center the vote arrow
@@ -856,11 +866,11 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
         // CRITICAL FIX: Ensure story rank numbers are visible
         if node.has_class("rank") {
             styles.display = Display::Block;
-            styles.color = LegacyColor {
+            styles.color = Rgba {
                 r: 0,
                 g: 0,
                 b: 0,
-                a: 255,
+                a: 1.0,
             };
             styles.font_size = 10.0;
             styles.text_align = TextAlign::Right;
@@ -880,22 +890,22 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
         // CRITICAL FIX: Ensure header navigation elements are visible and styled
         if node.has_class("pagetop") {
             styles.display = Display::Inline; // Keep inline so text is collected by parent table cell
-            styles.color = LegacyColor {
+            styles.color = Rgba {
                 r: 255,
                 g: 255,
                 b: 255,
-                a: 255,
+                a: 1.0,
             };
             styles.font_size = 10.0;
         }
 
         if node.has_class("hnname") {
             styles.display = Display::Inline; // Keep inline so text is collected by parent table cell
-            styles.color = LegacyColor {
+            styles.color = Rgba {
                 r: 255,
                 g: 255,
                 b: 255,
-                a: 255,
+                a: 1.0,
             };
             styles.font_weight = crate::style::FontWeight::Bold;
             styles.font_size = 10.0;
@@ -916,11 +926,11 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
                         || href.contains("news")
                     {
                         styles.display = Display::Inline;
-                        styles.color = LegacyColor {
+                        styles.color = Rgba {
                             r: 255,
                             g: 255,
                             b: 255,
-                            a: 255,
+                            a: 1.0,
                         };
                         styles.font_size = 10.0;
                     }
@@ -950,7 +960,7 @@ fn parse_dimension_attribute(dim_str: &str) -> Option<Length> {
     None
 }
 
-fn parse_color_attribute(color_str: &str) -> Option<LegacyColor> {
+fn parse_color_attribute(color_str: &str) -> Option<Rgba> {
     let color_str = color_str.trim();
 
     // Handle hex colors like #ff6600 or ff6600
@@ -962,7 +972,7 @@ fn parse_color_attribute(color_str: &str) -> Option<LegacyColor> {
                 u8::from_str_radix(&hex[2..4], 16),
                 u8::from_str_radix(&hex[4..6], 16),
             ) {
-                return Some(LegacyColor { r, g, b, a: 255 });
+                return Some(Rgba { r, g, b, a: 1.0 });
             }
         } else if hex.len() == 3 {
             // Shorthand like #f60
@@ -972,11 +982,11 @@ fn parse_color_attribute(color_str: &str) -> Option<LegacyColor> {
                 u8::from_str_radix(&hex[2..3], 16),
             ) {
                 // Double each digit: #f60 -> #ff6600
-                return Some(LegacyColor {
+                return Some(Rgba {
                     r: r * 17,
                     g: g * 17,
                     b: b * 17,
-                    a: 255,
+                    a: 1.0,
                 });
             }
         }
@@ -985,7 +995,7 @@ fn parse_color_attribute(color_str: &str) -> Option<LegacyColor> {
     None
 }
 
-fn inherit_styles(styles: &mut ComputedStyles, parent: &ComputedStyles) {
+fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     // Typography properties inherit
     styles.font_family = parent.font_family.clone();
     styles.font_size = parent.font_size;
@@ -1078,7 +1088,7 @@ fn build_element_ref_chain<'a>(node: &'a DomNode, ancestors: &'a [&'a DomNode]) 
     ElementRef::with_ancestors(node, ancestors)
 }
 
-fn apply_declaration(styles: &mut ComputedStyles, decl: &Declaration, parent_font_size: f32, root_font_size: f32) {
+fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_font_size: f32, root_font_size: f32) {
     // Handle CSS Custom Properties (--*)
     if decl.property.starts_with("--") {
         // Convert the property value to a string for storage
@@ -1967,7 +1977,7 @@ fn parse_grid_line(value: &str, named_lines: &HashMap<String, Vec<usize>>) -> i3
 }
 
 /// Finalize grid placement by resolving raw grid-column/row values with named lines
-fn finalize_grid_placement(styles: &mut ComputedStyles) {
+fn finalize_grid_placement(styles: &mut ComputedStyle) {
     // Resolve grid-column if raw value exists
     if let Some(raw_value) = &styles.grid_column_raw {
         let (start, end) = parse_grid_line_placement(raw_value, &styles.grid_column_names);

@@ -915,12 +915,12 @@ impl TableFormattingContext {
 mod tests {
     use super::*;
     use crate::style::display::FormattingContextType;
-    use crate::style::ComputedStyles;
+    use crate::style::ComputedStyle;
     use crate::tree::box_tree::DebugInfo;
     use std::sync::Arc;
 
-    fn create_test_style() -> Arc<ComputedStyles> {
-        Arc::new(ComputedStyles::default())
+    fn create_test_style() -> Arc<ComputedStyle> {
+        Arc::new(ComputedStyle::default())
     }
 
     fn create_table_cell(content: &str) -> BoxNode {
