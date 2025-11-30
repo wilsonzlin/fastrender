@@ -4,8 +4,7 @@
 //! according to CSS 2.1 Section 9.5.
 
 use fastrender::layout::inline::{
-    line_spaces, InlineFloatIntegration, InlineFloatIntegrationMut, LineSpace, LineSpaceOptions,
-    PlacedInlineFloat,
+    line_spaces, InlineFloatIntegration, InlineFloatIntegrationMut, LineSpace, LineSpaceOptions, PlacedInlineFloat,
 };
 use fastrender::layout::{FloatContext, FloatSide};
 use fastrender::style::Clear;
@@ -96,9 +95,7 @@ mod line_space_options_tests {
 
     #[test]
     fn test_options_builder_chain() {
-        let opts = LineSpaceOptions::default()
-            .min_width(100.0)
-            .line_height(24.0);
+        let opts = LineSpaceOptions::default().min_width(100.0).line_height(24.0);
 
         assert_eq!(opts.min_width, 100.0);
         assert_eq!(opts.line_height, 24.0);
