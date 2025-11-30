@@ -237,6 +237,27 @@
 //!
 //! # Quick Start
 //!
+//! ## Using the new FastRender API (recommended)
+//!
+//! ```rust,ignore
+//! use fastrender::FastRender;
+//!
+//! let html = r#"
+//!     <!DOCTYPE html>
+//!     <html>
+//!         <body>
+//!             <h1>Hello, FastRender!</h1>
+//!         </body>
+//!     </html>
+//! "#;
+//!
+//! let mut renderer = FastRender::new()?;
+//! let pixmap = renderer.render_html(html, 800, 600)?;
+//! pixmap.save_png("output.png")?;
+//! ```
+//!
+//! ## Using the legacy Renderer API
+//!
 //! ```rust,ignore
 //! use fastrender::{Renderer, RenderOptions};
 //!
@@ -250,8 +271,7 @@
 //! "#;
 //!
 //! let renderer = Renderer::new();
-//! let image = renderer.render(html, RenderOptions::default())?;
-//! image.save_png("output.png")?;
+//! let image = renderer.render(html)?;
 //! ```
 //!
 //! # Feature Flags
@@ -317,6 +337,12 @@ pub mod text;
 pub mod paint;
 
 // ============================================================================
+// Public API
+// ============================================================================
+
+pub mod api;
+
+// ============================================================================
 // Legacy Modules (to be refactored into above structure)
 // ============================================================================
 
@@ -344,6 +370,9 @@ pub use renderer::{ImageFormat, RenderOptions, Renderer};
 // Tree types from Wave 2 tasks
 pub use tree::{BoxNode, BoxTree, BoxType, FormattingContextType};
 
+// Fragment tree types
+pub use tree::{FragmentContent, FragmentNode, FragmentTree};
+
 // Debug tools from Wave 2
 pub use debug::{ColorMode, DiffMode, DotExporter, EnhancedTreePrinter, PrintConfig, TreeDiff};
 
@@ -352,3 +381,12 @@ pub use style::color::{ColorParseError, Hsla, Rgba};
 pub use style::display::{Display, DisplayParseError};
 pub use style::position::{Position, PositionParseError};
 pub use style::{Color, Length, LengthOrAuto, LengthUnit};
+
+// Layout types
+pub use layout::{LayoutConfig, LayoutEngine};
+
+// Text types
+pub use text::FontContext;
+
+// New Public API (W6.T03)
+pub use api::{FastRender, FastRenderConfig, Pixmap};
