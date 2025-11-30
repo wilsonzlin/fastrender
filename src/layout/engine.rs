@@ -345,7 +345,7 @@ impl LayoutEngine {
             .ok_or_else(|| LayoutError::MissingContext("Box does not establish a formatting context".to_string()))?;
 
         // Create the appropriate formatting context via factory
-        let fc = self.factory.create_specific(fc_type);
+        let fc = self.factory.create(fc_type);
 
         // Call the FC's layout method
         let fragment = fc.layout(box_node, constraints)?;
@@ -400,7 +400,7 @@ impl LayoutEngine {
             .formatting_context()
             .ok_or_else(|| LayoutError::MissingContext("Box does not establish a formatting context".to_string()))?;
 
-        let fc = self.factory.create_specific(fc_type);
+        let fc = self.factory.create(fc_type);
         fc.compute_intrinsic_inline_size(box_node, mode)
     }
 

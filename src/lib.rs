@@ -348,6 +348,7 @@ pub mod api;
 
 // These modules exist from FastRender V1 and will be gradually
 // refactored into the new architecture above
+pub mod box_generation;
 pub mod css;
 pub mod dom;
 pub mod image_loader;

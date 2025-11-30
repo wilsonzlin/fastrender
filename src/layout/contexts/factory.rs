@@ -60,14 +60,12 @@ use crate::tree::{BoxNode, FormattingContextType};
 ///
 /// - Factory is stateless for simplicity
 /// - Returns `Box<dyn FormattingContext>` for polymorphism
-pub struct FormattingContextFactory {
-    _placeholder: (),
-}
+pub struct FormattingContextFactory;
 
 impl FormattingContextFactory {
     /// Creates a new factory
     pub fn new() -> Self {
-        Self { _placeholder: () }
+        Self
     }
 
     /// Creates the appropriate FormattingContext for a box
@@ -84,15 +82,7 @@ impl FormattingContextFactory {
             LayoutError::UnsupportedBoxType("Box does not establish a formatting context".to_string())
         })?;
 
-        Ok(self.create_specific(fc_type))
-    }
-
-    /// Creates a specific formatting context type
-    ///
-    /// Lower-level method for when the FC type is already known.
-    /// Useful for testing or when bypassing box analysis.
-    pub fn create_specific(&self, fc_type: FormattingContextType) -> Box<dyn FormattingContext> {
-        self.create(fc_type)
+        Ok(self.create(fc_type))
     }
 
     /// Creates a formatting context for the specified type
@@ -216,7 +206,7 @@ mod tests {
     #[test]
     fn test_create_inline_fc() {
         let factory = FormattingContextFactory::new();
-        let fc = factory.create_specific(FormattingContextType::Inline);
+        let fc = factory.create(FormattingContextType::Inline);
 
         let box_node = BoxNode::new_block(default_style(), FormattingContextType::Inline, vec![]);
         let constraints = LayoutConstraints::definite(800.0, 600.0);
@@ -274,25 +264,6 @@ mod tests {
     }
 
     #[test]
-    fn test_create_specific_all_types() {
-        let factory = FormattingContextFactory::new();
-        let types = [
-            FormattingContextType::Block,
-            FormattingContextType::Inline,
-            FormattingContextType::Flex,
-            FormattingContextType::Grid,
-            FormattingContextType::Table,
-        ];
-
-        for fc_type in types {
-            let fc = factory.create_specific(fc_type);
-            let box_node = BoxNode::new_block(default_style(), fc_type, vec![]);
-            let constraints = LayoutConstraints::definite(800.0, 600.0);
-            assert!(fc.layout(&box_node, &constraints).is_ok());
-        }
-    }
-
-    #[test]
     fn test_create_all_types() {
         let factory = FormattingContextFactory::new();
 
@@ -309,7 +280,7 @@ mod tests {
         let factory = FormattingContextFactory::new();
 
         for _ in 0..10 {
-            let fc = factory.create_specific(FormattingContextType::Flex);
+            let fc = factory.create(FormattingContextType::Flex);
             let box_node = BoxNode::new_block(default_style(), FormattingContextType::Flex, vec![]);
             let constraints = LayoutConstraints::definite(800.0, 600.0);
             assert!(fc.layout(&box_node, &constraints).is_ok());
@@ -338,26 +309,6 @@ mod tests {
         assert!(factory.is_supported(FormattingContextType::Flex));
         assert!(factory.is_supported(FormattingContextType::Grid));
         assert!(factory.is_supported(FormattingContextType::Table));
-    }
-
-    #[test]
-    fn test_create_and_create_specific_equivalent() {
-        let factory = FormattingContextFactory::new();
-
-        for &fc_type in factory.supported_types() {
-            let fc1 = factory.create(fc_type);
-            let fc2 = factory.create_specific(fc_type);
-
-            let box_node = BoxNode::new_block(default_style(), fc_type, vec![]);
-            let constraints = LayoutConstraints::definite(800.0, 600.0);
-
-            let fragment1 = fc1.layout(&box_node, &constraints).unwrap();
-            let fragment2 = fc2.layout(&box_node, &constraints).unwrap();
-
-            // Both should produce same result
-            assert_eq!(fragment1.bounds.width(), fragment2.bounds.width());
-            assert_eq!(fragment1.bounds.height(), fragment2.bounds.height());
-        }
     }
 
     #[test]
