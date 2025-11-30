@@ -88,6 +88,7 @@ base64 = "0.22"
 
 [dev-dependencies]
 criterion = "0.5"
+tempfile = "3"
 
 [[bench]]
 name = "render_benchmark"
