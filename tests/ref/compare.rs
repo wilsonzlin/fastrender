@@ -472,6 +472,7 @@ pub fn load_png(path: &Path) -> Result<Pixmap, String> {
 ///
 /// # Returns
 /// `Ok(())` if saved successfully, `Err` with message otherwise
+#[allow(dead_code)]
 pub fn save_png(pixmap: &Pixmap, path: &Path) -> Result<(), String> {
     pixmap
         .save_png(path)

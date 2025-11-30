@@ -55,16 +55,16 @@
 //! instance per thread.
 
 use crate::css::extract_css;
-use crate::tree::generate_box_tree;
-use crate::style::Rgba;
 use crate::dom::{self, DomNode};
 use crate::error::{Error, RenderError, Result};
 use crate::geometry::Size;
 use crate::layout::{LayoutConfig, LayoutEngine};
 use crate::paint::paint_tree;
 use crate::style;
+use crate::style::Rgba;
 use crate::text::FontContext;
 use crate::tree::fragment_tree::FragmentTree;
+use crate::tree::generate_box_tree;
 
 // Re-export Pixmap from tiny-skia for public use
 pub use tiny_skia::Pixmap;

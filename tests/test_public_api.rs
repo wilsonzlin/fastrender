@@ -311,7 +311,10 @@ fn test_layout_document() {
     assert!(result.is_ok(), "Layout should succeed");
 
     let fragment_tree = result.unwrap();
-    assert!(fragment_tree.fragment_count() > 0, "Fragment tree should have fragments");
+    assert!(
+        fragment_tree.fragment_count() > 0,
+        "Fragment tree should have fragments"
+    );
     assert_eq!(fragment_tree.viewport_size().width, 800.0);
     assert_eq!(fragment_tree.viewport_size().height, 600.0);
 }

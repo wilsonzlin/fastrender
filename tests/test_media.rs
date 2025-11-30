@@ -53,7 +53,7 @@ fn test_bootstrap_breakpoints() {
     ];
 
     for (query_str, should_match, should_not_match) in breakpoints {
-        let query = MediaQuery::parse(query_str).expect(&format!("Failed to parse: {}", query_str));
+        let query = MediaQuery::parse(query_str).unwrap_or_else(|_| panic!("Failed to parse: {}", query_str));
 
         for width in should_match {
             let ctx = MediaContext::screen(width, 768.0);
@@ -566,7 +566,7 @@ fn test_whitespace_handling() {
     ];
 
     for query_str in queries {
-        let query = MediaQuery::parse(query_str).expect(&format!("Failed to parse: '{}'", query_str));
+        let query = MediaQuery::parse(query_str).unwrap_or_else(|_| panic!("Failed to parse: '{}'", query_str));
         assert!(ctx.evaluate(&query), "Query '{}' should match", query_str);
     }
 }
@@ -586,7 +586,7 @@ fn test_case_insensitivity() {
     ];
 
     for query_str in queries {
-        let query = MediaQuery::parse(query_str).expect(&format!("Failed to parse: '{}'", query_str));
+        let query = MediaQuery::parse(query_str).unwrap_or_else(|_| panic!("Failed to parse: '{}'", query_str));
         assert!(ctx.evaluate(&query), "Query '{}' should match", query_str);
     }
 }

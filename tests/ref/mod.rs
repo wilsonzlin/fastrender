@@ -157,5 +157,8 @@ pub mod compare;
 pub mod harness;
 
 // Re-export main types for convenience
+// Note: These are public API for external test consumers
+#[allow(unused_imports)]
 pub use compare::{compare_images, create_solid_pixmap, load_png, save_png, CompareConfig, DiffStatistics, ImageDiff};
+#[allow(unused_imports)]
 pub use harness::{RefTestConfig, RefTestHarness, RefTestResult, RefTestResults};

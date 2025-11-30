@@ -4,7 +4,7 @@
 //! according to CSS 2.1 Section 9.5.
 
 use fastrender::layout::inline::{
-    line_spaces, InlineFloatIntegration, InlineFloatIntegrationMut, LineSpace, LineSpaceOptions, PlacedInlineFloat,
+    line_spaces, InlineFloatIntegration, InlineFloatIntegrationMut, LineSpace, LineSpaceOptions,
 };
 use fastrender::layout::{FloatContext, FloatSide};
 use fastrender::style::Clear;

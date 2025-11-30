@@ -202,10 +202,7 @@ fn main() -> Result<()> {
         html
     };
 
-    println!(
-        "Rendering to image ({}x{} viewport)...",
-        width, height
-    );
+    println!("Rendering to image ({}x{} viewport)...", width, height);
     let mut renderer = FastRender::new()?;
     // Note: scroll_y is currently not supported, will render from top
     if scroll_y != 0 {

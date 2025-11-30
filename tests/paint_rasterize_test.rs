@@ -3,11 +3,11 @@
 //! These tests verify that path rendering primitives work correctly
 //! for rectangles, rounded rectangles, borders, and box shadows.
 
-use fastrender::style::Rgba;
 use fastrender::paint::rasterize::{
     draw_line, fill_circle, fill_ellipse, fill_rect, fill_rounded_rect, render_borders, render_box_shadow, stroke_rect,
     stroke_rounded_rect, BorderColors, BorderRadii, BorderWidths, BoxShadow,
 };
+use fastrender::style::Rgba;
 use tiny_skia::Pixmap;
 
 // ============================================================================

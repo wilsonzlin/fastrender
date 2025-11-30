@@ -74,6 +74,7 @@ pub struct RefTestConfig {
     pub failure_output_dir: Option<PathBuf>,
 
     /// Timeout for rendering (in seconds)
+    #[allow(dead_code)]
     pub render_timeout_secs: u64,
 }
 
@@ -120,6 +121,7 @@ impl RefTestConfig {
     }
 
     /// Sets the failure output directory
+    #[allow(dead_code)]
     pub fn with_failure_output_dir<P: AsRef<Path>>(mut self, dir: P) -> Self {
         self.failure_output_dir = Some(dir.as_ref().to_path_buf());
         self
@@ -301,6 +303,7 @@ impl RefTestHarness {
     }
 
     /// Returns a mutable reference to the configuration
+    #[allow(dead_code)]
     pub fn config_mut(&mut self) -> &mut RefTestConfig {
         &mut self.config
     }
@@ -460,6 +463,7 @@ impl RefTestHarness {
     ///
     /// # Returns
     /// `RefTestResults` with results for all discovered tests
+    #[allow(dead_code)]
     pub fn run_all_tests(&mut self, test_root: &Path) -> Result<RefTestResults, String> {
         let total_start = Instant::now();
         let mut results = Vec::new();
@@ -585,6 +589,7 @@ impl RefTestHarness {
     ///
     /// # Returns
     /// `Ok(())` if updated successfully, `Err` with message otherwise
+    #[allow(dead_code)]
     pub fn update_reference(&mut self, test_dir: &Path) -> Result<(), String> {
         let html_path = test_dir.join("input.html");
         let css_path = test_dir.join("style.css");

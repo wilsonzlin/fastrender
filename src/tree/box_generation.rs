@@ -816,9 +816,7 @@ fn generate_box_node_from_styled(styled: &StyledNode) -> BoxNode {
         .unwrap_or(FormattingContextType::Block);
 
     match styled.styles.display {
-        Display::Block | Display::Flex | Display::Grid | Display::Table => {
-            BoxNode::new_block(style, fc_type, children)
-        }
+        Display::Block | Display::Flex | Display::Grid | Display::Table => BoxNode::new_block(style, fc_type, children),
         Display::Inline => BoxNode::new_inline(style, children),
         Display::InlineBlock => BoxNode::new_inline_block(style, fc_type, children),
         Display::None => BoxNode::new_block(style, FormattingContextType::Block, vec![]),
@@ -849,9 +847,7 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<crate::style:
         "img" => ReplacedType::Image { src },
         "video" => ReplacedType::Video { src },
         "canvas" => ReplacedType::Canvas,
-        "svg" => ReplacedType::Svg {
-            content: String::new(),
-        },
+        "svg" => ReplacedType::Svg { content: String::new() },
         "iframe" => ReplacedType::Iframe { src },
         _ => ReplacedType::Image { src },
     };

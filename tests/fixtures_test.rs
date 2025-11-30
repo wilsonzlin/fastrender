@@ -438,14 +438,26 @@ pub fn fixture_descriptions() -> Vec<(&'static str, &'static str, &'static str)>
             "Adjacent and parent-child margin collapsing",
         ),
         ("block_clearance", "Block Layout", "Float clearance with clear property"),
-        ("inline_text_wrap", "Inline Layout", "Text wrapping in various container widths"),
-        ("inline_mixed", "Inline Layout", "Mixed inline elements and inline-blocks"),
+        (
+            "inline_text_wrap",
+            "Inline Layout",
+            "Text wrapping in various container widths",
+        ),
+        (
+            "inline_mixed",
+            "Inline Layout",
+            "Mixed inline elements and inline-blocks",
+        ),
         (
             "inline_baseline",
             "Inline Layout",
             "Baseline alignment of different-sized elements",
         ),
-        ("flex_direction", "Flexbox", "All flex-direction values (row, column, reverse)"),
+        (
+            "flex_direction",
+            "Flexbox",
+            "All flex-direction values (row, column, reverse)",
+        ),
         (
             "flex_justify_align",
             "Flexbox",

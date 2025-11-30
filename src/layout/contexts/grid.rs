@@ -234,10 +234,7 @@ impl GridFormattingContext {
 
     /// Converts GridTrack Vec to Taffy track list
     fn convert_grid_template(&self, tracks: &[GridTrack]) -> Vec<GridTemplateComponent<String>> {
-        tracks
-            .iter()
-            .map(|t| self.convert_track_to_component(t))
-            .collect()
+        tracks.iter().map(|t| self.convert_track_to_component(t)).collect()
     }
 
     /// Converts a single GridTrack to GridTemplateComponent

@@ -249,10 +249,7 @@ fn test_custom_viewport_size() {
         </html>
     "#;
 
-    let mut renderer = FastRender::builder()
-        .viewport_size(1024, 768)
-        .build()
-        .unwrap();
+    let mut renderer = FastRender::builder().viewport_size(1024, 768).build().unwrap();
 
     let result = renderer.render(html);
     assert!(result.is_ok());

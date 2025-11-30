@@ -21,8 +21,8 @@
 //! fragment's background, borders, and content. Text is rendered
 //! using the system's default font.
 
-use crate::style::Rgba;
 use crate::error::{RenderError, Result};
+use crate::style::Rgba;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 use tiny_skia::{Paint, PathBuilder, Pixmap, Rect as SkiaRect, Transform};
 

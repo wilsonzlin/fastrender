@@ -2,7 +2,7 @@
 //!
 //! Tests the baseline alignment algorithm as specified in CSS 2.1 Section 10.8.
 
-use fastrender::layout::inline::{BaselineAligner, InlineBoxMetrics, LineMetrics, PositionedInlineBox, VerticalAlign};
+use fastrender::layout::inline::{BaselineAligner, InlineBoxMetrics, LineMetrics, VerticalAlign};
 use fastrender::text::ScaledMetrics;
 
 // =============================================================================

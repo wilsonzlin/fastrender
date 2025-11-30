@@ -315,10 +315,14 @@ fn bench_viewport_sizes(c: &mut Criterion) {
     // Different viewport sizes
     for (width, height) in [(320, 480), (768, 1024), (1920, 1080), (2560, 1440)].iter() {
         let label = format!("{}x{}", width, height);
-        group.bench_with_input(BenchmarkId::new("cards", &label), &(&html, *width, *height), |b, (html, w, h)| {
-            let mut renderer = FastRender::new().unwrap();
-            b.iter(|| renderer.render_to_png(black_box(html), *w, *h).unwrap())
-        });
+        group.bench_with_input(
+            BenchmarkId::new("cards", &label),
+            &(&html, *width, *height),
+            |b, (html, w, h)| {
+                let mut renderer = FastRender::new().unwrap();
+                b.iter(|| renderer.render_to_png(black_box(html), *w, *h).unwrap())
+            },
+        );
     }
 
     group.finish();
@@ -402,9 +406,7 @@ fn bench_text_processing(c: &mut Criterion) {
     });
 
     // Script detection
-    group.bench_function("script_detect_latin", |b| {
-        b.iter(|| Script::detect(black_box('A')))
-    });
+    group.bench_function("script_detect_latin", |b| b.iter(|| Script::detect(black_box('A'))));
 
     group.bench_function("script_detect_cjk", |b| {
         b.iter(|| Script::detect(black_box('\u{4E00}'))) // CJK character

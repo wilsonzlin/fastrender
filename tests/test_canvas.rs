@@ -3,9 +3,9 @@
 //! These tests verify the Canvas wrapper for tiny-skia works correctly
 //! for real-world rendering scenarios.
 
-use fastrender::style::Rgba;
 use fastrender::geometry::{Point, Rect};
 use fastrender::paint::{BlendMode, BorderRadii, Canvas};
+use fastrender::style::Rgba;
 use fastrender::text::{FontContext, Script, TextDirection, TextShaper};
 
 // ============================================================================
@@ -550,18 +550,10 @@ fn test_complex_scene() {
 
     // Rounded header
     let radii = BorderRadii::new(5.0, 5.0, 0.0, 0.0);
-    canvas.draw_rounded_rect(
-        Rect::from_xywh(10.0, 10.0, 180.0, 40.0),
-        radii,
-        Rgba::rgb(51, 102, 204),
-    );
+    canvas.draw_rounded_rect(Rect::from_xywh(10.0, 10.0, 180.0, 40.0), radii, Rgba::rgb(51, 102, 204));
 
     // Content area with border
-    canvas.stroke_rect(
-        Rect::from_xywh(20.0, 60.0, 160.0, 120.0),
-        Rgba::rgb(200, 200, 200),
-        1.0,
-    );
+    canvas.stroke_rect(Rect::from_xywh(20.0, 60.0, 160.0, 120.0), Rgba::rgb(200, 200, 200), 1.0);
 
     // Decorative circles
     canvas.draw_circle(Point::new(50.0, 100.0), 15.0, Rgba::rgb(255, 100, 100));

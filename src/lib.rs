@@ -5,7 +5,6 @@
 #![deny(clippy::all)]
 #![warn(clippy::pedantic)]
 #![warn(clippy::nursery)]
-
 // Justified allows for a rendering engine
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::similar_names)]
@@ -24,7 +23,6 @@
 #![allow(clippy::imprecise_flops)]
 #![allow(clippy::many_single_char_names)]
 #![allow(clippy::too_many_arguments)]
-
 // Style preferences
 #![allow(clippy::must_use_candidate)]
 #![allow(clippy::missing_const_for_fn)]
@@ -95,22 +93,18 @@
 #![allow(clippy::stable_sort_primitive)]
 #![allow(clippy::io_other_error)]
 #![allow(clippy::elidable_lifetime_names)]
-
 // Temporary allows during development
 #![allow(dead_code)]
 #![allow(unused_imports)]
 #![allow(unused_assignments)]
 #![allow(deprecated)]
 #![allow(missing_docs)]
-
 // Performance - strict
 #![deny(clippy::needless_collect)]
-
 // Correctness - strict
 #![deny(clippy::absurd_extreme_comparisons)]
 #![deny(clippy::await_holding_lock)]
 #![deny(clippy::inherent_to_string)]
-
 // Style - warnings
 #![warn(clippy::explicit_into_iter_loop)]
 #![warn(clippy::inconsistent_struct_constructor)]
@@ -176,18 +170,18 @@ pub mod geometry;
 // Pipeline Modules
 // ============================================================================
 
-pub mod tree;
-pub mod style;
 pub mod layout;
-pub mod text;
 pub mod paint;
+pub mod style;
+pub mod text;
+pub mod tree;
 
 // ============================================================================
 // Supporting Modules
 // ============================================================================
 
-pub mod debug;
 pub mod css;
+pub mod debug;
 pub mod dom;
 pub mod image_loader;
 pub mod image_output;
@@ -210,10 +204,10 @@ pub use tree::{BoxNode, BoxTree, BoxType, FormattingContextType};
 pub use tree::{FragmentContent, FragmentNode, FragmentTree};
 
 // Style types
-pub use style::Color;
 pub use style::color::{ColorParseError, Hsla, Rgba};
 pub use style::display::{Display, DisplayParseError};
 pub use style::position::{Position, PositionParseError};
+pub use style::Color;
 pub use style::{Length, LengthOrAuto, LengthUnit};
 
 // Layout

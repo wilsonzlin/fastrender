@@ -41,9 +41,9 @@
 //! - CSS Color Level 4: Color handling
 //! - CSS 2.1 Appendix E: Paint order
 
-use crate::style::Rgba;
 use crate::error::{RenderError, Result};
 use crate::geometry::{Point, Rect, Size};
+use crate::style::Rgba;
 use crate::text::font_db::LoadedFont;
 use crate::text::shaper::GlyphPosition;
 use tiny_skia::{
