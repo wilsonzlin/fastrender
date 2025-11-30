@@ -36,9 +36,25 @@ use crate::geometry::Rect;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::display::FormattingContextType;
-use crate::style::{LineHeight, Position};
+use crate::style::{Length, LineHeight, Position};
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
+
+/// Helper to resolve a Length to pixels, handling em/rem units with font-size
+fn resolve_length(length: &Length, font_size: f32, containing_block_size: f32) -> f32 {
+    use crate::style::values::LengthUnit;
+    match length.unit {
+        LengthUnit::Em | LengthUnit::Rem => length.value * font_size,
+        LengthUnit::Percent => (length.value / 100.0) * containing_block_size,
+        _ if length.unit.is_absolute() => length.to_px(),
+        _ => 0.0, // Fallback for unknown units
+    }
+}
+
+/// Helper to resolve an optional Length to pixels
+fn resolve_opt_length(length: Option<&Length>, font_size: f32, containing_block_size: f32) -> f32 {
+    length.map(|l| resolve_length(l, font_size, containing_block_size)).unwrap_or(0.0)
+}
 
 /// Block Formatting Context implementation
 ///
@@ -62,13 +78,14 @@ impl BlockFormattingContext {
         current_y: f32,
     ) -> Result<(FragmentNode, f32), LayoutError> {
         let style = &child.style;
+        let font_size = style.font_size; // Get font-size for resolving em units
 
         // Compute width using CSS 2.1 Section 10.3.3 algorithm
         let computed_width = compute_block_width(style, containing_width);
 
-        // Handle vertical margins
-        let margin_top = style.margin_top.as_ref().map(|l| l.to_px()).unwrap_or(0.0);
-        let margin_bottom = style.margin_bottom.as_ref().map(|l| l.to_px()).unwrap_or(0.0);
+        // Handle vertical margins (resolve em/rem units with font-size)
+        let margin_top = resolve_opt_length(style.margin_top.as_ref(), font_size, containing_width);
+        let margin_bottom = resolve_opt_length(style.margin_bottom.as_ref(), font_size, containing_width);
 
         // Add top margin to pending collapse set
         margin_ctx.push_margin(margin_top);
@@ -83,22 +100,24 @@ impl BlockFormattingContext {
         // Recursively layout children
         let (child_fragments, content_height) = self.layout_children(child, &child_constraints)?;
 
-        // Compute height
-        let border_top = style.border_top_width.to_px();
-        let border_bottom = style.border_bottom_width.to_px();
-        let padding_top = style.padding_top.to_px();
-        let padding_bottom = style.padding_bottom.to_px();
+        // Compute height (resolve em/rem units with font-size)
+        let border_top = resolve_length(&style.border_top_width, font_size, containing_width);
+        let border_bottom = resolve_length(&style.border_bottom_width, font_size, containing_width);
+        let padding_top = resolve_length(&style.padding_top, font_size, containing_width);
+        let padding_bottom = resolve_length(&style.padding_bottom, font_size, containing_width);
 
         // Height computation (CSS 2.1 Section 10.6.3)
         let height = if let Some(h) = &style.height {
-            h.to_px()
+            resolve_length(h, font_size, containing_width)
         } else {
             content_height
         };
 
         // Apply min/max height constraints
-        let min_height = style.min_height.as_ref().map(|l| l.to_px()).unwrap_or(0.0);
-        let max_height = style.max_height.as_ref().map(|l| l.to_px()).unwrap_or(f32::INFINITY);
+        let min_height = resolve_opt_length(style.min_height.as_ref(), font_size, containing_width);
+        let max_height = style.max_height.as_ref()
+            .map(|l| resolve_length(l, font_size, containing_width))
+            .unwrap_or(f32::INFINITY);
         let height = height.max(min_height).min(max_height);
 
         // Create the fragment
