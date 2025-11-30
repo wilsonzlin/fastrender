@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::style::{Length, LengthUnit};
+use crate::style::{Length, LengthUnit, Rgba};
 use cssparser::{ParseError, Parser, ParserInput, ToCss, Token};
 use selectors::parser::{SelectorList, SelectorParseErrorKind};
 use selectors::Element;
@@ -239,7 +239,7 @@ pub struct BoxShadow {
     pub offset_y: Length,
     pub blur_radius: Length,
     pub spread_radius: Length,
-    pub color: Color,
+    pub color: Rgba,
     pub inset: bool,
 }
 
@@ -248,12 +248,12 @@ pub struct TextShadow {
     pub offset_x: Length,
     pub offset_y: Length,
     pub blur_radius: Length,
-    pub color: Color,
+    pub color: Rgba,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColorStop {
-    pub color: Color,
+    pub color: Rgba,
     pub position: Option<f32>,
 }
 
@@ -825,4 +825,40 @@ pub fn parse_declarations(declarations_str: &str) -> Vec<Declaration> {
     let mut input = ParserInput::new(declarations_str);
     let mut parser = Parser::new(&mut input);
     parse_declaration_list(&mut parser).unwrap_or_default()
+}
+
+/// Extracts CSS from style tags in the DOM
+///
+/// Walks the DOM tree looking for `<style>` elements and concatenates
+/// their text content to form a stylesheet.
+///
+/// # Arguments
+///
+/// * `dom` - The root DOM node to search
+///
+/// # Returns
+///
+/// A `StyleSheet` parsed from all found CSS content, or an empty
+/// stylesheet if no styles were found.
+pub fn extract_css(dom: &crate::dom::DomNode) -> crate::error::Result<StyleSheet> {
+    let mut css_content = String::new();
+
+    dom.walk_tree(&mut |node| {
+        if let Some(tag) = node.tag_name() {
+            if tag == "style" {
+                for child in &node.children {
+                    if let Some(text) = child.text_content() {
+                        css_content.push_str(text);
+                        css_content.push('\n');
+                    }
+                }
+            }
+        }
+    });
+
+    if css_content.is_empty() {
+        Ok(StyleSheet { rules: Vec::new() })
+    } else {
+        parse_stylesheet(&css_content)
+    }
 }

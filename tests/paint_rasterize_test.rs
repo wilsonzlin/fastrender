@@ -3,11 +3,11 @@
 //! These tests verify that path rendering primitives work correctly
 //! for rectangles, rounded rectangles, borders, and box shadows.
 
-use fastrender::css::Color;
 use fastrender::paint::rasterize::{
     draw_line, fill_circle, fill_ellipse, fill_rect, fill_rounded_rect, render_borders, render_box_shadow, stroke_rect,
     stroke_rounded_rect, BorderColors, BorderRadii, BorderWidths, BoxShadow,
 };
+use fastrender::style::Rgba;
 use tiny_skia::Pixmap;
 
 // ============================================================================
@@ -183,7 +183,7 @@ mod fill_rect_tests {
     #[test]
     fn test_basic_fill_rect() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = fill_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, Color::rgb(255, 0, 0));
+        let result = fill_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, Rgba::rgb(255, 0, 0));
         assert!(result);
 
         // Check that center of rectangle is colored
@@ -199,7 +199,7 @@ mod fill_rect_tests {
     #[test]
     fn test_fill_rect_transparent() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = fill_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, Color::TRANSPARENT);
+        let result = fill_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, Rgba::TRANSPARENT);
         assert!(!result);
         assert_eq!(count_colored_pixels(&pixmap), 0);
     }
@@ -207,28 +207,28 @@ mod fill_rect_tests {
     #[test]
     fn test_fill_rect_zero_width() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = fill_rect(&mut pixmap, 10.0, 10.0, 0.0, 50.0, Color::rgb(255, 0, 0));
+        let result = fill_rect(&mut pixmap, 10.0, 10.0, 0.0, 50.0, Rgba::rgb(255, 0, 0));
         assert!(!result);
     }
 
     #[test]
     fn test_fill_rect_zero_height() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = fill_rect(&mut pixmap, 10.0, 10.0, 50.0, 0.0, Color::rgb(255, 0, 0));
+        let result = fill_rect(&mut pixmap, 10.0, 10.0, 50.0, 0.0, Rgba::rgb(255, 0, 0));
         assert!(!result);
     }
 
     #[test]
     fn test_fill_rect_negative_dimensions() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = fill_rect(&mut pixmap, 10.0, 10.0, -50.0, 50.0, Color::rgb(255, 0, 0));
+        let result = fill_rect(&mut pixmap, 10.0, 10.0, -50.0, 50.0, Rgba::rgb(255, 0, 0));
         assert!(!result);
     }
 
     #[test]
     fn test_fill_rect_semi_transparent() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = fill_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, Color::rgba(255, 0, 0, 128));
+        let result = fill_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, Rgba::from_rgba8(255, 0, 0, 128));
         assert!(result);
         assert!(pixel_is_colored(&pixmap, 35, 35));
     }
@@ -236,7 +236,7 @@ mod fill_rect_tests {
     #[test]
     fn test_fill_rect_at_origin() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = fill_rect(&mut pixmap, 0.0, 0.0, 10.0, 10.0, Color::rgb(0, 255, 0));
+        let result = fill_rect(&mut pixmap, 0.0, 0.0, 10.0, 10.0, Rgba::rgb(0, 255, 0));
         assert!(result);
         assert!(pixel_is_colored(&pixmap, 0, 0));
         assert!(pixel_is_colored(&pixmap, 5, 5));
@@ -245,7 +245,7 @@ mod fill_rect_tests {
     #[test]
     fn test_fill_rect_full_canvas() {
         let mut pixmap = create_pixmap(50, 50);
-        let result = fill_rect(&mut pixmap, 0.0, 0.0, 50.0, 50.0, Color::rgb(0, 0, 255));
+        let result = fill_rect(&mut pixmap, 0.0, 0.0, 50.0, 50.0, Rgba::rgb(0, 0, 255));
         assert!(result);
         // All pixels should be colored
         assert_eq!(count_colored_pixels(&pixmap), 50 * 50);
@@ -258,7 +258,7 @@ mod stroke_rect_tests {
     #[test]
     fn test_basic_stroke_rect() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = stroke_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, Color::rgb(0, 0, 255), 2.0);
+        let result = stroke_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, Rgba::rgb(0, 0, 255), 2.0);
         assert!(result);
         // Center should be empty (just an outline)
         // Note: actual behavior depends on stroke implementation
@@ -267,14 +267,14 @@ mod stroke_rect_tests {
     #[test]
     fn test_stroke_rect_transparent() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = stroke_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, Color::TRANSPARENT, 2.0);
+        let result = stroke_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, Rgba::TRANSPARENT, 2.0);
         assert!(!result);
     }
 
     #[test]
     fn test_stroke_rect_zero_width_stroke() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = stroke_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, Color::rgb(0, 0, 255), 0.0);
+        let result = stroke_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, Rgba::rgb(0, 0, 255), 0.0);
         assert!(!result);
     }
 }
@@ -290,7 +290,7 @@ mod rounded_rect_tests {
     fn test_fill_rounded_rect_uniform_radii() {
         let mut pixmap = create_pixmap(100, 100);
         let radii = BorderRadii::uniform(10.0);
-        let result = fill_rounded_rect(&mut pixmap, 10.0, 10.0, 60.0, 60.0, &radii, Color::rgb(0, 255, 0));
+        let result = fill_rounded_rect(&mut pixmap, 10.0, 10.0, 60.0, 60.0, &radii, Rgba::rgb(0, 255, 0));
         assert!(result);
 
         // Center should be colored
@@ -301,7 +301,7 @@ mod rounded_rect_tests {
     fn test_fill_rounded_rect_zero_radii() {
         let mut pixmap = create_pixmap(100, 100);
         let radii = BorderRadii::zero();
-        let result = fill_rounded_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, &radii, Color::rgb(255, 0, 0));
+        let result = fill_rounded_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, &radii, Rgba::rgb(255, 0, 0));
         assert!(result);
         // Should behave like regular rectangle
     }
@@ -310,7 +310,7 @@ mod rounded_rect_tests {
     fn test_fill_rounded_rect_different_radii() {
         let mut pixmap = create_pixmap(100, 100);
         let radii = BorderRadii::new(5.0, 10.0, 15.0, 20.0);
-        let result = fill_rounded_rect(&mut pixmap, 10.0, 10.0, 60.0, 60.0, &radii, Color::rgb(0, 0, 255));
+        let result = fill_rounded_rect(&mut pixmap, 10.0, 10.0, 60.0, 60.0, &radii, Rgba::rgb(0, 0, 255));
         assert!(result);
     }
 
@@ -319,7 +319,7 @@ mod rounded_rect_tests {
         let mut pixmap = create_pixmap(100, 100);
         // Radii larger than box - should be clamped
         let radii = BorderRadii::uniform(50.0);
-        let result = fill_rounded_rect(&mut pixmap, 20.0, 20.0, 40.0, 40.0, &radii, Color::rgb(128, 128, 0));
+        let result = fill_rounded_rect(&mut pixmap, 20.0, 20.0, 40.0, 40.0, &radii, Rgba::rgb(128, 128, 0));
         assert!(result);
     }
 
@@ -327,7 +327,7 @@ mod rounded_rect_tests {
     fn test_fill_rounded_rect_transparent() {
         let mut pixmap = create_pixmap(100, 100);
         let radii = BorderRadii::uniform(10.0);
-        let result = fill_rounded_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, &radii, Color::TRANSPARENT);
+        let result = fill_rounded_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, &radii, Rgba::TRANSPARENT);
         assert!(!result);
     }
 
@@ -335,7 +335,7 @@ mod rounded_rect_tests {
     fn test_stroke_rounded_rect() {
         let mut pixmap = create_pixmap(100, 100);
         let radii = BorderRadii::uniform(10.0);
-        let result = stroke_rounded_rect(&mut pixmap, 10.0, 10.0, 60.0, 60.0, &radii, Color::rgb(0, 0, 0), 2.0);
+        let result = stroke_rounded_rect(&mut pixmap, 10.0, 10.0, 60.0, 60.0, &radii, Rgba::rgb(0, 0, 0), 2.0);
         assert!(result);
     }
 
@@ -343,7 +343,7 @@ mod rounded_rect_tests {
     fn test_stroke_rounded_rect_zero_radii() {
         let mut pixmap = create_pixmap(100, 100);
         let radii = BorderRadii::zero();
-        let result = stroke_rounded_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, &radii, Color::rgb(0, 0, 0), 2.0);
+        let result = stroke_rounded_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, &radii, Rgba::rgb(0, 0, 0), 2.0);
         assert!(result);
     }
 }
@@ -359,7 +359,7 @@ mod border_tests {
     fn test_render_uniform_borders() {
         let mut pixmap = create_pixmap(100, 100);
         let widths = BorderWidths::uniform(5.0);
-        let colors = BorderColors::uniform(Color::rgb(0, 0, 0));
+        let colors = BorderColors::uniform(Rgba::rgb(0, 0, 0));
         let radii = BorderRadii::zero();
         let result = render_borders(&mut pixmap, 10.0, 10.0, 80.0, 80.0, &widths, &colors, &radii);
         assert!(result);
@@ -369,7 +369,7 @@ mod border_tests {
     fn test_render_different_width_borders() {
         let mut pixmap = create_pixmap(100, 100);
         let widths = BorderWidths::new(2.0, 4.0, 6.0, 8.0);
-        let colors = BorderColors::uniform(Color::rgb(0, 0, 0));
+        let colors = BorderColors::uniform(Rgba::rgb(0, 0, 0));
         let radii = BorderRadii::zero();
         let result = render_borders(&mut pixmap, 10.0, 10.0, 80.0, 80.0, &widths, &colors, &radii);
         assert!(result);
@@ -380,10 +380,10 @@ mod border_tests {
         let mut pixmap = create_pixmap(100, 100);
         let widths = BorderWidths::uniform(5.0);
         let colors = BorderColors::new(
-            Color::rgb(255, 0, 0),   // top - red
-            Color::rgb(0, 255, 0),   // right - green
-            Color::rgb(0, 0, 255),   // bottom - blue
-            Color::rgb(255, 255, 0), // left - yellow
+            Rgba::rgb(255, 0, 0),   // top - red
+            Rgba::rgb(0, 255, 0),   // right - green
+            Rgba::rgb(0, 0, 255),   // bottom - blue
+            Rgba::rgb(255, 255, 0), // left - yellow
         );
         let radii = BorderRadii::zero();
         let result = render_borders(&mut pixmap, 10.0, 10.0, 80.0, 80.0, &widths, &colors, &radii);
@@ -394,7 +394,7 @@ mod border_tests {
     fn test_render_rounded_borders() {
         let mut pixmap = create_pixmap(100, 100);
         let widths = BorderWidths::uniform(5.0);
-        let colors = BorderColors::uniform(Color::rgb(0, 0, 0));
+        let colors = BorderColors::uniform(Rgba::rgb(0, 0, 0));
         let radii = BorderRadii::uniform(10.0);
         let result = render_borders(&mut pixmap, 10.0, 10.0, 80.0, 80.0, &widths, &colors, &radii);
         assert!(result);
@@ -404,7 +404,7 @@ mod border_tests {
     fn test_render_no_borders() {
         let mut pixmap = create_pixmap(100, 100);
         let widths = BorderWidths::new(0.0, 0.0, 0.0, 0.0);
-        let colors = BorderColors::uniform(Color::rgb(0, 0, 0));
+        let colors = BorderColors::uniform(Rgba::rgb(0, 0, 0));
         let radii = BorderRadii::zero();
         let result = render_borders(&mut pixmap, 10.0, 10.0, 80.0, 80.0, &widths, &colors, &radii);
         assert!(!result);
@@ -414,7 +414,7 @@ mod border_tests {
     fn test_render_partial_borders() {
         let mut pixmap = create_pixmap(100, 100);
         let widths = BorderWidths::new(5.0, 0.0, 5.0, 0.0); // Top and bottom only
-        let colors = BorderColors::uniform(Color::rgb(0, 0, 0));
+        let colors = BorderColors::uniform(Rgba::rgb(0, 0, 0));
         let radii = BorderRadii::zero();
         let result = render_borders(&mut pixmap, 10.0, 10.0, 80.0, 80.0, &widths, &colors, &radii);
         assert!(result);
@@ -424,7 +424,7 @@ mod border_tests {
     fn test_render_transparent_borders() {
         let mut pixmap = create_pixmap(100, 100);
         let widths = BorderWidths::uniform(5.0);
-        let colors = BorderColors::uniform(Color::TRANSPARENT);
+        let colors = BorderColors::uniform(Rgba::TRANSPARENT);
         let radii = BorderRadii::zero();
         let result = render_borders(&mut pixmap, 10.0, 10.0, 80.0, 80.0, &widths, &colors, &radii);
         assert!(!result); // Should return false for transparent
@@ -442,7 +442,7 @@ mod box_shadow_tests {
     fn test_render_basic_shadow() {
         let mut pixmap = create_pixmap(100, 100);
         let radii = BorderRadii::zero();
-        let shadow = BoxShadow::new(5.0, 5.0, 0.0, 0.0, Color::rgba(0, 0, 0, 128));
+        let shadow = BoxShadow::new(5.0, 5.0, 0.0, 0.0, Rgba::from_rgba8(0, 0, 0, 128));
         let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 40.0, 40.0, &radii, &shadow);
         assert!(result);
     }
@@ -451,7 +451,7 @@ mod box_shadow_tests {
     fn test_render_shadow_with_blur() {
         let mut pixmap = create_pixmap(100, 100);
         let radii = BorderRadii::zero();
-        let shadow = BoxShadow::new(5.0, 5.0, 10.0, 0.0, Color::rgba(0, 0, 0, 128));
+        let shadow = BoxShadow::new(5.0, 5.0, 10.0, 0.0, Rgba::from_rgba8(0, 0, 0, 128));
         let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 40.0, 40.0, &radii, &shadow);
         assert!(result);
     }
@@ -460,7 +460,7 @@ mod box_shadow_tests {
     fn test_render_shadow_with_spread() {
         let mut pixmap = create_pixmap(100, 100);
         let radii = BorderRadii::zero();
-        let shadow = BoxShadow::new(0.0, 0.0, 0.0, 10.0, Color::rgba(0, 0, 0, 100));
+        let shadow = BoxShadow::new(0.0, 0.0, 0.0, 10.0, Rgba::from_rgba8(0, 0, 0, 100));
         let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 40.0, 40.0, &radii, &shadow);
         assert!(result);
     }
@@ -469,7 +469,7 @@ mod box_shadow_tests {
     fn test_render_inset_shadow() {
         let mut pixmap = create_pixmap(100, 100);
         let radii = BorderRadii::zero();
-        let shadow = BoxShadow::inset(5.0, 5.0, 10.0, 5.0, Color::rgba(0, 0, 0, 128));
+        let shadow = BoxShadow::inset(5.0, 5.0, 10.0, 5.0, Rgba::from_rgba8(0, 0, 0, 128));
         let result = render_box_shadow(&mut pixmap, 10.0, 10.0, 80.0, 80.0, &radii, &shadow);
         assert!(result);
     }
@@ -478,7 +478,7 @@ mod box_shadow_tests {
     fn test_render_transparent_shadow() {
         let mut pixmap = create_pixmap(100, 100);
         let radii = BorderRadii::zero();
-        let shadow = BoxShadow::new(5.0, 5.0, 10.0, 0.0, Color::TRANSPARENT);
+        let shadow = BoxShadow::new(5.0, 5.0, 10.0, 0.0, Rgba::TRANSPARENT);
         let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 40.0, 40.0, &radii, &shadow);
         assert!(!result);
     }
@@ -487,7 +487,7 @@ mod box_shadow_tests {
     fn test_render_rounded_shadow() {
         let mut pixmap = create_pixmap(100, 100);
         let radii = BorderRadii::uniform(10.0);
-        let shadow = BoxShadow::new(5.0, 5.0, 10.0, 0.0, Color::rgba(0, 0, 0, 128));
+        let shadow = BoxShadow::new(5.0, 5.0, 10.0, 0.0, Rgba::from_rgba8(0, 0, 0, 128));
         let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 40.0, 40.0, &radii, &shadow);
         assert!(result);
     }
@@ -496,7 +496,7 @@ mod box_shadow_tests {
     fn test_render_shadow_negative_offset() {
         let mut pixmap = create_pixmap(100, 100);
         let radii = BorderRadii::zero();
-        let shadow = BoxShadow::new(-5.0, -5.0, 5.0, 0.0, Color::rgba(0, 0, 0, 128));
+        let shadow = BoxShadow::new(-5.0, -5.0, 5.0, 0.0, Rgba::from_rgba8(0, 0, 0, 128));
         let result = render_box_shadow(&mut pixmap, 30.0, 30.0, 40.0, 40.0, &radii, &shadow);
         assert!(result);
     }
@@ -512,35 +512,35 @@ mod line_tests {
     #[test]
     fn test_draw_horizontal_line() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = draw_line(&mut pixmap, 10.0, 50.0, 90.0, 50.0, Color::rgb(255, 0, 0), 2.0);
+        let result = draw_line(&mut pixmap, 10.0, 50.0, 90.0, 50.0, Rgba::rgb(255, 0, 0), 2.0);
         assert!(result);
     }
 
     #[test]
     fn test_draw_vertical_line() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = draw_line(&mut pixmap, 50.0, 10.0, 50.0, 90.0, Color::rgb(0, 255, 0), 2.0);
+        let result = draw_line(&mut pixmap, 50.0, 10.0, 50.0, 90.0, Rgba::rgb(0, 255, 0), 2.0);
         assert!(result);
     }
 
     #[test]
     fn test_draw_diagonal_line() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = draw_line(&mut pixmap, 0.0, 0.0, 100.0, 100.0, Color::rgb(0, 0, 255), 2.0);
+        let result = draw_line(&mut pixmap, 0.0, 0.0, 100.0, 100.0, Rgba::rgb(0, 0, 255), 2.0);
         assert!(result);
     }
 
     #[test]
     fn test_draw_line_transparent() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = draw_line(&mut pixmap, 0.0, 0.0, 100.0, 100.0, Color::TRANSPARENT, 2.0);
+        let result = draw_line(&mut pixmap, 0.0, 0.0, 100.0, 100.0, Rgba::TRANSPARENT, 2.0);
         assert!(!result);
     }
 
     #[test]
     fn test_draw_line_zero_width() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = draw_line(&mut pixmap, 0.0, 0.0, 100.0, 100.0, Color::rgb(0, 0, 0), 0.0);
+        let result = draw_line(&mut pixmap, 0.0, 0.0, 100.0, 100.0, Rgba::rgb(0, 0, 0), 0.0);
         assert!(!result);
     }
 }
@@ -551,7 +551,7 @@ mod circle_tests {
     #[test]
     fn test_fill_circle_basic() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = fill_circle(&mut pixmap, 50.0, 50.0, 30.0, Color::rgb(255, 0, 255));
+        let result = fill_circle(&mut pixmap, 50.0, 50.0, 30.0, Rgba::rgb(255, 0, 255));
         assert!(result);
 
         // Center should be colored
@@ -561,21 +561,21 @@ mod circle_tests {
     #[test]
     fn test_fill_circle_edge_positions() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = fill_circle(&mut pixmap, 10.0, 10.0, 10.0, Color::rgb(0, 128, 128));
+        let result = fill_circle(&mut pixmap, 10.0, 10.0, 10.0, Rgba::rgb(0, 128, 128));
         assert!(result);
     }
 
     #[test]
     fn test_fill_circle_transparent() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = fill_circle(&mut pixmap, 50.0, 50.0, 30.0, Color::TRANSPARENT);
+        let result = fill_circle(&mut pixmap, 50.0, 50.0, 30.0, Rgba::TRANSPARENT);
         assert!(!result);
     }
 
     #[test]
     fn test_fill_circle_zero_radius() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = fill_circle(&mut pixmap, 50.0, 50.0, 0.0, Color::rgb(255, 0, 0));
+        let result = fill_circle(&mut pixmap, 50.0, 50.0, 0.0, Rgba::rgb(255, 0, 0));
         assert!(!result);
     }
 }
@@ -586,7 +586,7 @@ mod ellipse_tests {
     #[test]
     fn test_fill_ellipse_basic() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = fill_ellipse(&mut pixmap, 50.0, 50.0, 40.0, 20.0, Color::rgb(128, 0, 128));
+        let result = fill_ellipse(&mut pixmap, 50.0, 50.0, 40.0, 20.0, Rgba::rgb(128, 0, 128));
         assert!(result);
 
         // Center should be colored
@@ -596,28 +596,28 @@ mod ellipse_tests {
     #[test]
     fn test_fill_ellipse_tall() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = fill_ellipse(&mut pixmap, 50.0, 50.0, 20.0, 40.0, Color::rgb(0, 128, 0));
+        let result = fill_ellipse(&mut pixmap, 50.0, 50.0, 20.0, 40.0, Rgba::rgb(0, 128, 0));
         assert!(result);
     }
 
     #[test]
     fn test_fill_ellipse_transparent() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = fill_ellipse(&mut pixmap, 50.0, 50.0, 40.0, 20.0, Color::TRANSPARENT);
+        let result = fill_ellipse(&mut pixmap, 50.0, 50.0, 40.0, 20.0, Rgba::TRANSPARENT);
         assert!(!result);
     }
 
     #[test]
     fn test_fill_ellipse_zero_rx() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = fill_ellipse(&mut pixmap, 50.0, 50.0, 0.0, 20.0, Color::rgb(255, 0, 0));
+        let result = fill_ellipse(&mut pixmap, 50.0, 50.0, 0.0, 20.0, Rgba::rgb(255, 0, 0));
         assert!(!result);
     }
 
     #[test]
     fn test_fill_ellipse_zero_ry() {
         let mut pixmap = create_pixmap(100, 100);
-        let result = fill_ellipse(&mut pixmap, 50.0, 50.0, 40.0, 0.0, Color::rgb(255, 0, 0));
+        let result = fill_ellipse(&mut pixmap, 50.0, 50.0, 40.0, 0.0, Rgba::rgb(255, 0, 0));
         assert!(!result);
     }
 }
@@ -635,10 +635,10 @@ mod integration {
         let mut pixmap = create_pixmap(200, 200);
 
         // Draw background
-        fill_rect(&mut pixmap, 0.0, 0.0, 200.0, 200.0, Color::rgb(240, 240, 240));
+        fill_rect(&mut pixmap, 0.0, 0.0, 200.0, 200.0, Rgba::rgb(240, 240, 240));
 
         // Draw a shadow
-        let shadow = BoxShadow::new(5.0, 5.0, 10.0, 0.0, Color::rgba(0, 0, 0, 64));
+        let shadow = BoxShadow::new(5.0, 5.0, 10.0, 0.0, Rgba::from_rgba8(0, 0, 0, 64));
         render_box_shadow(&mut pixmap, 50.0, 50.0, 100.0, 100.0, &BorderRadii::zero(), &shadow);
 
         // Draw main box
@@ -649,7 +649,7 @@ mod integration {
             100.0,
             100.0,
             &BorderRadii::uniform(10.0),
-            Color::rgb(255, 255, 255),
+            Rgba::rgb(255, 255, 255),
         );
 
         // Draw border
@@ -660,7 +660,7 @@ mod integration {
             100.0,
             100.0,
             &BorderWidths::uniform(2.0),
-            &BorderColors::uniform(Color::rgb(0, 0, 0)),
+            &BorderColors::uniform(Rgba::rgb(0, 0, 0)),
             &BorderRadii::uniform(10.0),
         );
 
@@ -676,7 +676,7 @@ mod integration {
         let radii = BorderRadii::uniform(6.0);
 
         // Button background
-        fill_rounded_rect(&mut pixmap, 0.0, 0.0, 120.0, 40.0, &radii, Color::rgb(66, 133, 244));
+        fill_rounded_rect(&mut pixmap, 0.0, 0.0, 120.0, 40.0, &radii, Rgba::rgb(66, 133, 244));
 
         // Button border
         render_borders(
@@ -686,7 +686,7 @@ mod integration {
             120.0,
             40.0,
             &BorderWidths::uniform(1.0),
-            &BorderColors::uniform(Color::rgb(41, 98, 195)),
+            &BorderColors::uniform(Rgba::rgb(41, 98, 195)),
             &radii,
         );
 
@@ -702,11 +702,11 @@ mod integration {
         let radii = BorderRadii::uniform(8.0);
 
         // Shadow
-        let shadow = BoxShadow::new(0.0, 2.0, 8.0, 0.0, Color::rgba(0, 0, 0, 50));
+        let shadow = BoxShadow::new(0.0, 2.0, 8.0, 0.0, Rgba::from_rgba8(0, 0, 0, 50));
         render_box_shadow(&mut pixmap, 20.0, 20.0, 260.0, 160.0, &radii, &shadow);
 
         // Card background
-        fill_rounded_rect(&mut pixmap, 20.0, 20.0, 260.0, 160.0, &radii, Color::rgb(255, 255, 255));
+        fill_rounded_rect(&mut pixmap, 20.0, 20.0, 260.0, 160.0, &radii, Rgba::rgb(255, 255, 255));
 
         // Verify rendering occurred
         assert!(count_colored_pixels(&pixmap) > 1000);

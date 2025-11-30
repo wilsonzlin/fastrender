@@ -191,7 +191,7 @@ mod integration_tests {
     /// Test that we can create a runner and run tests
     #[test]
     fn test_wpt_runner_integration() {
-        let renderer = fastrender::Renderer::new();
+        let renderer = fastrender::FastRender::new().unwrap();
         let runner = WptRunner::new(renderer);
 
         // Runner should start with empty stats
@@ -203,7 +203,7 @@ mod integration_tests {
     /// Test running a suite on an empty directory
     #[test]
     fn test_empty_suite() {
-        let renderer = fastrender::Renderer::new();
+        let renderer = fastrender::FastRender::new().unwrap();
         let mut runner = WptRunner::new(renderer);
 
         let temp = TempDir::new().unwrap();
@@ -215,7 +215,7 @@ mod integration_tests {
     /// Test suite aggregation
     #[test]
     fn test_suite_aggregation() {
-        let renderer = fastrender::Renderer::new();
+        let renderer = fastrender::FastRender::new().unwrap();
         let mut runner = WptRunner::new(renderer);
 
         let temp = TempDir::new().unwrap();
@@ -241,7 +241,7 @@ mod integration_tests {
     /// Test filtering by pattern
     #[test]
     fn test_filter_pattern() {
-        let renderer = fastrender::Renderer::new();
+        let renderer = fastrender::FastRender::new().unwrap();
         let config = HarnessConfig::default().with_filter("box-model");
         let mut runner = WptRunner::with_config(renderer, config);
 
@@ -281,7 +281,7 @@ mod integration_tests {
     /// Test runner builder pattern
     #[test]
     fn test_runner_builder_pattern() {
-        let renderer = fastrender::Renderer::new();
+        let renderer = fastrender::FastRender::new().unwrap();
         let runner = WptRunnerBuilder::new()
             .renderer(renderer)
             .test_dir("tests/custom")
@@ -307,7 +307,7 @@ mod integration_tests {
     /// Test statistics tracking
     #[test]
     fn test_stats_tracking() {
-        let renderer = fastrender::Renderer::new();
+        let renderer = fastrender::FastRender::new().unwrap();
         let mut runner = WptRunner::new(renderer);
 
         let temp = TempDir::new().unwrap();

@@ -4,9 +4,9 @@
 //! (glyph IDs + positions) into rendered pixels using font outlines
 //! and tiny-skia.
 
-use fastrender::css::Color;
 use fastrender::paint::{GlyphCache, TextRasterizer};
 use fastrender::style::computed::ComputedStyle;
+use fastrender::style::Rgba;
 use fastrender::text::font_loader::FontContext;
 use fastrender::text::pipeline::{Direction, GlyphPosition, ShapedRun, ShapingPipeline};
 use std::sync::Arc;
@@ -109,7 +109,7 @@ fn test_render_single_glyph() {
     }];
 
     let mut rasterizer = TextRasterizer::new();
-    let result = rasterizer.render_glyphs(&glyphs, &font, 24.0, 20.0, 60.0, Color::BLACK, &mut pixmap);
+    let result = rasterizer.render_glyphs(&glyphs, &font, 24.0, 20.0, 60.0, Rgba::BLACK, &mut pixmap);
 
     assert!(result.is_ok());
     // The glyph should have been rendered (pixels changed)
@@ -144,7 +144,7 @@ fn test_render_multiple_glyphs() {
         .collect();
 
     let mut rasterizer = TextRasterizer::new();
-    let result = rasterizer.render_glyphs(&glyphs, &font, 24.0, 10.0, 60.0, Color::BLACK, &mut pixmap);
+    let result = rasterizer.render_glyphs(&glyphs, &font, 24.0, 10.0, 60.0, Rgba::BLACK, &mut pixmap);
 
     assert!(result.is_ok());
     assert!(has_changed_pixels(&pixmap));
@@ -170,13 +170,13 @@ fn test_render_with_different_colors() {
     }];
 
     // Test with red color
-    let red = Color::rgba(255, 0, 0, 255);
+    let red = Rgba::from_rgba8(255, 0, 0, 255);
     let mut pixmap_red = create_test_pixmap(50, 50);
     let mut rasterizer = TextRasterizer::new();
     let _ = rasterizer.render_glyphs(&glyphs, &font, 20.0, 10.0, 35.0, red, &mut pixmap_red);
 
     // Test with blue color
-    let blue = Color::rgba(0, 0, 255, 255);
+    let blue = Rgba::from_rgba8(0, 0, 255, 255);
     let mut pixmap_blue = create_test_pixmap(50, 50);
     let _ = rasterizer.render_glyphs(&glyphs, &font, 20.0, 10.0, 35.0, blue, &mut pixmap_blue);
 
@@ -208,11 +208,11 @@ fn test_render_at_different_sizes() {
 
     // Small size
     let mut pixmap_small = create_test_pixmap(30, 20);
-    let _ = rasterizer.render_glyphs(&glyphs, &font, 12.0, 5.0, 15.0, Color::BLACK, &mut pixmap_small);
+    let _ = rasterizer.render_glyphs(&glyphs, &font, 12.0, 5.0, 15.0, Rgba::BLACK, &mut pixmap_small);
 
     // Large size
     let mut pixmap_large = create_test_pixmap(100, 80);
-    let _ = rasterizer.render_glyphs(&glyphs, &font, 48.0, 10.0, 60.0, Color::BLACK, &mut pixmap_large);
+    let _ = rasterizer.render_glyphs(&glyphs, &font, 48.0, 10.0, 60.0, Rgba::BLACK, &mut pixmap_large);
 
     assert!(has_changed_pixels(&pixmap_small));
     assert!(has_changed_pixels(&pixmap_large));
@@ -239,7 +239,7 @@ fn test_render_space_character() {
 
     let mut pixmap = create_test_pixmap(50, 50);
     let mut rasterizer = TextRasterizer::new();
-    let result = rasterizer.render_glyphs(&glyphs, &font, 16.0, 10.0, 30.0, Color::BLACK, &mut pixmap);
+    let result = rasterizer.render_glyphs(&glyphs, &font, 16.0, 10.0, 30.0, Rgba::BLACK, &mut pixmap);
 
     // Should succeed even though space has no visible outline
     assert!(result.is_ok());
@@ -267,7 +267,7 @@ fn test_render_with_offsets() {
 
     let mut pixmap = create_test_pixmap(100, 100);
     let mut rasterizer = TextRasterizer::new();
-    let result = rasterizer.render_glyphs(&glyphs, &font, 24.0, 20.0, 60.0, Color::BLACK, &mut pixmap);
+    let result = rasterizer.render_glyphs(&glyphs, &font, 24.0, 20.0, 60.0, Rgba::BLACK, &mut pixmap);
 
     assert!(result.is_ok());
     assert!(has_changed_pixels(&pixmap));
@@ -284,7 +284,7 @@ fn test_render_empty_glyph_list() {
     let mut pixmap = create_test_pixmap(50, 50);
     let mut rasterizer = TextRasterizer::new();
 
-    let result = rasterizer.render_glyphs(&glyphs, &font, 16.0, 10.0, 30.0, Color::BLACK, &mut pixmap);
+    let result = rasterizer.render_glyphs(&glyphs, &font, 16.0, 10.0, 30.0, Rgba::BLACK, &mut pixmap);
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), 0.0); // No advance for empty list
@@ -334,7 +334,7 @@ fn test_render_shaped_run() {
     let mut pixmap = create_test_pixmap(150, 100);
     let mut rasterizer = TextRasterizer::new();
 
-    let result = rasterizer.render_shaped_run(&run, 10.0, 60.0, Color::BLACK, &mut pixmap);
+    let result = rasterizer.render_shaped_run(&run, 10.0, 60.0, Rgba::BLACK, &mut pixmap);
 
     assert!(result.is_ok());
     assert!(has_changed_pixels(&pixmap));
@@ -386,7 +386,7 @@ fn test_render_multiple_runs() {
     let mut pixmap = create_test_pixmap(300, 100);
     let mut rasterizer = TextRasterizer::new();
 
-    let result = rasterizer.render_runs(&runs, 10.0, 60.0, Color::BLACK, &mut pixmap);
+    let result = rasterizer.render_runs(&runs, 10.0, 60.0, Rgba::BLACK, &mut pixmap);
 
     assert!(result.is_ok());
     assert!(has_changed_pixels(&pixmap));
@@ -414,7 +414,7 @@ fn test_render_pipeline_output() {
     let mut pixmap = create_test_pixmap(300, 100);
     let mut rasterizer = TextRasterizer::new();
 
-    let result = rasterizer.render_runs(&shaped_runs, 10.0, 60.0, Color::BLACK, &mut pixmap);
+    let result = rasterizer.render_runs(&shaped_runs, 10.0, 60.0, Rgba::BLACK, &mut pixmap);
 
     assert!(result.is_ok());
     assert!(has_changed_pixels(&pixmap));
@@ -440,7 +440,7 @@ fn test_render_unicode_text() {
     let mut pixmap = create_test_pixmap(250, 100);
     let mut rasterizer = TextRasterizer::new();
 
-    let result = rasterizer.render_runs(&shaped_runs, 10.0, 60.0, Color::BLACK, &mut pixmap);
+    let result = rasterizer.render_runs(&shaped_runs, 10.0, 60.0, Rgba::BLACK, &mut pixmap);
 
     assert!(result.is_ok());
 }
@@ -464,7 +464,7 @@ fn test_render_numbers_and_punctuation() {
     let mut pixmap = create_test_pixmap(250, 100);
     let mut rasterizer = TextRasterizer::new();
 
-    let result = rasterizer.render_runs(&shaped_runs, 10.0, 60.0, Color::BLACK, &mut pixmap);
+    let result = rasterizer.render_runs(&shaped_runs, 10.0, 60.0, Rgba::BLACK, &mut pixmap);
 
     assert!(result.is_ok());
     assert!(has_changed_pixels(&pixmap));
@@ -476,33 +476,34 @@ fn test_render_numbers_and_punctuation() {
 
 #[test]
 fn test_color_constants() {
-    assert_eq!(Color::BLACK.r, 0);
-    assert_eq!(Color::BLACK.g, 0);
-    assert_eq!(Color::BLACK.b, 0);
-    assert_eq!(Color::BLACK.a, 255);
+    assert_eq!(Rgba::BLACK.r, 0);
+    assert_eq!(Rgba::BLACK.g, 0);
+    assert_eq!(Rgba::BLACK.b, 0);
+    assert_eq!(Rgba::BLACK.a, 1.0);
 
-    assert_eq!(Color::WHITE.r, 255);
-    assert_eq!(Color::WHITE.g, 255);
-    assert_eq!(Color::WHITE.b, 255);
-    assert_eq!(Color::WHITE.a, 255);
+    assert_eq!(Rgba::WHITE.r, 255);
+    assert_eq!(Rgba::WHITE.g, 255);
+    assert_eq!(Rgba::WHITE.b, 255);
+    assert_eq!(Rgba::WHITE.a, 1.0);
 }
 
 #[test]
 fn test_color_rgba_constructor() {
-    let color = Color::rgba(100, 150, 200, 128);
+    let color = Rgba::from_rgba8(100, 150, 200, 128);
     assert_eq!(color.r, 100);
     assert_eq!(color.g, 150);
     assert_eq!(color.b, 200);
-    assert_eq!(color.a, 128);
+    // from_rgba8 converts u8 alpha to f32: 128/255 ≈ 0.502
+    assert!((color.a - 128.0 / 255.0).abs() < 0.01);
 }
 
 #[test]
 fn test_color_rgb_constructor() {
-    let color = Color::rgb(50, 100, 150);
+    let color = Rgba::rgb(50, 100, 150);
     assert_eq!(color.r, 50);
     assert_eq!(color.g, 100);
     assert_eq!(color.b, 150);
-    assert_eq!(color.a, 255); // Full opacity
+    assert_eq!(color.a, 1.0); // Full opacity
 }
 
 #[test]
@@ -525,7 +526,7 @@ fn test_render_with_transparency() {
     }];
 
     // Semi-transparent color
-    let semi_transparent = Color::rgba(0, 0, 0, 128);
+    let semi_transparent = Rgba::from_rgba8(0, 0, 0, 128);
     let mut pixmap = create_test_pixmap(50, 50);
     let mut rasterizer = TextRasterizer::new();
 
@@ -562,7 +563,7 @@ fn test_render_very_small_font_size() {
     let mut rasterizer = TextRasterizer::new();
 
     // Very small font size (4px)
-    let result = rasterizer.render_glyphs(&glyphs, &font, 4.0, 5.0, 15.0, Color::BLACK, &mut pixmap);
+    let result = rasterizer.render_glyphs(&glyphs, &font, 4.0, 5.0, 15.0, Rgba::BLACK, &mut pixmap);
 
     assert!(result.is_ok());
 }
@@ -590,7 +591,7 @@ fn test_render_large_font_size() {
     let mut rasterizer = TextRasterizer::new();
 
     // Large font size (72px)
-    let result = rasterizer.render_glyphs(&glyphs, &font, 72.0, 30.0, 100.0, Color::BLACK, &mut pixmap);
+    let result = rasterizer.render_glyphs(&glyphs, &font, 72.0, 30.0, 100.0, Rgba::BLACK, &mut pixmap);
 
     assert!(result.is_ok());
     assert!(has_changed_pixels(&pixmap));
@@ -619,7 +620,7 @@ fn test_render_at_edge_of_pixmap() {
     let mut rasterizer = TextRasterizer::new();
 
     // Render near the edge - should not crash even if partially clipped
-    let result = rasterizer.render_glyphs(&glyphs, &font, 16.0, 45.0, 10.0, Color::BLACK, &mut pixmap);
+    let result = rasterizer.render_glyphs(&glyphs, &font, 16.0, 45.0, 10.0, Rgba::BLACK, &mut pixmap);
 
     assert!(result.is_ok());
 }
@@ -652,7 +653,7 @@ fn test_repeated_rendering_uses_cache() {
     // Render the same glyph multiple times
     for _ in 0..10 {
         let mut pixmap = create_test_pixmap(50, 50);
-        let _ = rasterizer.render_glyphs(&glyphs, &font, 16.0, 10.0, 35.0, Color::BLACK, &mut pixmap);
+        let _ = rasterizer.render_glyphs(&glyphs, &font, 16.0, 10.0, 35.0, Rgba::BLACK, &mut pixmap);
     }
 
     // Cache should have been used (though we can't directly verify hits,

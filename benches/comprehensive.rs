@@ -18,7 +18,7 @@ use fastrender::layout::{LayoutConfig, LayoutConstraints, LayoutEngine};
 use fastrender::text::line_break::find_break_opportunities;
 use fastrender::text::shaper::Script;
 use fastrender::tree::{BoxNode, BoxTree, FormattingContextType};
-use fastrender::Renderer;
+use fastrender::FastRender;
 use std::sync::Arc;
 
 // ============================================================================
@@ -230,28 +230,28 @@ fn bench_end_to_end_rendering(c: &mut Criterion) {
     let simple_html = generate_simple_document(5);
     group.throughput(Throughput::Bytes(simple_html.len() as u64));
     group.bench_function("simple_5_paragraphs", |b| {
-        let renderer = Renderer::new();
+        let mut renderer = FastRender::new().unwrap();
         b.iter(|| renderer.render_to_png(black_box(&simple_html), 800, 600).unwrap())
     });
 
     // Medium document
     let medium_html = generate_simple_document(20);
     group.bench_function("medium_20_paragraphs", |b| {
-        let renderer = Renderer::new();
+        let mut renderer = FastRender::new().unwrap();
         b.iter(|| renderer.render_to_png(black_box(&medium_html), 800, 1200).unwrap())
     });
 
     // Large document
     let large_html = generate_simple_document(50);
     group.bench_function("large_50_paragraphs", |b| {
-        let renderer = Renderer::new();
+        let mut renderer = FastRender::new().unwrap();
         b.iter(|| renderer.render_to_png(black_box(&large_html), 800, 3000).unwrap())
     });
 
     // Mixed content
     let mixed_html = generate_mixed_content();
     group.bench_function("mixed_content", |b| {
-        let renderer = Renderer::new();
+        let mut renderer = FastRender::new().unwrap();
         b.iter(|| renderer.render_to_png(black_box(&mixed_html), 800, 800).unwrap())
     });
 
@@ -265,7 +265,7 @@ fn bench_layout_types(c: &mut Criterion) {
     for item_count in [10, 25, 50, 100].iter() {
         let html = generate_flex_container(*item_count);
         group.bench_with_input(BenchmarkId::new("flex", item_count), &html, |b, html| {
-            let renderer = Renderer::new();
+            let mut renderer = FastRender::new().unwrap();
             b.iter(|| renderer.render_to_png(black_box(html), 1200, 800).unwrap())
         });
     }
@@ -275,7 +275,7 @@ fn bench_layout_types(c: &mut Criterion) {
         let html = generate_grid_layout(*cols, *rows);
         let label = format!("{}x{}", cols, rows);
         group.bench_with_input(BenchmarkId::new("grid", &label), &html, |b, html| {
-            let renderer = Renderer::new();
+            let mut renderer = FastRender::new().unwrap();
             b.iter(|| renderer.render_to_png(black_box(html), 1200, 800).unwrap())
         });
     }
@@ -285,7 +285,7 @@ fn bench_layout_types(c: &mut Criterion) {
         let html = generate_table(*rows, *cols);
         let label = format!("{}x{}", rows, cols);
         group.bench_with_input(BenchmarkId::new("table", &label), &html, |b, html| {
-            let renderer = Renderer::new();
+            let mut renderer = FastRender::new().unwrap();
             b.iter(|| renderer.render_to_png(black_box(html), 1200, 1200).unwrap())
         });
     }
@@ -299,7 +299,7 @@ fn bench_tree_depth(c: &mut Criterion) {
     for depth in [5, 10, 20, 50].iter() {
         let html = generate_nested_divs(*depth);
         group.bench_with_input(BenchmarkId::new("nested_divs", depth), &html, |b, html| {
-            let renderer = Renderer::new();
+            let mut renderer = FastRender::new().unwrap();
             b.iter(|| renderer.render_to_png(black_box(html), 800, 600).unwrap())
         });
     }
@@ -315,10 +315,14 @@ fn bench_viewport_sizes(c: &mut Criterion) {
     // Different viewport sizes
     for (width, height) in [(320, 480), (768, 1024), (1920, 1080), (2560, 1440)].iter() {
         let label = format!("{}x{}", width, height);
-        group.bench_with_input(BenchmarkId::new("cards", &label), &(&html, *width, *height), |b, (html, w, h)| {
-            let renderer = Renderer::new();
-            b.iter(|| renderer.render_to_png(black_box(html), *w, *h).unwrap())
-        });
+        group.bench_with_input(
+            BenchmarkId::new("cards", &label),
+            &(&html, *width, *height),
+            |b, (html, w, h)| {
+                let mut renderer = FastRender::new().unwrap();
+                b.iter(|| renderer.render_to_png(black_box(html), *w, *h).unwrap())
+            },
+        );
     }
 
     group.finish();
@@ -402,9 +406,7 @@ fn bench_text_processing(c: &mut Criterion) {
     });
 
     // Script detection
-    group.bench_function("script_detect_latin", |b| {
-        b.iter(|| Script::detect(black_box('A')))
-    });
+    group.bench_function("script_detect_latin", |b| b.iter(|| Script::detect(black_box('A'))));
 
     group.bench_function("script_detect_cjk", |b| {
         b.iter(|| Script::detect(black_box('\u{4E00}'))) // CJK character
@@ -541,28 +543,28 @@ fn bench_stress_tests(c: &mut Criterion) {
     // Very large document
     let huge_html = generate_simple_document(200);
     group.bench_function("huge_document", |b| {
-        let renderer = Renderer::new();
+        let mut renderer = FastRender::new().unwrap();
         b.iter(|| renderer.render_to_png(black_box(&huge_html), 800, 10000).unwrap())
     });
 
     // Many flex items
     let many_flex = generate_flex_container(200);
     group.bench_function("many_flex_items", |b| {
-        let renderer = Renderer::new();
+        let mut renderer = FastRender::new().unwrap();
         b.iter(|| renderer.render_to_png(black_box(&many_flex), 1920, 2000).unwrap())
     });
 
     // Large grid
     let large_grid = generate_grid_layout(20, 20);
     group.bench_function("large_grid", |b| {
-        let renderer = Renderer::new();
+        let mut renderer = FastRender::new().unwrap();
         b.iter(|| renderer.render_to_png(black_box(&large_grid), 2000, 2000).unwrap())
     });
 
     // Large table
     let large_table = generate_table(100, 15);
     group.bench_function("large_table", |b| {
-        let renderer = Renderer::new();
+        let mut renderer = FastRender::new().unwrap();
         b.iter(|| renderer.render_to_png(black_box(&large_table), 1600, 4000).unwrap())
     });
 

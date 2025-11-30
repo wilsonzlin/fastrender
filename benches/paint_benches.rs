@@ -17,12 +17,9 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use fastrender::geometry::{Point, Rect};
 use fastrender::paint::display_list::{
-    BorderRadii, ClipItem, DisplayItem, DisplayList, FillRectItem, FillRoundedRectItem,
-    OpacityItem, StrokeRectItem,
+    BorderRadii, ClipItem, DisplayItem, DisplayList, FillRectItem, FillRoundedRectItem, OpacityItem, StrokeRectItem,
 };
-use fastrender::paint::{
-    build_stacking_tree, DisplayListBuilder, DisplayListOptimizer, OptimizationConfig,
-};
+use fastrender::paint::{build_stacking_tree, DisplayListBuilder, DisplayListOptimizer, OptimizationConfig};
 use fastrender::style::color::Rgba;
 use fastrender::tree::fragment_tree::{FragmentNode, FragmentTree};
 
@@ -33,12 +30,7 @@ use fastrender::tree::fragment_tree::{FragmentNode, FragmentTree};
 /// Creates a simple fragment tree for testing
 fn create_simple_fragment_tree(child_count: usize) -> FragmentTree {
     let children: Vec<FragmentNode> = (0..child_count)
-        .map(|i| {
-            FragmentNode::new_block(
-                Rect::from_xywh(10.0, (i as f32) * 50.0 + 10.0, 200.0, 40.0),
-                vec![],
-            )
-        })
+        .map(|i| FragmentNode::new_block(Rect::from_xywh(10.0, (i as f32) * 50.0 + 10.0, 200.0, 40.0), vec![]))
         .collect();
 
     let root = FragmentNode::new_block(
@@ -184,9 +176,7 @@ fn bench_display_list_creation(c: &mut Criterion) {
     let mut group = c.benchmark_group("display_list_creation");
 
     // Empty list creation
-    group.bench_function("empty_list", |b| {
-        b.iter(|| DisplayList::new())
-    });
+    group.bench_function("empty_list", |b| b.iter(|| DisplayList::new()));
 
     // Adding items
     group.bench_function("add_fill_rect", |b| {
@@ -246,14 +236,10 @@ fn bench_display_list_operations(c: &mut Criterion) {
 
     // List length
     let list_500 = create_display_list(500);
-    group.bench_function("list_length", |b| {
-        b.iter(|| black_box(&list_500).len())
-    });
+    group.bench_function("list_length", |b| b.iter(|| black_box(&list_500).len()));
 
     // List is_empty check
-    group.bench_function("is_empty_check", |b| {
-        b.iter(|| black_box(&list_500).is_empty())
-    });
+    group.bench_function("is_empty_check", |b| b.iter(|| black_box(&list_500).is_empty()));
 
     group.finish();
 }
@@ -266,53 +252,39 @@ fn bench_display_list_builder(c: &mut Criterion) {
     let mut group = c.benchmark_group("display_list_builder");
 
     // Builder creation
-    group.bench_function("builder_creation", |b| {
-        b.iter(|| DisplayListBuilder::new())
-    });
+    group.bench_function("builder_creation", |b| b.iter(|| DisplayListBuilder::new()));
 
     // Building from simple trees
     for count in [5, 10, 25, 50].iter() {
         let tree = create_simple_fragment_tree(*count);
-        group.bench_with_input(
-            BenchmarkId::new("simple_tree", count),
-            &tree,
-            |b, tree| {
-                b.iter(|| {
-                    let builder = DisplayListBuilder::new();
-                    builder.build_tree(black_box(tree))
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("simple_tree", count), &tree, |b, tree| {
+            b.iter(|| {
+                let builder = DisplayListBuilder::new();
+                builder.build_tree(black_box(tree))
+            })
+        });
     }
 
     // Building from deep trees
     for depth in [5, 10, 20].iter() {
         let tree = create_deep_fragment_tree(*depth);
-        group.bench_with_input(
-            BenchmarkId::new("deep_tree", depth),
-            &tree,
-            |b, tree| {
-                b.iter(|| {
-                    let builder = DisplayListBuilder::new();
-                    builder.build_tree(black_box(tree))
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("deep_tree", depth), &tree, |b, tree| {
+            b.iter(|| {
+                let builder = DisplayListBuilder::new();
+                builder.build_tree(black_box(tree))
+            })
+        });
     }
 
     // Building from text-heavy trees
     for count in [10, 25, 50].iter() {
         let tree = create_text_fragment_tree(*count);
-        group.bench_with_input(
-            BenchmarkId::new("text_tree", count),
-            &tree,
-            |b, tree| {
-                b.iter(|| {
-                    let builder = DisplayListBuilder::new();
-                    builder.build_tree(black_box(tree))
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("text_tree", count), &tree, |b, tree| {
+            b.iter(|| {
+                let builder = DisplayListBuilder::new();
+                builder.build_tree(black_box(tree))
+            })
+        });
     }
 
     group.finish();
@@ -326,55 +298,39 @@ fn bench_display_list_optimization(c: &mut Criterion) {
     let mut group = c.benchmark_group("display_list_optimization");
 
     // Optimizer creation
-    group.bench_function("optimizer_creation", |b| {
-        b.iter(|| DisplayListOptimizer::new())
-    });
+    group.bench_function("optimizer_creation", |b| b.iter(|| DisplayListOptimizer::new()));
 
     // Config creation
-    group.bench_function("config_default", |b| {
-        b.iter(|| OptimizationConfig::default())
-    });
+    group.bench_function("config_default", |b| b.iter(|| OptimizationConfig::default()));
 
     // Full optimization on various list sizes
     let viewport = Rect::from_xywh(0.0, 0.0, 800.0, 600.0);
 
     for count in [50, 100, 200, 500].iter() {
         let list = create_display_list(*count);
-        group.bench_with_input(
-            BenchmarkId::new("full_optimize", count),
-            &list,
-            |b, list| {
-                let optimizer = DisplayListOptimizer::new();
-                b.iter(|| optimizer.optimize(black_box(list.clone()), black_box(viewport)))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("full_optimize", count), &list, |b, list| {
+            let optimizer = DisplayListOptimizer::new();
+            b.iter(|| optimizer.optimize(black_box(list.clone()), black_box(viewport)))
+        });
     }
 
     // Optimization with culling (items outside viewport)
     for count in [100, 200, 500].iter() {
         let list = create_display_list_for_culling(*count, 300.0);
         let viewport = Rect::from_xywh(0.0, 0.0, 800.0, 300.0); // Half the items outside
-        group.bench_with_input(
-            BenchmarkId::new("with_culling", count),
-            &list,
-            |b, list| {
-                let optimizer = DisplayListOptimizer::new();
-                b.iter(|| optimizer.optimize(black_box(list.clone()), black_box(viewport)))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("with_culling", count), &list, |b, list| {
+            let optimizer = DisplayListOptimizer::new();
+            b.iter(|| optimizer.optimize(black_box(list.clone()), black_box(viewport)))
+        });
     }
 
     // Complex lists optimization
     for count in [25, 50, 100].iter() {
         let list = create_complex_display_list(*count);
-        group.bench_with_input(
-            BenchmarkId::new("complex_optimize", count),
-            &list,
-            |b, list| {
-                let optimizer = DisplayListOptimizer::new();
-                b.iter(|| optimizer.optimize(black_box(list.clone()), black_box(viewport)))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("complex_optimize", count), &list, |b, list| {
+            let optimizer = DisplayListOptimizer::new();
+            b.iter(|| optimizer.optimize(black_box(list.clone()), black_box(viewport)))
+        });
     }
 
     // Optimization with different configs
@@ -418,25 +374,17 @@ fn bench_stacking_context(c: &mut Criterion) {
     // Building stacking tree from simple fragment trees
     for count in [5, 10, 25, 50].iter() {
         let tree = create_simple_fragment_tree(*count);
-        group.bench_with_input(
-            BenchmarkId::new("simple_tree", count),
-            &tree,
-            |b, tree| {
-                b.iter(|| build_stacking_tree(black_box(&tree.root), None, true))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("simple_tree", count), &tree, |b, tree| {
+            b.iter(|| build_stacking_tree(black_box(&tree.root), None, true))
+        });
     }
 
     // Building stacking tree from deep fragment trees
     for depth in [5, 10, 20].iter() {
         let tree = create_deep_fragment_tree(*depth);
-        group.bench_with_input(
-            BenchmarkId::new("deep_tree", depth),
-            &tree,
-            |b, tree| {
-                b.iter(|| build_stacking_tree(black_box(&tree.root), None, true))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("deep_tree", depth), &tree, |b, tree| {
+            b.iter(|| build_stacking_tree(black_box(&tree.root), None, true))
+        });
     }
 
     group.finish();
@@ -483,7 +431,11 @@ fn bench_display_item_creation(c: &mut Criterion) {
 
     // Opacity item
     group.bench_function("opacity_item", |b| {
-        b.iter(|| DisplayItem::PushOpacity(OpacityItem { opacity: black_box(0.5) }))
+        b.iter(|| {
+            DisplayItem::PushOpacity(OpacityItem {
+                opacity: black_box(0.5),
+            })
+        })
     });
 
     // Clip item
@@ -502,14 +454,7 @@ fn bench_display_item_creation(c: &mut Criterion) {
     });
 
     group.bench_function("border_radii_custom", |b| {
-        b.iter(|| {
-            BorderRadii::new(
-                black_box(5.0),
-                black_box(10.0),
-                black_box(15.0),
-                black_box(20.0),
-            )
-        })
+        b.iter(|| BorderRadii::new(black_box(5.0), black_box(10.0), black_box(15.0), black_box(20.0)))
     });
 
     // Rgba color creation
@@ -550,39 +495,27 @@ fn bench_fragment_tree_operations(c: &mut Criterion) {
     // Fragment tree creation
     group.bench_function("tree_creation", |b| {
         b.iter(|| {
-            let root = FragmentNode::new_block(
-                Rect::from_xywh(0.0, 0.0, 800.0, 600.0),
-                vec![],
-            );
+            let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 800.0, 600.0), vec![]);
             FragmentTree::new(root)
         })
     });
 
     // Fragment tree with children
     for count in [5, 10, 25].iter() {
-        group.bench_with_input(
-            BenchmarkId::new("tree_with_children", count),
-            count,
-            |b, &count| {
-                b.iter(|| create_simple_fragment_tree(black_box(count)))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("tree_with_children", count), count, |b, &count| {
+            b.iter(|| create_simple_fragment_tree(black_box(count)))
+        });
     }
 
     // Contains point check
-    let fragment = FragmentNode::new_block(
-        Rect::from_xywh(10.0, 20.0, 100.0, 50.0),
-        vec![],
-    );
+    let fragment = FragmentNode::new_block(Rect::from_xywh(10.0, 20.0, 100.0, 50.0), vec![]);
     group.bench_function("contains_point", |b| {
         let point = Point::new(50.0, 40.0);
         b.iter(|| black_box(&fragment).contains_point(black_box(point)))
     });
 
     // Bounds access
-    group.bench_function("bounds_access", |b| {
-        b.iter(|| black_box(&fragment).bounds)
-    });
+    group.bench_function("bounds_access", |b| b.iter(|| black_box(&fragment).bounds));
 
     group.finish();
 }

@@ -17,8 +17,9 @@ pub mod variables;
 // Re-export color types
 pub use color::{Color, ColorParseError, Hsla, Rgba};
 
-// Re-export computed style types (excluding types that conflict with legacy definitions)
-pub use computed::{BorderColors, ComputedStyle, ComputedStyleBuilder};
+// Re-export computed style types
+// Note: BorderColors is not re-exported to avoid conflict with paint::BorderColors
+pub use computed::{ComputedStyle, ComputedStyleBuilder};
 
 // Re-export content generation types
 pub use content::{parse_content, ContentContext, ContentGenerator, ContentItem, ContentValue, CounterStyle};
@@ -1864,13 +1865,6 @@ fn extract_box_values(value: &PropertyValue) -> Option<Vec<Length>> {
         }
         _ => None,
     }
-}
-
-/// Parse grid track list (e.g., "200px 1fr 2fr" or "repeat(3, 1fr)")
-/// Returns tracks and a map of named grid lines to their positions
-fn parse_grid_tracks(tracks_str: &str) -> Vec<GridTrack> {
-    let (tracks, _) = parse_grid_tracks_with_names(tracks_str);
-    tracks
 }
 
 fn parse_grid_tracks_with_names(tracks_str: &str) -> (Vec<GridTrack>, HashMap<String, Vec<usize>>) {

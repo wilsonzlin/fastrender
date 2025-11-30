@@ -2,7 +2,7 @@
 #![allow(clippy::redundant_closure)]
 #![allow(clippy::len_zero)]
 
-use fastrender::{Error, Renderer, Result};
+use fastrender::{Error, FastRender, Result};
 use std::env;
 
 fn fetch_url(url: &str) -> Result<String> {
@@ -202,14 +202,13 @@ fn main() -> Result<()> {
         html
     };
 
-    println!(
-        "Rendering to image ({}x{} viewport, scroll_y={})...",
-        width, height, scroll_y
-    );
-    let renderer = Renderer::new();
-    // Always use the base URL for image resolution, whether scrolling or not
-    let png_data =
-        renderer.render_to_png_with_scroll_and_base_url(&html_with_css, width, height, scroll_y, url.to_string())?;
+    println!("Rendering to image ({}x{} viewport)...", width, height);
+    let mut renderer = FastRender::new()?;
+    // Note: scroll_y is currently not supported, will render from top
+    if scroll_y != 0 {
+        eprintln!("Warning: scroll_y parameter is not yet supported, rendering from top");
+    }
+    let png_data = renderer.render_to_png(&html_with_css, width, height)?;
 
     println!("Saving to {}...", output);
     std::fs::write(&output, png_data)?;

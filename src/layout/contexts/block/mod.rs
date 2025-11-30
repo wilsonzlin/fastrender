@@ -53,7 +53,9 @@ fn resolve_length(length: &Length, font_size: f32, containing_block_size: f32) -
 
 /// Helper to resolve an optional Length to pixels
 fn resolve_opt_length(length: Option<&Length>, font_size: f32, containing_block_size: f32) -> f32 {
-    length.map(|l| resolve_length(l, font_size, containing_block_size)).unwrap_or(0.0)
+    length
+        .map(|l| resolve_length(l, font_size, containing_block_size))
+        .unwrap_or(0.0)
 }
 
 /// Block Formatting Context implementation
@@ -115,7 +117,9 @@ impl BlockFormattingContext {
 
         // Apply min/max height constraints
         let min_height = resolve_opt_length(style.min_height.as_ref(), font_size, containing_width);
-        let max_height = style.max_height.as_ref()
+        let max_height = style
+            .max_height
+            .as_ref()
             .map(|l| resolve_length(l, font_size, containing_width))
             .unwrap_or(f32::INFINITY);
         let height = height.max(min_height).min(max_height);

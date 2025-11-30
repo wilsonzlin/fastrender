@@ -210,6 +210,27 @@ impl Rgba {
         [self.r, self.g, self.b, (self.a * 255.0) as u8]
     }
 
+    /// Returns the alpha component as a u8 (0-255)
+    ///
+    /// Useful for APIs that expect u8 alpha like tiny-skia.
+    #[inline]
+    pub fn alpha_u8(self) -> u8 {
+        (self.a * 255.0) as u8
+    }
+
+    /// Creates an Rgba from r, g, b, a where alpha is u8 (0-255)
+    ///
+    /// Converts u8 alpha to f32 internally.
+    #[inline]
+    pub const fn from_rgba8(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self {
+            r,
+            g,
+            b,
+            a: a as f32 / 255.0,
+        }
+    }
+
     /// Converts RGB to HSL
     ///
     /// Uses the algorithm from CSS Color Module Level 3.

@@ -4,7 +4,6 @@
 //! in various scenarios including edge cases.
 
 use fastrender::geometry::{Point, Rect};
-use fastrender::paint::optimize_with_stats;
 use fastrender::paint::{
     BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, DisplayListOptimizer,
     FillRectItem, FillRoundedRectItem, GradientStop, ImageData, ImageItem, LinearGradientItem, OpacityItem,

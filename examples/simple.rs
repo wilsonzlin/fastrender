@@ -1,6 +1,4 @@
-//! Simple example demonstrating the fastrender rendering pipeline.
-//!
-//! This example shows how to use the Renderer to convert HTML/CSS to images.
+//! Simple example demonstrating the FastRender rendering pipeline.
 //!
 //! # Running
 //!
@@ -8,7 +6,7 @@
 //! cargo run --example simple
 //! ```
 
-use fastrender::Renderer;
+use fastrender::{FastRender, Rgba};
 use std::fs;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,7 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         </html>
     "#;
 
-    let renderer = Renderer::new();
+    let mut renderer = FastRender::new()?;
     let png_bytes = renderer.render_to_png(html, 800, 600)?;
     fs::write("output_simple.png", &png_bytes)?;
     println!("  Wrote output_simple.png ({} bytes)", png_bytes.len());
@@ -52,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 </style>
             </head>
             <body>
-                <h1>Hello, Fastrender!</h1>
+                <h1>Hello, FastRender!</h1>
                 <p>This is an example of HTML to image rendering.</p>
                 <p>The complete pipeline handles parsing, styling, layout, and paint.</p>
             </body>
@@ -151,10 +149,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Example 5: Using the builder pattern with custom viewport
     println!("Rendering example 5: Custom viewport with builder...");
 
-    let renderer_custom = Renderer::builder()
+    let mut renderer_custom = FastRender::builder()
         .viewport_size(1024, 768)
-        .background_color(fastrender::css::Color::rgb(240, 240, 240))
-        .build();
+        .background_color(Rgba::rgb(240, 240, 240))
+        .build()?;
 
     let html_card = r#"
         <html>

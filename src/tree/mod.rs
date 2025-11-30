@@ -44,7 +44,9 @@ pub use fragment_tree::{FragmentContent, FragmentIterator, FragmentNode, Fragmen
 pub use anonymous::AnonymousBoxCreator;
 
 // Re-exports from box_generation
-pub use box_generation::{BoxGenerationConfig, BoxGenerationError, BoxGenerator, DOMNode};
+pub use box_generation::{
+    generate_box_tree, is_replaced_element, BoxGenerationConfig, BoxGenerationError, BoxGenerator, DOMNode,
+};
 
 // Re-exports from table_fixup
 pub use table_fixup::TableStructureFixer;

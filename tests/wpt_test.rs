@@ -17,8 +17,8 @@ mod wpt_runner_tests {
     use std::time::Duration;
     use tempfile::TempDir;
 
-    fn create_test_renderer() -> fastrender::Renderer {
-        fastrender::Renderer::new()
+    fn create_test_renderer() -> fastrender::FastRender {
+        fastrender::FastRender::new().unwrap()
     }
 
     // =========================================================================

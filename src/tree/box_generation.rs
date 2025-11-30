@@ -757,6 +757,128 @@ impl Default for BoxGenerator {
     }
 }
 
+// ============================================================================
+// StyledNode-based Box Generation (for real DOM/style pipeline)
+// ============================================================================
+
+use crate::style::StyledNode;
+use crate::tree::box_tree::ReplacedBox;
+
+/// Generates a BoxTree from a StyledNode tree
+///
+/// This is the main entry point for box generation from styled DOM.
+/// It recursively converts each StyledNode into the appropriate BoxNode type.
+///
+/// # Arguments
+///
+/// * `styled` - The root of the styled node tree
+///
+/// # Returns
+///
+/// A `BoxTree` containing the generated box structure
+pub fn generate_box_tree(styled: &StyledNode) -> BoxTree {
+    let root = generate_box_node_from_styled(styled);
+    BoxTree { root }
+}
+
+/// Recursively generates BoxNode from StyledNode
+fn generate_box_node_from_styled(styled: &StyledNode) -> BoxNode {
+    let style = Arc::new(styled.styles.clone());
+
+    // Check if this is display: none
+    if styled.styles.display == Display::None {
+        // Create an empty block (will have no effect on layout)
+        return BoxNode::new_block(style, FormattingContextType::Block, vec![]);
+    }
+
+    // Check for text node
+    if let Some(text) = styled.node.text_content() {
+        if !text.trim().is_empty() {
+            return BoxNode::new_text(style, text.to_string());
+        }
+    }
+
+    // Check for replaced elements (images, etc.)
+    if let Some(tag) = styled.node.tag_name() {
+        if is_replaced_element(tag) {
+            return create_replaced_box_from_styled(styled, style);
+        }
+    }
+
+    // Generate children
+    let children: Vec<BoxNode> = styled.children.iter().map(generate_box_node_from_styled).collect();
+
+    // Determine box type based on display
+    let fc_type = styled
+        .styles
+        .display
+        .formatting_context_type()
+        .unwrap_or(FormattingContextType::Block);
+
+    match styled.styles.display {
+        Display::Block | Display::Flex | Display::Grid | Display::Table => BoxNode::new_block(style, fc_type, children),
+        Display::Inline => BoxNode::new_inline(style, children),
+        Display::InlineBlock => BoxNode::new_inline_block(style, fc_type, children),
+        Display::None => BoxNode::new_block(style, FormattingContextType::Block, vec![]),
+        _ => BoxNode::new_block(style, fc_type, children),
+    }
+}
+
+/// Checks if an element is a replaced element
+///
+/// Replaced elements are those whose content is replaced by an external resource,
+/// such as images, videos, iframes, etc. These elements have intrinsic dimensions.
+pub fn is_replaced_element(tag: &str) -> bool {
+    matches!(
+        tag.to_lowercase().as_str(),
+        "img" | "video" | "canvas" | "svg" | "iframe" | "embed" | "object"
+    )
+}
+
+/// Creates a BoxNode for a replaced element from a StyledNode
+fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<crate::style::ComputedStyles>) -> BoxNode {
+    let tag = styled.node.tag_name().unwrap_or("img");
+
+    // Get src attribute if available
+    let src = styled.node.get_attribute("src").unwrap_or_default();
+
+    // Determine replaced type
+    let replaced_type = match tag.to_lowercase().as_str() {
+        "img" => ReplacedType::Image { src },
+        "video" => ReplacedType::Video { src },
+        "canvas" => ReplacedType::Canvas,
+        "svg" => ReplacedType::Svg { content: String::new() },
+        "iframe" => ReplacedType::Iframe { src },
+        _ => ReplacedType::Image { src },
+    };
+
+    // Get intrinsic size from attributes or use default
+    let intrinsic_width = styled
+        .node
+        .get_attribute("width")
+        .and_then(|w| w.parse::<f32>().ok())
+        .unwrap_or(300.0);
+
+    let intrinsic_height = styled
+        .node
+        .get_attribute("height")
+        .and_then(|h| h.parse::<f32>().ok())
+        .unwrap_or(150.0);
+
+    let replaced_box = ReplacedBox {
+        replaced_type,
+        intrinsic_size: Some(Size::new(intrinsic_width, intrinsic_height)),
+        aspect_ratio: Some(intrinsic_width / intrinsic_height),
+    };
+
+    BoxNode {
+        box_type: BoxType::Replaced(replaced_box),
+        style,
+        children: vec![],
+        debug_info: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

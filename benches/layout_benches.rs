@@ -109,7 +109,13 @@ fn create_deep_tree(depth: usize) -> BoxTree {
 /// Creates a flex container with N items
 fn create_flex_tree(item_count: usize) -> BoxTree {
     let children: Vec<BoxNode> = (0..item_count)
-        .map(|_| BoxNode::new_block(block_style(Some(100.0), Some(50.0)), FormattingContextType::Block, vec![]))
+        .map(|_| {
+            BoxNode::new_block(
+                block_style(Some(100.0), Some(50.0)),
+                FormattingContextType::Block,
+                vec![],
+            )
+        })
         .collect();
     let root = BoxNode::new_block(flex_style(), FormattingContextType::Flex, children);
     BoxTree::new(root)
@@ -140,19 +146,13 @@ fn bench_layout_constraints(c: &mut Criterion) {
         b.iter(|| LayoutConstraints::definite_width(black_box(800.0)))
     });
 
-    group.bench_function("indefinite", |b| {
-        b.iter(|| LayoutConstraints::indefinite())
-    });
+    group.bench_function("indefinite", |b| b.iter(LayoutConstraints::indefinite));
 
     // Constraint access
     let constraints = LayoutConstraints::definite(800.0, 600.0);
-    group.bench_function("width_access", |b| {
-        b.iter(|| black_box(&constraints).width())
-    });
+    group.bench_function("width_access", |b| b.iter(|| black_box(&constraints).width()));
 
-    group.bench_function("height_access", |b| {
-        b.iter(|| black_box(&constraints).height())
-    });
+    group.bench_function("height_access", |b| b.iter(|| black_box(&constraints).height()));
 
     group.bench_function("is_fully_definite_check", |b| {
         b.iter(|| black_box(&constraints).is_fully_definite())
@@ -163,9 +163,7 @@ fn bench_layout_constraints(c: &mut Criterion) {
         b.iter(|| AvailableSpace::Definite(black_box(800.0)))
     });
 
-    group.bench_function("available_space_indefinite", |b| {
-        b.iter(|| AvailableSpace::Indefinite)
-    });
+    group.bench_function("available_space_indefinite", |b| b.iter(|| AvailableSpace::Indefinite));
 
     group.finish();
 }
@@ -359,9 +357,7 @@ fn bench_float_context(c: &mut Criterion) {
     let mut group = c.benchmark_group("float_context");
 
     // Float context creation
-    group.bench_function("context_creation", |b| {
-        b.iter(|| FloatContext::new(black_box(800.0)))
-    });
+    group.bench_function("context_creation", |b| b.iter(|| FloatContext::new(black_box(800.0))));
 
     // Adding floats
     group.bench_function("add_float_left", |b| {
@@ -370,7 +366,7 @@ fn bench_float_context(c: &mut Criterion) {
             rect: Rect::from_xywh(0.0, 0.0, 100.0, 50.0),
             side: FloatSide::Left,
         };
-        b.iter(|| ctx.add_float(black_box(float_info.clone())))
+        b.iter(|| ctx.add_float(black_box(float_info)))
     });
 
     group.bench_function("add_float_right", |b| {
@@ -379,7 +375,7 @@ fn bench_float_context(c: &mut Criterion) {
             rect: Rect::from_xywh(700.0, 0.0, 100.0, 50.0),
             side: FloatSide::Right,
         };
-        b.iter(|| ctx.add_float(black_box(float_info.clone())))
+        b.iter(|| ctx.add_float(black_box(float_info)))
     });
 
     // Available width calculation with floats
@@ -518,9 +514,7 @@ fn bench_layout_engine(c: &mut Criterion) {
     let mut group = c.benchmark_group("layout_engine_config");
 
     // Engine creation
-    group.bench_function("engine_creation_default", |b| {
-        b.iter(|| LayoutEngine::with_defaults())
-    });
+    group.bench_function("engine_creation_default", |b| b.iter(LayoutEngine::with_defaults));
 
     group.bench_function("engine_creation_custom", |b| {
         b.iter(|| {
@@ -534,9 +528,7 @@ fn bench_layout_engine(c: &mut Criterion) {
         b.iter(|| LayoutConfig::for_viewport(Size::new(black_box(1920.0), black_box(1080.0))))
     });
 
-    group.bench_function("config_default", |b| {
-        b.iter(|| LayoutConfig::default())
-    });
+    group.bench_function("config_default", |b| b.iter(LayoutConfig::default));
 
     // Engine reuse (multiple layouts with same engine)
     group.bench_function("engine_reuse_10x", |b| {

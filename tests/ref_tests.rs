@@ -382,7 +382,7 @@ fn test_ref_harness_compare_images_via_harness() {
 
 #[test]
 fn test_ref_harness_run_ref_test_missing_html() {
-    let harness = RefTestHarness::new();
+    let mut harness = RefTestHarness::new();
     let test_dir = std::path::Path::new("/nonexistent/test/dir");
     let reference = std::path::Path::new("/nonexistent/reference.png");
 
@@ -400,7 +400,7 @@ fn test_ref_harness_run_ref_test_missing_html() {
 #[test]
 fn test_ref_harness_render_and_compare_identical() {
     // Create two identical renders and verify they match
-    let harness = RefTestHarness::with_config(RefTestConfig::with_viewport(100, 100));
+    let mut harness = RefTestHarness::with_config(RefTestConfig::with_viewport(100, 100));
 
     let html = r#"
         <html>
@@ -438,7 +438,7 @@ fn test_ref_harness_render_and_compare_identical() {
 fn test_ref_harness_create_reference() {
     use std::fs;
 
-    let harness = RefTestHarness::with_config(RefTestConfig::with_viewport(100, 100));
+    let mut harness = RefTestHarness::with_config(RefTestConfig::with_viewport(100, 100));
 
     let html = r#"
         <html>
@@ -482,7 +482,7 @@ fn test_ref_harness_create_reference() {
 fn test_ref_harness_detect_difference() {
     use std::fs;
 
-    let harness = RefTestHarness::with_config(RefTestConfig::with_viewport(100, 100));
+    let mut harness = RefTestHarness::with_config(RefTestConfig::with_viewport(100, 100));
 
     let html1 = r#"
         <html>
@@ -538,7 +538,7 @@ fn test_ref_harness_with_lenient_config() {
 
     // Use lenient config to allow small differences
     let config = RefTestConfig::with_viewport(100, 100).with_compare_config(CompareConfig::lenient());
-    let harness = RefTestHarness::with_config(config);
+    let mut harness = RefTestHarness::with_config(config);
 
     let html = r#"
         <html>
