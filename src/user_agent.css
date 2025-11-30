@@ -181,14 +181,9 @@ textarea {
     white-space: pre-wrap;
 }
 
-/* Hidden elements */
-meta, link, title {
+/* Hidden elements - these should not be rendered */
+head, style, script, meta, link, title, noscript, template {
     display: none;
-}
-
-/* Keep head, style, script as inline internally (we skip rendering their text in paint.rs) */
-head, style, script {
-    display: inline;
 }
 
 /* Horizontal rule */

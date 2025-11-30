@@ -731,9 +731,18 @@ fn apply_styles_internal_with_ancestors(
 fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
     let mut styles = ComputedStyles::default();
 
+    // Handle Document node type - must be block to establish formatting context at root
+    if matches!(node.node_type, crate::dom::DomNodeType::Document) {
+        styles.display = Display::Block;
+        return styles;
+    }
+
     // Set proper default display values for HTML elements (user-agent stylesheet defaults)
     if let Some(tag) = node.tag_name() {
         styles.display = match tag {
+            // Document structure elements (must be block to establish formatting context)
+            "html" | "body" => Display::Block,
+
             // Block-level elements
             "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol" | "li" | "blockquote" | "pre"
             | "article" | "section" | "nav" | "aside" | "header" | "footer" | "main" | "figure" | "figcaption"
@@ -748,6 +757,9 @@ fn get_default_styles_for_element(node: &DomNode) -> ComputedStyles {
             // Inline elements (explicit for clarity, though it's the default)
             "a" | "span" | "em" | "strong" | "code" | "b" | "i" | "u" | "small" | "sub" | "sup" | "mark" | "abbr"
             | "cite" | "q" | "kbd" | "samp" | "var" | "time" | "label" => Display::Inline,
+
+            // Hidden elements (display: none - not rendered)
+            "head" | "style" | "script" | "meta" | "link" | "title" | "noscript" | "template" => Display::None,
 
             // Everything else defaults to inline
             _ => Display::Inline,
