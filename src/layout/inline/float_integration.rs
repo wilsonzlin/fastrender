@@ -49,7 +49,7 @@
 //! ```
 
 use crate::geometry::Rect;
-use crate::layout::float_context::{FloatContext, FloatInfo, FloatSide};
+use crate::layout::float_context::{FloatContext, FloatSide};
 use crate::style::Clear;
 
 /// Describes the available space for a line box

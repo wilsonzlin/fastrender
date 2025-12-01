@@ -35,7 +35,6 @@ pub use width::{compute_block_width, compute_block_width_with_auto_margins, Comp
 use crate::geometry::Rect;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::style::display::FormattingContextType;
 use crate::style::{Length, LineHeight, Position};
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
@@ -305,6 +304,7 @@ fn is_out_of_flow(box_node: &BoxNode) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::display::FormattingContextType;
     use crate::style::{ComputedStyle, Display, Length};
     use std::sync::Arc;
 

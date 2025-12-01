@@ -24,7 +24,7 @@
 //! }
 //! ```
 
-use crate::text::font_db::{FontDatabase, FontMetrics, FontStretch, FontStyle, FontWeight, LoadedFont, ScaledMetrics};
+use crate::text::font_db::{FontDatabase, FontStretch, FontStyle, FontWeight, LoadedFont, ScaledMetrics};
 use rustybuzz::{Direction, Face, UnicodeBuffer};
 use std::sync::Arc;
 

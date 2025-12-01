@@ -35,7 +35,7 @@
 //! ```
 
 use crate::error::{Error, Result};
-use crate::geometry::{Point, Rect, Size};
+use crate::geometry::{Point, Rect};
 use crate::text::font_db::{FontStyle, FontWeight, LoadedFont, ScaledMetrics};
 use crate::text::font_loader::FontContext;
 use rustybuzz::{Direction, Face, UnicodeBuffer};

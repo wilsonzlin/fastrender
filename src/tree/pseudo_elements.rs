@@ -37,10 +37,9 @@
 //!
 //! Generates an inline box with text "» " as the first child of each `<p>`.
 
-use crate::geometry::Size;
 use crate::style::display::{Display, FormattingContextType};
 use crate::style::ComputedStyle;
-use crate::tree::box_tree::{BoxNode, BoxType, DebugInfo, InlineBox, TextBox};
+use crate::tree::box_tree::{BoxNode, DebugInfo};
 use std::sync::Arc;
 
 // =============================================================================

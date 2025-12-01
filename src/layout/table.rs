@@ -26,7 +26,7 @@
 //! - CSS Tables Module Level 3
 //! - HTML 5.2 Section 4.9: Tabular data
 
-use crate::geometry::{Rect, Size};
+use crate::geometry::Rect;
 use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::tree::box_tree::BoxNode;

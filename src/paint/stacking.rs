@@ -56,7 +56,7 @@
 //! let stacking_tree = build_stacking_tree(&fragment_tree.root, None, true);
 //! ```
 
-use crate::geometry::{Point, Rect};
+use crate::geometry::Rect;
 use crate::style::{ComputedStyle, Display, Overflow, Position};
 use crate::tree::{FragmentContent, FragmentNode};
 use std::cmp::Ordering;

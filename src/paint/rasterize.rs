@@ -31,7 +31,6 @@
 //! fill_rounded_rect(&mut pixmap, 20.0, 20.0, 60.0, 60.0, &radii, Rgba::rgb(0, 255, 0));
 //! ```
 
-use crate::error::{RenderError, Result};
 use crate::geometry::Rect;
 use crate::style::Rgba;
 use tiny_skia::{FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};

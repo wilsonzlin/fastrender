@@ -49,7 +49,6 @@
 use crate::error::{Result, TextError};
 use crate::text::font_db::LoadedFont;
 use rustybuzz::{Face, UnicodeBuffer};
-use std::sync::Arc;
 
 // ============================================================================
 // Direction

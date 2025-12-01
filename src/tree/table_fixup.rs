@@ -51,10 +51,10 @@
 //! let fixed = TableStructureFixer::fixup_table(table).unwrap();
 //! ```
 
-use crate::error::{LayoutError, Result};
+use crate::error::Result;
 use crate::style::display::{Display, FormattingContextType};
 use crate::style::ComputedStyle;
-use crate::tree::box_tree::{AnonymousBox, AnonymousType, BlockBox, BoxNode, BoxType};
+use crate::tree::box_tree::{AnonymousBox, AnonymousType, BoxNode, BoxType};
 use std::sync::Arc;
 
 /// Table structure fixer
@@ -534,6 +534,7 @@ impl TableStructureFixer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tree::box_tree::BlockBox;
     use crate::tree::debug::DebugInfo;
 
     // Helper to create a default style

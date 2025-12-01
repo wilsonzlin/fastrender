@@ -31,11 +31,11 @@ use std::collections::HashMap;
 
 use taffy::geometry::Line;
 use taffy::style::{
-    AlignContent as TaffyAlignContent, AlignItems as TaffyAlignItems, AlignSelf as TaffyAlignSelf, Dimension, Display,
-    GridAutoFlow as TaffyGridAutoFlow, GridPlacement as TaffyGridPlacement, GridTemplateComponent, LengthPercentage,
-    LengthPercentageAuto, MaxTrackSizingFunction, MinTrackSizingFunction, Style as TaffyStyle, TrackSizingFunction,
+    AlignContent as TaffyAlignContent, Dimension, Display, GridPlacement as TaffyGridPlacement, GridTemplateComponent,
+    LengthPercentage, LengthPercentageAuto, MaxTrackSizingFunction, MinTrackSizingFunction, Style as TaffyStyle,
+    TrackSizingFunction,
 };
-use taffy::style_helpers::{TaffyAuto, TaffyFitContent, TaffyMaxContent, TaffyMinContent};
+use taffy::style_helpers::TaffyAuto;
 use taffy::tree::{NodeId as TaffyNodeId, TaffyTree};
 
 use crate::geometry::Rect;

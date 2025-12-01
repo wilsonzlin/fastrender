@@ -20,7 +20,6 @@
 //! - W3.T09: GridFormattingContext (Taffy-backed)
 //! - W4.T12: InlineFormattingContext
 
-use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::flex::FlexFormattingContext;
 use crate::layout::contexts::grid::GridFormattingContext;
@@ -177,6 +176,7 @@ impl Default for FormattingContextFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::constraints::LayoutConstraints;
     use crate::style::ComputedStyle;
     use std::sync::Arc;
 

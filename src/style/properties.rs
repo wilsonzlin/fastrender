@@ -11,8 +11,7 @@ use crate::style::grid::parse_grid_tracks_with_names;
 use crate::style::types::*;
 use crate::style::var_resolution::resolve_var;
 use crate::style::values::Length;
-use crate::style::{ComputedStyle, Display, LengthUnit, Position, Rgba};
-use std::collections::HashMap;
+use crate::style::{ComputedStyle, Display, LengthUnit, Position};
 
 pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_font_size: f32, root_font_size: f32) {
     // Handle CSS Custom Properties (--*)

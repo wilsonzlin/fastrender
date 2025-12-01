@@ -41,9 +41,9 @@
 
 use crate::geometry::{Point, Rect, Size};
 use crate::layout::utils::resolve_offset;
-use crate::layout::{LayoutConstraints, LayoutError};
+use crate::layout::LayoutError;
 use crate::style::{Position, PositionedStyle};
-use crate::tree::{BoxNode, FragmentNode};
+use crate::tree::FragmentNode;
 
 /// Represents a containing block for positioned elements
 ///
