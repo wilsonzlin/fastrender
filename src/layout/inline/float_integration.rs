@@ -565,6 +565,8 @@ pub struct LineSpaceIterator<'a> {
     float_ctx: &'a FloatContext,
     current_y: f32,
     end_y: f32,
+    /// Reserved for future use in width calculations
+    #[allow(dead_code)]
     containing_width: f32,
 }
 

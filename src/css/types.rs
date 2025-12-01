@@ -85,26 +85,26 @@ impl StyleSheet {
     /// This flattens nested @media rules and filters by the given media context.
     pub fn collect_style_rules(&self, media_ctx: &crate::style::media::MediaContext) -> Vec<&StyleRule> {
         let mut result = Vec::new();
-        self.collect_rules_recursive(&self.rules, media_ctx, &mut result);
+        collect_rules_recursive(&self.rules, media_ctx, &mut result);
         result
     }
+}
 
-    fn collect_rules_recursive<'a>(
-        &'a self,
-        rules: &'a [CssRule],
-        media_ctx: &crate::style::media::MediaContext,
-        out: &mut Vec<&'a StyleRule>,
-    ) {
-        for rule in rules {
-            match rule {
-                CssRule::Style(style_rule) => {
-                    out.push(style_rule);
-                }
-                CssRule::Media(media_rule) => {
-                    // Only include rules from @media blocks that match
-                    if media_ctx.evaluate(&media_rule.query) {
-                        self.collect_rules_recursive(&media_rule.rules, media_ctx, out);
-                    }
+/// Helper to recursively collect style rules from nested @media blocks
+fn collect_rules_recursive<'a>(
+    rules: &'a [CssRule],
+    media_ctx: &crate::style::media::MediaContext,
+    out: &mut Vec<&'a StyleRule>,
+) {
+    for rule in rules {
+        match rule {
+            CssRule::Style(style_rule) => {
+                out.push(style_rule);
+            }
+            CssRule::Media(media_rule) => {
+                // Only include rules from @media blocks that match
+                if media_ctx.evaluate(&media_rule.query) {
+                    collect_rules_recursive(&media_rule.rules, media_ctx, out);
                 }
             }
         }
