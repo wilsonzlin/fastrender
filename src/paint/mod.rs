@@ -71,7 +71,7 @@
 //! use fastrender::paint::{DisplayListBuilder, DisplayList, build_stacking_tree};
 //! use fastrender::paint::{DisplayListOptimizer, OptimizationConfig};
 //! use fastrender::paint::{Canvas, BorderRadii};
-//! use fastrender::style::Rgba;
+//! use fastrender::Rgba;
 //!
 //! // Build stacking tree from fragment tree
 //! let stacking_tree = build_stacking_tree(&fragment_tree.root, None, true);

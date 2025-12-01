@@ -22,7 +22,7 @@
 //! ```rust,ignore
 //! use fastrender::text::pipeline::{ShapingPipeline, Direction};
 //! use fastrender::text::FontContext;
-//! use fastrender::style::ComputedStyle;
+//! use fastrender::ComputedStyle;
 //!
 //! let mut pipeline = ShapingPipeline::new();
 //! let font_context = FontContext::new();

@@ -17,7 +17,7 @@
 //! # Example
 //!
 //! ```
-//! use fastrender::style::PositionedStyle;
+//! use fastrender::PositionedStyle;
 //!
 //! let style = PositionedStyle::default();
 //! assert_eq!(style.font_size, 16.0); // Default font size
@@ -51,7 +51,7 @@ use crate::style::values::{Length, LengthOrAuto};
 /// # Examples
 ///
 /// ```
-/// use fastrender::style::PositionedStyle;
+/// use fastrender::PositionedStyle;
 ///
 /// let mut style = PositionedStyle::default();
 /// // Modify as needed
@@ -557,8 +557,8 @@ impl PositionedStyle {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::PositionedStyle;
-    /// use fastrender::style::Display;
+    /// use fastrender::PositionedStyle;
+    /// use fastrender::Display;
     ///
     /// let style = PositionedStyle::builder()
     ///     .display(Display::Block)

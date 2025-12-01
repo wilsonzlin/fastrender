@@ -30,7 +30,7 @@ use std::fmt;
 /// # Examples
 ///
 /// ```
-/// use fastrender::style::Float;
+/// use fastrender::Float;
 ///
 /// let float = Float::parse("left").unwrap();
 /// assert_eq!(float, Float::Left);
@@ -63,7 +63,7 @@ impl Float {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Float;
+    /// use fastrender::Float;
     ///
     /// assert!(Float::Left.is_floating());
     /// assert!(Float::Right.is_floating());
@@ -78,7 +78,7 @@ impl Float {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Float;
+    /// use fastrender::Float;
     ///
     /// assert_eq!(Float::parse("left").unwrap(), Float::Left);
     /// assert_eq!(Float::parse("right").unwrap(), Float::Right);
@@ -114,7 +114,7 @@ impl fmt::Display for Float {
 /// # Examples
 ///
 /// ```
-/// use fastrender::style::Clear;
+/// use fastrender::Clear;
 ///
 /// let clear = Clear::parse("both").unwrap();
 /// assert_eq!(clear, Clear::Both);
@@ -151,7 +151,7 @@ impl Clear {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Clear;
+    /// use fastrender::Clear;
     ///
     /// assert!(Clear::Left.clears_left());
     /// assert!(Clear::Both.clears_left());
@@ -167,7 +167,7 @@ impl Clear {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Clear;
+    /// use fastrender::Clear;
     ///
     /// assert!(Clear::Right.clears_right());
     /// assert!(Clear::Both.clears_right());
@@ -183,7 +183,7 @@ impl Clear {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Clear;
+    /// use fastrender::Clear;
     ///
     /// assert!(Clear::Left.is_clearing());
     /// assert!(Clear::Right.is_clearing());
@@ -199,7 +199,7 @@ impl Clear {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Clear;
+    /// use fastrender::Clear;
     ///
     /// assert_eq!(Clear::parse("left").unwrap(), Clear::Left);
     /// assert_eq!(Clear::parse("right").unwrap(), Clear::Right);

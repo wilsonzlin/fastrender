@@ -63,7 +63,7 @@ use crate::tree::fragment_tree::FragmentNode;
 ///
 /// ```ignore
 /// use fastrender::layout::contexts::GridFormattingContext;
-/// use fastrender::layout::{FormattingContext, LayoutConstraints};
+/// use fastrender::{FormattingContext, LayoutConstraints};
 ///
 /// let fc = GridFormattingContext::new();
 /// let fragment = fc.layout(&box_node, &constraints)?;

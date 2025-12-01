@@ -31,8 +31,8 @@ use crate::tree::fragment_tree::{FragmentNode, FragmentTree};
 /// # Examples
 ///
 /// ```
-/// use fastrender::layout::LayoutConfig;
-/// use fastrender::geometry::Size;
+/// use fastrender::LayoutConfig;
+/// use fastrender::Size;
 ///
 /// // Create config for specific viewport
 /// let config = LayoutConfig::for_viewport(Size::new(1920.0, 1080.0));
@@ -68,8 +68,8 @@ impl LayoutConfig {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::LayoutConfig;
-    /// use fastrender::geometry::Size;
+    /// use fastrender::LayoutConfig;
+    /// use fastrender::Size;
     ///
     /// let config = LayoutConfig::new(Size::new(1024.0, 768.0));
     /// assert_eq!(config.initial_containing_block.width, 1024.0);
@@ -90,8 +90,8 @@ impl LayoutConfig {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::LayoutConfig;
-    /// use fastrender::geometry::Size;
+    /// use fastrender::LayoutConfig;
+    /// use fastrender::Size;
     ///
     /// let config = LayoutConfig::for_viewport(Size::new(1920.0, 1080.0));
     /// assert_eq!(config.initial_containing_block.width, 1920.0);
@@ -118,7 +118,7 @@ impl Default for LayoutConfig {
 /// # Examples
 ///
 /// ```
-/// use fastrender::layout::{LayoutEngine, LayoutStats};
+/// use fastrender::{LayoutConfig, LayoutEngine};
 ///
 /// let engine = LayoutEngine::with_defaults();
 /// let stats = engine.stats();
@@ -170,10 +170,10 @@ impl LayoutCache {
 ///
 /// ```
 /// use std::sync::Arc;
-/// use fastrender::layout::{LayoutEngine, LayoutConfig};
-/// use fastrender::tree::{BoxTree, BoxNode, FormattingContextType};
-/// use fastrender::tree::box_tree::ComputedStyle;
-/// use fastrender::geometry::Size;
+/// use fastrender::{LayoutEngine, LayoutConfig};
+/// use fastrender::{BoxTree, BoxNode, FormattingContextType};
+/// use fastrender::ComputedStyle;
+/// use fastrender::Size;
 ///
 /// let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
 /// let engine = LayoutEngine::new(config);
@@ -205,8 +205,8 @@ impl LayoutEngine {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::{LayoutEngine, LayoutConfig};
-    /// use fastrender::geometry::Size;
+    /// use fastrender::{LayoutEngine, LayoutConfig};
+    /// use fastrender::Size;
     ///
     /// let config = LayoutConfig::new(Size::new(1024.0, 768.0));
     /// let engine = LayoutEngine::new(config);
@@ -226,7 +226,7 @@ impl LayoutEngine {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::LayoutEngine;
+    /// use fastrender::LayoutEngine;
     ///
     /// let engine = LayoutEngine::with_defaults();
     /// assert_eq!(engine.config().initial_containing_block.width, 800.0);
@@ -257,10 +257,10 @@ impl LayoutEngine {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use fastrender::layout::{LayoutEngine, LayoutConfig};
-    /// use fastrender::tree::{BoxTree, BoxNode, FormattingContextType};
-    /// use fastrender::tree::box_tree::ComputedStyle;
-    /// use fastrender::geometry::Size;
+    /// use fastrender::{LayoutEngine, LayoutConfig};
+    /// use fastrender::{BoxTree, BoxNode, FormattingContextType};
+    /// use fastrender::ComputedStyle;
+    /// use fastrender::Size;
     ///
     /// let config = LayoutConfig::for_viewport(Size::new(1024.0, 768.0));
     /// let engine = LayoutEngine::new(config);
@@ -314,10 +314,10 @@ impl LayoutEngine {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use fastrender::layout::{LayoutEngine, LayoutConfig, LayoutConstraints};
-    /// use fastrender::tree::{BoxNode, FormattingContextType};
-    /// use fastrender::tree::box_tree::ComputedStyle;
-    /// use fastrender::geometry::Size;
+    /// use fastrender::{LayoutEngine, LayoutConfig, LayoutConstraints};
+    /// use fastrender::{BoxNode, FormattingContextType};
+    /// use fastrender::ComputedStyle;
+    /// use fastrender::Size;
     ///
     /// let config = LayoutConfig::new(Size::new(800.0, 600.0));
     /// let engine = LayoutEngine::new(config);
@@ -381,9 +381,9 @@ impl LayoutEngine {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use fastrender::layout::{LayoutEngine, IntrinsicSizingMode};
-    /// use fastrender::tree::{BoxNode, FormattingContextType};
-    /// use fastrender::tree::box_tree::ComputedStyle;
+    /// use fastrender::{LayoutEngine, IntrinsicSizingMode};
+    /// use fastrender::{BoxNode, FormattingContextType};
+    /// use fastrender::ComputedStyle;
     ///
     /// let engine = LayoutEngine::with_defaults();
     /// let style = Arc::new(ComputedStyle::default());
@@ -420,7 +420,7 @@ impl LayoutEngine {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::LayoutEngine;
+    /// use fastrender::LayoutEngine;
     ///
     /// let engine = LayoutEngine::with_defaults();
     /// let stats = engine.stats();

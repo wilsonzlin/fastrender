@@ -19,7 +19,7 @@
 //! ```rust,ignore
 //! use fastrender::paint::canvas::Canvas;
 //! use fastrender::geometry::{Point, Rect, Size};
-//! use fastrender::style::Rgba;
+//! use fastrender::Rgba;
 //!
 //! // Create a canvas
 //! let mut canvas = Canvas::new(800, 600, Rgba::WHITE)?;
@@ -153,7 +153,7 @@ impl Canvas {
     ///
     /// ```rust,ignore
     /// use fastrender::paint::canvas::Canvas;
-    /// use fastrender::style::Rgba;
+    /// use fastrender::Rgba;
     ///
     /// let canvas = Canvas::new(800, 600, Rgba::WHITE)?;
     /// assert_eq!(canvas.width(), 800);

@@ -29,7 +29,7 @@
 //!
 //! ```rust,ignore
 //! use fastrender::layout::contexts::positioned::PositionedLayout;
-//! use fastrender::tree::FragmentNode;
+//! use fastrender::FragmentNode;
 //!
 //! let layout = PositionedLayout::new();
 //! let adjusted_fragment = layout.apply_relative_positioning(

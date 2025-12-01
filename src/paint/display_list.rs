@@ -26,8 +26,8 @@
 //!
 //! ```rust,ignore
 //! use fastrender::paint::display_list::{DisplayList, DisplayItem, FillRectItem};
-//! use fastrender::geometry::{Rect, Point, Size};
-//! use fastrender::style::Rgba;
+//! use fastrender::{Rect, Point, Size};
+//! use fastrender::Rgba;
 //!
 //! let mut list = DisplayList::new();
 //! list.push(DisplayItem::FillRect(FillRectItem {
@@ -842,8 +842,8 @@ pub struct StackingContextItem {
 ///
 /// ```rust,ignore
 /// use fastrender::paint::display_list::{DisplayList, DisplayItem, FillRectItem};
-/// use fastrender::geometry::Rect;
-/// use fastrender::style::Rgba;
+/// use fastrender::Rect;
+/// use fastrender::Rgba;
 ///
 /// let mut list = DisplayList::new();
 /// list.push(DisplayItem::FillRect(FillRectItem {

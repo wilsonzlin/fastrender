@@ -142,7 +142,7 @@ impl std::fmt::Debug for FastRender {
 ///
 /// ```rust,ignore
 /// use fastrender::api::FastRenderConfig;
-/// use fastrender::style::Rgba;
+/// use fastrender::Rgba;
 ///
 /// let config = FastRenderConfig::new()
 ///     .with_default_background(Rgba::rgb(240, 240, 240));
@@ -245,7 +245,7 @@ impl FastRenderConfig {
     ///
     /// ```rust,ignore
     /// use fastrender::api::FastRenderConfig;
-    /// use fastrender::style::Rgba;
+    /// use fastrender::Rgba;
     ///
     /// let config = FastRenderConfig::new()
     ///     .with_default_background(Rgba::rgb(255, 255, 255));
@@ -324,7 +324,7 @@ impl FastRender {
     ///
     /// ```rust,ignore
     /// use fastrender::api::{FastRender, FastRenderConfig};
-    /// use fastrender::style::Rgba;
+    /// use fastrender::Rgba;
     ///
     /// let config = FastRenderConfig::new()
     ///     .with_default_background(Rgba::rgb(240, 240, 240))
@@ -428,7 +428,7 @@ impl FastRender {
     ///
     /// ```rust,ignore
     /// use fastrender::api::FastRender;
-    /// use fastrender::style::Rgba;
+    /// use fastrender::Rgba;
     ///
     /// let mut renderer = FastRender::new()?;
     /// let pixmap = renderer.render_html_with_background(

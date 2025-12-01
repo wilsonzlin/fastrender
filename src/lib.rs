@@ -197,6 +197,8 @@ pub use geometry::{EdgeOffsets, Point, Rect, Size};
 
 // Tree structures
 pub use tree::box_tree::{BoxNode, BoxTree, BoxType};
+pub use tree::box_generation::BoxGenerator;
+pub use tree::debug::DebugInfo;
 pub use tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 pub use tree::pseudo_elements::{
     count_pseudo_boxes, find_pseudo_boxes, get_pseudo_type, is_pseudo_box, PseudoContent,
@@ -224,7 +226,7 @@ pub use layout::formatting_context::{FormattingContext, IntrinsicSizingMode};
 pub use layout::contexts::factory::FormattingContextFactory;
 
 // Additional style types
-pub use style::float::Clear;
+pub use style::float::{Clear, Float};
 
 // Paint
 pub use paint::canvas::Canvas;

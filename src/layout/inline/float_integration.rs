@@ -32,7 +32,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use fastrender::layout::{FloatContext, FloatSide};
+//! use fastrender::{FloatContext, FloatSide};
 //! use fastrender::layout::inline::{InlineFloatIntegration, LineSpace};
 //!
 //! // Create a float context with some floats

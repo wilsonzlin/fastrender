@@ -99,9 +99,9 @@ impl DOMNode {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use fastrender::tree::DOMNode;
-    /// use fastrender::tree::box_tree::ComputedStyle;
-    /// use fastrender::geometry::Size;
+    /// use fastrender::tree::box_generation::DOMNode;
+    /// use fastrender::ComputedStyle;
+    /// use fastrender::Size;
     ///
     /// let style = Arc::new(ComputedStyle::default());
     /// let img = DOMNode::new_replaced("img", style, "image.png", Some(Size::new(100.0, 50.0)));
@@ -597,9 +597,9 @@ impl BoxGenerator {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use fastrender::tree::{BoxNode, FormattingContextType};
-    /// use fastrender::tree::box_tree::ComputedStyle;
-    /// use fastrender::tree::BoxGenerator;
+    /// use fastrender::{BoxNode, FormattingContextType};
+    /// use fastrender::ComputedStyle;
+    /// use fastrender::BoxGenerator;
     ///
     /// let style = Arc::new(ComputedStyle::default());
     /// let child = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
@@ -625,9 +625,9 @@ impl BoxGenerator {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use fastrender::tree::{BoxNode, BoxType, FormattingContextType};
-    /// use fastrender::tree::box_tree::ComputedStyle;
-    /// use fastrender::tree::BoxGenerator;
+    /// use fastrender::{BoxNode, BoxType, FormattingContextType};
+    /// use fastrender::ComputedStyle;
+    /// use fastrender::BoxGenerator;
     ///
     /// let style = Arc::new(ComputedStyle::default());
     /// let text = BoxNode::new_text(style.clone(), "Hello".to_string());
@@ -663,9 +663,9 @@ impl BoxGenerator {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use fastrender::tree::{BoxNode, FormattingContextType};
-    /// use fastrender::tree::box_tree::ComputedStyle;
-    /// use fastrender::tree::BoxGenerator;
+    /// use fastrender::{BoxNode, FormattingContextType};
+    /// use fastrender::ComputedStyle;
+    /// use fastrender::BoxGenerator;
     ///
     /// let style = Arc::new(ComputedStyle::default());
     /// let child1 = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
@@ -707,9 +707,9 @@ impl BoxGenerator {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use fastrender::tree::{BoxNode, FormattingContextType};
-    /// use fastrender::tree::box_tree::ComputedStyle;
-    /// use fastrender::tree::BoxGenerator;
+    /// use fastrender::{BoxNode, FormattingContextType};
+    /// use fastrender::ComputedStyle;
+    /// use fastrender::BoxGenerator;
     ///
     /// let style = Arc::new(ComputedStyle::default());
     /// let valid_tree = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![

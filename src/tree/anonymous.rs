@@ -80,9 +80,9 @@ impl AnonymousBoxCreator {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use fastrender::tree::{BoxNode, FormattingContextType};
+    /// use fastrender::{BoxNode, FormattingContextType};
     /// use fastrender::tree::anonymous::AnonymousBoxCreator;
-    /// use fastrender::tree::box_tree::ComputedStyle;
+    /// use fastrender::ComputedStyle;
     ///
     /// let style = Arc::new(ComputedStyle::default());
     /// let text = BoxNode::new_text(style.clone(), "Hello".to_string());

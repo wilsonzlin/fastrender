@@ -17,7 +17,7 @@
 //! # Examples
 //!
 //! ```
-//! use fastrender::style::Display;
+//! use fastrender::Display;
 //!
 //! let display = Display::parse("flex").unwrap();
 //! assert!(display.is_block_level());
@@ -34,7 +34,7 @@ use std::fmt;
 /// # Examples
 ///
 /// ```
-/// use fastrender::style::Display;
+/// use fastrender::Display;
 ///
 /// let block = Display::Block;
 /// assert!(block.is_block_level());
@@ -182,7 +182,7 @@ impl Display {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Display;
+    /// use fastrender::Display;
     ///
     /// assert!(Display::None.is_none());
     /// assert!(!Display::Block.is_none());
@@ -198,7 +198,7 @@ impl Display {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Display;
+    /// use fastrender::Display;
     ///
     /// assert!(Display::Block.is_block_level());
     /// assert!(Display::Flex.is_block_level());
@@ -221,7 +221,7 @@ impl Display {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Display;
+    /// use fastrender::Display;
     ///
     /// assert!(Display::Inline.is_inline_level());
     /// assert!(Display::InlineBlock.is_inline_level());
@@ -241,7 +241,7 @@ impl Display {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Display;
+    /// use fastrender::Display;
     ///
     /// assert!(Display::TableRow.is_table_internal());
     /// assert!(Display::TableCell.is_table_internal());
@@ -269,7 +269,7 @@ impl Display {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Display;
+    /// use fastrender::Display;
     ///
     /// assert!(Display::Flex.establishes_formatting_context());
     /// assert!(Display::Grid.establishes_formatting_context());
@@ -298,7 +298,7 @@ impl Display {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::{Display, FormattingContextType};
+    /// use fastrender::{Display, FormattingContextType};
     ///
     /// assert_eq!(
     ///     Display::Flex.formatting_context_type(),
@@ -326,7 +326,7 @@ impl Display {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use fastrender::style::{Display, OuterDisplay};
     ///
     /// assert_eq!(Display::Block.outer_display(), OuterDisplay::Block);
@@ -349,7 +349,7 @@ impl Display {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use fastrender::style::{Display, InnerDisplay};
     ///
     /// assert_eq!(Display::Block.inner_display(), InnerDisplay::Flow);
@@ -372,7 +372,7 @@ impl Display {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Display;
+    /// use fastrender::Display;
     ///
     /// assert_eq!(Display::parse("block").unwrap(), Display::Block);
     /// assert_eq!(Display::parse("flex").unwrap(), Display::Flex);

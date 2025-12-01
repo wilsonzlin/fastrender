@@ -15,7 +15,7 @@
 //! # Usage
 //!
 //! ```
-//! use fastrender::tree::DebugInfo;
+//! use fastrender::DebugInfo;
 //!
 //! let info = DebugInfo::new(
 //!     Some("div".to_string()),
@@ -45,7 +45,7 @@ use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 /// # Examples
 ///
 /// ```
-/// use fastrender::tree::DebugInfo;
+/// use fastrender::DebugInfo;
 ///
 /// let info = DebugInfo::new(
 ///     Some("div".to_string()),
@@ -88,7 +88,7 @@ impl DebugInfo {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::DebugInfo;
+    /// use fastrender::DebugInfo;
     ///
     /// let info = DebugInfo::new(
     ///     Some("div".to_string()),
@@ -114,7 +114,7 @@ impl DebugInfo {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::DebugInfo;
+    /// use fastrender::DebugInfo;
     ///
     /// let info = DebugInfo::text("Hello world");
     /// assert_eq!(info.to_selector(), "#text(Hello world)");
@@ -133,7 +133,7 @@ impl DebugInfo {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::DebugInfo;
+    /// use fastrender::DebugInfo;
     ///
     /// let info = DebugInfo::anonymous("block");
     /// assert_eq!(info.to_selector(), "#anonymous(block)");
@@ -154,7 +154,7 @@ impl DebugInfo {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::DebugInfo;
+    /// use fastrender::DebugInfo;
     ///
     /// let info = DebugInfo::new(
     ///     Some("div".to_string()),
@@ -176,7 +176,7 @@ impl DebugInfo {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::DebugInfo;
+    /// use fastrender::DebugInfo;
     ///
     /// let info = DebugInfo::new(
     ///     Some("div".to_string()),
@@ -219,7 +219,7 @@ impl DebugInfo {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::DebugInfo;
+    /// use fastrender::DebugInfo;
     ///
     /// let info = DebugInfo::new(
     ///     Some("div".to_string()),
@@ -259,8 +259,8 @@ impl fmt::Display for DebugInfo {
 /// # Examples
 ///
 /// ```
-/// use fastrender::tree::{BoxNode, DebugInfo, TreePrinter, FormattingContextType};
-/// use fastrender::tree::box_tree::ComputedStyle;
+/// use fastrender::{BoxNode, DebugInfo, FormattingContextType, ComputedStyle};
+/// use fastrender::tree::debug::TreePrinter;
 /// use std::sync::Arc;
 ///
 /// let style = Arc::new(ComputedStyle::default());

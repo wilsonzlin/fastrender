@@ -14,7 +14,7 @@
 //!
 //! ```rust,ignore
 //! use fastrender::paint::{DisplayList, DisplayListOptimizer, OptimizationConfig};
-//! use fastrender::geometry::Rect;
+//! use fastrender::Rect;
 //!
 //! let list = DisplayList::new();
 //! // ... build display list ...

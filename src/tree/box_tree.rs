@@ -280,8 +280,8 @@ impl fmt::Display for BoxType {
 ///
 /// ```
 /// use std::sync::Arc;
-/// use fastrender::tree::{BoxNode, FormattingContextType};
-/// use fastrender::tree::box_tree::ComputedStyle;
+/// use fastrender::{BoxNode, FormattingContextType};
+/// use fastrender::ComputedStyle;
 ///
 /// let style = Arc::new(ComputedStyle::default());
 /// let box_node = BoxNode::new_block(
@@ -321,8 +321,8 @@ impl BoxNode {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use fastrender::tree::{BoxNode, FormattingContextType};
-    /// use fastrender::tree::box_tree::ComputedStyle;
+    /// use fastrender::{BoxNode, FormattingContextType};
+    /// use fastrender::ComputedStyle;
     ///
     /// let style = Arc::new(ComputedStyle::default());
     /// let box_node = BoxNode::new_block(
@@ -538,8 +538,8 @@ impl BoxNode {
 ///
 /// ```
 /// use std::sync::Arc;
-/// use fastrender::tree::{BoxTree, BoxNode, FormattingContextType};
-/// use fastrender::tree::box_tree::ComputedStyle;
+/// use fastrender::{BoxTree, BoxNode, FormattingContextType};
+/// use fastrender::ComputedStyle;
 ///
 /// let style = Arc::new(ComputedStyle::default());
 /// let root = BoxNode::new_block(

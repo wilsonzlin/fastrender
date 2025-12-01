@@ -18,7 +18,7 @@
 //!
 //! ```rust,ignore
 //! use fastrender::paint::rasterize::{fill_rect, fill_rounded_rect, BorderRadii};
-//! use fastrender::style::Rgba;
+//! use fastrender::Rgba;
 //! use tiny_skia::Pixmap;
 //!
 //! let mut pixmap = Pixmap::new(100, 100).unwrap();

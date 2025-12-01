@@ -39,9 +39,9 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use fastrender::layout::{LayoutEngine, LayoutConfig};
+//! use fastrender::{LayoutEngine, LayoutConfig};
 //! use fastrender::tree::BoxTree;
-//! use fastrender::geometry::Size;
+//! use fastrender::Size;
 //!
 //! let config = LayoutConfig::for_viewport(Size::new(1024.0, 768.0));
 //! let engine = LayoutEngine::new(config);

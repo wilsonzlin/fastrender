@@ -19,7 +19,7 @@
 //! # Examples
 //!
 //! ```
-//! use fastrender::style::Position;
+//! use fastrender::Position;
 //!
 //! let pos = Position::parse("absolute").unwrap();
 //! assert!(pos.is_positioned());
@@ -35,7 +35,7 @@ use std::fmt;
 /// # Examples
 ///
 /// ```
-/// use fastrender::style::Position;
+/// use fastrender::Position;
 ///
 /// let static_pos = Position::Static;
 /// assert!(!static_pos.is_positioned());
@@ -56,7 +56,7 @@ pub enum Position {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Position;
+    /// use fastrender::Position;
     ///
     /// let pos = Position::Static;
     /// assert!(!pos.is_positioned());
@@ -74,7 +74,7 @@ pub enum Position {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Position;
+    /// use fastrender::Position;
     ///
     /// let pos = Position::Relative;
     /// assert!(pos.is_positioned());
@@ -90,7 +90,7 @@ pub enum Position {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Position;
+    /// use fastrender::Position;
     ///
     /// let pos = Position::Absolute;
     /// assert!(pos.is_positioned());
@@ -109,7 +109,7 @@ pub enum Position {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Position;
+    /// use fastrender::Position;
     ///
     /// let pos = Position::Fixed;
     /// assert!(pos.is_positioned());
@@ -127,7 +127,7 @@ pub enum Position {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Position;
+    /// use fastrender::Position;
     ///
     /// let pos = Position::Sticky;
     /// assert!(pos.is_positioned());
@@ -152,7 +152,7 @@ impl Position {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Position;
+    /// use fastrender::Position;
     ///
     /// assert!(!Position::Static.is_positioned());
     /// assert!(Position::Relative.is_positioned());
@@ -172,7 +172,7 @@ impl Position {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Position;
+    /// use fastrender::Position;
     ///
     /// assert!(Position::Static.is_in_flow());
     /// assert!(Position::Relative.is_in_flow());
@@ -189,13 +189,14 @@ impl Position {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Position;
+    /// use fastrender::Position;
     ///
     /// assert!(Position::Absolute.is_absolutely_positioned());
+    /// assert!(Position::Fixed.is_absolutely_positioned());
     /// assert!(!Position::Relative.is_absolutely_positioned());
     /// ```
     pub fn is_absolutely_positioned(self) -> bool {
-        matches!(self, Position::Absolute)
+        matches!(self, Position::Absolute | Position::Fixed)
     }
 
     /// Returns true if the element is fixed positioned
@@ -203,7 +204,7 @@ impl Position {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Position;
+    /// use fastrender::Position;
     ///
     /// assert!(Position::Fixed.is_fixed());
     /// assert!(!Position::Absolute.is_fixed());
@@ -217,7 +218,7 @@ impl Position {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Position;
+    /// use fastrender::Position;
     ///
     /// assert!(Position::Sticky.is_sticky());
     /// assert!(!Position::Relative.is_sticky());
@@ -231,7 +232,7 @@ impl Position {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Position;
+    /// use fastrender::Position;
     ///
     /// assert!(Position::Relative.is_relative());
     /// assert!(!Position::Absolute.is_relative());
@@ -245,7 +246,7 @@ impl Position {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Position;
+    /// use fastrender::Position;
     ///
     /// assert!(Position::Static.is_static());
     /// assert!(!Position::Relative.is_static());
@@ -263,7 +264,7 @@ impl Position {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Position;
+    /// use fastrender::Position;
     ///
     /// assert!(!Position::Static.establishes_containing_block());
     /// assert!(Position::Relative.establishes_containing_block());
@@ -283,7 +284,7 @@ impl Position {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Position;
+    /// use fastrender::Position;
     ///
     /// assert!(!Position::Static.can_use_offsets());
     /// assert!(Position::Relative.can_use_offsets());
@@ -298,7 +299,7 @@ impl Position {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Position;
+    /// use fastrender::Position;
     ///
     /// assert_eq!(Position::parse("static").unwrap(), Position::Static);
     /// assert_eq!(Position::parse("relative").unwrap(), Position::Relative);
@@ -433,12 +434,13 @@ mod tests {
     }
 
     // is_absolutely_positioned tests
+    // Per CSS spec, both absolute and fixed positioned elements are "absolutely positioned"
     #[test]
     fn test_is_absolutely_positioned() {
         assert!(Position::Absolute.is_absolutely_positioned());
+        assert!(Position::Fixed.is_absolutely_positioned());
         assert!(!Position::Static.is_absolutely_positioned());
         assert!(!Position::Relative.is_absolutely_positioned());
-        assert!(!Position::Fixed.is_absolutely_positioned());
         assert!(!Position::Sticky.is_absolutely_positioned());
     }
 

@@ -35,8 +35,8 @@
 //!
 //! ```
 //! use fastrender::tree::table_fixup::TableStructureFixer;
-//! use fastrender::tree::{BoxNode, FormattingContextType};
-//! use fastrender::style::ComputedStyle;
+//! use fastrender::{BoxNode, FormattingContextType};
+//! use fastrender::ComputedStyle;
 //! use std::sync::Arc;
 //!
 //! // Create a simple table with cells (missing rows and row-groups)

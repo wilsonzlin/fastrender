@@ -10,9 +10,9 @@
 //! # Examples
 //!
 //! ```
-//! use fastrender::debug::{EnhancedTreePrinter, PrintConfig, ColorMode};
-//! use fastrender::tree::{BoxNode, FormattingContextType};
-//! use fastrender::tree::box_tree::ComputedStyle;
+//! use fastrender::{EnhancedTreePrinter, PrintConfig, ColorMode};
+//! use fastrender::{BoxNode, FormattingContextType};
+//! use fastrender::ComputedStyle;
 //! use std::sync::Arc;
 //!
 //! let style = Arc::new(ComputedStyle::default());

@@ -674,7 +674,7 @@ pub fn calculate_row_heights(structure: &mut TableStructure, _available_height: 
 ///
 /// ```rust,ignore
 /// use fastrender::layout::table::TableFormattingContext;
-/// use fastrender::layout::FormattingContext;
+/// use fastrender::FormattingContext;
 ///
 /// let tfc = TableFormattingContext::new();
 /// let fragment = tfc.layout(table_box, constraints)?;

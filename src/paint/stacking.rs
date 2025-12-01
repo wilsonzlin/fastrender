@@ -393,7 +393,7 @@ impl StackingContext {
 ///
 /// ```ignore
 /// use fastrender::paint::stacking::creates_stacking_context;
-/// use fastrender::style::ComputedStyle;
+/// use fastrender::ComputedStyle;
 ///
 /// let mut style = ComputedStyle::default();
 /// style.opacity = 0.5;

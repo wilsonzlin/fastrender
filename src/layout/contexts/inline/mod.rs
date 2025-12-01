@@ -29,7 +29,7 @@
 //!
 //! ```rust,ignore
 //! use fastrender::layout::contexts::inline::InlineFormattingContext;
-//! use fastrender::layout::{FormattingContext, LayoutConstraints};
+//! use fastrender::{FormattingContext, LayoutConstraints};
 //!
 //! let ifc = InlineFormattingContext::new();
 //! let constraints = LayoutConstraints::definite_width(400.0);

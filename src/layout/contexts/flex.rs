@@ -51,7 +51,7 @@ use taffy::TaffyTree;
 ///
 /// ```ignore
 /// use fastrender::layout::contexts::FlexFormattingContext;
-/// use fastrender::layout::LayoutConstraints;
+/// use fastrender::LayoutConstraints;
 /// use fastrender::tree::BoxNode;
 ///
 /// let fc = FlexFormattingContext::new();
