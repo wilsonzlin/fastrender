@@ -8,8 +8,8 @@
 //! - CSS 2.1 Section 10.1: Definition of "containing block"
 
 use fastrender::geometry::{EdgeOffsets, Point, Rect, Size};
-use fastrender::layout::{AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult, ContainingBlock, ResolvedMargins};
-use fastrender::style::{LengthOrAuto, Position, PositionedStyle};
+use fastrender::{AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult, ContainingBlock, ResolvedMargins};
+use fastrender::{LengthOrAuto, Position, PositionedStyle};
 use fastrender::FragmentNode;
 
 // ============================================================================

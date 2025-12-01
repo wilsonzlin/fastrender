@@ -939,7 +939,7 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<crate::style:
 mod tests {
     use super::*;
     use crate::geometry::Size;
-    use crate::tree::ReplacedType;
+    use crate::tree::box_tree::ReplacedType;
 
     fn default_style() -> Arc<ComputedStyle> {
         Arc::new(ComputedStyle::default())

@@ -304,7 +304,9 @@ fn is_out_of_flow(box_node: &BoxNode) -> bool {
 mod tests {
     use super::*;
     use crate::style::display::FormattingContextType;
-    use crate::style::{ComputedStyle, Display, Length};
+    use crate::style::ComputedStyle;
+    use crate::style::display::Display;
+    use crate::style::values::Length;
     use std::sync::Arc;
 
     fn default_style() -> Arc<ComputedStyle> {

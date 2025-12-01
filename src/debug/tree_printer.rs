@@ -495,7 +495,8 @@ mod tests {
     use super::*;
     use crate::geometry::{Point, Rect, Size};
     use crate::style::ComputedStyle;
-    use crate::tree::{DebugInfo, FormattingContextType};
+    use crate::tree::debug::DebugInfo;
+    use crate::style::display::FormattingContextType;
     use std::sync::Arc;
 
     fn default_style() -> Arc<ComputedStyle> {

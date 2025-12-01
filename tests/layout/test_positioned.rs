@@ -9,8 +9,8 @@
 //! - CSS Position Module Level 3: Sticky positioning
 
 use fastrender::geometry::{EdgeOffsets, Point, Rect, Size};
-use fastrender::layout::{ContainingBlock, PositionedLayout, StickyConstraints};
-use fastrender::style::{LengthOrAuto, Position, PositionedStyle};
+use fastrender::{ContainingBlock, PositionedLayout, StickyConstraints};
+use fastrender::{LengthOrAuto, Position, PositionedStyle};
 use fastrender::FragmentNode;
 
 // ============================================================================

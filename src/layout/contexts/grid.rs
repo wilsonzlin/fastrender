@@ -429,7 +429,7 @@ impl FormattingContext for GridFormattingContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::GridTrack;
+    use crate::style::types::GridTrack;
     use crate::style::display::FormattingContextType;
     use std::sync::Arc;
 

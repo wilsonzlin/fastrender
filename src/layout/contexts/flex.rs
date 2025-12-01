@@ -469,7 +469,7 @@ impl FlexFormattingContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::Display;
+    use crate::style::display::Display;
     use crate::style::display::FormattingContextType;
     use std::sync::Arc;
 

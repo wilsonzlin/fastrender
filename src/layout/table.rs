@@ -916,7 +916,7 @@ mod tests {
     use super::*;
     use crate::style::display::FormattingContextType;
     use crate::style::ComputedStyle;
-    use crate::tree::box_tree::DebugInfo;
+    use crate::tree::debug::DebugInfo;
     use std::sync::Arc;
 
     fn create_test_style() -> Arc<ComputedStyle> {
