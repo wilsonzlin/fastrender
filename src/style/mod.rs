@@ -185,6 +185,9 @@ pub struct ComputedStyle {
 
     // CSS Custom Properties (variables)
     pub custom_properties: HashMap<String, String>,
+
+    // Generated content (for ::before and ::after pseudo-elements)
+    pub content: String,
 }
 
 impl Default for ComputedStyle {
@@ -285,6 +288,8 @@ impl Default for ComputedStyle {
             overflow_y: Overflow::Visible,
 
             custom_properties: HashMap::new(),
+
+            content: String::new(),
         }
     }
 }

@@ -807,7 +807,21 @@ fn generate_box_node_from_styled(styled: &StyledNode) -> BoxNode {
     }
 
     // Generate children
-    let children: Vec<BoxNode> = styled.children.iter().map(generate_box_node_from_styled).collect();
+    let mut children: Vec<BoxNode> = styled.children.iter().map(generate_box_node_from_styled).collect();
+
+    // Generate ::before pseudo-element box if styles exist
+    if let Some(before_styles) = &styled.before_styles {
+        if let Some(before_box) = create_pseudo_element_box(before_styles, "before") {
+            children.insert(0, before_box);
+        }
+    }
+
+    // Generate ::after pseudo-element box if styles exist
+    if let Some(after_styles) = &styled.after_styles {
+        if let Some(after_box) = create_pseudo_element_box(after_styles, "after") {
+            children.push(after_box);
+        }
+    }
 
     // Determine box type based on display
     let fc_type = styled
@@ -823,6 +837,46 @@ fn generate_box_node_from_styled(styled: &StyledNode) -> BoxNode {
         Display::None => BoxNode::new_block(style, FormattingContextType::Block, vec![]),
         _ => BoxNode::new_block(style, fc_type, children),
     }
+}
+
+/// Creates a box for a pseudo-element (::before or ::after)
+fn create_pseudo_element_box(styles: &ComputedStyle, pseudo_name: &str) -> Option<BoxNode> {
+    // Get content value
+    let content = &styles.content;
+
+    // Skip if no content or content is "none" or "normal"
+    if content.is_empty() || content == "none" || content == "normal" {
+        return None;
+    }
+
+    let pseudo_style = Arc::new(styles.clone());
+
+    // Create a text box with the content
+    let text_box = BoxNode::new_text(pseudo_style.clone(), content.clone());
+
+    // Determine the box type based on display property
+    let fc_type = styles
+        .display
+        .formatting_context_type()
+        .unwrap_or(FormattingContextType::Block);
+
+    // Wrap in appropriate box type based on display
+    let mut pseudo_box = match styles.display {
+        Display::Block => BoxNode::new_block(pseudo_style.clone(), fc_type, vec![text_box]),
+        Display::Inline | Display::None => BoxNode::new_inline(pseudo_style.clone(), vec![text_box]),
+        Display::InlineBlock => BoxNode::new_inline_block(pseudo_style.clone(), fc_type, vec![text_box]),
+        _ => BoxNode::new_inline(pseudo_style.clone(), vec![text_box]),
+    };
+
+    // Add debug info to mark this as a pseudo-element
+    pseudo_box.debug_info = Some(DebugInfo {
+        tag_name: Some(pseudo_name.to_string()),
+        id: None,
+        classes: vec!["pseudo-element".to_string()],
+        dom_path: None,
+    });
+
+    Some(pseudo_box)
 }
 
 /// Checks if an element is a replaced element

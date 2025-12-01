@@ -6,15 +6,14 @@
 //! Reference: CSS Cascading and Inheritance Level 4
 //! https://www.w3.org/TR/css-cascade-4/
 
+use crate::css::selectors::PseudoElement;
 use crate::css::{self, Declaration, StyleRule, StyleSheet};
 use crate::dom::{DomNode, ElementRef};
 use crate::style::defaults::{get_default_styles_for_element, parse_color_attribute, parse_dimension_attribute};
 use crate::style::grid::finalize_grid_placement;
 use crate::style::media::MediaContext;
 use crate::style::properties::apply_declaration;
-use crate::style::types::{FontWeight, LineHeight};
-use crate::style::values::Length;
-use crate::style::{ComputedStyle, Display, Rgba};
+use crate::style::{ComputedStyle, Display};
 use selectors::context::{QuirksMode, SelectorCaches};
 use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
 
@@ -26,6 +25,10 @@ const USER_AGENT_STYLESHEET: &str = include_str!("../user_agent.css");
 pub struct StyledNode {
     pub node: DomNode,
     pub styles: ComputedStyle,
+    /// Styles for ::before pseudo-element (if content is set)
+    pub before_styles: Option<ComputedStyle>,
+    /// Styles for ::after pseudo-element (if content is set)
+    pub after_styles: Option<ComputedStyle>,
     pub children: Vec<StyledNode>,
 }
 
@@ -86,6 +89,10 @@ fn apply_styles_internal(
     // Finalize grid placement - resolve named grid lines
     finalize_grid_placement(&mut styles);
 
+    // Compute pseudo-element styles
+    let before_styles = compute_pseudo_element_styles(node, rules, &ancestors, &styles, root_font_size, &PseudoElement::Before);
+    let after_styles = compute_pseudo_element_styles(node, rules, &ancestors, &styles, root_font_size, &PseudoElement::After);
+
     // Recursively style children (passing current node in ancestors)
     let mut new_ancestors = ancestors.clone();
     new_ancestors.push(node);
@@ -98,6 +105,8 @@ fn apply_styles_internal(
     StyledNode {
         node: node.clone(),
         styles,
+        before_styles,
+        after_styles,
         children,
     }
 }
@@ -154,69 +163,24 @@ fn apply_styles_internal_with_ancestors(
     // Finalize grid placement - resolve named grid lines
     finalize_grid_placement(&mut styles);
 
+    // Compute pseudo-element styles from CSS rules
+    let before_styles = compute_pseudo_element_styles(node, rules, ancestors, &styles, root_font_size, &PseudoElement::Before);
+    let after_styles = compute_pseudo_element_styles(node, rules, ancestors, &styles, root_font_size, &PseudoElement::After);
+
     // Recursively style children (passing current node in ancestors)
     let mut new_ancestors = ancestors.to_vec();
     new_ancestors.push(node);
-    let mut children: Vec<StyledNode> = node
+    let children: Vec<StyledNode> = node
         .children
         .iter()
         .map(|child| apply_styles_internal_with_ancestors(child, rules, &styles, root_font_size, &new_ancestors))
         .collect();
 
-    // HACK: Add ::before pseudo-element content for .toc elements
-    // The CSS has `.toc::before { content: "Contents"; ... }`
-    if node.has_class("toc") {
-        // Create a synthetic container with text content
-        // We can't use a plain text node because layout filters those out
-        let text_node = DomNode {
-            node_type: crate::dom::DomNodeType::Text {
-                content: "CONTENTS".to_string(),
-            },
-            children: vec![],
-        };
-
-        let before_node = DomNode {
-            node_type: crate::dom::DomNodeType::Element {
-                tag_name: "div".to_string(),
-                attributes: vec![],
-            },
-            children: vec![text_node.clone()],
-        };
-
-        // Create styles for the ::before pseudo-element matching the CSS
-        let mut before_styles = ComputedStyle::default();
-        before_styles.display = Display::Block;
-        before_styles.font_size = 12.0; // .75rem = 12px
-        before_styles.font_weight = FontWeight::Bold;
-        before_styles.color = Rgba {
-            r: 90,
-            g: 90,
-            b: 90,
-            a: 1.0,
-        }; // #5a5a5a (--color-text-muted)
-        before_styles.margin_bottom = Some(Length::px(8.0));
-        before_styles.line_height = LineHeight::Normal;
-
-        // Create styled text child
-        let text_styled = StyledNode {
-            node: text_node.clone(),
-            styles: ComputedStyle::default(),
-            children: vec![],
-        };
-
-        let before_styled = StyledNode {
-            node: before_node,
-            styles: before_styles,
-            children: vec![text_styled],
-        };
-
-        // Insert at the beginning
-        children.insert(0, before_styled);
-    }
-
     StyledNode {
         node: node.clone(),
         styles,
+        before_styles,
+        after_styles,
         children,
     }
 }
@@ -272,6 +236,10 @@ fn find_matching_rules(
         let mut max_specificity = 0u32;
 
         for selector in rule.selectors.slice().iter() {
+            // Skip selectors with pseudo-elements (handled separately)
+            if selector.pseudo_element().is_some() {
+                continue;
+            }
             if matches_selector(selector, 0, None, &element_ref, &mut context) {
                 matched = true;
                 let spec = selector.specificity();
@@ -292,6 +260,60 @@ fn find_matching_rules(
     matches
 }
 
+/// Find rules that match an element with a specific pseudo-element
+fn find_pseudo_element_rules(
+    node: &DomNode,
+    rules: &[&StyleRule],
+    ancestors: &[&DomNode],
+    pseudo: &PseudoElement,
+) -> Vec<(u32, Vec<Declaration>)> {
+    let mut matches = Vec::new();
+
+    // Build ElementRef chain with proper parent links
+    let element_ref = build_element_ref_chain(node, ancestors);
+
+    // Create selector caches and matching context
+    let mut caches = SelectorCaches::default();
+    let mut context = MatchingContext::new(
+        MatchingMode::Normal,
+        None,
+        &mut caches,
+        QuirksMode::NoQuirks,
+        selectors::matching::NeedsSelectorFlags::No,
+        selectors::matching::MatchingForInvalidation::No,
+    );
+
+    for rule in rules {
+        let mut matched = false;
+        let mut max_specificity = 0u32;
+
+        for selector in rule.selectors.slice().iter() {
+            // Only consider selectors with the matching pseudo-element
+            if let Some(selector_pseudo) = selector.pseudo_element() {
+                if selector_pseudo == pseudo {
+                    // Check if the element part matches
+                    if matches_selector(selector, 0, None, &element_ref, &mut context) {
+                        matched = true;
+                        let spec = selector.specificity();
+                        if spec > max_specificity {
+                            max_specificity = spec;
+                        }
+                    }
+                }
+            }
+        }
+
+        if matched {
+            matches.push((max_specificity, rule.declarations.clone()));
+        }
+    }
+
+    // Sort by specificity
+    matches.sort_by_key(|(spec, _)| *spec);
+
+    matches
+}
+
 /// Build an ElementRef with ancestor context
 fn build_element_ref_chain<'a>(node: &'a DomNode, ancestors: &'a [&'a DomNode]) -> ElementRef<'a> {
     if ancestors.is_empty() {
@@ -300,4 +322,46 @@ fn build_element_ref_chain<'a>(node: &'a DomNode, ancestors: &'a [&'a DomNode]) 
 
     // Create ElementRef with all ancestors
     ElementRef::with_ancestors(node, ancestors)
+}
+
+/// Compute styles for a pseudo-element (::before or ::after)
+///
+/// Returns Some(ComputedStyle) if the pseudo-element should be generated
+/// (i.e., has content property set to something other than 'none' or 'normal')
+fn compute_pseudo_element_styles(
+    node: &DomNode,
+    rules: &[&StyleRule],
+    ancestors: &[&DomNode],
+    parent_styles: &ComputedStyle,
+    root_font_size: f32,
+    pseudo: &PseudoElement,
+) -> Option<ComputedStyle> {
+    // Find rules matching this pseudo-element
+    let matching_rules = find_pseudo_element_rules(node, rules, ancestors, pseudo);
+
+    if matching_rules.is_empty() {
+        return None;
+    }
+
+    // Start with default inline styles (pseudo-elements default to display: inline)
+    let mut styles = ComputedStyle::default();
+    styles.display = Display::Inline;
+
+    // Inherit from parent element
+    inherit_styles(&mut styles, parent_styles);
+
+    // Apply matching declarations
+    for (_specificity, declarations) in matching_rules {
+        for decl in declarations {
+            apply_declaration(&mut styles, &decl, parent_styles.font_size, root_font_size);
+        }
+    }
+
+    // Check if content property generates content
+    // Per CSS spec, ::before/::after only generate boxes if content is not 'none' or 'normal'
+    if styles.content.is_empty() || styles.content == "none" || styles.content == "normal" {
+        return None;
+    }
+
+    Some(styles)
 }

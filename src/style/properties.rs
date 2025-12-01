@@ -757,6 +757,20 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
             }
         }
 
+        // Content property (for ::before and ::after pseudo-elements)
+        "content" => {
+            match &resolved_value {
+                PropertyValue::String(s) => {
+                    styles.content = s.clone();
+                }
+                PropertyValue::Keyword(kw) => {
+                    // "none" and "normal" mean no content
+                    styles.content = kw.clone();
+                }
+                _ => {}
+            }
+        }
+
         _ => {
             // Ignore unknown properties
         }
