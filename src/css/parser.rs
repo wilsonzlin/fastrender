@@ -19,10 +19,7 @@ use selectors::parser::{SelectorList, SelectorParseErrorKind};
 /// This parser now properly handles @media rules, building a tree of
 /// CssRule that can be evaluated against a MediaContext during cascade.
 pub fn parse_stylesheet(css: &str) -> Result<StyleSheet> {
-    // Preprocess: unwrap :is() pseudo-class (temporary until selectors crate handles it)
-    let preprocessed = unwrap_is_pseudo(css);
-
-    let mut input = ParserInput::new(&preprocessed);
+    let mut input = ParserInput::new(css);
     let mut parser = Parser::new(&mut input);
 
     let rules = parse_rule_list(&mut parser);
@@ -326,67 +323,6 @@ pub fn extract_css(dom: &crate::dom::DomNode) -> crate::error::Result<StyleSheet
     }
 }
 
-// ============================================================================
-// Temporary preprocessing (to be removed when selectors crate handles :is())
-// ============================================================================
-
-/// Unwrap :is() pseudo-class selector (temporary workaround)
-///
-/// Converts ":is(main>article) .toc" to "main>article .toc"
-///
-/// TODO: Remove this when the selectors crate properly handles :is()
-fn unwrap_is_pseudo(css: &str) -> String {
-    let mut result = String::new();
-    let mut chars = css.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == ':' {
-            // Check if this is :is(
-            let mut lookahead = String::new();
-            let mut temp_chars = chars.clone();
-            for _ in 0..3 {
-                if let Some(c) = temp_chars.next() {
-                    lookahead.push(c);
-                }
-            }
-
-            if lookahead == "is(" {
-                // Skip ":is("
-                for _ in 0..3 {
-                    chars.next();
-                }
-
-                // Extract content until matching )
-                let mut depth = 1;
-                let mut content = String::new();
-                while let Some(c) = chars.next() {
-                    if c == '(' {
-                        depth += 1;
-                        content.push(c);
-                    } else if c == ')' {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                        content.push(c);
-                    } else {
-                        content.push(c);
-                    }
-                }
-
-                // Output the content without :is() wrapper
-                result.push_str(&content);
-            } else {
-                result.push(ch);
-            }
-        } else {
-            result.push(ch);
-        }
-    }
-
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -454,5 +390,33 @@ mod tests {
         let narrow_ctx = MediaContext::screen(400.0, 600.0);
         let narrow_rules = stylesheet.collect_style_rules(&narrow_ctx);
         assert_eq!(narrow_rules.len(), 2, "Narrow viewport should have 2 rules");
+    }
+
+    #[test]
+    fn test_is_selector_parsing() {
+        // Test that :is() pseudo-class is handled natively by the selectors crate
+        let css = ":is(main > article) .toc { color: red; }";
+        let stylesheet = parse_stylesheet(css).unwrap();
+        assert_eq!(stylesheet.rules.len(), 1, "Should parse :is() selector");
+        if let CssRule::Style(rule) = &stylesheet.rules[0] {
+            assert_eq!(rule.declarations.len(), 1);
+        } else {
+            panic!("Expected style rule");
+        }
+    }
+
+    #[test]
+    fn test_is_selector_with_multiple_arguments() {
+        let css = ":is(h1, h2, h3) { font-weight: bold; }";
+        let stylesheet = parse_stylesheet(css).unwrap();
+        assert_eq!(stylesheet.rules.len(), 1, "Should parse :is() with multiple args");
+    }
+
+    #[test]
+    fn test_where_selector_parsing() {
+        // :where() should also work (same mechanism as :is())
+        let css = ":where(section, article) p { margin: 1em; }";
+        let stylesheet = parse_stylesheet(css).unwrap();
+        assert_eq!(stylesheet.rules.len(), 1, "Should parse :where() selector");
     }
 }
