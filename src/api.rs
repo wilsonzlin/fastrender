@@ -54,17 +54,18 @@
 //! caches that are not thread-safe. For multi-threaded use, create one
 //! instance per thread.
 
-use crate::css::extract_css;
+use crate::css::parser::extract_css;
 use crate::dom::{self, DomNode};
 use crate::error::{Error, RenderError, Result};
 use crate::geometry::Size;
-use crate::layout::{LayoutConfig, LayoutEngine};
-use crate::paint::paint_tree;
-use crate::style;
-use crate::style::Rgba;
-use crate::text::FontContext;
+use crate::image_output::{encode_image, OutputFormat};
+use crate::layout::engine::{LayoutConfig, LayoutEngine};
+use crate::paint::painter::paint_tree;
+use crate::style::cascade::apply_styles;
+use crate::style::color::Rgba;
+use crate::text::font_loader::FontContext;
+use crate::tree::box_generation::generate_box_tree;
 use crate::tree::fragment_tree::FragmentTree;
-use crate::tree::generate_box_tree;
 
 // Re-export Pixmap from tiny-skia for public use
 pub use tiny_skia::Pixmap;
@@ -512,7 +513,7 @@ impl FastRender {
         let stylesheet = extract_css(dom)?;
 
         // Apply styles to create styled tree
-        let styled_tree = style::apply_styles(dom, &stylesheet);
+        let styled_tree = apply_styles(dom, &stylesheet);
 
         // Generate box tree
         let box_tree = generate_box_tree(&styled_tree);
@@ -609,7 +610,7 @@ impl FastRender {
     /// ```
     pub fn render_to_png(&mut self, html: &str, width: u32, height: u32) -> Result<Vec<u8>> {
         let pixmap = self.render_html(html, width, height)?;
-        crate::image_output::encode_image(&pixmap, crate::image_output::OutputFormat::Png)
+        encode_image(&pixmap, OutputFormat::Png)
     }
 
     /// Renders HTML to JPEG bytes with specified quality (0-100)
@@ -622,7 +623,7 @@ impl FastRender {
     /// * `quality` - JPEG quality (0-100, where 100 is highest quality)
     pub fn render_to_jpeg(&mut self, html: &str, width: u32, height: u32, quality: u8) -> Result<Vec<u8>> {
         let pixmap = self.render_html(html, width, height)?;
-        crate::image_output::encode_image(&pixmap, crate::image_output::OutputFormat::Jpeg(quality))
+        encode_image(&pixmap, OutputFormat::Jpeg(quality))
     }
 
     /// Renders HTML to WebP bytes with specified quality (0-100)
@@ -635,7 +636,7 @@ impl FastRender {
     /// * `quality` - WebP quality (0-100, where 100 is highest quality)
     pub fn render_to_webp(&mut self, html: &str, width: u32, height: u32, quality: u8) -> Result<Vec<u8>> {
         let pixmap = self.render_html(html, width, height)?;
-        crate::image_output::encode_image(&pixmap, crate::image_output::OutputFormat::WebP(quality))
+        encode_image(&pixmap, OutputFormat::WebP(quality))
     }
 
     /// Renders HTML using default viewport size

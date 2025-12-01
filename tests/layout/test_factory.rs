@@ -5,11 +5,11 @@
 
 #[allow(unused_imports)]
 use fastrender::geometry::Rect;
-use fastrender::layout::contexts::FormattingContextFactory;
-use fastrender::layout::{FormattingContext, IntrinsicSizingMode, LayoutConstraints};
-use fastrender::style::ComputedStyle;
+use fastrender::FormattingContextFactory;
+use fastrender::{FormattingContext, IntrinsicSizingMode, LayoutConstraints};
+use fastrender::ComputedStyle;
 #[allow(unused_imports)]
-use fastrender::tree::{BoxNode, FormattingContextType, FragmentNode};
+use fastrender::{BoxNode, FormattingContextType, FragmentNode};
 use std::sync::Arc;
 
 // =============================================================================

@@ -3,11 +3,11 @@
 //! These tests verify that inline content correctly wraps around floats
 //! according to CSS 2.1 Section 9.5.
 
-use fastrender::layout::inline::{
+use fastrender::layout::contexts::inline::{
     line_spaces, InlineFloatIntegration, InlineFloatIntegrationMut, LineSpace, LineSpaceOptions,
 };
 use fastrender::layout::{FloatContext, FloatSide};
-use fastrender::style::Clear;
+use fastrender::Clear;
 
 // ==================== LineSpace Tests ====================
 

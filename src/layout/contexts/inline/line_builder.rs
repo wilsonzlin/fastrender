@@ -32,7 +32,8 @@
 //! ```
 
 use super::baseline::{BaselineMetrics, LineBaselineAccumulator, VerticalAlign};
-use crate::text::{BreakOpportunity, ShapedGlyphs};
+use crate::text::line_break::BreakOpportunity;
+use crate::text::shaper::ShapedGlyphs;
 use crate::tree::fragment_tree::FragmentNode;
 
 /// An item in the inline formatting context

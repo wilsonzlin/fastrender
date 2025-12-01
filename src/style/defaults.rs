@@ -6,7 +6,7 @@
 //! Reference: HTML5 Living Standard - Rendering
 //! https://html.spec.whatwg.org/multipage/rendering.html
 
-use crate::dom::DomNode;
+use crate::dom::{DomNode, DomNodeType};
 use crate::style::types::WhiteSpace;
 use crate::style::{ComputedStyle, Display, Length, Rgba};
 
@@ -21,7 +21,7 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
     let mut styles = ComputedStyle::default();
 
     // Handle Document node type - must be block to establish formatting context at root
-    if matches!(node.node_type, crate::dom::DomNodeType::Document) {
+    if matches!(node.node_type, DomNodeType::Document) {
         styles.display = Display::Block;
         return styles;
     }

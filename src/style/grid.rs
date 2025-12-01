@@ -6,7 +6,8 @@
 //! Reference: CSS Grid Layout Module Level 1
 //! https://www.w3.org/TR/css-grid-1/
 
-use crate::css::PropertyValue;
+use crate::css::properties::parse_property_value;
+use crate::css::types::PropertyValue;
 use crate::style::types::GridTrack;
 use crate::style::ComputedStyle;
 use std::collections::HashMap;
@@ -244,7 +245,7 @@ fn parse_single_grid_track(track_str: &str) -> Option<GridTrack> {
     }
 
     // Try to parse as length
-    if let Some(len) = crate::css::parse_property_value("", track_str).and_then(|pv| match pv {
+    if let Some(len) = parse_property_value("", track_str).and_then(|pv| match pv {
         PropertyValue::Length(l) => Some(l),
         _ => None,
     }) {

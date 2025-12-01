@@ -24,11 +24,9 @@
 use crate::geometry::Size;
 use crate::style::display::FormattingContextType;
 use crate::style::ComputedStyle;
+use crate::tree::debug::DebugInfo;
 use std::fmt;
 use std::sync::Arc;
-
-// Import DebugInfo from the debug module
-pub use super::debug::DebugInfo;
 
 /// A block-level box
 ///

@@ -29,6 +29,7 @@
 //! Reference: <https://www.w3.org/TR/CSS21/visudet.html#Computing_widths_and_margins>
 
 use crate::style::ComputedStyle;
+use crate::style::values::Length;
 
 /// Result of width computation
 ///
@@ -290,14 +291,13 @@ fn resolve_constraint(
 }
 
 /// Resolves a Length value to pixels
-fn resolve_length(length: crate::style::Length, containing_width: f32) -> f32 {
+fn resolve_length(length: Length, containing_width: f32) -> f32 {
     length.resolve_against(containing_width)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::Length;
 
     fn default_style() -> ComputedStyle {
         ComputedStyle::default()

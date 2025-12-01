@@ -51,7 +51,7 @@
 //! - tiny-skia: <https://docs.rs/tiny-skia/>
 
 use crate::error::{RenderError, Result};
-use crate::style::Rgba;
+use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
 use crate::text::pipeline::{GlyphPosition, ShapedRun};
 use std::collections::HashMap;

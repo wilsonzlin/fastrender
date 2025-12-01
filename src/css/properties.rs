@@ -3,7 +3,8 @@
 //! Parses individual CSS property values.
 
 use super::types::PropertyValue;
-use crate::style::{Length, LengthUnit, Rgba};
+use crate::style::color::Rgba;
+use crate::style::values::{Length, LengthUnit};
 
 /// Parse a CSS property value
 pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyValue> {

@@ -43,15 +43,14 @@
 
 use crate::error::{RenderError, Result};
 use crate::geometry::{Point, Rect, Size};
-use crate::style::Rgba;
+use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
 use crate::text::shaper::GlyphPosition;
 use tiny_skia::{
     BlendMode as SkiaBlendMode, FillRule, Paint, PathBuilder, Pixmap, Rect as SkiaRect, Stroke, Transform,
 };
 
-// Re-export display_list types that canvas uses
-pub use super::display_list::{BlendMode, BorderRadii};
+use super::display_list::{BlendMode, BorderRadii};
 
 // ============================================================================
 // Canvas State

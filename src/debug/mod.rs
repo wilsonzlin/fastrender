@@ -22,6 +22,4 @@
 //! println!("{}", printer.print_box_tree(&root));
 //! ```
 
-mod tree_printer;
-
-pub use tree_printer::{ColorMode, DiffMode, DotExporter, EnhancedTreePrinter, PrintConfig, TreeDiff};
+pub mod tree_printer;

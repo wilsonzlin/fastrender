@@ -1,6 +1,8 @@
 //! Enhanced tree printing and visualization utilities
 
-use crate::tree::{BoxNode, BoxType, FragmentContent, FragmentNode};
+use crate::geometry::Rect;
+use crate::tree::box_tree::{BoxNode, BoxType};
+use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 use std::fmt::Write as _;
 
 /// Color mode for terminal output
@@ -301,7 +303,7 @@ impl EnhancedTreePrinter {
         )
     }
 
-    fn format_bounds(&self, bounds: &crate::geometry::Rect) -> String {
+    fn format_bounds(&self, bounds: &Rect) -> String {
         self.colorize(
             &format!(
                 "[@({:.1}, {:.1}), {:.1}x{:.1}]",

@@ -3,7 +3,7 @@
 //! This module contains all the enum types used in computed styles.
 //! These types represent CSS property values that can be applied to elements.
 
-use crate::css::ColorStop;
+use crate::css::types::ColorStop;
 use crate::style::values::Length;
 
 /// Overflow behavior for content that exceeds container bounds

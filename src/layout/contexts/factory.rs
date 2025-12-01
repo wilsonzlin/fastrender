@@ -26,7 +26,8 @@ use crate::layout::contexts::grid::GridFormattingContext;
 use crate::layout::contexts::inline::InlineFormattingContext;
 use crate::layout::formatting_context::{FormattingContext, LayoutError};
 use crate::layout::table::TableFormattingContext;
-use crate::tree::{BoxNode, FormattingContextType};
+use crate::style::display::FormattingContextType;
+use crate::tree::box_tree::BoxNode;
 
 // =============================================================================
 // Factory

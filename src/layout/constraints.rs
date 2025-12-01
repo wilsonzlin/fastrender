@@ -28,6 +28,7 @@
 //! assert!(!constraints.is_height_definite());
 //! ```
 
+use crate::geometry::Size;
 use std::fmt;
 
 /// Available space for layout
@@ -469,7 +470,7 @@ impl LayoutConstraints {
     /// assert_eq!(clamped.width, 800.0); // Clamped to constraint
     /// assert_eq!(clamped.height, 400.0); // Within constraint
     /// ```
-    pub fn clamp_size(&self, size: crate::geometry::Size) -> crate::geometry::Size {
+    pub fn clamp_size(&self, size: Size) -> Size {
         let width = if let Some(max_width) = self.width() {
             size.width.min(max_width)
         } else {
@@ -482,7 +483,7 @@ impl LayoutConstraints {
             size.height
         };
 
-        crate::geometry::Size::new(width, height)
+        Size::new(width, height)
     }
 }
 
@@ -506,7 +507,7 @@ impl Default for LayoutConstraints {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::Size;
+    use Size;
 
     // AvailableSpace tests
     #[test]

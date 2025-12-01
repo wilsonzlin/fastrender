@@ -10,9 +10,9 @@
 //! - Box insertion order (before at start, after at end)
 //! - Integration with box generation pipeline
 
-use fastrender::style::display::{Display, FormattingContextType};
-use fastrender::style::ComputedStyle;
-use fastrender::tree::{
+use fastrender::{Display, FormattingContextType};
+use fastrender::ComputedStyle;
+use fastrender::{
     count_pseudo_boxes, find_pseudo_boxes, get_pseudo_type, is_pseudo_box, BoxNode, PseudoContent, PseudoContentItem,
     PseudoElementConfig, PseudoElementGenerator, PseudoElementStyle, PseudoElementType,
 };

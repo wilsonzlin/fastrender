@@ -10,7 +10,8 @@ use crate::geometry::Size;
 use crate::style::display::{Display, FormattingContextType};
 use crate::style::ComputedStyle;
 use crate::tree::anonymous::AnonymousBoxCreator;
-use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, DebugInfo, ReplacedType};
+use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, ReplacedType};
+use crate::tree::debug::DebugInfo;
 use std::sync::Arc;
 
 /// Simplified DOM node representation
@@ -762,7 +763,7 @@ impl Default for BoxGenerator {
 // StyledNode-based Box Generation (for real DOM/style pipeline)
 // ============================================================================
 
-use crate::style::StyledNode;
+use crate::style::cascade::StyledNode;
 use crate::tree::box_tree::ReplacedBox;
 
 /// Generates a BoxTree from a StyledNode tree
@@ -937,6 +938,8 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<crate::style:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::Size;
+    use crate::tree::ReplacedType;
 
     fn default_style() -> Arc<ComputedStyle> {
         Arc::new(ComputedStyle::default())
@@ -1337,7 +1340,7 @@ mod tests {
     #[test]
     fn test_new_replaced_constructor() {
         let style = default_style();
-        let size = crate::geometry::Size::new(100.0, 50.0);
+        let size = Size::new(100.0, 50.0);
 
         let img = DOMNode::new_replaced("img", style.clone(), "image.png", Some(size));
 
@@ -1350,7 +1353,7 @@ mod tests {
     #[test]
     fn test_replaced_element_aspect_ratio() {
         let style = default_style();
-        let size = crate::geometry::Size::new(100.0, 50.0);
+        let size = Size::new(100.0, 50.0);
 
         let img = DOMNode::new_replaced("img", style.clone(), "test.png", Some(size));
         assert_eq!(img.aspect_ratio(), Some(2.0)); // 100/50 = 2
@@ -1360,7 +1363,7 @@ mod tests {
         assert_eq!(img_no_size.aspect_ratio(), None);
 
         // Test with zero height
-        let zero_height = DOMNode::new_replaced("img", style, "test.png", Some(crate::geometry::Size::new(100.0, 0.0)));
+        let zero_height = DOMNode::new_replaced("img", style, "test.png", Some(Size::new(100.0, 0.0)));
         assert_eq!(zero_height.aspect_ratio(), None);
     }
 
@@ -1371,19 +1374,19 @@ mod tests {
         let img = DOMNode::new_replaced("img", style.clone(), "test.png", None);
         assert!(matches!(
             img.replaced_type(),
-            Some(crate::tree::ReplacedType::Image { .. })
+            Some(ReplacedType::Image { .. })
         ));
 
         let video = DOMNode::new_replaced("video", style.clone(), "test.mp4", None);
         assert!(matches!(
             video.replaced_type(),
-            Some(crate::tree::ReplacedType::Video { .. })
+            Some(ReplacedType::Video { .. })
         ));
 
         let canvas = DOMNode::new_element("canvas", style.clone(), vec![]);
         assert!(matches!(
             canvas.replaced_type(),
-            Some(crate::tree::ReplacedType::Canvas)
+            Some(ReplacedType::Canvas)
         ));
 
         let div = DOMNode::new_element("div", style, vec![]);
@@ -1394,7 +1397,7 @@ mod tests {
     fn test_generate_replaced_box() {
         let generator = BoxGenerator::new();
         let style = default_style();
-        let size = crate::geometry::Size::new(200.0, 100.0);
+        let size = Size::new(200.0, 100.0);
 
         let img = DOMNode::new_replaced("img", style.clone(), "test.png", Some(size));
         let wrapper = DOMNode::new_element("div", style_with_display(Display::Block), vec![img]);
@@ -1418,13 +1421,13 @@ mod tests {
             "img",
             style.clone(),
             "img1.png",
-            Some(crate::geometry::Size::new(100.0, 100.0)),
+            Some(Size::new(100.0, 100.0)),
         );
         let video = DOMNode::new_replaced(
             "video",
             style.clone(),
             "video.mp4",
-            Some(crate::geometry::Size::new(640.0, 480.0)),
+            Some(Size::new(640.0, 480.0)),
         );
         let img2 = DOMNode::new_replaced("img", style.clone(), "img2.png", None);
 
@@ -1465,7 +1468,7 @@ mod tests {
             "img",
             style.clone(),
             "icon.png",
-            Some(crate::geometry::Size::new(16.0, 16.0)),
+            Some(Size::new(16.0, 16.0)),
         );
         let text2 = DOMNode::new_text(" World", style.clone());
 
@@ -1567,15 +1570,15 @@ mod tests {
 
         let img = BoxNode::new_replaced(
             style.clone(),
-            crate::tree::ReplacedType::Image {
+            ReplacedType::Image {
                 src: "test.png".to_string(),
             },
-            Some(crate::geometry::Size::new(100.0, 100.0)),
+            Some(Size::new(100.0, 100.0)),
             Some(1.0),
         );
         let video = BoxNode::new_replaced(
             style.clone(),
-            crate::tree::ReplacedType::Video {
+            ReplacedType::Video {
                 src: "test.mp4".to_string(),
             },
             None,
@@ -1623,7 +1626,7 @@ mod tests {
     #[test]
     fn test_with_builder_methods() {
         let style = default_style();
-        let size = crate::geometry::Size::new(50.0, 25.0);
+        let size = Size::new(50.0, 25.0);
 
         let node = DOMNode::new_element("img", style, vec![])
             .with_id("my-image")

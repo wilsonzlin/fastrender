@@ -6,12 +6,14 @@
 //! Reference: CSS Cascading and Inheritance Level 4
 //! https://www.w3.org/TR/css-cascade-4/
 
-use crate::css::{Declaration, PropertyValue};
+use crate::css::types::{Declaration, PropertyValue};
+use crate::style::display::Display;
 use crate::style::grid::parse_grid_tracks_with_names;
+use crate::style::position::Position;
 use crate::style::types::*;
+use crate::style::values::{Length, LengthUnit};
 use crate::style::var_resolution::resolve_var;
-use crate::style::values::Length;
-use crate::style::{ComputedStyle, Display, LengthUnit, Position};
+use crate::style::ComputedStyle;
 
 pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_font_size: f32, root_font_size: f32) {
     // Handle CSS Custom Properties (--*)
@@ -20,7 +22,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         let value_str = match &decl.value {
             PropertyValue::Keyword(kw) => kw.clone(),
             PropertyValue::Length(len) => {
-                use crate::style::LengthUnit;
+                use crate::style::values::LengthUnit;
                 format!(
                     "{}{}",
                     len.value,

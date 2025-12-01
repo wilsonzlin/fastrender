@@ -32,11 +32,9 @@
 //! ```
 
 use crate::geometry::Rect;
-use crate::style::Rgba;
+use crate::paint::display_list::BorderRadii;
+use crate::style::color::Rgba;
 use tiny_skia::{FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
-
-// Re-export BorderRadii from display_list (canonical definition)
-pub use super::display_list::BorderRadii;
 
 /// Border widths for all four sides
 #[derive(Debug, Clone, Copy, PartialEq, Default)]

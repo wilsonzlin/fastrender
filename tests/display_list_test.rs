@@ -4,12 +4,12 @@
 //! Unit tests are in the display_list module itself; these are integration tests.
 
 use fastrender::geometry::{Point, Rect};
-use fastrender::paint::{
+use fastrender::{
     BlendMode, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FillRoundedRectItem,
     GlyphInstance, GradientStop, ImageData, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem,
-    StrokeRectItem, StrokeRoundedRectItem, TextItem, Transform2D, TransformItem,
+    StrokeRectItem, StrokeRoundedRectItem, PaintTextItem as TextItem, Transform2D, TransformItem,
 };
-use fastrender::style::Rgba;
+use fastrender::Rgba;
 use std::sync::Arc;
 
 // ============================================================================
@@ -657,7 +657,7 @@ fn test_border_radii_max() {
 
 #[test]
 fn test_blend_modes() {
-    use fastrender::paint::BlendModeItem;
+    use fastrender::BlendModeItem;
 
     // Test various blend modes are available
     let modes = vec![
@@ -779,7 +779,7 @@ fn test_nested_transforms() {
 
 #[test]
 fn test_stacking_context() {
-    use fastrender::paint::StackingContextItem;
+    use fastrender::StackingContextItem;
 
     let mut list = DisplayList::new();
 

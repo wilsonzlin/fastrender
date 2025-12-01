@@ -34,7 +34,7 @@
 //! - **Replaced elements**: Bottom margin edge
 
 use crate::style::ComputedStyle;
-use crate::text::FontMetrics;
+use crate::text::font_db::FontMetrics;
 
 /// Vertical alignment modes for inline elements
 ///
@@ -355,7 +355,7 @@ impl LineBaselineAccumulator {
 /// - `<length>`: Use the absolute value
 /// - `<percentage>`: Multiply font-size by percentage/100
 pub fn compute_line_height(style: &ComputedStyle) -> f32 {
-    use crate::style::LineHeight;
+    use crate::style::types::LineHeight;
 
     let font_size = style.font_size;
 

@@ -7,9 +7,9 @@
 //! - Text shaping
 //! - Mixed script handling
 
-use fastrender::style::ComputedStyle;
+use fastrender::ComputedStyle;
 use fastrender::text::pipeline::{itemize_text, BidiAnalysis, Direction, ItemizedRun, Script, ShapingPipeline};
-use fastrender::text::FontContext;
+use fastrender::FontContext;
 
 // ============================================================================
 // Direction Tests

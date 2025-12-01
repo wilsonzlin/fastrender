@@ -57,8 +57,11 @@
 //! ```
 
 use crate::geometry::Rect;
-use crate::style::{ComputedStyle, Display, Overflow, Position};
-use crate::tree::{FragmentContent, FragmentNode};
+use crate::style::display::Display;
+use crate::style::position::Position;
+use crate::style::types::Overflow;
+use crate::style::ComputedStyle;
+use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 use std::cmp::Ordering;
 use std::sync::Arc;
 

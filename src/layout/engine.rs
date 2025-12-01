@@ -16,8 +16,11 @@
 //! the engine handles cross-cutting concerns.
 
 use crate::geometry::Size;
-use crate::layout::{FormattingContextFactory, IntrinsicSizingMode, LayoutConstraints, LayoutError};
-use crate::tree::{BoxNode, BoxTree, FragmentNode, FragmentTree};
+use crate::layout::constraints::LayoutConstraints;
+use crate::layout::contexts::factory::FormattingContextFactory;
+use crate::layout::formatting_context::{IntrinsicSizingMode, LayoutError};
+use crate::tree::box_tree::{BoxNode, BoxTree};
+use crate::tree::fragment_tree::{FragmentNode, FragmentTree};
 
 /// Configuration for layout engine
 ///
@@ -446,11 +449,12 @@ impl Default for LayoutEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tree::FormattingContextType;
+    use crate::style::ComputedStyle;
+    use crate::style::display::FormattingContextType;
     use std::sync::Arc;
 
-    fn default_style() -> Arc<crate::style::ComputedStyle> {
-        Arc::new(crate::style::ComputedStyle::default())
+    fn default_style() -> Arc<ComputedStyle> {
+        Arc::new(ComputedStyle::default())
     }
 
     // === LayoutConfig Tests ===

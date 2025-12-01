@@ -47,6 +47,7 @@
 //! - [CSS Text Module Level 3](https://www.w3.org/TR/css-text-3/)
 
 use crate::error::{Result, TextError};
+use crate::text::bidi::Direction as BidiDirection;
 use crate::text::font_db::LoadedFont;
 use rustybuzz::{Face, UnicodeBuffer};
 
@@ -113,10 +114,10 @@ impl TextDirection {
     }
 
     /// Convert from bidi Direction
-    pub fn from_bidi(dir: crate::text::bidi::Direction) -> Self {
+    pub fn from_bidi(dir: BidiDirection) -> Self {
         match dir {
-            crate::text::bidi::Direction::Ltr => TextDirection::Ltr,
-            crate::text::bidi::Direction::Rtl => TextDirection::Rtl,
+            BidiDirection::Ltr => TextDirection::Ltr,
+            BidiDirection::Rtl => TextDirection::Rtl,
         }
     }
 }

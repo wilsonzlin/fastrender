@@ -50,7 +50,7 @@
 
 use crate::geometry::Rect;
 use crate::layout::float_context::{FloatContext, FloatSide};
-use crate::style::Clear;
+use crate::style::float::Clear;
 
 /// Describes the available space for a line box
 ///

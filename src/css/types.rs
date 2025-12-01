@@ -3,7 +3,8 @@
 //! Core types for representing CSS stylesheets, rules, and values.
 
 use crate::style::media::MediaQuery;
-use crate::style::{Length, Rgba};
+use crate::style::color::Rgba;
+use crate::style::values::Length;
 use cssparser::ToCss;
 use selectors::parser::SelectorList;
 use std::fmt;

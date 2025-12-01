@@ -5,6 +5,7 @@
 use super::properties::parse_property_value;
 use super::selectors::PseudoClassParser;
 use super::types::{CssRule, Declaration, MediaRule, StyleRule, StyleSheet};
+use crate::dom::DomNode;
 use crate::error::Result;
 use crate::style::media::MediaQuery;
 use cssparser::{ParseError, Parser, ParserInput, Token};
@@ -300,7 +301,7 @@ pub fn parse_declarations(declarations_str: &str) -> Vec<Declaration> {
 ///
 /// Walks the DOM tree looking for `<style>` elements and concatenates
 /// their text content to form a stylesheet.
-pub fn extract_css(dom: &crate::dom::DomNode) -> crate::error::Result<StyleSheet> {
+pub fn extract_css(dom: &DomNode) -> Result<StyleSheet> {
     let mut css_content = String::new();
 
     dom.walk_tree(&mut |node| {

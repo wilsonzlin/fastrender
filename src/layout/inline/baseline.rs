@@ -28,7 +28,7 @@
 //! - `<length>`: Raise/lower box by specified amount
 //! - `<percentage>`: Raise/lower box by percentage of line-height
 
-use crate::text::ScaledMetrics;
+use crate::text::font_db::ScaledMetrics;
 
 /// CSS vertical-align property values
 ///

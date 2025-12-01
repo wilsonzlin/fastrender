@@ -6,14 +6,16 @@
 //! Reference: CSS Cascading and Inheritance Level 4
 //! https://www.w3.org/TR/css-cascade-4/
 
+use crate::css::parser::{parse_declarations, parse_stylesheet};
 use crate::css::selectors::PseudoElement;
-use crate::css::{self, Declaration, StyleRule, StyleSheet};
+use crate::css::types::{Declaration, StyleRule, StyleSheet};
 use crate::dom::{DomNode, ElementRef};
 use crate::style::defaults::{get_default_styles_for_element, parse_color_attribute, parse_dimension_attribute};
+use crate::style::display::Display;
 use crate::style::grid::finalize_grid_placement;
 use crate::style::media::MediaContext;
 use crate::style::properties::apply_declaration;
-use crate::style::{ComputedStyle, Display};
+use crate::style::ComputedStyle;
 use selectors::context::{QuirksMode, SelectorCaches};
 use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
 
@@ -48,7 +50,7 @@ pub fn apply_styles(dom: &DomNode, stylesheet: &StyleSheet) -> StyledNode {
 /// for responsive rendering.
 pub fn apply_styles_with_media(dom: &DomNode, stylesheet: &StyleSheet, media_ctx: &MediaContext) -> StyledNode {
     // Parse user-agent stylesheet
-    let ua_stylesheet = css::parse_stylesheet(USER_AGENT_STYLESHEET).unwrap_or_else(|_| StyleSheet::new());
+    let ua_stylesheet = parse_stylesheet(USER_AGENT_STYLESHEET).unwrap_or_else(|_| StyleSheet::new());
 
     // Collect applicable rules from both stylesheets
     // User-agent rules come first (lower priority)
@@ -80,7 +82,7 @@ fn apply_styles_internal(
 
     // Apply inline styles (highest specificity)
     if let Some(style_attr) = node.get_attribute("style") {
-        let inline_decls = css::parse_declarations(&style_attr);
+        let inline_decls = parse_declarations(&style_attr);
         for decl in inline_decls {
             apply_declaration(&mut styles, &decl, parent_styles.font_size, root_font_size);
         }
@@ -133,7 +135,7 @@ fn apply_styles_internal_with_ancestors(
 
     // Apply inline styles (highest specificity)
     if let Some(style_attr) = node.get_attribute("style") {
-        let inline_decls = css::parse_declarations(&style_attr);
+        let inline_decls = parse_declarations(&style_attr);
         for decl in inline_decls {
             apply_declaration(&mut styles, &decl, parent_styles.font_size, root_font_size);
         }

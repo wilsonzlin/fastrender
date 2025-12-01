@@ -41,9 +41,10 @@
 
 use crate::geometry::{Point, Rect, Size};
 use crate::layout::utils::resolve_offset;
-use crate::layout::LayoutError;
-use crate::style::{Position, PositionedStyle};
-use crate::tree::FragmentNode;
+use crate::layout::formatting_context::LayoutError;
+use crate::style::position::Position;
+use crate::style::computed::PositionedStyle;
+use crate::tree::fragment_tree::FragmentNode;
 
 /// Represents a containing block for positioned elements
 ///
@@ -576,8 +577,9 @@ impl PositionedLayout {
 mod tests {
     use super::*;
     use crate::geometry::EdgeOffsets;
-    use crate::style::PositionedStyle;
-    use crate::style::{Display, Length, LengthOrAuto};
+    use crate::style::computed::PositionedStyle;
+    use crate::style::display::Display;
+    use crate::style::values::{Length, LengthOrAuto};
     use std::sync::Arc;
 
     fn default_style() -> PositionedStyle {

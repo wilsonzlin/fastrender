@@ -38,7 +38,7 @@
 //! - CSS 2.1 Section 9.5.2: https://www.w3.org/TR/CSS21/visuren.html#propdef-clear
 
 use crate::geometry::Rect;
-use crate::style::{Clear, Float};
+use crate::style::float::{Clear, Float};
 
 /// Side on which a float is placed
 ///

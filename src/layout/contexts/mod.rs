@@ -16,12 +16,3 @@ pub mod grid;
 pub mod inline;
 pub mod positioned;
 pub mod table;
-
-// Re-exports
-pub use block::BlockFormattingContext;
-pub use factory::FormattingContextFactory;
-pub use flex::FlexFormattingContext;
-pub use grid::GridFormattingContext;
-pub use inline::InlineFormattingContext;
-pub use positioned::{ContainingBlock, PositionedLayout, StickyConstraints};
-pub use table::{ColumnConstraints, ColumnDistributor, ColumnWidthDistributionResult, DistributionMode};

@@ -39,17 +39,16 @@
 pub mod baseline;
 pub mod line_builder;
 
-pub use baseline::{compute_line_height, BaselineMetrics, LineBaselineAccumulator, VerticalAlign};
-pub use line_builder::{
-    InlineBlockItem, InlineBoxItem, InlineItem, Line, LineBuilder, PositionedItem, ReplacedItem, TextItem,
-};
-
 use crate::geometry::Rect;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::text::{find_break_opportunities, BreakType, Script, ShapedGlyphs, TextDirection, TextShaper};
+use crate::text::line_break::{find_break_opportunities, BreakType};
+use crate::text::shaper::{Script, ShapedGlyphs, TextDirection, TextShaper};
 use crate::tree::box_tree::{BoxNode, BoxType, ReplacedType};
 use crate::tree::fragment_tree::FragmentNode;
+
+use baseline::{compute_line_height, BaselineMetrics};
+use line_builder::{InlineItem, Line, LineBuilder, ReplacedItem, TextItem};
 
 /// Inline Formatting Context implementation
 ///

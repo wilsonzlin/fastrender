@@ -11,7 +11,7 @@
 use fastrender::geometry::{EdgeOffsets, Point, Rect, Size};
 use fastrender::layout::{ContainingBlock, PositionedLayout, StickyConstraints};
 use fastrender::style::{LengthOrAuto, Position, PositionedStyle};
-use fastrender::tree::FragmentNode;
+use fastrender::FragmentNode;
 
 // ============================================================================
 // Test Fixtures

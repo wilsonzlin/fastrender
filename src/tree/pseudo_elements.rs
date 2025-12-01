@@ -39,7 +39,8 @@
 
 use crate::style::display::{Display, FormattingContextType};
 use crate::style::ComputedStyle;
-use crate::tree::box_tree::{BoxNode, DebugInfo};
+use crate::tree::box_tree::BoxNode;
+use crate::tree::debug::DebugInfo;
 use std::sync::Arc;
 
 // =============================================================================

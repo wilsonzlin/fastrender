@@ -3,9 +3,9 @@
 //! Tests the text run generation module (W4.T14) with comprehensive coverage
 //! for text shaping, inline items, and line metrics.
 
-use fastrender::layout::inline::{GlyphInfo, InlineItem, LineMetrics, TextRun, TextRunBuilder};
+use fastrender::layout::contexts::inline::{GlyphInfo, InlineItem, LineMetrics, TextRun, TextRunBuilder};
 use fastrender::text::font_db::{FontStyle, FontWeight};
-use fastrender::text::font_loader::FontContext;
+use fastrender::font_loader::FontContext;
 use fastrender::geometry::Point;
 
 // ============================================================================

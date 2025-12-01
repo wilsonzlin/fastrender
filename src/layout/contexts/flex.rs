@@ -25,13 +25,14 @@
 use std::collections::HashMap;
 
 use crate::geometry::{Point, Rect, Size};
-use crate::layout::constraints::LayoutConstraints;
+use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutConstraints};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::style::{
-    AlignContent, AlignItems, ComputedStyle, Display, FlexBasis, FlexDirection, FlexWrap, JustifyContent, Length,
-    LengthUnit,
-};
-use crate::tree::{BoxNode, FragmentNode};
+use crate::style::display::Display;
+use crate::style::types::{AlignContent, AlignItems, FlexBasis, FlexDirection, FlexWrap, JustifyContent};
+use crate::style::values::{Length, LengthUnit};
+use crate::style::ComputedStyle;
+use crate::tree::box_tree::BoxNode;
+use crate::tree::fragment_tree::FragmentNode;
 
 use taffy::prelude::*;
 use taffy::TaffyTree;
@@ -313,16 +314,16 @@ impl FlexFormattingContext {
     fn constraints_to_available_space(&self, constraints: &LayoutConstraints) -> taffy::geometry::Size<AvailableSpace> {
         taffy::geometry::Size {
             width: match constraints.available_width {
-                crate::layout::AvailableSpace::Definite(w) => AvailableSpace::Definite(w),
-                crate::layout::AvailableSpace::MinContent => AvailableSpace::MinContent,
-                crate::layout::AvailableSpace::MaxContent => AvailableSpace::MaxContent,
-                crate::layout::AvailableSpace::Indefinite => AvailableSpace::MaxContent,
+                CrateAvailableSpace::Definite(w) => AvailableSpace::Definite(w),
+                CrateAvailableSpace::MinContent => AvailableSpace::MinContent,
+                CrateAvailableSpace::MaxContent => AvailableSpace::MaxContent,
+                CrateAvailableSpace::Indefinite => AvailableSpace::MaxContent,
             },
             height: match constraints.available_height {
-                crate::layout::AvailableSpace::Definite(h) => AvailableSpace::Definite(h),
-                crate::layout::AvailableSpace::MinContent => AvailableSpace::MinContent,
-                crate::layout::AvailableSpace::MaxContent => AvailableSpace::MaxContent,
-                crate::layout::AvailableSpace::Indefinite => AvailableSpace::MaxContent,
+                CrateAvailableSpace::Definite(h) => AvailableSpace::Definite(h),
+                CrateAvailableSpace::MinContent => AvailableSpace::MinContent,
+                CrateAvailableSpace::MaxContent => AvailableSpace::MaxContent,
+                CrateAvailableSpace::Indefinite => AvailableSpace::MaxContent,
             },
         }
     }
@@ -469,7 +470,7 @@ impl FlexFormattingContext {
 mod tests {
     use super::*;
     use crate::style::Display;
-    use crate::tree::FormattingContextType;
+    use crate::style::display::FormattingContextType;
     use std::sync::Arc;
 
     fn create_flex_style() -> Arc<ComputedStyle> {

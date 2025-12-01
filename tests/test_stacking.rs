@@ -7,11 +7,11 @@
 //! - CSS 2.1 Section 9.9: https://www.w3.org/TR/CSS21/visuren.html#layered-presentation
 
 use fastrender::geometry::Rect;
-use fastrender::paint::{
+use fastrender::{
     build_stacking_tree, creates_stacking_context, get_stacking_context_reason, StackingContext, StackingContextReason,
 };
-use fastrender::style::{ComputedStyle, Display, Overflow, Position};
-use fastrender::tree::FragmentNode;
+use fastrender::{ComputedStyle, Display, Overflow, Position};
+use fastrender::FragmentNode;
 use std::sync::Arc;
 
 // Helper functions
@@ -165,7 +165,7 @@ fn test_grid_item_with_z_index_creates_stacking_context() {
 
 #[test]
 fn test_transform_creates_stacking_context() {
-    use fastrender::css::Transform;
+    use fastrender::Transform;
 
     let mut style = ComputedStyle::default();
     style.transform.push(Transform::Rotate(45.0));
@@ -574,7 +574,7 @@ fn test_negative_z_index() {
 
 #[test]
 fn test_build_stacking_tree_with_styles() {
-    use fastrender::paint::build_stacking_tree_with_styles;
+    use fastrender::build_stacking_tree_with_styles;
 
     let fragment = block_fragment(0.0, 0.0, 100.0, 100.0);
 

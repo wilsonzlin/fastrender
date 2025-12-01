@@ -49,9 +49,10 @@
 
 use crate::geometry::{Point, Rect, Size};
 use crate::layout::utils::resolve_offset;
-use crate::layout::LayoutError;
-use crate::style::{Position, PositionedStyle};
-use crate::tree::FragmentNode;
+use crate::layout::formatting_context::LayoutError;
+use crate::style::position::Position;
+use crate::style::computed::PositionedStyle;
+use crate::tree::fragment_tree::FragmentNode;
 
 use super::contexts::positioned::ContainingBlock;
 
@@ -474,7 +475,7 @@ impl AbsoluteLayout {
 mod tests {
     use super::*;
     use crate::geometry::EdgeOffsets;
-    use crate::style::LengthOrAuto;
+    use crate::style::values::LengthOrAuto;
 
     fn default_style() -> PositionedStyle {
         let mut style = PositionedStyle::default();

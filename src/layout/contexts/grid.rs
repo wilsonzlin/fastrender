@@ -39,11 +39,14 @@ use taffy::style_helpers::TaffyAuto;
 use taffy::tree::{NodeId as TaffyNodeId, TaffyTree};
 
 use crate::geometry::Rect;
-use crate::layout::constraints::LayoutConstraints;
+use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutConstraints};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::style::{AlignContent, Display as CssDisplay, GridTrack, Length};
+use crate::style::display::Display as CssDisplay;
+use crate::style::types::{AlignContent, GridTrack};
+use crate::style::values::Length;
 use crate::style::ComputedStyle;
-use crate::tree::{BoxNode, FragmentNode};
+use crate::tree::box_tree::BoxNode;
+use crate::tree::fragment_tree::FragmentNode;
 
 /// Grid Formatting Context
 ///
@@ -204,7 +207,7 @@ impl GridFormattingContext {
 
     /// Converts Length to Taffy Dimension
     fn convert_length_to_dimension(&self, length: &Length) -> Dimension {
-        use crate::style::LengthUnit;
+        use crate::style::values::LengthUnit;
         match length.unit {
             LengthUnit::Percent => Dimension::percent(length.value / 100.0),
             _ => Dimension::length(length.to_px()),
@@ -213,7 +216,7 @@ impl GridFormattingContext {
 
     /// Converts Option<Length> to Taffy LengthPercentageAuto
     fn convert_opt_length_to_lpa(&self, length: &Option<Length>) -> LengthPercentageAuto {
-        use crate::style::LengthUnit;
+        use crate::style::values::LengthUnit;
         match length {
             None => LengthPercentageAuto::auto(),
             Some(len) => match len.unit {
@@ -225,7 +228,7 @@ impl GridFormattingContext {
 
     /// Converts Length to Taffy LengthPercentage
     fn convert_length_to_lp(&self, length: &Length) -> LengthPercentage {
-        use crate::style::LengthUnit;
+        use crate::style::values::LengthUnit;
         match length.unit {
             LengthUnit::Percent => LengthPercentage::percent(length.value / 100.0),
             _ => LengthPercentage::length(length.to_px()),
@@ -267,7 +270,7 @@ impl GridFormattingContext {
 
     /// Converts GridTrack to MinTrackSizingFunction
     fn convert_min_track(&self, track: &GridTrack) -> MinTrackSizingFunction {
-        use crate::style::LengthUnit;
+        use crate::style::values::LengthUnit;
         match track {
             GridTrack::Length(len) => match len.unit {
                 LengthUnit::Percent => MinTrackSizingFunction::percent(len.value / 100.0),
@@ -280,7 +283,7 @@ impl GridFormattingContext {
 
     /// Converts GridTrack to MaxTrackSizingFunction
     fn convert_max_track(&self, track: &GridTrack) -> MaxTrackSizingFunction {
-        use crate::style::LengthUnit;
+        use crate::style::values::LengthUnit;
         match track {
             GridTrack::Length(len) => match len.unit {
                 LengthUnit::Percent => MaxTrackSizingFunction::percent(len.value / 100.0),
@@ -396,16 +399,16 @@ impl FormattingContext for GridFormattingContext {
         // Convert constraints to Taffy available space
         let available_space = taffy::geometry::Size {
             width: match constraints.available_width {
-                crate::layout::AvailableSpace::Definite(w) => taffy::style::AvailableSpace::Definite(w),
-                crate::layout::AvailableSpace::Indefinite => taffy::style::AvailableSpace::MaxContent,
-                crate::layout::AvailableSpace::MinContent => taffy::style::AvailableSpace::MinContent,
-                crate::layout::AvailableSpace::MaxContent => taffy::style::AvailableSpace::MaxContent,
+                CrateAvailableSpace::Definite(w) => taffy::style::AvailableSpace::Definite(w),
+                CrateAvailableSpace::Indefinite => taffy::style::AvailableSpace::MaxContent,
+                CrateAvailableSpace::MinContent => taffy::style::AvailableSpace::MinContent,
+                CrateAvailableSpace::MaxContent => taffy::style::AvailableSpace::MaxContent,
             },
             height: match constraints.available_height {
-                crate::layout::AvailableSpace::Definite(h) => taffy::style::AvailableSpace::Definite(h),
-                crate::layout::AvailableSpace::Indefinite => taffy::style::AvailableSpace::MaxContent,
-                crate::layout::AvailableSpace::MinContent => taffy::style::AvailableSpace::MinContent,
-                crate::layout::AvailableSpace::MaxContent => taffy::style::AvailableSpace::MaxContent,
+                CrateAvailableSpace::Definite(h) => taffy::style::AvailableSpace::Definite(h),
+                CrateAvailableSpace::Indefinite => taffy::style::AvailableSpace::MaxContent,
+                CrateAvailableSpace::MinContent => taffy::style::AvailableSpace::MinContent,
+                CrateAvailableSpace::MaxContent => taffy::style::AvailableSpace::MaxContent,
             },
         };
 
@@ -427,7 +430,7 @@ impl FormattingContext for GridFormattingContext {
 mod tests {
     use super::*;
     use crate::style::GridTrack;
-    use crate::tree::FormattingContextType;
+    use crate::style::display::FormattingContextType;
     use std::sync::Arc;
 
     fn make_grid_style() -> Arc<ComputedStyle> {

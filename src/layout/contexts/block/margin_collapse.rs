@@ -26,7 +26,8 @@
 //!
 //! Reference: <https://www.w3.org/TR/CSS21/box.html#collapsing-margins>
 
-use crate::style::{ComputedStyle, Position};
+use crate::style::position::Position;
+use crate::style::ComputedStyle;
 
 /// A collapsible margin that tracks positive and negative components separately
 ///
@@ -325,7 +326,8 @@ pub fn should_collapse_with_last_child(parent_style: &ComputedStyle) -> bool {
 
 /// Determines if a box establishes a new block formatting context
 pub fn establishes_bfc(style: &ComputedStyle) -> bool {
-    use crate::style::{Display, Overflow};
+    use crate::style::display::Display;
+    use crate::style::types::Overflow;
 
     if style.position == Position::Absolute || style.position == Position::Fixed {
         return true;
@@ -345,7 +347,7 @@ pub fn establishes_bfc(style: &ComputedStyle) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::Length;
+    use crate::style::values::Length;
 
     // ==========================================================================
     // CollapsibleMargin Tests

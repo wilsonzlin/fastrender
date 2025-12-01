@@ -10,7 +10,7 @@
 use fastrender::geometry::{EdgeOffsets, Point, Rect, Size};
 use fastrender::layout::{AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult, ContainingBlock, ResolvedMargins};
 use fastrender::style::{LengthOrAuto, Position, PositionedStyle};
-use fastrender::tree::FragmentNode;
+use fastrender::FragmentNode;
 
 // ============================================================================
 // Test Fixtures

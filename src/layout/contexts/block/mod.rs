@@ -23,21 +23,20 @@
 //!
 //! Reference: <https://www.w3.org/TR/CSS21/visuren.html#block-formatting>
 
-mod margin_collapse;
-mod width;
-
-pub use margin_collapse::{
-    collapse_margins, establishes_bfc, is_margin_collapsible_through, should_collapse_with_first_child,
-    should_collapse_with_last_child, CollapsibleMargin, MarginCollapseContext,
-};
-pub use width::{compute_block_width, compute_block_width_with_auto_margins, ComputedBlockWidth, MarginValue};
+pub mod margin_collapse;
+pub mod width;
 
 use crate::geometry::Rect;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::style::{Length, LineHeight, Position};
+use crate::style::position::Position;
+use crate::style::types::LineHeight;
+use crate::style::values::Length;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
+
+use margin_collapse::{MarginCollapseContext};
+use width::compute_block_width;
 
 /// Helper to resolve a Length to pixels, handling em/rem units with font-size
 fn resolve_length(length: &Length, font_size: f32, containing_block_size: f32) -> f32 {

@@ -31,8 +31,9 @@
 //! - CSS Flexbox: https://www.w3.org/TR/css-flexbox-1/
 //! - CSS Grid: https://www.w3.org/TR/css-grid-1/
 
-use crate::layout::LayoutConstraints;
-use crate::tree::{BoxNode, FragmentNode};
+use crate::layout::constraints::LayoutConstraints;
+use crate::tree::box_tree::BoxNode;
+use crate::tree::fragment_tree::FragmentNode;
 
 /// Intrinsic sizing mode for content-based size queries
 ///
@@ -226,9 +227,9 @@ impl std::error::Error for LayoutError {}
 mod tests {
     use super::*;
     use crate::geometry::Rect;
-    use crate::layout::AvailableSpace;
+    use crate::layout::constraints::AvailableSpace;
     use crate::style::ComputedStyle;
-    use crate::tree::FormattingContextType;
+    use crate::style::display::FormattingContextType;
     use std::sync::Arc;
 
     /// Stub formatting context for testing trait requirements

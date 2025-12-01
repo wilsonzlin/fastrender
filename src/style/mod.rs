@@ -3,11 +3,11 @@
 //! This module contains types related to CSS styling, including colors,
 //! computed styles, and style properties.
 
+pub mod cascade;
 pub mod color;
 pub mod computed;
 pub mod content;
 pub mod counters;
-pub mod cascade;
 pub mod defaults;
 pub mod display;
 pub mod float;
@@ -16,65 +16,22 @@ pub mod media;
 pub mod position;
 pub mod properties;
 pub mod types;
+pub mod values;
 pub mod var_resolution;
 pub mod variables;
 
-// Re-export color types
-pub use color::{Color, ColorParseError, Hsla, Rgba};
-
-// Re-export positioned style types (used for absolute positioning layout)
-pub use computed::{PositionedStyle, PositionedStyleBuilder};
-
-// Re-export content generation types
-pub use content::{parse_content, ContentContext, ContentGenerator, ContentItem, ContentValue, CounterStyle};
-
-// Re-export counter system types
-pub use counters::{CounterManager, CounterProperties, CounterSet, CounterSetItem};
-
-// Re-export display types
-pub use display::{Display, DisplayParseError, FormattingContextType, InnerDisplay, OuterDisplay};
-
-// Re-export float types
-pub use float::{Clear, ClearParseError, Float, FloatParseError};
-
-// Re-export position types
-pub use position::{Position, PositionParseError};
-
-// Re-export media types
-pub use media::{
-    ColorScheme, ContrastPreference, HoverCapability, MediaContext, MediaFeature, MediaModifier, MediaParseError,
-    MediaQuery, MediaType, Orientation, PointerCapability, ReducedMotion, ReducedTransparency, Resolution,
-    ResolutionUnit,
-};
-
-// Re-export CSS variables types
-pub use variables::CssVariables;
-
-// Re-export style types (enums for CSS property values)
-pub use types::{
+// Internal imports used by ComputedStyle
+use crate::css::types::{BoxShadow, TextShadow, Transform};
+use color::Rgba;
+use display::Display;
+use position::Position;
+use types::{
     AlignContent, AlignItems, BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderStyle,
     FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack, JustifyContent, LineHeight, Overflow,
     TextAlign, TextDecoration, TextTransform, WhiteSpace,
 };
-
-// Re-export grid functions
-pub use grid::{finalize_grid_placement, parse_grid_line, parse_grid_line_placement, parse_grid_tracks_with_names};
-
-// Re-export defaults functions
-pub use defaults::{get_default_styles_for_element, parse_color_attribute, parse_dimension_attribute};
-
-// Re-export properties functions
-pub use properties::{apply_declaration, apply_box_values, apply_margin_values, extract_box_values, extract_length, extract_margin_values, parse_border_style};
-
-// Re-export cascade functions
-pub use cascade::{apply_styles, StyledNode};
-
-// CSS types used by ComputedStyle
-use crate::css::{BoxShadow, TextShadow, Transform};
-pub use crate::style::values::{Length, LengthOrAuto, LengthUnit};
+use values::Length;
 use std::collections::HashMap;
-
-pub mod values;
 
 // Re-export common types from values module
 // These are now public via the module system
