@@ -7,13 +7,16 @@
 //! https://html.spec.whatwg.org/multipage/rendering.html
 
 use crate::dom::DomNode;
-use crate::style::types::{LineHeight, TextAlign, WhiteSpace};
+use crate::style::types::WhiteSpace;
 use crate::style::{ComputedStyle, Display, Length, Rgba};
 
 /// Get default styles for an HTML element
 ///
 /// Returns a ComputedStyle with appropriate default values for the given element.
 /// These defaults match the user-agent stylesheet behavior for HTML elements.
+///
+/// Note: All styling should come from CSS (user-agent.css or author styles),
+/// not from class-name checks in Rust code. This function only sets tag-based defaults.
 pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
     let mut styles = ComputedStyle::default();
 
@@ -51,161 +54,35 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
             _ => Display::Inline,
         };
 
-        // Force minimal spacing for table elements
-        if let Some(tag) = node.tag_name() {
-            match tag {
-                "table" => {
-                    // Remove all spacing from tables
-                    styles.margin_top = Some(Length::px(0.0));
-                    styles.margin_bottom = Some(Length::px(0.0));
-                    styles.padding_top = Length::px(0.0);
-                    styles.padding_bottom = Length::px(0.0);
-                }
-                "tr" => {
-                    // Minimal spacing between table rows
-                    styles.margin_top = Some(Length::px(0.0));
-                    styles.margin_bottom = Some(Length::px(0.0));
-                    styles.padding_top = Length::px(0.0);
-                    styles.padding_bottom = Length::px(0.0);
-
-                    // Force spacer rows to be minimal
-                    if node.has_class("spacer") {
-                        styles.height = Some(Length::px(2.0));
-                    }
-                }
-                "td" | "th" => {
-                    // Minimal padding for table cells
-                    styles.padding_top = Length::px(1.0);
-                    styles.padding_bottom = Length::px(1.0);
-                    styles.margin_top = Some(Length::px(0.0));
-                    styles.margin_bottom = Some(Length::px(0.0));
-                }
-                _ => {}
+        // Force minimal spacing for table elements (consistent with user-agent.css)
+        match tag {
+            "table" => {
+                // Remove all spacing from tables
+                styles.margin_top = Some(Length::px(0.0));
+                styles.margin_bottom = Some(Length::px(0.0));
+                styles.padding_top = Length::px(0.0);
+                styles.padding_bottom = Length::px(0.0);
             }
+            "tr" => {
+                // Minimal spacing between table rows
+                styles.margin_top = Some(Length::px(0.0));
+                styles.margin_bottom = Some(Length::px(0.0));
+                styles.padding_top = Length::px(0.0);
+                styles.padding_bottom = Length::px(0.0);
+            }
+            "td" | "th" => {
+                // Minimal padding for table cells
+                styles.padding_top = Length::px(1.0);
+                styles.padding_bottom = Length::px(1.0);
+                styles.margin_top = Some(Length::px(0.0));
+                styles.margin_bottom = Some(Length::px(0.0));
+            }
+            _ => {}
         }
 
-        // Prevent text wrapping in table cells
+        // Prevent text wrapping in table cells by default
         if matches!(styles.display, Display::TableCell) {
             styles.white_space = WhiteSpace::Nowrap;
-        }
-
-        // HACK: Site-specific styling for pagetop
-        if node.has_class("pagetop") {
-            styles.font_family = vec!["Verdana".to_string(), "Geneva".to_string(), "sans-serif".to_string()];
-            styles.font_size = 10.0;
-            styles.color = Rgba {
-                r: 34,
-                g: 34,
-                b: 34,
-                a: 1.0,
-            }; // #222222
-            styles.line_height = LineHeight::Length(Length::px(12.0));
-        }
-
-        // HACK: Style links
-        if matches!(node.tag_name(), Some("a")) {
-            styles.color = Rgba {
-                r: 34,
-                g: 34,
-                b: 34,
-                a: 1.0,
-            }; // #222222
-            styles.display = Display::Inline;
-        }
-
-        // HACK: Site-specific styling for votearrow
-        if node.has_class("votearrow") {
-            styles.display = Display::Block;
-            styles.width = Some(Length::px(10.0));
-            styles.height = Some(Length::px(10.0));
-            styles.color = Rgba {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 1.0,
-            };
-            styles.font_size = 20.0;
-            styles.text_align = TextAlign::Center;
-        }
-
-        // HACK: Site-specific styling for votelinks
-        if node.has_class("votelinks") {
-            styles.width = Some(Length::px(30.0));
-            styles.text_align = TextAlign::Center;
-        }
-
-        // HACK: Site-specific styling for rank
-        if node.has_class("rank") {
-            styles.display = Display::Block;
-            styles.color = Rgba {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 1.0,
-            };
-            styles.font_size = 10.0;
-            styles.text_align = TextAlign::Right;
-        }
-
-        // HACK: Site-specific styling for title cell
-        if node.has_class("title") && node.tag_name() == Some("td") {
-            if node.get_attribute("align").as_deref() == Some("right")
-                && node.get_attribute("valign").as_deref() == Some("top")
-            {
-                styles.width = Some(Length::px(30.0));
-                styles.text_align = TextAlign::Right;
-            }
-        }
-
-        // HACK: Site-specific styling for pagetop
-        if node.has_class("pagetop") {
-            styles.display = Display::Inline;
-            styles.color = Rgba {
-                r: 255,
-                g: 255,
-                b: 255,
-                a: 1.0,
-            };
-            styles.font_size = 10.0;
-        }
-
-        // HACK: Site-specific styling for hnname
-        if node.has_class("hnname") {
-            styles.display = Display::Inline;
-            styles.color = Rgba {
-                r: 255,
-                g: 255,
-                b: 255,
-                a: 1.0,
-            };
-            styles.font_weight = crate::style::FontWeight::Bold;
-            styles.font_size = 10.0;
-        }
-
-        // HACK: Style navigation links
-        if let Some(tag) = node.tag_name() {
-            if tag == "a" && node.get_attribute("href").is_some() {
-                if let Some(href) = node.get_attribute("href") {
-                    if href.contains("newest")
-                        || href.contains("front")
-                        || href.contains("newcomments")
-                        || href.contains("ask")
-                        || href.contains("show")
-                        || href.contains("jobs")
-                        || href.contains("submit")
-                        || href.contains("news")
-                    {
-                        styles.display = Display::Inline;
-                        styles.color = Rgba {
-                            r: 255,
-                            g: 255,
-                            b: 255,
-                            a: 1.0,
-                        };
-                        styles.font_size = 10.0;
-                    }
-                }
-            }
         }
     }
 

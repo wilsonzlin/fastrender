@@ -12,7 +12,7 @@ use crate::style::defaults::{get_default_styles_for_element, parse_color_attribu
 use crate::style::grid::finalize_grid_placement;
 use crate::style::media::MediaContext;
 use crate::style::properties::apply_declaration;
-use crate::style::types::{BorderStyle, FontWeight, LineHeight};
+use crate::style::types::{FontWeight, LineHeight};
 use crate::style::values::Length;
 use crate::style::{ComputedStyle, Display, Rgba};
 use selectors::context::{QuirksMode, SelectorCaches};
@@ -153,113 +153,6 @@ fn apply_styles_internal_with_ancestors(
 
     // Finalize grid placement - resolve named grid lines
     finalize_grid_placement(&mut styles);
-
-    // HACK: Add grid placement for TOC (from @media min-width:1000px)
-    // The CSS has `.toc { grid-column: 1/4; grid-row: 2; }` but our CSS parser
-    // doesn't handle @media queries yet, so we hardcode it here.
-    // Must be done AFTER finalize_grid_placement to override.
-    if node.has_class("toc") {
-        // CSS grid-column: 1/4 means from line 1 to line 4
-        // CSS grid-row: 2 means from line 2 to line 3 (span 1)
-        // These line numbers are used directly by Taffy (NOT 0-indexed)
-        styles.grid_column_start = 1;
-        styles.grid_column_end = 4;
-        styles.grid_row_start = 2;
-        styles.grid_row_end = 3;
-    }
-
-    // HACK: Both img-links for the map should be at row 2 alongside TOC
-    // Note: HTML has nested <a> elements, but nested links are invalid HTML.
-    // The browser/parser auto-corrects this by making them siblings instead of nested.
-    // So both the "outer" link (hn.wilsonl.in) and "inner" link (map.png) are
-    // actually sibling grid items, and both need to be at row 2.
-    if node.has_class("img-link") {
-        if let Some(href) = node.get_attribute("href") {
-            if href == "https://hn.wilsonl.in" || href == "./map.png" {
-                styles.grid_row_start = 2;
-                styles.grid_row_end = 3;
-            }
-        }
-    }
-
-    // HACK: Add border-radius to images
-    if node.tag_name() == Some("img") {
-        // Check if we're inside an article element (.5rem = 8px)
-        let in_article = ancestors.iter().any(|a| a.tag_name() == Some("article"));
-        if in_article {
-            styles.border_top_left_radius = Length::px(8.0);
-            styles.border_top_right_radius = Length::px(8.0);
-            styles.border_bottom_left_radius = Length::px(8.0);
-            styles.border_bottom_right_radius = Length::px(8.0);
-        }
-
-        // Check if we're inside banner-left (avatar image with border-radius: 50%)
-        let in_banner_left = ancestors.iter().any(|a| a.has_class("banner-left"));
-        if in_banner_left {
-            // border-radius: 50% for circular avatar
-            // Since the image is 2rem (32px) square, 50% = 16px radius
-            styles.border_top_left_radius = Length::px(16.0);
-            styles.border_top_right_radius = Length::px(16.0);
-            styles.border_bottom_left_radius = Length::px(16.0);
-            styles.border_bottom_right_radius = Length::px(16.0);
-        }
-    }
-
-    // HACK: Style subscribe button - white background, blue border and text
-    if node.has_class("subscribe-btn") {
-        styles.padding_top = Length::px(6.0); // .375rem
-        styles.padding_right = Length::px(12.0); // .75rem
-        styles.padding_bottom = Length::px(6.0);
-        styles.padding_left = Length::px(12.0);
-        styles.background_color = Rgba {
-            r: 255,
-            g: 255,
-            b: 255,
-            a: 1.0,
-        }; // white background
-        styles.color = Rgba {
-            r: 59,
-            g: 130,
-            b: 246,
-            a: 1.0,
-        }; // #3b82f6 blue text
-        styles.border_top_width = Length::px(1.0);
-        styles.border_right_width = Length::px(1.0);
-        styles.border_bottom_width = Length::px(1.0);
-        styles.border_left_width = Length::px(1.0);
-        styles.border_top_color = Rgba {
-            r: 59,
-            g: 130,
-            b: 246,
-            a: 1.0,
-        }; // #3b82f6
-        styles.border_right_color = Rgba {
-            r: 59,
-            g: 130,
-            b: 246,
-            a: 1.0,
-        };
-        styles.border_bottom_color = Rgba {
-            r: 59,
-            g: 130,
-            b: 246,
-            a: 1.0,
-        };
-        styles.border_left_color = Rgba {
-            r: 59,
-            g: 130,
-            b: 246,
-            a: 1.0,
-        };
-        styles.border_top_style = BorderStyle::Solid;
-        styles.border_right_style = BorderStyle::Solid;
-        styles.border_bottom_style = BorderStyle::Solid;
-        styles.border_left_style = BorderStyle::Solid;
-        styles.border_top_left_radius = Length::px(4.0); // .25rem
-        styles.border_top_right_radius = Length::px(4.0);
-        styles.border_bottom_left_radius = Length::px(4.0);
-        styles.border_bottom_right_radius = Length::px(4.0);
-    }
 
     // Recursively style children (passing current node in ancestors)
     let mut new_ancestors = ancestors.to_vec();
