@@ -6,10 +6,11 @@
 //! Reference: CSS Cascading and Inheritance Level 4
 //! https://www.w3.org/TR/css-cascade-4/
 
-use crate::css::{self, Declaration, StyleSheet};
+use crate::css::{self, Declaration, StyleRule, StyleSheet};
 use crate::dom::{DomNode, ElementRef};
 use crate::style::defaults::{get_default_styles_for_element, parse_color_attribute, parse_dimension_attribute};
 use crate::style::grid::finalize_grid_placement;
+use crate::style::media::MediaContext;
 use crate::style::properties::apply_declaration;
 use crate::style::types::{BorderStyle, FontWeight, LineHeight};
 use crate::style::values::Length;
@@ -28,24 +29,35 @@ pub struct StyledNode {
     pub children: Vec<StyledNode>,
 }
 
+/// Apply styles to a DOM tree with default viewport (desktop)
+///
+/// This is the main entry point for CSS cascade. It uses a default
+/// desktop viewport size for media query evaluation.
 pub fn apply_styles(dom: &DomNode, stylesheet: &StyleSheet) -> StyledNode {
+    // Use default desktop viewport
+    let media_ctx = MediaContext::screen(1200.0, 800.0);
+    apply_styles_with_media(dom, stylesheet, &media_ctx)
+}
+
+/// Apply styles to a DOM tree with a specific media context
+///
+/// This allows controlling viewport size and other media features
+/// for responsive rendering.
+pub fn apply_styles_with_media(dom: &DomNode, stylesheet: &StyleSheet, media_ctx: &MediaContext) -> StyledNode {
     // Parse user-agent stylesheet
-    let ua_stylesheet =
-        css::parse_stylesheet(USER_AGENT_STYLESHEET).unwrap_or_else(|_| StyleSheet { rules: Vec::new() });
+    let ua_stylesheet = css::parse_stylesheet(USER_AGENT_STYLESHEET).unwrap_or_else(|_| StyleSheet::new());
 
-    // Merge user-agent stylesheet with author stylesheet
-    // User-agent rules come first (lower specificity)
-    let mut merged_rules = ua_stylesheet.rules;
-    merged_rules.extend(stylesheet.rules.clone());
+    // Collect applicable rules from both stylesheets
+    // User-agent rules come first (lower priority)
+    let mut all_rules: Vec<&StyleRule> = ua_stylesheet.collect_style_rules(media_ctx);
+    all_rules.extend(stylesheet.collect_style_rules(media_ctx));
 
-    let merged_stylesheet = StyleSheet { rules: merged_rules };
-
-    apply_styles_internal(dom, &merged_stylesheet, &ComputedStyle::default(), 16.0)
+    apply_styles_internal(dom, &all_rules, &ComputedStyle::default(), 16.0)
 }
 
 fn apply_styles_internal(
     node: &DomNode,
-    stylesheet: &StyleSheet,
+    rules: &[&StyleRule],
     parent_styles: &ComputedStyle,
     root_font_size: f32,
 ) -> StyledNode {
@@ -54,9 +66,9 @@ fn apply_styles_internal(
     // Inherit styles from parent
     inherit_styles(&mut styles, parent_styles);
 
-    // Apply matching CSS rules (now passing ancestors for selector matching)
+    // Apply matching CSS rules
     let ancestors: Vec<&DomNode> = vec![];
-    let matching_rules = find_matching_rules_with_ancestors(node, stylesheet, &ancestors);
+    let matching_rules = find_matching_rules(node, rules, &ancestors);
     for (_specificity, declarations) in matching_rules {
         for decl in declarations {
             apply_declaration(&mut styles, &decl, parent_styles.font_size, root_font_size);
@@ -80,7 +92,7 @@ fn apply_styles_internal(
     let children = node
         .children
         .iter()
-        .map(|child| apply_styles_internal_with_ancestors(child, stylesheet, &styles, root_font_size, &new_ancestors))
+        .map(|child| apply_styles_internal_with_ancestors(child, rules, &styles, root_font_size, &new_ancestors))
         .collect();
 
     StyledNode {
@@ -92,7 +104,7 @@ fn apply_styles_internal(
 
 fn apply_styles_internal_with_ancestors(
     node: &DomNode,
-    stylesheet: &StyleSheet,
+    rules: &[&StyleRule],
     parent_styles: &ComputedStyle,
     root_font_size: f32,
     ancestors: &[&DomNode],
@@ -102,8 +114,8 @@ fn apply_styles_internal_with_ancestors(
     // Inherit styles from parent
     inherit_styles(&mut styles, parent_styles);
 
-    // Apply matching CSS rules (passing ancestors for selector matching)
-    let matching_rules = find_matching_rules_with_ancestors(node, stylesheet, ancestors);
+    // Apply matching CSS rules
+    let matching_rules = find_matching_rules(node, rules, ancestors);
     for (_specificity, declarations) in matching_rules {
         for decl in declarations {
             apply_declaration(&mut styles, &decl, parent_styles.font_size, root_font_size);
@@ -255,7 +267,7 @@ fn apply_styles_internal_with_ancestors(
     let mut children: Vec<StyledNode> = node
         .children
         .iter()
-        .map(|child| apply_styles_internal_with_ancestors(child, stylesheet, &styles, root_font_size, &new_ancestors))
+        .map(|child| apply_styles_internal_with_ancestors(child, rules, &styles, root_font_size, &new_ancestors))
         .collect();
 
     // HACK: Add ::before pseudo-element content for .toc elements
@@ -340,9 +352,9 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.grid_row_names = parent.grid_row_names.clone();
 }
 
-fn find_matching_rules_with_ancestors(
+fn find_matching_rules(
     node: &DomNode,
-    stylesheet: &StyleSheet,
+    rules: &[&StyleRule],
     ancestors: &[&DomNode],
 ) -> Vec<(u32, Vec<Declaration>)> {
     let mut matches = Vec::new();
@@ -361,7 +373,7 @@ fn find_matching_rules_with_ancestors(
         selectors::matching::MatchingForInvalidation::No,
     );
 
-    for rule in &stylesheet.rules {
+    for rule in rules {
         // Check if any selector in the list matches
         let mut matched = false;
         let mut max_specificity = 0u32;
@@ -396,4 +408,3 @@ fn build_element_ref_chain<'a>(node: &'a DomNode, ancestors: &'a [&'a DomNode]) 
     // Create ElementRef with all ancestors
     ElementRef::with_ancestors(node, ancestors)
 }
-
