@@ -2,7 +2,7 @@
 //!
 //! Core types for representing CSS stylesheets, rules, and values.
 
-use crate::style::media::MediaQuery;
+use crate::style::media::{MediaContext, MediaQuery};
 use crate::style::color::Rgba;
 use crate::style::values::Length;
 use cssparser::ToCss;
@@ -84,7 +84,7 @@ impl StyleSheet {
     /// Collects all applicable style rules, evaluating @media queries
     ///
     /// This flattens nested @media rules and filters by the given media context.
-    pub fn collect_style_rules(&self, media_ctx: &crate::style::media::MediaContext) -> Vec<&StyleRule> {
+    pub fn collect_style_rules(&self, media_ctx: &MediaContext) -> Vec<&StyleRule> {
         let mut result = Vec::new();
         collect_rules_recursive(&self.rules, media_ctx, &mut result);
         result
@@ -94,7 +94,7 @@ impl StyleSheet {
 /// Helper to recursively collect style rules from nested @media blocks
 fn collect_rules_recursive<'a>(
     rules: &'a [CssRule],
-    media_ctx: &crate::style::media::MediaContext,
+    media_ctx: &MediaContext,
     out: &mut Vec<&'a StyleRule>,
 ) {
     for rule in rules {

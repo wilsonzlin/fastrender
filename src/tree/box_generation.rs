@@ -892,7 +892,7 @@ pub fn is_replaced_element(tag: &str) -> bool {
 }
 
 /// Creates a BoxNode for a replaced element from a StyledNode
-fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<crate::style::ComputedStyle>) -> BoxNode {
+fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle>) -> BoxNode {
     let tag = styled.node.tag_name().unwrap_or("img");
 
     // Get src attribute if available
@@ -1669,7 +1669,7 @@ mod tests {
             "img",
             style.clone(),
             "test.png",
-            Some(crate::geometry::Size::new(100.0, 50.0)),
+            Some(Size::new(100.0, 50.0)),
         );
         let text2 = DOMNode::new_text(" after image ", style.clone());
         let video = DOMNode::new_replaced("video", style.clone(), "test.mp4", None);
@@ -1702,7 +1702,7 @@ mod tests {
             "svg",
             style.clone(),
             "<svg>...</svg>",
-            Some(crate::geometry::Size::new(100.0, 100.0)),
+            Some(Size::new(100.0, 100.0)),
         );
         let wrapper = DOMNode::new_element("div", style_with_display(Display::Block), vec![svg]);
 
@@ -1720,7 +1720,7 @@ mod tests {
             "iframe",
             style.clone(),
             "https://example.com",
-            Some(crate::geometry::Size::new(300.0, 200.0)),
+            Some(Size::new(300.0, 200.0)),
         );
         let wrapper = DOMNode::new_element("div", style_with_display(Display::Block), vec![iframe]);
 

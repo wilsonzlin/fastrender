@@ -44,7 +44,7 @@ use crate::layout::constraints::LayoutConstraints;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::text::line_break::{find_break_opportunities, BreakType};
 use crate::text::shaper::{Script, ShapedGlyphs, TextDirection, TextShaper};
-use crate::tree::box_tree::{BoxNode, BoxType, ReplacedType};
+use crate::tree::box_tree::{BoxNode, BoxType, ReplacedBox, ReplacedType};
 use crate::tree::fragment_tree::FragmentNode;
 
 use baseline::{compute_line_height, BaselineMetrics};
@@ -157,7 +157,7 @@ impl InlineFormattingContext {
     fn create_replaced_item(
         &self,
         box_node: &BoxNode,
-        replaced_box: &crate::tree::box_tree::ReplacedBox,
+        replaced_box: &ReplacedBox,
     ) -> Result<ReplacedItem, LayoutError> {
         let style = &box_node.style;
 

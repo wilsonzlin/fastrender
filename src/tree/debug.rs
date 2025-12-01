@@ -289,7 +289,7 @@ impl TreePrinter {
     /// Prints a box tree with debug information
     ///
     /// Returns a string with indented tree structure.
-    pub fn print_box_tree(node: &crate::tree::box_tree::BoxNode) -> String {
+    pub fn print_box_tree(node: &BoxNode) -> String {
         let mut output = String::new();
         Self::print_box_node(node, "", true, &mut output);
         output
