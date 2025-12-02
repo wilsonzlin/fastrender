@@ -26,7 +26,7 @@ Thank you for your interest in contributing to FastRender! This document provide
 ### Clone the Repository
 
 ```bash
-git clone https://github.com/anysphere/fastrender.git
+git clone https://github.com/fastrender/fastrender.git
 cd fastrender
 ```
 
