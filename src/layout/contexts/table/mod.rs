@@ -21,9 +21,3 @@
 //! - CSS 2.1 Section 17: https://www.w3.org/TR/CSS21/tables.html
 
 pub mod column_distribution;
-
-// Re-exports
-pub use column_distribution::{
-    compute_column_constraints, distribute_spanning_cell_width, ColumnConstraints, ColumnDistributor,
-    ColumnWidthDistributionResult, DistributionMode,
-};

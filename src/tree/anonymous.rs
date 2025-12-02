@@ -40,7 +40,7 @@
 //! let fixed_tree = AnonymousBoxCreator::fixup_tree(box_tree);
 //! ```
 
-use crate::style::ComputedStyles;
+use crate::style::ComputedStyle;
 use crate::tree::box_tree::{AnonymousBox, AnonymousType, BoxNode, BoxType};
 use std::sync::Arc;
 
@@ -80,9 +80,9 @@ impl AnonymousBoxCreator {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use fastrender::tree::{BoxNode, FormattingContextType};
+    /// use fastrender::{BoxNode, FormattingContextType};
     /// use fastrender::tree::anonymous::AnonymousBoxCreator;
-    /// use fastrender::tree::box_tree::ComputedStyle;
+    /// use fastrender::ComputedStyle;
     ///
     /// let style = Arc::new(ComputedStyle::default());
     /// let text = BoxNode::new_text(style.clone(), "Hello".to_string());
@@ -264,7 +264,7 @@ impl AnonymousBoxCreator {
         let style = if let Some(first) = inline_run.first() {
             first.style.clone()
         } else {
-            Arc::new(ComputedStyles::default())
+            Arc::new(ComputedStyle::default())
         };
 
         let children = std::mem::take(inline_run);
@@ -282,7 +282,7 @@ impl AnonymousBoxCreator {
     /// Anonymous boxes inherit computed style from their containing block.
     /// Currently uses default style as a placeholder - proper inheritance
     /// should be handled during style computation.
-    pub fn create_anonymous_block(style: Arc<ComputedStyles>, children: Vec<BoxNode>) -> BoxNode {
+    pub fn create_anonymous_block(style: Arc<ComputedStyle>, children: Vec<BoxNode>) -> BoxNode {
         BoxNode {
             style,
             box_type: BoxType::Anonymous(AnonymousBox {
@@ -300,7 +300,7 @@ impl AnonymousBoxCreator {
     /// CSS 2.1 Section 9.2.2.1: "Any text that is directly contained inside
     /// a block container element (not inside an inline element) must be
     /// treated as an anonymous inline element."
-    pub fn create_anonymous_inline(style: Arc<ComputedStyles>, children: Vec<BoxNode>) -> BoxNode {
+    pub fn create_anonymous_inline(style: Arc<ComputedStyle>, children: Vec<BoxNode>) -> BoxNode {
         BoxNode {
             style,
             box_type: BoxType::Anonymous(AnonymousBox {
@@ -314,7 +314,7 @@ impl AnonymousBoxCreator {
     /// Creates an anonymous table row box
     ///
     /// Used when table cells appear outside of table rows.
-    pub fn create_anonymous_table_row(style: Arc<ComputedStyles>, children: Vec<BoxNode>) -> BoxNode {
+    pub fn create_anonymous_table_row(style: Arc<ComputedStyle>, children: Vec<BoxNode>) -> BoxNode {
         BoxNode {
             style,
             box_type: BoxType::Anonymous(AnonymousBox {
@@ -328,7 +328,7 @@ impl AnonymousBoxCreator {
     /// Creates an anonymous table cell box
     ///
     /// Used when non-table content appears inside table rows.
-    pub fn create_anonymous_table_cell(style: Arc<ComputedStyles>, children: Vec<BoxNode>) -> BoxNode {
+    pub fn create_anonymous_table_cell(style: Arc<ComputedStyle>, children: Vec<BoxNode>) -> BoxNode {
         BoxNode {
             style,
             box_type: BoxType::Anonymous(AnonymousBox {
@@ -373,8 +373,8 @@ mod tests {
     use super::*;
     use crate::style::display::FormattingContextType;
 
-    fn default_style() -> Arc<ComputedStyles> {
-        Arc::new(ComputedStyles::default())
+    fn default_style() -> Arc<ComputedStyle> {
+        Arc::new(ComputedStyle::default())
     }
 
     #[test]

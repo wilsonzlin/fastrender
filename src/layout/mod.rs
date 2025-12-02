@@ -39,9 +39,9 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use fastrender::layout::{LayoutEngine, LayoutConfig};
+//! use fastrender::{LayoutEngine, LayoutConfig};
 //! use fastrender::tree::BoxTree;
-//! use fastrender::geometry::Size;
+//! use fastrender::Size;
 //!
 //! let config = LayoutConfig::for_viewport(Size::new(1024.0, 768.0));
 //! let engine = LayoutEngine::new(config);
@@ -71,21 +71,6 @@ pub mod inline;
 
 // W3.T13 - Absolute positioning algorithm
 pub mod absolute_positioning;
-
-// Re-exports
-pub use absolute_positioning::{AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult, ResolvedMargins};
-pub use constraints::{AvailableSpace, LayoutConstraints};
-pub use contexts::{
-    ContainingBlock, FormattingContextFactory, GridFormattingContext, PositionedLayout, StickyConstraints,
-};
-pub use engine::{LayoutConfig, LayoutEngine, LayoutStats};
-pub use float_context::{FloatContext, FloatInfo, FloatSide};
-pub use formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-pub use inline::{
-    line_spaces, BaselineAligner, GlyphInfo, InlineBoxMetrics, InlineFloatIntegration, InlineFloatIntegrationMut,
-    InlineItem, LineMetrics, LineSpace, LineSpaceIterator, LineSpaceOptions, PlacedInlineFloat, PositionedInlineBox,
-    TextRun, TextRunBuilder, VerticalAlign,
-};
 
 // W3.T06 - Table layout algorithm
 pub mod table;

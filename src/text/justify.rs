@@ -40,8 +40,6 @@
 //! // Now glyphs are repositioned with 50px distributed between them
 //! ```
 
-use crate::error::{Result, TextError};
-
 /// Position and metrics for a single glyph in a line
 ///
 /// This type represents a glyph with its position and advance width,

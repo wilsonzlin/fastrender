@@ -3,8 +3,8 @@
 //! These tests verify the font fallback chain behavior according to
 //! CSS Fonts Module Level 4, Section 5.
 
-use fastrender::text::{
-    FallbackChain, FallbackChainBuilder, FamilyEntry, FontDatabase, FontStretch, FontStyle, GenericFamily,
+use fastrender::{
+    FallbackChain, FallbackChainBuilder, FamilyEntry, FontDatabase, FontStretch, FontStyleDb as FontStyle, GenericFamily,
 };
 
 // ============================================================================

@@ -32,7 +32,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use fastrender::layout::{FloatContext, FloatSide};
+//! use fastrender::{FloatContext, FloatSide};
 //! use fastrender::layout::inline::{InlineFloatIntegration, LineSpace};
 //!
 //! // Create a float context with some floats
@@ -49,8 +49,8 @@
 //! ```
 
 use crate::geometry::Rect;
-use crate::layout::float_context::{FloatContext, FloatInfo, FloatSide};
-use crate::style::Clear;
+use crate::layout::float_context::{FloatContext, FloatSide};
+use crate::style::float::Clear;
 
 /// Describes the available space for a line box
 ///
@@ -565,6 +565,8 @@ pub struct LineSpaceIterator<'a> {
     float_ctx: &'a FloatContext,
     current_y: f32,
     end_y: f32,
+    /// Reserved for future use in width calculations
+    #[allow(dead_code)]
     containing_width: f32,
 }
 

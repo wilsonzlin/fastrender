@@ -5,9 +5,9 @@
 
 use fastrender::paint::rasterize::{
     draw_line, fill_circle, fill_ellipse, fill_rect, fill_rounded_rect, render_borders, render_box_shadow, stroke_rect,
-    stroke_rounded_rect, BorderColors, BorderRadii, BorderWidths, BoxShadow,
+    stroke_rounded_rect, BorderColors, BorderWidths, BoxShadow,
 };
-use fastrender::style::Rgba;
+use fastrender::{BorderRadii, Rgba};
 use tiny_skia::Pixmap;
 
 // ============================================================================

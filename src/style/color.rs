@@ -13,7 +13,7 @@
 //! # Examples
 //!
 //! ```
-//! use fastrender::style::Color;
+//! use fastrender::Color;
 //!
 //! // Parse from hex
 //! let color = Color::parse("#ff0000").unwrap();
@@ -36,7 +36,7 @@ use std::fmt;
 /// # Examples
 ///
 /// ```
-/// use fastrender::style::Rgba;
+/// use fastrender::Rgba;
 ///
 /// let red = Rgba::new(255, 0, 0, 1.0);
 /// let semi_transparent_blue = Rgba::new(0, 0, 255, 0.5);
@@ -114,7 +114,7 @@ impl Rgba {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Rgba;
+    /// use fastrender::Rgba;
     ///
     /// let color = Rgba::new(255, 128, 0, 1.0); // Orange
     /// ```
@@ -127,7 +127,7 @@ impl Rgba {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Rgba;
+    /// use fastrender::Rgba;
     ///
     /// let purple = Rgba::rgb(128, 0, 128);
     /// assert_eq!(purple.a, 1.0);
@@ -141,7 +141,7 @@ impl Rgba {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Rgba;
+    /// use fastrender::Rgba;
     ///
     /// assert!(Rgba::TRANSPARENT.is_transparent());
     /// assert!(!Rgba::BLACK.is_transparent());
@@ -155,7 +155,7 @@ impl Rgba {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Rgba;
+    /// use fastrender::Rgba;
     ///
     /// assert!(Rgba::BLACK.is_opaque());
     /// assert!(!Rgba::new(0, 0, 0, 0.5).is_opaque());
@@ -169,7 +169,7 @@ impl Rgba {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Rgba;
+    /// use fastrender::Rgba;
     ///
     /// let red = Rgba::RED;
     /// let semi_transparent_red = red.with_alpha(0.5);
@@ -191,7 +191,7 @@ impl Rgba {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Rgba;
+    /// use fastrender::Rgba;
     ///
     /// let color = Rgba::new(255, 0, 0, 0.5);
     /// let premul = color.premultiplied();
@@ -238,7 +238,7 @@ impl Rgba {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Rgba;
+    /// use fastrender::Rgba;
     ///
     /// let rgb = Rgba::RED;
     /// let hsl = rgb.to_hsla();
@@ -303,7 +303,7 @@ impl fmt::Display for Rgba {
 /// # Examples
 ///
 /// ```
-/// use fastrender::style::Hsla;
+/// use fastrender::Hsla;
 ///
 /// let red = Hsla::new(0.0, 100.0, 50.0, 1.0);
 /// let green = Hsla::new(120.0, 100.0, 50.0, 1.0);
@@ -332,7 +332,7 @@ impl Hsla {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Hsla;
+    /// use fastrender::Hsla;
     ///
     /// let cyan = Hsla::new(180.0, 100.0, 50.0, 1.0);
     /// ```
@@ -357,7 +357,7 @@ impl Hsla {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::{Hsla, Rgba};
+    /// use fastrender::{Hsla, Rgba};
     ///
     /// let hsl = Hsla::new(0.0, 100.0, 50.0, 1.0); // Red
     /// let rgb = hsl.to_rgba();
@@ -428,7 +428,7 @@ impl fmt::Display for Hsla {
 /// # Examples
 ///
 /// ```
-/// use fastrender::style::{Color, Rgba};
+/// use fastrender::{Color, Rgba};
 ///
 /// let red = Color::Rgba(Rgba::RED);
 /// let current = Color::CurrentColor;
@@ -452,7 +452,7 @@ impl Color {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::{Color, Rgba};
+    /// use fastrender::{Color, Rgba};
     ///
     /// let color = Color::Rgba(Rgba::RED);
     /// assert_eq!(color.to_rgba(Rgba::BLACK), Rgba::RED);
@@ -500,7 +500,7 @@ impl Color {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Color;
+    /// use fastrender::Color;
     ///
     /// assert!(Color::parse("#ff0000").is_ok());
     /// assert!(Color::parse("rgb(255, 0, 0)").is_ok());

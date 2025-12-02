@@ -12,13 +12,13 @@
 //! - Hit testing
 
 use fastrender::text::shaper::{GlyphCluster, GlyphPosition, Script, ShapedGlyphs, TextDirection, TextShaper};
-use fastrender::text::FontContext;
+use fastrender::FontContext;
 
 // ============================================================================
 // Helper functions
 // ============================================================================
 
-fn get_test_font() -> Option<fastrender::text::LoadedFont> {
+fn get_test_font() -> Option<fastrender::LoadedFont> {
     let ctx = FontContext::new();
     if !ctx.has_fonts() {
         return None;
@@ -26,7 +26,7 @@ fn get_test_font() -> Option<fastrender::text::LoadedFont> {
     ctx.get_sans_serif()
 }
 
-fn get_shaper_and_font() -> Option<(TextShaper, fastrender::text::LoadedFont)> {
+fn get_shaper_and_font() -> Option<(TextShaper, fastrender::LoadedFont)> {
     let font = get_test_font()?;
     Some((TextShaper::new(), font))
 }

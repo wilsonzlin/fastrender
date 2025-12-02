@@ -15,7 +15,7 @@
 //! # Usage
 //!
 //! ```
-//! use fastrender::tree::DebugInfo;
+//! use fastrender::DebugInfo;
 //!
 //! let info = DebugInfo::new(
 //!     Some("div".to_string()),
@@ -33,6 +33,10 @@
 use std::fmt;
 use std::fmt::Write as _;
 
+use crate::tree::box_tree::BoxNode;
+use crate::tree::box_tree::BoxType;
+use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
+
 /// Debug information linking a box to its source DOM element
 ///
 /// This information is optional and used only for debugging and dev tools.
@@ -41,7 +45,7 @@ use std::fmt::Write as _;
 /// # Examples
 ///
 /// ```
-/// use fastrender::tree::DebugInfo;
+/// use fastrender::DebugInfo;
 ///
 /// let info = DebugInfo::new(
 ///     Some("div".to_string()),
@@ -84,7 +88,7 @@ impl DebugInfo {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::DebugInfo;
+    /// use fastrender::DebugInfo;
     ///
     /// let info = DebugInfo::new(
     ///     Some("div".to_string()),
@@ -110,7 +114,7 @@ impl DebugInfo {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::DebugInfo;
+    /// use fastrender::DebugInfo;
     ///
     /// let info = DebugInfo::text("Hello world");
     /// assert_eq!(info.to_selector(), "#text(Hello world)");
@@ -129,7 +133,7 @@ impl DebugInfo {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::DebugInfo;
+    /// use fastrender::DebugInfo;
     ///
     /// let info = DebugInfo::anonymous("block");
     /// assert_eq!(info.to_selector(), "#anonymous(block)");
@@ -150,7 +154,7 @@ impl DebugInfo {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::DebugInfo;
+    /// use fastrender::DebugInfo;
     ///
     /// let info = DebugInfo::new(
     ///     Some("div".to_string()),
@@ -172,7 +176,7 @@ impl DebugInfo {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::DebugInfo;
+    /// use fastrender::DebugInfo;
     ///
     /// let info = DebugInfo::new(
     ///     Some("div".to_string()),
@@ -215,7 +219,7 @@ impl DebugInfo {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::DebugInfo;
+    /// use fastrender::DebugInfo;
     ///
     /// let info = DebugInfo::new(
     ///     Some("div".to_string()),
@@ -255,8 +259,8 @@ impl fmt::Display for DebugInfo {
 /// # Examples
 ///
 /// ```
-/// use fastrender::tree::{BoxNode, DebugInfo, TreePrinter, FormattingContextType};
-/// use fastrender::tree::box_tree::ComputedStyle;
+/// use fastrender::{BoxNode, DebugInfo, FormattingContextType, ComputedStyle};
+/// use fastrender::tree::debug::TreePrinter;
 /// use std::sync::Arc;
 ///
 /// let style = Arc::new(ComputedStyle::default());
@@ -285,14 +289,14 @@ impl TreePrinter {
     /// Prints a box tree with debug information
     ///
     /// Returns a string with indented tree structure.
-    pub fn print_box_tree(node: &crate::tree::BoxNode) -> String {
+    pub fn print_box_tree(node: &BoxNode) -> String {
         let mut output = String::new();
         Self::print_box_node(node, "", true, &mut output);
         output
     }
 
     /// Prints a single box node with indentation
-    fn print_box_node(node: &crate::tree::BoxNode, prefix: &str, is_last: bool, output: &mut String) {
+    fn print_box_node(node: &BoxNode, prefix: &str, is_last: bool, output: &mut String) {
         // Print this node
         let branch = if is_last { "└─ " } else { "├─ " };
         let debug_str = node
@@ -302,11 +306,11 @@ impl TreePrinter {
             .unwrap_or_else(|| "#unknown".to_string());
 
         let box_type = match &node.box_type {
-            crate::tree::BoxType::Block(_) => "Block",
-            crate::tree::BoxType::Inline(_) => "Inline",
-            crate::tree::BoxType::Text(text) => &format!("Text({})", truncate(&text.text, 20)),
-            crate::tree::BoxType::Replaced(_) => "Replaced",
-            crate::tree::BoxType::Anonymous(_) => "Anonymous",
+            BoxType::Block(_) => "Block",
+            BoxType::Inline(_) => "Inline",
+            BoxType::Text(text) => &format!("Text({})", truncate(&text.text, 20)),
+            BoxType::Replaced(_) => "Replaced",
+            BoxType::Anonymous(_) => "Anonymous",
         };
 
         output.push_str(prefix);
@@ -330,23 +334,23 @@ impl TreePrinter {
     }
 
     /// Prints a fragment tree with debug information
-    pub fn print_fragment_tree(node: &crate::tree::FragmentNode) -> String {
+    pub fn print_fragment_tree(node: &FragmentNode) -> String {
         let mut output = String::new();
         Self::print_fragment_node(node, "", true, &mut output);
         output
     }
 
     /// Prints a single fragment node with indentation
-    fn print_fragment_node(node: &crate::tree::FragmentNode, prefix: &str, is_last: bool, output: &mut String) {
+    fn print_fragment_node(node: &FragmentNode, prefix: &str, is_last: bool, output: &mut String) {
         // Print this node
         let branch = if is_last { "└─ " } else { "├─ " };
 
         let content_type = match &node.content {
-            crate::tree::fragment_tree::FragmentContent::Block { .. } => "Block",
-            crate::tree::fragment_tree::FragmentContent::Inline { .. } => "Inline",
-            crate::tree::fragment_tree::FragmentContent::Text { text, .. } => &format!("Text({})", truncate(text, 20)),
-            crate::tree::fragment_tree::FragmentContent::Line { .. } => "Line",
-            crate::tree::fragment_tree::FragmentContent::Replaced { .. } => "Replaced",
+            FragmentContent::Block { .. } => "Block",
+            FragmentContent::Inline { .. } => "Inline",
+            FragmentContent::Text { text, .. } => &format!("Text({})", truncate(text, 20)),
+            FragmentContent::Line { .. } => "Line",
+            FragmentContent::Replaced { .. } => "Replaced",
         };
 
         output.push_str(prefix);
@@ -513,8 +517,9 @@ mod tests {
 
     #[test]
     fn test_tree_printer_single_node() {
-        use crate::tree::box_tree::ComputedStyle;
-        use crate::tree::{BoxNode, FormattingContextType};
+        use crate::style::ComputedStyle;
+        use crate::tree::box_tree::BoxNode;
+        use crate::style::display::FormattingContextType;
         use std::sync::Arc;
 
         let style = Arc::new(ComputedStyle::default());
@@ -531,8 +536,9 @@ mod tests {
 
     #[test]
     fn test_tree_printer_with_children() {
-        use crate::tree::box_tree::ComputedStyle;
-        use crate::tree::{BoxNode, FormattingContextType};
+        use crate::style::ComputedStyle;
+        use crate::tree::box_tree::BoxNode;
+        use crate::style::display::FormattingContextType;
         use std::sync::Arc;
 
         let style = Arc::new(ComputedStyle::default());

@@ -29,7 +29,7 @@
 //!
 //! ```rust,ignore
 //! use fastrender::layout::contexts::inline::InlineFormattingContext;
-//! use fastrender::layout::{FormattingContext, LayoutConstraints};
+//! use fastrender::{FormattingContext, LayoutConstraints};
 //!
 //! let ifc = InlineFormattingContext::new();
 //! let constraints = LayoutConstraints::definite_width(400.0);
@@ -39,17 +39,16 @@
 pub mod baseline;
 pub mod line_builder;
 
-pub use baseline::{compute_line_height, BaselineMetrics, LineBaselineAccumulator, VerticalAlign};
-pub use line_builder::{
-    InlineBlockItem, InlineBoxItem, InlineItem, Line, LineBuilder, PositionedItem, ReplacedItem, TextItem,
-};
-
 use crate::geometry::Rect;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::text::{find_break_opportunities, BreakType, Script, ShapedGlyphs, TextDirection, TextShaper};
-use crate::tree::box_tree::{BoxNode, BoxType, ReplacedType};
+use crate::text::line_break::{find_break_opportunities, BreakType};
+use crate::text::shaper::{Script, ShapedGlyphs, TextDirection, TextShaper};
+use crate::tree::box_tree::{BoxNode, BoxType, ReplacedBox, ReplacedType};
 use crate::tree::fragment_tree::FragmentNode;
+
+use baseline::{compute_line_height, BaselineMetrics};
+use line_builder::{InlineItem, Line, LineBuilder, ReplacedItem, TextItem};
 
 /// Inline Formatting Context implementation
 ///
@@ -72,7 +71,8 @@ use crate::tree::fragment_tree::FragmentNode;
 /// 4. Create text fragments with baseline offsets
 #[derive(Debug, Default)]
 pub struct InlineFormattingContext {
-    /// Text shaper instance
+    /// Text shaper instance (reserved for future text shaping integration)
+    #[allow(dead_code)]
     shaper: TextShaper,
 }
 
@@ -157,7 +157,7 @@ impl InlineFormattingContext {
     fn create_replaced_item(
         &self,
         box_node: &BoxNode,
-        replaced_box: &crate::tree::box_tree::ReplacedBox,
+        replaced_box: &ReplacedBox,
     ) -> Result<ReplacedItem, LayoutError> {
         let style = &box_node.style;
 
@@ -425,11 +425,11 @@ impl FormattingContext for InlineFormattingContext {
 mod tests {
     use super::*;
     use crate::style::display::FormattingContextType;
-    use crate::style::ComputedStyles;
+    use crate::style::ComputedStyle;
     use std::sync::Arc;
 
-    fn default_style() -> Arc<ComputedStyles> {
-        let mut style = ComputedStyles::default();
+    fn default_style() -> Arc<ComputedStyle> {
+        let mut style = ComputedStyle::default();
         style.font_size = 16.0;
         Arc::new(style)
     }

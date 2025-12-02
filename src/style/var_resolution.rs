@@ -29,7 +29,8 @@
 //! CSS Custom Properties for Cascading Variables Module Level 1
 //! <https://www.w3.org/TR/css-variables-1/>
 
-use crate::css::{parse_property_value, PropertyValue};
+use crate::css::properties::parse_property_value;
+use crate::css::types::PropertyValue;
 use std::collections::HashMap;
 
 /// Maximum depth for recursive var() resolution to prevent infinite loops
@@ -383,6 +384,7 @@ pub fn is_valid_custom_property_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::values::Length;
 
     fn make_props(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
@@ -631,7 +633,7 @@ mod tests {
     #[test]
     fn test_non_var_value_unchanged() {
         let props = make_props(&[("--color", "blue")]);
-        let value = PropertyValue::Length(crate::style::Length::px(10.0));
+        let value = PropertyValue::Length(Length::px(10.0));
         let resolved = resolve_var(&value, &props);
 
         if let PropertyValue::Length(len) = resolved {

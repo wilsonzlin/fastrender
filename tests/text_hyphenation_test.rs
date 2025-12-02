@@ -3,7 +3,7 @@
 //! These tests verify the hyphenation functionality works correctly
 //! with various words, edge cases, and configurations.
 
-use fastrender::text::{
+use fastrender::{
     find_soft_hyphens, is_soft_hyphen, remove_soft_hyphens, Hyphenator, HyphensMode, SupportedLanguage,
 };
 

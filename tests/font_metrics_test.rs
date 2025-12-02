@@ -6,7 +6,7 @@
 //! - Line height calculations
 //! - Integration with FontDatabase and FontContext
 
-use fastrender::text::{FontContext, FontDatabase, FontStyle, FontWeight};
+use fastrender::{FontContext, FontDatabase, FontStyleDb as FontStyle, FontWeightDb as FontWeight};
 
 // ============================================================================
 // FontMetrics Unit Tests

@@ -17,7 +17,7 @@
 //! # Examples
 //!
 //! ```
-//! use fastrender::layout::{AvailableSpace, LayoutConstraints};
+//! use fastrender::{AvailableSpace, LayoutConstraints};
 //!
 //! let constraints = LayoutConstraints::new(
 //!     AvailableSpace::Definite(800.0),
@@ -28,6 +28,7 @@
 //! assert!(!constraints.is_height_definite());
 //! ```
 
+use crate::geometry::Size;
 use std::fmt;
 
 /// Available space for layout
@@ -47,7 +48,7 @@ use std::fmt;
 /// # Examples
 ///
 /// ```
-/// use fastrender::layout::AvailableSpace;
+/// use fastrender::AvailableSpace;
 ///
 /// let definite = AvailableSpace::Definite(100.0);
 /// assert!(definite.is_definite());
@@ -86,7 +87,7 @@ impl AvailableSpace {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::AvailableSpace;
+    /// use fastrender::AvailableSpace;
     ///
     /// assert!(AvailableSpace::Definite(100.0).is_definite());
     /// assert!(!AvailableSpace::Indefinite.is_definite());
@@ -115,7 +116,7 @@ impl AvailableSpace {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::AvailableSpace;
+    /// use fastrender::AvailableSpace;
     ///
     /// assert_eq!(AvailableSpace::Definite(100.0).to_option(), Some(100.0));
     /// assert_eq!(AvailableSpace::Indefinite.to_option(), None);
@@ -132,7 +133,7 @@ impl AvailableSpace {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::AvailableSpace;
+    /// use fastrender::AvailableSpace;
     ///
     /// assert_eq!(AvailableSpace::Definite(100.0).or_else(50.0), 100.0);
     /// assert_eq!(AvailableSpace::Indefinite.or_else(50.0), 50.0);
@@ -151,7 +152,7 @@ impl AvailableSpace {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::AvailableSpace;
+    /// use fastrender::AvailableSpace;
     ///
     /// let space = AvailableSpace::Definite(100.0);
     /// let shrunk = space.shrink_by(20.0);
@@ -172,7 +173,7 @@ impl AvailableSpace {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::AvailableSpace;
+    /// use fastrender::AvailableSpace;
     ///
     /// let space = AvailableSpace::Definite(100.0);
     /// let doubled = space.map(|v| v * 2.0);
@@ -193,7 +194,7 @@ impl AvailableSpace {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::AvailableSpace;
+    /// use fastrender::AvailableSpace;
     ///
     /// let space = AvailableSpace::Definite(150.0);
     /// let clamped = space.clamp(50.0, 100.0);
@@ -223,7 +224,7 @@ impl fmt::Display for AvailableSpace {
 /// # Examples
 ///
 /// ```
-/// use fastrender::layout::{AvailableSpace, LayoutConstraints};
+/// use fastrender::{AvailableSpace, LayoutConstraints};
 ///
 /// // Fixed width, flexible height (common for blocks)
 /// let constraints = LayoutConstraints::new(
@@ -250,7 +251,7 @@ impl LayoutConstraints {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::{AvailableSpace, LayoutConstraints};
+    /// use fastrender::{AvailableSpace, LayoutConstraints};
     ///
     /// let constraints = LayoutConstraints::new(
     ///     AvailableSpace::Definite(800.0),
@@ -272,7 +273,7 @@ impl LayoutConstraints {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::LayoutConstraints;
+    /// use fastrender::LayoutConstraints;
     ///
     /// let constraints = LayoutConstraints::definite(800.0, 600.0);
     /// assert!(constraints.is_width_definite());
@@ -289,7 +290,7 @@ impl LayoutConstraints {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::LayoutConstraints;
+    /// use fastrender::LayoutConstraints;
     ///
     /// let constraints = LayoutConstraints::definite_width(800.0);
     /// assert!(constraints.is_width_definite());
@@ -306,7 +307,7 @@ impl LayoutConstraints {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::LayoutConstraints;
+    /// use fastrender::LayoutConstraints;
     ///
     /// let constraints = LayoutConstraints::indefinite();
     /// assert!(!constraints.is_width_definite());
@@ -337,7 +338,7 @@ impl LayoutConstraints {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::{AvailableSpace, LayoutConstraints};
+    /// use fastrender::{AvailableSpace, LayoutConstraints};
     ///
     /// let constraints = LayoutConstraints::indefinite()
     ///     .with_width(AvailableSpace::Definite(800.0));
@@ -362,7 +363,7 @@ impl LayoutConstraints {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::{AvailableSpace, LayoutConstraints};
+    /// use fastrender::{AvailableSpace, LayoutConstraints};
     ///
     /// let outer = LayoutConstraints::definite_width(800.0);
     /// let inner = outer.shrink_width_by(40.0); // 20px margins on each side
@@ -385,7 +386,7 @@ impl LayoutConstraints {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::LayoutConstraints;
+    /// use fastrender::LayoutConstraints;
     ///
     /// let outer = LayoutConstraints::definite(800.0, 600.0);
     /// let inner = outer.shrink_by(40.0, 30.0);
@@ -404,7 +405,7 @@ impl LayoutConstraints {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::LayoutConstraints;
+    /// use fastrender::LayoutConstraints;
     ///
     /// let constraints = LayoutConstraints::definite_width(800.0);
     /// assert!(constraints.is_width_definite());
@@ -438,7 +439,7 @@ impl LayoutConstraints {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::LayoutConstraints;
+    /// use fastrender::LayoutConstraints;
     ///
     /// let constraints = LayoutConstraints::definite_width(800.0);
     /// assert_eq!(constraints.width(), Some(800.0));
@@ -459,8 +460,8 @@ impl LayoutConstraints {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::LayoutConstraints;
-    /// use fastrender::geometry::Size;
+    /// use fastrender::LayoutConstraints;
+    /// use fastrender::Size;
     ///
     /// let constraints = LayoutConstraints::definite(800.0, 600.0);
     /// let size = Size::new(1000.0, 400.0);
@@ -469,7 +470,7 @@ impl LayoutConstraints {
     /// assert_eq!(clamped.width, 800.0); // Clamped to constraint
     /// assert_eq!(clamped.height, 400.0); // Within constraint
     /// ```
-    pub fn clamp_size(&self, size: crate::geometry::Size) -> crate::geometry::Size {
+    pub fn clamp_size(&self, size: Size) -> Size {
         let width = if let Some(max_width) = self.width() {
             size.width.min(max_width)
         } else {
@@ -482,7 +483,7 @@ impl LayoutConstraints {
             size.height
         };
 
-        crate::geometry::Size::new(width, height)
+        Size::new(width, height)
     }
 }
 
@@ -506,7 +507,7 @@ impl Default for LayoutConstraints {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::Size;
+    use Size;
 
     // AvailableSpace tests
     #[test]

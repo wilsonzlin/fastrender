@@ -1,6 +1,8 @@
 //! Enhanced tree printing and visualization utilities
 
-use crate::tree::{BoxNode, BoxType, FragmentContent, FragmentNode};
+use crate::geometry::Rect;
+use crate::tree::box_tree::{BoxNode, BoxType};
+use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 use std::fmt::Write as _;
 
 /// Color mode for terminal output
@@ -82,7 +84,8 @@ impl Default for PrintConfig {
     }
 }
 
-/// ANSI color codes
+/// ANSI color codes (debug infrastructure)
+#[allow(dead_code)]
 mod colors {
     pub const RESET: &str = "\x1b[0m";
     pub const GRAY: &str = "\x1b[90m";
@@ -300,7 +303,7 @@ impl EnhancedTreePrinter {
         )
     }
 
-    fn format_bounds(&self, bounds: &crate::geometry::Rect) -> String {
+    fn format_bounds(&self, bounds: &Rect) -> String {
         self.colorize(
             &format!(
                 "[@({:.1}, {:.1}), {:.1}x{:.1}]",
@@ -339,7 +342,9 @@ pub enum DiffMode {
 
 /// Tree differ - compares two trees
 pub struct TreeDiff {
+    #[allow(dead_code)]
     config: PrintConfig,
+    #[allow(dead_code)]
     mode: DiffMode,
 }
 
@@ -489,8 +494,9 @@ fn truncate(s: &str, max_len: usize) -> String {
 mod tests {
     use super::*;
     use crate::geometry::{Point, Rect, Size};
-    use crate::tree::box_tree::ComputedStyle;
-    use crate::tree::{DebugInfo, FormattingContextType};
+    use crate::style::ComputedStyle;
+    use crate::tree::debug::DebugInfo;
+    use crate::style::display::FormattingContextType;
     use std::sync::Arc;
 
     fn default_style() -> Arc<ComputedStyle> {

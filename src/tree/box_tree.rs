@@ -23,19 +23,10 @@
 
 use crate::geometry::Size;
 use crate::style::display::FormattingContextType;
-use crate::style::ComputedStyles;
+use crate::style::ComputedStyle;
+use crate::tree::debug::DebugInfo;
 use std::fmt;
 use std::sync::Arc;
-
-// Import DebugInfo from the debug module
-pub use super::debug::DebugInfo;
-
-// Re-export ComputedStyles for backward compatibility
-// Note: There are two computed style types in the codebase:
-// - style::ComputedStyles (used by tree module, cascade system)
-// - style::computed::ComputedStyle (used by layout, text pipeline)
-// These should be consolidated in a future refactoring.
-pub use crate::style::ComputedStyles as ComputedStyle;
 
 /// A block-level box
 ///
@@ -289,8 +280,8 @@ impl fmt::Display for BoxType {
 ///
 /// ```
 /// use std::sync::Arc;
-/// use fastrender::tree::{BoxNode, FormattingContextType};
-/// use fastrender::tree::box_tree::ComputedStyle;
+/// use fastrender::{BoxNode, FormattingContextType};
+/// use fastrender::ComputedStyle;
 ///
 /// let style = Arc::new(ComputedStyle::default());
 /// let box_node = BoxNode::new_block(
@@ -330,8 +321,8 @@ impl BoxNode {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use fastrender::tree::{BoxNode, FormattingContextType};
-    /// use fastrender::tree::box_tree::ComputedStyle;
+    /// use fastrender::{BoxNode, FormattingContextType};
+    /// use fastrender::ComputedStyle;
     ///
     /// let style = Arc::new(ComputedStyle::default());
     /// let box_node = BoxNode::new_block(
@@ -547,8 +538,8 @@ impl BoxNode {
 ///
 /// ```
 /// use std::sync::Arc;
-/// use fastrender::tree::{BoxTree, BoxNode, FormattingContextType};
-/// use fastrender::tree::box_tree::ComputedStyle;
+/// use fastrender::{BoxTree, BoxNode, FormattingContextType};
+/// use fastrender::ComputedStyle;
 ///
 /// let style = Arc::new(ComputedStyle::default());
 /// let root = BoxNode::new_block(

@@ -9,7 +9,7 @@
 //! in integration_test.rs).
 
 use fastrender::api::{FastRender, FastRenderConfig};
-use fastrender::style::Rgba;
+use fastrender::Rgba;
 
 // =============================================================================
 // FastRender Creation Tests
@@ -217,7 +217,7 @@ fn test_fragment_tree_type_reexport() {
 #[test]
 fn test_rgba_available() {
     // style::Rgba should be accessible for public API
-    use fastrender::style::Rgba;
+    use fastrender::Rgba;
     let color = Rgba::rgb(100, 150, 200);
     assert_eq!(color.r, 100);
 }

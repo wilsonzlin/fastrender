@@ -2,22 +2,24 @@
 //!
 //! Tests the AnonymousBoxCreator implementation per CSS 2.1 Section 9.2.1.1 and 9.2.2.1
 
-use fastrender::style::display::{Display, FormattingContextType};
-use fastrender::style::ComputedStyles;
+use fastrender::{Display, FormattingContextType};
+use fastrender::ComputedStyle;
 use fastrender::tree::box_tree::{AnonymousType, BoxType};
-use fastrender::tree::{AnonymousBoxCreator, BoxGenerationConfig, BoxGenerator, BoxNode, DOMNode};
+use fastrender::tree::anonymous::AnonymousBoxCreator;
+use fastrender::tree::box_generation::{BoxGenerationConfig, BoxGenerator, DOMNode};
+use fastrender::BoxNode;
 use std::sync::Arc;
 
 // =============================================================================
 // Helper Functions
 // =============================================================================
 
-fn default_style() -> Arc<ComputedStyles> {
-    Arc::new(ComputedStyles::default())
+fn default_style() -> Arc<ComputedStyle> {
+    Arc::new(ComputedStyle::default())
 }
 
-fn style_with_display(display: Display) -> Arc<ComputedStyles> {
-    let mut style = ComputedStyles::default();
+fn style_with_display(display: Display) -> Arc<ComputedStyle> {
+    let mut style = ComputedStyle::default();
     style.display = display;
     Arc::new(style)
 }

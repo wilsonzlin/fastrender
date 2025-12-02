@@ -4,9 +4,8 @@
 //! (glyph IDs + positions) into rendered pixels using font outlines
 //! and tiny-skia.
 
-use fastrender::paint::{GlyphCache, TextRasterizer};
-use fastrender::style::computed::ComputedStyle;
-use fastrender::style::Rgba;
+use fastrender::{GlyphCache, TextRasterizer};
+use fastrender::{ComputedStyle, Rgba};
 use fastrender::text::font_loader::FontContext;
 use fastrender::text::pipeline::{Direction, GlyphPosition, ShapedRun, ShapingPipeline};
 use std::sync::Arc;

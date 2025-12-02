@@ -26,7 +26,7 @@
 //! - CSS Tables Module Level 3
 //! - HTML 5.2 Section 4.9: Tabular data
 
-use crate::geometry::{Rect, Size};
+use crate::geometry::Rect;
 use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::tree::box_tree::BoxNode;
@@ -674,7 +674,7 @@ pub fn calculate_row_heights(structure: &mut TableStructure, _available_height: 
 ///
 /// ```rust,ignore
 /// use fastrender::layout::table::TableFormattingContext;
-/// use fastrender::layout::FormattingContext;
+/// use fastrender::FormattingContext;
 ///
 /// let tfc = TableFormattingContext::new();
 /// let fragment = tfc.layout(table_box, constraints)?;
@@ -915,12 +915,12 @@ impl TableFormattingContext {
 mod tests {
     use super::*;
     use crate::style::display::FormattingContextType;
-    use crate::style::ComputedStyles;
-    use crate::tree::box_tree::DebugInfo;
+    use crate::style::ComputedStyle;
+    use crate::tree::debug::DebugInfo;
     use std::sync::Arc;
 
-    fn create_test_style() -> Arc<ComputedStyles> {
-        Arc::new(ComputedStyles::default())
+    fn create_test_style() -> Arc<ComputedStyle> {
+        Arc::new(ComputedStyle::default())
     }
 
     fn create_table_cell(content: &str) -> BoxNode {

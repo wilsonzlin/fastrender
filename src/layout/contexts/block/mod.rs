@@ -23,22 +23,20 @@
 //!
 //! Reference: <https://www.w3.org/TR/CSS21/visuren.html#block-formatting>
 
-mod margin_collapse;
-mod width;
-
-pub use margin_collapse::{
-    collapse_margins, establishes_bfc, is_margin_collapsible_through, should_collapse_with_first_child,
-    should_collapse_with_last_child, CollapsibleMargin, MarginCollapseContext,
-};
-pub use width::{compute_block_width, compute_block_width_with_auto_margins, ComputedBlockWidth, MarginValue};
+pub mod margin_collapse;
+pub mod width;
 
 use crate::geometry::Rect;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::style::display::FormattingContextType;
-use crate::style::{Length, LineHeight, Position};
+use crate::style::position::Position;
+use crate::style::types::LineHeight;
+use crate::style::values::Length;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
+
+use margin_collapse::{MarginCollapseContext};
+use width::compute_block_width;
 
 /// Helper to resolve a Length to pixels, handling em/rem units with font-size
 fn resolve_length(length: &Length, font_size: f32, containing_block_size: f32) -> f32 {
@@ -305,24 +303,27 @@ fn is_out_of_flow(box_node: &BoxNode) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::{ComputedStyles, Display, Length};
+    use crate::style::display::FormattingContextType;
+    use crate::style::ComputedStyle;
+    use crate::style::display::Display;
+    use crate::style::values::Length;
     use std::sync::Arc;
 
-    fn default_style() -> Arc<ComputedStyles> {
-        let mut style = ComputedStyles::default();
+    fn default_style() -> Arc<ComputedStyle> {
+        let mut style = ComputedStyle::default();
         style.display = Display::Block;
         Arc::new(style)
     }
 
-    fn block_style_with_height(height: f32) -> Arc<ComputedStyles> {
-        let mut style = ComputedStyles::default();
+    fn block_style_with_height(height: f32) -> Arc<ComputedStyle> {
+        let mut style = ComputedStyle::default();
         style.display = Display::Block;
         style.height = Some(Length::px(height));
         Arc::new(style)
     }
 
-    fn block_style_with_margin(margin: f32) -> Arc<ComputedStyles> {
-        let mut style = ComputedStyles::default();
+    fn block_style_with_margin(margin: f32) -> Arc<ComputedStyle> {
+        let mut style = ComputedStyle::default();
         style.display = Display::Block;
         style.margin_top = Some(Length::px(margin));
         style.margin_bottom = Some(Length::px(margin));

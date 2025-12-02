@@ -32,8 +32,8 @@
 //! ```
 
 use super::baseline::{BaselineMetrics, LineBaselineAccumulator, VerticalAlign};
-use crate::geometry::Rect;
-use crate::text::{BreakOpportunity, BreakType, ShapedGlyphs};
+use crate::text::line_break::BreakOpportunity;
+use crate::text::shaper::ShapedGlyphs;
 use crate::tree::fragment_tree::FragmentNode;
 
 /// An item in the inline formatting context
@@ -588,6 +588,7 @@ impl LineBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::Rect;
     use crate::text::line_break::find_break_opportunities;
 
     fn make_strut_metrics() -> BaselineMetrics {

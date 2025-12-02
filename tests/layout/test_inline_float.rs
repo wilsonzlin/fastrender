@@ -3,11 +3,10 @@
 //! These tests verify that inline content correctly wraps around floats
 //! according to CSS 2.1 Section 9.5.
 
-use fastrender::layout::inline::{
+use fastrender::layout::inline::float_integration::{
     line_spaces, InlineFloatIntegration, InlineFloatIntegrationMut, LineSpace, LineSpaceOptions,
 };
-use fastrender::layout::{FloatContext, FloatSide};
-use fastrender::style::Clear;
+use fastrender::{FloatContext, FloatSide, Clear};
 
 // ==================== LineSpace Tests ====================
 
@@ -661,6 +660,10 @@ mod complex_scenarios {
     fn test_staircase_floats() {
         let mut ctx = FloatContext::new(800.0);
         // Staircase of progressively smaller floats
+        // Float 1: y=0-50, width=400 -> available=400
+        // Float 2: y=50-100, width=300 -> available=500
+        // Float 3: y=100-150, width=200 -> available=600
+        // Float 4: y=150-200, width=100 -> available=700
         ctx.add_float_at(FloatSide::Left, 0.0, 0.0, 400.0, 50.0);
         ctx.add_float_at(FloatSide::Left, 0.0, 50.0, 300.0, 50.0);
         ctx.add_float_at(FloatSide::Left, 0.0, 100.0, 200.0, 50.0);
@@ -668,8 +671,22 @@ mod complex_scenarios {
 
         let integration = InlineFloatIntegration::new(&ctx);
 
-        // Need 500px, must wait until all floats pass
+        // Need 500px - available at y=50 where float 2 (300px) leaves 500px
         let opts = LineSpaceOptions::with_min_width(500.0).line_height(20.0);
+        let space = integration.find_line_space(0.0, opts);
+
+        assert_eq!(space.y, 50.0);
+        assert_eq!(space.width, 500.0);
+
+        // Need 700px - available at y=150 where float 4 (100px) leaves 700px
+        let opts = LineSpaceOptions::with_min_width(700.0).line_height(20.0);
+        let space = integration.find_line_space(0.0, opts);
+
+        assert_eq!(space.y, 150.0);
+        assert_eq!(space.width, 700.0);
+
+        // Need full 800px - must wait until all floats pass at y=200
+        let opts = LineSpaceOptions::with_min_width(800.0).line_height(20.0);
         let space = integration.find_line_space(0.0, opts);
 
         assert_eq!(space.y, 200.0);

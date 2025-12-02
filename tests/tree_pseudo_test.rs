@@ -10,9 +10,9 @@
 //! - Box insertion order (before at start, after at end)
 //! - Integration with box generation pipeline
 
-use fastrender::style::display::{Display, FormattingContextType};
-use fastrender::style::ComputedStyles;
-use fastrender::tree::{
+use fastrender::{Display, FormattingContextType};
+use fastrender::ComputedStyle;
+use fastrender::{
     count_pseudo_boxes, find_pseudo_boxes, get_pseudo_type, is_pseudo_box, BoxNode, PseudoContent, PseudoContentItem,
     PseudoElementConfig, PseudoElementGenerator, PseudoElementStyle, PseudoElementType,
 };
@@ -22,8 +22,8 @@ use std::sync::Arc;
 // Helper Functions
 // =============================================================================
 
-fn default_style() -> Arc<ComputedStyles> {
-    Arc::new(ComputedStyles::default())
+fn default_style() -> Arc<ComputedStyle> {
+    Arc::new(ComputedStyle::default())
 }
 
 // =============================================================================

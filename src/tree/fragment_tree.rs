@@ -23,8 +23,8 @@
 //! # Usage
 //!
 //! ```
-//! use fastrender::tree::{FragmentNode, FragmentContent};
-//! use fastrender::geometry::{Rect, Point, Size};
+//! use fastrender::{FragmentNode, FragmentContent};
+//! use fastrender::{Rect, Point, Size};
 //!
 //! let fragment = FragmentNode::new_block(
 //!     Rect::from_xywh(10.0, 20.0, 100.0, 50.0),
@@ -147,8 +147,8 @@ impl FragmentContent {
 /// # Examples
 ///
 /// ```
-/// use fastrender::tree::{FragmentNode, FragmentContent};
-/// use fastrender::geometry::Rect;
+/// use fastrender::{FragmentNode, FragmentContent};
+/// use fastrender::Rect;
 ///
 /// let fragment = FragmentNode::new_block(
 ///     Rect::from_xywh(0.0, 0.0, 100.0, 50.0),
@@ -183,8 +183,8 @@ impl FragmentNode {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::{FragmentNode, FragmentContent};
-    /// use fastrender::geometry::Rect;
+    /// use fastrender::{FragmentNode, FragmentContent};
+    /// use fastrender::Rect;
     ///
     /// let bounds = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
     /// let content = FragmentContent::Block { box_id: None };
@@ -205,8 +205,8 @@ impl FragmentNode {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::FragmentNode;
-    /// use fastrender::geometry::Rect;
+    /// use fastrender::FragmentNode;
+    /// use fastrender::Rect;
     ///
     /// let fragment = FragmentNode::new_block(
     ///     Rect::from_xywh(0.0, 0.0, 200.0, 100.0),
@@ -241,8 +241,8 @@ impl FragmentNode {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::FragmentNode;
-    /// use fastrender::geometry::Rect;
+    /// use fastrender::FragmentNode;
+    /// use fastrender::Rect;
     ///
     /// let fragment = FragmentNode::new_text(
     ///     Rect::from_xywh(0.0, 0.0, 50.0, 20.0),
@@ -300,8 +300,8 @@ impl FragmentNode {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::FragmentNode;
-    /// use fastrender::geometry::Rect;
+    /// use fastrender::FragmentNode;
+    /// use fastrender::Rect;
     ///
     /// let child1 = FragmentNode::new_block(
     ///     Rect::from_xywh(0.0, 0.0, 50.0, 50.0),
@@ -342,8 +342,8 @@ impl FragmentNode {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::FragmentNode;
-    /// use fastrender::geometry::{Rect, Point};
+    /// use fastrender::FragmentNode;
+    /// use fastrender::{Rect, Point};
     ///
     /// let fragment = FragmentNode::new_block(
     ///     Rect::from_xywh(10.0, 20.0, 100.0, 50.0),
@@ -369,8 +369,8 @@ impl FragmentNode {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::FragmentNode;
-    /// use fastrender::geometry::{Rect, Point};
+    /// use fastrender::FragmentNode;
+    /// use fastrender::{Rect, Point};
     ///
     /// let fragment = FragmentNode::new_block(
     ///     Rect::from_xywh(10.0, 10.0, 100.0, 100.0),
@@ -392,8 +392,8 @@ impl FragmentNode {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::FragmentNode;
-    /// use fastrender::geometry::{Rect, Point};
+    /// use fastrender::FragmentNode;
+    /// use fastrender::{Rect, Point};
     ///
     /// let child = FragmentNode::new_block(
     ///     Rect::from_xywh(20.0, 20.0, 30.0, 30.0),
@@ -429,8 +429,8 @@ impl FragmentNode {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::tree::FragmentNode;
-    /// use fastrender::geometry::Rect;
+    /// use fastrender::FragmentNode;
+    /// use fastrender::Rect;
     ///
     /// let child1 = FragmentNode::new_block(
     ///     Rect::from_xywh(0.0, 0.0, 50.0, 50.0),
@@ -486,8 +486,8 @@ impl<'a> Iterator for FragmentIterator<'a> {
 /// # Examples
 ///
 /// ```
-/// use fastrender::tree::{FragmentTree, FragmentNode};
-/// use fastrender::geometry::Rect;
+/// use fastrender::{FragmentTree, FragmentNode};
+/// use fastrender::Rect;
 ///
 /// let root = FragmentNode::new_block(
 ///     Rect::from_xywh(0.0, 0.0, 800.0, 600.0),

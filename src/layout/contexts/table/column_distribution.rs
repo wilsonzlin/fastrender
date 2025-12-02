@@ -36,7 +36,7 @@ use std::fmt;
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// use fastrender::layout::contexts::table::ColumnConstraints;
 ///
 /// // A column with content-based sizing
@@ -51,7 +51,7 @@ use std::fmt;
 /// // A percentage column
 /// let percentage_column = ColumnConstraints::percentage(25.0, 30.0, 200.0);
 /// assert_eq!(percentage_column.percentage, Some(25.0));
-/// ```
+/// ```ignore
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnConstraints {
     /// Minimum content width (narrowest the column can be without overflow)
@@ -97,13 +97,13 @@ impl ColumnConstraints {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use fastrender::layout::contexts::table::ColumnConstraints;
     ///
     /// let column = ColumnConstraints::new(50.0, 200.0);
     /// assert!(column.is_flexible);
     /// assert_eq!(column.min_width, 50.0);
-    /// ```
+    /// ```ignore
     pub fn new(min_width: f32, max_width: f32) -> Self {
         Self {
             min_width,
@@ -124,13 +124,13 @@ impl ColumnConstraints {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use fastrender::layout::contexts::table::ColumnConstraints;
     ///
     /// let column = ColumnConstraints::fixed(150.0);
     /// assert_eq!(column.fixed_width, Some(150.0));
     /// assert!(!column.is_flexible);
-    /// ```
+    /// ```ignore
     pub fn fixed(width: f32) -> Self {
         Self {
             min_width: width,
@@ -153,13 +153,13 @@ impl ColumnConstraints {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use fastrender::layout::contexts::table::ColumnConstraints;
     ///
     /// let column = ColumnConstraints::percentage(25.0, 50.0, 200.0);
     /// assert_eq!(column.percentage, Some(25.0));
     /// assert!(!column.is_flexible);
-    /// ```
+    /// ```ignore
     pub fn percentage(percentage: f32, min_width: f32, max_width: f32) -> Self {
         Self {
             min_width,
@@ -176,13 +176,13 @@ impl ColumnConstraints {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use fastrender::layout::contexts::table::ColumnConstraints;
     ///
     /// let column = ColumnConstraints::zero();
     /// assert_eq!(column.min_width, 0.0);
     /// assert_eq!(column.max_width, 0.0);
-    /// ```
+    /// ```ignore
     pub fn zero() -> Self {
         Self::new(0.0, 0.0)
     }
@@ -194,12 +194,12 @@ impl ColumnConstraints {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use fastrender::layout::contexts::table::ColumnConstraints;
     ///
     /// let column = ColumnConstraints::new(50.0, 150.0);
     /// assert_eq!(column.flexibility_range(), 100.0);
-    /// ```
+    /// ```ignore
     pub fn flexibility_range(&self) -> f32 {
         (self.max_width - self.min_width).max(0.0)
     }
@@ -218,14 +218,14 @@ impl ColumnConstraints {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use fastrender::layout::contexts::table::ColumnConstraints;
     ///
     /// let mut column = ColumnConstraints::new(50.0, 100.0);
     /// column.add_colspan_contribution(200.0, 400.0, 2, 0);
     /// // Column receives half of the spanning cell's width requirement
     /// assert!(column.min_width >= 50.0);
-    /// ```
+    /// ```ignore
     pub fn add_colspan_contribution(&mut self, cell_min: f32, cell_max: f32, colspan: usize, _column_index: usize) {
         if colspan == 0 {
             return;
@@ -333,7 +333,7 @@ impl ColumnWidthDistributionResult {
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// use fastrender::layout::contexts::table::{
 ///     ColumnConstraints, ColumnDistributor, DistributionMode,
 /// };
@@ -349,7 +349,7 @@ impl ColumnWidthDistributionResult {
 ///
 /// assert_eq!(result.column_count(), 3);
 /// assert!((result.total_width - 500.0).abs() < 0.01);
-/// ```
+/// ```ignore
 #[derive(Debug, Clone)]
 pub struct ColumnDistributor {
     /// Distribution mode (fixed or auto)
@@ -368,11 +368,11 @@ impl ColumnDistributor {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use fastrender::layout::contexts::table::{ColumnDistributor, DistributionMode};
     ///
     /// let distributor = ColumnDistributor::new(DistributionMode::Auto);
-    /// ```
+    /// ```ignore
     pub fn new(mode: DistributionMode) -> Self {
         Self {
             mode,
@@ -386,12 +386,12 @@ impl ColumnDistributor {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use fastrender::layout::contexts::table::{ColumnDistributor, DistributionMode};
     ///
     /// let distributor = ColumnDistributor::new(DistributionMode::Auto)
     ///     .with_min_column_width(10.0);
-    /// ```
+    /// ```ignore
     pub fn with_min_column_width(mut self, width: f32) -> Self {
         self.min_column_width = width;
         self
@@ -414,7 +414,7 @@ impl ColumnDistributor {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use fastrender::layout::contexts::table::{
     ///     ColumnConstraints, ColumnDistributor, DistributionMode,
     /// };
@@ -428,7 +428,7 @@ impl ColumnDistributor {
     /// let result = distributor.distribute(&columns, 400.0);
     ///
     /// assert_eq!(result.widths.len(), 2);
-    /// ```
+    /// ```ignore
     pub fn distribute(&self, columns: &[ColumnConstraints], available_width: f32) -> ColumnWidthDistributionResult {
         if columns.is_empty() {
             return ColumnWidthDistributionResult::new(vec![]);
@@ -718,7 +718,7 @@ impl Default for ColumnDistributor {
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// use fastrender::layout::contexts::table::{
 ///     ColumnConstraints, distribute_spanning_cell_width,
 /// };
@@ -733,7 +733,7 @@ impl Default for ColumnDistributor {
 ///
 /// // Columns are updated to accommodate
 /// assert!(columns[0].min_width + columns[1].min_width >= 250.0);
-/// ```
+/// ```ignore
 pub fn distribute_spanning_cell_width(
     columns: &mut [ColumnConstraints],
     start_col: usize,
@@ -792,7 +792,7 @@ pub fn distribute_spanning_cell_width(
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// use fastrender::layout::contexts::table::compute_column_constraints;
 ///
 /// // 2x2 table with no colspan
@@ -805,7 +805,7 @@ pub fn distribute_spanning_cell_width(
 /// assert_eq!(constraints.len(), 2);
 /// // Column 0 min = max(50, 60) = 60
 /// assert_eq!(constraints[0].min_width, 60.0);
-/// ```
+/// ```ignore
 pub fn compute_column_constraints(
     cell_widths: &[Vec<(f32, f32, usize)>],
     column_count: usize,

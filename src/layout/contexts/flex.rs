@@ -25,13 +25,14 @@
 use std::collections::HashMap;
 
 use crate::geometry::{Point, Rect, Size};
-use crate::layout::constraints::LayoutConstraints;
+use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutConstraints};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::style::{
-    AlignContent, AlignItems, ComputedStyles, Display, FlexBasis, FlexDirection, FlexWrap, JustifyContent, Length,
-    LengthUnit,
-};
-use crate::tree::{BoxNode, FragmentNode};
+use crate::style::display::Display;
+use crate::style::types::{AlignContent, AlignItems, FlexBasis, FlexDirection, FlexWrap, JustifyContent};
+use crate::style::values::{Length, LengthUnit};
+use crate::style::ComputedStyle;
+use crate::tree::box_tree::BoxNode;
+use crate::tree::fragment_tree::FragmentNode;
 
 use taffy::prelude::*;
 use taffy::TaffyTree;
@@ -50,7 +51,7 @@ use taffy::TaffyTree;
 ///
 /// ```ignore
 /// use fastrender::layout::contexts::FlexFormattingContext;
-/// use fastrender::layout::LayoutConstraints;
+/// use fastrender::LayoutConstraints;
 /// use fastrender::tree::BoxNode;
 ///
 /// let fc = FlexFormattingContext::new();
@@ -191,11 +192,11 @@ impl FlexFormattingContext {
         Ok(taffy_node)
     }
 
-    /// Converts our ComputedStyles to Taffy's Style
+    /// Converts our ComputedStyle to Taffy's Style
     ///
     /// The `is_root` flag indicates if this is the root flex container.
     /// For the root, we use Flex display; for children, we use Block.
-    fn computed_style_to_taffy(&self, style: &ComputedStyles, is_root: bool) -> taffy::style::Style {
+    fn computed_style_to_taffy(&self, style: &ComputedStyle, is_root: bool) -> taffy::style::Style {
         taffy::style::Style {
             // Display mode - only root is Flex, children are Block (flex items)
             display: self.display_to_taffy(style, is_root),
@@ -258,7 +259,7 @@ impl FlexFormattingContext {
     ///
     /// For the root flex container without explicit size, we use 100% to fill
     /// available space (simulating block-level behavior).
-    fn compute_size(&self, style: &ComputedStyles, is_root: bool) -> taffy::geometry::Size<Dimension> {
+    fn compute_size(&self, style: &ComputedStyle, is_root: bool) -> taffy::geometry::Size<Dimension> {
         let width = match style.width.as_ref() {
             Some(len) => self.length_to_dimension(len),
             None if is_root => {
@@ -313,16 +314,16 @@ impl FlexFormattingContext {
     fn constraints_to_available_space(&self, constraints: &LayoutConstraints) -> taffy::geometry::Size<AvailableSpace> {
         taffy::geometry::Size {
             width: match constraints.available_width {
-                crate::layout::AvailableSpace::Definite(w) => AvailableSpace::Definite(w),
-                crate::layout::AvailableSpace::MinContent => AvailableSpace::MinContent,
-                crate::layout::AvailableSpace::MaxContent => AvailableSpace::MaxContent,
-                crate::layout::AvailableSpace::Indefinite => AvailableSpace::MaxContent,
+                CrateAvailableSpace::Definite(w) => AvailableSpace::Definite(w),
+                CrateAvailableSpace::MinContent => AvailableSpace::MinContent,
+                CrateAvailableSpace::MaxContent => AvailableSpace::MaxContent,
+                CrateAvailableSpace::Indefinite => AvailableSpace::MaxContent,
             },
             height: match constraints.available_height {
-                crate::layout::AvailableSpace::Definite(h) => AvailableSpace::Definite(h),
-                crate::layout::AvailableSpace::MinContent => AvailableSpace::MinContent,
-                crate::layout::AvailableSpace::MaxContent => AvailableSpace::MaxContent,
-                crate::layout::AvailableSpace::Indefinite => AvailableSpace::MaxContent,
+                CrateAvailableSpace::Definite(h) => AvailableSpace::Definite(h),
+                CrateAvailableSpace::MinContent => AvailableSpace::MinContent,
+                CrateAvailableSpace::MaxContent => AvailableSpace::MaxContent,
+                CrateAvailableSpace::Indefinite => AvailableSpace::MaxContent,
             },
         }
     }
@@ -331,7 +332,7 @@ impl FlexFormattingContext {
     // Type conversion helpers
     // ==========================================================================
 
-    fn display_to_taffy(&self, style: &ComputedStyles, is_root: bool) -> taffy::style::Display {
+    fn display_to_taffy(&self, style: &ComputedStyle, is_root: bool) -> taffy::style::Display {
         // Root container is always Flex (that's why we're using FlexFormattingContext)
         // Children use their actual display mode, defaulting to Block for flex items
         if is_root {
@@ -468,26 +469,26 @@ impl FlexFormattingContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::Display;
-    use crate::tree::FormattingContextType;
+    use crate::style::display::Display;
+    use crate::style::display::FormattingContextType;
     use std::sync::Arc;
 
-    fn create_flex_style() -> Arc<ComputedStyles> {
-        let mut style = ComputedStyles::default();
+    fn create_flex_style() -> Arc<ComputedStyle> {
+        let mut style = ComputedStyle::default();
         style.display = Display::Flex;
         style.flex_direction = FlexDirection::Row;
         Arc::new(style)
     }
 
-    fn create_item_style(width: f32, height: f32) -> Arc<ComputedStyles> {
-        let mut style = ComputedStyles::default();
+    fn create_item_style(width: f32, height: f32) -> Arc<ComputedStyle> {
+        let mut style = ComputedStyle::default();
         style.width = Some(Length::px(width));
         style.height = Some(Length::px(height));
         Arc::new(style)
     }
 
-    fn create_item_style_with_grow(width: f32, height: f32, grow: f32) -> Arc<ComputedStyles> {
-        let mut style = ComputedStyles::default();
+    fn create_item_style_with_grow(width: f32, height: f32, grow: f32) -> Arc<ComputedStyle> {
+        let mut style = ComputedStyle::default();
         style.width = Some(Length::px(width));
         style.height = Some(Length::px(height));
         style.flex_grow = grow;
@@ -538,7 +539,7 @@ mod tests {
     fn test_flex_column_layout() {
         let fc = FlexFormattingContext::new();
 
-        let mut container_style = ComputedStyles::default();
+        let mut container_style = ComputedStyle::default();
         container_style.display = Display::Flex;
         container_style.flex_direction = FlexDirection::Column;
 
@@ -619,7 +620,7 @@ mod tests {
     fn test_justify_content_space_between() {
         let fc = FlexFormattingContext::new();
 
-        let mut container_style = ComputedStyles::default();
+        let mut container_style = ComputedStyle::default();
         container_style.display = Display::Flex;
         container_style.flex_direction = FlexDirection::Row;
         container_style.justify_content = JustifyContent::SpaceBetween;
@@ -652,7 +653,7 @@ mod tests {
     fn test_align_items_center() {
         let fc = FlexFormattingContext::new();
 
-        let mut container_style = ComputedStyles::default();
+        let mut container_style = ComputedStyle::default();
         container_style.display = Display::Flex;
         container_style.flex_direction = FlexDirection::Row;
         container_style.align_items = AlignItems::Center;

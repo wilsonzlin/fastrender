@@ -36,10 +36,3 @@ pub mod text_run;
 // W4.T15 - Float integration
 pub mod float_integration;
 
-// Re-export primary types
-pub use baseline::{BaselineAligner, InlineBoxMetrics, LineMetrics, PositionedInlineBox, VerticalAlign};
-pub use float_integration::{
-    line_spaces, InlineFloatIntegration, InlineFloatIntegrationMut, LineSpace, LineSpaceIterator, LineSpaceOptions,
-    PlacedInlineFloat,
-};
-pub use text_run::{GlyphInfo, InlineItem, TextRun, TextRunBuilder};

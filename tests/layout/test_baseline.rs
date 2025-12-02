@@ -2,8 +2,8 @@
 //!
 //! Tests the baseline alignment algorithm as specified in CSS 2.1 Section 10.8.
 
-use fastrender::layout::inline::{BaselineAligner, InlineBoxMetrics, LineMetrics, VerticalAlign};
-use fastrender::text::ScaledMetrics;
+use fastrender::layout::inline::baseline::{BaselineAligner, InlineBoxMetrics, LineMetrics, VerticalAlign};
+use fastrender::text::font_db::ScaledMetrics;
 
 // =============================================================================
 // Test Helpers
@@ -562,14 +562,22 @@ fn test_length_offset_negative() {
 
 #[test]
 fn test_percentage_offset() {
-    let strut = mock_scaled_metrics(16.0, 12.0, 4.0);
+    // Use consistent line-height to isolate the percentage offset effect
+    let strut = mock_scaled_metrics_with_line_height(16.0, 12.0, 4.0, 20.0);
     let mut aligner = BaselineAligner::with_strut(strut.clone());
 
-    let normal = InlineBoxMetrics::from_text(&strut, VerticalAlign::Baseline);
+    let normal = InlineBoxMetrics {
+        ascent: 12.0,
+        descent: 4.0,
+        line_height: 20.0,
+        baseline_offset: 12.0,
+        x_height: None,
+        vertical_align: VerticalAlign::Baseline,
+    };
     let shifted = InlineBoxMetrics {
         ascent: 12.0,
         descent: 4.0,
-        line_height: 20.0, // 20px line-height
+        line_height: 20.0, // Same line-height as normal
         baseline_offset: 12.0,
         x_height: None,
         vertical_align: VerticalAlign::Percentage(50.0), // Raise by 50% of 20px = 10px
@@ -580,7 +588,7 @@ fn test_percentage_offset() {
 
     let (_, boxes) = aligner.align();
 
-    // Should be raised by 10px
+    // Should be raised by 10px (50% of 20px line-height)
     let difference = boxes[0].y_offset - boxes[1].y_offset;
     assert!((difference - 10.0).abs() < 0.01);
 }

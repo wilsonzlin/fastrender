@@ -1,5 +1,6 @@
-use crate::css::{CssString, FastRenderSelectorImpl, PseudoClass, PseudoElement};
-use crate::error::{Error, Result};
+use crate::css::selectors::{FastRenderSelectorImpl, PseudoClass, PseudoElement};
+use crate::css::types::CssString;
+use crate::error::{Error, ParseError, Result};
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
@@ -32,7 +33,7 @@ pub fn parse_html(html: &str) -> Result<DomNode> {
         .from_utf8()
         .read_from(&mut html.as_bytes())
         .map_err(|e| {
-            Error::Parse(crate::error::ParseError::InvalidHtml {
+            Error::Parse(ParseError::InvalidHtml {
                 message: format!("Failed to parse HTML: {}", e),
                 line: 0,
             })

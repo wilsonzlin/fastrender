@@ -51,7 +51,7 @@
 //! - tiny-skia: <https://docs.rs/tiny-skia/>
 
 use crate::error::{RenderError, Result};
-use crate::style::Rgba;
+use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
 use crate::text::pipeline::{GlyphPosition, ShapedRun};
 use std::collections::HashMap;
@@ -197,7 +197,9 @@ impl GlyphCacheKey {
 ///
 /// Contains a pre-built path that can be reused across multiple
 /// render calls at the same font size.
+/// (Reserved for glyph caching optimization)
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct CachedGlyph {
     /// The rendered path, or None if the glyph has no outline
     path: Option<Path>,

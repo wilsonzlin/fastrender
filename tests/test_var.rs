@@ -8,11 +8,11 @@
 //! - Embedded var() in other CSS functions
 //! - Edge cases and error handling
 
-use fastrender::css::PropertyValue;
+use fastrender::PropertyValue;
 use fastrender::style::var_resolution::{
     contains_var, extract_var_references, is_valid_custom_property_name, resolve_var, resolve_var_with_depth,
 };
-use fastrender::style::Length;
+use fastrender::Length;
 use std::collections::HashMap;
 
 /// Helper function to create a custom properties map from pairs
@@ -52,7 +52,7 @@ fn test_resolve_var_with_px_length() {
     match resolved {
         PropertyValue::Length(len) => {
             assert_eq!(len.value, 16.0);
-            assert_eq!(len.unit, fastrender::style::LengthUnit::Px);
+            assert_eq!(len.unit, fastrender::LengthUnit::Px);
         }
         _ => panic!("Expected Length, got {:?}", resolved),
     }
@@ -67,7 +67,7 @@ fn test_resolve_var_with_em_length() {
     match resolved {
         PropertyValue::Length(len) => {
             assert_eq!(len.value, 1.5);
-            assert_eq!(len.unit, fastrender::style::LengthUnit::Em);
+            assert_eq!(len.unit, fastrender::LengthUnit::Em);
         }
         _ => panic!("Expected Length, got {:?}", resolved),
     }

@@ -1,4 +1,4 @@
-use crate::error::{Error, Result};
+use crate::error::{Error, RenderError, Result};
 use image::{ImageFormat, RgbaImage};
 use std::io::Cursor;
 use tiny_skia::Pixmap;
@@ -52,7 +52,7 @@ pub fn encode_image(pixmap: &Pixmap, format: OutputFormat) -> Result<Vec<u8>> {
     match format {
         OutputFormat::Png => {
             let img = RgbaImage::from_raw(width, height, rgba_data).ok_or_else(|| {
-                Error::Render(crate::error::RenderError::EncodeFailed {
+                Error::Render(RenderError::EncodeFailed {
                     format: "PNG".to_string(),
                     reason: "Failed to create RGBA image".to_string(),
                 })
@@ -60,7 +60,7 @@ pub fn encode_image(pixmap: &Pixmap, format: OutputFormat) -> Result<Vec<u8>> {
 
             let mut cursor = Cursor::new(&mut buffer);
             img.write_to(&mut cursor, ImageFormat::Png).map_err(|e| {
-                Error::Render(crate::error::RenderError::EncodeFailed {
+                Error::Render(RenderError::EncodeFailed {
                     format: "PNG".to_string(),
                     reason: e.to_string(),
                 })
@@ -74,7 +74,7 @@ pub fn encode_image(pixmap: &Pixmap, format: OutputFormat) -> Result<Vec<u8>> {
                 .collect();
 
             let rgb_img = image::RgbImage::from_raw(width, height, rgb_data).ok_or_else(|| {
-                Error::Render(crate::error::RenderError::EncodeFailed {
+                Error::Render(RenderError::EncodeFailed {
                     format: "JPEG".to_string(),
                     reason: "Failed to create RGB image".to_string(),
                 })
@@ -83,7 +83,7 @@ pub fn encode_image(pixmap: &Pixmap, format: OutputFormat) -> Result<Vec<u8>> {
             let mut cursor = Cursor::new(&mut buffer);
             let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, quality);
             rgb_img.write_with_encoder(encoder).map_err(|e| {
-                Error::Render(crate::error::RenderError::EncodeFailed {
+                Error::Render(RenderError::EncodeFailed {
                     format: "JPEG".to_string(),
                     reason: e.to_string(),
                 })
@@ -91,7 +91,7 @@ pub fn encode_image(pixmap: &Pixmap, format: OutputFormat) -> Result<Vec<u8>> {
         }
         OutputFormat::WebP(_quality) => {
             let img = RgbaImage::from_raw(width, height, rgba_data).ok_or_else(|| {
-                Error::Render(crate::error::RenderError::EncodeFailed {
+                Error::Render(RenderError::EncodeFailed {
                     format: "WebP".to_string(),
                     reason: "Failed to create RGBA image".to_string(),
                 })
@@ -101,7 +101,7 @@ pub fn encode_image(pixmap: &Pixmap, format: OutputFormat) -> Result<Vec<u8>> {
             let mut cursor = Cursor::new(&mut buffer);
             let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut cursor);
             img.write_with_encoder(encoder).map_err(|e| {
-                Error::Render(crate::error::RenderError::EncodeFailed {
+                Error::Render(RenderError::EncodeFailed {
                     format: "WebP".to_string(),
                     reason: e.to_string(),
                 })

@@ -34,8 +34,8 @@
 //! );
 //! ```
 
-use crate::error::{Error, Result};
-use crate::geometry::{Point, Rect, Size};
+use crate::error::{Error, FontError, Result};
+use crate::geometry::{Point, Rect};
 use crate::text::font_db::{FontStyle, FontWeight, LoadedFont, ScaledMetrics};
 use crate::text::font_loader::FontContext;
 use rustybuzz::{Direction, Face, UnicodeBuffer};
@@ -741,11 +741,11 @@ impl<'a> TextRunBuilder<'a> {
         let font = self
             .font_context
             .get_font(families, weight, italic, false)
-            .ok_or(Error::Font(crate::error::FontError::NoFontsAvailable))?;
+            .ok_or(Error::Font(FontError::NoFontsAvailable))?;
 
         // Get metrics
         let metrics = font.metrics().map(|m| m.scale(font_size)).map_err(|e| {
-            Error::Font(crate::error::FontError::LoadFailed {
+            Error::Font(FontError::LoadFailed {
                 family: font.family.clone(),
                 reason: format!("Failed to get metrics: {:?}", e),
             })
@@ -769,7 +769,7 @@ impl<'a> TextRunBuilder<'a> {
 
         // Get metrics
         let metrics = font.metrics().map(|m| m.scale(font_size)).map_err(|e| {
-            Error::Font(crate::error::FontError::LoadFailed {
+            Error::Font(FontError::LoadFailed {
                 family: font.family.clone(),
                 reason: format!("Failed to get metrics: {:?}", e),
             })
@@ -785,7 +785,7 @@ impl<'a> TextRunBuilder<'a> {
     fn shape_text(&self, text: &str, font: &LoadedFont, font_size: f32) -> Result<Vec<GlyphInfo>> {
         // Get rustybuzz face
         let rb_face = Face::from_slice(&font.data, font.index).ok_or_else(|| {
-            Error::Font(crate::error::FontError::LoadFailed {
+            Error::Font(FontError::LoadFailed {
                 family: font.family.clone(),
                 reason: "Failed to create rustybuzz face".to_string(),
             })
@@ -851,7 +851,7 @@ impl<'a> TextRunBuilder<'a> {
         let font = self
             .font_context
             .get_font(families, weight, italic, false)
-            .ok_or(Error::Font(crate::error::FontError::NoFontsAvailable))?;
+            .ok_or(Error::Font(FontError::NoFontsAvailable))?;
 
         // Split by whitespace while tracking positions
         let mut last_end = 0;

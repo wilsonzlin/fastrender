@@ -53,7 +53,7 @@ use std::fmt;
 ///
 /// ```
 /// use fastrender::style::media::{MediaQuery, MediaType, MediaModifier, MediaFeature};
-/// use fastrender::style::values::Length;
+/// use fastrender::Length;
 ///
 /// // Equivalent to: @media screen and (min-width: 768px)
 /// let query = MediaQuery {
@@ -110,7 +110,7 @@ impl MediaQuery {
     ///
     /// ```
     /// use fastrender::style::media::{MediaQuery, MediaFeature};
-    /// use fastrender::style::values::Length;
+    /// use fastrender::Length;
     ///
     /// let query = MediaQuery::with_feature(MediaFeature::MinWidth(Length::px(768.0)));
     /// ```
@@ -270,7 +270,7 @@ impl fmt::Display for MediaModifier {
 ///
 /// ```
 /// use fastrender::style::media::MediaFeature;
-/// use fastrender::style::values::Length;
+/// use fastrender::Length;
 ///
 /// let min_width = MediaFeature::MinWidth(Length::px(768.0));
 /// let orientation = MediaFeature::Orientation(fastrender::style::media::Orientation::Portrait);

@@ -20,14 +20,14 @@
 //! - W3.T09: GridFormattingContext (Taffy-backed)
 //! - W4.T12: InlineFormattingContext
 
-use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::flex::FlexFormattingContext;
 use crate::layout::contexts::grid::GridFormattingContext;
 use crate::layout::contexts::inline::InlineFormattingContext;
 use crate::layout::formatting_context::{FormattingContext, LayoutError};
 use crate::layout::table::TableFormattingContext;
-use crate::tree::{BoxNode, FormattingContextType};
+use crate::style::display::FormattingContextType;
+use crate::tree::box_tree::BoxNode;
 
 // =============================================================================
 // Factory
@@ -41,10 +41,10 @@ use crate::tree::{BoxNode, FormattingContextType};
 /// # Usage
 ///
 /// ```
-/// use fastrender::layout::contexts::FormattingContextFactory;
-/// use fastrender::layout::LayoutConstraints;
-/// use fastrender::tree::{BoxNode, FormattingContextType};
-/// use fastrender::tree::box_tree::ComputedStyle;
+/// use fastrender::FormattingContextFactory;
+/// use fastrender::LayoutConstraints;
+/// use fastrender::{BoxNode, FormattingContextType};
+/// use fastrender::ComputedStyle;
 /// use std::sync::Arc;
 ///
 /// let factory = FormattingContextFactory::new();
@@ -99,8 +99,8 @@ impl FormattingContextFactory {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::contexts::FormattingContextFactory;
-    /// use fastrender::tree::FormattingContextType;
+    /// use fastrender::FormattingContextFactory;
+    /// use fastrender::FormattingContextType;
     ///
     /// let factory = FormattingContextFactory::new();
     /// let block_fc = factory.create(FormattingContextType::Block);
@@ -130,10 +130,10 @@ impl FormattingContextFactory {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::contexts::FormattingContextFactory;
+    /// use fastrender::FormattingContextFactory;
     ///
     /// let factory = FormattingContextFactory::new();
-    /// for fc_type in factory.supported_types() {
+    /// for &fc_type in factory.supported_types() {
     ///     let _fc = factory.create(fc_type);
     /// }
     /// ```
@@ -152,8 +152,8 @@ impl FormattingContextFactory {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::layout::contexts::FormattingContextFactory;
-    /// use fastrender::tree::FormattingContextType;
+    /// use fastrender::FormattingContextFactory;
+    /// use fastrender::FormattingContextType;
     ///
     /// let factory = FormattingContextFactory::new();
     /// assert!(factory.is_supported(FormattingContextType::Block));
@@ -177,7 +177,8 @@ impl Default for FormattingContextFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tree::box_tree::ComputedStyle;
+    use crate::layout::constraints::LayoutConstraints;
+    use crate::style::ComputedStyle;
     use std::sync::Arc;
 
     fn default_style() -> Arc<ComputedStyle> {

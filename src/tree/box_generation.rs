@@ -8,8 +8,10 @@
 
 use crate::geometry::Size;
 use crate::style::display::{Display, FormattingContextType};
+use crate::style::ComputedStyle;
 use crate::tree::anonymous::AnonymousBoxCreator;
-use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, ComputedStyle, DebugInfo, ReplacedType};
+use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, ReplacedType};
+use crate::tree::debug::DebugInfo;
 use std::sync::Arc;
 
 /// Simplified DOM node representation
@@ -97,9 +99,9 @@ impl DOMNode {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use fastrender::tree::DOMNode;
-    /// use fastrender::tree::box_tree::ComputedStyle;
-    /// use fastrender::geometry::Size;
+    /// use fastrender::tree::box_generation::DOMNode;
+    /// use fastrender::ComputedStyle;
+    /// use fastrender::Size;
     ///
     /// let style = Arc::new(ComputedStyle::default());
     /// let img = DOMNode::new_replaced("img", style, "image.png", Some(Size::new(100.0, 50.0)));
@@ -595,9 +597,9 @@ impl BoxGenerator {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use fastrender::tree::{BoxNode, FormattingContextType};
-    /// use fastrender::tree::box_tree::ComputedStyle;
-    /// use fastrender::tree::BoxGenerator;
+    /// use fastrender::{BoxNode, FormattingContextType};
+    /// use fastrender::ComputedStyle;
+    /// use fastrender::BoxGenerator;
     ///
     /// let style = Arc::new(ComputedStyle::default());
     /// let child = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
@@ -623,9 +625,9 @@ impl BoxGenerator {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use fastrender::tree::{BoxNode, BoxType, FormattingContextType};
-    /// use fastrender::tree::box_tree::ComputedStyle;
-    /// use fastrender::tree::BoxGenerator;
+    /// use fastrender::{BoxNode, BoxType, FormattingContextType};
+    /// use fastrender::ComputedStyle;
+    /// use fastrender::BoxGenerator;
     ///
     /// let style = Arc::new(ComputedStyle::default());
     /// let text = BoxNode::new_text(style.clone(), "Hello".to_string());
@@ -661,9 +663,9 @@ impl BoxGenerator {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use fastrender::tree::{BoxNode, FormattingContextType};
-    /// use fastrender::tree::box_tree::ComputedStyle;
-    /// use fastrender::tree::BoxGenerator;
+    /// use fastrender::{BoxNode, FormattingContextType};
+    /// use fastrender::ComputedStyle;
+    /// use fastrender::BoxGenerator;
     ///
     /// let style = Arc::new(ComputedStyle::default());
     /// let child1 = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
@@ -705,9 +707,9 @@ impl BoxGenerator {
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use fastrender::tree::{BoxNode, FormattingContextType};
-    /// use fastrender::tree::box_tree::ComputedStyle;
-    /// use fastrender::tree::BoxGenerator;
+    /// use fastrender::{BoxNode, FormattingContextType};
+    /// use fastrender::ComputedStyle;
+    /// use fastrender::BoxGenerator;
     ///
     /// let style = Arc::new(ComputedStyle::default());
     /// let valid_tree = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![
@@ -761,7 +763,7 @@ impl Default for BoxGenerator {
 // StyledNode-based Box Generation (for real DOM/style pipeline)
 // ============================================================================
 
-use crate::style::StyledNode;
+use crate::style::cascade::StyledNode;
 use crate::tree::box_tree::ReplacedBox;
 
 /// Generates a BoxTree from a StyledNode tree
@@ -806,7 +808,21 @@ fn generate_box_node_from_styled(styled: &StyledNode) -> BoxNode {
     }
 
     // Generate children
-    let children: Vec<BoxNode> = styled.children.iter().map(generate_box_node_from_styled).collect();
+    let mut children: Vec<BoxNode> = styled.children.iter().map(generate_box_node_from_styled).collect();
+
+    // Generate ::before pseudo-element box if styles exist
+    if let Some(before_styles) = &styled.before_styles {
+        if let Some(before_box) = create_pseudo_element_box(before_styles, "before") {
+            children.insert(0, before_box);
+        }
+    }
+
+    // Generate ::after pseudo-element box if styles exist
+    if let Some(after_styles) = &styled.after_styles {
+        if let Some(after_box) = create_pseudo_element_box(after_styles, "after") {
+            children.push(after_box);
+        }
+    }
 
     // Determine box type based on display
     let fc_type = styled
@@ -824,6 +840,46 @@ fn generate_box_node_from_styled(styled: &StyledNode) -> BoxNode {
     }
 }
 
+/// Creates a box for a pseudo-element (::before or ::after)
+fn create_pseudo_element_box(styles: &ComputedStyle, pseudo_name: &str) -> Option<BoxNode> {
+    // Get content value
+    let content = &styles.content;
+
+    // Skip if no content or content is "none" or "normal"
+    if content.is_empty() || content == "none" || content == "normal" {
+        return None;
+    }
+
+    let pseudo_style = Arc::new(styles.clone());
+
+    // Create a text box with the content
+    let text_box = BoxNode::new_text(pseudo_style.clone(), content.clone());
+
+    // Determine the box type based on display property
+    let fc_type = styles
+        .display
+        .formatting_context_type()
+        .unwrap_or(FormattingContextType::Block);
+
+    // Wrap in appropriate box type based on display
+    let mut pseudo_box = match styles.display {
+        Display::Block => BoxNode::new_block(pseudo_style.clone(), fc_type, vec![text_box]),
+        Display::Inline | Display::None => BoxNode::new_inline(pseudo_style.clone(), vec![text_box]),
+        Display::InlineBlock => BoxNode::new_inline_block(pseudo_style.clone(), fc_type, vec![text_box]),
+        _ => BoxNode::new_inline(pseudo_style.clone(), vec![text_box]),
+    };
+
+    // Add debug info to mark this as a pseudo-element
+    pseudo_box.debug_info = Some(DebugInfo {
+        tag_name: Some(pseudo_name.to_string()),
+        id: None,
+        classes: vec!["pseudo-element".to_string()],
+        dom_path: None,
+    });
+
+    Some(pseudo_box)
+}
+
 /// Checks if an element is a replaced element
 ///
 /// Replaced elements are those whose content is replaced by an external resource,
@@ -836,7 +892,7 @@ pub fn is_replaced_element(tag: &str) -> bool {
 }
 
 /// Creates a BoxNode for a replaced element from a StyledNode
-fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<crate::style::ComputedStyles>) -> BoxNode {
+fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle>) -> BoxNode {
     let tag = styled.node.tag_name().unwrap_or("img");
 
     // Get src attribute if available
@@ -882,6 +938,8 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<crate::style:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::Size;
+    use crate::tree::box_tree::ReplacedType;
 
     fn default_style() -> Arc<ComputedStyle> {
         Arc::new(ComputedStyle::default())
@@ -1282,7 +1340,7 @@ mod tests {
     #[test]
     fn test_new_replaced_constructor() {
         let style = default_style();
-        let size = crate::geometry::Size::new(100.0, 50.0);
+        let size = Size::new(100.0, 50.0);
 
         let img = DOMNode::new_replaced("img", style.clone(), "image.png", Some(size));
 
@@ -1295,7 +1353,7 @@ mod tests {
     #[test]
     fn test_replaced_element_aspect_ratio() {
         let style = default_style();
-        let size = crate::geometry::Size::new(100.0, 50.0);
+        let size = Size::new(100.0, 50.0);
 
         let img = DOMNode::new_replaced("img", style.clone(), "test.png", Some(size));
         assert_eq!(img.aspect_ratio(), Some(2.0)); // 100/50 = 2
@@ -1305,7 +1363,7 @@ mod tests {
         assert_eq!(img_no_size.aspect_ratio(), None);
 
         // Test with zero height
-        let zero_height = DOMNode::new_replaced("img", style, "test.png", Some(crate::geometry::Size::new(100.0, 0.0)));
+        let zero_height = DOMNode::new_replaced("img", style, "test.png", Some(Size::new(100.0, 0.0)));
         assert_eq!(zero_height.aspect_ratio(), None);
     }
 
@@ -1316,19 +1374,19 @@ mod tests {
         let img = DOMNode::new_replaced("img", style.clone(), "test.png", None);
         assert!(matches!(
             img.replaced_type(),
-            Some(crate::tree::ReplacedType::Image { .. })
+            Some(ReplacedType::Image { .. })
         ));
 
         let video = DOMNode::new_replaced("video", style.clone(), "test.mp4", None);
         assert!(matches!(
             video.replaced_type(),
-            Some(crate::tree::ReplacedType::Video { .. })
+            Some(ReplacedType::Video { .. })
         ));
 
         let canvas = DOMNode::new_element("canvas", style.clone(), vec![]);
         assert!(matches!(
             canvas.replaced_type(),
-            Some(crate::tree::ReplacedType::Canvas)
+            Some(ReplacedType::Canvas)
         ));
 
         let div = DOMNode::new_element("div", style, vec![]);
@@ -1339,7 +1397,7 @@ mod tests {
     fn test_generate_replaced_box() {
         let generator = BoxGenerator::new();
         let style = default_style();
-        let size = crate::geometry::Size::new(200.0, 100.0);
+        let size = Size::new(200.0, 100.0);
 
         let img = DOMNode::new_replaced("img", style.clone(), "test.png", Some(size));
         let wrapper = DOMNode::new_element("div", style_with_display(Display::Block), vec![img]);
@@ -1363,13 +1421,13 @@ mod tests {
             "img",
             style.clone(),
             "img1.png",
-            Some(crate::geometry::Size::new(100.0, 100.0)),
+            Some(Size::new(100.0, 100.0)),
         );
         let video = DOMNode::new_replaced(
             "video",
             style.clone(),
             "video.mp4",
-            Some(crate::geometry::Size::new(640.0, 480.0)),
+            Some(Size::new(640.0, 480.0)),
         );
         let img2 = DOMNode::new_replaced("img", style.clone(), "img2.png", None);
 
@@ -1410,7 +1468,7 @@ mod tests {
             "img",
             style.clone(),
             "icon.png",
-            Some(crate::geometry::Size::new(16.0, 16.0)),
+            Some(Size::new(16.0, 16.0)),
         );
         let text2 = DOMNode::new_text(" World", style.clone());
 
@@ -1512,15 +1570,15 @@ mod tests {
 
         let img = BoxNode::new_replaced(
             style.clone(),
-            crate::tree::ReplacedType::Image {
+            ReplacedType::Image {
                 src: "test.png".to_string(),
             },
-            Some(crate::geometry::Size::new(100.0, 100.0)),
+            Some(Size::new(100.0, 100.0)),
             Some(1.0),
         );
         let video = BoxNode::new_replaced(
             style.clone(),
-            crate::tree::ReplacedType::Video {
+            ReplacedType::Video {
                 src: "test.mp4".to_string(),
             },
             None,
@@ -1568,7 +1626,7 @@ mod tests {
     #[test]
     fn test_with_builder_methods() {
         let style = default_style();
-        let size = crate::geometry::Size::new(50.0, 25.0);
+        let size = Size::new(50.0, 25.0);
 
         let node = DOMNode::new_element("img", style, vec![])
             .with_id("my-image")
@@ -1611,7 +1669,7 @@ mod tests {
             "img",
             style.clone(),
             "test.png",
-            Some(crate::geometry::Size::new(100.0, 50.0)),
+            Some(Size::new(100.0, 50.0)),
         );
         let text2 = DOMNode::new_text(" after image ", style.clone());
         let video = DOMNode::new_replaced("video", style.clone(), "test.mp4", None);
@@ -1644,7 +1702,7 @@ mod tests {
             "svg",
             style.clone(),
             "<svg>...</svg>",
-            Some(crate::geometry::Size::new(100.0, 100.0)),
+            Some(Size::new(100.0, 100.0)),
         );
         let wrapper = DOMNode::new_element("div", style_with_display(Display::Block), vec![svg]);
 
@@ -1662,7 +1720,7 @@ mod tests {
             "iframe",
             style.clone(),
             "https://example.com",
-            Some(crate::geometry::Size::new(300.0, 200.0)),
+            Some(Size::new(300.0, 200.0)),
         );
         let wrapper = DOMNode::new_element("div", style_with_display(Display::Block), vec![iframe]);
 

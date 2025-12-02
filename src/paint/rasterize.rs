@@ -18,7 +18,7 @@
 //!
 //! ```rust,ignore
 //! use fastrender::paint::rasterize::{fill_rect, fill_rounded_rect, BorderRadii};
-//! use fastrender::style::Rgba;
+//! use fastrender::Rgba;
 //! use tiny_skia::Pixmap;
 //!
 //! let mut pixmap = Pixmap::new(100, 100).unwrap();
@@ -31,13 +31,10 @@
 //! fill_rounded_rect(&mut pixmap, 20.0, 20.0, 60.0, 60.0, &radii, Rgba::rgb(0, 255, 0));
 //! ```
 
-use crate::error::{RenderError, Result};
 use crate::geometry::Rect;
-use crate::style::Rgba;
+use crate::paint::display_list::BorderRadii;
+use crate::style::color::Rgba;
 use tiny_skia::{FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
-
-// Re-export BorderRadii from display_list (canonical definition)
-pub use super::display_list::BorderRadii;
 
 /// Border widths for all four sides
 #[derive(Debug, Clone, Copy, PartialEq, Default)]

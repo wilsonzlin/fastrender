@@ -26,12 +26,13 @@
 //! let display_list = builder.build(&fragment_tree.root);
 //! ```
 
-use crate::geometry::{Point, Rect, Size};
+use crate::geometry::{Point, Rect};
 use crate::paint::display_list::{
     ClipItem, DisplayItem, DisplayList, FillRectItem, GlyphInstance, ImageData, ImageItem, OpacityItem, StrokeRectItem,
     TextItem,
 };
 use crate::style::color::Rgba;
+use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -163,7 +164,7 @@ impl DisplayListBuilder {
             }
 
             FragmentContent::Replaced {
-                replaced_type: crate::tree::box_tree::ReplacedType::Image { src: _ },
+                replaced_type: ReplacedType::Image { src: _ },
                 ..
             } => {
                 // Create placeholder image (1x1 gray pixel)

@@ -23,7 +23,7 @@ use std::fmt;
 /// # Examples
 ///
 /// ```
-/// use fastrender::style::LengthUnit;
+/// use fastrender::LengthUnit;
 ///
 /// let unit = LengthUnit::Px;
 /// assert!(unit.is_absolute());
@@ -88,7 +88,7 @@ impl LengthUnit {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::LengthUnit;
+    /// use fastrender::LengthUnit;
     ///
     /// assert!(LengthUnit::Px.is_absolute());
     /// assert!(LengthUnit::In.is_absolute());
@@ -105,7 +105,7 @@ impl LengthUnit {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::LengthUnit;
+    /// use fastrender::LengthUnit;
     ///
     /// assert!(LengthUnit::Em.is_font_relative());
     /// assert!(LengthUnit::Rem.is_font_relative());
@@ -122,7 +122,7 @@ impl LengthUnit {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::LengthUnit;
+    /// use fastrender::LengthUnit;
     ///
     /// assert!(LengthUnit::Vw.is_viewport_relative());
     /// assert!(LengthUnit::Vh.is_viewport_relative());
@@ -142,7 +142,7 @@ impl LengthUnit {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::LengthUnit;
+    /// use fastrender::LengthUnit;
     ///
     /// assert_eq!(LengthUnit::Px.as_str(), "px");
     /// assert_eq!(LengthUnit::Em.as_str(), "em");
@@ -362,7 +362,7 @@ impl fmt::Display for LengthUnit {
 /// # Examples
 ///
 /// ```
-/// use fastrender::style::{Length, LengthUnit};
+/// use fastrender::{Length, LengthUnit};
 ///
 /// let length = Length::px(100.0);
 /// assert_eq!(length.value, 100.0);
@@ -386,7 +386,7 @@ impl Length {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::{Length, LengthUnit};
+    /// use fastrender::{Length, LengthUnit};
     ///
     /// let length = Length::new(10.0, LengthUnit::Px);
     /// assert_eq!(length.value, 10.0);
@@ -468,7 +468,7 @@ impl Length {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Length;
+    /// use fastrender::Length;
     ///
     /// assert_eq!(Length::px(100.0).to_px(), 100.0);
     /// assert_eq!(Length::pt(72.0).to_px(), 96.0); // 72pt = 1in = 96px
@@ -492,7 +492,7 @@ impl Length {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Length;
+    /// use fastrender::Length;
     ///
     /// let length = Length::percent(50.0);
     /// assert_eq!(length.resolve_against(200.0), 100.0);
@@ -513,7 +513,7 @@ impl Length {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Length;
+    /// use fastrender::Length;
     ///
     /// let length = Length::em(2.0);
     /// assert_eq!(length.resolve_with_font_size(16.0), 32.0);
@@ -534,12 +534,12 @@ impl Length {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Length;
+    /// use fastrender::{Length, LengthUnit};
     ///
-    /// let length = Length::new(50.0, fastrender::style::LengthUnit::Vw);
+    /// let length = Length::new(50.0, LengthUnit::Vw);
     /// assert_eq!(length.resolve_with_viewport(800.0, 600.0), 400.0);
     ///
-    /// let vh_length = Length::new(50.0, fastrender::style::LengthUnit::Vh);
+    /// let vh_length = Length::new(50.0, LengthUnit::Vh);
     /// assert_eq!(vh_length.resolve_with_viewport(800.0, 600.0), 300.0);
     /// ```
     pub fn resolve_with_viewport(self, viewport_width: f32, viewport_height: f32) -> f32 {
@@ -558,7 +558,7 @@ impl Length {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::Length;
+    /// use fastrender::Length;
     ///
     /// assert!(Length::px(0.0).is_zero());
     /// assert!(!Length::px(0.1).is_zero());
@@ -582,7 +582,7 @@ impl fmt::Display for Length {
 /// # Examples
 ///
 /// ```
-/// use fastrender::style::{LengthOrAuto, Length};
+/// use fastrender::{LengthOrAuto, Length};
 ///
 /// let auto_width = LengthOrAuto::Auto;
 /// assert!(auto_width.is_auto());
@@ -604,7 +604,7 @@ impl LengthOrAuto {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::LengthOrAuto;
+    /// use fastrender::LengthOrAuto;
     ///
     /// let width = LengthOrAuto::px(100.0);
     /// assert_eq!(width.to_px().unwrap(), 100.0);
@@ -623,7 +623,7 @@ impl LengthOrAuto {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::LengthOrAuto;
+    /// use fastrender::LengthOrAuto;
     ///
     /// assert!(LengthOrAuto::Auto.is_auto());
     /// assert!(!LengthOrAuto::px(100.0).is_auto());
@@ -637,7 +637,7 @@ impl LengthOrAuto {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::{LengthOrAuto, Length};
+    /// use fastrender::{LengthOrAuto, Length};
     ///
     /// let value = LengthOrAuto::px(100.0);
     /// assert_eq!(value.length(), Some(Length::px(100.0)));
@@ -656,7 +656,7 @@ impl LengthOrAuto {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::LengthOrAuto;
+    /// use fastrender::LengthOrAuto;
     ///
     /// assert_eq!(LengthOrAuto::px(100.0).to_px(), Some(100.0));
     /// assert_eq!(LengthOrAuto::Auto.to_px(), None);
@@ -675,7 +675,7 @@ impl LengthOrAuto {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::LengthOrAuto;
+    /// use fastrender::LengthOrAuto;
     ///
     /// let percent = LengthOrAuto::percent(50.0);
     /// assert_eq!(percent.resolve_against(200.0), Some(100.0));
@@ -694,7 +694,7 @@ impl LengthOrAuto {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::style::LengthOrAuto;
+    /// use fastrender::LengthOrAuto;
     ///
     /// assert_eq!(LengthOrAuto::px(100.0).resolve_or(50.0, 0.0), 100.0);
     /// assert_eq!(LengthOrAuto::Auto.resolve_or(50.0, 0.0), 50.0);

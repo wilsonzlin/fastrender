@@ -14,7 +14,7 @@
 //!
 //! ```rust,ignore
 //! use fastrender::paint::{DisplayList, DisplayListOptimizer, OptimizationConfig};
-//! use fastrender::geometry::Rect;
+//! use fastrender::Rect;
 //!
 //! let list = DisplayList::new();
 //! // ... build display list ...
@@ -27,9 +27,7 @@
 //! ```
 
 use crate::geometry::Rect;
-use crate::paint::display_list::{
-    BlendMode, BlendModeItem, DisplayItem, DisplayList, FillRectItem, OpacityItem, TransformItem,
-};
+use crate::paint::display_list::{BlendMode, DisplayItem, DisplayList, FillRectItem};
 
 // ============================================================================
 // Optimization Configuration
@@ -541,8 +539,8 @@ pub fn optimize_with_stats(list: DisplayList, viewport: Rect) -> (DisplayList, O
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::paint::display_list::Transform2D;
-    use crate::style::Rgba;
+    use crate::paint::display_list::{OpacityItem, Transform2D};
+    use crate::style::color::Rgba;
 
     fn make_fill_rect(x: f32, y: f32, w: f32, h: f32, color: Rgba) -> DisplayItem {
         DisplayItem::FillRect(FillRectItem {

@@ -4,7 +4,7 @@
 //! for various real-world scenarios based on CSS 2.1 Section 17.5.2.2 and
 //! CSS Tables Module Level 3.
 
-use fastrender::layout::contexts::table::{
+use fastrender::layout::contexts::table::column_distribution::{
     compute_column_constraints, distribute_spanning_cell_width, ColumnConstraints, ColumnDistributor, DistributionMode,
 };
 

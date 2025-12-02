@@ -22,7 +22,8 @@
 //! using the system's default font.
 
 use crate::error::{RenderError, Result};
-use crate::style::Rgba;
+use crate::style::color::Rgba;
+use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 use tiny_skia::{Paint, PathBuilder, Pixmap, Rect as SkiaRect, Transform};
 
@@ -140,7 +141,7 @@ impl Painter {
     /// Paints a replaced element (image, etc.)
     fn paint_replaced(
         &mut self,
-        replaced_type: &crate::tree::box_tree::ReplacedType,
+        replaced_type: &ReplacedType,
         x: f32,
         y: f32,
         width: f32,
@@ -170,7 +171,7 @@ impl Painter {
         }
 
         // Would load and render actual image here for ReplacedType::Image
-        if let crate::tree::box_tree::ReplacedType::Image { src } = replaced_type {
+        if let ReplacedType::Image { src } = replaced_type {
             let _ = src; // Placeholder - would load image from src
         }
     }

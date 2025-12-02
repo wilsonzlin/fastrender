@@ -302,16 +302,16 @@ impl LoadedFont {
     /// let scaled = metrics.scale(16.0);
     /// println!("Ascent: {}px", scaled.ascent);
     /// ```
-    pub fn metrics(&self) -> crate::error::Result<FontMetrics> {
+    pub fn metrics(&self) -> Result<FontMetrics> {
         FontMetrics::from_font(self)
     }
 
     /// Get ttf-parser Face for advanced operations
     ///
     /// Returns a parsed font face for accessing glyph data, kerning, etc.
-    pub fn as_ttf_face(&self) -> crate::error::Result<ttf_parser::Face<'_>> {
+    pub fn as_ttf_face(&self) -> Result<ttf_parser::Face<'_>> {
         ttf_parser::Face::parse(&self.data, self.index).map_err(|e| {
-            crate::error::FontError::LoadFailed {
+            FontError::LoadFailed {
                 family: self.family.clone(),
                 reason: format!("Failed to parse font: {:?}", e),
             }
@@ -970,13 +970,13 @@ impl FontMetrics {
     /// # Errors
     ///
     /// Returns an error if the font data cannot be parsed.
-    pub fn from_font(font: &LoadedFont) -> crate::error::Result<Self> {
+    pub fn from_font(font: &LoadedFont) -> Result<Self> {
         Self::from_data(&font.data, font.index)
     }
 
     /// Extract metrics from font data
-    pub fn from_data(data: &[u8], index: u32) -> crate::error::Result<Self> {
-        let face = ttf_parser::Face::parse(data, index).map_err(|e| crate::error::FontError::LoadFailed {
+    pub fn from_data(data: &[u8], index: u32) -> Result<Self> {
+        let face = ttf_parser::Face::parse(data, index).map_err(|e| FontError::LoadFailed {
             family: String::new(),
             reason: format!("Failed to parse font: {:?}", e),
         })?;
@@ -985,7 +985,7 @@ impl FontMetrics {
     }
 
     /// Extract metrics from ttf-parser Face
-    pub fn from_face(face: &ttf_parser::Face) -> crate::error::Result<Self> {
+    pub fn from_face(face: &ttf_parser::Face) -> Result<Self> {
         let units_per_em = face.units_per_em();
         let ascent = face.ascender();
         let descent = face.descender();

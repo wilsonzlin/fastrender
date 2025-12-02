@@ -38,7 +38,7 @@
 //! - CSS 2.1 Section 9.5.2: https://www.w3.org/TR/CSS21/visuren.html#propdef-clear
 
 use crate::geometry::Rect;
-use crate::style::{Clear, Float};
+use crate::style::float::{Clear, Float};
 
 /// Side on which a float is placed
 ///
@@ -149,14 +149,14 @@ impl FloatInfo {
 /// # Example
 ///
 /// ```
-/// use fastrender::layout::FloatContext;
+/// use fastrender::{FloatContext, FloatSide};
 ///
 /// // Create a context with a 800px wide containing block
 /// let mut ctx = FloatContext::new(800.0);
 ///
 /// // Add a left float at position (0, 0) that is 200x100
 /// ctx.add_float_at(
-///     fastrender::layout::FloatSide::Left,
+///     FloatSide::Left,
 ///     0.0, 0.0, 200.0, 100.0
 /// );
 ///
@@ -196,7 +196,7 @@ impl FloatContext {
     /// # Example
     ///
     /// ```
-    /// use fastrender::layout::FloatContext;
+    /// use fastrender::FloatContext;
     ///
     /// let ctx = FloatContext::new(800.0);
     /// assert_eq!(ctx.containing_block_width(), 800.0);
@@ -328,7 +328,7 @@ impl FloatContext {
     /// # Example
     ///
     /// ```
-    /// use fastrender::layout::{FloatContext, FloatSide};
+    /// use fastrender::{FloatContext, FloatSide};
     ///
     /// let mut ctx = FloatContext::new(800.0);
     /// ctx.add_float_at(FloatSide::Left, 0.0, 0.0, 200.0, 100.0);
@@ -399,8 +399,8 @@ impl FloatContext {
     /// # Example
     ///
     /// ```
-    /// use fastrender::layout::{FloatContext, FloatSide};
-    /// use fastrender::style::Clear;
+    /// use fastrender::{FloatContext, FloatSide};
+    /// use fastrender::Clear;
     ///
     /// let mut ctx = FloatContext::new(800.0);
     /// ctx.add_float_at(FloatSide::Left, 0.0, 0.0, 200.0, 100.0);
@@ -481,7 +481,7 @@ impl FloatContext {
     /// # Example
     ///
     /// ```
-    /// use fastrender::layout::{FloatContext, FloatSide};
+    /// use fastrender::{FloatContext, FloatSide};
     ///
     /// let mut ctx = FloatContext::new(800.0);
     ///

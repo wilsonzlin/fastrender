@@ -26,7 +26,7 @@ use std::fmt;
 /// # Examples
 ///
 /// ```
-/// use fastrender::geometry::Point;
+/// use fastrender::Point;
 ///
 /// let p1 = Point::new(10.0, 20.0);
 /// let p2 = Point::ZERO;
@@ -52,7 +52,7 @@ impl Point {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::geometry::Point;
+    /// use fastrender::Point;
     ///
     /// let point = Point::new(100.0, 50.0);
     /// assert_eq!(point.x, 100.0);
@@ -67,7 +67,7 @@ impl Point {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::geometry::Point;
+    /// use fastrender::Point;
     ///
     /// let p1 = Point::new(10.0, 20.0);
     /// let p2 = Point::new(5.0, 3.0);
@@ -89,7 +89,7 @@ impl Point {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::geometry::Point;
+    /// use fastrender::Point;
     ///
     /// let p1 = Point::new(0.0, 0.0);
     /// let p2 = Point::new(3.0, 4.0);
@@ -118,7 +118,7 @@ impl fmt::Display for Point {
 /// # Examples
 ///
 /// ```
-/// use fastrender::geometry::Size;
+/// use fastrender::Size;
 ///
 /// let size = Size::new(100.0, 50.0);
 /// assert_eq!(size.width, 100.0);
@@ -145,7 +145,7 @@ impl Size {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::geometry::Size;
+    /// use fastrender::Size;
     ///
     /// let size = Size::new(200.0, 100.0);
     /// assert_eq!(size.width, 200.0);
@@ -160,7 +160,7 @@ impl Size {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::geometry::Size;
+    /// use fastrender::Size;
     ///
     /// let size = Size::new(10.0, 20.0);
     /// assert_eq!(size.area(), 200.0);
@@ -174,7 +174,7 @@ impl Size {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::geometry::Size;
+    /// use fastrender::Size;
     ///
     /// assert!(Size::ZERO.is_empty());
     /// assert!(Size::new(0.0, 10.0).is_empty());
@@ -189,7 +189,7 @@ impl Size {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::geometry::Size;
+    /// use fastrender::Size;
     ///
     /// let size = Size::new(100.0, 50.0);
     /// let scaled = size.scale(2.0);
@@ -217,7 +217,7 @@ impl fmt::Display for Size {
 /// # Examples
 ///
 /// ```
-/// use fastrender::geometry::{Rect, Point, Size};
+/// use fastrender::{Rect, Point, Size};
 ///
 /// let rect = Rect::new(Point::new(10.0, 20.0), Size::new(100.0, 50.0));
 /// assert_eq!(rect.x(), 10.0);
@@ -245,7 +245,7 @@ impl Rect {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::geometry::{Rect, Point, Size};
+    /// use fastrender::{Rect, Point, Size};
     ///
     /// let rect = Rect::new(Point::new(5.0, 5.0), Size::new(10.0, 10.0));
     /// assert_eq!(rect.origin.x, 5.0);
@@ -261,7 +261,7 @@ impl Rect {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::geometry::Rect;
+    /// use fastrender::Rect;
     ///
     /// let rect = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
     /// assert_eq!(rect.x(), 10.0);
@@ -281,7 +281,7 @@ impl Rect {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::geometry::{Rect, Point};
+    /// use fastrender::{Rect, Point};
     ///
     /// let rect = Rect::from_points(Point::new(10.0, 20.0), Point::new(50.0, 70.0));
     /// assert_eq!(rect.width(), 40.0);
@@ -341,7 +341,7 @@ impl Rect {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::geometry::{Rect, Point};
+    /// use fastrender::{Rect, Point};
     ///
     /// let rect = Rect::from_xywh(0.0, 0.0, 100.0, 50.0);
     /// assert_eq!(rect.center(), Point::new(50.0, 25.0));
@@ -362,7 +362,7 @@ impl Rect {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::geometry::{Rect, Point};
+    /// use fastrender::{Rect, Point};
     ///
     /// let rect = Rect::from_xywh(10.0, 10.0, 20.0, 20.0);
     /// assert!(rect.contains_point(Point::new(15.0, 15.0)));
@@ -379,7 +379,7 @@ impl Rect {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::geometry::Rect;
+    /// use fastrender::Rect;
     ///
     /// let rect1 = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
     /// let rect2 = Rect::from_xywh(5.0, 5.0, 10.0, 10.0);
@@ -402,7 +402,7 @@ impl Rect {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::geometry::Rect;
+    /// use fastrender::Rect;
     ///
     /// let rect1 = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
     /// let rect2 = Rect::from_xywh(5.0, 5.0, 10.0, 10.0);
@@ -426,7 +426,7 @@ impl Rect {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::geometry::Rect;
+    /// use fastrender::Rect;
     ///
     /// let rect1 = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
     /// let rect2 = Rect::from_xywh(5.0, 5.0, 10.0, 10.0);
@@ -452,7 +452,7 @@ impl Rect {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::geometry::{Rect, Point};
+    /// use fastrender::{Rect, Point};
     ///
     /// let rect = Rect::from_xywh(10.0, 10.0, 20.0, 20.0);
     /// let translated = rect.translate(Point::new(5.0, 3.0));
@@ -473,7 +473,7 @@ impl Rect {
     /// # Examples
     ///
     /// ```
-    /// use fastrender::geometry::Rect;
+    /// use fastrender::Rect;
     ///
     /// let rect = Rect::from_xywh(10.0, 10.0, 20.0, 20.0);
     /// let inflated = rect.inflate(5.0);

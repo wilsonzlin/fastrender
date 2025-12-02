@@ -28,7 +28,8 @@
 //!
 //! Reference: <https://www.w3.org/TR/CSS21/visudet.html#Computing_widths_and_margins>
 
-use crate::style::ComputedStyles;
+use crate::style::ComputedStyle;
+use crate::style::values::Length;
 
 /// Result of width computation
 ///
@@ -117,7 +118,7 @@ impl MarginValue {
 /// # Returns
 ///
 /// A `ComputedBlockWidth` containing all resolved horizontal dimensions.
-pub fn compute_block_width(style: &ComputedStyles, containing_width: f32) -> ComputedBlockWidth {
+pub fn compute_block_width(style: &ComputedStyle, containing_width: f32) -> ComputedBlockWidth {
     // Resolve padding (percentages relative to containing width)
     let padding_left = resolve_length(style.padding_left, containing_width);
     let padding_right = resolve_length(style.padding_right, containing_width);
@@ -166,7 +167,7 @@ pub fn compute_block_width(style: &ComputedStyles, containing_width: f32) -> Com
 ///
 /// Use this when you have explicit information about whether margins are auto.
 pub fn compute_block_width_with_auto_margins(
-    style: &ComputedStyles,
+    style: &ComputedStyle,
     containing_width: f32,
     margin_left_is_auto: bool,
     margin_right_is_auto: bool,
@@ -290,17 +291,16 @@ fn resolve_constraint(
 }
 
 /// Resolves a Length value to pixels
-fn resolve_length(length: crate::style::Length, containing_width: f32) -> f32 {
+fn resolve_length(length: Length, containing_width: f32) -> f32 {
     length.resolve_against(containing_width)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::Length;
 
-    fn default_style() -> ComputedStyles {
-        ComputedStyles::default()
+    fn default_style() -> ComputedStyle {
+        ComputedStyle::default()
     }
 
     // ComputedBlockWidth tests
