@@ -7,9 +7,9 @@
 //! # CSS Specification
 //!
 //! - CSS 2.1 Appendix E: Elaborate description of Stacking Contexts
-//!   https://www.w3.org/TR/CSS21/zindex.html
+//!   <https://www.w3.org/TR/CSS21/zindex.html>
 //! - CSS 2.1 Section 9.9: Layered presentation
-//!   https://www.w3.org/TR/CSS21/visuren.html#layered-presentation
+//!   <https://www.w3.org/TR/CSS21/visuren.html#layered-presentation>
 //!
 //! # The 7-Layer Paint Order Algorithm
 //!
@@ -28,7 +28,7 @@
 //! An element creates a stacking context if it satisfies ANY of these conditions:
 //!
 //! 1. Root element (`<html>`)
-//! 2. Positioned element with z-index ≠ auto (relative/absolute/fixed/sticky + z-index: <integer>)
+//! 2. Positioned element with z-index ≠ auto (relative/absolute/fixed/sticky + z-index: `<integer>`)
 //! 3. Fixed or sticky positioning (even without z-index)
 //! 4. Opacity < 1
 //! 5. Any transform (except none)

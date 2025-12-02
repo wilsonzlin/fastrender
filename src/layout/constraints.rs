@@ -12,7 +12,7 @@
 //! - **MaxContent**: Size to maximum without wrapping
 //!
 //! Reference: CSS Sizing Module Level 3, Section 2.4
-//! https://www.w3.org/TR/css-sizing-3/#available
+//! <https://www.w3.org/TR/css-sizing-3/#available>
 //!
 //! # Examples
 //!

@@ -16,12 +16,13 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use fastrender::geometry::{Point, Rect};
-use fastrender::paint::display_list::{
-    BorderRadii, ClipItem, DisplayItem, DisplayList, FillRectItem, FillRoundedRectItem, OpacityItem, StrokeRectItem,
-};
-use fastrender::paint::{build_stacking_tree, DisplayListBuilder, DisplayListOptimizer, OptimizationConfig};
+use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::style::color::Rgba;
 use fastrender::tree::fragment_tree::{FragmentNode, FragmentTree};
+use fastrender::{
+    build_stacking_tree, BorderRadii, ClipItem, DisplayItem, DisplayList, DisplayListOptimizer, FillRectItem,
+    FillRoundedRectItem, OpacityItem, OptimizationConfig, StrokeRectItem,
+};
 
 // ============================================================================
 // Helper Functions
@@ -176,7 +177,7 @@ fn bench_display_list_creation(c: &mut Criterion) {
     let mut group = c.benchmark_group("display_list_creation");
 
     // Empty list creation
-    group.bench_function("empty_list", |b| b.iter(|| DisplayList::new()));
+    group.bench_function("empty_list", |b| b.iter(DisplayList::new));
 
     // Adding items
     group.bench_function("add_fill_rect", |b| {
@@ -252,7 +253,7 @@ fn bench_display_list_builder(c: &mut Criterion) {
     let mut group = c.benchmark_group("display_list_builder");
 
     // Builder creation
-    group.bench_function("builder_creation", |b| b.iter(|| DisplayListBuilder::new()));
+    group.bench_function("builder_creation", |b| b.iter(DisplayListBuilder::new));
 
     // Building from simple trees
     for count in [5, 10, 25, 50].iter() {
@@ -298,10 +299,10 @@ fn bench_display_list_optimization(c: &mut Criterion) {
     let mut group = c.benchmark_group("display_list_optimization");
 
     // Optimizer creation
-    group.bench_function("optimizer_creation", |b| b.iter(|| DisplayListOptimizer::new()));
+    group.bench_function("optimizer_creation", |b| b.iter(DisplayListOptimizer::new));
 
     // Config creation
-    group.bench_function("config_default", |b| b.iter(|| OptimizationConfig::default()));
+    group.bench_function("config_default", |b| b.iter(OptimizationConfig::default));
 
     // Full optimization on various list sizes
     let viewport = Rect::from_xywh(0.0, 0.0, 800.0, 600.0);
@@ -337,15 +338,19 @@ fn bench_display_list_optimization(c: &mut Criterion) {
     let list = create_display_list(100);
 
     group.bench_function("no_culling", |b| {
-        let mut config = OptimizationConfig::default();
-        config.enable_culling = false;
+        let config = OptimizationConfig {
+            enable_culling: false,
+            ..Default::default()
+        };
         let optimizer = DisplayListOptimizer::with_config(config);
         b.iter(|| optimizer.optimize(black_box(list.clone()), black_box(viewport)))
     });
 
     group.bench_function("no_fill_merging", |b| {
-        let mut config = OptimizationConfig::default();
-        config.enable_fill_merging = false;
+        let config = OptimizationConfig {
+            enable_fill_merging: false,
+            ..Default::default()
+        };
         let optimizer = DisplayListOptimizer::with_config(config);
         b.iter(|| optimizer.optimize(black_box(list.clone()), black_box(viewport)))
     });

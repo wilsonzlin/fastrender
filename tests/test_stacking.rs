@@ -7,11 +7,11 @@
 //! - CSS 2.1 Section 9.9: https://www.w3.org/TR/CSS21/visuren.html#layered-presentation
 
 use fastrender::geometry::Rect;
+use fastrender::FragmentNode;
 use fastrender::{
     build_stacking_tree, creates_stacking_context, get_stacking_context_reason, StackingContext, StackingContextReason,
 };
 use fastrender::{ComputedStyle, Display, Overflow, Position};
-use fastrender::FragmentNode;
 use std::sync::Arc;
 
 // Helper functions

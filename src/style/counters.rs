@@ -10,7 +10,7 @@
 //! # CSS Specification
 //!
 //! Reference: CSS Lists and Counters Module Level 3
-//! https://www.w3.org/TR/css-lists-3/#counters
+//! <https://www.w3.org/TR/css-lists-3/#counters>
 //!
 //! # Counter Scoping Rules
 //!

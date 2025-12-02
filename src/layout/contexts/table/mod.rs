@@ -17,7 +17,7 @@
 //!
 //! # References
 //!
-//! - CSS Tables Module Level 3: https://www.w3.org/TR/css-tables-3/
-//! - CSS 2.1 Section 17: https://www.w3.org/TR/CSS21/tables.html
+//! - CSS Tables Module Level 3: <https://www.w3.org/TR/css-tables-3/>
+//! - CSS 2.1 Section 17: <https://www.w3.org/TR/CSS21/tables.html>
 
 pub mod column_distribution;

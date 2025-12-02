@@ -416,7 +416,7 @@ impl BaselineAligner {
     ///
     /// # Returns
     ///
-    /// A tuple of (LineMetrics, Vec<PositionedInlineBox>) containing:
+    /// A tuple of `(LineMetrics, Vec<PositionedInlineBox>)` containing:
     /// - The computed line box metrics
     /// - Each inline box with its Y offset from the line box top
     ///

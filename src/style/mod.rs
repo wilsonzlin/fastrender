@@ -25,13 +25,13 @@ use crate::css::types::{BoxShadow, TextShadow, Transform};
 use color::Rgba;
 use display::Display;
 use position::Position;
+use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderStyle,
     FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack, JustifyContent, LineHeight, Overflow,
     TextAlign, TextDecoration, TextTransform, WhiteSpace,
 };
 use values::Length;
-use std::collections::HashMap;
 
 // Re-export common types from values module
 // These are now public via the module system

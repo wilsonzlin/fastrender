@@ -196,16 +196,15 @@ pub use error::{Error, Result};
 pub use geometry::{EdgeOffsets, Point, Rect, Size};
 
 // Tree structures
-pub use tree::box_tree::{BoxNode, BoxTree, BoxType};
+pub use style::display::FormattingContextType;
 pub use tree::box_generation::BoxGenerator;
+pub use tree::box_tree::{BoxNode, BoxTree, BoxType};
 pub use tree::debug::DebugInfo;
 pub use tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 pub use tree::pseudo_elements::{
-    count_pseudo_boxes, find_pseudo_boxes, get_pseudo_type, is_pseudo_box, PseudoContent,
-    PseudoContentItem, PseudoElementConfig, PseudoElementGenerator, PseudoElementStyle,
-    PseudoElementType,
+    count_pseudo_boxes, find_pseudo_boxes, get_pseudo_type, is_pseudo_box, PseudoContent, PseudoContentItem,
+    PseudoElementConfig, PseudoElementGenerator, PseudoElementStyle, PseudoElementType,
 };
-pub use style::display::FormattingContextType;
 
 // Style types
 pub use style::color::{Color, ColorParseError, Hsla, Rgba};
@@ -219,11 +218,11 @@ pub use style::ComputedStyle;
 // Layout
 pub use layout::absolute_positioning::{AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult, ResolvedMargins};
 pub use layout::constraints::{AvailableSpace, LayoutConstraints};
+pub use layout::contexts::factory::FormattingContextFactory;
 pub use layout::contexts::positioned::{ContainingBlock, PositionedLayout, StickyConstraints};
 pub use layout::engine::{LayoutConfig, LayoutEngine};
 pub use layout::float_context::{FloatContext, FloatSide};
 pub use layout::formatting_context::{FormattingContext, IntrinsicSizingMode};
-pub use layout::contexts::factory::FormattingContextFactory;
 
 // Additional style types
 pub use style::float::{Clear, Float};
@@ -231,23 +230,27 @@ pub use style::float::{Clear, Float};
 // Paint
 pub use paint::canvas::Canvas;
 pub use paint::display_list::{
-    BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList,
-    FillRectItem, FillRoundedRectItem, GlyphInstance, GradientStop,
-    ImageData, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem,
-    StackingContextItem, StrokeRectItem, StrokeRoundedRectItem, TextItem as PaintTextItem, Transform2D, TransformItem,
+    BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem,
+    FillRoundedRectItem, GlyphInstance, GradientStop, ImageData, ImageItem, LinearGradientItem, OpacityItem,
+    RadialGradientItem, StackingContextItem, StrokeRectItem, StrokeRoundedRectItem, TextItem as PaintTextItem,
+    Transform2D, TransformItem,
 };
 pub use paint::optimize::{DisplayListOptimizer, OptimizationConfig};
 pub use paint::stacking::{
-    build_stacking_tree, build_stacking_tree_with_styles, creates_stacking_context,
-    get_stacking_context_reason, StackingContext, StackingContextReason,
+    build_stacking_tree, build_stacking_tree_with_styles, creates_stacking_context, get_stacking_context_reason,
+    StackingContext, StackingContextReason,
 };
 pub use paint::text_rasterize::{GlyphCache, TextRasterizer};
 
 // Text
-pub use text::font_db::{FontDatabase, FontStretch, FontStyle as FontStyleDb, FontWeight as FontWeightDb, GenericFamily, LoadedFont};
+pub use text::font_db::{
+    FontDatabase, FontStretch, FontStyle as FontStyleDb, FontWeight as FontWeightDb, GenericFamily, LoadedFont,
+};
 pub use text::font_fallback::{FallbackChain, FallbackChainBuilder, FamilyEntry};
 pub use text::font_loader::FontContext;
-pub use text::hyphenation::{find_soft_hyphens, is_soft_hyphen, remove_soft_hyphens, Hyphenator, HyphensMode, SupportedLanguage};
+pub use text::hyphenation::{
+    find_soft_hyphens, is_soft_hyphen, remove_soft_hyphens, Hyphenator, HyphensMode, SupportedLanguage,
+};
 pub use text::shaper::{Script, TextDirection, TextShaper};
 
 // CSS

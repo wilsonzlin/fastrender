@@ -40,10 +40,10 @@
 //! ```
 
 use crate::geometry::{Point, Rect, Size};
-use crate::layout::utils::resolve_offset;
 use crate::layout::formatting_context::LayoutError;
-use crate::style::position::Position;
+use crate::layout::utils::resolve_offset;
 use crate::style::computed::PositionedStyle;
+use crate::style::position::Position;
 use crate::tree::fragment_tree::FragmentNode;
 
 /// Represents a containing block for positioned elements
@@ -111,7 +111,7 @@ impl ContainingBlock {
 /// During rendering, these constraints determine when the element
 /// transitions from relative to fixed behavior.
 ///
-/// CSS Position Module Level 3: https://www.w3.org/TR/css-position-3/#sticky-pos
+/// CSS Position Module Level 3: <https://www.w3.org/TR/css-position-3/#sticky-pos>
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct StickyConstraints {
     /// Top constraint in pixels (if specified)
@@ -578,9 +578,8 @@ mod tests {
     use super::*;
     use crate::geometry::EdgeOffsets;
     use crate::style::computed::PositionedStyle;
-    use crate::style::display::Display;
-    use crate::style::values::{Length, LengthOrAuto};
-    use std::sync::Arc;
+
+    use crate::style::values::LengthOrAuto;
 
     fn default_style() -> PositionedStyle {
         let mut style = PositionedStyle::default();
@@ -884,7 +883,7 @@ mod tests {
         let cb = create_containing_block(800.0, 600.0);
         let intrinsic = Size::new(150.0, 75.0);
 
-        let (pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+        let (_pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
 
         // Should use intrinsic size when everything is auto
         assert_eq!(size.width, 150.0);

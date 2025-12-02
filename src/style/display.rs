@@ -441,7 +441,7 @@ pub enum InnerDisplay {
 /// A formatting context defines how child boxes are laid out.
 ///
 /// Reference: CSS Display Module Level 3
-/// https://www.w3.org/TR/css-display-3/#formatting-context
+/// <https://www.w3.org/TR/css-display-3/#formatting-context>
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormattingContextType {
     /// Block formatting context (BFC)

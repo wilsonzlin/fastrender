@@ -26,6 +26,7 @@ fn pixel_is_colored(pixmap: &Pixmap, x: u32, y: u32) -> bool {
 }
 
 /// Gets the color at a pixel
+#[allow(dead_code)]
 fn get_pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
     let idx = (y * pixmap.width() + x) as usize * 4;
     let data = pixmap.data();

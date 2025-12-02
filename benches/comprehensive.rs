@@ -14,11 +14,12 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use fastrender::geometry::{Point, Rect, Size};
-use fastrender::layout::{LayoutConfig, LayoutConstraints, LayoutEngine};
+use fastrender::style::display::FormattingContextType;
+use fastrender::style::ComputedStyle;
 use fastrender::text::line_break::find_break_opportunities;
 use fastrender::text::shaper::Script;
-use fastrender::tree::{BoxNode, BoxTree, FormattingContextType};
-use fastrender::FastRender;
+use fastrender::tree::box_tree::{BoxNode, BoxTree};
+use fastrender::{FastRender, LayoutConfig, LayoutConstraints, LayoutEngine};
 use std::sync::Arc;
 
 // ============================================================================
@@ -447,8 +448,8 @@ fn bench_layout_engine(c: &mut Criterion) {
     });
 
     // Create default style for box nodes
-    fn default_style() -> Arc<fastrender::style::ComputedStyles> {
-        Arc::new(fastrender::style::ComputedStyles::default())
+    fn default_style() -> Arc<ComputedStyle> {
+        Arc::new(ComputedStyle::default())
     }
 
     // Simple box tree layout
@@ -503,8 +504,8 @@ fn bench_allocations(c: &mut Criterion) {
     let mut group = c.benchmark_group("allocations");
 
     // Box tree construction
-    fn default_style() -> Arc<fastrender::style::ComputedStyles> {
-        Arc::new(fastrender::style::ComputedStyles::default())
+    fn default_style() -> Arc<ComputedStyle> {
+        Arc::new(ComputedStyle::default())
     }
 
     group.bench_function("box_node_creation", |b| {

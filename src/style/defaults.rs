@@ -4,7 +4,7 @@
 //! These are applied before author styles in the cascade.
 //!
 //! Reference: HTML5 Living Standard - Rendering
-//! https://html.spec.whatwg.org/multipage/rendering.html
+//! <https://html.spec.whatwg.org/multipage/rendering.html>
 
 use crate::dom::{DomNode, DomNodeType};
 use crate::style::types::WhiteSpace;

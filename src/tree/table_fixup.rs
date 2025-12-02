@@ -7,7 +7,7 @@
 //! # CSS Specification
 //!
 //! CSS 2.1 Section 17.2.1 defines the anonymous box generation algorithm:
-//! https://www.w3.org/TR/CSS21/tables.html#anonymous-boxes
+//! <https://www.w3.org/TR/CSS21/tables.html#anonymous-boxes>
 //!
 //! # Table Structure Requirements
 //!
@@ -535,7 +535,6 @@ impl TableStructureFixer {
 mod tests {
     use super::*;
     use crate::tree::box_tree::BlockBox;
-    use crate::tree::debug::DebugInfo;
 
     // Helper to create a default style
     fn default_style() -> Arc<ComputedStyle> {

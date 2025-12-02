@@ -33,7 +33,7 @@
 //! ```
 //!
 //! Reference: CSS Generated Content Module Level 3
-//! https://www.w3.org/TR/css-content-3/
+//! <https://www.w3.org/TR/css-content-3/>
 
 use std::collections::HashMap;
 use std::fmt;
@@ -149,7 +149,7 @@ impl fmt::Display for ContentValue {
 /// Content items are concatenated together to form the final content.
 ///
 /// Reference: CSS Generated Content Module Level 3
-/// https://www.w3.org/TR/css-content-3/#content-values
+/// <https://www.w3.org/TR/css-content-3/#content-values>
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContentItem {
     /// A string literal
@@ -340,7 +340,7 @@ impl fmt::Display for ContentItem {
 /// Defines how counter values are formatted.
 ///
 /// Reference: CSS Counter Styles Level 3
-/// https://www.w3.org/TR/css-counter-styles-3/
+/// <https://www.w3.org/TR/css-counter-styles-3/>
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CounterStyle {
     /// Decimal numbers (1, 2, 3, ...)

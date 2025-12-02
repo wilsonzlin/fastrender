@@ -12,7 +12,7 @@
 //! - Colors fully resolved
 //!
 //! Reference: CSS Cascading and Inheritance Level 3
-//! https://www.w3.org/TR/css-cascade-3/
+//! <https://www.w3.org/TR/css-cascade-3/>
 //!
 //! # Example
 //!

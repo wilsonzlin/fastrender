@@ -288,7 +288,7 @@ fn test_baseline_alignment_same_size_text() {
     aligner.add_box(text1);
     aligner.add_box(text2);
 
-    let (line_metrics, boxes) = aligner.align();
+    let (_line_metrics, boxes) = aligner.align();
 
     // Both should be at same position
     assert_eq!(boxes[0].y_offset, boxes[1].y_offset);

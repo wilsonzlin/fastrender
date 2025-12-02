@@ -4,13 +4,13 @@
 //! in various scenarios including edge cases.
 
 use fastrender::geometry::{Point, Rect};
+use fastrender::Rgba;
 use fastrender::{
     BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, DisplayListOptimizer,
     FillRectItem, FillRoundedRectItem, GradientStop, ImageData, ImageItem, LinearGradientItem, OpacityItem,
-    OptimizationConfig, RadialGradientItem, StackingContextItem, StrokeRectItem, StrokeRoundedRectItem, PaintTextItem as TextItem,
-    Transform2D, TransformItem,
+    OptimizationConfig, PaintTextItem as TextItem, RadialGradientItem, StackingContextItem, StrokeRectItem,
+    StrokeRoundedRectItem, Transform2D, TransformItem,
 };
-use fastrender::Rgba;
 use std::sync::Arc;
 
 // ============================================================================

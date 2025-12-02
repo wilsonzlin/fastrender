@@ -278,7 +278,7 @@ impl WptRunner {
             results.push(result);
 
             // Check fail-fast
-            if self.config.fail_fast && results.last().map_or(false, |r| r.status.is_failure()) {
+            if self.config.fail_fast && results.last().is_some_and(|r| r.status.is_failure()) {
                 break;
             }
         }
@@ -792,9 +792,11 @@ mod tests {
 
     #[test]
     fn test_runner_stats_reset() {
-        let mut stats = RunnerStats::default();
-        stats.total = 10;
-        stats.passed = 5;
+        let mut stats = RunnerStats {
+            total: 10,
+            passed: 5,
+            ..Default::default()
+        };
 
         stats.reset();
 

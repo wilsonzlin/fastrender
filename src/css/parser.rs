@@ -104,7 +104,7 @@ fn parse_media_rule<'i, 't>(
     loop {
         match parser.next_including_whitespace() {
             Ok(Token::CurlyBracketBlock) => break,
-            Ok(Token::WhiteSpace(ws)) => query_parts.push(ws.to_string()),
+            Ok(Token::WhiteSpace(ws)) => query_parts.push((*ws).to_string()),
             Ok(Token::Ident(id)) => query_parts.push(id.to_string()),
             Ok(Token::Number { value, .. }) => query_parts.push(value.to_string()),
             Ok(Token::Dimension { value, unit, .. }) => {
@@ -117,7 +117,7 @@ fn parse_media_rule<'i, 't>(
                     let mut inner_parts = Vec::new();
                     while !p.is_exhausted() {
                         match p.next_including_whitespace() {
-                            Ok(Token::WhiteSpace(ws)) => inner_parts.push(ws.to_string()),
+                            Ok(Token::WhiteSpace(ws)) => inner_parts.push((*ws).to_string()),
                             Ok(Token::Ident(id)) => inner_parts.push(id.to_string()),
                             Ok(Token::Number { value, .. }) => inner_parts.push(value.to_string()),
                             Ok(Token::Dimension { value, unit, .. }) => {
@@ -354,7 +354,7 @@ mod tests {
 
     #[test]
     fn test_parse_nested_media_queries() {
-        let css = r#"
+        let css = r"
             .outer { color: red; }
             @media (min-width: 768px) {
                 .inner { color: blue; }
@@ -362,7 +362,7 @@ mod tests {
                     .nested { color: green; }
                 }
             }
-        "#;
+        ";
         let stylesheet = parse_stylesheet(css).unwrap();
         assert_eq!(stylesheet.rules.len(), 2);
     }
@@ -371,7 +371,7 @@ mod tests {
     fn test_collect_style_rules_with_media() {
         use crate::style::media::MediaContext;
 
-        let css = r#"
+        let css = r"
             .always { color: red; }
             @media (min-width: 768px) {
                 .wide { color: blue; }
@@ -379,7 +379,7 @@ mod tests {
             @media (max-width: 500px) {
                 .narrow { color: green; }
             }
-        "#;
+        ";
         let stylesheet = parse_stylesheet(css).unwrap();
 
         // Wide viewport - should include .always and .wide but not .narrow

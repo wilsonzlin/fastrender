@@ -139,14 +139,7 @@ impl Painter {
     }
 
     /// Paints a replaced element (image, etc.)
-    fn paint_replaced(
-        &mut self,
-        replaced_type: &ReplacedType,
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
-    ) {
+    fn paint_replaced(&mut self, replaced_type: &ReplacedType, x: f32, y: f32, width: f32, height: f32) {
         // For now, draw a placeholder rectangle
         let mut paint = Paint::default();
         paint.set_color_rgba8(200, 200, 200, 255); // Light gray

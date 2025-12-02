@@ -24,8 +24,8 @@
 //!
 //! # References
 //!
-//! - CSS Grid Layout Module Level 2: https://www.w3.org/TR/css-grid-2/
-//! - Taffy: https://github.com/DioxusLabs/taffy
+//! - CSS Grid Layout Module Level 2: <https://www.w3.org/TR/css-grid-2/>
+//! - Taffy: <https://github.com/DioxusLabs/taffy>
 
 use std::collections::HashMap;
 
@@ -429,8 +429,8 @@ impl FormattingContext for GridFormattingContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::types::GridTrack;
     use crate::style::display::FormattingContextType;
+    use crate::style::types::GridTrack;
     use std::sync::Arc;
 
     fn make_grid_style() -> Arc<ComputedStyle> {

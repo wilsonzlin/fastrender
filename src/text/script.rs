@@ -37,8 +37,8 @@
 //!
 //! # References
 //!
-//! - Unicode Script Property (UAX #24): https://www.unicode.org/reports/tr24/
-//! - Unicode Standard Annex #24: https://www.unicode.org/reports/tr24/
+//! - Unicode Script Property (UAX #24): <https://www.unicode.org/reports/tr24/>
+//! - Unicode Standard Annex #24: <https://www.unicode.org/reports/tr24/>
 
 use unicode_script::{Script, UnicodeScript};
 

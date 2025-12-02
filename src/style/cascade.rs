@@ -4,7 +4,7 @@
 //! computed styles. It implements the CSS cascade algorithm.
 //!
 //! Reference: CSS Cascading and Inheritance Level 4
-//! https://www.w3.org/TR/css-cascade-4/
+//! <https://www.w3.org/TR/css-cascade-4/>
 
 use crate::css::parser::{parse_declarations, parse_stylesheet};
 use crate::css::selectors::PseudoElement;
@@ -92,8 +92,10 @@ fn apply_styles_internal(
     finalize_grid_placement(&mut styles);
 
     // Compute pseudo-element styles
-    let before_styles = compute_pseudo_element_styles(node, rules, &ancestors, &styles, root_font_size, &PseudoElement::Before);
-    let after_styles = compute_pseudo_element_styles(node, rules, &ancestors, &styles, root_font_size, &PseudoElement::After);
+    let before_styles =
+        compute_pseudo_element_styles(node, rules, &ancestors, &styles, root_font_size, &PseudoElement::Before);
+    let after_styles =
+        compute_pseudo_element_styles(node, rules, &ancestors, &styles, root_font_size, &PseudoElement::After);
 
     // Recursively style children (passing current node in ancestors)
     let mut new_ancestors = ancestors.clone();
@@ -166,8 +168,10 @@ fn apply_styles_internal_with_ancestors(
     finalize_grid_placement(&mut styles);
 
     // Compute pseudo-element styles from CSS rules
-    let before_styles = compute_pseudo_element_styles(node, rules, ancestors, &styles, root_font_size, &PseudoElement::Before);
-    let after_styles = compute_pseudo_element_styles(node, rules, ancestors, &styles, root_font_size, &PseudoElement::After);
+    let before_styles =
+        compute_pseudo_element_styles(node, rules, ancestors, &styles, root_font_size, &PseudoElement::Before);
+    let after_styles =
+        compute_pseudo_element_styles(node, rules, ancestors, &styles, root_font_size, &PseudoElement::After);
 
     // Recursively style children (passing current node in ancestors)
     let mut new_ancestors = ancestors.to_vec();
@@ -211,11 +215,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.grid_row_names = parent.grid_row_names.clone();
 }
 
-fn find_matching_rules(
-    node: &DomNode,
-    rules: &[&StyleRule],
-    ancestors: &[&DomNode],
-) -> Vec<(u32, Vec<Declaration>)> {
+fn find_matching_rules(node: &DomNode, rules: &[&StyleRule], ancestors: &[&DomNode]) -> Vec<(u32, Vec<Declaration>)> {
     let mut matches = Vec::new();
 
     // Build ElementRef chain with proper parent links

@@ -112,7 +112,7 @@ fn test_fixture(name: &str) -> Result<(), String> {
     if let Some(_golden) = load_golden(name) {
         // For now, just check that rendered output is valid PNG
         // Full pixel comparison would require image comparison library
-        if rendered.len() > 0 && rendered.starts_with(&[0x89, b'P', b'N', b'G']) {
+        if !rendered.is_empty() && rendered.starts_with(&[0x89, b'P', b'N', b'G']) {
             // Valid PNG header
             Ok(())
         } else {
@@ -120,7 +120,7 @@ fn test_fixture(name: &str) -> Result<(), String> {
         }
     } else {
         // No golden exists - just verify rendering succeeds
-        if rendered.len() > 0 && rendered.starts_with(&[0x89, b'P', b'N', b'G']) {
+        if !rendered.is_empty() && rendered.starts_with(&[0x89, b'P', b'N', b'G']) {
             eprintln!(
                 "Warning: No golden image for {}. Run with UPDATE_GOLDEN=1 to create.",
                 name
@@ -196,7 +196,7 @@ fn test_fixture_files_are_valid_html() {
     for entry in fs::read_dir(&html_path).unwrap() {
         let entry = entry.unwrap();
         let path = entry.path();
-        if path.extension().map_or(false, |e| e == "html") {
+        if path.extension().is_some_and(|e| e == "html") {
             let content = fs::read_to_string(&path).unwrap();
             // Basic HTML validation - should contain doctype and html tags
             assert!(
