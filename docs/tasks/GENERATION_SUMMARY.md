@@ -206,7 +206,7 @@ The following tasks are marked as CRITICAL in the dependency graph:
 
 1. **Review task dependencies** in TASK_GRAPH.md to understand execution order
 2. **Start Wave 3 execution** - all Wave 1-2 must be complete first
-3. **Create notes files** as each task completes (in outputs/notes/)
+3. **Create notes files** as each task completes (in docs/tasks/notes/)
 4. **Follow quality standards** defined in TASK_TEMPLATE.md
 5. **Run verification commands** after each task completion
 

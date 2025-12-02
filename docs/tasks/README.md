@@ -97,9 +97,9 @@ inputs: []
 outputs:
   - "src/geometry.rs"
   - "tests/geometry_test.rs"
-  - "outputs/notes/W1.T01-notes.md"
+  - "docs/tasks/notes/W1.T01-notes.md"
 skills_required: ["Rust"]
-context_files: ["docs/plan/01-type-system.md"]
+context_files: ["docs/core/type-system.md"]
 verification:
   - "cargo test geometry"
 ---
@@ -175,7 +175,7 @@ Each agent executing a task should:
 
 **Critical**: Notes files are how tasks communicate!
 
-Every completed task MUST create: `outputs/notes/{task_id}-notes.md`
+Every completed task MUST create: `docs/tasks/notes/{task_id}-notes.md`
 
 ### Required Sections
 
@@ -241,8 +241,8 @@ depends_on:
   - "W1.T01"
   - "W1.T03"
 inputs:
-  - "outputs/notes/W1.T01-notes.md"
-  - "outputs/notes/W1.T03-notes.md"
+  - "docs/tasks/notes/W1.T01-notes.md"
+  - "docs/tasks/notes/W1.T03-notes.md"
 ```
 
 **What to look for in dependency notes:**
@@ -469,7 +469,7 @@ Based on example tasks:
 2. **Read task file**: `wave-1/W1.T01-geometry-types.md`
 
 3. **Read context**:
-   - `docs/plan/01-type-system.md` (if referenced)
+   - `docs/core/type-system.md` (if referenced)
    - Any other context files
 
 4. **Read dependency notes**: (if any)
@@ -484,7 +484,7 @@ Based on example tasks:
    - Document APIs
 
 6. **Create notes file**:
-   - `outputs/notes/W1.T01-notes.md`
+   - `docs/tasks/notes/W1.T01-notes.md`
    - Fill all required sections
    - Be specific and actionable
 
