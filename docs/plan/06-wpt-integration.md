@@ -19,7 +19,6 @@ Integrate the official W3C Web Platform Tests (WPT) to validate FastRender's com
 - **Handle test formats** - Reftests, testharness.js, and manual tests
 - **Track progress** - Measure how many tests pass over time
 - **CI integration** - Run WPT tests on every commit
-- **Upstream results** - Report FastRender results to WPT.fyi
 
 This is **critical for standards compliance** - WPT is the official test suite used by all major browsers.
 
@@ -103,14 +102,12 @@ Implement a comprehensive WPT test runner that:
 4. **Compares results** - Pixel comparison for reftests, assertion checking for JS tests
 5. **Reports results** - Generate test reports and track progress
 6. **Integrates with CI** - Run on every commit
-7. **Uploads to WPT.fyi** - Share results with broader community
 
 ## Specification References
 
 **Primary:**
 - **Web Platform Tests:** https://web-platform-tests.org/
 - **WPT Documentation:** https://web-platform-tests.org/writing-tests/
-- **WPT.fyi Results Dashboard:** https://wpt.fyi/
 - **WPT GitHub Repository:** https://github.com/web-platform-tests/wpt
 
 **Test Format References:**
@@ -783,34 +780,6 @@ impl WptResults {
 
         Ok(())
     }
-
-    /// Save results in WPT.fyi format
-    ///
-    /// Format: https://github.com/web-platform-tests/wpt.fyi/blob/main/api/README.md
-    pub fn save_wptfyi_format(&self, path: impl AsRef<std::path::Path>) -> Result<()> {
-        let mut results = HashMap::new();
-
-        for test in &self.passed {
-            results.insert(test.clone(), WptfyiStatus::Pass);
-        }
-
-        for (test, _) in &self.failed {
-            results.insert(test.clone(), WptfyiStatus::Fail);
-        }
-
-        for (test, _) in &self.skipped {
-            results.insert(test.clone(), WptfyiStatus::Skip);
-        }
-
-        for (test, _) in &self.errors {
-            results.insert(test.clone(), WptfyiStatus::Error);
-        }
-
-        let json = serde_json::to_string_pretty(&results)?;
-        std::fs::write(path, json)?;
-
-        Ok(())
-    }
 }
 
 /// JSON results format
@@ -824,19 +793,6 @@ struct JsonResults<'a> {
     expected_failures: &'a [(String, String)],
     total: usize,
     pass_rate: f32,
-}
-
-/// WPT.fyi status format
-#[derive(Serialize)]
-enum WptfyiStatus {
-    #[serde(rename = "PASS")]
-    Pass,
-    #[serde(rename = "FAIL")]
-    Fail,
-    #[serde(rename = "SKIP")]
-    Skip,
-    #[serde(rename = "ERROR")]
-    Error,
 }
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -1036,10 +992,6 @@ enum Commands {
         /// Save results to JSON file
         #[clap(long)]
         output: Option<PathBuf>,
-
-        /// Save results in WPT.fyi format
-        #[clap(long)]
-        wptfyi_output: Option<PathBuf>,
     },
 
     /// List all tests in a suite
@@ -1076,7 +1028,6 @@ fn main() -> Result<()> {
             wpt_root,
             expectations,
             output,
-            wptfyi_output,
         } => {
             // Create runner
             let mut runner = executor::WptRunner::new(&wpt_root);
@@ -1096,11 +1047,6 @@ fn main() -> Result<()> {
             if let Some(output_path) = output {
                 results.save_json(&output_path)?;
                 println!("\nResults saved to: {}", output_path.display());
-            }
-
-            if let Some(wptfyi_path) = wptfyi_output {
-                results.save_wptfyi_format(&wptfyi_path)?;
-                println!("WPT.fyi results saved to: {}", wptfyi_path.display());
             }
 
             // Exit with error code if tests failed
@@ -1194,8 +1140,7 @@ jobs:
       - name: Run WPT CSS Flexbox tests
         run: |
           cargo run --bin wpt-runner -- run css/css-flexbox \
-            --output tests/wpt_results/flexbox.json \
-            --wptfyi-output tests/wpt_results/flexbox-wptfyi.json
+            --output tests/wpt_results/flexbox.json
 
       - name: Upload results
         if: always()
@@ -1280,23 +1225,6 @@ jobs:
           name: wpt-inline-results
           path: tests/wpt_results/inline.json
 
-  upload-to-wptfyi:
-    runs-on: ubuntu-latest
-    needs: [wpt-flexbox, wpt-block, wpt-inline]
-    if: github.ref == 'refs/heads/main'
-
-    steps:
-      - name: Download all results
-        uses: actions/download-artifact@v3
-
-      - name: Upload to WPT.fyi
-        env:
-          WPTFYI_API_KEY: ${{ secrets.WPTFYI_API_KEY }}
-        run: |
-          # Combine all results
-          # Upload to WPT.fyi API
-          # TODO: Implement actual upload
-          echo "Would upload to WPT.fyi here"
 ```
 
 ### Step 10: Progress Tracking Dashboard (Day 7)
@@ -1498,8 +1426,7 @@ cargo run --bin wpt-runner -- run css/css-flexbox \
 
 # Save results
 cargo run --bin wpt-runner -- run css/css-flexbox \
-    --output results.json \
-    --wptfyi-output results-wptfyi.json
+    --output results.json
 
 # List all tests in a suite
 cargo run --bin wpt-runner -- list css/css-grid
@@ -1552,7 +1479,6 @@ When you discover a new failure:
 - [ ] Test results are tracked (pass/fail/skip/error)
 - [ ] Expectations file is loaded and respected
 - [ ] Results can be saved to JSON
-- [ ] Results can be saved in WPT.fyi format
 - [ ] CI runs WPT tests on every commit
 - [ ] Progress dashboard shows improvement over time
 - [ ] At least 50% of CSS Flexbox WPT tests pass
@@ -1646,31 +1572,6 @@ if metadata.flags.contains("may-gc") {
 4. **Incremental results** - Save results after each test
 5. **Fast-fail mode** - Stop on first failure during development
 
-## Integration with WPT.fyi
-
-WPT.fyi is the official dashboard for WPT results across all browsers:
-
-**Upload Results:**
-
-```bash
-# Generate results in WPT.fyi format
-cargo run --bin wpt-runner -- run css/css-flexbox \
-    --wptfyi-output results-wptfyi.json
-
-# Upload to WPT.fyi (requires API key)
-curl -X POST https://wpt.fyi/api/results/upload \
-    -H "Authorization: Bearer $WPTFYI_API_KEY" \
-    -F "result_file=@results-wptfyi.json" \
-    -F "labels=fastrender,experimental"
-```
-
-**View Results:**
-
-Visit https://wpt.fyi/ and search for "fastrender" to see:
-- How FastRender compares to other browsers
-- Which tests are passing/failing
-- Historical progress over time
-
 ## Next Steps
 
 After WPT integration:
@@ -1683,7 +1584,6 @@ After WPT integration:
 
 - **Web Platform Tests:** https://web-platform-tests.org/
 - **WPT GitHub:** https://github.com/web-platform-tests/wpt
-- **WPT.fyi Dashboard:** https://wpt.fyi/
 - **Writing Reftests:** https://web-platform-tests.org/writing-tests/reftests.html
 - **testharness.js API:** https://web-platform-tests.org/writing-tests/testharness-api.html
 - **Servo WPT Integration:** https://github.com/servo/servo/tree/main/tests/wpt
