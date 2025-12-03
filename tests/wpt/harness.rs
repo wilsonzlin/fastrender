@@ -636,7 +636,7 @@ fn decode_png(data: &[u8]) -> Result<PngImage, String> {
 
     // Check PNG signature
     let png_sig = [137u8, 80, 78, 71, 13, 10, 26, 10];
-    if &data[..8] != png_sig {
+    if data[..8] != png_sig {
         return Err("Invalid PNG signature".to_string());
     }
 

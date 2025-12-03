@@ -26,9 +26,9 @@ depends_on: []
 inputs: []
 outputs:
   - "path/to/code.rs"
-  - "outputs/notes/W1.T01-notes.md"
+  - "docs/tasks/notes/W1.T01-notes.md"
 skills_required: ["Rust", "CSS"]
-context_files: ["docs/plan/XX.md"]
+context_files: ["docs/*/relevant.md"]
 ---
 ```
 
@@ -37,7 +37,7 @@ context_files: ["docs/plan/XX.md"]
 Each task produces:
 
 1. **Code/Tests**: Implementation files
-2. **Notes File**: `outputs/notes/{task_id}-notes.md` containing:
+2. **Notes File**: `docs/tasks/notes/{task_id}-notes.md` containing:
    - **Decisions Made**: Architectural choices and rationale
    - **API Contracts**: Type signatures, trait definitions, public APIs
    - **Discoveries**: Gotchas, pitfalls, non-obvious behaviors
@@ -311,7 +311,7 @@ Each agent:
 
 ## Notes File Schema
 
-Every task outputs: `outputs/notes/{task_id}-notes.md`
+Every task outputs: `docs/tasks/notes/{task_id}-notes.md`
 
 ```markdown
 # Task {task_id} Output Notes

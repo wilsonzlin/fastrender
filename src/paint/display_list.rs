@@ -1135,7 +1135,7 @@ mod tests {
     fn test_transform_inverse() {
         let t = Transform2D::translate(10.0, 20.0);
         let inv = t.inverse().unwrap();
-        let p = Point::new(15.0, 30.0);
+        let _p = Point::new(15.0, 30.0);
 
         let transformed = t.transform_point(Point::new(5.0, 10.0));
         let back = inv.transform_point(transformed);

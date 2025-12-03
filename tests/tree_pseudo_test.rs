@@ -10,12 +10,12 @@
 //! - Box insertion order (before at start, after at end)
 //! - Integration with box generation pipeline
 
-use fastrender::{Display, FormattingContextType};
 use fastrender::ComputedStyle;
 use fastrender::{
     count_pseudo_boxes, find_pseudo_boxes, get_pseudo_type, is_pseudo_box, BoxNode, PseudoContent, PseudoContentItem,
     PseudoElementConfig, PseudoElementGenerator, PseudoElementStyle, PseudoElementType,
 };
+use fastrender::{Display, FormattingContextType};
 use std::sync::Arc;
 
 // =============================================================================
@@ -54,10 +54,10 @@ fn test_pseudo_type_equality() {
 }
 
 #[test]
-fn test_pseudo_type_clone() {
+fn test_pseudo_type_copy() {
     let before = PseudoElementType::Before;
-    let cloned = before.clone();
-    assert_eq!(before, cloned);
+    let copied = before; // Copy trait
+    assert_eq!(before, copied);
 }
 
 // =============================================================================

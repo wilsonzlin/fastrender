@@ -9,19 +9,20 @@
 //! - CSS Position Module Level 3: Sticky positioning
 
 use fastrender::geometry::{EdgeOffsets, Point, Rect, Size};
+use fastrender::FragmentNode;
 use fastrender::{ContainingBlock, PositionedLayout, StickyConstraints};
 use fastrender::{LengthOrAuto, Position, PositionedStyle};
-use fastrender::FragmentNode;
 
 // ============================================================================
 // Test Fixtures
 // ============================================================================
 
 fn default_style() -> PositionedStyle {
-    let mut style = PositionedStyle::default();
     // Reset border width to 0 for cleaner test expectations
-    style.border_width = EdgeOffsets::ZERO;
-    style
+    PositionedStyle {
+        border_width: EdgeOffsets::ZERO,
+        ..Default::default()
+    }
 }
 
 fn create_fragment(x: f32, y: f32, width: f32, height: f32) -> FragmentNode {
@@ -355,7 +356,7 @@ fn test_absolute_position_uses_intrinsic_when_auto() {
     let cb = create_containing_block(800.0, 600.0);
     let intrinsic = Size::new(200.0, 150.0);
 
-    let (pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+    let (_pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
 
     // Should use intrinsic size
     assert_eq!(size.width, 200.0);
@@ -397,7 +398,7 @@ fn test_absolute_position_with_containing_block_offset() {
     let cb = create_containing_block_at(100.0, 100.0, 400.0, 300.0);
     let intrinsic = Size::new(50.0, 50.0);
 
-    let (pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+    let (pos, _size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
 
     // Position should be relative to containing block origin
     assert_eq!(pos.x, 110.0); // 100 + 10
@@ -412,35 +413,35 @@ fn test_absolute_position_with_containing_block_offset() {
 fn test_determine_cb_static_uses_block_ancestor() {
     let layout = PositionedLayout::new();
     let viewport = Size::new(1024.0, 768.0);
-    let block = Some(Rect::from_xywh(10.0, 10.0, 400.0, 300.0));
+    let block_rect = Rect::from_xywh(10.0, 10.0, 400.0, 300.0);
 
-    let cb = layout.determine_containing_block(Position::Static, viewport, None, block);
+    let cb = layout.determine_containing_block(Position::Static, viewport, None, Some(block_rect));
 
-    assert_eq!(cb.rect, block.unwrap());
+    assert_eq!(cb.rect, block_rect);
 }
 
 #[test]
 fn test_determine_cb_relative_uses_block_ancestor() {
     let layout = PositionedLayout::new();
     let viewport = Size::new(1024.0, 768.0);
-    let block = Some(Rect::from_xywh(20.0, 20.0, 500.0, 400.0));
+    let block_rect = Rect::from_xywh(20.0, 20.0, 500.0, 400.0);
 
-    let cb = layout.determine_containing_block(Position::Relative, viewport, None, block);
+    let cb = layout.determine_containing_block(Position::Relative, viewport, None, Some(block_rect));
 
-    assert_eq!(cb.rect, block.unwrap());
+    assert_eq!(cb.rect, block_rect);
 }
 
 #[test]
 fn test_determine_cb_absolute_uses_positioned_ancestor() {
     let layout = PositionedLayout::new();
     let viewport = Size::new(1024.0, 768.0);
-    let positioned = Some(Rect::from_xywh(50.0, 50.0, 300.0, 200.0));
+    let positioned_rect = Rect::from_xywh(50.0, 50.0, 300.0, 200.0);
     let block = Some(Rect::from_xywh(10.0, 10.0, 800.0, 600.0));
 
-    let cb = layout.determine_containing_block(Position::Absolute, viewport, positioned, block);
+    let cb = layout.determine_containing_block(Position::Absolute, viewport, Some(positioned_rect), block);
 
     // Absolute uses positioned ancestor, not block ancestor
-    assert_eq!(cb.rect, positioned.unwrap());
+    assert_eq!(cb.rect, positioned_rect);
 }
 
 #[test]
@@ -474,12 +475,12 @@ fn test_determine_cb_fixed_always_uses_viewport() {
 fn test_determine_cb_sticky_uses_block_ancestor() {
     let layout = PositionedLayout::new();
     let viewport = Size::new(1024.0, 768.0);
-    let block = Some(Rect::from_xywh(30.0, 30.0, 600.0, 400.0));
+    let block_rect = Rect::from_xywh(30.0, 30.0, 600.0, 400.0);
 
-    let cb = layout.determine_containing_block(Position::Sticky, viewport, None, block);
+    let cb = layout.determine_containing_block(Position::Sticky, viewport, None, Some(block_rect));
 
     // Sticky uses block container like relative
-    assert_eq!(cb.rect, block.unwrap());
+    assert_eq!(cb.rect, block_rect);
 }
 
 // ============================================================================

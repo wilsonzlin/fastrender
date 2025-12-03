@@ -28,8 +28,8 @@
 //!
 //! Reference: <https://www.w3.org/TR/CSS21/visudet.html#Computing_widths_and_margins>
 
-use crate::style::ComputedStyle;
 use crate::style::values::Length;
+use crate::style::ComputedStyle;
 
 /// Result of width computation
 ///

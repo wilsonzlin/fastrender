@@ -845,7 +845,7 @@ mod tests {
     #[test]
     fn test_non_breaking_space() {
         let text = "Hello\u{00A0}world"; // Non-breaking space
-        let breaks = find_break_opportunities(text);
+        let _breaks = find_break_opportunities(text);
 
         // NBSP should NOT create a break opportunity at position 7
         // "Hello" = 5 bytes, NBSP = 2 bytes (C2 A0), so position 7 is after NBSP
@@ -858,7 +858,7 @@ mod tests {
     #[test]
     fn test_word_joiner() {
         let text = "Hello\u{2060}world"; // Word joiner (WJ)
-        let breaks = find_break_opportunities(text);
+        let _breaks = find_break_opportunities(text);
 
         // Word joiner prevents breaks on both sides
         let interior = find_interior_breaks(text);
@@ -921,7 +921,7 @@ mod tests {
     #[test]
     fn test_soft_hyphen() {
         let text = "super\u{00AD}cali"; // Soft hyphen
-        let breaks = find_break_opportunities(text);
+        let _breaks = find_break_opportunities(text);
 
         // Soft hyphen (U+00AD) allows breaks
         let interior = find_interior_breaks(text);
@@ -946,7 +946,7 @@ mod tests {
     #[test]
     fn test_url_breaking() {
         let text = "https://example.com/path/to/page";
-        let breaks = find_break_opportunities(text);
+        let _breaks = find_break_opportunities(text);
 
         // URLs should have break opportunities after slashes
         let interior = find_interior_breaks(text);
@@ -956,7 +956,7 @@ mod tests {
     #[test]
     fn test_file_path() {
         let text = "/home/user/documents/file.txt";
-        let breaks = find_break_opportunities(text);
+        let _breaks = find_break_opportunities(text);
 
         // File paths have break opportunities after slashes
         let interior = find_interior_breaks(text);
@@ -979,7 +979,7 @@ mod tests {
     #[test]
     fn test_emoji_zwj_sequence() {
         let text = "👨‍👩‍👧‍👦"; // Family emoji with ZWJ
-        let breaks = find_break_opportunities(text);
+        let _breaks = find_break_opportunities(text);
 
         // ZWJ sequences should stay together (no interior breaks)
         let interior = find_interior_breaks(text);
@@ -989,7 +989,7 @@ mod tests {
     #[test]
     fn test_emoji_with_skin_tone() {
         let text = "👋🏽"; // Waving hand with skin tone modifier
-        let breaks = find_break_opportunities(text);
+        let _breaks = find_break_opportunities(text);
 
         // Emoji with modifier should not break in middle
         let interior = find_interior_breaks(text);
@@ -999,7 +999,7 @@ mod tests {
     #[test]
     fn test_flag_emoji() {
         let text = "🇺🇸"; // US flag (regional indicators)
-        let breaks = find_break_opportunities(text);
+        let _breaks = find_break_opportunities(text);
 
         // Flag should not break between regional indicators
         let interior = find_interior_breaks(text);
@@ -1123,7 +1123,7 @@ mod tests {
     #[test]
     fn test_tab_character() {
         let text = "Hello\tworld";
-        let breaks = find_break_opportunities(text);
+        let _breaks = find_break_opportunities(text);
 
         // Tab allows break
         let interior = find_interior_breaks(text);
@@ -1133,7 +1133,7 @@ mod tests {
     #[test]
     fn test_very_long_word() {
         let text = "supercalifragilisticexpialidocious";
-        let breaks = find_break_opportunities(text);
+        let _breaks = find_break_opportunities(text);
 
         // Long word without spaces should only have break at end
         let interior = find_interior_breaks(text);
@@ -1152,7 +1152,7 @@ mod tests {
     #[test]
     fn test_punctuation_sequences() {
         let text = "Hello... World!!!";
-        let breaks = find_break_opportunities(text);
+        let _breaks = find_break_opportunities(text);
 
         // Should have breaks around punctuation
         let interior = find_interior_breaks(text);

@@ -33,9 +33,9 @@
 //!
 //! # References
 //!
-//! - CSS 2.1 Section 9.5: https://www.w3.org/TR/CSS21/visuren.html#floats
-//! - CSS 2.1 Section 9.5.1: https://www.w3.org/TR/CSS21/visuren.html#float-position
-//! - CSS 2.1 Section 9.5.2: https://www.w3.org/TR/CSS21/visuren.html#propdef-clear
+//! - CSS 2.1 Section 9.5: <https://www.w3.org/TR/CSS21/visuren.html#floats>
+//! - CSS 2.1 Section 9.5.1: <https://www.w3.org/TR/CSS21/visuren.html#float-position>
+//! - CSS 2.1 Section 9.5.2: <https://www.w3.org/TR/CSS21/visuren.html#propdef-clear>
 
 use crate::geometry::Rect;
 use crate::style::float::{Clear, Float};

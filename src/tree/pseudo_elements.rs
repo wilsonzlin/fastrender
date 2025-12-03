@@ -3,7 +3,7 @@
 //! Implements CSS pseudo-element box generation for ::before and ::after.
 //!
 //! CSS Specification: CSS 2.1 Section 12.1 - The :before and :after pseudo-elements
-//! https://www.w3.org/TR/CSS21/generate.html#before-after-content
+//! <https://www.w3.org/TR/CSS21/generate.html#before-after-content>
 //!
 //! # Overview
 //!

@@ -6,7 +6,7 @@
 use fastrender::layout::inline::float_integration::{
     line_spaces, InlineFloatIntegration, InlineFloatIntegrationMut, LineSpace, LineSpaceOptions,
 };
-use fastrender::{FloatContext, FloatSide, Clear};
+use fastrender::{Clear, FloatContext, FloatSide};
 
 // ==================== LineSpace Tests ====================
 

@@ -48,8 +48,8 @@
 //! - rustybuzz documentation: <https://docs.rs/rustybuzz/>
 
 use crate::error::{Result, TextError};
-use crate::style::ComputedStyle;
 use crate::style::types::FontStyle as CssFontStyle;
+use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
 use rustybuzz::{Direction as HbDirection, Face, UnicodeBuffer};

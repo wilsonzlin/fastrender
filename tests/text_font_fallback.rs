@@ -4,7 +4,8 @@
 //! CSS Fonts Module Level 4, Section 5.
 
 use fastrender::{
-    FallbackChain, FallbackChainBuilder, FamilyEntry, FontDatabase, FontStretch, FontStyleDb as FontStyle, GenericFamily,
+    FallbackChain, FallbackChainBuilder, FamilyEntry, FontDatabase, FontStretch, FontStyleDb as FontStyle,
+    GenericFamily,
 };
 
 // ============================================================================

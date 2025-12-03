@@ -8,11 +8,11 @@
 //! - Embedded var() in other CSS functions
 //! - Edge cases and error handling
 
-use fastrender::PropertyValue;
 use fastrender::style::var_resolution::{
     contains_var, extract_var_references, is_valid_custom_property_name, resolve_var, resolve_var_with_depth,
 };
 use fastrender::Length;
+use fastrender::PropertyValue;
 use std::collections::HashMap;
 
 /// Helper function to create a custom properties map from pairs

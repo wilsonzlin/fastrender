@@ -450,7 +450,7 @@ rust-lldb target/debug/fastrender
 - **Documentation**: Run `just doc` to view API docs
 - **Issues**: Check existing issues or create a new one
 - **Discussions**: Use GitHub Discussions for questions
-- **Discord**: Join our Discord server (link in README)
+- **GitHub**: Open an issue for bug reports or feature requests
 
 ## Code of Conduct
 

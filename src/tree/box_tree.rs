@@ -19,7 +19,7 @@
 //! - Generated per layout pass
 //!
 //! Reference: CSS Display Module Level 3
-//! https://www.w3.org/TR/css-display-3/
+//! <https://www.w3.org/TR/css-display-3/>
 
 use crate::geometry::Size;
 use crate::style::display::FormattingContextType;

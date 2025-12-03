@@ -4,12 +4,12 @@
 //! Unit tests are in the display_list module itself; these are integration tests.
 
 use fastrender::geometry::{Point, Rect};
+use fastrender::Rgba;
 use fastrender::{
     BlendMode, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FillRoundedRectItem,
-    GlyphInstance, GradientStop, ImageData, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem,
-    StrokeRectItem, StrokeRoundedRectItem, PaintTextItem as TextItem, Transform2D, TransformItem,
+    GlyphInstance, GradientStop, ImageData, ImageItem, LinearGradientItem, OpacityItem, PaintTextItem as TextItem,
+    RadialGradientItem, StrokeRectItem, StrokeRoundedRectItem, Transform2D, TransformItem,
 };
-use fastrender::Rgba;
 use std::sync::Arc;
 
 // ============================================================================

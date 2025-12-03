@@ -48,10 +48,10 @@
 //! ```
 
 use crate::geometry::{Point, Rect, Size};
-use crate::layout::utils::resolve_offset;
 use crate::layout::formatting_context::LayoutError;
-use crate::style::position::Position;
+use crate::layout::utils::resolve_offset;
 use crate::style::computed::PositionedStyle;
+use crate::style::position::Position;
 use crate::tree::fragment_tree::FragmentNode;
 
 use super::contexts::positioned::ContainingBlock;

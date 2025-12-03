@@ -22,18 +22,18 @@ depends_on:
   - "WA.TBB"
   - "WA.TCC"
 inputs:
-  - "outputs/notes/WA.TBB-notes.md"
-  - "outputs/notes/WA.TCC-notes.md"
+  - "docs/tasks/notes/WA.TBB-notes.md"
+  - "docs/tasks/notes/WA.TCC-notes.md"
   - "src/some/existing/file.rs" (if applicable)
 outputs:
   - "src/path/to/new/file.rs"
   - "tests/path/to/test_file.rs"
-  - "outputs/notes/WX.TYY-notes.md"
+  - "docs/tasks/notes/WX.TYY-notes.md"
 skills_required:
   - "Rust"
   - "Specific domain knowledge"
 context_files:
-  - "docs/plan/XX-relevant-plan.md"
+  - "docs/*/relevant-topic.md"
   - "AGENTS.md" (if relevant)
   - "README.md" (if relevant)
 verification:
@@ -86,7 +86,7 @@ Read these notes files from prerequisite tasks:
 
 Read these existing files:
 - `src/path/file.rs` - Understand API X
-- `docs/plan/XX.md` - Reference implementation guide (Section Y is most relevant)
+- `docs/*/relevant.md` - Reference implementation guide (Section Y is most relevant)
 
 ## Objectives
 
@@ -131,7 +131,7 @@ Read these existing files:
 [Specific guidance on how to implement, with code examples]
 
 **Reference:**
-- See `docs/plan/XX.md` Section Y for algorithm details
+- See `docs/*/relevant.md` Section Y for algorithm details
 - CSS Spec Section A.B: [link]
 
 **Example code:**
@@ -250,7 +250,7 @@ cargo fmt --check
 
 ### Notes File
 
-Create: **`outputs/notes/{task_id}-notes.md`**
+Create: **`docs/tasks/notes/{task_id}-notes.md`**
 
 Use this template:
 
@@ -471,10 +471,10 @@ Track your time to improve estimates:
 
 If stuck:
 
-1. **Re-read context files**: `docs/plan/XX.md` usually has answers
+1. **Re-read context files**: `docs/*/relevant.md` usually has answers
 2. **Check dependency notes**: Look for recommendations
 3. **Review CSS specs**: Link in "Prerequisites" section
-4. **Study browser code**: Servo/WebKit examples in `docs/plan/08-reference-materials.md`
+4. **Study browser code**: Servo/WebKit examples in `docs/guides/reference-materials.md`
 5. **Ask specific questions**: Document in "Open Questions" section
 
 Remember: You're working in isolation. Your notes file is how you communicate with downstream tasks. Be thorough!

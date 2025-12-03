@@ -4,7 +4,7 @@
 //! track definitions, named lines, and grid placement.
 //!
 //! Reference: CSS Grid Layout Module Level 1
-//! https://www.w3.org/TR/css-grid-1/
+//! <https://www.w3.org/TR/css-grid-1/>
 
 use crate::css::properties::parse_property_value;
 use crate::css::types::PropertyValue;
@@ -89,6 +89,7 @@ pub fn parse_grid_tracks_with_names(tracks_str: &str) -> (Vec<GridTrack>, HashMa
 }
 
 /// Parse a single grid line reference (e.g., "text-start", "3", "auto")
+#[allow(clippy::implicit_hasher)]
 pub fn parse_grid_line(value: &str, named_lines: &HashMap<String, Vec<usize>>) -> i32 {
     let value = value.trim();
 
@@ -132,6 +133,7 @@ pub fn finalize_grid_placement(styles: &mut ComputedStyle) {
 }
 
 /// Parse grid-column or grid-row placement (e.g., "text", "1 / 3", "auto")
+#[allow(clippy::implicit_hasher)]
 pub fn parse_grid_line_placement(value: &str, named_lines: &HashMap<String, Vec<usize>>) -> (i32, i32) {
     let value = value.trim();
 

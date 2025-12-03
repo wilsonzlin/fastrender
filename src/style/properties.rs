@@ -4,7 +4,7 @@
 //! to a computed style struct.
 //!
 //! Reference: CSS Cascading and Inheritance Level 4
-//! https://www.w3.org/TR/css-cascade-4/
+//! <https://www.w3.org/TR/css-cascade-4/>
 
 use crate::css::types::{Declaration, PropertyValue};
 use crate::style::display::Display;
@@ -854,7 +854,13 @@ pub fn apply_margin_values(
     }
 }
 
-pub fn apply_box_values(top: &mut Length, right: &mut Length, bottom: &mut Length, left: &mut Length, values: Vec<Length>) {
+pub fn apply_box_values(
+    top: &mut Length,
+    right: &mut Length,
+    bottom: &mut Length,
+    left: &mut Length,
+    values: Vec<Length>,
+) {
     match values.len() {
         1 => {
             *top = values[0];

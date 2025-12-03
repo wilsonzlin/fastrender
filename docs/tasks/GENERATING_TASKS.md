@@ -19,7 +19,7 @@ We have created:
 Create each task file manually using the template, referencing:
 
 1. **TASK_GRAPH.md** for task definition
-2. **docs/plan/*.md** for implementation details
+2. **docs/*/*.md** for implementation details
 3. **Example tasks** for patterns
 
 **Pros:**
@@ -39,7 +39,7 @@ Use an AI agent to generate task files based on:
 
 1. **TASK_TEMPLATE.md** as structure
 2. **TASK_GRAPH.md** for task metadata
-3. **docs/plan/*.md** for implementation details
+3. **docs/*/*.md** for implementation details
 4. **Example tasks** as reference
 
 **Prompt template:**
@@ -59,7 +59,7 @@ TEMPLATE:
 [Include TASK_TEMPLATE.md]
 
 REFERENCE IMPLEMENTATION:
-[Include relevant section from docs/plan/*.md]
+[Include relevant section from docs/*/*.md]
 
 EXAMPLE TASKS:
 [Include 1-2 similar example tasks]
@@ -198,7 +198,7 @@ TASK_DEFINITIONS = [
         "wave": 1,
         "hours": "3-4",
         "depends_on": [],
-        "plan_doc": "docs/plan/01-type-system.md",
+        "plan_doc": "docs/core/type-system.md",
         "plan_section": "Error Types",
         "description": "Create comprehensive error type hierarchy...",
     },
@@ -363,7 +363,7 @@ With AI assistance and parallel work, this can be compressed to 1-2 days.
    ```bash
    # Create each task file using TASK_TEMPLATE.md
    # Reference TASK_GRAPH.md for definitions
-   # Reference docs/plan/*.md for details
+   # Reference docs/*/*.md for details
    # Use example tasks as reference
    ```
 

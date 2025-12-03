@@ -69,7 +69,7 @@ pub struct TableStructure {
     /// Cell information
     pub cells: Vec<CellInfo>,
 
-    /// Grid mapping: grid[row][col] = cell_index or None for spanned cells
+    /// Grid mapping: `grid[row][col]` = cell_index or None for spanned cells
     pub grid: Vec<Vec<Option<usize>>>,
 
     /// Table border spacing (horizontal, vertical)

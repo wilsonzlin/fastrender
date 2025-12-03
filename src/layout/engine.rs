@@ -449,8 +449,8 @@ impl Default for LayoutEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::ComputedStyle;
     use crate::style::display::FormattingContextType;
+    use crate::style::ComputedStyle;
     use std::sync::Arc;
 
     fn default_style() -> Arc<ComputedStyle> {

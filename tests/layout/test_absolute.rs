@@ -8,18 +8,19 @@
 //! - CSS 2.1 Section 10.1: Definition of "containing block"
 
 use fastrender::geometry::{EdgeOffsets, Point, Rect, Size};
+use fastrender::FragmentNode;
 use fastrender::{AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult, ContainingBlock, ResolvedMargins};
 use fastrender::{LengthOrAuto, Position, PositionedStyle};
-use fastrender::FragmentNode;
 
 // ============================================================================
 // Test Fixtures
 // ============================================================================
 
 fn default_style() -> PositionedStyle {
-    let mut style = PositionedStyle::default();
-    style.border_width = EdgeOffsets::ZERO;
-    style
+    PositionedStyle {
+        border_width: EdgeOffsets::ZERO,
+        ..Default::default()
+    }
 }
 
 fn create_cb(width: f32, height: f32) -> ContainingBlock {

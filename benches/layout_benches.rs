@@ -4,12 +4,8 @@
 //! - Block formatting context layout
 //! - Flex layout (via Taffy)
 //! - Grid layout (via Taffy)
-//! - Table layout
-//! - Margin collapsing
-//! - Width computation
 //! - Intrinsic sizing
 //! - Layout constraints
-//! - Float context
 //!
 //! # Running Benchmarks
 //!
@@ -18,16 +14,12 @@
 //! ```
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use fastrender::geometry::{Rect, Size};
-use fastrender::layout::constraints::{AvailableSpace, LayoutConstraints};
-use fastrender::layout::contexts::block::{
-    collapse_margins, compute_block_width, CollapsibleMargin, MarginCollapseContext,
-};
-use fastrender::layout::float_context::{FloatContext, FloatInfo, FloatSide};
-use fastrender::layout::formatting_context::IntrinsicSizingMode;
-use fastrender::layout::{LayoutConfig, LayoutEngine};
-use fastrender::style::{ComputedStyles, Display, Length};
-use fastrender::tree::{BoxNode, BoxTree, FormattingContextType};
+use fastrender::geometry::Size;
+use fastrender::style::display::{Display, FormattingContextType};
+use fastrender::style::values::Length;
+use fastrender::style::ComputedStyle;
+use fastrender::tree::box_tree::{BoxNode, BoxTree};
+use fastrender::{AvailableSpace, IntrinsicSizingMode, LayoutConfig, LayoutConstraints, LayoutEngine};
 use std::sync::Arc;
 
 // ============================================================================
@@ -35,13 +27,13 @@ use std::sync::Arc;
 // ============================================================================
 
 /// Creates a default computed style
-fn default_style() -> Arc<ComputedStyles> {
-    Arc::new(ComputedStyles::default())
+fn default_style() -> Arc<ComputedStyle> {
+    Arc::new(ComputedStyle::default())
 }
 
 /// Creates a block style with specified dimensions
-fn block_style(width: Option<f32>, height: Option<f32>) -> Arc<ComputedStyles> {
-    let mut style = ComputedStyles::default();
+fn block_style(width: Option<f32>, height: Option<f32>) -> Arc<ComputedStyle> {
+    let mut style = ComputedStyle::default();
     style.display = Display::Block;
     if let Some(w) = width {
         style.width = Some(Length::px(w));
@@ -53,8 +45,8 @@ fn block_style(width: Option<f32>, height: Option<f32>) -> Arc<ComputedStyles> {
 }
 
 /// Creates a style with margins
-fn style_with_margins(top: f32, right: f32, bottom: f32, left: f32) -> Arc<ComputedStyles> {
-    let mut style = ComputedStyles::default();
+fn style_with_margins(top: f32, right: f32, bottom: f32, left: f32) -> Arc<ComputedStyle> {
+    let mut style = ComputedStyle::default();
     style.display = Display::Block;
     style.margin_top = Some(Length::px(top));
     style.margin_right = Some(Length::px(right));
@@ -64,8 +56,8 @@ fn style_with_margins(top: f32, right: f32, bottom: f32, left: f32) -> Arc<Compu
 }
 
 /// Creates a style with padding
-fn style_with_padding(top: f32, right: f32, bottom: f32, left: f32) -> Arc<ComputedStyles> {
-    let mut style = ComputedStyles::default();
+fn style_with_padding(top: f32, right: f32, bottom: f32, left: f32) -> Arc<ComputedStyle> {
+    let mut style = ComputedStyle::default();
     style.display = Display::Block;
     style.padding_top = Length::px(top);
     style.padding_right = Length::px(right);
@@ -75,15 +67,15 @@ fn style_with_padding(top: f32, right: f32, bottom: f32, left: f32) -> Arc<Compu
 }
 
 /// Creates a flex container style
-fn flex_style() -> Arc<ComputedStyles> {
-    let mut style = ComputedStyles::default();
+fn flex_style() -> Arc<ComputedStyle> {
+    let mut style = ComputedStyle::default();
     style.display = Display::Flex;
     Arc::new(style)
 }
 
 /// Creates a grid container style
-fn grid_style() -> Arc<ComputedStyles> {
-    let mut style = ComputedStyles::default();
+fn grid_style() -> Arc<ComputedStyle> {
+    let mut style = ComputedStyle::default();
     style.display = Display::Grid;
     Arc::new(style)
 }
@@ -237,184 +229,6 @@ fn bench_block_layout(c: &mut Criterion) {
 }
 
 // ============================================================================
-// Width Computation Benchmarks
-// ============================================================================
-
-fn bench_width_computation(c: &mut Criterion) {
-    let mut group = c.benchmark_group("width_computation");
-
-    // Auto width
-    let auto_style = ComputedStyles::default();
-    group.bench_function("auto_width", |b| {
-        b.iter(|| compute_block_width(black_box(&auto_style), black_box(800.0)))
-    });
-
-    // Explicit width
-    let mut explicit_style = ComputedStyles::default();
-    explicit_style.width = Some(Length::px(400.0));
-    group.bench_function("explicit_width", |b| {
-        b.iter(|| compute_block_width(black_box(&explicit_style), black_box(800.0)))
-    });
-
-    // Percentage width
-    let mut percent_style = ComputedStyles::default();
-    percent_style.width = Some(Length::percent(50.0));
-    group.bench_function("percent_width", |b| {
-        b.iter(|| compute_block_width(black_box(&percent_style), black_box(800.0)))
-    });
-
-    // With min-width
-    let mut min_style = ComputedStyles::default();
-    min_style.min_width = Some(Length::px(200.0));
-    group.bench_function("with_min_width", |b| {
-        b.iter(|| compute_block_width(black_box(&min_style), black_box(800.0)))
-    });
-
-    // With max-width
-    let mut max_style = ComputedStyles::default();
-    max_style.max_width = Some(Length::px(600.0));
-    group.bench_function("with_max_width", |b| {
-        b.iter(|| compute_block_width(black_box(&max_style), black_box(800.0)))
-    });
-
-    // Complex style with all properties
-    let mut complex_style = ComputedStyles::default();
-    complex_style.width = Some(Length::percent(75.0));
-    complex_style.min_width = Some(Length::px(200.0));
-    complex_style.max_width = Some(Length::px(600.0));
-    complex_style.margin_left = Some(Length::px(20.0));
-    complex_style.margin_right = Some(Length::px(20.0));
-    complex_style.padding_left = Length::px(15.0);
-    complex_style.padding_right = Length::px(15.0);
-    group.bench_function("complex_width", |b| {
-        b.iter(|| compute_block_width(black_box(&complex_style), black_box(800.0)))
-    });
-
-    group.finish();
-}
-
-// ============================================================================
-// Margin Collapse Benchmarks
-// ============================================================================
-
-fn bench_margin_collapse(c: &mut Criterion) {
-    let mut group = c.benchmark_group("margin_collapse");
-
-    // Simple collapse (two positive margins)
-    group.bench_function("simple_positive", |b| {
-        b.iter(|| collapse_margins(black_box(20.0), black_box(30.0)))
-    });
-
-    // Negative margins
-    group.bench_function("with_negative", |b| {
-        b.iter(|| collapse_margins(black_box(20.0), black_box(-10.0)))
-    });
-
-    // Both negative
-    group.bench_function("both_negative", |b| {
-        b.iter(|| collapse_margins(black_box(-15.0), black_box(-25.0)))
-    });
-
-    // Zero margins
-    group.bench_function("zero_margins", |b| {
-        b.iter(|| collapse_margins(black_box(0.0), black_box(0.0)))
-    });
-
-    // Collapsible margin creation
-    group.bench_function("collapsible_margin_new", |b| {
-        b.iter(|| CollapsibleMargin::new(black_box(20.0), black_box(0.0)))
-    });
-
-    // Margin collapse context operations
-    group.bench_function("context_push_resolve", |b| {
-        b.iter(|| {
-            let mut ctx = MarginCollapseContext::new();
-            ctx.push_margin(black_box(20.0));
-            ctx.push_margin(black_box(30.0));
-            ctx.resolve()
-        })
-    });
-
-    // Multiple margin collapse sequence
-    group.bench_function("multiple_collapses", |b| {
-        b.iter(|| {
-            let mut ctx = MarginCollapseContext::new();
-            for margin in [10.0, 20.0, 15.0, 30.0, 25.0].iter() {
-                ctx.push_margin(black_box(*margin));
-            }
-            ctx.resolve()
-        })
-    });
-
-    group.finish();
-}
-
-// ============================================================================
-// Float Context Benchmarks
-// ============================================================================
-
-fn bench_float_context(c: &mut Criterion) {
-    let mut group = c.benchmark_group("float_context");
-
-    // Float context creation
-    group.bench_function("context_creation", |b| b.iter(|| FloatContext::new(black_box(800.0))));
-
-    // Adding floats
-    group.bench_function("add_float_left", |b| {
-        let mut ctx = FloatContext::new(800.0);
-        let float_info = FloatInfo {
-            rect: Rect::from_xywh(0.0, 0.0, 100.0, 50.0),
-            side: FloatSide::Left,
-        };
-        b.iter(|| ctx.add_float(black_box(float_info)))
-    });
-
-    group.bench_function("add_float_right", |b| {
-        let mut ctx = FloatContext::new(800.0);
-        let float_info = FloatInfo {
-            rect: Rect::from_xywh(700.0, 0.0, 100.0, 50.0),
-            side: FloatSide::Right,
-        };
-        b.iter(|| ctx.add_float(black_box(float_info)))
-    });
-
-    // Available width calculation with floats
-    group.bench_function("available_width_empty", |b| {
-        let ctx = FloatContext::new(800.0);
-        b.iter(|| ctx.available_width_at_y(black_box(0.0)))
-    });
-
-    group.bench_function("available_width_with_floats", |b| {
-        let mut ctx = FloatContext::new(800.0);
-        ctx.add_float(FloatInfo {
-            rect: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-            side: FloatSide::Left,
-        });
-        ctx.add_float(FloatInfo {
-            rect: Rect::from_xywh(700.0, 0.0, 100.0, 80.0),
-            side: FloatSide::Right,
-        });
-        b.iter(|| ctx.available_width_at_y(black_box(50.0)))
-    });
-
-    // Many floats scenario
-    group.bench_function("many_floats", |b| {
-        let mut ctx = FloatContext::new(800.0);
-        for i in 0..20 {
-            let side = if i % 2 == 0 { FloatSide::Left } else { FloatSide::Right };
-            let x = if side == FloatSide::Left { 0.0 } else { 700.0 };
-            ctx.add_float(FloatInfo {
-                rect: Rect::from_xywh(x, (i * 30) as f32, 100.0, 25.0),
-                side,
-            });
-        }
-        b.iter(|| ctx.available_width_at_y(black_box(150.0)))
-    });
-
-    group.finish();
-}
-
-// ============================================================================
 // Flex Layout Benchmarks
 // ============================================================================
 
@@ -556,9 +370,6 @@ criterion_group!(
     benches,
     bench_layout_constraints,
     bench_block_layout,
-    bench_width_computation,
-    bench_margin_collapse,
-    bench_float_context,
     bench_flex_layout,
     bench_grid_layout,
     bench_intrinsic_sizing,

@@ -5,11 +5,11 @@
 
 #[allow(unused_imports)]
 use fastrender::geometry::Rect;
-use fastrender::FormattingContextFactory;
-use fastrender::{FormattingContext, IntrinsicSizingMode, LayoutConstraints};
 use fastrender::ComputedStyle;
+use fastrender::FormattingContextFactory;
 #[allow(unused_imports)]
 use fastrender::{BoxNode, FormattingContextType, FragmentNode};
+use fastrender::{FormattingContext, IntrinsicSizingMode, LayoutConstraints};
 use std::sync::Arc;
 
 // =============================================================================
@@ -668,7 +668,7 @@ fn test_is_supported_returns_true_for_all_types() {
 
 #[test]
 fn test_default_factory_works() {
-    let factory = FormattingContextFactory::default();
+    let factory = FormattingContextFactory;
 
     for &fc_type in factory.supported_types() {
         let fc = factory.create(fc_type);

@@ -493,10 +493,10 @@ fn truncate(s: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::{Point, Rect, Size};
+    use crate::geometry::Rect;
+    use crate::style::display::FormattingContextType;
     use crate::style::ComputedStyle;
     use crate::tree::debug::DebugInfo;
-    use crate::style::display::FormattingContextType;
     use std::sync::Arc;
 
     fn default_style() -> Arc<ComputedStyle> {

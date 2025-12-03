@@ -4,7 +4,7 @@
 //! are created from DOM elements.
 //!
 //! CSS Specification: CSS 2.1 Section 9.2 - Box Generation
-//! https://www.w3.org/TR/CSS21/visuren.html#box-gen
+//! <https://www.w3.org/TR/CSS21/visuren.html#box-gen>
 
 use crate::geometry::Size;
 use crate::style::display::{Display, FormattingContextType};
@@ -1372,22 +1372,13 @@ mod tests {
         let style = default_style();
 
         let img = DOMNode::new_replaced("img", style.clone(), "test.png", None);
-        assert!(matches!(
-            img.replaced_type(),
-            Some(ReplacedType::Image { .. })
-        ));
+        assert!(matches!(img.replaced_type(), Some(ReplacedType::Image { .. })));
 
         let video = DOMNode::new_replaced("video", style.clone(), "test.mp4", None);
-        assert!(matches!(
-            video.replaced_type(),
-            Some(ReplacedType::Video { .. })
-        ));
+        assert!(matches!(video.replaced_type(), Some(ReplacedType::Video { .. })));
 
         let canvas = DOMNode::new_element("canvas", style.clone(), vec![]);
-        assert!(matches!(
-            canvas.replaced_type(),
-            Some(ReplacedType::Canvas)
-        ));
+        assert!(matches!(canvas.replaced_type(), Some(ReplacedType::Canvas)));
 
         let div = DOMNode::new_element("div", style, vec![]);
         assert!(div.replaced_type().is_none());
@@ -1417,18 +1408,8 @@ mod tests {
         let generator = BoxGenerator::new();
         let style = default_style();
 
-        let img1 = DOMNode::new_replaced(
-            "img",
-            style.clone(),
-            "img1.png",
-            Some(Size::new(100.0, 100.0)),
-        );
-        let video = DOMNode::new_replaced(
-            "video",
-            style.clone(),
-            "video.mp4",
-            Some(Size::new(640.0, 480.0)),
-        );
+        let img1 = DOMNode::new_replaced("img", style.clone(), "img1.png", Some(Size::new(100.0, 100.0)));
+        let video = DOMNode::new_replaced("video", style.clone(), "video.mp4", Some(Size::new(640.0, 480.0)));
         let img2 = DOMNode::new_replaced("img", style.clone(), "img2.png", None);
 
         let container = DOMNode::new_element("div", style_with_display(Display::Block), vec![img1, video, img2]);
@@ -1464,12 +1445,7 @@ mod tests {
 
         // img in inline context
         let text = DOMNode::new_text("Hello ", style.clone());
-        let img = DOMNode::new_replaced(
-            "img",
-            style.clone(),
-            "icon.png",
-            Some(Size::new(16.0, 16.0)),
-        );
+        let img = DOMNode::new_replaced("img", style.clone(), "icon.png", Some(Size::new(16.0, 16.0)));
         let text2 = DOMNode::new_text(" World", style.clone());
 
         let span = DOMNode::new_element("span", style_with_display(Display::Inline), vec![text, img, text2]);
@@ -1665,12 +1641,7 @@ mod tests {
 
         // Create: div > text + img + text + video + div
         let text1 = DOMNode::new_text("Before image ", style.clone());
-        let img = DOMNode::new_replaced(
-            "img",
-            style.clone(),
-            "test.png",
-            Some(Size::new(100.0, 50.0)),
-        );
+        let img = DOMNode::new_replaced("img", style.clone(), "test.png", Some(Size::new(100.0, 50.0)));
         let text2 = DOMNode::new_text(" after image ", style.clone());
         let video = DOMNode::new_replaced("video", style.clone(), "test.mp4", None);
         let nested_div = DOMNode::new_element(
@@ -1698,12 +1669,7 @@ mod tests {
         let generator = BoxGenerator::new();
         let style = default_style();
 
-        let svg = DOMNode::new_replaced(
-            "svg",
-            style.clone(),
-            "<svg>...</svg>",
-            Some(Size::new(100.0, 100.0)),
-        );
+        let svg = DOMNode::new_replaced("svg", style.clone(), "<svg>...</svg>", Some(Size::new(100.0, 100.0)));
         let wrapper = DOMNode::new_element("div", style_with_display(Display::Block), vec![svg]);
 
         let box_tree = generator.generate(&wrapper).unwrap();

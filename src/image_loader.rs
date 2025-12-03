@@ -81,7 +81,7 @@ impl ImageCache {
                 }
             } else {
                 // Relative path without ./
-                // For base URLs like https://news.ycombinator.com, append directly
+                // For base URLs like <https://news.ycombinator.com,> append directly
                 let resolved_url = format!("{}/{}", base.trim_end_matches('/'), url);
                 return resolved_url;
             }
@@ -235,9 +235,8 @@ impl ImageCache {
         let height = size.height() as u32;
 
         // Render SVG to pixmap
-        let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or(Error::Render(
-            RenderError::CanvasCreationFailed { width, height },
-        ))?;
+        let mut pixmap = tiny_skia::Pixmap::new(width, height)
+            .ok_or(Error::Render(RenderError::CanvasCreationFailed { width, height }))?;
 
         resvg::render(&tree, tiny_skia::Transform::identity(), &mut pixmap.as_mut());
 

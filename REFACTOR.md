@@ -10,13 +10,13 @@
 
 | Document | Purpose |
 |----------|---------|
-| [00-inventory.md](docs/refactor/00-inventory.md) | Current state: metrics, file inventory, type duplicates, hack locations |
-| [01-phase1-types.md](docs/refactor/01-phase1-types.md) | Eliminate duplicate types (css::Color, ComputedStyles) |
-| [02-phase2-modules.md](docs/refactor/02-phase2-modules.md) | Split monster files (style/mod.rs, css.rs) |
-| [03-phase3-hacks.md](docs/refactor/03-phase3-hacks.md) | Remove all site-specific hardcoding |
-| [04-phase4-css.md](docs/refactor/04-phase4-css.md) | Proper @media and :is() support |
-| [05-phase5-quality.md](docs/refactor/05-phase5-quality.md) | Clippy, dead code, TODOs, vendored Taffy |
-| [06-phase6-features.md](docs/refactor/06-phase6-features.md) | ::before/::after, float, transform, RTL |
+| [00-inventory.md](docs/archive/refactor/00-inventory.md) | Current state: metrics, file inventory, type duplicates, hack locations |
+| [01-phase1-types.md](docs/archive/refactor/01-phase1-types.md) | Eliminate duplicate types (css::Color, ComputedStyles) |
+| [02-phase2-modules.md](docs/archive/refactor/02-phase2-modules.md) | Split monster files (style/mod.rs, css.rs) |
+| [03-phase3-hacks.md](docs/archive/refactor/03-phase3-hacks.md) | Remove all site-specific hardcoding |
+| [04-phase4-css.md](docs/archive/refactor/04-phase4-css.md) | Proper @media and :is() support |
+| [05-phase5-quality.md](docs/archive/refactor/05-phase5-quality.md) | Clippy, dead code, TODOs, vendored Taffy |
+| [06-phase6-features.md](docs/archive/refactor/06-phase6-features.md) | ::before/::after, float, transform, RTL |
 
 ---
 

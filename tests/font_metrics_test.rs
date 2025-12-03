@@ -52,9 +52,8 @@ fn test_query_serif() {
         return;
     }
 
-    let id = db.query("serif", FontWeight::NORMAL, FontStyle::Normal);
-    if id.is_some() {
-        let font = db.load_font(id.unwrap());
+    if let Some(id) = db.query("serif", FontWeight::NORMAL, FontStyle::Normal) {
+        let font = db.load_font(id);
         assert!(font.is_some());
     }
 }
@@ -67,9 +66,8 @@ fn test_query_monospace() {
         return;
     }
 
-    let id = db.query("monospace", FontWeight::NORMAL, FontStyle::Normal);
-    if id.is_some() {
-        let font = db.load_font(id.unwrap());
+    if let Some(id) = db.query("monospace", FontWeight::NORMAL, FontStyle::Normal) {
+        let font = db.load_font(id);
         assert!(font.is_some());
     }
 }
@@ -88,9 +86,8 @@ fn test_font_fallback_chain() {
         "sans-serif".to_string(),
     ];
 
-    let id = db.resolve_family_list(&families, FontWeight::NORMAL, FontStyle::Normal);
-    if id.is_some() {
-        let font = db.load_font(id.unwrap());
+    if let Some(id) = db.resolve_family_list(&families, FontWeight::NORMAL, FontStyle::Normal) {
+        let font = db.load_font(id);
         assert!(font.is_some());
     }
 }
@@ -378,9 +375,7 @@ fn test_get_font_bold() {
     }
 
     let families = vec!["sans-serif".to_string()];
-    let font = ctx.get_font(&families, 700, false, false);
-    if font.is_some() {
-        let font = font.unwrap();
+    if let Some(font) = ctx.get_font(&families, 700, false, false) {
         assert!(font.weight.value() >= 400);
     }
 }

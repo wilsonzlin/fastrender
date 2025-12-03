@@ -35,7 +35,7 @@ use crate::style::values::Length;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
 
-use margin_collapse::{MarginCollapseContext};
+use margin_collapse::MarginCollapseContext;
 use width::compute_block_width;
 
 /// Helper to resolve a Length to pixels, handling em/rem units with font-size
@@ -303,10 +303,10 @@ fn is_out_of_flow(box_node: &BoxNode) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::display::FormattingContextType;
-    use crate::style::ComputedStyle;
     use crate::style::display::Display;
+    use crate::style::display::FormattingContextType;
     use crate::style::values::Length;
+    use crate::style::ComputedStyle;
     use std::sync::Arc;
 
     fn default_style() -> Arc<ComputedStyle> {

@@ -4,8 +4,8 @@
 //! for real-world rendering scenarios.
 
 use fastrender::geometry::{Point, Rect};
-use fastrender::{BlendMode, BorderRadii, Canvas};
 use fastrender::Rgba;
+use fastrender::{BlendMode, BorderRadii, Canvas};
 use fastrender::{FontContext, Script, TextDirection, TextShaper};
 
 // ============================================================================

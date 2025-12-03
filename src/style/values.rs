@@ -12,7 +12,7 @@
 //! - **Percentages**: Relative to containing block or font size
 //!
 //! Reference: CSS Values and Units Module Level 3
-//! https://www.w3.org/TR/css-values-3/
+//! <https://www.w3.org/TR/css-values-3/>
 
 use std::fmt;
 

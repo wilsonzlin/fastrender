@@ -25,69 +25,69 @@ The current codebase has fatal architectural issues:
 This plan is broken into focused, detailed documents:
 
 ### Phase 0: Foundation & Research
-- [`docs/plan/00-foundation-research.md`](docs/plan/00-foundation-research.md) - Specification study and architecture research
-- [`docs/plan/00-architecture-decisions.md`](docs/plan/00-architecture-decisions.md) - Core architectural decisions and rationale
+- [`docs/architecture/foundation.md`](docs/architecture/foundation.md) - Specification study and architecture research
+- [`docs/architecture/decisions.md`](docs/architecture/decisions.md) - Core architectural decisions and rationale
 
 ### Phase 1: Core Architecture
-- [`docs/plan/01-type-system.md`](docs/plan/01-type-system.md) - Box tree, Fragment tree, core types
-- [`docs/plan/01-formatting-contexts.md`](docs/plan/01-formatting-contexts.md) - BFC, IFC, FFC, GFC, TFC abstractions
-- [`docs/plan/01-box-generation.md`](docs/plan/01-box-generation.md) - DOM to Box Tree transformation
-- [`docs/plan/01-integration.md`](docs/plan/01-integration.md) - Engine integration and pipeline
+- [`docs/core/type-system.md`](docs/core/type-system.md) - Box tree, Fragment tree, core types
+- [`docs/core/formatting-contexts.md`](docs/core/formatting-contexts.md) - BFC, IFC, FFC, GFC, TFC abstractions
+- [`docs/core/box-generation.md`](docs/core/box-generation.md) - DOM to Box Tree transformation
+- [`docs/core/integration.md`](docs/core/integration.md) - Engine integration and pipeline
 
 ### Phase 2: Layout Algorithms
-- [`docs/plan/02-block-layout.md`](docs/plan/02-block-layout.md) - Block Formatting Context implementation
-- [`docs/plan/02-inline-layout.md`](docs/plan/02-inline-layout.md) - Inline Formatting Context implementation
-- [`docs/plan/02-flex-layout.md`](docs/plan/02-flex-layout.md) - Flexbox (Taffy integration)
-- [`docs/plan/02-grid-layout.md`](docs/plan/02-grid-layout.md) - Grid (Taffy integration)
-- [`docs/plan/02-table-layout.md`](docs/plan/02-table-layout.md) - Table layout from scratch
-- [`docs/plan/02-float-layout.md`](docs/plan/02-float-layout.md) - Float positioning
-- [`docs/plan/02-positioned-layout.md`](docs/plan/02-positioned-layout.md) - Absolute/relative/fixed positioning
+- [`docs/layout/block.md`](docs/layout/block.md) - Block Formatting Context implementation
+- [`docs/layout/inline.md`](docs/layout/inline.md) - Inline Formatting Context implementation
+- [`docs/layout/flex.md`](docs/layout/flex.md) - Flexbox (Taffy integration)
+- [`docs/layout/grid.md`](docs/layout/grid.md) - Grid (Taffy integration)
+- [`docs/layout/table.md`](docs/layout/table.md) - Table layout from scratch
+- [`docs/layout/float.md`](docs/layout/float.md) - Float positioning
+- [`docs/layout/positioned.md`](docs/layout/positioned.md) - Absolute/relative/fixed positioning
 
 ### Phase 3: Text & Typography
-- [`docs/plan/03-font-system.md`](docs/plan/03-font-system.md) - Font loading, caching, fallback
-- [`docs/plan/03-text-shaping.md`](docs/plan/03-text-shaping.md) - Bidi, script itemization, shaping
-- [`docs/plan/03-line-breaking.md`](docs/plan/03-line-breaking.md) - Line breaking algorithm
+- [`docs/text/font-system.md`](docs/text/font-system.md) - Font loading, caching, fallback
+- [`docs/text/shaping.md`](docs/text/shaping.md) - Bidi, script itemization, shaping
+- [`docs/text/line-breaking.md`](docs/text/line-breaking.md) - Line breaking algorithm
 
 ### Phase 4: Paint & Rendering
-- [`docs/plan/04-display-list.md`](docs/plan/04-display-list.md) - Display list construction
-- [`docs/plan/04-stacking-contexts.md`](docs/plan/04-stacking-contexts.md) - Z-index and paint order
-- [`docs/plan/04-rasterization.md`](docs/plan/04-rasterization.md) - Pixel rendering
+- [`docs/paint/display-list.md`](docs/paint/display-list.md) - Display list construction
+- [`docs/paint/stacking-contexts.md`](docs/paint/stacking-contexts.md) - Z-index and paint order
+- [`docs/paint/rasterization.md`](docs/paint/rasterization.md) - Pixel rendering
 
 ### Phase 5: CSS Features
-- [`docs/plan/05-css-features-roadmap.md`](docs/plan/05-css-features-roadmap.md) - Complete CSS feature matrix
-- [`docs/plan/05-margin-collapse.md`](docs/plan/05-margin-collapse.md) - Margin collapsing algorithm
-- [`docs/plan/05-pseudo-elements.md`](docs/plan/05-pseudo-elements.md) - ::before, ::after
-- [`docs/plan/05-media-queries.md`](docs/plan/05-media-queries.md) - @media support
-- [`docs/plan/05-css-variables.md`](docs/plan/05-css-variables.md) - Custom properties (fix existing)
+- [`docs/css-features/roadmap.md`](docs/css-features/roadmap.md) - Complete CSS feature matrix
+- [`docs/css-features/margin-collapse.md`](docs/css-features/margin-collapse.md) - Margin collapsing algorithm
+- [`docs/css-features/pseudo-elements.md`](docs/css-features/pseudo-elements.md) - ::before, ::after
+- [`docs/css-features/media-queries.md`](docs/css-features/media-queries.md) - @media support
+- [`docs/css-features/variables.md`](docs/css-features/variables.md) - Custom properties (fix existing)
 
 ### Phase 6: Testing & Quality
-- [`docs/plan/06-testing-strategy.md`](docs/plan/06-testing-strategy.md) - Comprehensive testing approach
-- [`docs/plan/06-wpt-integration.md`](docs/plan/06-wpt-integration.md) - Web Platform Tests setup
-- [`docs/plan/06-reference-tests.md`](docs/plan/06-reference-tests.md) - Pixel-comparison testing
-- [`docs/plan/06-benchmarking.md`](docs/plan/06-benchmarking.md) - Performance measurement
+- [`docs/testing/strategy.md`](docs/testing/strategy.md) - Comprehensive testing approach
+- [`docs/testing/wpt.md`](docs/testing/wpt.md) - Web Platform Tests setup
+- [`docs/testing/reference-tests.md`](docs/testing/reference-tests.md) - Pixel-comparison testing
+- [`docs/testing/benchmarking.md`](docs/testing/benchmarking.md) - Performance measurement
 
 ### Supporting Documentation
-- [`docs/plan/07-migration-guide.md`](docs/plan/07-migration-guide.md) - Migrating from V1 to V2
-- [`docs/plan/08-reference-materials.md`](docs/plan/08-reference-materials.md) - Specs, browser code, resources
-- [`docs/plan/09-implementation-checklist.md`](docs/plan/09-implementation-checklist.md) - Detailed task breakdown
-- [`docs/plan/10-code-standards.md`](docs/plan/10-code-standards.md) - Coding conventions and patterns
-- [`docs/plan/11-api-design.md`](docs/plan/11-api-design.md) - Public API surface
+- [`docs/guides/migration.md`](docs/guides/migration.md) - Migrating from V1 to V2
+- [`docs/guides/reference-materials.md`](docs/guides/reference-materials.md) - Specs, browser code, resources
+- [`docs/guides/implementation-checklist.md`](docs/guides/implementation-checklist.md) - Detailed task breakdown
+- [`docs/guides/code-standards.md`](docs/guides/code-standards.md) - Coding conventions and patterns
+- [`docs/guides/api-design.md`](docs/guides/api-design.md) - Public API surface
 
 ## Quick Start for AI Agents
 
 ### Understanding the Current State
 1. Read the comprehensive analysis above (you've already done this)
-2. Review [`docs/plan/00-architecture-decisions.md`](docs/plan/00-architecture-decisions.md)
+2. Review [`docs/architecture/decisions.md`](docs/architecture/decisions.md)
 
 ### Starting Phase 0 (Foundation Research)
-1. Follow [`docs/plan/00-foundation-research.md`](docs/plan/00-foundation-research.md)
+1. Follow [`docs/architecture/foundation.md`](docs/architecture/foundation.md)
 2. Complete all specification reading
 3. Study reference implementations
 4. Document findings in `/docs/research/`
 
 ### Starting Phase 1 (Core Architecture)
 1. Review all Phase 1 documents
-2. Start with [`docs/plan/01-type-system.md`](docs/plan/01-type-system.md)
+2. Start with [`docs/core/type-system.md`](docs/core/type-system.md)
 3. Follow the detailed implementation steps
 4. Write tests before implementation
 5. Verify against acceptance criteria
@@ -133,9 +133,9 @@ The rebuild is complete when:
 ## Navigation
 
 Start reading from Phase 0:
-- Next: [`docs/plan/00-foundation-research.md`](docs/plan/00-foundation-research.md)
+- Next: [`docs/architecture/foundation.md`](docs/architecture/foundation.md)
 - Index: See "Documentation Structure" above
-- Checklist: [`docs/plan/09-implementation-checklist.md`](docs/plan/09-implementation-checklist.md)
+- Checklist: [`docs/guides/implementation-checklist.md`](docs/guides/implementation-checklist.md)
 
 ## Living Document
 

@@ -27,9 +27,9 @@
 //!
 //! # References
 //!
-//! - CSS 2.1 Section 9.4 - Normal Flow: https://www.w3.org/TR/CSS21/visuren.html#normal-flow
-//! - CSS Flexbox: https://www.w3.org/TR/css-flexbox-1/
-//! - CSS Grid: https://www.w3.org/TR/css-grid-1/
+//! - CSS 2.1 Section 9.4 - Normal Flow: <https://www.w3.org/TR/CSS21/visuren.html#normal-flow>
+//! - CSS Flexbox: <https://www.w3.org/TR/css-flexbox-1/>
+//! - CSS Grid: <https://www.w3.org/TR/css-grid-1/>
 
 use crate::layout::constraints::LayoutConstraints;
 use crate::tree::box_tree::BoxNode;
@@ -55,7 +55,7 @@ use crate::tree::fragment_tree::FragmentNode;
 ///
 /// # Reference
 ///
-/// CSS Sizing Module Level 3: https://www.w3.org/TR/css-sizing-3/
+/// CSS Sizing Module Level 3: <https://www.w3.org/TR/css-sizing-3/>
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntrinsicSizingMode {
     /// Minimum content size (narrowest possible without overflow)
@@ -227,9 +227,9 @@ impl std::error::Error for LayoutError {}
 mod tests {
     use super::*;
     use crate::geometry::Rect;
-    use crate::layout::constraints::AvailableSpace;
-    use crate::style::ComputedStyle;
+
     use crate::style::display::FormattingContextType;
+    use crate::style::ComputedStyle;
     use std::sync::Arc;
 
     /// Stub formatting context for testing trait requirements

@@ -88,9 +88,9 @@ inputs: []
 outputs:
   - "src/geometry.rs"
   - "tests/geometry_test.rs"
-  - "outputs/notes/W1.T01-notes.md"
+  - "docs/tasks/notes/W1.T01-notes.md"
 skills_required: ["Rust"]
-context_files: ["docs/plan/01-type-system.md"]
+context_files: ["docs/core/type-system.md"]
 verification:
   - "cargo test geometry"
 ---
@@ -125,12 +125,12 @@ If your task has dependencies (check `inputs` in frontmatter), you **must** read
 
 Notes files are in:
 ```
-outputs/notes/{task_id}-notes.md
+docs/tasks/notes/{task_id}-notes.md
 ```
 
 **Example:**
 - Your task depends on: `W1.T01`
-- Read: `outputs/notes/W1.T01-notes.md`
+- Read: `docs/tasks/notes/W1.T01-notes.md`
 
 ### 4.2 What to Extract from Notes
 
@@ -179,7 +179,7 @@ Your task may reference context files (see `context_files` in frontmatter):
 
 ### Common Context Files
 
-- **`docs/plan/*.md`** - Detailed implementation plans
+- **`docs/*/*.md`** - Detailed implementation plans
   - Read the relevant sections referenced in your task
   - Contains algorithms, CSS spec references, code examples
 
@@ -330,11 +330,11 @@ mod tests {
 
 ### 7.1 Notes File Location
 
-Create: `outputs/notes/{your_task_id}-notes.md`
+Create: `docs/tasks/notes/{your_task_id}-notes.md`
 
 **Example:**
 - Your task: `W1.T01`
-- Create: `outputs/notes/W1.T01-notes.md`
+- Create: `docs/tasks/notes/W1.T01-notes.md`
 
 ### 7.2 Notes File Template
 
@@ -547,7 +547,7 @@ Once your task is verified, your outputs are:
    - Example: `tests/geometry_test.rs`
 
 3. **Notes file** (always required)
-   - Location: `outputs/notes/{task_id}-notes.md`
+   - Location: `docs/tasks/notes/{task_id}-notes.md`
    - Must be complete with all sections filled
 
 ### Verification Results
@@ -567,7 +567,7 @@ Verification:
 Files Created:
 ✅ src/geometry.rs (287 lines)
 ✅ tests/geometry_test.rs (156 lines)
-✅ outputs/notes/W1.T01-notes.md (342 lines)
+✅ docs/tasks/notes/W1.T01-notes.md (342 lines)
 
 Time Taken: 5.5 hours (estimate was 4-6 hours)
 
@@ -587,7 +587,7 @@ docs/tasks/wave-{N}/{task_id}-{slug}.md
 ### Notes File Structure
 
 ```
-outputs/notes/{task_id}-notes.md
+docs/tasks/notes/{task_id}-notes.md
 ```
 
 ### Key Commands
@@ -646,9 +646,9 @@ If you're stuck:
 
 1. **Re-read your task file** - The answer is usually there
 2. **Re-read dependency notes** - Look for recommendations
-3. **Check context files** - `docs/plan/*.md` has detailed guidance
+3. **Check context files** - `docs/*/*.md` has detailed guidance
 4. **Review CSS specs** - Links provided in Prerequisites section
-5. **Study browser code** - `docs/plan/08-reference-materials.md` has links to Servo, WebKit
+5. **Study browser code** - `docs/guides/reference-materials.md` has links to Servo, WebKit
 
 If still stuck:
 - **Document it in your notes** under "Open Questions"

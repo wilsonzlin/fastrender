@@ -391,7 +391,7 @@ fn test_breaks_within_bounds() {
 #[test]
 fn test_opening_bracket() {
     let text = "Hello (world)";
-    let breaks = find_break_opportunities(text);
+    let _breaks = find_break_opportunities(text);
 
     // Should have break before opening bracket
     let interior = find_interior_breaks(text);

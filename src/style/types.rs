@@ -136,7 +136,7 @@ impl FontWeight {
         match self {
             FontWeight::Normal => 400,
             FontWeight::Bold => 700,
-            FontWeight::Bolder => 700, // Simplified - should be relative to parent
+            FontWeight::Bolder => 700,  // Simplified - should be relative to parent
             FontWeight::Lighter => 300, // Simplified - should be relative to parent
             FontWeight::Number(n) => n,
         }
