@@ -1054,8 +1054,14 @@ impl TableFormattingContext {
                     let line_height = font_size * 1.2;
                     let char_width = font_size * 0.5;
                     
+                    // Pre-process: combine parenthetical expressions into single units
+                    // This prevents "( domain.com )" from being split awkwardly
+                    let processed_text = combined_text
+                        .replace("( ", "(")
+                        .replace(" )", ")");
+                    
                     // Simple word-wrap: split into lines that fit within width
-                    let words: Vec<&str> = combined_text.split_whitespace().collect();
+                    let words: Vec<&str> = processed_text.split_whitespace().collect();
                     let mut current_line = String::new();
                     let mut line_start_y = y_offset;
                     
