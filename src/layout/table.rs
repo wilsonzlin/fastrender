@@ -581,11 +581,21 @@ pub fn calculate_auto_layout_widths(structure: &mut TableStructure, available_wi
             col.computed_width = col.min_width;
         }
     } else if content_width >= total_max {
-        // More than enough space - use maximum widths and distribute extra
+        // More than enough space - use maximum widths
+        // Give extra space proportionally to columns based on their max_width
+        // This keeps narrow columns (rank, arrow) small while content columns grow
         let extra = content_width - total_max;
-        let per_col = extra / structure.column_count as f32;
-        for col in &mut structure.columns {
-            col.computed_width = col.max_width + per_col;
+        if total_max > 0.0 {
+            for col in &mut structure.columns {
+                let proportion = col.max_width / total_max;
+                col.computed_width = col.max_width + extra * proportion;
+            }
+        } else {
+            // Fallback to equal distribution if no max widths
+            let per_col = extra / structure.column_count as f32;
+            for col in &mut structure.columns {
+                col.computed_width = col.max_width + per_col;
+            }
         }
     } else {
         // Between min and max - distribute proportionally
@@ -784,7 +794,7 @@ impl TableFormattingContext {
                 let text = child.text().unwrap_or("");
                 if !text.trim().is_empty() {
                     let font_size = child.style.font_size;
-                    let line_height = font_size * 1.2;
+                    let line_height = font_size * 1.1; // Compact line height
                     total_height += line_height;
                 }
             } else if child.is_block_level() {
@@ -794,7 +804,7 @@ impl TableFormattingContext {
             } else {
                 // Inline content - estimate height based on content wrapping
                 let font_size = child.style.font_size;
-                let line_height = font_size * 1.2;
+                let line_height = font_size * 1.1; // Compact line height
                 let char_width = font_size * 0.5;
                 
                 // Collect all inline text to estimate total width
@@ -827,7 +837,7 @@ impl TableFormattingContext {
         }
         
         // Ensure minimum height
-        total_height.max(20.0)
+        total_height.max(12.0) // Minimum cell height for compact layout
     }
     
     /// Estimates height of a block element
@@ -840,7 +850,7 @@ impl TableFormattingContext {
                 let text = child.text().unwrap_or("");
                 if !text.trim().is_empty() {
                     let font_size = child.style.font_size;
-                    let line_height = font_size * 1.2;
+                    let line_height = font_size * 1.1;
                     height += line_height;
                 }
             } else {
@@ -848,7 +858,7 @@ impl TableFormattingContext {
             }
         }
         
-        height.max(16.0) // Minimum for empty blocks
+        height.max(5.0) // Minimum for empty blocks (spacer rows)
     }
 
     /// Creates fragments for all table cells
@@ -974,7 +984,7 @@ impl TableFormattingContext {
                 let text = child.text().unwrap_or("");
                 if !text.trim().is_empty() {
                     let font_size = child.style.font_size;
-                    let line_height = font_size * 1.2;
+                    let line_height = font_size * 1.1;
                     let estimated_width = text.len() as f32 * font_size * 0.5;
                     let bounds = Rect::from_xywh(0.0, y_offset, estimated_width.min(width), line_height);
                     let fragment = FragmentNode::new_text_styled(
@@ -999,7 +1009,7 @@ impl TableFormattingContext {
                 if !block_texts.is_empty() && fc_type != Some(FormattingContextType::Table) {
                     let combined = block_texts.join(" ");
                     let font_size = child.style.font_size;
-                    let line_height = font_size * 1.2;
+                    let line_height = font_size * 1.1;
                     let char_width = font_size * 0.5;
                     let text_width = combined.len() as f32 * char_width;
                     
@@ -1051,7 +1061,7 @@ impl TableFormattingContext {
                     // Join all text parts with space separator
                     let combined_text = all_text_parts.join(" ");
                     let font_size = child.style.font_size;
-                    let line_height = font_size * 1.2;
+                    let line_height = font_size * 1.1;
                     let char_width = font_size * 0.5;
                     
                     // Pre-process: combine parenthetical expressions into single units
@@ -1138,6 +1148,9 @@ impl FormattingContext for TableFormattingContext {
         
 
         // Phase 2: Determine available width
+        // Note: The block layout already applies the table's width style (e.g., width="85%")
+        // when computing the child_constraints.content_width. So we should use the 
+        // constraint width directly, not re-apply the percentage.
         let available_width = match constraints.available_width {
             AvailableSpace::Definite(w) => w,
             AvailableSpace::Indefinite => 10000.0, // Large default for indefinite

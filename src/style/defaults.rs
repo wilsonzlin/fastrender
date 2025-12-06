@@ -35,7 +35,10 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
             // Block-level elements
             "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol" | "li" | "blockquote" | "pre"
             | "article" | "section" | "nav" | "aside" | "header" | "footer" | "main" | "figure" | "figcaption"
-            | "dl" | "dt" | "dd" | "form" | "fieldset" | "legend" | "address" | "hr" | "center" => Display::Block,
+            | "dl" | "dt" | "dd" | "form" | "fieldset" | "legend" | "address" | "hr" => Display::Block,
+            
+            // Center element - centers its contents
+            "center" => Display::Block,
 
             // Table elements
             "table" => Display::Table,
@@ -57,9 +60,11 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
         // Force minimal spacing for table elements (consistent with user-agent.css)
         match tag {
             "table" => {
-                // Remove all spacing from tables
+                // Table margins: auto left/right for centering when width is specified
                 styles.margin_top = Some(Length::px(0.0));
                 styles.margin_bottom = Some(Length::px(0.0));
+                styles.margin_left = None; // auto - allows centering
+                styles.margin_right = None; // auto - allows centering
                 styles.padding_top = Length::px(0.0);
                 styles.padding_bottom = Length::px(0.0);
             }
@@ -76,6 +81,14 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
                 styles.padding_bottom = Length::px(1.0);
                 styles.margin_top = Some(Length::px(0.0));
                 styles.margin_bottom = Some(Length::px(0.0));
+            }
+            "b" | "strong" => {
+                // Bold text
+                styles.font_weight = crate::style::FontWeight::Bold;
+            }
+            "i" | "em" => {
+                // Italic text - using Oblique since we may not have true italics
+                styles.font_style = crate::style::FontStyle::Oblique;
             }
             _ => {}
         }
