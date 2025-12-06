@@ -810,6 +810,13 @@ fn generate_box_node_from_styled(styled: &StyledNode) -> BoxNode {
     // Generate children
     let mut children: Vec<BoxNode> = styled.children.iter().map(generate_box_node_from_styled).collect();
 
+    // Special handling for vote arrows (div.votearrow) - inject ▲ character
+    if styled.node.tag_name() == Some("div") && styled.node.has_class("votearrow") {
+        // Add a text child with the upvote arrow
+        let arrow_text = BoxNode::new_text(style.clone(), "▲".to_string());
+        children.push(arrow_text);
+    }
+
     // Generate ::before pseudo-element box if styles exist
     if let Some(before_styles) = &styled.before_styles {
         if let Some(before_box) = create_pseudo_element_box(before_styles, "before") {
@@ -841,11 +848,26 @@ fn generate_box_node_from_styled(styled: &StyledNode) -> BoxNode {
     
     // Add debug info with tag name for table element identification
     if let Some(tag) = styled.node.tag_name() {
+        // Extract colspan and rowspan for table cells
+        let colspan = styled.node.get_attribute("colspan")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(1)
+            .max(1);
+        let rowspan = styled.node.get_attribute("rowspan")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(1)
+            .max(1);
+        
+        let id = styled.node.get_attribute("id");
+        let classes = styled.node.get_attribute("class")
+            .map(|c| c.split_whitespace().map(|s| s.to_string()).collect())
+            .unwrap_or_default();
+            
         box_node.with_debug_info(DebugInfo::new(
             Some(tag.to_string()),
-            None,
-            vec![],
-        ))
+            id,
+            classes,
+        ).with_spans(colspan, rowspan))
     } else {
         box_node
     }
@@ -881,12 +903,11 @@ fn create_pseudo_element_box(styles: &ComputedStyle, pseudo_name: &str) -> Optio
     };
 
     // Add debug info to mark this as a pseudo-element
-    pseudo_box.debug_info = Some(DebugInfo {
-        tag_name: Some(pseudo_name.to_string()),
-        id: None,
-        classes: vec!["pseudo-element".to_string()],
-        dom_path: None,
-    });
+    pseudo_box.debug_info = Some(DebugInfo::new(
+        Some(pseudo_name.to_string()),
+        None,
+        vec!["pseudo-element".to_string()],
+    ));
 
     Some(pseudo_box)
 }

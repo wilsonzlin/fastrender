@@ -32,10 +32,8 @@ use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::display::FormattingContextType;
-use crate::style::ComputedStyle;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
-use std::sync::Arc;
 
 // ============================================================================
 // Table Structure Types
@@ -394,9 +392,12 @@ impl TableStructure {
 
         for (cell_idx, cell_child) in row.children.iter().enumerate() {
             if matches!(Self::get_table_element_type(cell_child), TableElementType::Cell) {
-                // Extract colspan and rowspan (simplified - would come from attributes)
-                let colspan = 1;
-                let rowspan = 1;
+                // Extract colspan and rowspan from debug info
+                let (colspan, rowspan) = if let Some(ref debug_info) = cell_child.debug_info {
+                    (debug_info.colspan, debug_info.rowspan)
+                } else {
+                    (1, 1)
+                };
 
                 cells.push((row_idx, col_idx, rowspan, colspan, cell_idx));
                 col_idx += colspan;
@@ -702,17 +703,152 @@ impl TableFormattingContext {
     }
 
     /// Measures cell content for min/max width calculation
-    fn measure_cell_intrinsic_widths(&self, _cell_box: &BoxNode, _mode: IntrinsicSizingMode) -> (f32, f32) {
-        // Simplified implementation - use reasonable defaults
-        let min_width = 20.0; // Minimum cell width
-        let max_width = 400.0; // Maximum
-        (min_width, max_width)
+    fn measure_cell_intrinsic_widths(&self, cell_box: &BoxNode, _mode: IntrinsicSizingMode) -> (f32, f32) {
+        // Measure actual content width
+        let (min, max) = self.measure_content_width(cell_box);
+        
+        // Apply reasonable constraints
+        (min.max(8.0), max.max(min).max(20.0))
+    }
+    
+    /// Recursively measure content width
+    fn measure_content_width(&self, node: &BoxNode) -> (f32, f32) {
+        // Check for nested table
+        if let Some(fc_type) = node.formatting_context() {
+            if fc_type == FormattingContextType::Table {
+                // Nested tables can grow to fill available space
+                return (100.0, 2000.0);
+            }
+        }
+        
+        // Text content
+        if node.is_text() {
+            if let Some(text) = node.text() {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    let font_size = node.style.font_size;
+                    let char_width = font_size * 0.5;
+                    let text_width = trimmed.len() as f32 * char_width;
+                    // Min = single word, max = full text
+                    let words: Vec<&str> = trimmed.split_whitespace().collect();
+                    let longest_word = words.iter().map(|w| w.len()).max().unwrap_or(0);
+                    let min_width = longest_word as f32 * char_width;
+                    return (min_width, text_width);
+                }
+            }
+            return (0.0, 0.0);
+        }
+        
+        // Aggregate children
+        let mut total_min: f32 = 0.0;
+        let mut total_max: f32 = 0.0;
+        
+        for child in &node.children {
+            let (child_min, child_max) = self.measure_content_width(child);
+            
+            if child.is_block_level() {
+                // Block children stack vertically - take max width
+                total_min = total_min.max(child_min);
+                total_max = total_max.max(child_max);
+            } else {
+                // Inline children add horizontally
+                total_min = total_min.max(child_min); // Min is still largest word
+                total_max += child_max; // Max is all content
+            }
+        }
+        
+        (total_min, total_max)
     }
 
     /// Measures cell content height given a width constraint
-    fn measure_cell_height(&self, _cell_box: &BoxNode, _available_width: f32) -> f32 {
-        // Use a reasonable default cell height
-        20.0
+    fn measure_cell_height(&self, cell_box: &BoxNode, available_width: f32) -> f32 {
+        // Actually lay out the content to measure its height
+        let constraints = LayoutConstraints::definite_width(available_width);
+        
+        let mut total_height: f32 = 0.0;
+        
+        // Check if cell contains a table (which we need to recursively layout)
+        for child in &cell_box.children {
+            if let Some(fc_type) = child.formatting_context() {
+                if fc_type == FormattingContextType::Table {
+                    // Recursively layout nested table to get its height
+                    let nested_tfc = TableFormattingContext::new();
+                    if let Ok(fragment) = nested_tfc.layout(child, &constraints) {
+                        total_height += fragment.bounds.height();
+                        continue;
+                    }
+                }
+            }
+            
+            if child.is_text() {
+                let text = child.text().unwrap_or("");
+                if !text.trim().is_empty() {
+                    let font_size = child.style.font_size;
+                    let line_height = font_size * 1.2;
+                    total_height += line_height;
+                }
+            } else if child.is_block_level() {
+                // For block children, estimate based on content
+                let child_height = self.estimate_block_height(child, available_width);
+                total_height += child_height;
+            } else {
+                // Inline content - estimate height based on content wrapping
+                let font_size = child.style.font_size;
+                let line_height = font_size * 1.2;
+                let char_width = font_size * 0.5;
+                
+                // Collect all inline text to estimate total width
+                let mut all_text = String::new();
+                fn collect_text_for_height(node: &BoxNode, text: &mut String) {
+                    if node.is_text() {
+                        if let Some(t) = node.text() {
+                            if !t.trim().is_empty() {
+                                if !text.is_empty() {
+                                    text.push(' ');
+                                }
+                                text.push_str(t.trim());
+                            }
+                        }
+                    }
+                    for child in &node.children {
+                        collect_text_for_height(child, text);
+                    }
+                }
+                collect_text_for_height(child, &mut all_text);
+                
+                if !all_text.is_empty() {
+                    let text_width = all_text.len() as f32 * char_width;
+                    let num_lines = (text_width / available_width).ceil().max(1.0);
+                    total_height += num_lines * line_height;
+                } else {
+                    total_height += line_height;
+                }
+            }
+        }
+        
+        // Ensure minimum height
+        total_height.max(20.0)
+    }
+    
+    /// Estimates height of a block element
+    fn estimate_block_height(&self, node: &BoxNode, available_width: f32) -> f32 {
+        let mut height: f32 = 0.0;
+        let _ = available_width; // Mark as used (reserved for future line-wrapping calculations)
+        
+        for child in &node.children {
+            if child.is_text() {
+                let text = child.text().unwrap_or("");
+                if !text.trim().is_empty() {
+                    let font_size = child.style.font_size;
+                    let line_height = font_size * 1.2;
+                    height += line_height;
+                }
+            } else {
+                height += self.estimate_block_height(child, available_width);
+            }
+        }
+        
+        height.max(16.0) // Minimum for empty blocks
     }
 
     /// Creates fragments for all table cells
@@ -812,20 +948,21 @@ impl TableFormattingContext {
     fn create_cell_content_fragments(&self, cell_node: &BoxNode, width: f32, _height: f32) -> Vec<FragmentNode> {
         let mut fragments = Vec::new();
         let constraints = LayoutConstraints::definite_width(width);
-        let bfc = BlockFormattingContext::new();
+        let _bfc = BlockFormattingContext::new();
         
         
-        // Collect all text from node recursively (for inline content)
-        fn collect_all_text(node: &BoxNode, texts: &mut Vec<(String, Arc<ComputedStyle>)>) {
+        // Helper to collect all text recursively from any node
+        fn collect_all_text_deep(node: &BoxNode, texts: &mut Vec<String>) {
             if node.is_text() {
                 if let Some(text) = node.text() {
-                    if !text.trim().is_empty() {
-                        texts.push((text.to_string(), node.style.clone()));
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        texts.push(trimmed.to_string());
                     }
                 }
             }
             for child in &node.children {
-                collect_all_text(child, texts);
+                collect_all_text_deep(child, texts);
             }
         }
         
@@ -852,61 +989,118 @@ impl TableFormattingContext {
             } else if child.is_block_level() {
                 // Check if child establishes a specific formatting context
                 let fc_type = child.formatting_context();
-                let child_fragment = if let Some(fc_type) = fc_type {
+                
+                // For table layout, also collect simple text content from block elements
+                // This handles cases like <center><a><div class="votearrow">▲</div></a></center>
+                let mut block_texts = Vec::new();
+                collect_all_text_deep(child, &mut block_texts);
+                
+                // If we have simple text content, render it directly
+                if !block_texts.is_empty() && fc_type != Some(FormattingContextType::Table) {
+                    let combined = block_texts.join(" ");
+                    let font_size = child.style.font_size;
+                    let line_height = font_size * 1.2;
+                    let char_width = font_size * 0.5;
+                    let text_width = combined.len() as f32 * char_width;
+                    
+                    let bounds = Rect::from_xywh(0.0, y_offset, text_width.min(width), line_height);
+                    let fragment = FragmentNode::new_text_styled(
+                        bounds,
+                        combined,
+                        line_height * 0.8,
+                        child.style.clone(),
+                    );
+                    y_offset += line_height;
+                    fragments.push(fragment);
+                } else if let Some(fc_type) = fc_type {
                     if fc_type != FormattingContextType::Block {
                         // Use appropriate FC for the child (e.g., nested table)
                         let factory = FormattingContextFactory::new();
                         let fc = factory.create(fc_type);
-                        fc.layout(child, &constraints)
-                    } else {
-                        bfc.layout(child, &constraints)
+                        if let Ok(child_fragment) = fc.layout(child, &constraints) {
+                            let translated = child_fragment.translate(Point::new(0.0, y_offset));
+                            y_offset += translated.bounds.height();
+                            fragments.push(translated);
+                        }
                     }
-                } else {
-                    bfc.layout(child, &constraints)
-                };
-                
-                if let Ok(child_fragment) = child_fragment {
-                    let translated = child_fragment.translate(Point::new(0.0, y_offset));
-                    y_offset += translated.bounds.height();
-                    fragments.push(translated);
                 }
             } else {
-                // For inline boxes, recursively collect all text
-                let mut texts = Vec::new();
-                collect_all_text(child, &mut texts);
+                // For inline boxes, collect all text into a single combined line
+                // Only collect from inline children, not block-level descendants
+                let mut all_text_parts: Vec<String> = Vec::new();
+                fn collect_inline_text_only(node: &BoxNode, parts: &mut Vec<String>) {
+                    // Skip block-level elements to avoid collecting from nested structures
+                    if node.is_block_level() {
+                        return;
+                    }
+                    if node.is_text() {
+                        if let Some(text) = node.text() {
+                            let trimmed = text.trim();
+                            if !trimmed.is_empty() {
+                                parts.push(trimmed.to_string());
+                            }
+                        }
+                    }
+                    for child in &node.children {
+                        collect_inline_text_only(child, parts);
+                    }
+                }
+                collect_inline_text_only(child, &mut all_text_parts);
                 
-                // Render all collected text in a line
-                let mut x_offset: f32 = 0.0;
-                let base_y = y_offset;
-                let mut max_height: f32 = 0.0;
-                
-                for (text, style) in texts {
-                    let font_size = style.font_size;
+                if !all_text_parts.is_empty() {
+                    // Join all text parts with space separator
+                    let combined_text = all_text_parts.join(" ");
+                    let font_size = child.style.font_size;
                     let line_height = font_size * 1.2;
-                    max_height = max_height.max(line_height);
                     let char_width = font_size * 0.5;
-                    let text_width = text.len() as f32 * char_width;
                     
-                    // Check if we need to wrap
-                    if x_offset + text_width > width && x_offset > 0.0 {
-                        // Wrap to next line
-                        y_offset += line_height;
-                        x_offset = 0.0;
+                    // Simple word-wrap: split into lines that fit within width
+                    let words: Vec<&str> = combined_text.split_whitespace().collect();
+                    let mut current_line = String::new();
+                    let mut line_start_y = y_offset;
+                    
+                    for word in words {
+                        let word_width = word.len() as f32 * char_width;
+                        let current_width = current_line.len() as f32 * char_width;
+                        
+                        if current_line.is_empty() {
+                            // First word on line
+                            current_line = word.to_string();
+                        } else if current_width + char_width + word_width <= width {
+                            // Word fits on current line
+                            current_line.push(' ');
+                            current_line.push_str(word);
+                        } else {
+                            // Emit current line and start new one
+                            let line_width = current_line.len() as f32 * char_width;
+                            let bounds = Rect::from_xywh(0.0, line_start_y, line_width.min(width), line_height);
+                            let fragment = FragmentNode::new_text_styled(
+                                bounds,
+                                current_line.clone(),
+                                line_height * 0.8,
+                                child.style.clone(),
+                            );
+                            fragments.push(fragment);
+                            line_start_y += line_height;
+                            current_line = word.to_string();
+                        }
                     }
                     
-                    let bounds = Rect::from_xywh(x_offset, y_offset, text_width.min(width - x_offset), line_height);
-                    let fragment = FragmentNode::new_text_styled(
-                        bounds,
-                        text.clone(),
-                        line_height * 0.8,
-                        style,
-                    );
-                    fragments.push(fragment);
-                    x_offset += text_width + char_width * 0.5; // Add small space between words
-                }
-                
-                if max_height > 0.0 {
-                    y_offset = base_y + max_height;
+                    // Emit final line if non-empty
+                    if !current_line.is_empty() {
+                        let line_width = current_line.len() as f32 * char_width;
+                        let bounds = Rect::from_xywh(0.0, line_start_y, line_width.min(width), line_height);
+                        let fragment = FragmentNode::new_text_styled(
+                            bounds,
+                            current_line,
+                            line_height * 0.8,
+                            child.style.clone(),
+                        );
+                        fragments.push(fragment);
+                        line_start_y += line_height;
+                    }
+                    
+                    y_offset = line_start_y;
                 }
             }
         }
