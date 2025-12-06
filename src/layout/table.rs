@@ -26,11 +26,16 @@
 //! - CSS Tables Module Level 3
 //! - HTML 5.2 Section 4.9: Tabular data
 
-use crate::geometry::Rect;
+use crate::geometry::{Point, Rect};
 use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
+use crate::layout::contexts::block::BlockFormattingContext;
+use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
+use crate::style::display::FormattingContextType;
+use crate::style::ComputedStyle;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
+use std::sync::Arc;
 
 // ============================================================================
 // Table Structure Types
@@ -698,22 +703,22 @@ impl TableFormattingContext {
 
     /// Measures cell content for min/max width calculation
     fn measure_cell_intrinsic_widths(&self, _cell_box: &BoxNode, _mode: IntrinsicSizingMode) -> (f32, f32) {
-        // Simplified implementation - in reality we'd recursively layout cell content
-        // For now, return default minimums
-        let min_width = 10.0; // Minimum cell width
-        let max_width = 200.0; // Default maximum
+        // Simplified implementation - use reasonable defaults
+        let min_width = 20.0; // Minimum cell width
+        let max_width = 400.0; // Maximum
         (min_width, max_width)
     }
 
     /// Measures cell content height given a width constraint
     fn measure_cell_height(&self, _cell_box: &BoxNode, _available_width: f32) -> f32 {
-        // Simplified - would recursively layout cell content with width constraint
-        20.0 // Default cell height
+        // Use a reasonable default cell height
+        20.0
     }
 
     /// Creates fragments for all table cells
     fn create_cell_fragments(&self, table_box: &BoxNode, structure: &TableStructure) -> Vec<FragmentNode> {
         let mut fragments = Vec::new();
+        
 
         // Create a fragment for each cell
         for cell in &structure.cells {
@@ -750,13 +755,26 @@ impl TableFormattingContext {
                 Vec::new()
             };
 
-            let cell_fragment = FragmentNode::new(
-                bounds,
-                FragmentContent::Block {
-                    box_id: Some(cell.index),
-                },
-                cell_children,
-            );
+            // Get cell style if available
+            let cell_style = cell_box.map(|b| b.style.clone());
+            let cell_fragment = if let Some(style) = cell_style {
+                FragmentNode::new_with_style(
+                    bounds,
+                    FragmentContent::Block {
+                        box_id: Some(cell.index),
+                    },
+                    cell_children,
+                    style,
+                )
+            } else {
+                FragmentNode::new(
+                    bounds,
+                    FragmentContent::Block {
+                        box_id: Some(cell.index),
+                    },
+                    cell_children,
+                )
+            };
 
             fragments.push(cell_fragment);
         }
@@ -791,9 +809,109 @@ impl TableFormattingContext {
     }
 
     /// Creates fragments for cell content
-    fn create_cell_content_fragments(&self, _cell_node: &BoxNode, _width: f32, _height: f32) -> Vec<FragmentNode> {
-        // Simplified - would recursively layout cell content
-        Vec::new()
+    fn create_cell_content_fragments(&self, cell_node: &BoxNode, width: f32, _height: f32) -> Vec<FragmentNode> {
+        let mut fragments = Vec::new();
+        let constraints = LayoutConstraints::definite_width(width);
+        let bfc = BlockFormattingContext::new();
+        
+        
+        // Collect all text from node recursively (for inline content)
+        fn collect_all_text(node: &BoxNode, texts: &mut Vec<(String, Arc<ComputedStyle>)>) {
+            if node.is_text() {
+                if let Some(text) = node.text() {
+                    if !text.trim().is_empty() {
+                        texts.push((text.to_string(), node.style.clone()));
+                    }
+                }
+            }
+            for child in &node.children {
+                collect_all_text(child, texts);
+            }
+        }
+        
+        // Process each child in the cell
+        let mut y_offset: f32 = 0.0;
+        for child in &cell_node.children {
+            if child.is_text() {
+                // Direct text node
+                let text = child.text().unwrap_or("");
+                if !text.trim().is_empty() {
+                    let font_size = child.style.font_size;
+                    let line_height = font_size * 1.2;
+                    let estimated_width = text.len() as f32 * font_size * 0.5;
+                    let bounds = Rect::from_xywh(0.0, y_offset, estimated_width.min(width), line_height);
+                    let fragment = FragmentNode::new_text_styled(
+                        bounds,
+                        text.to_string(),
+                        line_height * 0.8,
+                        child.style.clone(),
+                    );
+                    y_offset += line_height;
+                    fragments.push(fragment);
+                }
+            } else if child.is_block_level() {
+                // Check if child establishes a specific formatting context
+                let fc_type = child.formatting_context();
+                let child_fragment = if let Some(fc_type) = fc_type {
+                    if fc_type != FormattingContextType::Block {
+                        // Use appropriate FC for the child (e.g., nested table)
+                        let factory = FormattingContextFactory::new();
+                        let fc = factory.create(fc_type);
+                        fc.layout(child, &constraints)
+                    } else {
+                        bfc.layout(child, &constraints)
+                    }
+                } else {
+                    bfc.layout(child, &constraints)
+                };
+                
+                if let Ok(child_fragment) = child_fragment {
+                    let translated = child_fragment.translate(Point::new(0.0, y_offset));
+                    y_offset += translated.bounds.height();
+                    fragments.push(translated);
+                }
+            } else {
+                // For inline boxes, recursively collect all text
+                let mut texts = Vec::new();
+                collect_all_text(child, &mut texts);
+                
+                // Render all collected text in a line
+                let mut x_offset: f32 = 0.0;
+                let base_y = y_offset;
+                let mut max_height: f32 = 0.0;
+                
+                for (text, style) in texts {
+                    let font_size = style.font_size;
+                    let line_height = font_size * 1.2;
+                    max_height = max_height.max(line_height);
+                    let char_width = font_size * 0.5;
+                    let text_width = text.len() as f32 * char_width;
+                    
+                    // Check if we need to wrap
+                    if x_offset + text_width > width && x_offset > 0.0 {
+                        // Wrap to next line
+                        y_offset += line_height;
+                        x_offset = 0.0;
+                    }
+                    
+                    let bounds = Rect::from_xywh(x_offset, y_offset, text_width.min(width - x_offset), line_height);
+                    let fragment = FragmentNode::new_text_styled(
+                        bounds,
+                        text.clone(),
+                        line_height * 0.8,
+                        style,
+                    );
+                    fragments.push(fragment);
+                    x_offset += text_width + char_width * 0.5; // Add small space between words
+                }
+                
+                if max_height > 0.0 {
+                    y_offset = base_y + max_height;
+                }
+            }
+        }
+        
+        fragments
     }
 }
 
@@ -814,8 +932,10 @@ impl FormattingContext for TableFormattingContext {
     /// 4. Calculate row heights
     /// 5. Position cells and create fragments
     fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
+        
         // Phase 1: Build table structure
         let mut structure = TableStructure::from_box_tree(box_node);
+        
 
         // Phase 2: Determine available width
         let available_width = match constraints.available_width {
@@ -851,7 +971,12 @@ impl FormattingContext for TableFormattingContext {
 
         // Create table fragment
         let table_bounds = Rect::from_xywh(0.0, 0.0, table_width, table_height);
-        let table_fragment = FragmentNode::new(table_bounds, FragmentContent::Block { box_id: None }, cell_fragments);
+        let table_fragment = FragmentNode::new_with_style(
+            table_bounds,
+            FragmentContent::Block { box_id: None },
+            cell_fragments,
+            box_node.style.clone(),
+        );
 
         Ok(table_fragment)
     }

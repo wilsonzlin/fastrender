@@ -831,12 +831,23 @@ fn generate_box_node_from_styled(styled: &StyledNode) -> BoxNode {
         .formatting_context_type()
         .unwrap_or(FormattingContextType::Block);
 
-    match styled.styles.display {
+    let box_node = match styled.styles.display {
         Display::Block | Display::Flex | Display::Grid | Display::Table => BoxNode::new_block(style, fc_type, children),
         Display::Inline => BoxNode::new_inline(style, children),
         Display::InlineBlock => BoxNode::new_inline_block(style, fc_type, children),
         Display::None => BoxNode::new_block(style, FormattingContextType::Block, vec![]),
         _ => BoxNode::new_block(style, fc_type, children),
+    };
+    
+    // Add debug info with tag name for table element identification
+    if let Some(tag) = styled.node.tag_name() {
+        box_node.with_debug_info(DebugInfo::new(
+            Some(tag.to_string()),
+            None,
+            vec![],
+        ))
+    } else {
+        box_node
     }
 }
 

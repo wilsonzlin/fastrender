@@ -23,6 +23,8 @@
 
 use crate::error::{RenderError, Result};
 use crate::style::color::Rgba;
+use crate::style::ComputedStyle;
+use crate::text::font_loader::FontContext;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 use tiny_skia::{Paint, PathBuilder, Pixmap, Rect as SkiaRect, Transform};
@@ -33,6 +35,8 @@ pub struct Painter {
     pixmap: Pixmap,
     /// Background color
     background: Rgba,
+    /// Font context for text rendering
+    font_ctx: FontContext,
 }
 
 impl Painter {
@@ -42,7 +46,11 @@ impl Painter {
             message: format!("Failed to create pixmap {}x{}", width, height),
         })?;
 
-        Ok(Self { pixmap, background })
+        Ok(Self { 
+            pixmap, 
+            background,
+            font_ctx: FontContext::new(),
+        })
     }
 
     /// Paints a fragment tree and returns the resulting pixmap
@@ -74,19 +82,30 @@ impl Painter {
         let width = fragment.bounds.width();
         let height = fragment.bounds.height();
 
+        // Get style if available
+        let style = fragment.get_style();
+
+        // Paint background first (if present)
+        if let Some(style) = style {
+            self.paint_background(x, y, width, height, style);
+            self.paint_borders(x, y, width, height, style);
+        }
+
         // Paint based on content type
         match &fragment.content {
             FragmentContent::Block { .. } => {
-                // Block fragments may have backgrounds/borders
-                // For now, just recurse into children
+                // Background/borders already painted above
             }
             FragmentContent::Inline { .. } => {
-                // Inline fragments may have backgrounds/borders
+                // Inline fragments may have backgrounds/borders (already painted)
             }
             FragmentContent::Text {
                 text, baseline_offset, ..
             } => {
-                self.paint_text(text, x, y + baseline_offset, height);
+                // Get text color from style
+                let color = style.map(|s| s.color).unwrap_or(Rgba::BLACK);
+                let font_size = style.map(|s| s.font_size).unwrap_or(16.0);
+                self.paint_text(text, x, y + baseline_offset, font_size, color);
             }
             FragmentContent::Line { .. } => {
                 // Line boxes are containers, paint children
@@ -102,35 +121,237 @@ impl Painter {
         }
     }
 
+    /// Paints the background of a fragment
+    fn paint_background(&mut self, x: f32, y: f32, width: f32, height: f32, style: &ComputedStyle) {
+        // Skip if background is transparent
+        if style.background_color.alpha_u8() == 0 {
+            return;
+        }
+
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(
+            style.background_color.r,
+            style.background_color.g,
+            style.background_color.b,
+            style.background_color.alpha_u8(),
+        );
+        paint.anti_alias = true;
+
+        if let Some(rect) = SkiaRect::from_xywh(x, y, width, height) {
+            let path = PathBuilder::from_rect(rect);
+            self.pixmap
+                .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+        }
+    }
+
+    /// Paints the borders of a fragment
+    fn paint_borders(&mut self, x: f32, y: f32, width: f32, height: f32, style: &ComputedStyle) {
+        // Only paint if there are borders
+        let top = style.border_top_width.to_px();
+        let right = style.border_right_width.to_px();
+        let bottom = style.border_bottom_width.to_px();
+        let left = style.border_left_width.to_px();
+
+        if top <= 0.0 && right <= 0.0 && bottom <= 0.0 && left <= 0.0 {
+            return;
+        }
+
+        // Top border
+        if top > 0.0 {
+            let mut paint = Paint::default();
+            let color = &style.border_top_color;
+            paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
+            paint.anti_alias = true;
+            if let Some(rect) = SkiaRect::from_xywh(x, y, width, top) {
+                let path = PathBuilder::from_rect(rect);
+                self.pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+            }
+        }
+
+        // Right border
+        if right > 0.0 {
+            let mut paint = Paint::default();
+            let color = &style.border_right_color;
+            paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
+            paint.anti_alias = true;
+            if let Some(rect) = SkiaRect::from_xywh(x + width - right, y, right, height) {
+                let path = PathBuilder::from_rect(rect);
+                self.pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+            }
+        }
+
+        // Bottom border
+        if bottom > 0.0 {
+            let mut paint = Paint::default();
+            let color = &style.border_bottom_color;
+            paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
+            paint.anti_alias = true;
+            if let Some(rect) = SkiaRect::from_xywh(x, y + height - bottom, width, bottom) {
+                let path = PathBuilder::from_rect(rect);
+                self.pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+            }
+        }
+
+        // Left border
+        if left > 0.0 {
+            let mut paint = Paint::default();
+            let color = &style.border_left_color;
+            paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
+            paint.anti_alias = true;
+            if let Some(rect) = SkiaRect::from_xywh(x, y, left, height) {
+                let path = PathBuilder::from_rect(rect);
+                self.pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+            }
+        }
+    }
+
     /// Paints text at the given position
-    fn paint_text(&mut self, text: &str, x: f32, y: f32, _height: f32) {
+    fn paint_text(&mut self, text: &str, x: f32, y: f32, font_size: f32, color: Rgba) {
         if text.is_empty() {
             return;
         }
 
-        // Simple text rendering using tiny-skia's path-based approach
-        // In production, this would use rustybuzz for shaping and
-        // ttf-parser for glyph outlines
+        // Try to get a sans-serif font
+        let font = match self.font_ctx.get_sans_serif() {
+            Some(f) => f,
+            None => {
+                // Try DejaVu Sans directly
+                let families = vec!["DejaVu Sans".to_string(), "sans-serif".to_string()];
+                match self.font_ctx.get_font(&families, 400, false, false) {
+                    Some(f) => f,
+                    None => {
+                        // Fallback to placeholder rectangles if no font available
+                        self.paint_text_placeholder(text, x, y, font_size, color);
+                        return;
+                    }
+                }
+            }
+        };
 
-        // For now, render text as simple rectangles (placeholder)
-        // Each character gets a small box
-        let char_width = 8.0f32;
-        let char_height = 14.0f32;
+        // Render text using glyph outlines
+        let face = match ttf_parser::Face::parse(&font.data, font.index) {
+            Ok(f) => f,
+            Err(_) => {
+                self.paint_text_placeholder(text, x, y, font_size, color);
+                return;
+            }
+        };
+
+        let units_per_em = face.units_per_em() as f32;
+        let scale = font_size / units_per_em;
 
         let mut paint = Paint::default();
-        paint.set_color_rgba8(0, 0, 0, 255); // Black text
+        paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
+        paint.anti_alias = true;
+
+        let mut cursor_x = x;
+        // Position baseline below the top (ascent is typically ~80% of em)
+        let baseline_y = y + font_size * 0.8;
+
+        for ch in text.chars() {
+            // Get glyph ID for this character
+            let glyph_id = face.glyph_index(ch).map(|id| id.0 as u32).unwrap_or(0);
+            
+            // Get horizontal advance
+            let advance = face
+                .glyph_hor_advance(ttf_parser::GlyphId(glyph_id as u16))
+                .unwrap_or(0) as f32
+                * scale;
+
+            // Build path for the glyph
+            if let Some(path) = self.build_glyph_path(&face, glyph_id as u16, cursor_x, baseline_y, scale) {
+                self.pixmap
+                    .fill_path(&path, &paint, tiny_skia::FillRule::EvenOdd, Transform::identity(), None);
+            }
+
+            cursor_x += advance;
+            
+            // Skip if out of bounds
+            if cursor_x >= self.pixmap.width() as f32 {
+                break;
+            }
+        }
+    }
+
+    /// Builds a tiny-skia path from a glyph outline
+    fn build_glyph_path(&self, face: &ttf_parser::Face, glyph_id: u16, x: f32, baseline_y: f32, scale: f32) -> Option<tiny_skia::Path> {
+        use ttf_parser::OutlineBuilder;
+        
+        struct PathConverter {
+            builder: PathBuilder,
+            scale: f32,
+            x: f32,
+            y: f32, // baseline position
+        }
+
+        impl OutlineBuilder for PathConverter {
+            fn move_to(&mut self, px: f32, py: f32) {
+                self.builder.move_to(
+                    self.x + px * self.scale,
+                    self.y - py * self.scale, // Flip Y axis
+                );
+            }
+
+            fn line_to(&mut self, px: f32, py: f32) {
+                self.builder.line_to(
+                    self.x + px * self.scale,
+                    self.y - py * self.scale,
+                );
+            }
+
+            fn quad_to(&mut self, x1: f32, y1: f32, px: f32, py: f32) {
+                self.builder.quad_to(
+                    self.x + x1 * self.scale,
+                    self.y - y1 * self.scale,
+                    self.x + px * self.scale,
+                    self.y - py * self.scale,
+                );
+            }
+
+            fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, px: f32, py: f32) {
+                self.builder.cubic_to(
+                    self.x + x1 * self.scale,
+                    self.y - y1 * self.scale,
+                    self.x + x2 * self.scale,
+                    self.y - y2 * self.scale,
+                    self.x + px * self.scale,
+                    self.y - py * self.scale,
+                );
+            }
+
+            fn close(&mut self) {
+                self.builder.close();
+            }
+        }
+
+        let mut converter = PathConverter {
+            builder: PathBuilder::new(),
+            scale,
+            x,
+            y: baseline_y,
+        };
+
+        face.outline_glyph(ttf_parser::GlyphId(glyph_id), &mut converter)?;
+        converter.builder.finish()
+    }
+
+    /// Fallback text rendering with placeholder rectangles
+    fn paint_text_placeholder(&mut self, text: &str, x: f32, y: f32, font_size: f32, color: Rgba) {
+        let char_width = font_size * 0.6;
+        let char_height = font_size * 0.8;
+
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
         paint.anti_alias = true;
 
         for (i, _ch) in text.chars().enumerate() {
             let char_x = x + (i as f32 * char_width);
 
-            // Skip if out of bounds
             if char_x >= self.pixmap.width() as f32 || y >= self.pixmap.height() as f32 {
                 continue;
             }
 
-            // Create a small rectangle for each character
-            if let Some(rect) = SkiaRect::from_xywh(char_x, y, char_width * 0.8, char_height * 0.7) {
+            if let Some(rect) = SkiaRect::from_xywh(char_x, y, char_width * 0.8, char_height) {
                 let path = PathBuilder::from_rect(rect);
                 self.pixmap
                     .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);

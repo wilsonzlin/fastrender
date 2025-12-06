@@ -36,8 +36,10 @@
 //! ```
 
 use crate::geometry::{Point, Rect, Size};
+use crate::style::ComputedStyle;
 use crate::tree::box_tree::ReplacedType;
 use std::fmt;
+use std::sync::Arc;
 
 /// Content type of a fragment
 ///
@@ -175,6 +177,12 @@ pub struct FragmentNode {
     /// For line fragments: inline and text children
     /// For inline/text/replaced: typically empty
     pub children: Vec<FragmentNode>,
+
+    /// Computed style for painting
+    ///
+    /// Contains color, background, border, font and other paint-relevant properties.
+    /// Optional for backwards compatibility with tests.
+    pub style: Option<Arc<ComputedStyle>>,
 }
 
 impl FragmentNode {
@@ -197,6 +205,22 @@ impl FragmentNode {
             bounds,
             content,
             children,
+            style: None,
+        }
+    }
+
+    /// Creates a new fragment with style information
+    pub fn new_with_style(
+        bounds: Rect,
+        content: FragmentContent,
+        children: Vec<FragmentNode>,
+        style: Arc<ComputedStyle>,
+    ) -> Self {
+        Self {
+            bounds,
+            content,
+            children,
+            style: Some(style),
         }
     }
 
@@ -217,6 +241,11 @@ impl FragmentNode {
     /// ```
     pub fn new_block(bounds: Rect, children: Vec<FragmentNode>) -> Self {
         Self::new(bounds, FragmentContent::Block { box_id: None }, children)
+    }
+
+    /// Creates a new block fragment with style
+    pub fn new_block_styled(bounds: Rect, children: Vec<FragmentNode>, style: Arc<ComputedStyle>) -> Self {
+        Self::new_with_style(bounds, FragmentContent::Block { box_id: None }, children, style)
     }
 
     /// Creates a new block fragment with a box ID
@@ -265,6 +294,20 @@ impl FragmentNode {
         )
     }
 
+    /// Creates a new text fragment with style
+    pub fn new_text_styled(bounds: Rect, text: String, baseline_offset: f32, style: Arc<ComputedStyle>) -> Self {
+        Self::new_with_style(
+            bounds,
+            FragmentContent::Text {
+                text,
+                box_id: None,
+                baseline_offset,
+            },
+            vec![],
+            style,
+        )
+    }
+
     /// Creates a new line fragment
     pub fn new_line(bounds: Rect, baseline: f32, children: Vec<FragmentNode>) -> Self {
         Self::new(bounds, FragmentContent::Line { baseline }, children)
@@ -280,6 +323,11 @@ impl FragmentNode {
             },
             vec![],
         )
+    }
+
+    /// Gets the style for this fragment, if available
+    pub fn get_style(&self) -> Option<&ComputedStyle> {
+        self.style.as_ref().map(|s| s.as_ref())
     }
 
     /// Returns the number of children
@@ -359,6 +407,7 @@ impl FragmentNode {
             bounds: self.bounds.translate(offset),
             content: self.content.clone(),
             children: self.children.iter().map(|child| child.translate(offset)).collect(),
+            style: self.style.clone(),
         }
     }
 

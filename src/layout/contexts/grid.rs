@@ -326,7 +326,7 @@ impl GridFormattingContext {
     fn convert_to_fragments(
         taffy: &TaffyTree<()>,
         node_id: TaffyNodeId,
-        _node_map: &HashMap<TaffyNodeId, &BoxNode>,
+        node_map: &HashMap<TaffyNodeId, &BoxNode>,
     ) -> Result<FragmentNode, LayoutError> {
         let layout = taffy
             .layout(node_id)
@@ -339,7 +339,7 @@ impl GridFormattingContext {
 
         let child_fragments: Vec<FragmentNode> = children
             .iter()
-            .map(|&child_id| Self::convert_to_fragments(taffy, child_id, _node_map))
+            .map(|&child_id| Self::convert_to_fragments(taffy, child_id, node_map))
             .collect::<Result<_, _>>()?;
 
         // Create fragment bounds from Taffy layout
@@ -350,7 +350,12 @@ impl GridFormattingContext {
             layout.size.height,
         );
 
-        Ok(FragmentNode::new_block(bounds, child_fragments))
+        // Get style from node_map if available
+        if let Some(box_node) = node_map.get(&node_id) {
+            Ok(FragmentNode::new_block_styled(bounds, child_fragments, box_node.style.clone()))
+        } else {
+            Ok(FragmentNode::new_block(bounds, child_fragments))
+        }
     }
 
     /// Computes intrinsic size using Taffy
