@@ -28,6 +28,7 @@ pub mod width;
 
 use crate::geometry::Rect;
 use crate::layout::constraints::LayoutConstraints;
+use crate::layout::contexts::block::width::MarginValue;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::InlineFormattingContext;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
@@ -35,6 +36,7 @@ use crate::layout::utils::compute_replaced_size;
 use crate::style::display::FormattingContextType;
 use crate::style::position::Position;
 use crate::style::values::Length;
+use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::tree::box_tree::{BoxNode, BoxType, ReplacedBox};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
@@ -367,7 +369,18 @@ impl FormattingContext for BlockFormattingContext {
 
         let clamped_content_width = computed_width.content_width.clamp(min_width, max_width);
         if clamped_content_width != computed_width.content_width {
+            let (margin_left, margin_right) = recompute_margins_for_width(
+                style,
+                containing_width,
+                clamped_content_width,
+                computed_width.border_left,
+                computed_width.padding_left,
+                computed_width.padding_right,
+                computed_width.border_right,
+            );
             computed_width.content_width = clamped_content_width;
+            computed_width.margin_left = margin_left;
+            computed_width.margin_right = margin_right;
         }
 
         let child_constraints = LayoutConstraints::definite_width(computed_width.content_width);
@@ -452,6 +465,47 @@ fn resolve_length_for_width(length: Length, percentage_base: f32) -> f32 {
     } else {
         // Relative units (em/rem/etc.) should be resolved earlier; use raw value as px fallback.
         length.value
+    }
+}
+
+fn recompute_margins_for_width(
+    style: &ComputedStyle,
+    containing_width: f32,
+    content_width: f32,
+    border_left: f32,
+    padding_left: f32,
+    padding_right: f32,
+    border_right: f32,
+) -> (f32, f32) {
+    let margin_left = match &style.margin_left {
+        Some(len) => MarginValue::Length(len.resolve_against(containing_width)),
+        None => MarginValue::Auto,
+    };
+    let margin_right = match &style.margin_right {
+        Some(len) => MarginValue::Length(len.resolve_against(containing_width)),
+        None => MarginValue::Auto,
+    };
+
+    let borders_and_padding = border_left + padding_left + padding_right + border_right;
+
+    match (margin_left, margin_right) {
+        (MarginValue::Auto, MarginValue::Auto) => {
+            let remaining = containing_width - borders_and_padding - content_width;
+            let margin = (remaining / 2.0).max(0.0);
+            (margin, margin)
+        }
+        (MarginValue::Auto, MarginValue::Length(mr)) => {
+            let ml = containing_width - borders_and_padding - content_width - mr;
+            (ml, mr)
+        }
+        (MarginValue::Length(ml), MarginValue::Auto) => {
+            let mr = containing_width - borders_and_padding - content_width - ml;
+            (ml, mr)
+        }
+        (MarginValue::Length(ml), MarginValue::Length(_mr)) => {
+            let mr = containing_width - borders_and_padding - content_width - ml;
+            (ml, mr)
+        }
     }
 }
 
