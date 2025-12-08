@@ -73,6 +73,16 @@ impl InlineItem {
         }
     }
 
+    /// Returns the intrinsic width excluding margins (border/padding included)
+    pub fn intrinsic_width(&self) -> f32 {
+        match self {
+            InlineItem::Text(t) => t.advance,
+            InlineItem::InlineBox(b) => b.width(),
+            InlineItem::InlineBlock(b) => b.width,
+            InlineItem::Replaced(r) => r.width,
+        }
+    }
+
     /// Returns baseline metrics for this item
     pub fn baseline_metrics(&self) -> BaselineMetrics {
         match self {

@@ -495,7 +495,7 @@ impl InlineFormattingContext {
                             max_word_width = max_word_width.max(word_widths.into_iter().fold(0.0f32, |a, b| a.max(b)));
                         }
                         InlineItem::Replaced(r) => {
-                            max_word_width = max_word_width.max(r.width);
+                            max_word_width = max_word_width.max(r.intrinsic_width());
                         }
                         InlineItem::InlineBlock(b) => {
                             max_word_width = max_word_width.max(b.width);
@@ -510,7 +510,7 @@ impl InlineFormattingContext {
             }
             IntrinsicSizingMode::MaxContent => {
                 // Max-content: width needed for single line (no wrapping)
-                items.iter().map(|item| item.width()).sum()
+                items.iter().map(|item| item.intrinsic_width()).sum()
             }
         }
     }
