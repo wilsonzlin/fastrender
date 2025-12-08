@@ -30,9 +30,7 @@ use crate::geometry::{Point, Rect};
 use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
 use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::inline::InlineFormattingContext;
-use crate::layout::contexts::table::column_distribution::{
-    ColumnConstraints, ColumnDistributor, DistributionMode,
-};
+use crate::layout::contexts::table::column_distribution::{ColumnConstraints, ColumnDistributor, DistributionMode};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
@@ -242,7 +240,8 @@ impl TableStructure {
             rows: Vec::new(),
             cells: Vec::new(),
             grid: Vec::new(),
-            border_spacing: (0.0, 0.0),
+            // CSS 2.1 §17.6.1: initial border-spacing is 2px 2px for separate borders
+            border_spacing: (2.0, 2.0),
             is_fixed_layout: false,
         }
     }
@@ -264,8 +263,8 @@ impl TableStructure {
     pub fn from_box_tree(table_box: &BoxNode) -> Self {
         let mut structure = TableStructure::new();
 
-        // Extract border-spacing from style (simplified - default to spec initial value 0)
-        structure.border_spacing = (0.0, 0.0);
+        // Extract border-spacing from style (simplified - default to spec initial value 2px)
+        structure.border_spacing = (2.0, 2.0);
 
         // Check for fixed layout
         structure.is_fixed_layout = false; // Default to auto (no table-layout property yet)
@@ -796,7 +795,9 @@ impl TableFormattingContext {
         constraints: &mut [ColumnConstraints],
     ) {
         for cell in &structure.cells {
-            let Some(cell_box) = self.get_cell_box(table_box, cell) else { continue };
+            let Some(cell_box) = self.get_cell_box(table_box, cell) else {
+                continue;
+            };
             let (min_w, max_w) = self.measure_cell_intrinsic_widths(cell_box);
 
             if cell.colspan == 1 {
@@ -854,7 +855,6 @@ impl TableFormattingContext {
         None
     }
 }
-
 
 impl Default for TableFormattingContext {
     fn default() -> Self {
@@ -971,12 +971,8 @@ impl FormattingContext for TableFormattingContext {
 
         let spacing = structure.total_horizontal_spacing();
         let width = match mode {
-            IntrinsicSizingMode::MinContent => {
-                column_constraints.iter().map(|c| c.min_width).sum::<f32>() + spacing
-            }
-            IntrinsicSizingMode::MaxContent => {
-                column_constraints.iter().map(|c| c.max_width).sum::<f32>() + spacing
-            }
+            IntrinsicSizingMode::MinContent => column_constraints.iter().map(|c| c.min_width).sum::<f32>() + spacing,
+            IntrinsicSizingMode::MaxContent => column_constraints.iter().map(|c| c.max_width).sum::<f32>() + spacing,
         };
 
         Ok(width.max(0.0))
