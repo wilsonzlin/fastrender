@@ -773,8 +773,8 @@ pub struct LineBuilder {
     /// Font context for reshaping during line breaks
     font_context: FontContext,
 
-    /// Base paragraph level for bidi ordering
-    base_level: Level,
+    /// Base paragraph level for bidi ordering (None = auto/first strong)
+    base_level: Option<Level>,
 }
 
 impl LineBuilder {
@@ -784,7 +784,7 @@ impl LineBuilder {
         strut_metrics: BaselineMetrics,
         shaper: ShapingPipeline,
         font_context: FontContext,
-        base_level: Level,
+        base_level: Option<Level>,
     ) -> Self {
         Self {
             available_width,
@@ -998,7 +998,7 @@ impl LineBuilder {
             return;
         }
 
-        let bidi = BidiInfo::new(&logical_text, Some(self.base_level));
+        let bidi = BidiInfo::new(&logical_text, self.base_level);
         let para = match bidi.paragraphs.first() {
             Some(p) => p,
             None => return,
@@ -1091,7 +1091,13 @@ mod tests {
 
     fn make_builder(width: f32) -> LineBuilder {
         let strut = make_strut_metrics();
-        LineBuilder::new(width, strut, ShapingPipeline::new(), FontContext::new(), Level::ltr())
+        LineBuilder::new(
+            width,
+            strut,
+            ShapingPipeline::new(),
+            FontContext::new(),
+            Some(Level::ltr()),
+        )
     }
 
     fn make_text_item(text: &str, advance: f32) -> TextItem {
