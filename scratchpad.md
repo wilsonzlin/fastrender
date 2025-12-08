@@ -29,6 +29,7 @@
 - Block layout now clamps computed content widths to `min-width`/`max-width` (percentages resolved against containing block) and recomputes margins with the clamped width so the constraint equation still holds when author limits kick in (`src/layout/contexts/block/mod.rs`).
 - Inline replaced elements now honor horizontal margins: margins are resolved in the inline context, included in line advance, and their fragments are offset so margins behave as spacing rather than painted area (`src/layout/contexts/inline/{mod.rs,line_builder.rs}`).
 - Intrinsic sizing for inline content now excludes margins (replaced elements contribute their border-box width to min/max-content sums while layout still accounts for margins separately) to better match CSS sizing definitions (`src/layout/contexts/inline/{mod.rs,line_builder.rs}`).
+- Inline-blocks now resolve horizontal margins, subtract them from available inline space for shrink-to-fit sizing, and include them in line advance while only the border-box is painted (`src/layout/contexts/inline/{mod.rs,line_builder.rs}`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).

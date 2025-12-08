@@ -68,7 +68,7 @@ impl InlineItem {
         match self {
             InlineItem::Text(t) => t.advance,
             InlineItem::InlineBox(b) => b.width(),
-            InlineItem::InlineBlock(b) => b.width,
+            InlineItem::InlineBlock(b) => b.total_width(),
             InlineItem::Replaced(r) => r.total_width(),
         }
     }
@@ -610,6 +610,10 @@ pub struct InlineBlockItem {
     /// Height of the inline-block
     pub height: f32,
 
+    /// Horizontal margins
+    pub margin_left: f32,
+    pub margin_right: f32,
+
     /// Baseline metrics
     pub metrics: BaselineMetrics,
 
@@ -625,7 +629,13 @@ pub struct InlineBlockItem {
 
 impl InlineBlockItem {
     /// Creates a new inline-block item
-    pub fn new(fragment: FragmentNode, direction: Direction, unicode_bidi: UnicodeBidi) -> Self {
+    pub fn new(
+        fragment: FragmentNode,
+        direction: Direction,
+        unicode_bidi: UnicodeBidi,
+        margin_left: f32,
+        margin_right: f32,
+    ) -> Self {
         let width = fragment.bounds.width();
         let height = fragment.bounds.height();
         let metrics = BaselineMetrics::for_replaced(height);
@@ -634,6 +644,8 @@ impl InlineBlockItem {
             fragment,
             width,
             height,
+            margin_left,
+            margin_right,
             metrics,
             vertical_align: VerticalAlign::Baseline,
             direction,
@@ -645,6 +657,10 @@ impl InlineBlockItem {
     pub fn with_vertical_align(mut self, align: VerticalAlign) -> Self {
         self.vertical_align = align;
         self
+    }
+
+    pub fn total_width(&self) -> f32 {
+        self.margin_left + self.width + self.margin_right
     }
 }
 
@@ -712,6 +728,10 @@ impl ReplacedItem {
 
     pub fn total_width(&self) -> f32 {
         self.margin_left + self.width + self.margin_right
+    }
+
+    pub fn intrinsic_width(&self) -> f32 {
+        self.width
     }
 }
 
@@ -1281,7 +1301,7 @@ mod tests {
         let mut builder = make_builder(200.0);
 
         let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 80.0, 40.0), vec![]);
-        let inline_block = InlineBlockItem::new(fragment, Direction::Ltr, UnicodeBidi::Normal);
+        let inline_block = InlineBlockItem::new(fragment, Direction::Ltr, UnicodeBidi::Normal, 0.0, 0.0);
         builder.add_item(InlineItem::InlineBlock(inline_block));
 
         let lines = builder.finish();

@@ -144,6 +144,21 @@ impl InlineFormattingContext {
         } else {
             0.0
         };
+        let margin_left = style
+            .margin_left
+            .as_ref()
+            .map(|l| resolve_length_for_width(*l, percentage_base))
+            .unwrap_or(0.0);
+        let margin_right = style
+            .margin_right
+            .as_ref()
+            .map(|l| resolve_length_for_width(*l, percentage_base))
+            .unwrap_or(0.0);
+        let available_for_box = if available_width.is_finite() {
+            (available_width - margin_left - margin_right).max(0.0)
+        } else {
+            available_width
+        };
 
         // CSS 2.1 §10.3.9: inline-block width auto -> shrink-to-fit:
         // min(max(preferred_min, available), preferred)
@@ -178,14 +193,14 @@ impl InlineFormattingContext {
             // Honor specified width; use containing block width for layout to avoid over-constraining margins.
             let border_box_width = content_width + horizontal_edges;
             let used = border_box_width.clamp(min_width, max_width);
-            if available_width.is_finite() {
-                available_width
+            if available_for_box.is_finite() {
+                available_for_box
             } else {
                 used
             }
         } else {
-            let available = if available_width.is_finite() {
-                available_width
+            let available = if available_for_box.is_finite() {
+                available_for_box
             } else {
                 preferred
             };
@@ -197,10 +212,23 @@ impl InlineFormattingContext {
         let constraints = LayoutConstraints::definite_width(constraint_width);
         let fragment = fc.layout(box_node, &constraints)?;
 
+        let margin_left = style
+            .margin_left
+            .as_ref()
+            .map(|l| resolve_length_for_width(*l, percentage_base))
+            .unwrap_or(0.0);
+        let margin_right = style
+            .margin_right
+            .as_ref()
+            .map(|l| resolve_length_for_width(*l, percentage_base))
+            .unwrap_or(0.0);
+
         Ok(InlineBlockItem::new(
             fragment,
             box_node.style.direction,
             box_node.style.unicode_bidi,
+            margin_left,
+            margin_right,
         ))
     }
 
@@ -452,7 +480,7 @@ impl InlineFormattingContext {
             }
             InlineItem::InlineBlock(block_item) => {
                 let mut fragment = block_item.fragment.clone();
-                fragment.bounds = Rect::from_xywh(x, y, block_item.width, block_item.height);
+                fragment.bounds = Rect::from_xywh(x + block_item.margin_left, y, block_item.width, block_item.height);
                 fragment
             }
             InlineItem::Replaced(replaced_item) => {
