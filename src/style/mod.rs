@@ -141,6 +141,8 @@ pub struct ComputedStyle {
     pub transform: Vec<Transform>,
     pub overflow_x: Overflow,
     pub overflow_y: Overflow,
+    pub border_spacing_horizontal: Length,
+    pub border_spacing_vertical: Length,
 
     // CSS Custom Properties (variables)
     pub custom_properties: HashMap<String, String>,
@@ -247,6 +249,8 @@ impl Default for ComputedStyle {
             transform: Vec::new(),
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
+            border_spacing_horizontal: Length::px(0.0),
+            border_spacing_vertical: Length::px(0.0),
 
             custom_properties: HashMap::new(),
 

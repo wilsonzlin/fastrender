@@ -32,6 +32,7 @@ use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::table::column_distribution::{ColumnConstraints, ColumnDistributor, DistributionMode};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
+use crate::style::values::LengthUnit;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 
@@ -240,8 +241,8 @@ impl TableStructure {
             rows: Vec::new(),
             cells: Vec::new(),
             grid: Vec::new(),
-            // CSS 2.1 §17.6.1: initial border-spacing is 2px 2px for separate borders
-            border_spacing: (2.0, 2.0),
+            // CSS 2.1 initial value is 0; UA stylesheet may override (e.g., 2px 2px).
+            border_spacing: (0.0, 0.0),
             is_fixed_layout: false,
         }
     }
@@ -263,8 +264,8 @@ impl TableStructure {
     pub fn from_box_tree(table_box: &BoxNode) -> Self {
         let mut structure = TableStructure::new();
 
-        // Extract border-spacing from style (simplified - default to spec initial value 2px)
-        structure.border_spacing = (2.0, 2.0);
+        // Extract border-spacing from style (UA stylesheet can override)
+        structure.border_spacing = resolve_border_spacing(&table_box.style);
 
         // Check for fixed layout
         structure.is_fixed_layout = false; // Default to auto (no table-layout property yet)
@@ -499,6 +500,22 @@ impl Default for TableStructure {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn resolve_border_spacing_length(length: &crate::style::values::Length, font_size: f32) -> f32 {
+    match length.unit {
+        LengthUnit::Em | LengthUnit::Rem => length.value * font_size,
+        _ if length.unit.is_absolute() => length.to_px(),
+        _ => 0.0,
+    }
+}
+
+fn resolve_border_spacing(style: &crate::style::ComputedStyle) -> (f32, f32) {
+    let font_size = style.font_size;
+    (
+        resolve_border_spacing_length(&style.border_spacing_horizontal, font_size),
+        resolve_border_spacing_length(&style.border_spacing_vertical, font_size),
+    )
 }
 
 /// Types of table elements for structure analysis

@@ -779,6 +779,12 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "border-spacing" => {
+            if let Some((h, v)) = extract_length_pair(&resolved_value) {
+                styles.border_spacing_horizontal = h;
+                styles.border_spacing_vertical = v;
+            }
+        }
 
         // Content property (for ::before and ::after pseudo-elements)
         "content" => {
@@ -805,6 +811,21 @@ pub fn extract_length(value: &PropertyValue) -> Option<Length> {
         PropertyValue::Length(len) => Some(*len),
         PropertyValue::Number(n) if *n == 0.0 => Some(Length::px(0.0)),
         PropertyValue::Keyword(kw) if kw == "auto" => None,
+        _ => None,
+    }
+}
+
+pub fn extract_length_pair(value: &PropertyValue) -> Option<(Length, Length)> {
+    match value {
+        PropertyValue::Length(len) => Some((*len, *len)),
+        PropertyValue::Multiple(values) => {
+            let lengths: Vec<Length> = values.iter().filter_map(extract_length).collect();
+            match lengths.len() {
+                1 => Some((lengths[0], lengths[0])),
+                l if l >= 2 => Some((lengths[0], lengths[1])),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
