@@ -34,6 +34,7 @@ use crate::layout::contexts::table::column_distribution::{
     distribute_spanning_cell_width, ColumnConstraints, ColumnDistributor, DistributionMode,
 };
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
+use crate::style::types::BorderCollapse;
 use crate::style::values::LengthUnit;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
@@ -80,6 +81,9 @@ pub struct TableStructure {
 
     /// Table border spacing (horizontal, vertical)
     pub border_spacing: (f32, f32),
+
+    /// Border collapsing model
+    pub border_collapse: BorderCollapse,
 
     /// Whether table uses fixed layout
     pub is_fixed_layout: bool,
@@ -245,6 +249,7 @@ impl TableStructure {
             grid: Vec::new(),
             // CSS 2.1 initial value is 0; UA stylesheet may override (e.g., 2px 2px).
             border_spacing: (0.0, 0.0),
+            border_collapse: BorderCollapse::Separate,
             is_fixed_layout: false,
         }
     }
@@ -266,8 +271,12 @@ impl TableStructure {
     pub fn from_box_tree(table_box: &BoxNode) -> Self {
         let mut structure = TableStructure::new();
 
-        // Extract border-spacing from style (UA stylesheet can override)
-        structure.border_spacing = resolve_border_spacing(&table_box.style);
+        // Extract border model and spacing from style (UA stylesheet can override)
+        structure.border_collapse = table_box.style.border_collapse;
+        structure.border_spacing = match table_box.style.border_collapse {
+            BorderCollapse::Collapse => (0.0, 0.0),
+            BorderCollapse::Separate => resolve_border_spacing(&table_box.style),
+        };
 
         // Check for fixed layout
         structure.is_fixed_layout = false; // Default to auto (no table-layout property yet)

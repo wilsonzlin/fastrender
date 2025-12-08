@@ -42,6 +42,15 @@ pub enum Overflow {
     Auto,
 }
 
+/// Border collapsing model for tables
+///
+/// CSS 2.1 §17.6.1: initial value is `separate`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BorderCollapse {
+    Separate,
+    Collapse,
+}
+
 /// Border line style
 ///
 /// CSS: `border-style`, `border-*-style`

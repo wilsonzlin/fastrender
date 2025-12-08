@@ -779,6 +779,15 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "border-collapse" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.border_collapse = match kw.as_str() {
+                    "collapse" => crate::style::types::BorderCollapse::Collapse,
+                    "separate" => crate::style::types::BorderCollapse::Separate,
+                    _ => styles.border_collapse,
+                };
+            }
+        }
         "border-spacing" => {
             if let Some((h, v)) = extract_length_pair(&resolved_value) {
                 styles.border_spacing_horizontal = h;
