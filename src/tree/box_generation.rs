@@ -810,13 +810,6 @@ fn generate_box_node_from_styled(styled: &StyledNode) -> BoxNode {
     // Generate children
     let mut children: Vec<BoxNode> = styled.children.iter().map(generate_box_node_from_styled).collect();
 
-    // Special handling for vote arrows (div.votearrow) - inject ▲ character
-    if styled.node.tag_name() == Some("div") && styled.node.has_class("votearrow") {
-        // Add a text child with the upvote arrow
-        let arrow_text = BoxNode::new_text(style.clone(), "▲".to_string());
-        children.push(arrow_text);
-    }
-
     // Generate ::before pseudo-element box if styles exist
     if let Some(before_styles) = &styled.before_styles {
         if let Some(before_box) = create_pseudo_element_box(before_styles, "before") {

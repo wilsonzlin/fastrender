@@ -265,6 +265,24 @@ impl FragmentNode {
         )
     }
 
+    /// Creates a new inline fragment with style
+    pub fn new_inline_styled(
+        bounds: Rect,
+        fragment_index: usize,
+        children: Vec<FragmentNode>,
+        style: Arc<ComputedStyle>,
+    ) -> Self {
+        Self::new_with_style(
+            bounds,
+            FragmentContent::Inline {
+                box_id: None,
+                fragment_index,
+            },
+            children,
+            style,
+        )
+    }
+
     /// Creates a new text fragment
     ///
     /// # Examples

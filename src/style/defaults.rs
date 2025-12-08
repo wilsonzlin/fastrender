@@ -60,11 +60,9 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
         // Force minimal spacing for table elements (consistent with user-agent.css)
         match tag {
             "table" => {
-                // Table margins: auto left/right for centering when width is specified
+                // Remove all spacing from tables
                 styles.margin_top = Some(Length::px(0.0));
                 styles.margin_bottom = Some(Length::px(0.0));
-                styles.margin_left = None; // auto - allows centering
-                styles.margin_right = None; // auto - allows centering
                 styles.padding_top = Length::px(0.0);
                 styles.padding_bottom = Length::px(0.0);
             }

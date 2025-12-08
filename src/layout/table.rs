@@ -29,9 +29,11 @@
 use crate::geometry::{Point, Rect};
 use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
 use crate::layout::contexts::block::BlockFormattingContext;
-use crate::layout::contexts::factory::FormattingContextFactory;
+use crate::layout::contexts::inline::InlineFormattingContext;
+use crate::layout::contexts::table::column_distribution::{
+    ColumnConstraints, ColumnDistributor, DistributionMode,
+};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::style::display::FormattingContextType;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 
@@ -262,11 +264,11 @@ impl TableStructure {
     pub fn from_box_tree(table_box: &BoxNode) -> Self {
         let mut structure = TableStructure::new();
 
-        // Extract border-spacing from style (simplified - use defaults)
-        structure.border_spacing = (2.0, 2.0);
+        // Extract border-spacing from style (simplified - default to spec initial value 0)
+        structure.border_spacing = (0.0, 0.0);
 
         // Check for fixed layout
-        structure.is_fixed_layout = false; // Default to auto
+        structure.is_fixed_layout = false; // Default to auto (no table-layout property yet)
 
         // Phase 1: Count rows and discover maximum column count
         let mut current_row = 0;
@@ -317,6 +319,42 @@ impl TableStructure {
             structure.columns.push(ColumnInfo::new(i));
         }
 
+        // Apply column widths from <col>/<colgroup> if present
+        let mut col_cursor = 0;
+        for child in &table_box.children {
+            match Self::get_table_element_type(child) {
+                TableElementType::Column => {
+                    if let Some(width) = &child.style.width {
+                        if let Some(col) = structure.columns.get_mut(col_cursor) {
+                            col.specified_width = Some(Self::length_to_specified_width(width));
+                        }
+                    }
+                    col_cursor += 1;
+                }
+                TableElementType::ColumnGroup => {
+                    // Apply group width to contained columns (or next column if none)
+                    if !child.children.is_empty() {
+                        for group_child in &child.children {
+                            if Self::get_table_element_type(group_child) == TableElementType::Column {
+                                if let Some(width) = &group_child.style.width {
+                                    if let Some(col) = structure.columns.get_mut(col_cursor) {
+                                        col.specified_width = Some(Self::length_to_specified_width(width));
+                                    }
+                                }
+                                col_cursor += 1;
+                            }
+                        }
+                    } else if let Some(width) = &child.style.width {
+                        if let Some(col) = structure.columns.get_mut(col_cursor) {
+                            col.specified_width = Some(Self::length_to_specified_width(width));
+                        }
+                        col_cursor += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // Initialize rows
         for i in 0..structure.row_count {
             structure.rows.push(RowInfo::new(i));
@@ -347,8 +385,35 @@ impl TableStructure {
 
     /// Gets the table element type from a box node
     fn get_table_element_type(node: &BoxNode) -> TableElementType {
-        // In a real implementation, we would check the display property
-        // For now, we infer from box type and debug info
+        use crate::style::display::Display;
+        use crate::tree::box_tree::{AnonymousType, BoxType};
+
+        // Prefer computed display over tag hints
+        match node.style.display {
+            Display::Table | Display::InlineTable => return TableElementType::Table,
+            Display::TableRow => return TableElementType::Row,
+            Display::TableCell => return TableElementType::Cell,
+            Display::TableCaption => return TableElementType::Caption,
+            Display::TableRowGroup => return TableElementType::RowGroup,
+            Display::TableHeaderGroup => return TableElementType::HeaderGroup,
+            Display::TableFooterGroup => return TableElementType::FooterGroup,
+            Display::TableColumn => return TableElementType::Column,
+            Display::TableColumnGroup => return TableElementType::ColumnGroup,
+            _ => {}
+        }
+
+        // Fall back to anonymous boxes
+        if let BoxType::Anonymous(anon) = &node.box_type {
+            return match anon.anonymous_type {
+                AnonymousType::TableWrapper => TableElementType::Table,
+                AnonymousType::TableRow => TableElementType::Row,
+                AnonymousType::TableCell => TableElementType::Cell,
+                AnonymousType::TableRowGroup => TableElementType::RowGroup,
+                _ => TableElementType::Unknown,
+            };
+        }
+
+        // As a last resort, use debug info tags if present
         if let Some(ref debug_info) = node.debug_info {
             if let Some(ref tag) = debug_info.tag_name {
                 let tag_lower = tag.to_lowercase();
@@ -367,17 +432,7 @@ impl TableStructure {
             }
         }
 
-        // Fall back to anonymous type checking
-        use crate::tree::box_tree::{AnonymousType, BoxType};
-        match &node.box_type {
-            BoxType::Anonymous(anon) => match anon.anonymous_type {
-                AnonymousType::TableWrapper => TableElementType::Table,
-                AnonymousType::TableRow => TableElementType::Row,
-                AnonymousType::TableCell => TableElementType::Cell,
-                _ => TableElementType::Unknown,
-            },
-            _ => TableElementType::Unknown,
-        }
+        TableElementType::Unknown
     }
 
     /// Processes a table row and returns cell information
@@ -430,6 +485,14 @@ impl TableStructure {
             return 0.0;
         }
         self.border_spacing.1 * (self.row_count + 1) as f32
+    }
+
+    fn length_to_specified_width(length: &crate::style::values::Length) -> SpecifiedWidth {
+        use crate::style::values::LengthUnit;
+        match length.unit {
+            LengthUnit::Percent => SpecifiedWidth::Percent(length.value),
+            _ => SpecifiedWidth::Fixed(length.to_px()),
+        }
     }
 }
 
@@ -712,225 +775,62 @@ impl TableFormattingContext {
         self.structure.as_ref()
     }
 
-    /// Measures cell content for min/max width calculation
-    fn measure_cell_intrinsic_widths(&self, cell_box: &BoxNode, _mode: IntrinsicSizingMode) -> (f32, f32) {
-        // Measure actual content width
-        let (min, max) = self.measure_content_width(cell_box);
-        
-        // Apply reasonable constraints
-        (min.max(8.0), max.max(min).max(20.0))
-    }
-    
-    /// Recursively measure content width
-    fn measure_content_width(&self, node: &BoxNode) -> (f32, f32) {
-        // Check for nested table
-        if let Some(fc_type) = node.formatting_context() {
-            if fc_type == FormattingContextType::Table {
-                // Nested tables can grow to fill available space
-                return (100.0, 2000.0);
-            }
-        }
-        
-        // Text content
-        if node.is_text() {
-            if let Some(text) = node.text() {
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    let font_size = node.style.font_size;
-                    let char_width = font_size * 0.5;
-                    let text_width = trimmed.len() as f32 * char_width;
-                    // Min = single word, max = full text
-                    let words: Vec<&str> = trimmed.split_whitespace().collect();
-                    let longest_word = words.iter().map(|w| w.len()).max().unwrap_or(0);
-                    let min_width = longest_word as f32 * char_width;
-                    return (min_width, text_width);
-                }
-            }
-            return (0.0, 0.0);
-        }
-        
-        // Aggregate children
-        let mut total_min: f32 = 0.0;
-        let mut total_max: f32 = 0.0;
-        
-        for child in &node.children {
-            let (child_min, child_max) = self.measure_content_width(child);
-            
-            if child.is_block_level() {
-                // Block children stack vertically - take max width
-                total_min = total_min.max(child_min);
-                total_max = total_max.max(child_max);
-            } else {
-                // Inline children add horizontally
-                total_min = total_min.max(child_min); // Min is still largest word
-                total_max += child_max; // Max is all content
-            }
-        }
-        
-        (total_min, total_max)
+    /// Measures cell intrinsic widths using inline min/max content rules
+    fn measure_cell_intrinsic_widths(&self, cell_box: &BoxNode) -> (f32, f32) {
+        let inline_fc = InlineFormattingContext::new();
+        let min = inline_fc
+            .compute_intrinsic_inline_size(cell_box, IntrinsicSizingMode::MinContent)
+            .unwrap_or(0.0);
+        let max = inline_fc
+            .compute_intrinsic_inline_size(cell_box, IntrinsicSizingMode::MaxContent)
+            .unwrap_or(min);
+
+        (min.max(0.0), max.max(min))
     }
 
-    /// Measures cell content height given a width constraint
-    fn measure_cell_height(&self, cell_box: &BoxNode, available_width: f32) -> f32 {
-        // Actually lay out the content to measure its height
-        let constraints = LayoutConstraints::definite_width(available_width);
-        
-        let mut total_height: f32 = 0.0;
-        
-        // Check if cell contains a table (which we need to recursively layout)
-        for child in &cell_box.children {
-            if let Some(fc_type) = child.formatting_context() {
-                if fc_type == FormattingContextType::Table {
-                    // Recursively layout nested table to get its height
-                    let nested_tfc = TableFormattingContext::new();
-                    if let Ok(fragment) = nested_tfc.layout(child, &constraints) {
-                        total_height += fragment.bounds.height();
-                        continue;
-                    }
-                }
-            }
-            
-            if child.is_text() {
-                let text = child.text().unwrap_or("");
-                if !text.trim().is_empty() {
-                    let font_size = child.style.font_size;
-                    let line_height = font_size * 1.1; // Compact line height
-                    total_height += line_height;
-                }
-            } else if child.is_block_level() {
-                // For block children, estimate based on content
-                let child_height = self.estimate_block_height(child, available_width);
-                total_height += child_height;
-            } else {
-                // Inline content - estimate height based on content wrapping
-                let font_size = child.style.font_size;
-                let line_height = font_size * 1.1; // Compact line height
-                let char_width = font_size * 0.5;
-                
-                // Collect all inline text to estimate total width
-                let mut all_text = String::new();
-                fn collect_text_for_height(node: &BoxNode, text: &mut String) {
-                    if node.is_text() {
-                        if let Some(t) = node.text() {
-                            if !t.trim().is_empty() {
-                                if !text.is_empty() {
-                                    text.push(' ');
-                                }
-                                text.push_str(t.trim());
-                            }
-                        }
-                    }
-                    for child in &node.children {
-                        collect_text_for_height(child, text);
-                    }
-                }
-                collect_text_for_height(child, &mut all_text);
-                
-                if !all_text.is_empty() {
-                    let text_width = all_text.len() as f32 * char_width;
-                    let num_lines = (text_width / available_width).ceil().max(1.0);
-                    total_height += num_lines * line_height;
-                } else {
-                    total_height += line_height;
-                }
-            }
-        }
-        
-        // Ensure minimum height
-        total_height.max(12.0) // Minimum cell height for compact layout
-    }
-    
-    /// Estimates height of a block element
-    fn estimate_block_height(&self, node: &BoxNode, available_width: f32) -> f32 {
-        let mut height: f32 = 0.0;
-        let _ = available_width; // Mark as used (reserved for future line-wrapping calculations)
-        
-        for child in &node.children {
-            if child.is_text() {
-                let text = child.text().unwrap_or("");
-                if !text.trim().is_empty() {
-                    let font_size = child.style.font_size;
-                    let line_height = font_size * 1.1;
-                    height += line_height;
-                }
-            } else {
-                height += self.estimate_block_height(child, available_width);
-            }
-        }
-        
-        height.max(5.0) // Minimum for empty blocks (spacer rows)
-    }
-
-    /// Creates fragments for all table cells
-    fn create_cell_fragments(&self, table_box: &BoxNode, structure: &TableStructure) -> Vec<FragmentNode> {
-        let mut fragments = Vec::new();
-        
-
-        // Create a fragment for each cell
+    /// Populates column constraints from cell intrinsic widths and explicit widths
+    fn populate_column_constraints(
+        &self,
+        table_box: &BoxNode,
+        structure: &TableStructure,
+        constraints: &mut [ColumnConstraints],
+    ) {
         for cell in &structure.cells {
-            // Calculate cell bounds
-            let x = structure.border_spacing.0
-                + structure.columns[..cell.col]
-                    .iter()
-                    .map(|c| c.computed_width + structure.border_spacing.0)
-                    .sum::<f32>();
+            let Some(cell_box) = self.get_cell_box(table_box, cell) else { continue };
+            let (min_w, max_w) = self.measure_cell_intrinsic_widths(cell_box);
 
-            let y = structure.rows[cell.row].y_position;
+            if cell.colspan == 1 {
+                if let Some(width) = &cell_box.style.width {
+                    let px = width.to_px().max(min_w);
+                    let col = &mut constraints[cell.col];
+                    col.fixed_width = Some(px);
+                    col.min_width = col.min_width.max(min_w);
+                    col.max_width = col.max_width.max(px.max(max_w));
+                    continue;
+                }
 
-            let width: f32 = structure.columns[cell.col..(cell.col + cell.colspan).min(structure.column_count)]
-                .iter()
-                .map(|c| c.computed_width)
-                .sum::<f32>()
-                + structure.border_spacing.0 * (cell.colspan - 1).max(0) as f32;
-
-            let height: f32 = structure.rows[cell.row..(cell.row + cell.rowspan).min(structure.row_count)]
-                .iter()
-                .map(|r| r.computed_height)
-                .sum::<f32>()
-                + structure.border_spacing.1 * (cell.rowspan - 1).max(0) as f32;
-
-            let bounds = Rect::from_xywh(x, y, width, height);
-
-            // Get the cell box node
-            let cell_box = self.get_cell_box(table_box, cell);
-
-            // Create cell fragment with children
-            let cell_children = if let Some(cell_node) = cell_box {
-                self.create_cell_content_fragments(cell_node, width, height)
+                let col = &mut constraints[cell.col];
+                col.min_width = col.min_width.max(min_w);
+                col.max_width = col.max_width.max(max_w);
             } else {
-                Vec::new()
-            };
-
-            // Get cell style if available
-            let cell_style = cell_box.map(|b| b.style.clone());
-            let cell_fragment = if let Some(style) = cell_style {
-                FragmentNode::new_with_style(
-                    bounds,
-                    FragmentContent::Block {
-                        box_id: Some(cell.index),
-                    },
-                    cell_children,
-                    style,
-                )
-            } else {
-                FragmentNode::new(
-                    bounds,
-                    FragmentContent::Block {
-                        box_id: Some(cell.index),
-                    },
-                    cell_children,
-                )
-            };
-
-            fragments.push(cell_fragment);
+                for span_idx in 0..cell.colspan {
+                    if let Some(col) = constraints.get_mut(cell.col + span_idx) {
+                        col.add_colspan_contribution(min_w, max_w, cell.colspan, span_idx);
+                    }
+                }
+            }
         }
+    }
 
-        fragments
+    /// Layout a single cell with the given width
+    fn layout_cell(&self, cell_box: &BoxNode, cell_width: f32) -> Result<FragmentNode, LayoutError> {
+        let bfc = BlockFormattingContext::new();
+        let constraints = LayoutConstraints::definite_width(cell_width.max(0.0));
+        bfc.layout(cell_box, &constraints)
     }
 
     /// Gets the box node for a cell
     fn get_cell_box<'a>(&self, table_box: &'a BoxNode, cell: &CellInfo) -> Option<&'a BoxNode> {
-        // Navigate to the cell in the box tree
         let mut row_idx = 0;
         for child in &table_box.children {
             match TableStructure::get_table_element_type(child) {
@@ -953,177 +853,8 @@ impl TableFormattingContext {
         }
         None
     }
-
-    /// Creates fragments for cell content
-    fn create_cell_content_fragments(&self, cell_node: &BoxNode, width: f32, _height: f32) -> Vec<FragmentNode> {
-        let mut fragments = Vec::new();
-        let constraints = LayoutConstraints::definite_width(width);
-        let _bfc = BlockFormattingContext::new();
-        
-        
-        // Helper to collect all text recursively from any node
-        fn collect_all_text_deep(node: &BoxNode, texts: &mut Vec<String>) {
-            if node.is_text() {
-                if let Some(text) = node.text() {
-                    let trimmed = text.trim();
-                    if !trimmed.is_empty() {
-                        texts.push(trimmed.to_string());
-                    }
-                }
-            }
-            for child in &node.children {
-                collect_all_text_deep(child, texts);
-            }
-        }
-        
-        // Process each child in the cell
-        let mut y_offset: f32 = 0.0;
-        for child in &cell_node.children {
-            if child.is_text() {
-                // Direct text node
-                let text = child.text().unwrap_or("");
-                if !text.trim().is_empty() {
-                    let font_size = child.style.font_size;
-                    let line_height = font_size * 1.1;
-                    let estimated_width = text.len() as f32 * font_size * 0.5;
-                    let bounds = Rect::from_xywh(0.0, y_offset, estimated_width.min(width), line_height);
-                    let fragment = FragmentNode::new_text_styled(
-                        bounds,
-                        text.to_string(),
-                        line_height * 0.8,
-                        child.style.clone(),
-                    );
-                    y_offset += line_height;
-                    fragments.push(fragment);
-                }
-            } else if child.is_block_level() {
-                // Check if child establishes a specific formatting context
-                let fc_type = child.formatting_context();
-                
-                // For table layout, also collect simple text content from block elements
-                // This handles cases like <center><a><div class="votearrow">▲</div></a></center>
-                let mut block_texts = Vec::new();
-                collect_all_text_deep(child, &mut block_texts);
-                
-                // If we have simple text content, render it directly
-                if !block_texts.is_empty() && fc_type != Some(FormattingContextType::Table) {
-                    let combined = block_texts.join(" ");
-                    let font_size = child.style.font_size;
-                    let line_height = font_size * 1.1;
-                    let char_width = font_size * 0.5;
-                    let text_width = combined.len() as f32 * char_width;
-                    
-                    let bounds = Rect::from_xywh(0.0, y_offset, text_width.min(width), line_height);
-                    let fragment = FragmentNode::new_text_styled(
-                        bounds,
-                        combined,
-                        line_height * 0.8,
-                        child.style.clone(),
-                    );
-                    y_offset += line_height;
-                    fragments.push(fragment);
-                } else if let Some(fc_type) = fc_type {
-                    if fc_type != FormattingContextType::Block {
-                        // Use appropriate FC for the child (e.g., nested table)
-                        let factory = FormattingContextFactory::new();
-                        let fc = factory.create(fc_type);
-                        if let Ok(child_fragment) = fc.layout(child, &constraints) {
-                            let translated = child_fragment.translate(Point::new(0.0, y_offset));
-                            y_offset += translated.bounds.height();
-                            fragments.push(translated);
-                        }
-                    }
-                }
-            } else {
-                // For inline boxes, collect all text into a single combined line
-                // Only collect from inline children, not block-level descendants
-                let mut all_text_parts: Vec<String> = Vec::new();
-                fn collect_inline_text_only(node: &BoxNode, parts: &mut Vec<String>) {
-                    // Skip block-level elements to avoid collecting from nested structures
-                    if node.is_block_level() {
-                        return;
-                    }
-                    if node.is_text() {
-                        if let Some(text) = node.text() {
-                            let trimmed = text.trim();
-                            if !trimmed.is_empty() {
-                                parts.push(trimmed.to_string());
-                            }
-                        }
-                    }
-                    for child in &node.children {
-                        collect_inline_text_only(child, parts);
-                    }
-                }
-                collect_inline_text_only(child, &mut all_text_parts);
-                
-                if !all_text_parts.is_empty() {
-                    // Join all text parts with space separator
-                    let combined_text = all_text_parts.join(" ");
-                    let font_size = child.style.font_size;
-                    let line_height = font_size * 1.1;
-                    let char_width = font_size * 0.5;
-                    
-                    // Pre-process: combine parenthetical expressions into single units
-                    // This prevents "( domain.com )" from being split awkwardly
-                    let processed_text = combined_text
-                        .replace("( ", "(")
-                        .replace(" )", ")");
-                    
-                    // Simple word-wrap: split into lines that fit within width
-                    let words: Vec<&str> = processed_text.split_whitespace().collect();
-                    let mut current_line = String::new();
-                    let mut line_start_y = y_offset;
-                    
-                    for word in words {
-                        let word_width = word.len() as f32 * char_width;
-                        let current_width = current_line.len() as f32 * char_width;
-                        
-                        if current_line.is_empty() {
-                            // First word on line
-                            current_line = word.to_string();
-                        } else if current_width + char_width + word_width <= width {
-                            // Word fits on current line
-                            current_line.push(' ');
-                            current_line.push_str(word);
-                        } else {
-                            // Emit current line and start new one
-                            let line_width = current_line.len() as f32 * char_width;
-                            let bounds = Rect::from_xywh(0.0, line_start_y, line_width.min(width), line_height);
-                            let fragment = FragmentNode::new_text_styled(
-                                bounds,
-                                current_line.clone(),
-                                line_height * 0.8,
-                                child.style.clone(),
-                            );
-                            fragments.push(fragment);
-                            line_start_y += line_height;
-                            current_line = word.to_string();
-                        }
-                    }
-                    
-                    // Emit final line if non-empty
-                    if !current_line.is_empty() {
-                        let line_width = current_line.len() as f32 * char_width;
-                        let bounds = Rect::from_xywh(0.0, line_start_y, line_width.min(width), line_height);
-                        let fragment = FragmentNode::new_text_styled(
-                            bounds,
-                            current_line,
-                            line_height * 0.8,
-                            child.style.clone(),
-                        );
-                        fragments.push(fragment);
-                        line_start_y += line_height;
-                    }
-                    
-                    y_offset = line_start_y;
-                }
-            }
-        }
-        
-        fragments
-    }
 }
+
 
 impl Default for TableFormattingContext {
     fn default() -> Self {
@@ -1132,122 +863,125 @@ impl Default for TableFormattingContext {
 }
 
 impl FormattingContext for TableFormattingContext {
-    /// Performs full table layout
-    ///
-    /// # Algorithm
-    ///
-    /// 1. Build table structure from box tree
-    /// 2. Measure cell intrinsic sizes
-    /// 3. Calculate column widths (fixed or auto algorithm)
-    /// 4. Calculate row heights
-    /// 5. Position cells and create fragments
+    /// Performs full table layout following CSS table algorithms (auto layout)
     fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
-        
-        // Phase 1: Build table structure
-        let mut structure = TableStructure::from_box_tree(box_node);
-        
+        let structure = TableStructure::from_box_tree(box_node);
 
-        // Phase 2: Determine available width
-        // Note: The block layout already applies the table's width style (e.g., width="85%")
-        // when computing the child_constraints.content_width. So we should use the 
-        // constraint width directly, not re-apply the percentage.
-        let available_width = match constraints.available_width {
-            AvailableSpace::Definite(w) => w,
-            AvailableSpace::Indefinite => 10000.0, // Large default for indefinite
-            AvailableSpace::MaxContent => 10000.0, // Large default
-            AvailableSpace::MinContent => 0.0,
-        };
-
-        // Phase 3: Measure cell intrinsic widths
-        self.populate_cell_intrinsic_widths(box_node, &mut structure);
-
-        // Phase 4: Calculate column widths
-        if structure.is_fixed_layout {
-            calculate_fixed_layout_widths(&mut structure, available_width);
-        } else {
-            calculate_auto_layout_widths(&mut structure, available_width);
+        if structure.column_count == 0 || structure.row_count == 0 {
+            let bounds = Rect::from_xywh(0.0, 0.0, 0.0, 0.0);
+            return Ok(FragmentNode::new_with_style(
+                bounds,
+                FragmentContent::Block { box_id: None },
+                vec![],
+                box_node.style.clone(),
+            ));
         }
 
-        // Phase 5: Calculate row heights
-        self.populate_cell_heights(box_node, &mut structure);
-        calculate_row_heights(&mut structure, None);
+        let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+            .map(|_| ColumnConstraints::new(0.0, 0.0))
+            .collect();
+        self.populate_column_constraints(box_node, &structure, &mut column_constraints);
 
-        // Phase 6: Create cell fragments
-        let cell_fragments = self.create_cell_fragments(box_node, &structure);
+        let spacing = structure.total_horizontal_spacing();
+        let available_content = match constraints.available_width {
+            AvailableSpace::Definite(w) => (w - spacing).max(0.0),
+            AvailableSpace::MinContent => 0.0,
+            AvailableSpace::MaxContent | AvailableSpace::Indefinite => {
+                column_constraints.iter().map(|c| c.max_width).sum::<f32>()
+            }
+        };
 
-        // Calculate final table size
-        let table_width: f32 =
-            structure.columns.iter().map(|c| c.computed_width).sum::<f32>() + structure.total_horizontal_spacing();
+        let mode = if structure.is_fixed_layout {
+            DistributionMode::Fixed
+        } else {
+            DistributionMode::Auto
+        };
+        let distributor = ColumnDistributor::new(mode).with_min_column_width(0.0);
+        let distribution = distributor.distribute(&column_constraints, available_content);
+        let mut col_widths = if distribution.widths.len() == structure.column_count {
+            distribution.widths
+        } else {
+            vec![0.0; structure.column_count]
+        };
 
-        let table_height: f32 =
-            structure.rows.iter().map(|r| r.computed_height).sum::<f32>() + structure.total_vertical_spacing();
+        // Fallback: if all columns computed to zero, distribute available space equally
+        if col_widths.iter().all(|w| *w == 0.0) && available_content > 0.0 && !col_widths.is_empty() {
+            let per = available_content / structure.column_count as f32;
+            col_widths = vec![per; structure.column_count];
+        }
 
-        // Create table fragment
-        let table_bounds = Rect::from_xywh(0.0, 0.0, table_width, table_height);
-        let table_fragment = FragmentNode::new_with_style(
+        let mut fragments = Vec::new();
+        let h_spacing = structure.border_spacing.0;
+        let v_spacing = structure.border_spacing.1;
+        let mut current_y = v_spacing;
+
+        for row_idx in 0..structure.row_count {
+            let row_cells: Vec<&CellInfo> = structure.cells.iter().filter(|c| c.row == row_idx).collect();
+            let mut row_height: f32 = 0.0;
+            let mut staged = Vec::new();
+
+            for cell in row_cells {
+                let span_end = (cell.col + cell.colspan).min(col_widths.len());
+                let width: f32 = col_widths[cell.col..span_end].iter().sum::<f32>()
+                    + h_spacing * (cell.colspan.saturating_sub(1) as f32);
+
+                if let Some(cell_box) = self.get_cell_box(box_node, cell) {
+                    if let Ok(fragment) = self.layout_cell(cell_box, width) {
+                        row_height = row_height.max(fragment.bounds.height());
+                        staged.push((cell, fragment));
+                    }
+                }
+            }
+
+            if row_height == 0.0 {
+                row_height = 1.0;
+            }
+
+            for (cell, frag) in staged {
+                let mut x = h_spacing;
+                for col_idx in 0..cell.col {
+                    x += col_widths[col_idx] + h_spacing;
+                }
+                let translated = frag.translate(Point::new(x, current_y));
+                fragments.push(translated);
+            }
+
+            current_y += row_height + v_spacing;
+        }
+
+        let total_width: f32 = col_widths.iter().sum::<f32>() + spacing;
+        let total_height = current_y.max(0.0);
+        let table_bounds = Rect::from_xywh(0.0, 0.0, total_width.max(0.0), total_height);
+
+        Ok(FragmentNode::new_with_style(
             table_bounds,
             FragmentContent::Block { box_id: None },
-            cell_fragments,
+            fragments,
             box_node.style.clone(),
-        );
-
-        Ok(table_fragment)
+        ))
     }
 
     /// Calculates intrinsic inline size for the table
     fn compute_intrinsic_inline_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
-        let mut structure = TableStructure::from_box_tree(box_node);
-        self.populate_cell_intrinsic_widths(box_node, &mut structure);
+        let structure = TableStructure::from_box_tree(box_node);
+        let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+            .map(|_| ColumnConstraints::new(0.0, 0.0))
+            .collect();
+        self.populate_column_constraints(box_node, &structure, &mut column_constraints);
 
+        let spacing = structure.total_horizontal_spacing();
         let width = match mode {
             IntrinsicSizingMode::MinContent => {
-                structure.columns.iter().map(|c| c.min_width).sum::<f32>() + structure.total_horizontal_spacing()
+                column_constraints.iter().map(|c| c.min_width).sum::<f32>() + spacing
             }
             IntrinsicSizingMode::MaxContent => {
-                structure.columns.iter().map(|c| c.max_width.min(1000.0)).sum::<f32>()
-                    + structure.total_horizontal_spacing()
+                column_constraints.iter().map(|c| c.max_width).sum::<f32>() + spacing
             }
         };
 
-        Ok(width)
+        Ok(width.max(0.0))
     }
 }
-
-impl TableFormattingContext {
-    /// Populates cell intrinsic widths by measuring content
-    fn populate_cell_intrinsic_widths(&self, table_box: &BoxNode, structure: &mut TableStructure) {
-        for cell in &mut structure.cells {
-            if let Some(cell_box) = self.get_cell_box_mut(table_box, cell) {
-                let (min_w, max_w) = self.measure_cell_intrinsic_widths(cell_box, IntrinsicSizingMode::MinContent);
-                cell.min_width = min_w;
-                cell.max_width = max_w;
-            }
-        }
-    }
-
-    /// Populates cell heights by measuring content with column widths
-    fn populate_cell_heights(&self, table_box: &BoxNode, structure: &mut TableStructure) {
-        for cell in &mut structure.cells {
-            let cell_width: f32 = structure.columns[cell.col..(cell.col + cell.colspan).min(structure.column_count)]
-                .iter()
-                .map(|c| c.computed_width)
-                .sum::<f32>();
-
-            if let Some(cell_box) = self.get_cell_box_mut(table_box, cell) {
-                cell.min_height = self.measure_cell_height(cell_box, cell_width);
-            }
-        }
-    }
-
-    /// Gets mutable reference to cell box (workaround for borrow checker)
-    fn get_cell_box_mut<'a>(&self, table_box: &'a BoxNode, cell: &CellInfo) -> Option<&'a BoxNode> {
-        self.get_cell_box(table_box, cell)
-    }
-}
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {

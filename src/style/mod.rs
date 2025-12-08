@@ -219,7 +219,7 @@ impl Default for ComputedStyle {
             grid_row_raw: None,
 
             font_family: vec!["serif".to_string()],
-            font_size: 13.3, // 10pt default like HN
+            font_size: 16.0,
             font_weight: FontWeight::Normal,
             font_style: FontStyle::Normal,
             line_height: LineHeight::Normal,

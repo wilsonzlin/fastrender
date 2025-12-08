@@ -25,9 +25,10 @@ pub fn encode_image(pixmap: &Pixmap, format: OutputFormat) -> Result<Vec<u8>> {
     // Convert to straight RGBA for image encoding
     let mut rgba_data = Vec::with_capacity(pixels.len());
     for chunk in pixels.chunks_exact(4) {
-        let r = chunk[0];
+        // tiny-skia stores pixels as BGRA premultiplied
+        let b = chunk[0];
         let g = chunk[1];
-        let b = chunk[2];
+        let r = chunk[2];
         let a = chunk[3];
 
         // Unpremultiply alpha
