@@ -529,6 +529,20 @@ fn resolve_border_spacing(style: &crate::style::ComputedStyle) -> (f32, f32) {
     )
 }
 
+fn horizontal_padding_and_borders(style: &crate::style::ComputedStyle) -> f32 {
+    // Percentages would need containing block; treat them as zero for intrinsic measurement fallback.
+    let resolve_abs = |l: &crate::style::values::Length| match l.unit {
+        LengthUnit::Percent => 0.0,
+        _ if l.unit.is_absolute() => l.to_px(),
+        _ => l.value,
+    };
+
+    resolve_abs(&style.padding_left)
+        + resolve_abs(&style.padding_right)
+        + resolve_abs(&style.border_left_width)
+        + resolve_abs(&style.border_right_width)
+}
+
 /// Types of table elements for structure analysis
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TableElementType {
@@ -809,12 +823,18 @@ impl TableFormattingContext {
             .unwrap_or(crate::style::display::FormattingContextType::Block);
         let fc = FormattingContextFactory::new().create(fc_type);
 
-        let min = fc
+        let mut min = fc
             .compute_intrinsic_inline_size(cell_box, IntrinsicSizingMode::MinContent)
             .unwrap_or(0.0);
-        let max = fc
+        let mut max = fc
             .compute_intrinsic_inline_size(cell_box, IntrinsicSizingMode::MaxContent)
             .unwrap_or(min);
+
+        // Add horizontal padding and borders to intrinsic widths
+        let style = &cell_box.style;
+        let padding_and_borders = horizontal_padding_and_borders(style);
+        min += padding_and_borders;
+        max += padding_and_borders;
 
         (min.max(0.0), max.max(min))
     }
