@@ -37,3 +37,13 @@
 ## Notes
 - Current table code uses `InlineFormattingContext` for cell intrinsic widths; this fails for block/table/replaced content—needs a per-context intrinsic measurement.
 - Default font family remains `"serif"`; UA defaults can be revisited when baseline metrics are real.
+
+## Remote branch (cursor/pixel-perfect-news-ycombinator-com-rendering-gpt-5.1-codex-high-b0ad) scan
+- Block FC: buffers inline children and runs them through `InlineFormattingContext` as a group, with margin collapse handling. Better than placeholder inline fragments—worth adopting concept.
+- Painter: introduces `FontContext` parameter to `paint_tree`/`Painter::new` and uses `TextShaper` + `TextRasterizer` (`shape_text_simple`) with guessed font size; still LTR-only and style-agnostic. We already have a more capable shaping pipeline; don’t regress, but sharing the font context between layout/paint is a good idea.
+- Table: adds a simplistic cell-content layout by stacking child fragments or collected text; ignores padding/borders/inline flow—worse than current plan.
+- Inline FC: minor guard for mandatory breaks past end-of-text.
+
+Actionable borrowings:
+- Integrate the block inline-buffering approach (layout inline groups via IFC, flush on block children).
+- Consider passing a shared `FontContext` into paint_tree/painter so paint and layout use the same font state.
