@@ -37,11 +37,12 @@
 - Percentage columns remain unscaled even when total percentages exceed 100%, matching current column distribution expectations; over-constraint is flagged and flexible columns collapse to their minima (`src/layout/contexts/table/column_distribution.rs`).
 - Colspan contributions now use the spanning-cell constraint distributor so multi-column cells raise min/max widths across the spanned range rather than per-column equal splits (`src/layout/table.rs`, `src/layout/contexts/table/column_distribution.rs`).
 - Parsed `border-collapse` into computed styles and table spacing respects collapsed mode by zeroing spacing when collapse is set (`src/style/{types,mod,properties}.rs`, `src/layout/table.rs`).
+- CSS `vertical-align` is now parsed/stored (UA default `middle` for `td/th`), and table layout uses baseline-aware row heights plus per-cell alignment for baseline/top/middle/bottom cases (`src/style/{types,mod,properties.rs,user_agent.css}`, `src/layout/table.rs`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
 - Min/max content sizing still uses simple break-opportunity offsets rather than cluster-aware shaping widths; no hyphenation support yet in IFC.
-- Table layout is partial: border-collapse unimplemented, padding/borders/vertical-align ignored in row heights, row/col spans not truly honored, percent/fixed widths still simplified vs CSS 2.1, colspans split evenly.
+- Table layout is partial: border-collapse unimplemented, row/col spans not truly honored, percent/fixed widths still simplified vs CSS 2.1, colspans split evenly, rowspan baseline alignment still coarse.
 - Replaced elements still ignore object-fit/object-position/backgrounds on the content box; SVG/iframe/video remain unrendered.
 - Painting still bypasses display list; no shared font context between layout and paint (painter builds its own).
 - Inline-blocks/replaced elements still rely on display hints rather than full anonymous inline box generation and lack percent/min-height handling.
@@ -52,7 +53,7 @@
    - Integrate shared `FontContext` across layout/paint to avoid divergent font fallback; propagate font metrics into inline box metrics consistently.
    - Harden RTL run positioning and visual reordering in painter/layout so mixed-direction text paints correctly.
 2. Tables:
-   - Implement CSS 2.1 auto table layout properly: cell min/max via the correct formatting context (including padding/border), border-spacing/border-collapse initial values surfaced from style, percent/fixed widths resolved against containing block, correct colspan/rowspan distribution, vertical-align and padding/borders in row heights.
+   - Finish CSS 2.1 auto table layout: full border-collapse model, percent/fixed widths resolved per spec, correct colspan/rowspan distribution (including baseline handling for rowspans), and row height/baseline behavior under collapsed borders.
 3. Replaced content:
    - Render images for `ReplacedType::Image` instead of placeholders.
 4. General bidi:

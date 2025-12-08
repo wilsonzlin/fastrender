@@ -551,6 +551,28 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
             }
             _ => {}
         },
+        "vertical-align" => match &resolved_value {
+            PropertyValue::Keyword(kw) => {
+                styles.vertical_align = match kw.as_str() {
+                    "baseline" => VerticalAlign::Baseline,
+                    "sub" => VerticalAlign::Sub,
+                    "super" => VerticalAlign::Super,
+                    "text-top" => VerticalAlign::TextTop,
+                    "text-bottom" => VerticalAlign::TextBottom,
+                    "middle" => VerticalAlign::Middle,
+                    "top" => VerticalAlign::Top,
+                    "bottom" => VerticalAlign::Bottom,
+                    _ => styles.vertical_align,
+                };
+            }
+            PropertyValue::Length(len) => {
+                styles.vertical_align = VerticalAlign::Length(*len);
+            }
+            PropertyValue::Percentage(pct) => {
+                styles.vertical_align = VerticalAlign::Percentage(*pct);
+            }
+            _ => {}
+        },
         "text-align" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.text_align = match kw.as_str() {

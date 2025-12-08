@@ -126,6 +126,7 @@ tr {
 td, th {
     display: table-cell;
     padding: 1px;
+    vertical-align: middle;
 }
 
 th {

@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse,
     BorderStyle, Direction, FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack, JustifyContent,
-    LineHeight, Overflow, TextAlign, TextDecoration, TextTransform, UnicodeBidi, WhiteSpace,
+    LineHeight, Overflow, TextAlign, TextDecoration, TextTransform, UnicodeBidi, VerticalAlign, WhiteSpace,
 };
 use values::Length;
 
@@ -125,6 +125,7 @@ pub struct ComputedStyle {
     pub letter_spacing: f32,
     pub word_spacing: f32,
     pub white_space: WhiteSpace,
+    pub vertical_align: VerticalAlign,
 
     // Color and background
     pub color: Rgba,
@@ -236,6 +237,7 @@ impl Default for ComputedStyle {
             letter_spacing: 0.0,
             word_spacing: 0.0,
             white_space: WhiteSpace::Normal,
+            vertical_align: VerticalAlign::Baseline,
 
             color: Rgba::BLACK,
             background_color: Rgba::TRANSPARENT,

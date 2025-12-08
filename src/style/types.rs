@@ -198,6 +198,51 @@ pub enum LineHeight {
     Length(Length),
 }
 
+/// Vertical alignment
+///
+/// CSS: `vertical-align`
+/// Reference: CSS 2.1 §10.8.1
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum VerticalAlign {
+    /// Align baseline with parent's baseline (initial value)
+    #[default]
+    Baseline,
+    /// Lower baseline to parent's subscript position
+    Sub,
+    /// Raise baseline to parent's superscript position
+    Super,
+    /// Align box top with the parent's text-top edge
+    TextTop,
+    /// Align box bottom with the parent's text-bottom edge
+    TextBottom,
+    /// Center box within available space
+    Middle,
+    /// Align box top with container top
+    Top,
+    /// Align box bottom with container bottom
+    Bottom,
+    /// Shift baseline by a specific length (positive = up)
+    Length(Length),
+    /// Shift baseline by a percentage of the line-height
+    Percentage(f32),
+}
+
+impl VerticalAlign {
+    /// Returns true if the value participates in baseline alignment
+    pub fn is_baseline_relative(self) -> bool {
+        matches!(
+            self,
+            VerticalAlign::Baseline
+                | VerticalAlign::Sub
+                | VerticalAlign::Super
+                | VerticalAlign::TextTop
+                | VerticalAlign::TextBottom
+                | VerticalAlign::Length(_)
+                | VerticalAlign::Percentage(_)
+        )
+    }
+}
+
 /// Text horizontal alignment
 ///
 /// CSS: `text-align`

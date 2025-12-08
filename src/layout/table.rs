@@ -34,7 +34,7 @@ use crate::layout::contexts::table::column_distribution::{
     distribute_spanning_cell_width, ColumnConstraints, ColumnDistributor, DistributionMode,
 };
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::style::types::BorderCollapse;
+use crate::style::types::{BorderCollapse, VerticalAlign};
 use crate::style::values::LengthUnit;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
@@ -543,6 +543,27 @@ fn horizontal_padding_and_borders(style: &crate::style::ComputedStyle) -> f32 {
         + resolve_abs(&style.border_right_width)
 }
 
+fn find_first_baseline(fragment: &FragmentNode, parent_offset: f32) -> Option<f32> {
+    let origin = parent_offset + fragment.bounds.y();
+    match &fragment.content {
+        FragmentContent::Line { baseline } => return Some(origin + *baseline),
+        FragmentContent::Text { baseline_offset, .. } => return Some(origin + *baseline_offset),
+        _ => {}
+    }
+
+    for child in &fragment.children {
+        if let Some(b) = find_first_baseline(child, origin) {
+            return Some(b);
+        }
+    }
+
+    None
+}
+
+fn cell_baseline(fragment: &FragmentNode) -> Option<f32> {
+    find_first_baseline(fragment, 0.0)
+}
+
 /// Types of table elements for structure analysis
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TableElementType {
@@ -556,6 +577,35 @@ enum TableElementType {
     Column,
     ColumnGroup,
     Unknown,
+}
+
+#[derive(Debug, Clone)]
+struct RowMetrics {
+    height: f32,
+    baseline_top: f32,
+    baseline_bottom: f32,
+    has_baseline: bool,
+    max_cell_height: f32,
+}
+
+impl RowMetrics {
+    fn new(height: f32) -> Self {
+        Self {
+            height,
+            baseline_top: 0.0,
+            baseline_bottom: 0.0,
+            has_baseline: false,
+            max_cell_height: height,
+        }
+    }
+
+    fn baseline_height(&self) -> f32 {
+        if self.has_baseline {
+            self.baseline_top + self.baseline_bottom
+        } else {
+            0.0
+        }
+    }
 }
 
 // ============================================================================
@@ -992,8 +1042,16 @@ impl FormattingContext for TableFormattingContext {
         let h_spacing = structure.border_spacing.0;
         let v_spacing = structure.border_spacing.1;
 
+        struct LaidOutCell<'a> {
+            cell: &'a CellInfo,
+            fragment: FragmentNode,
+            vertical_align: VerticalAlign,
+            baseline: Option<f32>,
+            height: f32,
+        }
+
         // Layout all cells to obtain their fragments and measure heights, then distribute row heights with rowspans.
-        let mut laid_out_cells: Vec<(&CellInfo, FragmentNode)> = Vec::new();
+        let mut laid_out_cells: Vec<LaidOutCell> = Vec::new();
         for cell in &structure.cells {
             let span_end = (cell.col + cell.colspan).min(col_widths.len());
             let width: f32 = col_widths[cell.col..span_end].iter().sum::<f32>()
@@ -1001,23 +1059,31 @@ impl FormattingContext for TableFormattingContext {
 
             if let Some(cell_box) = self.get_cell_box(box_node, cell) {
                 if let Ok(fragment) = self.layout_cell(cell_box, width) {
-                    laid_out_cells.push((cell, fragment));
+                    let height = fragment.bounds.height();
+                    let baseline = cell_baseline(&fragment);
+                    laid_out_cells.push(LaidOutCell {
+                        cell,
+                        fragment,
+                        vertical_align: cell_box.style.vertical_align,
+                        baseline,
+                        height,
+                    });
                 }
             }
         }
 
         // Compute row heights, accounting for rowspans and vertical spacing.
         let mut row_heights = vec![0.0f32; structure.row_count];
-        for (cell, frag) in &laid_out_cells {
-            if cell.rowspan == 1 {
-                row_heights[cell.row] = row_heights[cell.row].max(frag.bounds.height());
+        for laid in &laid_out_cells {
+            if laid.cell.rowspan == 1 {
+                row_heights[laid.cell.row] = row_heights[laid.cell.row].max(laid.height);
             } else {
-                let span_start = cell.row;
-                let span_end = (cell.row + cell.rowspan).min(structure.row_count);
-                let spacing_total = v_spacing * (cell.rowspan.saturating_sub(1) as f32);
+                let span_start = laid.cell.row;
+                let span_end = (laid.cell.row + laid.cell.rowspan).min(structure.row_count);
+                let spacing_total = v_spacing * (laid.cell.rowspan.saturating_sub(1) as f32);
                 let current: f32 = row_heights[span_start..span_end].iter().sum();
-                if frag.bounds.height() > current + spacing_total {
-                    let extra = frag.bounds.height() - current - spacing_total;
+                if laid.height > current + spacing_total {
+                    let extra = laid.height - current - spacing_total;
                     let per_row = extra / (span_end - span_start) as f32;
                     for r in span_start..span_end {
                         row_heights[r] += per_row;
@@ -1026,36 +1092,80 @@ impl FormattingContext for TableFormattingContext {
             }
         }
 
-        // Ensure non-zero heights
-        for h in &mut row_heights {
-            if *h <= 0.0 {
-                *h = 1.0;
+        let mut row_metrics: Vec<RowMetrics> = row_heights.iter().map(|h| RowMetrics::new(*h)).collect();
+
+        for laid in &laid_out_cells {
+            if laid.cell.rowspan != 1 {
+                continue;
+            }
+
+            let row = &mut row_metrics[laid.cell.row];
+            row.max_cell_height = row.max_cell_height.max(laid.height);
+
+            if laid.vertical_align.is_baseline_relative() {
+                let baseline = laid.baseline.unwrap_or(laid.height);
+                let bottom = (laid.height - baseline).max(0.0);
+                row.has_baseline = true;
+                row.baseline_top = row.baseline_top.max(baseline);
+                row.baseline_bottom = row.baseline_bottom.max(bottom);
+            }
+        }
+
+        for row in &mut row_metrics {
+            let baseline_height = row.baseline_height();
+            let max_required = row.max_cell_height.max(baseline_height);
+            if max_required > row.height {
+                row.height = max_required;
+            }
+            if row.height <= 0.0 {
+                row.height = 1.0;
             }
         }
 
         // Compute row offsets
         let mut row_offsets = Vec::with_capacity(structure.row_count);
         let mut y = v_spacing;
-        for h in &row_heights {
+        for row in &row_metrics {
             row_offsets.push(y);
-            y += *h + v_spacing;
+            y += row.height + v_spacing;
         }
 
-        // Position fragments
-        for (cell, frag) in laid_out_cells {
+        // Position fragments with vertical alignment within their row block
+        for laid in laid_out_cells {
+            let cell = laid.cell;
             let mut x = h_spacing;
             for col_idx in 0..cell.col {
                 x += col_widths[col_idx] + h_spacing;
             }
-            let y = row_offsets.get(cell.row).cloned().unwrap_or(0.0);
-            fragments.push(frag.translate(Point::new(x, y)));
+
+            let row_start = cell.row;
+            let span_end = (cell.row + cell.rowspan).min(row_metrics.len());
+            let spanned_height: f32 = row_metrics[row_start..span_end].iter().map(|r| r.height).sum::<f32>()
+                + v_spacing * cell.rowspan.saturating_sub(1) as f32;
+
+            let y_offset = match laid.vertical_align {
+                VerticalAlign::Top => 0.0,
+                VerticalAlign::Bottom => (spanned_height - laid.height).max(0.0),
+                VerticalAlign::Middle => ((spanned_height - laid.height) / 2.0).max(0.0),
+                _ => {
+                    let baseline = laid.baseline.unwrap_or(laid.height);
+                    let row_base = row_metrics
+                        .get(row_start)
+                        .map(|r| if r.has_baseline { r.baseline_top } else { r.height })
+                        .unwrap_or(0.0);
+                    (row_base - baseline).max(0.0)
+                }
+            };
+
+            let y = row_offsets.get(row_start).cloned().unwrap_or(0.0) + y_offset;
+            fragments.push(laid.fragment.translate(Point::new(x, y)));
         }
 
         let total_width: f32 = col_widths.iter().sum::<f32>() + spacing;
         let total_height = if structure.row_count > 0 {
             row_offsets
                 .last()
-                .map(|start| start + row_heights.last().copied().unwrap_or(0.0) + v_spacing)
+                .map(|start| start + row_metrics.last().map(|r| r.height).unwrap_or(0.0) + v_spacing)
                 .unwrap_or(0.0)
         } else {
             0.0
@@ -1091,7 +1201,11 @@ impl FormattingContext for TableFormattingContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::constraints::LayoutConstraints;
     use crate::style::display::FormattingContextType;
+    use crate::style::display::Display;
+    use crate::style::types::VerticalAlign;
+    use crate::style::values::Length;
     use crate::style::ComputedStyle;
     use crate::tree::debug::DebugInfo;
     use std::sync::Arc;
@@ -1594,6 +1708,46 @@ mod tests {
         let fragment = result.unwrap();
         assert!(fragment.bounds.width() > 0.0);
         assert!(fragment.bounds.height() > 0.0);
+    }
+
+    #[test]
+    fn test_vertical_align_bottom_positions_cell_at_row_end() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut tall_style = ComputedStyle::default();
+        tall_style.display = Display::TableCell;
+        tall_style.height = Some(Length::px(100.0));
+
+        let tall_cell = BoxNode::new_block(Arc::new(tall_style), FormattingContextType::Block, vec![]);
+
+        let mut short_style = ComputedStyle::default();
+        short_style.display = Display::TableCell;
+        short_style.height = Some(Length::px(20.0));
+        short_style.vertical_align = VerticalAlign::Bottom;
+
+        let short_cell = BoxNode::new_block(Arc::new(short_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(
+            Arc::new(row_style),
+            FormattingContextType::Block,
+            vec![tall_cell, short_cell],
+        );
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let tfc = TableFormattingContext::new();
+        let constraints = LayoutConstraints::definite_width(200.0);
+        let fragment = tfc.layout(&table, &constraints).expect("table layout");
+
+        assert_eq!(fragment.children.len(), 2);
+        let first = &fragment.children[0];
+        let second = &fragment.children[1];
+
+        assert!((first.bounds.y() - 0.0).abs() < 0.01);
+        assert!((second.bounds.y() - 80.0).abs() < 0.01);
+        assert!((second.bounds.height() - 20.0).abs() < 0.01);
     }
 
     #[test]
