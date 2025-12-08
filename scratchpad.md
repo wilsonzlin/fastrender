@@ -12,27 +12,36 @@
 - Inline text fragments now carry computed styles; painter uses shaping pipeline and real glyph outlines instead of box approximations (`src/paint/painter.rs`).
 - Table layout rewritten to use computed display values, default border-spacing 0, column constraints via `column_distribution`, `<col>/<colgroup>` width handling, min/max from IFC, fallback equal widths if zero; cells laid out with BFC using computed column widths (`src/layout/table.rs`).
 - Added `FragmentNode::new_inline_styled` convenience (`src/tree/fragment_tree.rs`).
+- Inline FC now shapes with `ShapingPipeline`, keeps shaped runs on fragments, and uses real font metrics for struts/baselines; painter reuses those runs with pen advance and rudimentary RTL handling (`src/layout/contexts/inline`, `src/paint/painter.rs`).
+- Added embedded Roboto Regular fallback for fontless environments and generic fallbacks now pick the first available face when generic lookup fails (`resources/fonts`, `src/text/font_loader.rs`, `src/text/font_db.rs`).
+- Block FC now buffers inline-level children (including inline replaced/inline-block) and lays them out with `InlineFormattingContext`; inline-blocks get laid out through their own formatting context as atomic inline items (`src/layout/contexts/block/mod.rs`, `src/layout/contexts/inline/mod.rs`).
 - Tests currently pass (`cargo test`).
+- Replaced elements now resolve intrinsic sizes from actual images via `ImageCache` (using base URL from API/bin), reuse those sizes in inline/block layout, and the painter renders decoded images instead of gray placeholders (`src/api.rs`, `src/layout/utils.rs`, `src/layout/contexts/{block,inline}`, `src/paint/painter.rs`).
+- Inline text breaking now aligns break opportunities and splits to cluster boundaries using shaped glyphs; `TextItem` tracks cumulative cluster advances so wrapping and mandatory breaks no longer slice through ligatures/combining marks (`src/layout/contexts/inline/line_builder.rs`).
+- Inline line finalization now performs bidi visual reordering per line with the Unicode algorithm, treating non-text inline items as object replacements; x-positions are reassigned in visual order so mixed-direction lines place RTL runs correctly (`src/layout/contexts/inline/line_builder.rs`).
+- CSS `direction` is now parsed/inherited (initial `ltr`), carried through computed styles, and used as the base paragraph direction for bidi analysis and per-line reordering (`src/style/{types,mod,properties,cascade}.rs`, `src/text/pipeline.rs`, `src/layout/contexts/inline/mod.rs`).
 
 ## Current issues / gaps
-- Painter still renders each shaped run at the same origin (no pen advance, no bidi direction handling), so multi-run/fallback/bidi text overpaints.
-- Inline layout uses heuristic splitting and drops shaping data (`TextItem::split_at` empty glyphs); line breaking is byte-based, not cluster/bidi aware. Min/max content widths use `font_size * 0.5` estimates.
-- Baseline metrics are guessed (`font_size * 0.8` etc.), not taken from font ascenders/descenders.
+- Inline bidi reordering still reshapes splits without ligature preservation and models nested inline/replaced items as U+FFFC placeholders; CSS `unicode-bidi` isolation/embedding modes are unsupported.
+- Min/max content sizing still uses simple break-opportunity offsets rather than cluster-aware shaping widths; no hyphenation support yet in IFC.
 - Table layout is partial: border-spacing hardcoded to 0; border-collapse unimplemented; padding/borders/vertical-align ignored in row heights; row/col spans not truly honored; percent/fixed widths not resolved per CSS 2.1; colspans split evenly.
-- Replaced elements still paint gray placeholders even for images.
-- Layout/paint disagreement: layout doesn’t use shaped advances, painting now does, so wrapping/positioning can diverge.
+- Replaced elements still ignore object-fit/object-position/backgrounds on the content box; SVG/iframe/video remain unrendered.
+- Painting still bypasses display list; no shared font context between layout and paint (painter builds its own).
+- Inline-block sizing is naïve (no shrink-to-fit; uses available width floor), and inline-level replaced elements rely on display hints rather than true anonymous box generation.
 
 ## To-do / next steps (spec-oriented)
 1. Inline/text:
-   - Use `ShapingPipeline` for measurement and line breaking (cluster and bidi aware); carry shaped runs through splits.
-   - Advance pen between shaped runs using `run.advance`; honor `run.direction` when painting/laying out.
-   - Replace heuristic baselines with real font metrics.
+   - Make line breaking cluster-aware and bidi-sensitive (UAX #14 + UAX #9 ordering), and keep shaped runs when splitting.
+   - Integrate shared `FontContext` across layout/paint to avoid divergent font fallback; propagate font metrics into inline box metrics consistently.
+   - Harden RTL run positioning and visual reordering in painter/layout so mixed-direction text paints correctly.
 2. Tables:
    - Implement CSS 2.1 auto table layout properly: cell min/max via the correct formatting context (including padding/border), border-spacing/border-collapse initial values, percent/fixed widths resolved against containing block, correct colspan/rowspan distribution, vertical-align and padding/borders in row heights.
 3. Replaced content:
    - Render images for `ReplacedType::Image` instead of placeholders.
 4. General bidi:
    - Ensure visual ordering in layout and paint for RTL/mixed runs.
+5. Inline blocks:
+   - Implement shrink-to-fit sizing for inline-block and inline replaced elements so they honor min/max-content and percentages instead of using the containing width directly.
 
 ## Notes
 - Current table code uses `InlineFormattingContext` for cell intrinsic widths; this fails for block/table/replaced content—needs a per-context intrinsic measurement.

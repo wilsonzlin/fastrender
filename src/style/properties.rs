@@ -562,6 +562,15 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "direction" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.direction = match kw.as_str() {
+                    "ltr" => Direction::Ltr,
+                    "rtl" => Direction::Rtl,
+                    _ => styles.direction,
+                };
+            }
+        }
         "text-decoration" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.text_decoration = match kw.as_str() {

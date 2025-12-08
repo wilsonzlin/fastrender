@@ -48,7 +48,7 @@
 //! - rustybuzz documentation: <https://docs.rs/rustybuzz/>
 
 use crate::error::{Result, TextError};
-use crate::style::types::FontStyle as CssFontStyle;
+use crate::style::types::{Direction as CssDirection, FontStyle as CssFontStyle};
 use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
@@ -334,11 +334,12 @@ impl BidiAnalysis {
     ///
     /// * `text` - The text to analyze
     /// * `style` - ComputedStyle containing CSS direction property
-    pub fn analyze(text: &str, _style: &ComputedStyle) -> Self {
-        // Determine base direction from CSS
-        // Note: ComputedStyle doesn't have a direction field in current implementation,
-        // so we default to LTR. This should be extended when CSS direction is supported.
-        let base_level = Level::ltr();
+    pub fn analyze(text: &str, style: &ComputedStyle) -> Self {
+        // Determine base direction from CSS direction property (inherited, initial LTR)
+        let base_level = match style.direction {
+            CssDirection::Ltr => Level::ltr(),
+            CssDirection::Rtl => Level::rtl(),
+        };
 
         // Handle empty text
         if text.is_empty() {
@@ -763,7 +764,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
 ///
 /// let runs = pipeline.shape("Hello, world!", &style, &font_context)?;
 /// ```
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ShapingPipeline {
     // Reserved for future caching/configuration
     _private: (),

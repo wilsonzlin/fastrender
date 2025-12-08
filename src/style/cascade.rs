@@ -198,6 +198,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.font_weight = parent.font_weight;
     styles.font_style = parent.font_style;
     styles.line_height = parent.line_height.clone();
+    styles.direction = parent.direction;
     styles.text_align = parent.text_align;
     styles.text_transform = parent.text_transform;
     styles.letter_spacing = parent.letter_spacing;

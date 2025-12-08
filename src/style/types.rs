@@ -6,6 +6,16 @@
 use crate::css::types::ColorStop;
 use crate::style::values::Length;
 
+/// Text direction
+///
+/// CSS: `direction`
+/// Reference: CSS Writing Modes Level 3
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Ltr,
+    Rtl,
+}
+
 /// Overflow behavior for content that exceeds container bounds
 ///
 /// CSS: `overflow-x`, `overflow-y`, `overflow`

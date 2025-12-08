@@ -28,8 +28,8 @@ use position::Position;
 use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderStyle,
-    FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack, JustifyContent, LineHeight, Overflow,
-    TextAlign, TextDecoration, TextTransform, WhiteSpace,
+    Direction, FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack, JustifyContent, LineHeight,
+    Overflow, TextAlign, TextDecoration, TextTransform, WhiteSpace,
 };
 use values::Length;
 
@@ -117,6 +117,7 @@ pub struct ComputedStyle {
     pub font_weight: FontWeight,
     pub font_style: FontStyle,
     pub line_height: LineHeight,
+    pub direction: Direction,
     pub text_align: TextAlign,
     pub text_decoration: TextDecoration,
     pub text_transform: TextTransform,
@@ -223,6 +224,7 @@ impl Default for ComputedStyle {
             font_weight: FontWeight::Normal,
             font_style: FontStyle::Normal,
             line_height: LineHeight::Normal,
+            direction: Direction::Ltr,
             text_align: TextAlign::Left,
             text_decoration: TextDecoration::None,
             text_transform: TextTransform::None,

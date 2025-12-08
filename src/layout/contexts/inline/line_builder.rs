@@ -32,11 +32,16 @@
 //! ```
 
 use super::baseline::{BaselineMetrics, LineBaselineAccumulator, VerticalAlign};
+use crate::geometry::Size;
 use crate::style::ComputedStyle;
-use crate::text::line_break::BreakOpportunity;
-use crate::text::shaper::ShapedGlyphs;
+use crate::text::font_loader::FontContext;
+use crate::text::line_break::{BreakOpportunity, BreakType};
+use crate::text::pipeline::{ShapedRun, ShapingPipeline};
+use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::FragmentNode;
+use std::collections::BTreeMap;
 use std::sync::Arc;
+use unicode_bidi::{BidiInfo, Level};
 
 /// An item in the inline formatting context
 ///
@@ -96,8 +101,8 @@ impl InlineItem {
 /// A shaped text item
 #[derive(Debug, Clone)]
 pub struct TextItem {
-    /// The shaped glyphs
-    pub glyphs: ShapedGlyphs,
+    /// The shaped runs (bidi/script/font-aware)
+    pub runs: Vec<ShapedRun>,
 
     /// Total horizontal advance
     pub advance: f32,
@@ -119,28 +124,74 @@ pub struct TextItem {
 
     /// Computed style for this text run
     pub style: Arc<ComputedStyle>,
+    /// Cumulative advances at cluster boundaries (text order)
+    cluster_advances: Vec<ClusterBoundary>,
+}
+
+#[derive(Debug, Clone)]
+struct ClusterBoundary {
+    /// Byte offset in the source text where this cluster starts
+    byte_offset: usize,
+    /// Advance width from the start of the item up to and including this cluster
+    advance: f32,
 }
 
 impl TextItem {
     /// Creates a new text item
     pub fn new(
-        glyphs: ShapedGlyphs,
+        runs: Vec<ShapedRun>,
+        text: String,
         metrics: BaselineMetrics,
         break_opportunities: Vec<BreakOpportunity>,
         style: Arc<ComputedStyle>,
     ) -> Self {
-        let advance = glyphs.total_advance;
-        let text = glyphs.text.clone();
-        let font_size = glyphs.font_size;
+        let cluster_advances = Self::compute_cluster_advances(&runs, text.len(), style.font_size);
+        let aligned_breaks = Self::align_breaks_to_clusters(break_opportunities, &cluster_advances, text.len());
+        let advance: f32 = cluster_advances
+            .last()
+            .map(|c| c.advance)
+            .unwrap_or_else(|| runs.iter().map(|r| r.advance).sum());
+        let font_size = style.font_size;
         Self {
-            glyphs,
+            runs,
             advance,
             metrics,
             vertical_align: VerticalAlign::Baseline,
-            break_opportunities,
+            break_opportunities: aligned_breaks,
             text,
             font_size,
             style,
+            cluster_advances,
+        }
+    }
+
+    /// Derive baseline metrics from shaped runs and CSS line-height
+    pub fn metrics_from_runs(runs: &[ShapedRun], line_height: f32, fallback_font_size: f32) -> BaselineMetrics {
+        let mut ascent: f32 = 0.0;
+        let mut descent: f32 = 0.0;
+        let mut line_gap: f32 = 0.0;
+
+        for run in runs {
+            if let Ok(metrics) = run.font.metrics() {
+                let scaled = metrics.scale(run.font_size);
+                ascent = ascent.max(scaled.ascent);
+                descent = descent.max(scaled.descent);
+                line_gap = line_gap.max(scaled.line_gap);
+            }
+        }
+
+        if ascent == 0.0 && descent == 0.0 {
+            ascent = fallback_font_size * 0.8;
+            descent = fallback_font_size * 0.2;
+        }
+
+        BaselineMetrics {
+            baseline_offset: ascent,
+            height: line_height,
+            ascent,
+            descent,
+            line_gap,
+            line_height,
         }
     }
 
@@ -153,56 +204,65 @@ impl TextItem {
     /// Splits this text item at a byte offset, returning (before, after)
     ///
     /// This is used for line breaking within text.
-    pub fn split_at(&self, byte_offset: usize) -> Option<(TextItem, TextItem)> {
-        if byte_offset == 0 || byte_offset >= self.text.len() {
+    pub fn split_at(
+        &self,
+        byte_offset: usize,
+        shaper: &ShapingPipeline,
+        font_context: &FontContext,
+    ) -> Option<(TextItem, TextItem)> {
+        let split_offset = self.cluster_boundary_at_or_before(byte_offset).map(|b| b.byte_offset)?;
+
+        if split_offset == 0 || split_offset >= self.text.len() {
             return None;
         }
 
         // Split the text
-        let (before_text, after_text) = self.text.split_at(byte_offset);
+        let (before_text, after_text) = self.text.split_at(split_offset);
 
-        // Calculate advance for the 'before' portion using clusters
-        let before_advance = self.advance_at_offset(byte_offset);
-        let after_advance = self.advance - before_advance;
+        let before_runs = shaper.shape(before_text, &self.style, font_context).ok()?;
+        let after_runs = shaper.shape(after_text, &self.style, font_context).ok()?;
 
-        // Create new items (simplified - in production would re-shape)
-        let before_item = TextItem {
-            glyphs: ShapedGlyphs::empty(), // Would need to split glyphs properly
-            advance: before_advance,
-            metrics: self.metrics,
-            vertical_align: self.vertical_align,
-            break_opportunities: self
-                .break_opportunities
-                .iter()
-                .filter(|b| b.byte_offset <= byte_offset)
-                .copied()
-                .collect(),
-            text: before_text.to_string(),
-            font_size: self.font_size,
-            style: self.style.clone(),
-        };
+        let line_height = self.metrics.line_height;
+        let before_metrics = TextItem::metrics_from_runs(&before_runs, line_height, self.font_size);
+        let after_metrics = TextItem::metrics_from_runs(&after_runs, line_height, self.font_size);
 
-        let after_item = TextItem {
-            glyphs: ShapedGlyphs::empty(),
-            advance: after_advance,
-            metrics: self.metrics,
-            vertical_align: self.vertical_align,
-            break_opportunities: self
-                .break_opportunities
-                .iter()
-                .filter(|b| b.byte_offset > byte_offset)
-                .map(|b| BreakOpportunity::new(b.byte_offset - byte_offset, b.break_type))
-                .collect(),
-            text: after_text.to_string(),
-            font_size: self.font_size,
-            style: self.style.clone(),
-        };
+        let before_breaks = self
+            .break_opportunities
+            .iter()
+            .filter(|b| b.byte_offset <= split_offset)
+            .copied()
+            .collect();
+        let after_breaks = self
+            .break_opportunities
+            .iter()
+            .filter(|b| b.byte_offset > split_offset)
+            .map(|b| BreakOpportunity::new(b.byte_offset - split_offset, b.break_type))
+            .collect();
+
+        // Create new items using freshly shaped runs
+        let before_item = TextItem::new(
+            before_runs,
+            before_text.to_string(),
+            before_metrics,
+            before_breaks,
+            self.style.clone(),
+        )
+        .with_vertical_align(self.vertical_align);
+
+        let after_item = TextItem::new(
+            after_runs,
+            after_text.to_string(),
+            after_metrics,
+            after_breaks,
+            self.style.clone(),
+        )
+        .with_vertical_align(self.vertical_align);
 
         Some((before_item, after_item))
     }
 
     /// Gets the horizontal advance at a given byte offset
-    fn advance_at_offset(&self, byte_offset: usize) -> f32 {
+    pub fn advance_at_offset(&self, byte_offset: usize) -> f32 {
         if byte_offset == 0 {
             return 0.0;
         }
@@ -210,15 +270,20 @@ impl TextItem {
             return self.advance;
         }
 
-        // Use cluster information if available
-        if !self.glyphs.clusters.is_empty() {
-            self.glyphs.x_position_for_text_offset(byte_offset)
-        } else {
-            // Approximate based on character proportion
-            let char_count = self.text.chars().count();
-            let offset_chars = self.text[..byte_offset].chars().count();
-            self.advance * (offset_chars as f32 / char_count as f32)
+        if let Some(boundary) = self.cluster_boundary_at_or_before(byte_offset) {
+            return boundary.advance;
         }
+
+        if self.runs.is_empty() {
+            let char_count = self.text.chars().count().max(1);
+            let offset_chars = self.text[..byte_offset].chars().count();
+            return self.advance * (offset_chars as f32 / char_count as f32);
+        }
+
+        // Fallback: linear approximation if cluster data is missing
+        let char_count = self.text.chars().count().max(1);
+        let offset_chars = self.text[..byte_offset].chars().count();
+        self.advance * (offset_chars as f32 / char_count as f32)
     }
 
     /// Finds the best break point that fits within max_width
@@ -236,6 +301,138 @@ impl TextItem {
         }
 
         best_break
+    }
+
+    fn cluster_boundary_at_or_before(&self, byte_offset: usize) -> Option<ClusterBoundary> {
+        if self.cluster_advances.is_empty() {
+            return None;
+        }
+
+        let mut idx = match self
+            .cluster_advances
+            .binary_search_by_key(&byte_offset, |c| c.byte_offset)
+        {
+            Ok(i) => i,
+            Err(i) => i.checked_sub(1)?,
+        };
+
+        // If there are multiple entries for the same offset, keep the one with the largest advance
+        while idx + 1 < self.cluster_advances.len()
+            && self.cluster_advances[idx + 1].byte_offset == self.cluster_advances[idx].byte_offset
+        {
+            idx += 1;
+        }
+
+        self.cluster_advances.get(idx).cloned()
+    }
+
+    fn compute_cluster_advances(runs: &[ShapedRun], text_len: usize, fallback_font_size: f32) -> Vec<ClusterBoundary> {
+        if runs.is_empty() || text_len == 0 {
+            return Vec::new();
+        }
+
+        let mut sorted_runs: Vec<&ShapedRun> = runs.iter().collect();
+        sorted_runs.sort_by_key(|r| r.start);
+
+        let mut advances = Vec::new();
+        let mut cumulative = 0.0;
+
+        for run in sorted_runs {
+            let mut cluster_widths: BTreeMap<usize, f32> = BTreeMap::new();
+            for glyph in &run.glyphs {
+                let offset = run.start + glyph.cluster as usize;
+                *cluster_widths.entry(offset).or_default() += glyph.x_advance;
+            }
+
+            if cluster_widths.is_empty() {
+                // If shaping produced no glyphs, fall back to treating the entire run as a single cluster
+                cluster_widths.insert(run.start, run.advance.max(0.0));
+            }
+
+            let last_offset = *cluster_widths.keys().next_back().unwrap_or(&run.end);
+            if last_offset < run.end {
+                cluster_widths.entry(run.end).or_insert(0.0);
+            }
+
+            for (offset, width) in cluster_widths {
+                cumulative += width;
+                advances.push(ClusterBoundary {
+                    byte_offset: offset.min(text_len),
+                    advance: cumulative,
+                });
+            }
+        }
+
+        // Deduplicate by byte offset, keeping the greatest advance so that cumulative width remains monotonic
+        let mut deduped: Vec<ClusterBoundary> = Vec::new();
+        for boundary in advances {
+            if let Some(last) = deduped.last_mut() {
+                if last.byte_offset == boundary.byte_offset {
+                    if boundary.advance > last.advance {
+                        last.advance = boundary.advance;
+                    }
+                    continue;
+                }
+            }
+            deduped.push(boundary);
+        }
+
+        if deduped.last().map(|b| b.byte_offset < text_len).unwrap_or(false) {
+            deduped.push(ClusterBoundary {
+                byte_offset: text_len,
+                advance: deduped.last().map(|b| b.advance).unwrap_or(0.0),
+            });
+        }
+
+        if deduped.is_empty() {
+            deduped.push(ClusterBoundary {
+                byte_offset: text_len,
+                advance: fallback_font_size,
+            });
+        }
+
+        deduped
+    }
+
+    fn align_breaks_to_clusters(
+        breaks: Vec<BreakOpportunity>,
+        clusters: &[ClusterBoundary],
+        text_len: usize,
+    ) -> Vec<BreakOpportunity> {
+        if clusters.is_empty() || text_len == 0 {
+            return breaks;
+        }
+
+        let mut aligned: Vec<BreakOpportunity> = Vec::new();
+        for brk in breaks {
+            let clamped_offset = brk.byte_offset.min(text_len);
+            let aligned_offset = Self::cluster_offset_at_or_before(clamped_offset, clusters);
+            if let Some(offset) = aligned_offset {
+                if let Some(last) = aligned.last_mut() {
+                    if last.byte_offset == offset {
+                        if brk.break_type == BreakType::Mandatory {
+                            last.break_type = BreakType::Mandatory;
+                        }
+                        continue;
+                    }
+                }
+
+                aligned.push(BreakOpportunity::new(offset, brk.break_type));
+            }
+        }
+
+        aligned
+    }
+
+    fn cluster_offset_at_or_before(target: usize, clusters: &[ClusterBoundary]) -> Option<usize> {
+        if clusters.is_empty() {
+            return None;
+        }
+
+        match clusters.binary_search_by_key(&target, |c| c.byte_offset) {
+            Ok(idx) => clusters.get(idx).map(|c| c.byte_offset),
+            Err(idx) => clusters.get(idx.checked_sub(1)?).map(|c| c.byte_offset),
+        }
     }
 }
 
@@ -343,32 +540,30 @@ pub struct ReplacedItem {
     /// Vertical alignment
     pub vertical_align: VerticalAlign,
 
-    /// Optional source identifier
-    pub source: Option<String>,
+    /// Original replaced type (img, video, etc.)
+    pub replaced_type: ReplacedType,
+
+    /// Computed style for painting
+    pub style: Arc<ComputedStyle>,
 }
 
 impl ReplacedItem {
     /// Creates a new replaced item
-    pub fn new(width: f32, height: f32) -> Self {
-        let metrics = BaselineMetrics::for_replaced(height);
+    pub fn new(size: Size, replaced_type: ReplacedType, style: Arc<ComputedStyle>) -> Self {
+        let metrics = BaselineMetrics::for_replaced(size.height);
         Self {
-            width,
-            height,
+            width: size.width,
+            height: size.height,
             metrics,
             vertical_align: VerticalAlign::Baseline,
-            source: None,
+            replaced_type,
+            style,
         }
     }
 
     /// Sets the vertical alignment
     pub fn with_vertical_align(mut self, align: VerticalAlign) -> Self {
         self.vertical_align = align;
-        self
-    }
-
-    /// Sets the source identifier
-    pub fn with_source(mut self, source: String) -> Self {
-        self.source = Some(source);
         self
     }
 }
@@ -450,11 +645,26 @@ pub struct LineBuilder {
 
     /// Default strut metrics (from containing block)
     strut_metrics: BaselineMetrics,
+
+    /// Shaping pipeline for text splitting
+    shaper: ShapingPipeline,
+
+    /// Font context for reshaping during line breaks
+    font_context: FontContext,
+
+    /// Base paragraph level for bidi ordering
+    base_level: Level,
 }
 
 impl LineBuilder {
     /// Creates a new line builder
-    pub fn new(available_width: f32, strut_metrics: BaselineMetrics) -> Self {
+    pub fn new(
+        available_width: f32,
+        strut_metrics: BaselineMetrics,
+        shaper: ShapingPipeline,
+        font_context: FontContext,
+        base_level: Level,
+    ) -> Self {
         Self {
             available_width,
             current_line: Line::new(),
@@ -462,6 +672,9 @@ impl LineBuilder {
             lines: Vec::new(),
             baseline_acc: LineBaselineAccumulator::new(&strut_metrics),
             strut_metrics,
+            shaper,
+            font_context,
+            base_level,
         }
     }
 
@@ -490,7 +703,7 @@ impl LineBuilder {
 
             if let Some(break_point) = text_item.find_break_point(remaining_width) {
                 // Split at break point
-                if let Some((before, after)) = text_item.split_at(break_point) {
+                if let Some((before, after)) = text_item.split_at(break_point, &self.shaper, &self.font_context) {
                     // Place the part that fits
                     if before.advance > 0.0 {
                         self.place_item(InlineItem::Text(before));
@@ -501,6 +714,14 @@ impl LineBuilder {
 
                     // Add remaining text (may need further breaking)
                     self.add_item(InlineItem::Text(after));
+                } else {
+                    // If splitting fails, fall back to placing the whole item
+                    if self.current_line.is_empty() {
+                        self.place_item(InlineItem::Text(text_item));
+                    } else {
+                        self.finish_line();
+                        self.place_item(InlineItem::Text(text_item));
+                    }
                 }
             } else {
                 // No break point found within remaining width
@@ -548,6 +769,9 @@ impl LineBuilder {
     /// Finishes the current line and starts a new one
     fn finish_line(&mut self) {
         if !self.current_line.is_empty() {
+            // Reorder items visually according to the bidi algorithm (CSS Text 8.2)
+            self.reorder_line_for_bidi();
+
             // Calculate final line metrics
             self.current_line.width = self.current_x;
             self.current_line.height = self.baseline_acc.line_height();
@@ -580,6 +804,76 @@ impl LineBuilder {
         self.current_line = Line::new();
     }
 
+    /// Reorders the current line's items into visual order based on the Unicode Bidi algorithm.
+    ///
+    /// This models CSS Text 3 bidi reordering for inline-level boxes. It treats non-text items as
+    /// object replacement characters (U+FFFC) to ensure they participate in reordering.
+    fn reorder_line_for_bidi(&mut self) {
+        if self.current_line.items.is_empty() {
+            return;
+        }
+
+        // Build the logical text for this line and map byte ranges back to item indices.
+        let mut logical_text = String::new();
+        let mut spans: Vec<(usize, std::ops::Range<usize>)> = Vec::with_capacity(self.current_line.items.len());
+
+        for (idx, positioned) in self.current_line.items.iter().enumerate() {
+            let start = logical_text.len();
+            match &positioned.item {
+                InlineItem::Text(t) => logical_text.push_str(&t.text),
+                _ => logical_text.push('\u{FFFC}'),
+            }
+            let end = logical_text.len();
+            spans.push((idx, start..end));
+        }
+
+        if logical_text.is_empty() {
+            return;
+        }
+
+        let bidi = BidiInfo::new(&logical_text, Some(self.base_level));
+        let para = match bidi.paragraphs.first() {
+            Some(p) => p,
+            None => return,
+        };
+        let line_range = para.range.clone();
+        let mut visual_indices: Vec<usize> = Vec::with_capacity(self.current_line.items.len());
+
+        let (reordered_levels, runs) = bidi.visual_runs(para, line_range);
+        for run in runs {
+            let mut run_indices: Vec<usize> = spans
+                .iter()
+                .filter(|(_, range)| range.start < run.end && range.end > run.start)
+                .map(|(idx, _)| *idx)
+                .collect();
+
+            let char_index = logical_text[..run.start].chars().count();
+            let level = reordered_levels.get(char_index).copied().unwrap_or_else(Level::ltr);
+            if level.is_rtl() {
+                run_indices.reverse();
+            }
+
+            visual_indices.extend(run_indices);
+        }
+
+        if visual_indices.len() != self.current_line.items.len() {
+            // Fallback to logical order if reordering failed
+            return;
+        }
+
+        let mut x = 0.0;
+        let mut reordered: Vec<PositionedItem> = Vec::with_capacity(self.current_line.items.len());
+        for idx in visual_indices {
+            let mut item = self.current_line.items[idx].clone();
+            item.x = x;
+            x += item.item.width();
+            reordered.push(item);
+        }
+
+        self.current_line.items = reordered;
+        self.current_x = x;
+    }
+
     /// Finishes building and returns all lines
     pub fn finish(mut self) -> Vec<Line> {
         // Finish any remaining line
@@ -603,32 +897,48 @@ mod tests {
     use super::*;
     use crate::geometry::Rect;
     use crate::style::ComputedStyle;
+    use crate::text::font_loader::FontContext;
     use crate::text::line_break::find_break_opportunities;
+    use crate::text::pipeline::ShapingPipeline;
     use std::sync::Arc;
 
     fn make_strut_metrics() -> BaselineMetrics {
         BaselineMetrics::new(12.0, 16.0, 12.0, 4.0)
     }
 
+    fn make_builder(width: f32) -> LineBuilder {
+        let strut = make_strut_metrics();
+        LineBuilder::new(width, strut, ShapingPipeline::new(), FontContext::new(), Level::ltr())
+    }
+
     fn make_text_item(text: &str, advance: f32) -> TextItem {
-        let mut item = TextItem {
-            glyphs: ShapedGlyphs::empty(),
+        let style = Arc::new(ComputedStyle::default());
+        let mut cluster_advances = Vec::new();
+        if !text.is_empty() {
+            let step = advance / text.len() as f32;
+            for i in 1..=text.len() {
+                cluster_advances.push(ClusterBoundary {
+                    byte_offset: i,
+                    advance: step * i as f32,
+                });
+            }
+        }
+        TextItem {
+            runs: Vec::new(),
             advance,
             metrics: make_strut_metrics(),
             vertical_align: VerticalAlign::Baseline,
             break_opportunities: find_break_opportunities(text),
             text: text.to_string(),
             font_size: 16.0,
-            style: Arc::new(ComputedStyle::default()),
-        };
-        item.glyphs.text = text.to_string();
-        item
+            style: style.clone(),
+            cluster_advances,
+        }
     }
 
     #[test]
     fn test_line_builder_single_item_fits() {
-        let strut = make_strut_metrics();
-        let mut builder = LineBuilder::new(100.0, strut);
+        let mut builder = make_builder(100.0);
 
         let item = make_text_item("Hello", 50.0);
         builder.add_item(InlineItem::Text(item));
@@ -641,8 +951,7 @@ mod tests {
 
     #[test]
     fn test_line_builder_multiple_items_fit() {
-        let strut = make_strut_metrics();
-        let mut builder = LineBuilder::new(200.0, strut);
+        let mut builder = make_builder(200.0);
 
         builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
         builder.add_item(InlineItem::Text(make_text_item(" ", 5.0)));
@@ -655,8 +964,7 @@ mod tests {
 
     #[test]
     fn test_line_builder_item_exceeds_width() {
-        let strut = make_strut_metrics();
-        let mut builder = LineBuilder::new(80.0, strut);
+        let mut builder = make_builder(80.0);
 
         builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
         builder.add_item(InlineItem::Text(make_text_item("World", 50.0)));
@@ -668,8 +976,7 @@ mod tests {
 
     #[test]
     fn test_line_builder_force_break() {
-        let strut = make_strut_metrics();
-        let mut builder = LineBuilder::new(200.0, strut);
+        let mut builder = make_builder(200.0);
 
         builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
         builder.force_break();
@@ -682,8 +989,7 @@ mod tests {
 
     #[test]
     fn test_line_builder_empty_result() {
-        let strut = make_strut_metrics();
-        let builder = LineBuilder::new(100.0, strut);
+        let builder = make_builder(100.0);
 
         let lines = builder.finish();
         assert!(lines.is_empty());
@@ -691,8 +997,7 @@ mod tests {
 
     #[test]
     fn test_line_has_baseline() {
-        let strut = make_strut_metrics();
-        let mut builder = LineBuilder::new(200.0, strut);
+        let mut builder = make_builder(200.0);
 
         builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
 
@@ -704,10 +1009,13 @@ mod tests {
 
     #[test]
     fn test_replaced_item() {
-        let strut = make_strut_metrics();
-        let mut builder = LineBuilder::new(200.0, strut);
+        let mut builder = make_builder(200.0);
 
-        let replaced = ReplacedItem::new(100.0, 50.0);
+        let replaced = ReplacedItem::new(
+            Size::new(100.0, 50.0),
+            ReplacedType::Image { src: String::new() },
+            Arc::new(ComputedStyle::default()),
+        );
         builder.add_item(InlineItem::Replaced(replaced));
 
         let lines = builder.finish();
@@ -717,8 +1025,7 @@ mod tests {
 
     #[test]
     fn test_inline_block_item() {
-        let strut = make_strut_metrics();
-        let mut builder = LineBuilder::new(200.0, strut);
+        let mut builder = make_builder(200.0);
 
         let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 80.0, 40.0), vec![]);
         let inline_block = InlineBlockItem::new(fragment);
@@ -731,8 +1038,7 @@ mod tests {
 
     #[test]
     fn test_overflow_on_empty_line() {
-        let strut = make_strut_metrics();
-        let mut builder = LineBuilder::new(30.0, strut);
+        let mut builder = make_builder(30.0);
 
         // Item too wide but line is empty, so it must fit
         builder.add_item(InlineItem::Text(make_text_item("VeryLongWord", 100.0)));
@@ -744,8 +1050,7 @@ mod tests {
 
     #[test]
     fn test_positioned_item_x_position() {
-        let strut = make_strut_metrics();
-        let mut builder = LineBuilder::new(200.0, strut);
+        let mut builder = make_builder(200.0);
 
         builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
         builder.add_item(InlineItem::Text(make_text_item(" ", 5.0)));

@@ -41,16 +41,19 @@ pub mod line_builder;
 
 use crate::geometry::Rect;
 use crate::layout::constraints::LayoutConstraints;
+use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::text::line_break::{find_break_opportunities, BreakType};
-use crate::text::shaper::{Script, TextDirection, TextShaper};
+use crate::layout::utils::compute_replaced_size;
 use crate::style::types::FontStyle;
+use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
-use crate::tree::box_tree::{BoxNode, BoxType, ReplacedBox, ReplacedType};
-use crate::tree::fragment_tree::FragmentNode;
+use crate::text::line_break::{find_break_opportunities, BreakType};
+use crate::text::pipeline::ShapingPipeline;
+use crate::tree::box_tree::{BoxNode, BoxType, ReplacedBox};
+use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 
 use baseline::{compute_line_height, BaselineMetrics};
-use line_builder::{InlineItem, Line, LineBuilder, ReplacedItem, TextItem};
+use line_builder::{InlineBlockItem, InlineItem, Line, LineBuilder, ReplacedItem, TextItem};
 
 /// Inline Formatting Context implementation
 ///
@@ -67,14 +70,13 @@ use line_builder::{InlineItem, Line, LineBuilder, ReplacedItem, TextItem};
 /// # Text Handling
 ///
 /// Text boxes are shaped using the text shaping pipeline:
-/// 1. Shape text with TextShaper to get glyphs
+/// 1. Shape text with the ShapingPipeline (bidi/script/font fallback)
 /// 2. Find break opportunities using UAX #14
 /// 3. Break into lines respecting available width
 /// 4. Create text fragments with baseline offsets
-#[derive(Default)]
 pub struct InlineFormattingContext {
-    /// Text shaper instance (reserved for future text shaping integration)
-    shaper: TextShaper,
+    /// Text shaping pipeline (bidi/script/fallback aware)
+    pipeline: ShapingPipeline,
     font_context: FontContext,
 }
 
@@ -82,13 +84,20 @@ impl InlineFormattingContext {
     /// Creates a new InlineFormattingContext
     pub fn new() -> Self {
         Self {
-            shaper: TextShaper::new(),
+            pipeline: ShapingPipeline::new(),
             font_context: FontContext::new(),
         }
     }
 
+    pub fn with_font_context(font_context: FontContext) -> Self {
+        Self {
+            pipeline: ShapingPipeline::new(),
+            font_context,
+        }
+    }
+
     /// Collects inline items from box node children
-    fn collect_inline_items(&self, box_node: &BoxNode) -> Result<Vec<InlineItem>, LayoutError> {
+    fn collect_inline_items(&self, box_node: &BoxNode, available_width: f32) -> Result<Vec<InlineItem>, LayoutError> {
         let mut items = Vec::new();
 
         for child in &box_node.children {
@@ -98,8 +107,13 @@ impl InlineFormattingContext {
                     items.push(InlineItem::Text(item));
                 }
                 BoxType::Inline(_) => {
+                    if child.formatting_context().is_some() {
+                        let item = self.layout_inline_block(child, available_width)?;
+                        items.push(InlineItem::InlineBlock(item));
+                        continue;
+                    }
                     // Recursively collect children
-                    let child_items = self.collect_inline_items(child)?;
+                    let child_items = self.collect_inline_items(child, available_width)?;
                     items.extend(child_items);
                 }
                 BoxType::Replaced(replaced_box) => {
@@ -115,39 +129,66 @@ impl InlineFormattingContext {
         Ok(items)
     }
 
+    fn layout_inline_block(&self, box_node: &BoxNode, available_width: f32) -> Result<InlineBlockItem, LayoutError> {
+        let fc_type = box_node.formatting_context().ok_or_else(|| {
+            LayoutError::UnsupportedBoxType("Inline-level box missing formatting context".to_string())
+        })?;
+
+        let factory = FormattingContextFactory::new();
+        let fc = factory.create(fc_type);
+        let constraint_width = if available_width.is_finite() {
+            available_width
+        } else {
+            10_000.0
+        };
+        let constraints = LayoutConstraints::definite_width(constraint_width);
+        let fragment = fc.layout(box_node, &constraints)?;
+
+        Ok(InlineBlockItem::new(fragment))
+    }
+
     /// Creates a text item from a text box
     fn create_text_item(&self, box_node: &BoxNode, text: &str) -> Result<TextItem, LayoutError> {
         let style = &box_node.style;
-        let font_size = style.font_size;
         let line_height = compute_line_height(style);
 
-        // Resolve font using CSS font properties
-        let families = style.font_family.clone();
-        let weight = style.font_weight.to_u16();
-        let italic = matches!(style.font_style, FontStyle::Italic | FontStyle::Oblique);
-        let font = self
-            .font_context
-            .get_font(&families, weight, italic, false)
-            .or_else(|| self.font_context.get_sans_serif())
-            .ok_or(LayoutError::MissingContext("No fonts available".into()))?;
+        let shaped_runs = match self.pipeline.shape(text, style, &self.font_context) {
+            Ok(runs) => runs,
+            Err(err) => {
+                if let Some(fallback_font) = self.font_context.get_sans_serif() {
+                    let mut fallback_style = (*style).as_ref().clone();
+                    fallback_style.font_family = vec![fallback_font.family.clone()];
+                    self.pipeline
+                        .shape(text, &fallback_style, &self.font_context)
+                        .map_err(|e| {
+                            LayoutError::MissingContext(format!(
+                                "Shaping failed (fonts={}): {:?}",
+                                self.font_context.font_count(),
+                                e
+                            ))
+                        })?
+                } else {
+                    return Err(LayoutError::MissingContext(format!(
+                        "Shaping failed (fonts={}): {:?}",
+                        self.font_context.font_count(),
+                        err
+                    )));
+                }
+            }
+        };
 
-        // Shape the text with real metrics (direction/script default to LTR/Latin for now)
-        let shaped = self
-            .shaper
-            .shape_text(text, &font, font_size, Script::Latin, TextDirection::Ltr)
-            .map_err(|e| LayoutError::MissingContext(format!("Shaping failed: {:?}", e)))?;
-
-        // Use font metrics for baseline data if available
-        let metrics = BaselineMetrics::new(font_size * 0.8, line_height, font_size * 0.8, font_size * 0.2);
+        let metrics = TextItem::metrics_from_runs(&shaped_runs, line_height, style.font_size);
 
         // Find break opportunities
         let breaks = find_break_opportunities(text);
 
-        let mut item = TextItem::new(shaped, metrics, breaks, box_node.style.clone());
-        item.font_size = font_size;
-        item.text = text.to_string();
-
-        Ok(item)
+        Ok(TextItem::new(
+            shaped_runs,
+            text.to_string(),
+            metrics,
+            breaks,
+            box_node.style.clone(),
+        ))
     }
 
     /// Creates a replaced item from a replaced box
@@ -157,31 +198,30 @@ impl InlineFormattingContext {
         replaced_box: &ReplacedBox,
     ) -> Result<ReplacedItem, LayoutError> {
         let style = &box_node.style;
+        let size = compute_replaced_size(style, replaced_box);
 
-        // Determine dimensions
-        let intrinsic_width = replaced_box.intrinsic_size.map(|s| s.width).unwrap_or(300.0);
-        let intrinsic_height = replaced_box.intrinsic_size.map(|s| s.height).unwrap_or(150.0);
-
-        let width = style.width.as_ref().map(|l| l.to_px()).unwrap_or(intrinsic_width);
-        let height = style.height.as_ref().map(|l| l.to_px()).unwrap_or(intrinsic_height);
-
-        let source = match &replaced_box.replaced_type {
-            ReplacedType::Image { src } => Some(src.clone()),
-            ReplacedType::Video { src } => Some(src.clone()),
-            _ => None,
-        };
-
-        let mut item = ReplacedItem::new(width, height);
-        if let Some(src) = source {
-            item = item.with_source(src);
-        }
-
-        Ok(item)
+        Ok(ReplacedItem::new(
+            size,
+            replaced_box.replaced_type.clone(),
+            box_node.style.clone(),
+        ))
     }
 
     /// Builds lines from inline items
-    fn build_lines(&self, items: Vec<InlineItem>, available_width: f32, strut_metrics: &BaselineMetrics) -> Vec<Line> {
-        let mut builder = LineBuilder::new(available_width, *strut_metrics);
+    fn build_lines(
+        &self,
+        items: Vec<InlineItem>,
+        available_width: f32,
+        strut_metrics: &BaselineMetrics,
+        base_level: unicode_bidi::Level,
+    ) -> Vec<Line> {
+        let mut builder = LineBuilder::new(
+            available_width,
+            *strut_metrics,
+            self.pipeline.clone(),
+            self.font_context.clone(),
+            base_level,
+        );
 
         for item in items {
             // Check for mandatory breaks in text
@@ -204,6 +244,33 @@ impl InlineFormattingContext {
         builder.finish()
     }
 
+    fn compute_strut_metrics(&self, style: &ComputedStyle) -> BaselineMetrics {
+        let line_height = compute_line_height(style);
+        let font_size = style.font_size;
+        let italic = matches!(style.font_style, FontStyle::Italic);
+        let oblique = matches!(style.font_style, FontStyle::Oblique);
+
+        if let Some(font) = self
+            .font_context
+            .get_font(&style.font_family, style.font_weight.to_u16(), italic, oblique)
+            .or_else(|| self.font_context.get_sans_serif())
+        {
+            if let Ok(metrics) = font.metrics() {
+                let scaled = metrics.scale(font_size);
+                return BaselineMetrics {
+                    baseline_offset: scaled.ascent,
+                    height: line_height,
+                    ascent: scaled.ascent,
+                    descent: scaled.descent,
+                    line_gap: scaled.line_gap,
+                    line_height,
+                };
+            }
+        }
+
+        BaselineMetrics::new(font_size * 0.8, line_height, font_size * 0.8, font_size * 0.2)
+    }
+
     /// Adds text item handling mandatory breaks
     fn add_text_with_mandatory_breaks(&self, builder: &mut LineBuilder, text_item: TextItem) {
         let mut remaining = text_item;
@@ -218,7 +285,7 @@ impl InlineFormattingContext {
 
             if let Some(pos) = mandatory_pos {
                 if pos > 0 {
-                    if let Some((before, after)) = remaining.split_at(pos) {
+                    if let Some((before, after)) = remaining.split_at(pos, &self.pipeline, &self.font_context) {
                         if before.advance > 0.0 {
                             builder.add_item(InlineItem::Text(before));
                         }
@@ -226,13 +293,17 @@ impl InlineFormattingContext {
                         remaining = after;
                         continue;
                     }
+                    builder.force_break();
+                    break;
                 }
                 builder.force_break();
                 // Skip past the newline character
                 if pos < remaining.text.len() {
                     let skip_bytes = remaining.text[pos..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
                     if pos + skip_bytes < remaining.text.len() {
-                        if let Some((_, after)) = remaining.split_at(pos + skip_bytes) {
+                        if let Some((_, after)) =
+                            remaining.split_at(pos + skip_bytes, &self.pipeline, &self.font_context)
+                        {
                             remaining = after;
                             continue;
                         }
@@ -285,10 +356,11 @@ impl InlineFormattingContext {
         match item {
             InlineItem::Text(text_item) => {
                 let bounds = Rect::from_xywh(x, y, text_item.advance, text_item.metrics.height);
-                FragmentNode::new_text_styled(
+                FragmentNode::new_text_shaped(
                     bounds,
                     text_item.text.clone(),
                     text_item.metrics.baseline_offset,
+                    text_item.runs.clone(),
                     text_item.style.clone(),
                 )
             }
@@ -315,17 +387,22 @@ impl InlineFormattingContext {
             }
             InlineItem::Replaced(replaced_item) => {
                 let bounds = Rect::from_xywh(x, y, replaced_item.width, replaced_item.height);
-                let replaced_type = ReplacedType::Image {
-                    src: replaced_item.source.clone().unwrap_or_default(),
-                };
-                FragmentNode::new_replaced(bounds, replaced_type)
+                FragmentNode::new_with_style(
+                    bounds,
+                    FragmentContent::Replaced {
+                        replaced_type: replaced_item.replaced_type.clone(),
+                        box_id: None,
+                    },
+                    vec![],
+                    replaced_item.style.clone(),
+                )
             }
         }
     }
 
     /// Calculates intrinsic width for inline content
     fn calculate_intrinsic_width(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> f32 {
-        let items = match self.collect_inline_items(box_node) {
+        let items = match self.collect_inline_items(box_node, f32::INFINITY) {
             Ok(items) => items,
             Err(_) => return 0.0,
         };
@@ -371,19 +448,16 @@ impl InlineFormattingContext {
 
         for brk in &text_item.break_opportunities {
             if brk.byte_offset > word_start {
-                let word_chars = text[word_start..brk.byte_offset].chars().count();
-                // Approximate word width
-                let word_width = text_item.font_size * 0.5 * word_chars as f32;
-                widths.push(word_width);
+                let word_width = text_item.advance_at_offset(brk.byte_offset) - text_item.advance_at_offset(word_start);
+                widths.push(word_width.max(0.0));
             }
             word_start = brk.byte_offset;
         }
 
         // Handle remaining text after last break
         if word_start < text.len() {
-            let word_chars = text[word_start..].chars().count();
-            let word_width = text_item.font_size * 0.5 * word_chars as f32;
-            widths.push(word_width);
+            let word_width = text_item.advance_at_offset(text.len()) - text_item.advance_at_offset(word_start);
+            widths.push(word_width.max(0.0));
         }
 
         widths
@@ -396,15 +470,18 @@ impl FormattingContext for InlineFormattingContext {
         let available_width = constraints.width().unwrap_or(f32::MAX);
 
         // Create strut metrics from containing block style
-        let font_size = style.font_size;
-        let line_height = compute_line_height(style);
-        let strut_metrics = BaselineMetrics::new(font_size * 0.8, line_height, font_size * 0.8, font_size * 0.2);
+        let strut_metrics = self.compute_strut_metrics(style);
 
         // Collect inline items
-        let items = self.collect_inline_items(box_node)?;
+        let items = self.collect_inline_items(box_node, available_width)?;
+
+        let base_level = match style.direction {
+            crate::style::types::Direction::Rtl => unicode_bidi::Level::rtl(),
+            _ => unicode_bidi::Level::ltr(),
+        };
 
         // Build lines
-        let lines = self.build_lines(items, available_width, &strut_metrics);
+        let lines = self.build_lines(items, available_width, &strut_metrics, base_level);
 
         // Calculate total height
         let total_height: f32 = lines.iter().map(|l| l.height).sum();
@@ -420,6 +497,12 @@ impl FormattingContext for InlineFormattingContext {
 
     fn compute_intrinsic_inline_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
         Ok(self.calculate_intrinsic_width(box_node, mode))
+    }
+}
+
+impl Default for InlineFormattingContext {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
