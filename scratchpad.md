@@ -35,6 +35,7 @@
 - `border-spacing` is now parsed/resolved from computed style (em/absolute lengths) and table layout pulls spacing from styles rather than a hardcoded 2px default (`src/style/{mod,properties}.rs`, `src/layout/table.rs`).
 - Table column constraints now honor percentage widths on cells/cols and carry them through distribution, so percentage-specified columns consume their share of the available table width before auto distribution (`src/layout/table.rs`, `src/layout/contexts/table/column_distribution.rs`).
 - Percentage columns remain unscaled even when total percentages exceed 100%, matching current column distribution expectations; over-constraint is flagged and flexible columns collapse to their minima (`src/layout/contexts/table/column_distribution.rs`).
+- Colspan contributions now use the spanning-cell constraint distributor so multi-column cells raise min/max widths across the spanned range rather than per-column equal splits (`src/layout/table.rs`, `src/layout/contexts/table/column_distribution.rs`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
