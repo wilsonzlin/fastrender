@@ -307,7 +307,7 @@ impl FlexFormattingContext {
             }
         }
 
-        Ok(FragmentNode::new_block(rect, children))
+        Ok(FragmentNode::new_block_styled(rect, children, box_node.style.clone()))
     }
 
     /// Converts layout constraints to Taffy available space

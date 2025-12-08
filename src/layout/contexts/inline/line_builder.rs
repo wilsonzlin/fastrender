@@ -32,9 +32,11 @@
 //! ```
 
 use super::baseline::{BaselineMetrics, LineBaselineAccumulator, VerticalAlign};
+use crate::style::ComputedStyle;
 use crate::text::line_break::BreakOpportunity;
 use crate::text::shaper::ShapedGlyphs;
 use crate::tree::fragment_tree::FragmentNode;
+use std::sync::Arc;
 
 /// An item in the inline formatting context
 ///
@@ -114,11 +116,19 @@ pub struct TextItem {
 
     /// Font size used
     pub font_size: f32,
+
+    /// Computed style for this text run
+    pub style: Arc<ComputedStyle>,
 }
 
 impl TextItem {
     /// Creates a new text item
-    pub fn new(glyphs: ShapedGlyphs, metrics: BaselineMetrics, break_opportunities: Vec<BreakOpportunity>) -> Self {
+    pub fn new(
+        glyphs: ShapedGlyphs,
+        metrics: BaselineMetrics,
+        break_opportunities: Vec<BreakOpportunity>,
+        style: Arc<ComputedStyle>,
+    ) -> Self {
         let advance = glyphs.total_advance;
         let text = glyphs.text.clone();
         let font_size = glyphs.font_size;
@@ -130,6 +140,7 @@ impl TextItem {
             break_opportunities,
             text,
             font_size,
+            style,
         }
     }
 
@@ -168,6 +179,7 @@ impl TextItem {
                 .collect(),
             text: before_text.to_string(),
             font_size: self.font_size,
+            style: self.style.clone(),
         };
 
         let after_item = TextItem {
@@ -183,6 +195,7 @@ impl TextItem {
                 .collect(),
             text: after_text.to_string(),
             font_size: self.font_size,
+            style: self.style.clone(),
         };
 
         Some((before_item, after_item))
@@ -589,7 +602,9 @@ impl LineBuilder {
 mod tests {
     use super::*;
     use crate::geometry::Rect;
+    use crate::style::ComputedStyle;
     use crate::text::line_break::find_break_opportunities;
+    use std::sync::Arc;
 
     fn make_strut_metrics() -> BaselineMetrics {
         BaselineMetrics::new(12.0, 16.0, 12.0, 4.0)
@@ -604,6 +619,7 @@ mod tests {
             break_opportunities: find_break_opportunities(text),
             text: text.to_string(),
             font_size: 16.0,
+            style: Arc::new(ComputedStyle::default()),
         };
         item.glyphs.text = text.to_string();
         item

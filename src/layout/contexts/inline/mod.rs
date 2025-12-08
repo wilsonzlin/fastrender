@@ -43,7 +43,9 @@ use crate::geometry::Rect;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::text::line_break::{find_break_opportunities, BreakType};
-use crate::text::shaper::{Script, ShapedGlyphs, TextDirection, TextShaper};
+use crate::text::shaper::{Script, TextDirection, TextShaper};
+use crate::style::types::FontStyle;
+use crate::text::font_loader::FontContext;
 use crate::tree::box_tree::{BoxNode, BoxType, ReplacedBox, ReplacedType};
 use crate::tree::fragment_tree::FragmentNode;
 
@@ -69,11 +71,11 @@ use line_builder::{InlineItem, Line, LineBuilder, ReplacedItem, TextItem};
 /// 2. Find break opportunities using UAX #14
 /// 3. Break into lines respecting available width
 /// 4. Create text fragments with baseline offsets
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct InlineFormattingContext {
     /// Text shaper instance (reserved for future text shaping integration)
-    #[allow(dead_code)]
     shaper: TextShaper,
+    font_context: FontContext,
 }
 
 impl InlineFormattingContext {
@@ -81,6 +83,7 @@ impl InlineFormattingContext {
     pub fn new() -> Self {
         Self {
             shaper: TextShaper::new(),
+            font_context: FontContext::new(),
         }
     }
 
@@ -118,39 +121,33 @@ impl InlineFormattingContext {
         let font_size = style.font_size;
         let line_height = compute_line_height(style);
 
-        // Shape the text (simplified - would use full pipeline in production)
-        let shaped = self.shape_text_simple(text, font_size);
+        // Resolve font using CSS font properties
+        let families = style.font_family.clone();
+        let weight = style.font_weight.to_u16();
+        let italic = matches!(style.font_style, FontStyle::Italic | FontStyle::Oblique);
+        let font = self
+            .font_context
+            .get_font(&families, weight, italic, false)
+            .or_else(|| self.font_context.get_sans_serif())
+            .ok_or(LayoutError::MissingContext("No fonts available".into()))?;
 
-        // Get baseline metrics
+        // Shape the text with real metrics (direction/script default to LTR/Latin for now)
+        let shaped = self
+            .shaper
+            .shape_text(text, &font, font_size, Script::Latin, TextDirection::Ltr)
+            .map_err(|e| LayoutError::MissingContext(format!("Shaping failed: {:?}", e)))?;
+
+        // Use font metrics for baseline data if available
         let metrics = BaselineMetrics::new(font_size * 0.8, line_height, font_size * 0.8, font_size * 0.2);
 
         // Find break opportunities
         let breaks = find_break_opportunities(text);
 
-        let mut item = TextItem::new(shaped, metrics, breaks);
+        let mut item = TextItem::new(shaped, metrics, breaks, box_node.style.clone());
         item.font_size = font_size;
         item.text = text.to_string();
 
         Ok(item)
-    }
-
-    /// Simple text shaping (approximation for when fonts aren't available)
-    fn shape_text_simple(&self, text: &str, font_size: f32) -> ShapedGlyphs {
-        // Approximate average character width as 0.5 * font_size for Latin text
-        let avg_char_width = font_size * 0.5;
-        let char_count = text.chars().count();
-        let total_advance = avg_char_width * char_count as f32;
-
-        ShapedGlyphs {
-            text: text.to_string(),
-            glyphs: Vec::new(),
-            clusters: Vec::new(),
-            total_advance,
-            total_advance_y: 0.0,
-            direction: TextDirection::Ltr,
-            script: Script::Latin,
-            font_size,
-        }
     }
 
     /// Creates a replaced item from a replaced box
@@ -288,7 +285,12 @@ impl InlineFormattingContext {
         match item {
             InlineItem::Text(text_item) => {
                 let bounds = Rect::from_xywh(x, y, text_item.advance, text_item.metrics.height);
-                FragmentNode::new_text(bounds, text_item.text.clone(), text_item.metrics.baseline_offset)
+                FragmentNode::new_text_styled(
+                    bounds,
+                    text_item.text.clone(),
+                    text_item.metrics.baseline_offset,
+                    text_item.style.clone(),
+                )
             }
             InlineItem::InlineBox(box_item) => {
                 // Recursively create children

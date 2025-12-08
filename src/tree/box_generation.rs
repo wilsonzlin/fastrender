@@ -831,12 +831,38 @@ fn generate_box_node_from_styled(styled: &StyledNode) -> BoxNode {
         .formatting_context_type()
         .unwrap_or(FormattingContextType::Block);
 
-    match styled.styles.display {
+    let box_node = match styled.styles.display {
         Display::Block | Display::Flex | Display::Grid | Display::Table => BoxNode::new_block(style, fc_type, children),
         Display::Inline => BoxNode::new_inline(style, children),
         Display::InlineBlock => BoxNode::new_inline_block(style, fc_type, children),
         Display::None => BoxNode::new_block(style, FormattingContextType::Block, vec![]),
         _ => BoxNode::new_block(style, fc_type, children),
+    };
+    
+    // Add debug info with tag name for table element identification
+    if let Some(tag) = styled.node.tag_name() {
+        // Extract colspan and rowspan for table cells
+        let colspan = styled.node.get_attribute("colspan")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(1)
+            .max(1);
+        let rowspan = styled.node.get_attribute("rowspan")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(1)
+            .max(1);
+        
+        let id = styled.node.get_attribute("id");
+        let classes = styled.node.get_attribute("class")
+            .map(|c| c.split_whitespace().map(|s| s.to_string()).collect())
+            .unwrap_or_default();
+            
+        box_node.with_debug_info(DebugInfo::new(
+            Some(tag.to_string()),
+            id,
+            classes,
+        ).with_spans(colspan, rowspan))
+    } else {
+        box_node
     }
 }
 
@@ -870,12 +896,11 @@ fn create_pseudo_element_box(styles: &ComputedStyle, pseudo_name: &str) -> Optio
     };
 
     // Add debug info to mark this as a pseudo-element
-    pseudo_box.debug_info = Some(DebugInfo {
-        tag_name: Some(pseudo_name.to_string()),
-        id: None,
-        classes: vec!["pseudo-element".to_string()],
-        dom_path: None,
-    });
+    pseudo_box.debug_info = Some(DebugInfo::new(
+        Some(pseudo_name.to_string()),
+        None,
+        vec!["pseudo-element".to_string()],
+    ));
 
     Some(pseudo_box)
 }
