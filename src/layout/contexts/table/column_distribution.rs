@@ -601,13 +601,16 @@ impl ColumnDistributor {
             } else if let Some(pct) = col.percentage {
                 let width = (pct / 100.0 * available_width)
                     .max(col.min_width)
-                    .max(self.min_column_width);
+                    .max(self.min_column_width)
+                    .min(col.max_width.max(col.min_width));
                 widths[i] = width;
                 remaining_width -= width;
             } else {
                 flexible_indices.push(i);
             }
         }
+
+        // Remaining may be negative if fixed/percentage claims exceed available; flexible columns will collapse to their mins.
 
         // Second pass: Distribute to flexible columns
         if !flexible_indices.is_empty() {
