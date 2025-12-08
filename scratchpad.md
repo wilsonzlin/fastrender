@@ -24,7 +24,7 @@
 - Inline splits now preserve shaped glyphs instead of reshaping: splitting uses existing runs at cluster boundaries, adjusts glyph offsets/advances without re-running HarfBuzz, so ligatures/kerning survive across line breaks (`src/layout/contexts/inline/line_builder.rs`).
 - Non-text inline/replaced items now enter bidi reordering wrapped in directionally isolated control characters (LRI/RLI…PDI) rather than bare U+FFFC, improving structural ordering for mixed-direction lines (`src/layout/contexts/inline/line_builder.rs`).
 - Inline boxes now contribute their children’s text into the bidi reorder string instead of collapsing to a single object, so nested inline wrappers reorder according to their actual textual content (`src/layout/contexts/inline/line_builder.rs`).
-- Centralized bidi control generation with `bidi_controls`; logical-text construction now wraps inline boxes and atomic inline items per `unicode-bidi` values while retaining default isolation for inline-block/replaced placeholders when no controls apply (`src/layout/contexts/inline/line_builder.rs`).
+- Centralized bidi control generation with `bidi_controls`; logical-text construction now wraps inline boxes and atomic inline items per `unicode-bidi` values without auto-isolating inline-block/replaced placeholders when `unicode-bidi` is `normal` (`src/layout/contexts/inline/line_builder.rs`).
 - Inline-block sizing now uses CSS 2.1 shrink-to-fit when `width:auto`, deriving preferred and preferred-min widths from intrinsic measurements and adding padding/borders; specified widths avoid over-constrained margins, and padding/border percentages resolve against the available inline size (`src/layout/contexts/inline/mod.rs`).
 - Block layout now clamps computed content widths to `min-width`/`max-width` (percentages resolved against containing block) and recomputes margins with the clamped width so the constraint equation still holds when author limits kick in (`src/layout/contexts/block/mod.rs`).
 - Inline replaced elements now honor horizontal margins: margins are resolved in the inline context, included in line advance, and their fragments are offset so margins behave as spacing rather than painted area (`src/layout/contexts/inline/{mod.rs,line_builder.rs}`).
@@ -52,7 +52,6 @@
    - Ensure visual ordering in layout and paint for RTL/mixed runs.
 5. Inline blocks:
    - Implement shrink-to-fit sizing for inline-block and inline replaced elements so they honor min/max-content and percentages instead of using the containing width directly.
-- Verify whether default isolation of inline-block/replaced placeholders is spec-correct when `unicode-bidi` is `normal`; currently we fall back to LRI/RLI…PDI when no other controls are present.
 
 ## Notes
 - Current table code uses `InlineFormattingContext` for cell intrinsic widths; this fails for block/table/replaced content—needs a per-context intrinsic measurement.

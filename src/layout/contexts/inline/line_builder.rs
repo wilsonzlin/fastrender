@@ -1056,21 +1056,11 @@ impl LineBuilder {
     fn push_item_content(&self, item: &InlineItem, buffer: &mut String, wrap_item: bool) {
         let dir = item.direction();
         let ub = item.unicode_bidi();
-        let (mut open_controls, mut close_controls) = if wrap_item {
+        let (open_controls, close_controls) = if wrap_item {
             bidi_controls(ub, dir)
         } else {
             (Vec::new(), Vec::new())
         };
-
-        if open_controls.is_empty()
-            && close_controls.is_empty()
-            && matches!(item, InlineItem::InlineBlock(_) | InlineItem::Replaced(_))
-            && (wrap_item || ub == UnicodeBidi::Normal)
-        {
-            let isolate = if dir == Direction::Rtl { '\u{2067}' } else { '\u{2066}' };
-            open_controls.push(isolate);
-            close_controls.push('\u{2069}');
-        }
 
         for ch in open_controls {
             buffer.push(ch);
