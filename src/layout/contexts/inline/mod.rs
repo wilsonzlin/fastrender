@@ -144,7 +144,11 @@ impl InlineFormattingContext {
         let constraints = LayoutConstraints::definite_width(constraint_width);
         let fragment = fc.layout(box_node, &constraints)?;
 
-        Ok(InlineBlockItem::new(fragment))
+        Ok(InlineBlockItem::new(
+            fragment,
+            box_node.style.direction,
+            box_node.style.unicode_bidi,
+        ))
     }
 
     /// Creates a text item from a text box

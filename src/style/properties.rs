@@ -626,6 +626,19 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "unicode-bidi" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.unicode_bidi = match kw.as_str() {
+                    "normal" => UnicodeBidi::Normal,
+                    "embed" => UnicodeBidi::Embed,
+                    "bidi-override" => UnicodeBidi::BidiOverride,
+                    "isolate" => UnicodeBidi::Isolate,
+                    "isolate-override" => UnicodeBidi::IsolateOverride,
+                    "plaintext" => UnicodeBidi::Plaintext,
+                    _ => styles.unicode_bidi,
+                };
+            }
+        }
 
         // Color
         "color" => {

@@ -33,6 +33,7 @@
 
 use super::baseline::{BaselineMetrics, LineBaselineAccumulator, VerticalAlign};
 use crate::geometry::Size;
+use crate::style::types::{Direction, UnicodeBidi};
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::text::line_break::{BreakOpportunity, BreakType};
@@ -95,6 +96,24 @@ impl InlineItem {
     /// Returns true if this item can be broken (for text)
     pub fn is_breakable(&self) -> bool {
         matches!(self, InlineItem::Text(_))
+    }
+
+    pub fn direction(&self) -> Direction {
+        match self {
+            InlineItem::Text(t) => t.style.direction,
+            InlineItem::InlineBox(b) => b.direction,
+            InlineItem::InlineBlock(b) => b.direction,
+            InlineItem::Replaced(r) => r.direction,
+        }
+    }
+
+    pub fn unicode_bidi(&self) -> UnicodeBidi {
+        match self {
+            InlineItem::Text(t) => t.style.unicode_bidi,
+            InlineItem::InlineBox(b) => b.unicode_bidi,
+            InlineItem::InlineBlock(b) => b.unicode_bidi,
+            InlineItem::Replaced(r) => r.unicode_bidi,
+        }
     }
 }
 
@@ -456,11 +475,24 @@ pub struct InlineBoxItem {
 
     /// Index for fragment creation
     pub box_index: usize,
+
+    /// Bidi direction of this inline box
+    pub direction: Direction,
+
+    /// unicode-bidi behavior
+    pub unicode_bidi: UnicodeBidi,
 }
 
 impl InlineBoxItem {
     /// Creates a new inline box item
-    pub fn new(start_edge: f32, end_edge: f32, metrics: BaselineMetrics, box_index: usize) -> Self {
+    pub fn new(
+        start_edge: f32,
+        end_edge: f32,
+        metrics: BaselineMetrics,
+        box_index: usize,
+        direction: Direction,
+        unicode_bidi: UnicodeBidi,
+    ) -> Self {
         Self {
             children: Vec::new(),
             start_edge,
@@ -468,6 +500,8 @@ impl InlineBoxItem {
             metrics,
             vertical_align: VerticalAlign::Baseline,
             box_index,
+            direction,
+            unicode_bidi,
         }
     }
 
@@ -500,11 +534,17 @@ pub struct InlineBlockItem {
 
     /// Vertical alignment
     pub vertical_align: VerticalAlign,
+
+    /// Bidi direction
+    pub direction: Direction,
+
+    /// unicode-bidi behavior
+    pub unicode_bidi: UnicodeBidi,
 }
 
 impl InlineBlockItem {
     /// Creates a new inline-block item
-    pub fn new(fragment: FragmentNode) -> Self {
+    pub fn new(fragment: FragmentNode, direction: Direction, unicode_bidi: UnicodeBidi) -> Self {
         let width = fragment.bounds.width();
         let height = fragment.bounds.height();
         let metrics = BaselineMetrics::for_replaced(height);
@@ -515,6 +555,8 @@ impl InlineBlockItem {
             height,
             metrics,
             vertical_align: VerticalAlign::Baseline,
+            direction,
+            unicode_bidi,
         }
     }
 
@@ -545,6 +587,12 @@ pub struct ReplacedItem {
 
     /// Computed style for painting
     pub style: Arc<ComputedStyle>,
+
+    /// Bidi direction
+    pub direction: Direction,
+
+    /// unicode-bidi behavior
+    pub unicode_bidi: UnicodeBidi,
 }
 
 impl ReplacedItem {
@@ -557,6 +605,8 @@ impl ReplacedItem {
             metrics,
             vertical_align: VerticalAlign::Baseline,
             replaced_type,
+            direction: style.direction,
+            unicode_bidi: style.unicode_bidi,
             style,
         }
     }
@@ -818,13 +868,59 @@ impl LineBuilder {
         let mut spans: Vec<(usize, std::ops::Range<usize>)> = Vec::with_capacity(self.current_line.items.len());
 
         for (idx, positioned) in self.current_line.items.iter().enumerate() {
-            let start = logical_text.len();
-            match &positioned.item {
-                InlineItem::Text(t) => logical_text.push_str(&t.text),
-                _ => logical_text.push('\u{FFFC}'),
+            let dir = positioned.item.direction();
+            let ub = positioned.item.unicode_bidi();
+            let content_start;
+            let content_end;
+
+            match ub {
+                UnicodeBidi::Normal => {
+                    content_start = logical_text.len();
+                    self.push_item_content(&positioned.item, &mut logical_text);
+                    content_end = logical_text.len();
+                }
+                UnicodeBidi::Embed => {
+                    logical_text.push(if dir == Direction::Rtl { '\u{202b}' } else { '\u{202a}' });
+                    content_start = logical_text.len();
+                    self.push_item_content(&positioned.item, &mut logical_text);
+                    content_end = logical_text.len();
+                    logical_text.push('\u{202c}'); // PDF
+                }
+                UnicodeBidi::BidiOverride => {
+                    logical_text.push(if dir == Direction::Rtl { '\u{202e}' } else { '\u{202d}' });
+                    content_start = logical_text.len();
+                    self.push_item_content(&positioned.item, &mut logical_text);
+                    content_end = logical_text.len();
+                    logical_text.push('\u{202c}'); // PDF
+                }
+                UnicodeBidi::Isolate => {
+                    logical_text.push(if dir == Direction::Rtl { '\u{2067}' } else { '\u{2066}' });
+                    content_start = logical_text.len();
+                    self.push_item_content(&positioned.item, &mut logical_text);
+                    content_end = logical_text.len();
+                    logical_text.push('\u{2069}'); // PDI
+                }
+                UnicodeBidi::IsolateOverride => {
+                    logical_text.push(if dir == Direction::Rtl { '\u{2067}' } else { '\u{2066}' });
+                    logical_text.push(if dir == Direction::Rtl { '\u{202e}' } else { '\u{202d}' });
+                    content_start = logical_text.len();
+                    self.push_item_content(&positioned.item, &mut logical_text);
+                    content_end = logical_text.len();
+                    logical_text.push('\u{202c}'); // PDF
+                    logical_text.push('\u{2069}'); // PDI
+                }
+                UnicodeBidi::Plaintext => {
+                    logical_text.push('\u{2068}'); // FSI
+                    content_start = logical_text.len();
+                    self.push_item_content(&positioned.item, &mut logical_text);
+                    content_end = logical_text.len();
+                    logical_text.push('\u{2069}'); // PDI
+                }
             }
-            let end = logical_text.len();
-            spans.push((idx, start..end));
+
+            if content_start < content_end {
+                spans.push((idx, content_start..content_end));
+            }
         }
 
         if logical_text.is_empty() {
@@ -872,6 +968,13 @@ impl LineBuilder {
 
         self.current_line.items = reordered;
         self.current_x = x;
+    }
+
+    fn push_item_content(&self, item: &InlineItem, buffer: &mut String) {
+        match item {
+            InlineItem::Text(t) => buffer.push_str(&t.text),
+            _ => buffer.push('\u{FFFC}'),
+        }
     }
 
     /// Finishes building and returns all lines
@@ -1028,7 +1131,7 @@ mod tests {
         let mut builder = make_builder(200.0);
 
         let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 80.0, 40.0), vec![]);
-        let inline_block = InlineBlockItem::new(fragment);
+        let inline_block = InlineBlockItem::new(fragment, Direction::Ltr, UnicodeBidi::Normal);
         builder.add_item(InlineItem::InlineBlock(inline_block));
 
         let lines = builder.finish();

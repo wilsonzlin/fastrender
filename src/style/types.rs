@@ -16,6 +16,20 @@ pub enum Direction {
     Rtl,
 }
 
+/// Controls bidi embedding/override behavior
+///
+/// CSS: `unicode-bidi`
+/// Reference: CSS Writing Modes Level 3, CSS2.1 9.10
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnicodeBidi {
+    Normal,
+    Embed,
+    BidiOverride,
+    Isolate,
+    IsolateOverride,
+    Plaintext,
+}
+
 /// Overflow behavior for content that exceeds container bounds
 ///
 /// CSS: `overflow-x`, `overflow-y`, `overflow`
