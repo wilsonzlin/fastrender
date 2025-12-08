@@ -30,7 +30,9 @@ use crate::geometry::{Point, Rect};
 use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
 use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::factory::FormattingContextFactory;
-use crate::layout::contexts::table::column_distribution::{ColumnConstraints, ColumnDistributor, DistributionMode};
+use crate::layout::contexts::table::column_distribution::{
+    distribute_spanning_cell_width, ColumnConstraints, ColumnDistributor, DistributionMode,
+};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::values::LengthUnit;
 use crate::tree::box_tree::BoxNode;
@@ -846,11 +848,9 @@ impl TableFormattingContext {
                 col.min_width = col.min_width.max(min_w);
                 col.max_width = col.max_width.max(max_w);
             } else {
-                for span_idx in 0..cell.colspan {
-                    if let Some(col) = constraints.get_mut(cell.col + span_idx) {
-                        col.add_colspan_contribution(min_w, max_w, cell.colspan, span_idx);
-                    }
-                }
+                let start = cell.col;
+                let end = (cell.col + cell.colspan).min(constraints.len());
+                distribute_spanning_cell_width(constraints, start, end, min_w, max_w);
             }
         }
 
