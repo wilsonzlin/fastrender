@@ -118,7 +118,7 @@ impl InlineFormattingContext {
                     items.extend(child_items);
                 }
                 BoxType::Replaced(replaced_box) => {
-                    let item = self.create_replaced_item(child, replaced_box)?;
+                    let item = self.create_replaced_item(child, replaced_box, available_width)?;
                     items.push(InlineItem::Replaced(item));
                 }
                 _ => {
@@ -253,14 +253,27 @@ impl InlineFormattingContext {
         &self,
         box_node: &BoxNode,
         replaced_box: &ReplacedBox,
+        percentage_base: f32,
     ) -> Result<ReplacedItem, LayoutError> {
         let style = &box_node.style;
         let size = compute_replaced_size(style, replaced_box);
+        let margin_left = style
+            .margin_left
+            .as_ref()
+            .map(|l| resolve_length_for_width(*l, percentage_base))
+            .unwrap_or(0.0);
+        let margin_right = style
+            .margin_right
+            .as_ref()
+            .map(|l| resolve_length_for_width(*l, percentage_base))
+            .unwrap_or(0.0);
 
         Ok(ReplacedItem::new(
             size,
             replaced_box.replaced_type.clone(),
             box_node.style.clone(),
+            margin_left,
+            margin_right,
         ))
     }
 
@@ -443,7 +456,12 @@ impl InlineFormattingContext {
                 fragment
             }
             InlineItem::Replaced(replaced_item) => {
-                let bounds = Rect::from_xywh(x, y, replaced_item.width, replaced_item.height);
+                let bounds = Rect::from_xywh(
+                    x + replaced_item.margin_left,
+                    y,
+                    replaced_item.width,
+                    replaced_item.height,
+                );
                 FragmentNode::new_with_style(
                     bounds,
                     FragmentContent::Replaced {

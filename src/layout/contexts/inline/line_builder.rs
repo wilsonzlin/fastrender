@@ -69,7 +69,7 @@ impl InlineItem {
             InlineItem::Text(t) => t.advance,
             InlineItem::InlineBox(b) => b.width(),
             InlineItem::InlineBlock(b) => b.width,
-            InlineItem::Replaced(r) => r.width,
+            InlineItem::Replaced(r) => r.total_width(),
         }
     }
 
@@ -647,6 +647,10 @@ pub struct ReplacedItem {
     /// Height of the element
     pub height: f32,
 
+    /// Horizontal margins
+    pub margin_left: f32,
+    pub margin_right: f32,
+
     /// Baseline metrics
     pub metrics: BaselineMetrics,
 
@@ -668,11 +672,19 @@ pub struct ReplacedItem {
 
 impl ReplacedItem {
     /// Creates a new replaced item
-    pub fn new(size: Size, replaced_type: ReplacedType, style: Arc<ComputedStyle>) -> Self {
+    pub fn new(
+        size: Size,
+        replaced_type: ReplacedType,
+        style: Arc<ComputedStyle>,
+        margin_left: f32,
+        margin_right: f32,
+    ) -> Self {
         let metrics = BaselineMetrics::for_replaced(size.height);
         Self {
             width: size.width,
             height: size.height,
+            margin_left,
+            margin_right,
             metrics,
             vertical_align: VerticalAlign::Baseline,
             replaced_type,
@@ -686,6 +698,10 @@ impl ReplacedItem {
     pub fn with_vertical_align(mut self, align: VerticalAlign) -> Self {
         self.vertical_align = align;
         self
+    }
+
+    pub fn total_width(&self) -> f32 {
+        self.margin_left + self.width + self.margin_right
     }
 }
 
@@ -1240,6 +1256,8 @@ mod tests {
             Size::new(100.0, 50.0),
             ReplacedType::Image { src: String::new() },
             Arc::new(ComputedStyle::default()),
+            0.0,
+            0.0,
         );
         builder.add_item(InlineItem::Replaced(replaced));
 
