@@ -24,6 +24,7 @@
 - Inline splits now preserve shaped glyphs instead of reshaping: splitting uses existing runs at cluster boundaries, adjusts glyph offsets/advances without re-running HarfBuzz, so ligatures/kerning survive across line breaks (`src/layout/contexts/inline/line_builder.rs`).
 - Non-text inline/replaced items now enter bidi reordering wrapped in directionally isolated control characters (LRI/RLI…PDI) rather than bare U+FFFC, improving structural ordering for mixed-direction lines (`src/layout/contexts/inline/line_builder.rs`).
 - Inline boxes now contribute their children’s text into the bidi reorder string instead of collapsing to a single object, so nested inline wrappers reorder according to their actual textual content (`src/layout/contexts/inline/line_builder.rs`).
+- Centralized bidi control generation with `bidi_controls`; logical-text construction now wraps inline boxes and atomic inline items per `unicode-bidi` values while retaining default isolation for inline-block/replaced placeholders when no controls apply (`src/layout/contexts/inline/line_builder.rs`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
@@ -46,6 +47,7 @@
    - Ensure visual ordering in layout and paint for RTL/mixed runs.
 5. Inline blocks:
    - Implement shrink-to-fit sizing for inline-block and inline replaced elements so they honor min/max-content and percentages instead of using the containing width directly.
+- Verify whether default isolation of inline-block/replaced placeholders is spec-correct when `unicode-bidi` is `normal`; currently we fall back to LRI/RLI…PDI when no other controls are present.
 
 ## Notes
 - Current table code uses `InlineFormattingContext` for cell intrinsic widths; this fails for block/table/replaced content—needs a per-context intrinsic measurement.

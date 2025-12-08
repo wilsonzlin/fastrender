@@ -941,52 +941,18 @@ impl LineBuilder {
         for (idx, positioned) in self.current_line.items.iter().enumerate() {
             let dir = positioned.item.direction();
             let ub = positioned.item.unicode_bidi();
-            let content_start;
-            let content_end;
+            let (open_controls, close_controls) = bidi_controls(ub, dir);
 
-            match ub {
-                UnicodeBidi::Normal => {
-                    content_start = logical_text.len();
-                    self.push_item_content(&positioned.item, &mut logical_text);
-                    content_end = logical_text.len();
-                }
-                UnicodeBidi::Embed => {
-                    logical_text.push(if dir == Direction::Rtl { '\u{202b}' } else { '\u{202a}' });
-                    content_start = logical_text.len();
-                    self.push_item_content(&positioned.item, &mut logical_text);
-                    content_end = logical_text.len();
-                    logical_text.push('\u{202c}'); // PDF
-                }
-                UnicodeBidi::BidiOverride => {
-                    logical_text.push(if dir == Direction::Rtl { '\u{202e}' } else { '\u{202d}' });
-                    content_start = logical_text.len();
-                    self.push_item_content(&positioned.item, &mut logical_text);
-                    content_end = logical_text.len();
-                    logical_text.push('\u{202c}'); // PDF
-                }
-                UnicodeBidi::Isolate => {
-                    logical_text.push(if dir == Direction::Rtl { '\u{2067}' } else { '\u{2066}' });
-                    content_start = logical_text.len();
-                    self.push_item_content(&positioned.item, &mut logical_text);
-                    content_end = logical_text.len();
-                    logical_text.push('\u{2069}'); // PDI
-                }
-                UnicodeBidi::IsolateOverride => {
-                    logical_text.push(if dir == Direction::Rtl { '\u{2067}' } else { '\u{2066}' });
-                    logical_text.push(if dir == Direction::Rtl { '\u{202e}' } else { '\u{202d}' });
-                    content_start = logical_text.len();
-                    self.push_item_content(&positioned.item, &mut logical_text);
-                    content_end = logical_text.len();
-                    logical_text.push('\u{202c}'); // PDF
-                    logical_text.push('\u{2069}'); // PDI
-                }
-                UnicodeBidi::Plaintext => {
-                    logical_text.push('\u{2068}'); // FSI
-                    content_start = logical_text.len();
-                    self.push_item_content(&positioned.item, &mut logical_text);
-                    content_end = logical_text.len();
-                    logical_text.push('\u{2069}'); // PDI
-                }
+            for ch in open_controls {
+                logical_text.push(ch);
+            }
+
+            let content_start = logical_text.len();
+            self.push_item_content(&positioned.item, &mut logical_text, false);
+            let content_end = logical_text.len();
+
+            for ch in close_controls {
+                logical_text.push(ch);
             }
 
             if content_start < content_end {
@@ -1041,24 +1007,43 @@ impl LineBuilder {
         self.current_x = x;
     }
 
-    fn push_item_content(&self, item: &InlineItem, buffer: &mut String) {
+    fn push_item_content(&self, item: &InlineItem, buffer: &mut String, wrap_item: bool) {
+        let dir = item.direction();
+        let ub = item.unicode_bidi();
+        let (mut open_controls, mut close_controls) = if wrap_item {
+            bidi_controls(ub, dir)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
+        if open_controls.is_empty()
+            && close_controls.is_empty()
+            && matches!(item, InlineItem::InlineBlock(_) | InlineItem::Replaced(_))
+            && (wrap_item || ub == UnicodeBidi::Normal)
+        {
+            let isolate = if dir == Direction::Rtl { '\u{2067}' } else { '\u{2066}' };
+            open_controls.push(isolate);
+            close_controls.push('\u{2069}');
+        }
+
+        for ch in open_controls {
+            buffer.push(ch);
+        }
+
         match item {
             InlineItem::Text(t) => buffer.push_str(&t.text),
             InlineItem::InlineBox(b) => {
                 for child in &b.children {
-                    self.push_item_content(child, buffer);
+                    self.push_item_content(child, buffer, true);
                 }
             }
             InlineItem::InlineBlock(_) | InlineItem::Replaced(_) => {
-                let dir = item.direction();
-                let (lri, pdi) = match dir {
-                    Direction::Rtl => ('\u{2067}', '\u{2069}'), // RLI ... PDI
-                    _ => ('\u{2066}', '\u{2069}'),              // LRI ... PDI
-                };
-                buffer.push(lri);
                 buffer.push('\u{FFFC}');
-                buffer.push(pdi);
             }
+        }
+
+        for ch in close_controls {
+            buffer.push(ch);
         }
     }
 
@@ -1077,6 +1062,52 @@ impl LineBuilder {
     /// Returns true if current line is empty
     pub fn is_current_line_empty(&self) -> bool {
         self.current_line.is_empty()
+    }
+}
+
+fn bidi_controls(unicode_bidi: UnicodeBidi, direction: Direction) -> (Vec<char>, Vec<char>) {
+    match unicode_bidi {
+        UnicodeBidi::Normal => (Vec::new(), Vec::new()),
+        UnicodeBidi::Embed => {
+            let open = vec![if direction == Direction::Rtl {
+                '\u{202b}'
+            } else {
+                '\u{202a}'
+            }];
+            (open, vec!['\u{202c}'])
+        }
+        UnicodeBidi::BidiOverride => {
+            let open = vec![if direction == Direction::Rtl {
+                '\u{202e}'
+            } else {
+                '\u{202d}'
+            }];
+            (open, vec!['\u{202c}'])
+        }
+        UnicodeBidi::Isolate => {
+            let open = vec![if direction == Direction::Rtl {
+                '\u{2067}'
+            } else {
+                '\u{2066}'
+            }];
+            (open, vec!['\u{2069}'])
+        }
+        UnicodeBidi::IsolateOverride => {
+            let open = vec![
+                if direction == Direction::Rtl {
+                    '\u{2067}'
+                } else {
+                    '\u{2066}'
+                },
+                if direction == Direction::Rtl {
+                    '\u{202e}'
+                } else {
+                    '\u{202d}'
+                },
+            ];
+            (open, vec!['\u{202c}', '\u{2069}'])
+        }
+        UnicodeBidi::Plaintext => (vec!['\u{2068}'], vec!['\u{2069}']),
     }
 }
 
