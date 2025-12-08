@@ -45,6 +45,7 @@ use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::utils::compute_replaced_size;
 use crate::style::types::FontStyle;
+use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::text::line_break::{find_break_opportunities, BreakType};
@@ -134,13 +135,65 @@ impl InlineFormattingContext {
             LayoutError::UnsupportedBoxType("Inline-level box missing formatting context".to_string())
         })?;
 
+        let style = &box_node.style;
         let factory = FormattingContextFactory::new();
         let fc = factory.create(fc_type);
-        let constraint_width = if available_width.is_finite() {
+
+        let percentage_base = if available_width.is_finite() {
             available_width
         } else {
-            10_000.0
+            0.0
         };
+
+        // CSS 2.1 §10.3.9: inline-block width auto -> shrink-to-fit:
+        // min(max(preferred_min, available), preferred)
+        let preferred_min_content = fc
+            .compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent)
+            .unwrap_or(0.0);
+        let preferred_content = fc
+            .compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent)
+            .unwrap_or(preferred_min_content);
+
+        let horizontal_edges = horizontal_padding_and_borders(style, percentage_base);
+        let preferred_min = preferred_min_content + horizontal_edges;
+        let preferred = preferred_content + horizontal_edges;
+
+        let specified_width = style
+            .width
+            .as_ref()
+            .map(|l| resolve_length_for_width(*l, percentage_base));
+
+        let min_width = style
+            .min_width
+            .as_ref()
+            .map(|l| resolve_length_for_width(*l, percentage_base))
+            .unwrap_or(0.0);
+        let max_width = style
+            .max_width
+            .as_ref()
+            .map(|l| resolve_length_for_width(*l, percentage_base))
+            .unwrap_or(f32::INFINITY);
+
+        let constraint_width = if let Some(content_width) = specified_width {
+            // Honor specified width; use containing block width for layout to avoid over-constraining margins.
+            let border_box_width = content_width + horizontal_edges;
+            let used = border_box_width.clamp(min_width, max_width);
+            if available_width.is_finite() {
+                available_width
+            } else {
+                used
+            }
+        } else {
+            let available = if available_width.is_finite() {
+                available_width
+            } else {
+                preferred
+            };
+            let shrink = preferred.min(available.max(preferred_min));
+            let used = shrink.clamp(min_width, max_width);
+            used
+        };
+
         let constraints = LayoutConstraints::definite_width(constraint_width);
         let fragment = fc.layout(box_node, &constraints)?;
 
@@ -217,7 +270,7 @@ impl InlineFormattingContext {
         items: Vec<InlineItem>,
         available_width: f32,
         strut_metrics: &BaselineMetrics,
-        base_level: unicode_bidi::Level,
+        base_level: Option<unicode_bidi::Level>,
     ) -> Vec<Line> {
         let mut builder = LineBuilder::new(
             available_width,
@@ -468,6 +521,24 @@ impl InlineFormattingContext {
     }
 }
 
+fn resolve_length_for_width(length: Length, percentage_base: f32) -> f32 {
+    if length.unit.is_percentage() {
+        length.resolve_against(percentage_base)
+    } else if length.unit.is_absolute() {
+        length.to_px()
+    } else {
+        // Relative units (em/rem) should have been resolved earlier; treat as px fallback
+        length.value
+    }
+}
+
+fn horizontal_padding_and_borders(style: &ComputedStyle, percentage_base: f32) -> f32 {
+    resolve_length_for_width(style.padding_left, percentage_base)
+        + resolve_length_for_width(style.padding_right, percentage_base)
+        + resolve_length_for_width(style.border_left_width, percentage_base)
+        + resolve_length_for_width(style.border_right_width, percentage_base)
+}
+
 impl FormattingContext for InlineFormattingContext {
     fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
         let style = &box_node.style;
@@ -479,9 +550,12 @@ impl FormattingContext for InlineFormattingContext {
         // Collect inline items
         let items = self.collect_inline_items(box_node, available_width)?;
 
-        let base_level = match style.direction {
-            crate::style::types::Direction::Rtl => unicode_bidi::Level::rtl(),
-            _ => unicode_bidi::Level::ltr(),
+        let base_level = match style.unicode_bidi {
+            crate::style::types::UnicodeBidi::Plaintext => None,
+            _ => match style.direction {
+                crate::style::types::Direction::Rtl => Some(unicode_bidi::Level::rtl()),
+                _ => Some(unicode_bidi::Level::ltr()),
+            },
         };
 
         // Build lines

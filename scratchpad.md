@@ -25,6 +25,7 @@
 - Non-text inline/replaced items now enter bidi reordering wrapped in directionally isolated control characters (LRI/RLI…PDI) rather than bare U+FFFC, improving structural ordering for mixed-direction lines (`src/layout/contexts/inline/line_builder.rs`).
 - Inline boxes now contribute their children’s text into the bidi reorder string instead of collapsing to a single object, so nested inline wrappers reorder according to their actual textual content (`src/layout/contexts/inline/line_builder.rs`).
 - Centralized bidi control generation with `bidi_controls`; logical-text construction now wraps inline boxes and atomic inline items per `unicode-bidi` values while retaining default isolation for inline-block/replaced placeholders when no controls apply (`src/layout/contexts/inline/line_builder.rs`).
+- Inline-block sizing now uses CSS 2.1 shrink-to-fit when `width:auto`, deriving preferred and preferred-min widths from intrinsic measurements and adding padding/borders; specified widths avoid over-constrained margins, and padding/border percentages resolve against the available inline size (`src/layout/contexts/inline/mod.rs`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
@@ -48,6 +49,7 @@
 5. Inline blocks:
    - Implement shrink-to-fit sizing for inline-block and inline replaced elements so they honor min/max-content and percentages instead of using the containing width directly.
 - Verify whether default isolation of inline-block/replaced placeholders is spec-correct when `unicode-bidi` is `normal`; currently we fall back to LRI/RLI…PDI when no other controls are present.
+- Enforce min/max-width for inline-blocks and other formatting contexts during layout (currently not applied inside block FC width computation).
 
 ## Notes
 - Current table code uses `InlineFormattingContext` for cell intrinsic widths; this fails for block/table/replaced content—needs a per-context intrinsic measurement.
