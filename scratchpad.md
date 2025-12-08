@@ -38,6 +38,7 @@
 - Colspan contributions now use the spanning-cell constraint distributor so multi-column cells raise min/max widths across the spanned range rather than per-column equal splits (`src/layout/table.rs`, `src/layout/contexts/table/column_distribution.rs`).
 - Parsed `border-collapse` into computed styles and table spacing respects collapsed mode by zeroing spacing when collapse is set (`src/style/{types,mod,properties}.rs`, `src/layout/table.rs`).
 - CSS `vertical-align` is now parsed/stored (UA default `middle` for `td/th`), and table layout uses baseline-aware row heights plus per-cell alignment for baseline/top/middle/bottom cases (`src/style/{types,mod,properties.rs,user_agent.css}`, `src/layout/table.rs`).
+- CSS `table-layout` is parsed and stored; fixed layout now selects the fixed distribution path in the column distributor (`src/style/{types,mod,properties.rs}`, `src/layout/table.rs`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
