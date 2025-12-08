@@ -51,6 +51,16 @@ pub enum BorderCollapse {
     Collapse,
 }
 
+/// Table layout algorithm selection
+///
+/// CSS: `table-layout`
+/// Reference: CSS 2.1 §17.5.2
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableLayout {
+    Auto,
+    Fixed,
+}
+
 /// Border line style
 ///
 /// CSS: `border-style`, `border-*-style`

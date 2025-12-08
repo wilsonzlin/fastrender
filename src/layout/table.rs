@@ -34,7 +34,7 @@ use crate::layout::contexts::table::column_distribution::{
     distribute_spanning_cell_width, ColumnConstraints, ColumnDistributor, DistributionMode,
 };
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::style::types::{BorderCollapse, VerticalAlign};
+use crate::style::types::{BorderCollapse, TableLayout, VerticalAlign};
 use crate::style::values::LengthUnit;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
@@ -279,7 +279,7 @@ impl TableStructure {
         };
 
         // Check for fixed layout
-        structure.is_fixed_layout = false; // Default to auto (no table-layout property yet)
+        structure.is_fixed_layout = matches!(table_box.style.table_layout, TableLayout::Fixed);
 
         // Phase 1: Count rows and discover maximum column count
         let mut current_row = 0;
@@ -1204,7 +1204,7 @@ mod tests {
     use crate::layout::constraints::LayoutConstraints;
     use crate::style::display::FormattingContextType;
     use crate::style::display::Display;
-    use crate::style::types::VerticalAlign;
+    use crate::style::types::{TableLayout, VerticalAlign};
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
     use crate::tree::debug::DebugInfo;
@@ -1270,6 +1270,19 @@ mod tests {
         let structure = TableStructure::default();
         assert_eq!(structure.column_count, 0);
         assert!(!structure.is_fixed_layout);
+    }
+
+    #[test]
+    fn test_table_structure_respects_table_layout_property() {
+        let mut style = ComputedStyle::default();
+        style.display = Display::Table;
+        style.table_layout = TableLayout::Fixed;
+        let table = BoxNode::new_block(Arc::new(style), FormattingContextType::Table, vec![]).with_debug_info(
+            DebugInfo::new(Some("table".to_string()), None, vec![]),
+        );
+
+        let structure = TableStructure::from_box_tree(&table);
+        assert!(structure.is_fixed_layout);
     }
 
     #[test]

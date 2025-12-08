@@ -551,6 +551,15 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
             }
             _ => {}
         },
+        "table-layout" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.table_layout = match kw.as_str() {
+                    "auto" => TableLayout::Auto,
+                    "fixed" => TableLayout::Fixed,
+                    _ => styles.table_layout,
+                };
+            }
+        }
         "vertical-align" => match &resolved_value {
             PropertyValue::Keyword(kw) => {
                 styles.vertical_align = match kw.as_str() {

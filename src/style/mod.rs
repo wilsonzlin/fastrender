@@ -29,7 +29,8 @@ use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse,
     BorderStyle, Direction, FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack, JustifyContent,
-    LineHeight, Overflow, TextAlign, TextDecoration, TextTransform, UnicodeBidi, VerticalAlign, WhiteSpace,
+    LineHeight, Overflow, TableLayout, TextAlign, TextDecoration, TextTransform, UnicodeBidi, VerticalAlign,
+    WhiteSpace,
 };
 use values::Length;
 
@@ -145,6 +146,7 @@ pub struct ComputedStyle {
     pub border_spacing_horizontal: Length,
     pub border_spacing_vertical: Length,
     pub border_collapse: BorderCollapse,
+    pub table_layout: TableLayout,
 
     // CSS Custom Properties (variables)
     pub custom_properties: HashMap<String, String>,
@@ -255,6 +257,7 @@ impl Default for ComputedStyle {
             border_spacing_horizontal: Length::px(0.0),
             border_spacing_vertical: Length::px(0.0),
             border_collapse: BorderCollapse::Separate,
+            table_layout: TableLayout::Auto,
 
             custom_properties: HashMap::new(),
 
