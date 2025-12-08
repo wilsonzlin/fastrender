@@ -238,8 +238,11 @@ impl TextItem {
         // Split the text
         let (before_text, after_text) = self.text.split_at(split_offset);
 
-        let before_runs = shaper.shape(before_text, &self.style, font_context).ok()?;
-        let after_runs = shaper.shape(after_text, &self.style, font_context).ok()?;
+        let (before_runs, after_runs) = self.split_runs_preserving_shaping(split_offset).or_else(|| {
+            let before_runs = shaper.shape(before_text, &self.style, font_context).ok()?;
+            let after_runs = shaper.shape(after_text, &self.style, font_context).ok()?;
+            Some((before_runs, after_runs))
+        })?;
 
         let line_height = self.metrics.line_height;
         let before_metrics = TextItem::metrics_from_runs(&before_runs, line_height, self.font_size);
@@ -452,6 +455,74 @@ impl TextItem {
             Ok(idx) => clusters.get(idx).map(|c| c.byte_offset),
             Err(idx) => clusters.get(idx.checked_sub(1)?).map(|c| c.byte_offset),
         }
+    }
+
+    /// Splits existing shaped runs at a cluster boundary without reshaping, preserving ligatures/glyph IDs.
+    fn split_runs_preserving_shaping(&self, split_offset: usize) -> Option<(Vec<ShapedRun>, Vec<ShapedRun>)> {
+        let mut before_runs = Vec::new();
+        let mut after_runs = Vec::new();
+
+        for run in &self.runs {
+            if split_offset <= run.start {
+                // Entire run goes to the after side
+                after_runs.push(run.clone());
+                continue;
+            }
+            if split_offset >= run.end {
+                // Entire run goes to the before side
+                before_runs.push(run.clone());
+                continue;
+            }
+
+            // Split within this run
+            let local = split_offset - run.start;
+
+            // Guard against invalid UTF-8 boundaries
+            if local > run.text.len() {
+                return None;
+            }
+
+            let (left_text, right_text) = run.text.split_at(local);
+
+            let mut left_glyphs = Vec::new();
+            let mut right_glyphs = Vec::new();
+
+            for glyph in &run.glyphs {
+                if (glyph.cluster as usize) < local {
+                    left_glyphs.push(*glyph);
+                } else {
+                    right_glyphs.push(*glyph);
+                }
+            }
+
+            let left_advance: f32 = left_glyphs.iter().map(|g| g.x_advance).sum();
+
+            // Adjust right glyph offsets/clusters to be relative to the split
+            for glyph in &mut right_glyphs {
+                glyph.x_offset -= left_advance;
+                glyph.cluster = glyph.cluster.saturating_sub(local as u32);
+            }
+
+            if !left_glyphs.is_empty() {
+                let mut left_run = run.clone();
+                left_run.text = left_text.to_string();
+                left_run.end = split_offset;
+                left_run.glyphs = left_glyphs;
+                left_run.advance = left_advance;
+                before_runs.push(left_run);
+            }
+
+            if !right_glyphs.is_empty() {
+                let mut right_run = run.clone();
+                right_run.text = right_text.to_string();
+                right_run.start = split_offset;
+                right_run.glyphs = right_glyphs;
+                right_run.advance = right_run.glyphs.iter().map(|g| g.x_advance).sum();
+                after_runs.push(right_run);
+            }
+        }
+
+        Some((before_runs, after_runs))
     }
 }
 
