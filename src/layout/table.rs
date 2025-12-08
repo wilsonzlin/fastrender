@@ -823,12 +823,23 @@ impl TableFormattingContext {
 
             if cell.colspan == 1 {
                 if let Some(width) = &cell_box.style.width {
-                    let px = width.to_px().max(min_w);
-                    let col = &mut constraints[cell.col];
-                    col.fixed_width = Some(px);
-                    col.min_width = col.min_width.max(min_w);
-                    col.max_width = col.max_width.max(px.max(max_w));
-                    continue;
+                    match width.unit {
+                        LengthUnit::Percent => {
+                            let col = &mut constraints[cell.col];
+                            col.set_percentage(width.value);
+                            col.min_width = col.min_width.max(min_w);
+                            col.max_width = col.max_width.max(max_w);
+                            continue;
+                        }
+                        _ => {
+                            let px = width.to_px().max(min_w);
+                            let col = &mut constraints[cell.col];
+                            col.fixed_width = Some(px);
+                            col.min_width = col.min_width.max(min_w);
+                            col.max_width = col.max_width.max(px.max(max_w));
+                            continue;
+                        }
+                    }
                 }
 
                 let col = &mut constraints[cell.col];
@@ -839,6 +850,23 @@ impl TableFormattingContext {
                     if let Some(col) = constraints.get_mut(cell.col + span_idx) {
                         col.add_colspan_contribution(min_w, max_w, cell.colspan, span_idx);
                     }
+                }
+            }
+        }
+
+        // Apply specified widths from column info (<col>/<colgroup>)
+        for (i, col_info) in structure.columns.iter().enumerate() {
+            let Some(constraint) = constraints.get_mut(i) else { continue };
+            if let Some(specified) = col_info.specified_width {
+                match specified {
+                    SpecifiedWidth::Fixed(px) => {
+                        constraint.fixed_width = Some(px.max(constraint.min_width));
+                        constraint.is_flexible = false;
+                    }
+                    SpecifiedWidth::Percent(pct) => {
+                        constraint.set_percentage(pct);
+                    }
+                    SpecifiedWidth::Auto => {}
                 }
             }
         }

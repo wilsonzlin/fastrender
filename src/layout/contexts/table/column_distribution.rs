@@ -170,6 +170,13 @@ impl ColumnConstraints {
         }
     }
 
+    /// Marks this column as percentage-based using the current min/max widths.
+    pub fn set_percentage(&mut self, percentage: f32) {
+        self.percentage = Some(percentage.clamp(0.0, 100.0));
+        self.fixed_width = None;
+        self.is_flexible = false;
+    }
+
     /// Creates a zero-sized column (placeholder)
     ///
     /// Used for empty columns or columns with no content.

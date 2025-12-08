@@ -33,11 +33,12 @@
 - Block intrinsic inline-size computation now accounts for inline content, in-flow block children, replaced boxes, and the element’s own padding/borders instead of just explicit widths (`src/layout/contexts/block/mod.rs`).
 - Table column intrinsic widths now use the cell’s formatting context (block/flex/grid/inline) instead of forcing inline measurement, so block-only cells contribute widths correctly (`src/layout/table.rs`).
 - `border-spacing` is now parsed/resolved from computed style (em/absolute lengths) and table layout pulls spacing from styles rather than a hardcoded 2px default (`src/style/{mod,properties}.rs`, `src/layout/table.rs`).
+- Table column constraints now honor percentage widths on cells/cols and carry them through distribution, so percentage-specified columns consume their share of the available table width before auto distribution (`src/layout/table.rs`, `src/layout/contexts/table/column_distribution.rs`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
 - Min/max content sizing still uses simple break-opportunity offsets rather than cluster-aware shaping widths; no hyphenation support yet in IFC.
-- Table layout is partial: border-collapse unimplemented, padding/borders/vertical-align ignored in row heights, row/col spans not truly honored, percent/fixed widths not resolved per CSS 2.1, colspans split evenly.
+- Table layout is partial: border-collapse unimplemented, padding/borders/vertical-align ignored in row heights, row/col spans not truly honored, percent/fixed widths still simplified vs CSS 2.1, colspans split evenly.
 - Replaced elements still ignore object-fit/object-position/backgrounds on the content box; SVG/iframe/video remain unrendered.
 - Painting still bypasses display list; no shared font context between layout and paint (painter builds its own).
 - Inline-blocks/replaced elements still rely on display hints rather than full anonymous inline box generation and lack percent/min-height handling.
