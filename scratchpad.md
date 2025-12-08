@@ -10,7 +10,7 @@
 - Default font size restored to 16px (`src/style/mod.rs`); table margins stripped back to zero in defaults.
 - Fixed BGRA → RGBA conversion during image encoding (`src/image_output.rs`).
 - Inline text fragments now carry computed styles; painter uses shaping pipeline and real glyph outlines instead of box approximations (`src/paint/painter.rs`).
-- Table layout rewritten to use computed display values, default border-spacing 0, column constraints via `column_distribution`, `<col>/<colgroup>` width handling, min/max from IFC, fallback equal widths if zero; cells laid out with BFC using computed column widths (`src/layout/table.rs`).
+- Table layout rewritten to use computed display values, default border-spacing 2px 2px, column constraints via `column_distribution`, `<col>/<colgroup>` width handling, min/max from IFC, fallback equal widths if zero; cells laid out with BFC using computed column widths (`src/layout/table.rs`).
 - Added `FragmentNode::new_inline_styled` convenience (`src/tree/fragment_tree.rs`).
 - Inline FC now shapes with `ShapingPipeline`, keeps shaped runs on fragments, and uses real font metrics for struts/baselines; painter reuses those runs with pen advance and rudimentary RTL handling (`src/layout/contexts/inline`, `src/paint/painter.rs`).
 - Added embedded Roboto Regular fallback for fontless environments and generic fallbacks now pick the first available face when generic lookup fails (`resources/fonts`, `src/text/font_loader.rs`, `src/text/font_db.rs`).
@@ -37,7 +37,10 @@
 - Table layout is partial: border-spacing hardcoded to 0; border-collapse unimplemented; padding/borders/vertical-align ignored in row heights; row/col spans not truly honored; percent/fixed widths not resolved per CSS 2.1; colspans split evenly.
 - Replaced elements still ignore object-fit/object-position/backgrounds on the content box; SVG/iframe/video remain unrendered.
 - Painting still bypasses display list; no shared font context between layout and paint (painter builds its own).
-- Inline-block sizing is naïve (no shrink-to-fit; uses available width floor), and inline-level replaced elements rely on display hints rather than true anonymous box generation.
+- Table layout is partial: border-spacing fixed to the initial value only (no border-collapse), padding/borders/vertical-align ignored in row heights, row/col spans not truly honored, percent/fixed widths not resolved per CSS 2.1, colspans split evenly.
+- Replaced elements still ignore object-fit/object-position/backgrounds on the content box; SVG/iframe/video remain unrendered.
+- Painting still bypasses display list; no shared font context between layout and paint (painter builds its own).
+- Inline-blocks/replaced elements still rely on display hints rather than full anonymous inline box generation and lack percent/min-height handling.
 
 ## To-do / next steps (spec-oriented)
 1. Inline/text:
@@ -51,7 +54,7 @@
 4. General bidi:
    - Ensure visual ordering in layout and paint for RTL/mixed runs.
 5. Inline blocks:
-   - Implement shrink-to-fit sizing for inline-block and inline replaced elements so they honor min/max-content and percentages instead of using the containing width directly.
+   - Generate proper anonymous inline wrappers and honor percent/min-height sizing for inline-block/replaced; ensure baseline alignment matches spec.
 
 ## Notes
 - Current table code uses `InlineFormattingContext` for cell intrinsic widths; this fails for block/table/replaced content—needs a per-context intrinsic measurement.
