@@ -29,13 +29,15 @@ pub mod width;
 use crate::geometry::Rect;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
+use crate::layout::contexts::inline::InlineFormattingContext;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
+use crate::layout::utils::compute_replaced_size;
 use crate::style::display::FormattingContextType;
 use crate::style::position::Position;
-use crate::style::types::LineHeight;
 use crate::style::values::Length;
-use crate::tree::box_tree::BoxNode;
-use crate::tree::fragment_tree::FragmentNode;
+use crate::text::font_loader::FontContext;
+use crate::tree::box_tree::{BoxNode, BoxType, ReplacedBox};
+use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 
 use margin_collapse::MarginCollapseContext;
 use width::compute_block_width;
@@ -62,13 +64,17 @@ fn resolve_opt_length(length: Option<&Length>, font_size: f32, containing_block_
 ///
 /// Implements the FormattingContext trait for block-level layout.
 /// Handles vertical stacking, margin collapsing, and width computation.
-#[derive(Debug, Default)]
-pub struct BlockFormattingContext;
+#[derive(Clone)]
+pub struct BlockFormattingContext {
+    font_context: FontContext,
+}
 
 impl BlockFormattingContext {
     /// Creates a new BlockFormattingContext
     pub fn new() -> Self {
-        Self
+        Self {
+            font_context: FontContext::new(),
+        }
     }
 
     /// Lays out a single block-level child and returns its fragment
@@ -79,6 +85,10 @@ impl BlockFormattingContext {
         margin_ctx: &mut MarginCollapseContext,
         current_y: f32,
     ) -> Result<(FragmentNode, f32), LayoutError> {
+        if let BoxType::Replaced(replaced_box) = &child.box_type {
+            return self.layout_replaced_child(child, replaced_box, containing_width, margin_ctx, current_y);
+        }
+
         let style = &child.style;
         let font_size = style.font_size; // Get font-size for resolving em units
 
@@ -101,17 +111,17 @@ impl BlockFormattingContext {
 
         // Check if this child establishes a different formatting context
         let fc_type = child.formatting_context();
-        
+
         let (child_fragments, content_height) = if let Some(fc_type) = fc_type {
             if fc_type != FormattingContextType::Block {
                 // Child establishes a non-block FC - use the appropriate FC
                 let factory = FormattingContextFactory::new();
                 let fc = factory.create(fc_type);
-                
+
                 // Layout using the child's FC
                 let child_frag = fc.layout(child, &child_constraints)?;
                 let height = child_frag.bounds.height();
-                
+
                 // Return fragment wrapped in vec and height
                 (vec![child_frag], height)
             } else {
@@ -119,7 +129,7 @@ impl BlockFormattingContext {
                 self.layout_children(child, &child_constraints)?
             }
         } else {
-            // No FC (inline, text, etc.) - layout children normally  
+            // No FC (inline, text, etc.) - layout children normally
             self.layout_children(child, &child_constraints)?
         };
 
@@ -162,6 +172,58 @@ impl BlockFormattingContext {
         Ok((fragment, next_y))
     }
 
+    fn layout_replaced_child(
+        &self,
+        child: &BoxNode,
+        replaced_box: &ReplacedBox,
+        containing_width: f32,
+        margin_ctx: &mut MarginCollapseContext,
+        current_y: f32,
+    ) -> Result<(FragmentNode, f32), LayoutError> {
+        let style = &child.style;
+        let font_size = style.font_size;
+
+        let used_size = compute_replaced_size(style, replaced_box);
+
+        // Vertical margins collapse as normal blocks
+        let margin_top = resolve_opt_length(style.margin_top.as_ref(), font_size, containing_width);
+        let margin_bottom = resolve_opt_length(style.margin_bottom.as_ref(), font_size, containing_width);
+        margin_ctx.push_margin(margin_top);
+        let collapsed_margin = margin_ctx.resolve();
+        let box_y = current_y + collapsed_margin;
+
+        // Resolve padding and borders
+        let padding_top = resolve_length(&style.padding_top, font_size, containing_width);
+        let padding_bottom = resolve_length(&style.padding_bottom, font_size, containing_width);
+
+        let border_top = resolve_length(&style.border_top_width, font_size, containing_width);
+        let border_bottom = resolve_length(&style.border_bottom_width, font_size, containing_width);
+
+        // Use the resolved replaced width when computing horizontal metrics
+        let mut width_style = (*style).as_ref().clone();
+        width_style.width = Some(Length::px(used_size.width));
+        let computed_width = compute_block_width(&width_style, containing_width);
+
+        let box_width = computed_width.border_box_width();
+        let box_height = border_top + padding_top + used_size.height + padding_bottom + border_bottom;
+        let bounds = Rect::from_xywh(computed_width.margin_left, box_y, box_width, box_height);
+
+        let fragment = FragmentNode::new_with_style(
+            bounds,
+            FragmentContent::Replaced {
+                replaced_type: replaced_box.replaced_type.clone(),
+                box_id: None,
+            },
+            vec![],
+            child.style.clone(),
+        );
+
+        margin_ctx.push_margin(margin_bottom);
+        let next_y = box_y + box_height;
+
+        Ok((fragment, next_y))
+    }
+
     /// Lays out all children of a box
     fn layout_children(
         &self,
@@ -172,6 +234,7 @@ impl BlockFormattingContext {
         let mut current_y: f32 = 0.0;
         let mut content_height: f32 = 0.0;
         let mut margin_ctx = MarginCollapseContext::new();
+        let mut inline_buffer: Vec<BoxNode> = Vec::new();
 
         // Get containing width from constraints
         let containing_width = constraints.width().unwrap_or(0.0);
@@ -184,6 +247,39 @@ impl BlockFormattingContext {
             margin_ctx.mark_content_encountered();
         }
 
+        let flush_inline_buffer = |buffer: &mut Vec<BoxNode>,
+                                   fragments: &mut Vec<FragmentNode>,
+                                   current_y: &mut f32,
+                                   content_height: &mut f32,
+                                   margin_ctx: &mut MarginCollapseContext|
+         -> Result<(), LayoutError> {
+            if buffer.is_empty() {
+                return Ok(());
+            }
+
+            // Apply any pending collapsed margin before inline content
+            let pending_margin = margin_ctx.consume_pending();
+            *current_y += pending_margin;
+
+            let inline_container = BoxNode::new_inline(parent.style.clone(), buffer.clone());
+            let inline_fc = InlineFormattingContext::with_font_context(self.font_context.clone());
+            let inline_constraints = LayoutConstraints::definite_width(containing_width);
+            let mut inline_fragment = inline_fc.layout(&inline_container, &inline_constraints)?;
+
+            inline_fragment.bounds = Rect::from_xywh(
+                0.0,
+                *current_y,
+                inline_fragment.bounds.width(),
+                inline_fragment.bounds.height(),
+            );
+
+            *content_height = content_height.max(inline_fragment.bounds.max_y());
+            *current_y += inline_fragment.bounds.height();
+            fragments.push(inline_fragment);
+            buffer.clear();
+            Ok(())
+        };
+
         for child in &parent.children {
             // Skip out-of-flow children (positioned, floats)
             if is_out_of_flow(child) {
@@ -191,7 +287,20 @@ impl BlockFormattingContext {
             }
 
             // Layout in-flow children
-            if child.is_block_level() {
+            let treated_as_block = match child.box_type {
+                BoxType::Replaced(_) if child.style.display.is_inline_level() => false,
+                _ => child.is_block_level(),
+            };
+
+            if treated_as_block {
+                flush_inline_buffer(
+                    &mut inline_buffer,
+                    &mut fragments,
+                    &mut current_y,
+                    &mut content_height,
+                    &mut margin_ctx,
+                )?;
+
                 let (fragment, next_y) =
                     self.layout_block_child(child, containing_width, &mut margin_ctx, current_y)?;
 
@@ -199,15 +308,17 @@ impl BlockFormattingContext {
                 current_y = next_y;
                 fragments.push(fragment);
             } else {
-                // Inline children need inline formatting context
-                let inline_fragment = self.layout_inline_placeholder(child)?;
-                if let Some(frag) = inline_fragment {
-                    content_height = content_height.max(current_y + frag.bounds.height());
-                    current_y += frag.bounds.height();
-                    fragments.push(frag);
-                }
+                inline_buffer.push(child.clone());
             }
         }
+
+        flush_inline_buffer(
+            &mut inline_buffer,
+            &mut fragments,
+            &mut current_y,
+            &mut content_height,
+            &mut margin_ctx,
+        )?;
 
         // Resolve any trailing margins
         let trailing_margin = margin_ctx.pending_margin();
@@ -222,27 +333,17 @@ impl BlockFormattingContext {
 
         Ok((fragments, content_height))
     }
+}
 
-    /// Creates a placeholder fragment for inline content
-    fn layout_inline_placeholder(&self, child: &BoxNode) -> Result<Option<FragmentNode>, LayoutError> {
-        if child.is_text() {
-            let text = child.text().unwrap_or("");
-            let line_height = compute_line_height(&child.style.line_height, child.style.font_size);
-            let estimated_width = text.len() as f32 * child.style.font_size * 0.5;
-            let bounds = Rect::from_xywh(0.0, 0.0, estimated_width, line_height);
-            let fragment = FragmentNode::new_text_styled(bounds, text.to_string(), line_height * 0.8, child.style.clone());
-            return Ok(Some(fragment));
-        }
-        Ok(None)
+impl Default for BlockFormattingContext {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-/// Compute line height from LineHeight enum and font size
-fn compute_line_height(line_height: &LineHeight, font_size: f32) -> f32 {
-    match line_height {
-        LineHeight::Normal => font_size * 1.2,
-        LineHeight::Number(n) => font_size * n,
-        LineHeight::Length(len) => len.to_px(),
+impl std::fmt::Debug for BlockFormattingContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("BlockFormattingContext")
     }
 }
 
@@ -251,7 +352,23 @@ impl FormattingContext for BlockFormattingContext {
         let style = &box_node.style;
 
         let containing_width = constraints.width().unwrap_or(0.0);
-        let computed_width = compute_block_width(style, containing_width);
+        let mut computed_width = compute_block_width(style, containing_width);
+
+        let min_width = style
+            .min_width
+            .as_ref()
+            .map(|l| resolve_length_for_width(*l, containing_width))
+            .unwrap_or(0.0);
+        let max_width = style
+            .max_width
+            .as_ref()
+            .map(|l| resolve_length_for_width(*l, containing_width))
+            .unwrap_or(f32::INFINITY);
+
+        let clamped_content_width = computed_width.content_width.clamp(min_width, max_width);
+        if clamped_content_width != computed_width.content_width {
+            computed_width.content_width = clamped_content_width;
+        }
 
         let child_constraints = LayoutConstraints::definite_width(computed_width.content_width);
 
@@ -273,11 +390,15 @@ impl FormattingContext for BlockFormattingContext {
         let height = height.max(min_height).min(max_height);
 
         let box_height = border_top + padding_top + height + padding_bottom + border_bottom;
-        let box_width = computed_width.border_box_width();
+        let box_width = computed_width.total_width();
 
         let bounds = Rect::from_xywh(0.0, 0.0, box_width, box_height);
 
-        Ok(FragmentNode::new_block_styled(bounds, child_fragments, box_node.style.clone()))
+        Ok(FragmentNode::new_block_styled(
+            bounds,
+            child_fragments,
+            box_node.style.clone(),
+        ))
     }
 
     fn compute_intrinsic_inline_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
@@ -321,6 +442,17 @@ impl FormattingContext for BlockFormattingContext {
 fn is_out_of_flow(box_node: &BoxNode) -> bool {
     let position = box_node.style.position;
     matches!(position, Position::Absolute | Position::Fixed)
+}
+
+fn resolve_length_for_width(length: Length, percentage_base: f32) -> f32 {
+    if length.unit.is_percentage() {
+        length.resolve_against(percentage_base)
+    } else if length.unit.is_absolute() {
+        length.to_px()
+    } else {
+        // Relative units (em/rem/etc.) should be resolved earlier; use raw value as px fallback.
+        length.value
+    }
 }
 
 #[cfg(test)]
