@@ -1044,7 +1044,12 @@ impl LineBuilder {
     fn push_item_content(&self, item: &InlineItem, buffer: &mut String) {
         match item {
             InlineItem::Text(t) => buffer.push_str(&t.text),
-            _ => {
+            InlineItem::InlineBox(b) => {
+                for child in &b.children {
+                    self.push_item_content(child, buffer);
+                }
+            }
+            InlineItem::InlineBlock(_) | InlineItem::Replaced(_) => {
                 let dir = item.direction();
                 let (lri, pdi) = match dir {
                     Direction::Rtl => ('\u{2067}', '\u{2069}'), // RLI ... PDI
