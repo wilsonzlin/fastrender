@@ -37,6 +37,7 @@
 
 use crate::geometry::{Point, Rect, Size};
 use crate::style::ComputedStyle;
+use crate::text::pipeline::ShapedRun;
 use crate::tree::box_tree::ReplacedType;
 use std::fmt;
 use std::sync::Arc;
@@ -82,6 +83,13 @@ pub enum FragmentContent {
         /// Baseline offset from fragment top
         /// Used for text alignment within line
         baseline_offset: f32,
+
+        /// Pre-shaped runs for this text, if available
+        ///
+        /// Carrying shaped runs from layout allows painting to reuse the exact
+        /// glyph positions and fonts chosen during layout instead of reshaping
+        /// with potentially different fallback results.
+        shaped: Option<Vec<ShapedRun>>,
     },
 
     /// Line box containing inline and text fragments
@@ -307,6 +315,7 @@ impl FragmentNode {
                 text,
                 box_id: None,
                 baseline_offset,
+                shaped: None,
             },
             vec![],
         )
@@ -320,6 +329,28 @@ impl FragmentNode {
                 text,
                 box_id: None,
                 baseline_offset,
+                shaped: None,
+            },
+            vec![],
+            style,
+        )
+    }
+
+    /// Creates a new text fragment with pre-shaped runs and style
+    pub fn new_text_shaped(
+        bounds: Rect,
+        text: String,
+        baseline_offset: f32,
+        shaped: Vec<ShapedRun>,
+        style: Arc<ComputedStyle>,
+    ) -> Self {
+        Self::new_with_style(
+            bounds,
+            FragmentContent::Text {
+                text,
+                box_id: None,
+                baseline_offset,
+                shaped: Some(shaped),
             },
             vec![],
             style,
@@ -863,6 +894,7 @@ mod tests {
             text: "test".to_string(),
             box_id: None,
             baseline_offset: 0.0,
+            shaped: None,
         };
         assert!(text.is_text());
         assert_eq!(text.text(), Some("test"));

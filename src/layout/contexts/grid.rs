@@ -352,7 +352,11 @@ impl GridFormattingContext {
 
         // Get style from node_map if available
         if let Some(box_node) = node_map.get(&node_id) {
-            Ok(FragmentNode::new_block_styled(bounds, child_fragments, box_node.style.clone()))
+            Ok(FragmentNode::new_block_styled(
+                bounds,
+                child_fragments,
+                box_node.style.clone(),
+            ))
         } else {
             Ok(FragmentNode::new_block(bounds, child_fragments))
         }

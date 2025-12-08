@@ -793,6 +793,11 @@ impl FontDatabase {
         self.db.faces()
     }
 
+    /// Loads the first available font in the database, if any
+    pub fn first_font(&self) -> Option<LoadedFont> {
+        self.faces().next().and_then(|face| self.load_font(face.id))
+    }
+
     /// Checks if a font has a glyph for the given character.
     ///
     /// This is used during fallback resolution to find a font that

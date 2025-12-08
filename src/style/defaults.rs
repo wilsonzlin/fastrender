@@ -36,7 +36,7 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
             "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol" | "li" | "blockquote" | "pre"
             | "article" | "section" | "nav" | "aside" | "header" | "footer" | "main" | "figure" | "figcaption"
             | "dl" | "dt" | "dd" | "form" | "fieldset" | "legend" | "address" | "hr" => Display::Block,
-            
+
             // Center element - centers its contents
             "center" => Display::Block,
 

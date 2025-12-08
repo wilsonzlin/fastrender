@@ -80,10 +80,10 @@ pub struct DebugInfo {
     /// String representation of the path from root to this element
     /// Example: "html > body > div#main > p"
     pub dom_path: Option<String>,
-    
+
     /// Table cell colspan attribute (default 1)
     pub colspan: usize,
-    
+
     /// Table cell rowspan attribute (default 1)
     pub rowspan: usize,
 }
@@ -116,7 +116,7 @@ impl DebugInfo {
             rowspan: 1,
         }
     }
-    
+
     /// Creates debug info with colspan and rowspan
     pub fn with_spans(mut self, colspan: usize, rowspan: usize) -> Self {
         self.colspan = colspan;

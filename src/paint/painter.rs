@@ -22,14 +22,16 @@
 //! using the system's default font.
 
 use crate::error::{RenderError, Result};
+use crate::image_loader::ImageCache;
 use crate::style::color::Rgba;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::{ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
-use tiny_skia::{Paint, PathBuilder, Pixmap, Rect as SkiaRect, Transform};
+use image::DynamicImage;
 use std::borrow::Cow;
+use tiny_skia::{FilterQuality, IntSize, Paint, PathBuilder, Pixmap, PixmapPaint, Rect as SkiaRect, Transform};
 
 /// Main painter that rasterizes a FragmentTree to pixels
 pub struct Painter {
@@ -41,20 +43,34 @@ pub struct Painter {
     shaper: ShapingPipeline,
     /// Font context for resolution
     font_ctx: FontContext,
+    /// Image cache for replaced content
+    image_cache: ImageCache,
 }
 
 impl Painter {
     /// Creates a new painter with the given dimensions
     pub fn new(width: u32, height: u32, background: Rgba) -> Result<Self> {
+        Self::with_resources(width, height, background, FontContext::new(), ImageCache::new())
+    }
+
+    /// Creates a painter with explicit font and image resources
+    pub fn with_resources(
+        width: u32,
+        height: u32,
+        background: Rgba,
+        font_ctx: FontContext,
+        image_cache: ImageCache,
+    ) -> Result<Self> {
         let pixmap = Pixmap::new(width, height).ok_or_else(|| RenderError::InvalidParameters {
             message: format!("Failed to create pixmap {}x{}", width, height),
         })?;
 
-        Ok(Self { 
-            pixmap, 
+        Ok(Self {
+            pixmap,
             background,
             shaper: ShapingPipeline::new(),
-            font_ctx: FontContext::new(),
+            font_ctx,
+            image_cache,
         })
     }
 
@@ -101,12 +117,19 @@ impl Painter {
             FragmentContent::Block { .. } => {}
             FragmentContent::Inline { .. } => {}
             FragmentContent::Text {
-                text, baseline_offset, ..
+                text,
+                baseline_offset,
+                shaped,
+                ..
             } => {
                 // Get text color from style
                 let color = style.map(|s| s.color).unwrap_or(Rgba::BLACK);
                 let font_size = style.map(|s| s.font_size).unwrap_or(16.0);
-                self.paint_text(text, style, x, y + baseline_offset, font_size, color);
+                if let Some(runs) = shaped {
+                    self.paint_shaped_runs(runs, x, y + baseline_offset, color);
+                } else {
+                    self.paint_text(text, style, x, y + baseline_offset, font_size, color);
+                }
             }
             FragmentContent::Line { .. } => {}
             FragmentContent::Replaced { replaced_type, .. } => {
@@ -163,7 +186,8 @@ impl Painter {
             paint.anti_alias = true;
             if let Some(rect) = SkiaRect::from_xywh(x, y, width, top) {
                 let path = PathBuilder::from_rect(rect);
-                self.pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+                self.pixmap
+                    .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
             }
         }
 
@@ -175,7 +199,8 @@ impl Painter {
             paint.anti_alias = true;
             if let Some(rect) = SkiaRect::from_xywh(x + width - right, y, right, height) {
                 let path = PathBuilder::from_rect(rect);
-                self.pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+                self.pixmap
+                    .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
             }
         }
 
@@ -187,7 +212,8 @@ impl Painter {
             paint.anti_alias = true;
             if let Some(rect) = SkiaRect::from_xywh(x, y + height - bottom, width, bottom) {
                 let path = PathBuilder::from_rect(rect);
-                self.pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+                self.pixmap
+                    .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
             }
         }
 
@@ -199,7 +225,8 @@ impl Painter {
             paint.anti_alias = true;
             if let Some(rect) = SkiaRect::from_xywh(x, y, left, height) {
                 let path = PathBuilder::from_rect(rect);
-                self.pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+                self.pixmap
+                    .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
             }
         }
     }
@@ -234,8 +261,20 @@ impl Painter {
             Err(_) => return,
         };
 
-        for run in shaped_runs {
-            self.paint_shaped_run(&run, x, baseline_y, color);
+        self.paint_shaped_runs(&shaped_runs, x, baseline_y, color);
+    }
+
+    fn paint_shaped_runs(&mut self, runs: &[ShapedRun], origin_x: f32, baseline_y: f32, color: Rgba) {
+        let mut pen_x = origin_x;
+
+        for run in runs {
+            let run_origin = if run.direction.is_rtl() {
+                pen_x + run.advance
+            } else {
+                pen_x
+            };
+            self.paint_shaped_run(run, run_origin, baseline_y, color);
+            pen_x += run.advance;
         }
     }
 
@@ -253,7 +292,10 @@ impl Painter {
         let scale = run.font_size / units_per_em;
 
         for glyph in &run.glyphs {
-            let glyph_x = origin_x + glyph.x_offset;
+            let glyph_x = match run.direction {
+                crate::text::pipeline::Direction::RightToLeft => origin_x - glyph.x_offset,
+                _ => origin_x + glyph.x_offset,
+            };
             let glyph_y = baseline_y - glyph.y_offset;
 
             let glyph_id: u16 = glyph.glyph_id as u16;
@@ -328,6 +370,17 @@ impl Painter {
 
     /// Paints a replaced element (image, etc.)
     fn paint_replaced(&mut self, replaced_type: &ReplacedType, x: f32, y: f32, width: f32, height: f32) {
+        if width <= 0.0 || height <= 0.0 {
+            return;
+        }
+
+        // Try to render actual content for images
+        if let ReplacedType::Image { src } = replaced_type {
+            if self.paint_image_from_src(src, x, y, width, height) {
+                return;
+            }
+        }
+
         // For now, draw a placeholder rectangle
         let mut paint = Paint::default();
         paint.set_color_rgba8(200, 200, 200, 255); // Light gray
@@ -352,9 +405,64 @@ impl Painter {
         }
 
         // Would load and render actual image here for ReplacedType::Image
-        if let ReplacedType::Image { src } = replaced_type {
-            let _ = src; // Placeholder - would load image from src
+        if let ReplacedType::Image { src: _ } = replaced_type {
+            // Placeholder already drawn if image loading failed
         }
+    }
+
+    fn paint_image_from_src(&mut self, src: &str, x: f32, y: f32, width: f32, height: f32) -> bool {
+        if src.is_empty() {
+            return false;
+        }
+
+        let image = match self.image_cache.load(src) {
+            Ok(img) => img,
+            Err(_) => return false,
+        };
+
+        let pixmap = match Self::dynamic_image_to_pixmap(&image) {
+            Some(pixmap) => pixmap,
+            None => return false,
+        };
+
+        if pixmap.width() == 0 || pixmap.height() == 0 {
+            return false;
+        }
+
+        let scale_x = width / pixmap.width() as f32;
+        let scale_y = height / pixmap.height() as f32;
+        if !scale_x.is_finite() || !scale_y.is_finite() {
+            return false;
+        }
+
+        let mut paint = PixmapPaint::default();
+        paint.quality = FilterQuality::Bilinear;
+
+        let transform = Transform::from_row(scale_x, 0.0, 0.0, scale_y, x, y);
+        self.pixmap.draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);
+        true
+    }
+
+    fn dynamic_image_to_pixmap(image: &DynamicImage) -> Option<Pixmap> {
+        let rgba = image.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        // tiny-skia expects premultiplied BGRA
+        let mut data = Vec::with_capacity((width * height * 4) as usize);
+        for pixel in rgba.pixels() {
+            let [r, g, b, a] = pixel.0;
+            let alpha = a as f32 / 255.0;
+            data.push((b as f32 * alpha).round() as u8);
+            data.push((g as f32 * alpha).round() as u8);
+            data.push((r as f32 * alpha).round() as u8);
+            data.push(a);
+        }
+
+        let size = IntSize::from_wh(width, height)?;
+        Pixmap::from_vec(data, size)
     }
 }
 
@@ -363,6 +471,19 @@ impl Painter {
 /// This is the main entry point for painting.
 pub fn paint_tree(tree: &FragmentTree, width: u32, height: u32, background: Rgba) -> Result<Pixmap> {
     let painter = Painter::new(width, height, background)?;
+    painter.paint(tree)
+}
+
+/// Paints a fragment tree using provided font and image resources.
+pub fn paint_tree_with_resources(
+    tree: &FragmentTree,
+    width: u32,
+    height: u32,
+    background: Rgba,
+    font_ctx: FontContext,
+    image_cache: ImageCache,
+) -> Result<Pixmap> {
+    let painter = Painter::with_resources(width, height, background, font_ctx, image_cache)?;
     painter.paint(tree)
 }
 

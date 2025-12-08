@@ -58,14 +58,17 @@ use crate::css::parser::extract_css;
 use crate::dom::{self, DomNode};
 use crate::error::{Error, RenderError, Result};
 use crate::geometry::Size;
+use crate::image_loader::ImageCache;
 use crate::image_output::{encode_image, OutputFormat};
 use crate::layout::engine::{LayoutConfig, LayoutEngine};
-use crate::paint::painter::paint_tree;
+use crate::paint::painter::paint_tree_with_resources;
 use crate::style::cascade::apply_styles;
 use crate::style::color::Rgba;
 use crate::text::font_loader::FontContext;
 use crate::tree::box_generation::generate_box_tree;
+use crate::tree::box_tree::{BoxNode, BoxType, ReplacedType};
 use crate::tree::fragment_tree::FragmentTree;
+use image::GenericImageView;
 
 // Re-export Pixmap from tiny-skia for public use
 pub use tiny_skia::Pixmap;
@@ -122,6 +125,9 @@ pub struct FastRender {
     /// Layout engine for computing positions
     layout_engine: LayoutEngine,
 
+    /// Image cache for external resources (images, SVG)
+    image_cache: ImageCache,
+
     /// Default background color for rendering
     background_color: Rgba,
 }
@@ -157,6 +163,9 @@ pub struct FastRenderConfig {
 
     /// Default viewport height (used when not specified)
     pub default_height: u32,
+
+    /// Base URL used to resolve relative resource references (images, CSS)
+    pub base_url: Option<String>,
 }
 
 impl Default for FastRenderConfig {
@@ -165,6 +174,7 @@ impl Default for FastRenderConfig {
             background_color: Rgba::WHITE,
             default_width: 800,
             default_height: 600,
+            base_url: None,
         }
     }
 }
@@ -226,6 +236,12 @@ impl FastRenderBuilder {
         self
     }
 
+    /// Sets a base URL used to resolve relative resource references (images, linked CSS)
+    pub fn base_url(mut self, url: impl Into<String>) -> Self {
+        self.config.base_url = Some(url.into());
+        self
+    }
+
     /// Builds the FastRender instance
     pub fn build(self) -> Result<FastRender> {
         FastRender::with_config(self.config)
@@ -266,6 +282,12 @@ impl FastRenderConfig {
     pub fn with_default_viewport(mut self, width: u32, height: u32) -> Self {
         self.default_width = width;
         self.default_height = height;
+        self
+    }
+
+    /// Sets the base URL used to resolve relative resource references.
+    pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
+        self.base_url = Some(url.into());
         self
     }
 }
@@ -337,10 +359,15 @@ impl FastRender {
         let layout_config =
             LayoutConfig::for_viewport(Size::new(config.default_width as f32, config.default_height as f32));
         let layout_engine = LayoutEngine::new(layout_config);
+        let image_cache = match &config.base_url {
+            Some(url) => ImageCache::with_base_url(url.clone()),
+            None => ImageCache::new(),
+        };
 
         Ok(Self {
             font_context,
             layout_engine,
+            image_cache,
             background_color: config.background_color,
         })
     }
@@ -516,7 +543,10 @@ impl FastRender {
         let styled_tree = apply_styles(dom, &stylesheet);
 
         // Generate box tree
-        let box_tree = generate_box_tree(&styled_tree);
+        let mut box_tree = generate_box_tree(&styled_tree);
+
+        // Resolve intrinsic sizes for replaced elements using the image cache
+        self.resolve_replaced_intrinsic_sizes(&mut box_tree.root);
 
         // Update layout engine config for this viewport
         let config = LayoutConfig::for_viewport(Size::new(width as f32, height as f32));
@@ -558,7 +588,14 @@ impl FastRender {
     /// let pixmap = renderer.paint(&fragment_tree, 800, 600)?;
     /// ```
     pub fn paint(&self, fragment_tree: &FragmentTree, width: u32, height: u32) -> Result<Pixmap> {
-        paint_tree(fragment_tree, width, height, self.background_color)
+        paint_tree_with_resources(
+            fragment_tree,
+            width,
+            height,
+            self.background_color,
+            self.font_context.clone(),
+            self.image_cache.clone(),
+        )
     }
 
     /// Returns a reference to the font context
@@ -580,6 +617,16 @@ impl FastRender {
         &self.layout_engine
     }
 
+    /// Sets the base URL used to resolve relative resource references.
+    pub fn set_base_url(&mut self, base_url: impl Into<String>) {
+        self.image_cache.set_base_url(base_url);
+    }
+
+    /// Clears any configured base URL, leaving relative resources unresolved.
+    pub fn clear_base_url(&mut self) {
+        self.image_cache.clear_base_url();
+    }
+
     /// Gets the default background color
     pub fn background_color(&self) -> Rgba {
         self.background_color
@@ -588,6 +635,45 @@ impl FastRender {
     /// Sets the default background color
     pub fn set_background_color(&mut self, color: Rgba) {
         self.background_color = color;
+    }
+
+    /// Populate intrinsic sizes for replaced elements (e.g., images) using the image cache.
+    fn resolve_replaced_intrinsic_sizes(&self, node: &mut BoxNode) {
+        if let BoxType::Replaced(replaced_box) = &mut node.box_type {
+            // Fill missing intrinsic size/aspect ratio for images
+            if let ReplacedType::Image { src } = &replaced_box.replaced_type {
+                let needs_intrinsic = replaced_box.intrinsic_size.is_none();
+                let needs_ratio = replaced_box.aspect_ratio.is_none();
+
+                if (needs_intrinsic || needs_ratio) && !src.is_empty() {
+                    if let Ok(image) = self.image_cache.load(src) {
+                        let (w, h) = image.dimensions();
+                        if w > 0 && h > 0 {
+                            let size = Size::new(w as f32, h as f32);
+                            if needs_intrinsic {
+                                replaced_box.intrinsic_size = Some(size);
+                            }
+                            if needs_ratio {
+                                replaced_box.aspect_ratio = Some(size.width / size.height);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // If only intrinsic size is present, ensure aspect ratio is recorded
+            if replaced_box.aspect_ratio.is_none() {
+                if let Some(size) = replaced_box.intrinsic_size {
+                    if size.height > 0.0 {
+                        replaced_box.aspect_ratio = Some(size.width / size.height);
+                    }
+                }
+            }
+        }
+
+        for child in &mut node.children {
+            self.resolve_replaced_intrinsic_sizes(child);
+        }
     }
 
     // =========================================================================

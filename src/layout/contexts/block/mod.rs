@@ -416,38 +416,64 @@ impl FormattingContext for BlockFormattingContext {
 
     fn compute_intrinsic_inline_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
         let style = &box_node.style;
-        let explicit_width = style.width.as_ref().map(|l| l.to_px());
-
-        match mode {
-            IntrinsicSizingMode::MinContent => {
-                if let Some(w) = explicit_width {
-                    return Ok(w);
-                }
-                let mut max_child_width = 0.0f32;
-                for child in &box_node.children {
-                    if child.is_block_level() {
-                        if let Some(w) = child.style.width.as_ref().map(|l| l.to_px()) {
-                            max_child_width = max_child_width.max(w);
-                        }
-                    }
-                }
-                Ok(max_child_width)
-            }
-            IntrinsicSizingMode::MaxContent => {
-                if let Some(w) = explicit_width {
-                    return Ok(w);
-                }
-                let mut max_child_width = 0.0f32;
-                for child in &box_node.children {
-                    if child.is_block_level() {
-                        if let Some(w) = child.style.width.as_ref().map(|l| l.to_px()) {
-                            max_child_width = max_child_width.max(w);
-                        }
-                    }
-                }
-                Ok(max_child_width)
+        // Honor specified widths that resolve without a containing block
+        if let Some(specified) = style.width.as_ref() {
+            let resolved = resolve_length_for_width(*specified, 0.0);
+            // Ignore auto/relative cases that resolve to 0.0
+            if resolved > 0.0 {
+                return Ok(resolved);
             }
         }
+
+        // Replaced elements fall back to their intrinsic content size plus padding/borders
+        if let BoxType::Replaced(replaced_box) = &box_node.box_type {
+            let size = compute_replaced_size(style, replaced_box);
+            let edges = horizontal_padding_and_borders(style, size.width);
+            return Ok(size.width + edges);
+        }
+
+        let factory = FormattingContextFactory::new();
+        let inline_fc = InlineFormattingContext::new();
+
+        // Inline formatting context contribution (text and inline-level children)
+        let inline_width = inline_fc
+            .compute_intrinsic_inline_size(box_node, mode)
+            .unwrap_or(0.0);
+
+        // Block-level in-flow children contribute their own intrinsic widths
+        let mut block_child_width = 0.0f32;
+        for child in &box_node.children {
+            if !child.is_block_level() || is_out_of_flow(child) {
+                continue;
+            }
+            let fc_type = child
+                .formatting_context()
+                .unwrap_or(FormattingContextType::Block);
+            let fc = factory.create(fc_type);
+            let child_width = fc.compute_intrinsic_inline_size(child, mode)?;
+            block_child_width = block_child_width.max(child_width);
+        }
+
+        let content_width = inline_width.max(block_child_width);
+
+        // Add this box's own padding and borders
+        let edges = horizontal_padding_and_borders(style, 0.0);
+        let mut width = content_width + edges;
+
+        // Apply min/max constraints when present
+        let min_width = style
+            .min_width
+            .as_ref()
+            .map(|l| resolve_length_for_width(*l, 0.0))
+            .unwrap_or(0.0);
+        let max_width = style
+            .max_width
+            .as_ref()
+            .map(|l| resolve_length_for_width(*l, 0.0))
+            .unwrap_or(f32::INFINITY);
+        width = width.clamp(min_width, max_width);
+
+        Ok(width.max(0.0))
     }
 }
 
@@ -466,6 +492,13 @@ fn resolve_length_for_width(length: Length, percentage_base: f32) -> f32 {
         // Relative units (em/rem/etc.) should be resolved earlier; use raw value as px fallback.
         length.value
     }
+}
+
+fn horizontal_padding_and_borders(style: &ComputedStyle, percentage_base: f32) -> f32 {
+    resolve_length_for_width(style.padding_left, percentage_base)
+        + resolve_length_for_width(style.padding_right, percentage_base)
+        + resolve_length_for_width(style.border_left_width, percentage_base)
+        + resolve_length_for_width(style.border_right_width, percentage_base)
 }
 
 fn recompute_margins_for_width(

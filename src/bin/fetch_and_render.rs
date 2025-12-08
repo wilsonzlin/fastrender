@@ -204,6 +204,7 @@ fn main() -> Result<()> {
 
     println!("Rendering to image ({}x{} viewport)...", width, height);
     let mut renderer = FastRender::new()?;
+    renderer.set_base_url(url.clone());
     // Note: scroll_y is currently not supported, will render from top
     if scroll_y != 0 {
         eprintln!("Warning: scroll_y parameter is not yet supported, rendering from top");

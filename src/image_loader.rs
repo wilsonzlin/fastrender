@@ -24,6 +24,16 @@ impl ImageCache {
         }
     }
 
+    /// Sets or replaces the base URL used to resolve relative image sources.
+    pub fn set_base_url(&mut self, base_url: impl Into<String>) {
+        self.base_url = Some(base_url.into());
+    }
+
+    /// Clears any previously configured base URL.
+    pub fn clear_base_url(&mut self) {
+        self.base_url = None;
+    }
+
     /// Resolve a potentially relative URL to an absolute URL
     fn resolve_url(&self, url: &str) -> String {
         // DEBUG: Log URL resolution for y18.svg

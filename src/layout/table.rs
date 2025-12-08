@@ -29,7 +29,7 @@
 use crate::geometry::{Point, Rect};
 use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
 use crate::layout::contexts::block::BlockFormattingContext;
-use crate::layout::contexts::inline::InlineFormattingContext;
+use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::table::column_distribution::{ColumnConstraints, ColumnDistributor, DistributionMode};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::tree::box_tree::BoxNode;
@@ -776,11 +776,15 @@ impl TableFormattingContext {
 
     /// Measures cell intrinsic widths using inline min/max content rules
     fn measure_cell_intrinsic_widths(&self, cell_box: &BoxNode) -> (f32, f32) {
-        let inline_fc = InlineFormattingContext::new();
-        let min = inline_fc
+        let fc_type = cell_box
+            .formatting_context()
+            .unwrap_or(crate::style::display::FormattingContextType::Block);
+        let fc = FormattingContextFactory::new().create(fc_type);
+
+        let min = fc
             .compute_intrinsic_inline_size(cell_box, IntrinsicSizingMode::MinContent)
             .unwrap_or(0.0);
-        let max = inline_fc
+        let max = fc
             .compute_intrinsic_inline_size(cell_box, IntrinsicSizingMode::MaxContent)
             .unwrap_or(min);
 
@@ -913,44 +917,75 @@ impl FormattingContext for TableFormattingContext {
         let mut fragments = Vec::new();
         let h_spacing = structure.border_spacing.0;
         let v_spacing = structure.border_spacing.1;
-        let mut current_y = v_spacing;
 
-        for row_idx in 0..structure.row_count {
-            let row_cells: Vec<&CellInfo> = structure.cells.iter().filter(|c| c.row == row_idx).collect();
-            let mut row_height: f32 = 0.0;
-            let mut staged = Vec::new();
+        // Layout all cells to obtain their fragments and measure heights, then distribute row heights with rowspans.
+        let mut laid_out_cells: Vec<(&CellInfo, FragmentNode)> = Vec::new();
+        for cell in &structure.cells {
+            let span_end = (cell.col + cell.colspan).min(col_widths.len());
+            let width: f32 = col_widths[cell.col..span_end].iter().sum::<f32>()
+                + h_spacing * (cell.colspan.saturating_sub(1) as f32);
 
-            for cell in row_cells {
-                let span_end = (cell.col + cell.colspan).min(col_widths.len());
-                let width: f32 = col_widths[cell.col..span_end].iter().sum::<f32>()
-                    + h_spacing * (cell.colspan.saturating_sub(1) as f32);
+            if let Some(cell_box) = self.get_cell_box(box_node, cell) {
+                if let Ok(fragment) = self.layout_cell(cell_box, width) {
+                    laid_out_cells.push((cell, fragment));
+                }
+            }
+        }
 
-                if let Some(cell_box) = self.get_cell_box(box_node, cell) {
-                    if let Ok(fragment) = self.layout_cell(cell_box, width) {
-                        row_height = row_height.max(fragment.bounds.height());
-                        staged.push((cell, fragment));
+        // Compute row heights, accounting for rowspans and vertical spacing.
+        let mut row_heights = vec![0.0f32; structure.row_count];
+        for (cell, frag) in &laid_out_cells {
+            if cell.rowspan == 1 {
+                row_heights[cell.row] = row_heights[cell.row].max(frag.bounds.height());
+            } else {
+                let span_start = cell.row;
+                let span_end = (cell.row + cell.rowspan).min(structure.row_count);
+                let spacing_total = v_spacing * (cell.rowspan.saturating_sub(1) as f32);
+                let current: f32 = row_heights[span_start..span_end].iter().sum();
+                if frag.bounds.height() > current + spacing_total {
+                    let extra = frag.bounds.height() - current - spacing_total;
+                    let per_row = extra / (span_end - span_start) as f32;
+                    for r in span_start..span_end {
+                        row_heights[r] += per_row;
                     }
                 }
             }
+        }
 
-            if row_height == 0.0 {
-                row_height = 1.0;
+        // Ensure non-zero heights
+        for h in &mut row_heights {
+            if *h <= 0.0 {
+                *h = 1.0;
             }
+        }
 
-            for (cell, frag) in staged {
-                let mut x = h_spacing;
-                for col_idx in 0..cell.col {
-                    x += col_widths[col_idx] + h_spacing;
-                }
-                let translated = frag.translate(Point::new(x, current_y));
-                fragments.push(translated);
+        // Compute row offsets
+        let mut row_offsets = Vec::with_capacity(structure.row_count);
+        let mut y = v_spacing;
+        for h in &row_heights {
+            row_offsets.push(y);
+            y += *h + v_spacing;
+        }
+
+        // Position fragments
+        for (cell, frag) in laid_out_cells {
+            let mut x = h_spacing;
+            for col_idx in 0..cell.col {
+                x += col_widths[col_idx] + h_spacing;
             }
-
-            current_y += row_height + v_spacing;
+            let y = row_offsets.get(cell.row).cloned().unwrap_or(0.0);
+            fragments.push(frag.translate(Point::new(x, y)));
         }
 
         let total_width: f32 = col_widths.iter().sum::<f32>() + spacing;
-        let total_height = current_y.max(0.0);
+        let total_height = if structure.row_count > 0 {
+            row_offsets
+                .last()
+                .map(|start| start + row_heights.last().copied().unwrap_or(0.0) + v_spacing)
+                .unwrap_or(0.0)
+        } else {
+            0.0
+        };
         let table_bounds = Rect::from_xywh(0.0, 0.0, total_width.max(0.0), total_height);
 
         Ok(FragmentNode::new_with_style(

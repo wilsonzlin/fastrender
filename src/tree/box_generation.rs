@@ -838,29 +838,31 @@ fn generate_box_node_from_styled(styled: &StyledNode) -> BoxNode {
         Display::None => BoxNode::new_block(style, FormattingContextType::Block, vec![]),
         _ => BoxNode::new_block(style, fc_type, children),
     };
-    
+
     // Add debug info with tag name for table element identification
     if let Some(tag) = styled.node.tag_name() {
         // Extract colspan and rowspan for table cells
-        let colspan = styled.node.get_attribute("colspan")
+        let colspan = styled
+            .node
+            .get_attribute("colspan")
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(1)
             .max(1);
-        let rowspan = styled.node.get_attribute("rowspan")
+        let rowspan = styled
+            .node
+            .get_attribute("rowspan")
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(1)
             .max(1);
-        
+
         let id = styled.node.get_attribute("id");
-        let classes = styled.node.get_attribute("class")
+        let classes = styled
+            .node
+            .get_attribute("class")
             .map(|c| c.split_whitespace().map(|s| s.to_string()).collect())
             .unwrap_or_default();
-            
-        box_node.with_debug_info(DebugInfo::new(
-            Some(tag.to_string()),
-            id,
-            classes,
-        ).with_spans(colspan, rowspan))
+
+        box_node.with_debug_info(DebugInfo::new(Some(tag.to_string()), id, classes).with_spans(colspan, rowspan))
     } else {
         box_node
     }
@@ -933,23 +935,25 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
         _ => ReplacedType::Image { src },
     };
 
-    // Get intrinsic size from attributes or use default
-    let intrinsic_width = styled
-        .node
-        .get_attribute("width")
-        .and_then(|w| w.parse::<f32>().ok())
-        .unwrap_or(300.0);
+    // Get intrinsic size from attributes when provided
+    let intrinsic_width = styled.node.get_attribute("width").and_then(|w| w.parse::<f32>().ok());
 
-    let intrinsic_height = styled
-        .node
-        .get_attribute("height")
-        .and_then(|h| h.parse::<f32>().ok())
-        .unwrap_or(150.0);
+    let intrinsic_height = styled.node.get_attribute("height").and_then(|h| h.parse::<f32>().ok());
+
+    let intrinsic_size = match (intrinsic_width, intrinsic_height) {
+        (Some(w), Some(h)) => Some(Size::new(w, h)),
+        _ => None,
+    };
+
+    let aspect_ratio = match (intrinsic_width, intrinsic_height) {
+        (Some(w), Some(h)) if h > 0.0 => Some(w / h),
+        _ => None,
+    };
 
     let replaced_box = ReplacedBox {
         replaced_type,
-        intrinsic_size: Some(Size::new(intrinsic_width, intrinsic_height)),
-        aspect_ratio: Some(intrinsic_width / intrinsic_height),
+        intrinsic_size,
+        aspect_ratio,
     };
 
     BoxNode {

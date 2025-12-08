@@ -2,7 +2,10 @@
 //!
 //! Contains common functions used across multiple layout modules.
 
+use crate::geometry::Size;
 use crate::style::values::LengthOrAuto;
+use crate::style::ComputedStyle;
+use crate::tree::box_tree::ReplacedBox;
 
 /// Resolves a length-or-auto value to an optional pixel value.
 ///
@@ -39,10 +42,62 @@ pub fn resolve_offset(value: &LengthOrAuto, percentage_base: f32) -> Option<f32>
     }
 }
 
+/// Computes the used size of a replaced element based on style and intrinsic data.
+///
+/// Implements a simplified form of CSS 2.1 §10.3.2/§10.6.2:
+/// - Specified width/height override intrinsic dimensions
+/// - If only one dimension is specified and an aspect ratio is available, the other is derived
+/// - If nothing is specified and no intrinsic data exists, fall back to 300x150
+pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox) -> Size {
+    const DEFAULT_SIZE: Size = Size {
+        width: 300.0,
+        height: 150.0,
+    };
+
+    let intrinsic = replaced.intrinsic_size.unwrap_or(DEFAULT_SIZE);
+    let intrinsic_ratio = replaced.aspect_ratio.or_else(|| {
+        if intrinsic.height > 0.0 {
+            Some(intrinsic.width / intrinsic.height)
+        } else {
+            None
+        }
+    });
+
+    let mut width = style.width.as_ref().map(|l| l.to_px()).unwrap_or(intrinsic.width);
+    let mut height = style.height.as_ref().map(|l| l.to_px()).unwrap_or(intrinsic.height);
+
+    match (style.width.as_ref(), style.height.as_ref(), intrinsic_ratio) {
+        (Some(_), None, Some(ratio)) => {
+            // Width specified, derive height from aspect ratio
+            height = width / ratio;
+        }
+        (None, Some(_), Some(ratio)) => {
+            // Height specified, derive width from aspect ratio
+            width = height * ratio;
+        }
+        (None, None, None) => {
+            // No information at all, fall back to default object size
+            width = DEFAULT_SIZE.width;
+            height = DEFAULT_SIZE.height;
+        }
+        _ => {}
+    }
+
+    // Apply min/max constraints when present
+    let min_width = style.min_width.as_ref().map(|l| l.to_px()).unwrap_or(0.0);
+    let max_width = style.max_width.as_ref().map(|l| l.to_px()).unwrap_or(f32::INFINITY);
+    let min_height = style.min_height.as_ref().map(|l| l.to_px()).unwrap_or(0.0);
+    let max_height = style.max_height.as_ref().map(|l| l.to_px()).unwrap_or(f32::INFINITY);
+
+    Size::new(width.clamp(min_width, max_width), height.clamp(min_height, max_height))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::style::values::{Length, LengthUnit};
+    use crate::style::ComputedStyle;
+    use crate::tree::box_tree::ReplacedBox;
 
     #[test]
     fn test_resolve_offset_auto() {
@@ -65,5 +120,39 @@ mod tests {
     fn test_resolve_offset_em_fallback() {
         let value = LengthOrAuto::Length(Length::new(2.0, LengthUnit::Em));
         assert_eq!(resolve_offset(&value, 100.0), Some(0.0));
+    }
+
+    #[test]
+    fn test_compute_replaced_size_prefers_intrinsic() {
+        let mut style = ComputedStyle::default();
+        style.width = None;
+        style.height = None;
+
+        let replaced = ReplacedBox {
+            replaced_type: crate::tree::box_tree::ReplacedType::Image { src: "img".into() },
+            intrinsic_size: Some(Size::new(640.0, 480.0)),
+            aspect_ratio: None,
+        };
+
+        let size = compute_replaced_size(&style, &replaced);
+        assert_eq!(size.width, 640.0);
+        assert_eq!(size.height, 480.0);
+    }
+
+    #[test]
+    fn test_compute_replaced_size_derives_missing_dimension() {
+        let mut style = ComputedStyle::default();
+        style.width = Some(Length::px(200.0));
+        style.height = None;
+
+        let replaced = ReplacedBox {
+            replaced_type: crate::tree::box_tree::ReplacedType::Image { src: "img".into() },
+            intrinsic_size: Some(Size::new(100.0, 50.0)),
+            aspect_ratio: Some(2.0),
+        };
+
+        let size = compute_replaced_size(&style, &replaced);
+        assert_eq!(size.width, 200.0);
+        assert_eq!(size.height, 100.0);
     }
 }

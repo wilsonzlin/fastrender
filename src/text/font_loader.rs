@@ -26,7 +26,10 @@
 
 use crate::text::font_db::{FontDatabase, FontStretch, FontStyle, FontWeight, LoadedFont, ScaledMetrics};
 use rustybuzz::{Direction, Face, UnicodeBuffer};
+use std::fs;
 use std::sync::Arc;
+
+const EMBEDDED_FALLBACK_FONT: &[u8] = include_bytes!("../../resources/fonts/Roboto-Regular.ttf");
 
 /// Font context for text operations
 ///
@@ -74,9 +77,32 @@ impl FontContext {
     /// println!("Loaded {} fonts", ctx.font_count());
     /// ```
     pub fn new() -> Self {
-        Self {
-            db: Arc::new(FontDatabase::new()),
+        let mut db = FontDatabase::new();
+
+        // Some minimal container environments ship without system fonts.
+        // Attempt to load a few common sans-serif files so text shaping can proceed.
+        if db.font_count() == 0 {
+            let _ = db.load_font_data(EMBEDDED_FALLBACK_FONT.to_vec());
         }
+
+        if db.font_count() == 0 {
+            const FALLBACK_FONT_FILES: &[&str] = &[
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+                "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+            ];
+
+            for path in FALLBACK_FONT_FILES {
+                if let Ok(data) = fs::read(path) {
+                    let _ = db.load_font_data(data);
+                    if db.font_count() > 0 {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Self { db: Arc::new(db) }
     }
 
     /// Creates a font context with a custom font database
@@ -227,16 +253,19 @@ impl FontContext {
     /// Returns a generic sans-serif font. Useful as a last resort fallback.
     pub fn get_sans_serif(&self) -> Option<LoadedFont> {
         self.get_font_simple("sans-serif", 400, FontStyle::Normal)
+            .or_else(|| self.db.first_font())
     }
 
     /// Gets a serif fallback font
     pub fn get_serif(&self) -> Option<LoadedFont> {
         self.get_font_simple("serif", 400, FontStyle::Normal)
+            .or_else(|| self.db.first_font())
     }
 
     /// Gets a monospace fallback font
     pub fn get_monospace(&self) -> Option<LoadedFont> {
         self.get_font_simple("monospace", 400, FontStyle::Normal)
+            .or_else(|| self.db.first_font())
     }
 
     /// Clears the font data cache
@@ -577,6 +606,14 @@ mod tests {
         if font.is_some() {
             assert!(!font.unwrap().data.is_empty());
         }
+    }
+
+    #[test]
+    fn test_embedded_fallback_font_loads() {
+        let mut db = FontDatabase::empty();
+        let before = db.font_count();
+        let _ = db.load_font_data(EMBEDDED_FALLBACK_FONT.to_vec());
+        assert!(db.font_count() > before);
     }
 
     // ========================================================================

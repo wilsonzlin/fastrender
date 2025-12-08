@@ -30,14 +30,13 @@
 - Inline replaced elements now honor horizontal margins: margins are resolved in the inline context, included in line advance, and their fragments are offset so margins behave as spacing rather than painted area (`src/layout/contexts/inline/{mod.rs,line_builder.rs}`).
 - Intrinsic sizing for inline content now excludes margins (replaced elements contribute their border-box width to min/max-content sums while layout still accounts for margins separately) to better match CSS sizing definitions (`src/layout/contexts/inline/{mod.rs,line_builder.rs}`).
 - Inline-blocks now resolve horizontal margins, subtract them from available inline space for shrink-to-fit sizing, and include them in line advance while only the border-box is painted (`src/layout/contexts/inline/{mod.rs,line_builder.rs}`).
+- Block intrinsic inline-size computation now accounts for inline content, in-flow block children, replaced boxes, and the element’s own padding/borders instead of just explicit widths (`src/layout/contexts/block/mod.rs`).
+- Table column intrinsic widths now use the cell’s formatting context (block/flex/grid/inline) instead of forcing inline measurement, so block-only cells contribute widths correctly (`src/layout/table.rs`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
 - Min/max content sizing still uses simple break-opportunity offsets rather than cluster-aware shaping widths; no hyphenation support yet in IFC.
-- Table layout is partial: border-spacing hardcoded to 0; border-collapse unimplemented; padding/borders/vertical-align ignored in row heights; row/col spans not truly honored; percent/fixed widths not resolved per CSS 2.1; colspans split evenly.
-- Replaced elements still ignore object-fit/object-position/backgrounds on the content box; SVG/iframe/video remain unrendered.
-- Painting still bypasses display list; no shared font context between layout and paint (painter builds its own).
-- Table layout is partial: border-spacing fixed to the initial value only (no border-collapse), padding/borders/vertical-align ignored in row heights, row/col spans not truly honored, percent/fixed widths not resolved per CSS 2.1, colspans split evenly.
+- Table layout is partial: border-collapse unimplemented, padding/borders/vertical-align ignored in row heights, row/col spans not truly honored, percent/fixed widths not resolved per CSS 2.1, colspans split evenly, no `border-spacing` parsing (always initial).
 - Replaced elements still ignore object-fit/object-position/backgrounds on the content box; SVG/iframe/video remain unrendered.
 - Painting still bypasses display list; no shared font context between layout and paint (painter builds its own).
 - Inline-blocks/replaced elements still rely on display hints rather than full anonymous inline box generation and lack percent/min-height handling.
@@ -48,7 +47,7 @@
    - Integrate shared `FontContext` across layout/paint to avoid divergent font fallback; propagate font metrics into inline box metrics consistently.
    - Harden RTL run positioning and visual reordering in painter/layout so mixed-direction text paints correctly.
 2. Tables:
-   - Implement CSS 2.1 auto table layout properly: cell min/max via the correct formatting context (including padding/border), border-spacing/border-collapse initial values, percent/fixed widths resolved against containing block, correct colspan/rowspan distribution, vertical-align and padding/borders in row heights.
+   - Implement CSS 2.1 auto table layout properly: cell min/max via the correct formatting context (including padding/border), border-spacing/border-collapse initial values surfaced from style, percent/fixed widths resolved against containing block, correct colspan/rowspan distribution, vertical-align and padding/borders in row heights.
 3. Replaced content:
    - Render images for `ReplacedType::Image` instead of placeholders.
 4. General bidi:
