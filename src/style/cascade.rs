@@ -460,6 +460,7 @@ mod tests {
         assert!(marker.padding_right.is_zero());
         assert!(marker.margin_left.unwrap().is_zero());
         assert_eq!(marker.background_color, Rgba::TRANSPARENT);
+        assert!(matches!(marker.text_transform, crate::style::types::TextTransform::None));
     }
 }
 
@@ -641,6 +642,7 @@ fn compute_marker_styles(
 
     reset_marker_box_properties(&mut styles);
     styles.display = Display::Inline;
+    styles.text_transform = crate::style::types::TextTransform::None;
     Some(styles)
 }
 
