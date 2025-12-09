@@ -438,6 +438,11 @@ pub fn creates_stacking_context(style: &ComputedStyle, parent_style: Option<&Com
         return true;
     }
 
+    // 6c. Backdrop filter
+    if !style.backdrop_filter.is_empty() {
+        return true;
+    }
+
     // 7. Mix-blend-mode or isolation
     if !matches!(style.mix_blend_mode, crate::style::types::MixBlendMode::Normal) {
         return true;
@@ -521,6 +526,10 @@ pub fn get_stacking_context_reason(
 
     if !style.filter.is_empty() {
         return Some(StackingContextReason::Filter);
+    }
+
+    if !style.backdrop_filter.is_empty() {
+        return Some(StackingContextReason::BackdropFilter);
     }
 
     if is_positioned(style)

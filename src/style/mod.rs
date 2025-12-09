@@ -147,6 +147,8 @@ pub struct ComputedStyle {
     pub object_position: ObjectPosition,
     /// CSS filter effects applied to this element
     pub filter: Vec<FilterFunction>,
+    /// Backdrop filters applied to the backdrop behind this element
+    pub backdrop_filter: Vec<FilterFunction>,
     pub mix_blend_mode: MixBlendMode,
     pub isolation: Isolation,
 
@@ -274,6 +276,7 @@ impl Default for ComputedStyle {
                 y: types::PositionComponent::Keyword(types::PositionKeyword::Center),
             },
             filter: Vec::new(),
+            backdrop_filter: Vec::new(),
             mix_blend_mode: MixBlendMode::Normal,
             isolation: Isolation::Auto,
 

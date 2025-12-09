@@ -826,6 +826,11 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 styles.filter = filters;
             }
         }
+        "backdrop-filter" => {
+            if let Some(filters) = parse_filter_list(&resolved_value) {
+                styles.backdrop_filter = filters;
+            }
+        }
         "transform-origin" => {
             if let Some(origin) = parse_transform_origin(&resolved_value) {
                 styles.transform_origin = origin;
@@ -1670,6 +1675,23 @@ mod tests {
                 assert!((shadow.offset_y.to_px() - 3.0).abs() < 0.01);
             }
             _ => panic!("expected drop-shadow"),
+        }
+    }
+
+    #[test]
+    fn parses_backdrop_filter_as_filter_list() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "backdrop-filter".to_string(),
+            value: PropertyValue::Keyword("blur(5px)".to_string()),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.backdrop_filter.len(), 1);
+        match &style.backdrop_filter[0] {
+            FilterFunction::Blur(len) => assert!((len.to_px() - 5.0).abs() < 0.01),
+            _ => panic!("expected blur"),
         }
     }
 }

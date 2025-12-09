@@ -107,6 +107,7 @@ enum DisplayCommand {
         blend_mode: MixBlendMode,
         isolated: bool,
         filters: Vec<ResolvedFilter>,
+        backdrop_filters: Vec<ResolvedFilter>,
         commands: Vec<DisplayCommand>,
     },
 }
@@ -391,7 +392,17 @@ impl Painter {
             .map(|s| resolve_filters(&s.filter, s))
             .unwrap_or_default();
         let has_filters = !filters.is_empty();
-        if opacity < 1.0 || transform.is_some() || !matches!(blend_mode, MixBlendMode::Normal) || isolated || has_filters
+        let backdrop_filters = style_ref
+            .as_deref()
+            .map(|s| resolve_filters(&s.backdrop_filter, s))
+            .unwrap_or_default();
+        let has_backdrop = !backdrop_filters.is_empty();
+        if opacity < 1.0
+            || transform.is_some()
+            || !matches!(blend_mode, MixBlendMode::Normal)
+            || isolated
+            || has_filters
+            || has_backdrop
         {
             items.push(DisplayCommand::StackingContext {
                 opacity,
@@ -399,6 +410,7 @@ impl Painter {
                 blend_mode,
                 isolated,
                 filters,
+                backdrop_filters,
                 commands: local_commands,
             });
         } else {
@@ -517,6 +529,7 @@ impl Painter {
                 blend_mode,
                 isolated,
                 filters,
+                backdrop_filters,
                 commands,
             } => {
                 if opacity <= 0.0 {
@@ -528,12 +541,21 @@ impl Painter {
                 };
 
                 let (out_l, out_t, out_r, out_b) = filter_outset(&filters);
+                let (bd_l, bd_t, bd_r, bd_b) = filter_outset(&backdrop_filters);
                 if out_l > 0.0 || out_t > 0.0 || out_r > 0.0 || out_b > 0.0 {
                     bounds = Rect::from_xywh(
                         bounds.min_x() - out_l,
                         bounds.min_y() - out_t,
                         bounds.width() + out_l + out_r,
                         bounds.height() + out_t + out_b,
+                    );
+                }
+                if bd_l > 0.0 || bd_t > 0.0 || bd_r > 0.0 || bd_b > 0.0 {
+                    bounds = Rect::from_xywh(
+                        bounds.min_x() - bd_l,
+                        bounds.min_y() - bd_t,
+                        bounds.width() + bd_l + bd_r,
+                        bounds.height() + bd_t + bd_b,
                     );
                 }
 
@@ -565,6 +587,10 @@ impl Painter {
                 let mut layer_pixmap = painter.pixmap;
                 if !filters.is_empty() {
                     apply_filters(&mut layer_pixmap, &filters);
+                }
+
+                if !backdrop_filters.is_empty() {
+                    apply_backdrop_filters(&mut self.pixmap, &bounds, &backdrop_filters);
                 }
 
                 let mut paint = PixmapPaint::default();
@@ -1343,15 +1369,25 @@ fn command_bounds(cmd: &DisplayCommand) -> Option<Rect> {
         | DisplayCommand::Border { rect, .. }
         | DisplayCommand::Text { rect, .. }
         | DisplayCommand::Replaced { rect, .. } => Some(*rect),
-        DisplayCommand::StackingContext { commands, filters, .. } => {
+        DisplayCommand::StackingContext {
+            commands,
+            filters,
+            backdrop_filters,
+            ..
+        } => {
             let mut bounds = compute_commands_bounds(commands)?;
             let (l, t, r, b) = filter_outset(filters);
-            if l > 0.0 || t > 0.0 || r > 0.0 || b > 0.0 {
+            let (bl, bt, br, bb) = filter_outset(backdrop_filters);
+            let total_l = l.max(bl);
+            let total_t = t.max(bt);
+            let total_r = r.max(br);
+            let total_b = b.max(bb);
+            if total_l > 0.0 || total_t > 0.0 || total_r > 0.0 || total_b > 0.0 {
                 bounds = Rect::from_xywh(
-                    bounds.min_x() - l,
-                    bounds.min_y() - t,
-                    bounds.width() + l + r,
-                    bounds.height() + t + b,
+                    bounds.min_x() - total_l,
+                    bounds.min_y() - total_t,
+                    bounds.width() + total_l + total_r,
+                    bounds.height() + total_t + total_b,
                 );
             }
             Some(bounds)
@@ -1413,6 +1449,7 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
                 blend_mode,
                 isolated,
                 filters,
+                backdrop_filters,
                 commands,
             } => DisplayCommand::StackingContext {
                 opacity,
@@ -1420,6 +1457,7 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
                 blend_mode,
                 isolated,
                 filters,
+                backdrop_filters,
                 commands: translate_commands(commands, dx, dy),
             },
         })
@@ -1521,6 +1559,60 @@ fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter]) {
             } => apply_drop_shadow(pixmap, offset_x, offset_y, blur_radius, spread, color),
         }
     }
+}
+
+fn apply_backdrop_filters(pixmap: &mut Pixmap, bounds: &Rect, filters: &[ResolvedFilter]) {
+    if filters.is_empty() {
+        return;
+    }
+    let x = bounds.min_x().floor() as i32;
+    let y = bounds.min_y().floor() as i32;
+    let width = bounds.width().ceil() as u32;
+    let height = bounds.height().ceil() as u32;
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    let pix_w = pixmap.width() as i32;
+    let pix_h = pixmap.height() as i32;
+    if x >= pix_w || y >= pix_h {
+        return;
+    }
+
+    let clamped_x = x.max(0) as u32;
+    let clamped_y = y.max(0) as u32;
+    let max_w = pix_w.saturating_sub(clamped_x as i32).max(0) as u32;
+    let max_h = pix_h.saturating_sub(clamped_y as i32).max(0) as u32;
+    let region_w = width.min(max_w);
+    let region_h = height.min(max_h);
+    if region_w == 0 || region_h == 0 {
+        return;
+    }
+
+    let mut region = match Pixmap::new(region_w, region_h) {
+        Some(p) => p,
+        None => return,
+    };
+
+    // Copy region
+    let bytes_per_row = pixmap.width() as usize * 4;
+    let region_row_bytes = region_w as usize * 4;
+    let start = (clamped_y as usize * bytes_per_row) + clamped_x as usize * 4;
+    let data = pixmap.data();
+    let dest = region.data_mut();
+    for row in 0..region_h as usize {
+        let src_offset = start + row * bytes_per_row;
+        let dst_offset = row * (region_w as usize);
+        let src_slice = &data[src_offset..src_offset + region_row_bytes];
+        let dst_slice = &mut dest[dst_offset..dst_offset + region_row_bytes];
+        dst_slice.copy_from_slice(src_slice);
+    }
+
+    apply_filters(&mut region, filters);
+
+    let mut paint = PixmapPaint::default();
+    paint.blend_mode = SkiaBlendMode::SourceOver;
+    pixmap.draw_pixmap(clamped_x as i32, clamped_y as i32, region.as_ref(), &paint, Transform::identity(), None);
 }
 
 fn apply_color_filter<F>(pixmap: &mut Pixmap, mut f: F)
