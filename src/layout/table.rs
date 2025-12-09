@@ -1857,9 +1857,14 @@ impl FormattingContext for TableFormattingContext {
         let spacing = structure.total_horizontal_spacing();
         let min_content_sum: f32 = column_constraints.iter().map(|c| c.min_width).sum();
         let max_content_sum: f32 = column_constraints.iter().map(|c| c.max_width).sum();
+        let edge_consumption = if structure.border_collapse == BorderCollapse::Collapse {
+            0.0
+        } else {
+            padding_h + border_h
+        };
         let available_content = match (table_width, constraints.available_width) {
-            (Some(w), _) => (w - spacing).max(0.0),
-            (None, AvailableSpace::Definite(w)) => (w - spacing).max(0.0),
+            (Some(w), _) => (w - spacing - edge_consumption).max(0.0),
+            (None, AvailableSpace::Definite(w)) => (w - spacing - edge_consumption).max(0.0),
             (None, AvailableSpace::MinContent) => min_content_sum,
             (None, AvailableSpace::MaxContent) | (None, AvailableSpace::Indefinite) => max_content_sum,
         };
@@ -1876,6 +1881,29 @@ impl FormattingContext for TableFormattingContext {
         if col_widths.iter().all(|w| *w == 0.0) && available_content > 0.0 && !col_widths.is_empty() {
             let per = available_content / structure.column_count as f32;
             col_widths = vec![per; structure.column_count];
+        }
+
+        // If the table width is specified and columns don't fill the available content width, expand flexible columns.
+        if table_width.is_some() && mode == DistributionMode::Auto && available_content.is_finite() && !col_widths.is_empty() {
+            let current: f32 = col_widths.iter().sum();
+            if available_content > current + 0.01 {
+                let mut flex_indices: Vec<usize> = column_constraints
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.is_flexible && c.fixed_width.is_none() && c.percentage.is_none())
+                    .map(|(i, _)| i)
+                    .collect();
+                if flex_indices.is_empty() {
+                    flex_indices.extend(0..col_widths.len());
+                }
+                let extra = available_content - current;
+                let share = extra / flex_indices.len() as f32;
+                for i in flex_indices {
+                    if let Some(col) = col_widths.get_mut(i) {
+                        *col += share;
+                    }
+                }
+            }
         }
 
         let mut fragments = Vec::new();
@@ -2486,9 +2514,26 @@ impl FormattingContext for TableFormattingContext {
         self.populate_column_constraints(box_node, &structure, &mut column_constraints, DistributionMode::Auto);
 
         let spacing = structure.total_horizontal_spacing();
+        let edges = if structure.border_collapse == BorderCollapse::Collapse {
+            0.0
+        } else {
+            let resolve_abs = |l: &crate::style::values::Length| match l.unit {
+                LengthUnit::Percent => 0.0,
+                _ if l.unit.is_absolute() => l.to_px(),
+                _ => l.value,
+            };
+            resolve_abs(&box_node.style.padding_left)
+                + resolve_abs(&box_node.style.padding_right)
+                + resolve_abs(&box_node.style.border_left_width)
+                + resolve_abs(&box_node.style.border_right_width)
+        };
         let width = match mode {
-            IntrinsicSizingMode::MinContent => column_constraints.iter().map(|c| c.min_width).sum::<f32>() + spacing,
-            IntrinsicSizingMode::MaxContent => column_constraints.iter().map(|c| c.max_width).sum::<f32>() + spacing,
+            IntrinsicSizingMode::MinContent => {
+                column_constraints.iter().map(|c| c.min_width).sum::<f32>() + spacing + edges
+            }
+            IntrinsicSizingMode::MaxContent => {
+                column_constraints.iter().map(|c| c.max_width).sum::<f32>() + spacing + edges
+            }
         };
 
         Ok(width.max(0.0))
@@ -3265,6 +3310,7 @@ mod tests {
         let mut child_style = ComputedStyle::default();
         child_style.display = Display::Block;
         child_style.height = Some(Length::px(8.0));
+        child_style.width = Some(Length::px(10.0));
 
         let cell = BoxNode::new_block(
             Arc::new(cell_style),
@@ -3276,7 +3322,7 @@ mod tests {
 
         let tfc = TableFormattingContext::new();
         let fragment = tfc
-            .layout(&table, &LayoutConstraints::definite(200.0, 200.0))
+            .layout(&table, &LayoutConstraints::min_content())
             .expect("table layout");
 
         let child = &fragment.children[0];
@@ -3307,6 +3353,7 @@ mod tests {
         let mut child_style = ComputedStyle::default();
         child_style.display = Display::Block;
         child_style.height = Some(Length::px(5.0));
+        child_style.width = Some(Length::px(10.0));
 
         let cell = BoxNode::new_block(
             Arc::new(cell_style),
@@ -3318,7 +3365,7 @@ mod tests {
 
         let tfc = TableFormattingContext::new();
         let fragment = tfc
-            .layout(&table, &LayoutConstraints::definite(200.0, 200.0))
+            .layout(&table, &LayoutConstraints::min_content())
             .expect("table layout");
 
         let child = &fragment.children[0];
@@ -3326,6 +3373,75 @@ mod tests {
         assert!((child.bounds.y() - 4.0).abs() < 0.1);
         assert!((fragment.bounds.width() - 15.0).abs() < 0.1); // 10 content + 3 + 2 borders
         assert!((fragment.bounds.height() - 10.0).abs() < 0.1); // 5 content + 4 + 1 borders
+    }
+
+    #[test]
+    fn table_padding_and_borders_reduce_available_width() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.width = Some(Length::px(100.0));
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+        table_style.padding_left = Length::px(5.0);
+        table_style.padding_right = Length::px(5.0);
+        table_style.border_left_width = Length::px(2.0);
+        table_style.border_right_width = Length::px(2.0);
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.min_width = Some(Length::px(10.0));
+        cell_style.max_width = Some(Length::px(1000.0));
+
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(Arc::new({
+            let mut s = ComputedStyle::default();
+            s.display = Display::TableRow;
+            s
+        }), FormattingContextType::Block, vec![cell]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(&table, &LayoutConstraints::definite(100.0, 200.0))
+            .expect("table layout");
+
+        let child = &fragment.children[0];
+        // Content width should be table width minus padding/borders: 100 - (5+5) - (2+2) = 86.
+        assert!((child.bounds.width() - 86.0).abs() < 0.1);
+        // Child should start after left border+padding.
+        assert!((child.bounds.x() - 7.0).abs() < 0.1);
+        assert!((fragment.bounds.width() - 100.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn table_intrinsic_width_includes_padding_and_borders() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+        table_style.padding_left = Length::px(5.0);
+        table_style.padding_right = Length::px(5.0);
+        table_style.border_left_width = Length::px(2.0);
+        table_style.border_right_width = Length::px(2.0);
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.min_width = Some(Length::px(10.0));
+
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(Arc::new({
+            let mut s = ComputedStyle::default();
+            s.display = Display::TableRow;
+            s
+        }), FormattingContextType::Block, vec![cell]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let tfc = TableFormattingContext::new();
+        let min_width = tfc
+            .compute_intrinsic_inline_size(&table, IntrinsicSizingMode::MinContent)
+            .expect("intrinsic size");
+        // Expect min-content = cell min (10) + padding (10) + borders (4) = 24.
+        assert!((min_width - 24.0).abs() < 0.1);
     }
 
     #[test]
