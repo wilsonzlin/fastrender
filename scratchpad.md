@@ -68,13 +68,14 @@
 - Display-list construction now walks stacking contexts using `paint::stacking::creates_stacking_context`, emitting commands in stacking order (negative/zero/positive contexts) rather than globally sorting by z-index; backgrounds/borders for each context stay ahead of its content and descendants (`src/paint/painter.rs`).
 - Stacking contexts with `opacity < 1` now render into their own layer and composite back into the canvas so opacity applies to the entire subtree instead of per-primitive alpha (`src/paint/painter.rs`).
 - Opacity layers are now bounded to the stacking context’s content: commands are translated to a minimal bounding rectangle and composited back with a translation, avoiding full-canvas temporary buffers for translucent contexts (`src/paint/painter.rs`).
+- Stacking contexts now honor CSS `transform`: transforms are composed into the context’s layer, applied around the fragment’s top-left, and rendered via a translated offscreen buffer before compositing back. Basic translate/scale/rotate/skew/matrix forms are supported; percentages resolve against the context’s box (`src/paint/painter.rs`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
 - Max-content sizing now honors mandatory breaks but still ignores anonymous inline box generation and percent-driven height constraints.
 - Table layout still partial: border-collapsed corners/segments need better conflict resolution (origin/source-order aware joins), row/col spans not fully honored, percent/fixed widths still simplified vs CSS 2.1, colspans split evenly, rowspan baseline alignment still coarse.
 - Replaced elements still skip backgrounds and non-image types (SVG/iframe/video remain unrendered); object-fit only applies when image decoding succeeds.
-- Painting lacks transforms/filters/blend/isolation and still doesn't integrate the richer display list module; opacity compositing now bounds but still ignores transforms/filters.
+- Painting lacks filters/blend/isolation and still doesn't integrate the richer display list module; transform-origin is approximated at the top-left and filters/mix-blend-mode/isolation are ignored.
 - Root line strut still provides minimum line-height rather than full descendant baseline synthesis; replaced backgrounds/non-image types remain unpainted.
 
 ## To-do / next steps (spec-oriented)

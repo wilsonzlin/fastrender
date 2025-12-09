@@ -70,7 +70,11 @@ enum DisplayCommand {
         style: Arc<ComputedStyle>,
     },
     Replaced { rect: Rect, replaced_type: ReplacedType, style: Arc<ComputedStyle> },
-    StackingContext { opacity: f32, commands: Vec<DisplayCommand> },
+    StackingContext {
+        opacity: f32,
+        transform: Option<Transform>,
+        commands: Vec<DisplayCommand>,
+    },
 }
 
 #[derive(Copy, Clone)]
@@ -317,11 +321,13 @@ impl Painter {
             self.collect_stacking_context(&fragment.children[idx], child_offset, style_ref, false, &mut local_commands);
         }
 
-        // Wrap the stacking context if it applies an effect (opacity); otherwise flatten
+        // Wrap the stacking context if it applies an effect (opacity/transform); otherwise flatten
         let opacity = style_ref.map(|s| s.opacity).unwrap_or(1.0).clamp(0.0, 1.0);
-        if opacity < 1.0 {
+        let transform = build_transform(style_ref, abs_bounds);
+        if opacity < 1.0 || transform.is_some() {
             items.push(DisplayCommand::StackingContext {
                 opacity,
+                transform,
                 commands: local_commands,
             });
         } else {
@@ -425,14 +431,11 @@ impl Painter {
             } => {
                 self.paint_replaced(&replaced_type, Some(&style), rect.x(), rect.y(), rect.width(), rect.height());
             }
-            DisplayCommand::StackingContext { opacity, commands } => {
-                if opacity >= 1.0 {
-                    for cmd in commands {
-                        self.execute_command(cmd)?;
-                    }
-                    return Ok(());
-                }
-
+            DisplayCommand::StackingContext {
+                opacity,
+                transform,
+                commands,
+            } => {
                 if opacity <= 0.0 {
                     return Ok(());
                 }
@@ -441,20 +444,17 @@ impl Painter {
                     return Ok(());
                 };
 
-                let min_x = bounds.min_x().floor();
-                let min_y = bounds.min_y().floor();
-                let max_x = bounds.max_x().ceil();
-                let max_y = bounds.max_y().ceil();
-                let width = (max_x - min_x).max(0.0);
-                let height = (max_y - min_y).max(0.0);
+                // Reduce layer size by translating to the top-left of the local bounds.
+                let offset = Point::new(bounds.min_x(), bounds.min_y());
+                let translated = translate_commands(commands, -offset.x, -offset.y);
 
+                let width = bounds.width().ceil().max(0.0);
+                let height = bounds.height().ceil().max(0.0);
                 if width <= 0.0 || height <= 0.0 {
                     return Ok(());
                 }
 
-                let translated = translate_commands(commands, -min_x, -min_y);
-
-                let layer = match Pixmap::new(width.ceil() as u32, height.ceil() as u32) {
+                let layer = match Pixmap::new(width as u32, height as u32) {
                     Some(p) => p,
                     None => return Ok(()),
                 };
@@ -471,15 +471,11 @@ impl Painter {
                 }
 
                 let mut paint = PixmapPaint::default();
-                paint.opacity = opacity;
-                self.pixmap.draw_pixmap(
-                    0,
-                    0,
-                    painter.pixmap.as_ref(),
-                    &paint,
-                    Transform::from_translate(min_x, min_y),
-                    None,
-                );
+                paint.opacity = opacity.min(1.0);
+                let mut final_transform = transform.unwrap_or_else(Transform::identity);
+                final_transform = final_transform.pre_concat(Transform::from_translate(offset.x, offset.y));
+                self.pixmap
+                    .draw_pixmap(0, 0, painter.pixmap.as_ref(), &paint, final_transform, None);
             }
         }
         Ok(())
@@ -1185,6 +1181,56 @@ fn compute_object_fit(
     Some((offset_x, offset_y, dest_w, dest_h))
 }
 
+fn build_transform(style: Option<&ComputedStyle>, bounds: Rect) -> Option<Transform> {
+    let style = style?;
+    if style.transform.is_empty() {
+        return None;
+    }
+
+    let mut ts = Transform::identity();
+    for component in &style.transform {
+        let next = match component {
+            crate::css::types::Transform::Translate(x, y) => {
+                let tx = resolve_transform_length(x, style.font_size, bounds.width());
+                let ty = resolve_transform_length(y, style.font_size, bounds.height());
+                Transform::from_translate(tx, ty)
+            }
+            crate::css::types::Transform::TranslateX(x) => {
+                let tx = resolve_transform_length(x, style.font_size, bounds.width());
+                Transform::from_translate(tx, 0.0)
+            }
+            crate::css::types::Transform::TranslateY(y) => {
+                let ty = resolve_transform_length(y, style.font_size, bounds.height());
+                Transform::from_translate(0.0, ty)
+            }
+            crate::css::types::Transform::Scale(sx, sy) => Transform::from_scale(*sx, *sy),
+            crate::css::types::Transform::ScaleX(sx) => Transform::from_scale(*sx, 1.0),
+            crate::css::types::Transform::ScaleY(sy) => Transform::from_scale(1.0, *sy),
+            crate::css::types::Transform::Rotate(deg) => Transform::from_rotate(*deg),
+            crate::css::types::Transform::SkewX(deg) => Transform::from_skew(deg.to_radians().tan(), 0.0),
+            crate::css::types::Transform::SkewY(deg) => Transform::from_skew(0.0, deg.to_radians().tan()),
+            crate::css::types::Transform::Matrix(a, b, c, d, e, f) => Transform::from_row(*a, *b, *c, *d, *e, *f),
+        };
+        ts = ts.pre_concat(next);
+    }
+
+    // Apply transform relative to the context's origin to approximate transform-origin at the top-left.
+    ts = Transform::from_translate(bounds.x(), bounds.y())
+        .pre_concat(ts)
+        .pre_concat(Transform::from_translate(-bounds.x(), -bounds.y()));
+
+    Some(ts)
+}
+
+fn resolve_transform_length(len: &Length, font_size: f32, percentage_base: f32) -> f32 {
+    match len.unit {
+        LengthUnit::Percent => len.resolve_against(percentage_base),
+        LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size),
+        _ if len.unit.is_absolute() => len.to_px(),
+        _ => len.value,
+    }
+}
+
 fn command_bounds(cmd: &DisplayCommand) -> Option<Rect> {
     match cmd {
         DisplayCommand::Background { rect, .. }
@@ -1243,8 +1289,13 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
                 replaced_type,
                 style,
             },
-            DisplayCommand::StackingContext { opacity, commands } => DisplayCommand::StackingContext {
+            DisplayCommand::StackingContext {
                 opacity,
+                transform,
+                commands,
+            } => DisplayCommand::StackingContext {
+                opacity,
+                transform,
                 commands: translate_commands(commands, dx, dy),
             },
         })
