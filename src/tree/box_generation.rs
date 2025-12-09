@@ -11,6 +11,7 @@ use crate::style::content::CounterStyle;
 use crate::style::counters::{CounterManager, CounterSet};
 use crate::style::display::{Display, FormattingContextType};
 use crate::style::types::{ListStylePosition, ListStyleType};
+use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::tree::anonymous::AnonymousBoxCreator;
 use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, ReplacedType};
@@ -682,7 +683,7 @@ impl BoxGenerator {
     /// Prepends a marker box for list items based on list-style-* properties
     fn attach_list_marker(&self, mut list_item: BoxNode, counters: &CounterManager) -> BoxNode {
         let style = list_item.style.clone();
-        let marker_text = list_marker_text(style.list_style_type, counters);
+        let marker_text = marker_text_from_style(&style, counters);
         if marker_text.is_empty() {
             return list_item;
         }
@@ -700,6 +701,7 @@ impl BoxGenerator {
         marker_style.border_bottom_width = crate::style::values::Length::px(0.0);
         marker_style.border_left_width = crate::style::values::Length::px(0.0);
         marker_style.list_style_type = ListStyleType::None;
+        marker_style.text_transform = crate::style::types::TextTransform::None;
 
         // Position inside/outside: both remain inline for now; outside can be spaced a bit more.
         if style.list_style_position == ListStylePosition::Outside {
@@ -905,25 +907,37 @@ use crate::tree::box_tree::ReplacedBox;
 ///
 /// A `BoxTree` containing the generated box structure
 pub fn generate_box_tree(styled: &StyledNode) -> BoxTree {
-    let root = generate_box_node_from_styled(styled);
+    let mut counters = CounterManager::new();
+    counters.enter_scope();
+    let root = generate_box_node_from_styled(styled, &mut counters);
+    counters.leave_scope();
     BoxTree { root }
 }
 
 /// Recursively generates BoxNode from StyledNode
-fn generate_box_node_from_styled(styled: &StyledNode) -> BoxNode {
+fn generate_box_node_from_styled(styled: &StyledNode, counters: &mut CounterManager) -> BoxNode {
+    if let Some(text) = styled.node.text_content() {
+        if !text.trim().is_empty() {
+            let style = Arc::new(styled.styles.clone());
+            return BoxNode::new_text(style, text.to_string());
+        }
+    }
+
+    counters.enter_scope();
+    let node = generate_box_node_from_styled_in_scope(styled, counters);
+    counters.leave_scope();
+    node
+}
+
+fn generate_box_node_from_styled_in_scope(styled: &StyledNode, counters: &mut CounterManager) -> BoxNode {
     let style = Arc::new(styled.styles.clone());
+
+    apply_counter_properties_from_style(styled, counters);
 
     // Check if this is display: none
     if styled.styles.display == Display::None {
         // Create an empty block (will have no effect on layout)
         return BoxNode::new_block(style, FormattingContextType::Block, vec![]);
-    }
-
-    // Check for text node
-    if let Some(text) = styled.node.text_content() {
-        if !text.trim().is_empty() {
-            return BoxNode::new_text(style, text.to_string());
-        }
     }
 
     // Check for replaced elements (images, etc.)
@@ -934,12 +948,22 @@ fn generate_box_node_from_styled(styled: &StyledNode) -> BoxNode {
     }
 
     // Generate children
-    let mut children: Vec<BoxNode> = styled.children.iter().map(generate_box_node_from_styled).collect();
+    let mut children: Vec<BoxNode> = styled
+        .children
+        .iter()
+        .map(|child| generate_box_node_from_styled(child, counters))
+        .collect();
 
     // Generate ::before pseudo-element box if styles exist
     if let Some(before_styles) = &styled.before_styles {
         if let Some(before_box) = create_pseudo_element_box(before_styles, "before") {
             children.insert(0, before_box);
+        }
+    }
+
+    if styled.styles.display == Display::ListItem {
+        if let Some(marker_box) = create_marker_box(styled, counters) {
+            children.insert(0, marker_box);
         }
     }
 
@@ -1033,6 +1057,120 @@ fn create_pseudo_element_box(styles: &ComputedStyle, pseudo_name: &str) -> Optio
     Some(pseudo_box)
 }
 
+fn create_marker_box(styled: &StyledNode, counters: &CounterManager) -> Option<BoxNode> {
+    // Prefer authored ::marker styles; fall back to the originating style when absent.
+    let mut marker_style = styled.marker_styles.clone().unwrap_or_else(|| styled.styles.clone());
+    // ::marker boxes are inline and should not carry layout-affecting edges from the list item.
+    marker_style.display = Display::Inline;
+    reset_marker_box_edges(&mut marker_style);
+
+    let text = marker_text_from_style(&marker_style, counters);
+    if text.is_empty() {
+        return None;
+    }
+
+    Some(BoxNode::new_marker(Arc::new(marker_style), text))
+}
+
+fn marker_text_from_style(style: &ComputedStyle, counters: &CounterManager) -> String {
+    if !style.content.is_empty() && style.content != "normal" {
+        if style.content == "none" {
+            String::new()
+        } else {
+            style.content.clone()
+        }
+    } else {
+        list_marker_text(style.list_style_type, counters)
+    }
+}
+
+fn reset_marker_box_edges(style: &mut ComputedStyle) {
+    style.margin_top = Some(Length::px(0.0));
+    style.margin_bottom = Some(Length::px(0.0));
+    style.margin_left = Some(Length::px(0.0));
+
+    style.padding_top = Length::px(0.0);
+    style.padding_right = Length::px(0.0);
+    style.padding_bottom = Length::px(0.0);
+    style.padding_left = Length::px(0.0);
+
+    style.border_top_width = Length::px(0.0);
+    style.border_right_width = Length::px(0.0);
+    style.border_bottom_width = Length::px(0.0);
+    style.border_left_width = Length::px(0.0);
+
+    style.border_top_style = crate::style::types::BorderStyle::None;
+    style.border_right_style = crate::style::types::BorderStyle::None;
+    style.border_bottom_style = crate::style::types::BorderStyle::None;
+    style.border_left_style = crate::style::types::BorderStyle::None;
+
+    style.border_top_color = crate::style::color::Rgba::TRANSPARENT;
+    style.border_right_color = crate::style::color::Rgba::TRANSPARENT;
+    style.border_bottom_color = crate::style::color::Rgba::TRANSPARENT;
+    style.border_left_color = crate::style::color::Rgba::TRANSPARENT;
+    style.border_top_left_radius = Length::px(0.0);
+    style.border_top_right_radius = Length::px(0.0);
+    style.border_bottom_left_radius = Length::px(0.0);
+    style.border_bottom_right_radius = Length::px(0.0);
+
+    style.background_color = crate::style::color::Rgba::TRANSPARENT;
+    style.background_image = None;
+    style.background_size = crate::style::types::BackgroundSize::Explicit(
+        crate::style::types::BackgroundSizeComponent::Auto,
+        crate::style::types::BackgroundSizeComponent::Auto,
+    );
+    style.background_position = crate::style::types::BackgroundPosition::Position {
+        x: crate::style::types::BackgroundPositionComponent {
+            alignment: 0.0,
+            offset: Length::px(0.0),
+        },
+        y: crate::style::types::BackgroundPositionComponent {
+            alignment: 0.0,
+            offset: Length::px(0.0),
+        },
+    };
+    style.background_repeat = crate::style::types::BackgroundRepeat::repeat();
+    style.background_origin = crate::style::types::BackgroundBox::PaddingBox;
+    style.background_clip = crate::style::types::BackgroundBox::BorderBox;
+
+    style.box_shadow.clear();
+    style.text_shadow.clear();
+    style.filter.clear();
+    style.backdrop_filter.clear();
+    style.transform.clear();
+}
+
+fn apply_counter_properties_from_style(styled: &StyledNode, counters: &mut CounterManager) {
+    if styled.node.text_content().is_some() {
+        return;
+    }
+
+    let mut applied_default_reset = false;
+    if let Some(reset) = &styled.styles.counters.counter_reset {
+        counters.apply_reset(reset);
+        applied_default_reset = true;
+    }
+
+    if !applied_default_reset {
+        if let Some(tag) = styled.node.tag_name() {
+            if tag.eq_ignore_ascii_case("ol") || tag.eq_ignore_ascii_case("ul") {
+                let default_reset = CounterSet::single("list-item", 0);
+                counters.apply_reset(&default_reset);
+            }
+        }
+    }
+
+    if let Some(set) = &styled.styles.counters.counter_set {
+        counters.apply_set(set);
+    }
+
+    if let Some(increment) = &styled.styles.counters.counter_increment {
+        counters.apply_increment(increment);
+    } else if styled.styles.display == Display::ListItem {
+        counters.apply_increment(&CounterSet::single("list-item", 1));
+    }
+}
+
 /// Checks if an element is a replaced element
 ///
 /// Replaced elements are those whose content is replaced by an external resource,
@@ -1096,6 +1234,7 @@ mod tests {
     use super::*;
     use crate::geometry::Size;
     use crate::tree::box_tree::ReplacedType;
+    use crate::{dom, style};
 
     fn default_style() -> Arc<ComputedStyle> {
         Arc::new(ComputedStyle::default())
@@ -1255,6 +1394,61 @@ mod tests {
         assert_eq!(box_tree.count_boxes(), 3);
         // div's children should be the two spans
         assert_eq!(box_tree.root.children.len(), 2);
+    }
+
+    #[test]
+    fn generate_box_tree_includes_marker_from_marker_styles() {
+        use style::color::Rgba;
+        use style::display::Display;
+        use style::types::ListStyleType;
+
+        let mut li_style = ComputedStyle::default();
+        li_style.display = Display::ListItem;
+        li_style.list_style_type = ListStyleType::Decimal;
+
+        let mut marker_style = ComputedStyle::default();
+        marker_style.display = Display::Inline;
+        marker_style.content = "✱".to_string();
+        marker_style.color = Rgba::RED;
+
+        let text_dom = dom::DomNode {
+            node_type: dom::DomNodeType::Text {
+                content: "Item".to_string(),
+            },
+            children: vec![],
+        };
+        let text_node = StyledNode {
+            node: text_dom.clone(),
+            styles: ComputedStyle::default(),
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children: vec![],
+        };
+
+        let li_dom = dom::DomNode {
+            node_type: dom::DomNodeType::Element {
+                tag_name: "li".to_string(),
+                attributes: vec![],
+            },
+            children: vec![text_dom],
+        };
+
+        let li = StyledNode {
+            node: li_dom,
+            styles: li_style,
+            before_styles: None,
+            after_styles: None,
+            marker_styles: Some(marker_style),
+            children: vec![text_node],
+        };
+
+        let tree = generate_box_tree(&li);
+        assert_eq!(tree.root.children.len(), 2);
+        let marker = tree.root.children.first().expect("marker");
+        assert!(matches!(marker.box_type, BoxType::Marker(_)));
+        assert_eq!(marker.text(), Some("✱"));
+        assert_eq!(marker.style.color, Rgba::RED);
     }
 
     #[test]
@@ -1974,6 +2168,30 @@ mod tests {
             assert_eq!(text_box.text, "1 ");
         } else {
             panic!("expected inner marker text");
+        }
+    }
+
+    #[test]
+    fn marker_ignores_text_transform() {
+        let generator = BoxGenerator::new();
+        let mut li_style = ComputedStyle::default();
+        li_style.display = Display::ListItem;
+        li_style.list_style_type = ListStyleType::LowerAlpha;
+        li_style.text_transform = crate::style::types::TextTransform::Uppercase;
+        let li_style = Arc::new(li_style);
+
+        let li = DOMNode::new_element(
+            "li",
+            li_style.clone(),
+            vec![DOMNode::new_text("item", li_style.clone())],
+        );
+        let ul = DOMNode::new_element("ul", style_with_display(Display::Block), vec![li]);
+
+        let tree = generator.generate(&ul).unwrap();
+        if let BoxType::Marker(marker) = &tree.root.children[0].children[0].box_type {
+            assert_eq!(marker.text, "a ");
+        } else {
+            panic!("expected marker");
         }
     }
 }

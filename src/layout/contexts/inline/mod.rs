@@ -197,10 +197,13 @@ impl InlineFormattingContext {
                     }
                 }
                 BoxType::Marker(marker_box) => {
-                    let normalized = normalize_text_for_white_space(
-                        &apply_text_transform(&marker_box.text, child.style.text_transform),
-                        child.style.white_space,
-                    );
+                    let normalized = NormalizedText {
+                        text: marker_box.text.clone(),
+                        forced_breaks: Vec::new(),
+                        allow_soft_wrap: false,
+                        leading_collapsible: false,
+                        trailing_collapsible: false,
+                    };
                     let mut produced = self.create_inline_items_from_normalized(child, normalized.clone(), true)?;
                     items.append(&mut produced);
                     if normalized.trailing_collapsible {
@@ -499,9 +502,12 @@ impl InlineFormattingContext {
         is_marker: bool,
     ) -> Result<TextItem, LayoutError> {
         let line_height = compute_line_height(style);
-        let hyphenator = self.hyphenator_for(&style.language);
-        let (hyphen_free, hyphen_breaks) =
-            hyphenation_breaks(normalized_text, style.hyphens, hyphenator.as_ref(), allow_soft_wrap);
+        let (hyphen_free, hyphen_breaks) = if is_marker {
+            (normalized_text.to_string(), Vec::new())
+        } else {
+            let hyphenator = self.hyphenator_for(&style.language);
+            hyphenation_breaks(normalized_text, style.hyphens, hyphenator.as_ref(), allow_soft_wrap)
+        };
 
         let forced_break_offsets: Vec<usize> = forced_breaks.iter().map(|b| b.byte_offset).collect();
 
@@ -539,11 +545,16 @@ impl InlineFormattingContext {
         .with_vertical_align(va);
 
         if is_marker {
-            let gap = style
+            let raw_gap = style
                 .margin_right
                 .as_ref()
                 .map(|m| resolve_length_for_width(*m, 0.0))
-                .unwrap_or(style.font_size * 0.5);
+                .unwrap_or(0.0);
+            let gap = if raw_gap.abs() > f32::EPSILON {
+                raw_gap
+            } else {
+                style.font_size * 0.5
+            };
             let sign = if style.direction == crate::style::types::Direction::Rtl {
                 1.0
             } else {

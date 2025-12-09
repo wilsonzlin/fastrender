@@ -91,6 +91,7 @@ impl ToCss for PseudoClass {
 pub enum PseudoElement {
     Before,
     After,
+    Marker,
 }
 
 impl selectors::parser::PseudoElement for PseudoElement {
@@ -105,6 +106,7 @@ impl ToCss for PseudoElement {
         match self {
             PseudoElement::Before => dest.write_str("::before"),
             PseudoElement::After => dest.write_str("::after"),
+            PseudoElement::Marker => dest.write_str("::marker"),
         }
     }
 }
@@ -175,6 +177,7 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
         match &*name {
             "before" => Ok(PseudoElement::Before),
             "after" => Ok(PseudoElement::After),
+            "marker" => Ok(PseudoElement::Marker),
             _ => Err(ParseError {
                 kind: cssparser::ParseErrorKind::Basic(cssparser::BasicParseErrorKind::UnexpectedToken(Token::Ident(
                     name,

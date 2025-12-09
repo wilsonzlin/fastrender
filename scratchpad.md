@@ -31,6 +31,8 @@
 - CSS counters parsed (`counter-reset`, `counter-increment`, `counter-set`), default list counters are scoped with CounterManager (default reset on `ol/ul`, default increment on `list-item` unless overridden), list markers format from counter values, and `lower-greek` is supported.
 - List markers are dedicated marker boxes: markers no longer consume inline width when `list-style-position: outside`, paint from a negative offset to sit left of the content, and a regression checks marker/text positioning.
 - Marker offsets use resolved marker margins (defaulting to 0.5em) and respect direction for outside positioning (RTL pushes markers right of the text start).
+- Marker text ignores `text-transform` (styled from list-style type only) and skips hyphenation/breaking logic to stay atomic.
+- ::marker pseudo support wired into cascade/box generation: selector parsing handles `::marker`, marker styles inherit list-style values with box-model resets, counter properties run during styled box generation, and marker boxes use pseudo `content` when provided. List-style now inherits, and styled pipeline uses counters for numbering. Added tests for list-style inheritance and marker styling.
 - Stacking-context display list path no longer double-emits descendants: stacking-context roots paint shallowly, child layers inherit the context origin for offsets, and stacking-tree construction keeps only direct children in layers while hoisting nested stacking contexts.
 - Replaced content paints inside the content box: canvas images/SVGs now respect padding/border space during painting, dynamic images convert to premultiplied RGBA instead of BGRA to avoid channel swapping, and a regression covers padding isolation for replaced elements.
 - Overflow clipping now applies in paint: stacking contexts generated for overflow hidden/scroll/auto clip descendants to the padding box with radius-aware masks and a hard pixel clip (prevents filter bleed); backgrounds/borders are left unclipped, and partial-axis overflow (x hidden / y visible) keeps visible axis unmasked. Regression updated accordingly.
@@ -194,7 +196,6 @@
 - Replaced elements still skip backgrounds and non-image types (SVG/iframe/video remain unrendered); object-fit only applies when image decoding succeeds.
 - Painting lacks filters and isolation nuances (auto/isolate behavior), and still doesn't integrate the richer display list module; mix-blend-mode is supported but 3D transforms/transform-origin z and filter/mix-blend/isolation interplay are ignored.
 - Root line strut still provides minimum line-height rather than full descendant baseline synthesis; replaced backgrounds/non-image types remain unpainted.
-- List markers still flow as inline text (no dedicated marker boxes or outside positioning) and ignore full Counter Styles; ::marker pseudo remains unimplemented.
 
 ## To-do / next steps (spec-oriented)
 1. Inline/text:
@@ -209,6 +210,8 @@
    - Ensure visual ordering in layout and paint for RTL/mixed runs.
 5. Inline blocks:
    - Generate proper anonymous inline wrappers; validate remaining percentage/min-height edge cases and baseline behavior in nested formatting contexts.
+6. Lists/markers:
+   - Implement ::marker property restrictions and inside positioning geometry; round out counter style coverage and marker inheritance edge cases.
 
 ## Notes
 - Current table code uses `InlineFormattingContext` for cell intrinsic widths; this fails for block/table/replaced content—needs a per-context intrinsic measurement.

@@ -31,6 +31,8 @@ pub struct StyledNode {
     pub before_styles: Option<ComputedStyle>,
     /// Styles for ::after pseudo-element (if content is set)
     pub after_styles: Option<ComputedStyle>,
+    /// Styles for ::marker pseudo-element (list items only)
+    pub marker_styles: Option<ComputedStyle>,
     pub children: Vec<StyledNode>,
 }
 
@@ -106,6 +108,7 @@ fn apply_styles_internal(
         compute_pseudo_element_styles(node, rules, &ancestors, &styles, root_font_size, &PseudoElement::Before);
     let after_styles =
         compute_pseudo_element_styles(node, rules, &ancestors, &styles, root_font_size, &PseudoElement::After);
+    let marker_styles = compute_marker_styles(node, rules, &ancestors, &styles, root_font_size);
 
     // Recursively style children (passing current node in ancestors)
     let mut new_ancestors = ancestors.clone();
@@ -121,6 +124,7 @@ fn apply_styles_internal(
         styles,
         before_styles,
         after_styles,
+        marker_styles,
         children,
     }
 }
@@ -183,6 +187,7 @@ fn apply_styles_internal_with_ancestors(
         compute_pseudo_element_styles(node, rules, ancestors, &styles, root_font_size, &PseudoElement::Before);
     let after_styles =
         compute_pseudo_element_styles(node, rules, ancestors, &styles, root_font_size, &PseudoElement::After);
+    let marker_styles = compute_marker_styles(node, rules, ancestors, &styles, root_font_size);
 
     // Recursively style children (passing current node in ancestors)
     let mut new_ancestors = ancestors.to_vec();
@@ -198,6 +203,7 @@ fn apply_styles_internal_with_ancestors(
         styles,
         before_styles,
         after_styles,
+        marker_styles,
         children,
     }
 }
@@ -223,6 +229,8 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.word_break = parent.word_break;
     styles.overflow_wrap = parent.overflow_wrap;
     styles.language = parent.language.clone();
+    styles.list_style_type = parent.list_style_type;
+    styles.list_style_position = parent.list_style_position;
 
     // Color inherits
     styles.color = parent.color;
@@ -275,6 +283,7 @@ mod tests {
     use super::*;
     use crate::css::types::StyleSheet;
     use crate::dom::DomNodeType;
+    use crate::style::types::{ListStylePosition, ListStyleType};
 
     fn element_with_style(style: &str) -> DomNode {
         DomNode {
@@ -355,6 +364,31 @@ mod tests {
             child.styles.text_align,
             crate::style::types::TextAlign::Center
         ));
+    }
+
+    #[test]
+    fn list_style_inherits_from_parent() {
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "ul".to_string(),
+                attributes: vec![(
+                    "style".to_string(),
+                    "list-style-type: square; list-style-position: inside;".to_string(),
+                )],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            }],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let li = styled.children.first().expect("li");
+        assert!(matches!(li.styles.list_style_type, ListStyleType::Square));
+        assert!(matches!(li.styles.list_style_position, ListStylePosition::Inside));
     }
 }
 
@@ -509,4 +543,106 @@ fn compute_pseudo_element_styles(
     }
 
     Some(styles)
+}
+
+fn compute_marker_styles(
+    node: &DomNode,
+    rules: &[&StyleRule],
+    ancestors: &[&DomNode],
+    parent_styles: &ComputedStyle,
+    root_font_size: f32,
+) -> Option<ComputedStyle> {
+    if parent_styles.display != Display::ListItem {
+        return None;
+    }
+
+    let matching_rules = find_pseudo_element_rules(node, rules, ancestors, &PseudoElement::Marker);
+
+    let mut styles = ComputedStyle::default();
+    styles.display = Display::Inline;
+    inherit_styles(&mut styles, parent_styles);
+
+    for (_specificity, declarations) in matching_rules {
+        for decl in declarations {
+            apply_declaration(&mut styles, &decl, parent_styles.font_size, root_font_size);
+        }
+    }
+
+    reset_marker_box_properties(&mut styles);
+    Some(styles)
+}
+
+fn reset_marker_box_properties(styles: &mut ComputedStyle) {
+    let defaults = ComputedStyle::default();
+    styles.position = defaults.position;
+    styles.top = None;
+    styles.right = None;
+    styles.bottom = None;
+    styles.left = None;
+    styles.z_index = defaults.z_index;
+
+    styles.width = None;
+    styles.height = None;
+    styles.min_width = None;
+    styles.min_height = None;
+    styles.max_width = None;
+    styles.max_height = None;
+
+    styles.margin_top = defaults.margin_top;
+    styles.margin_right = defaults.margin_right;
+    styles.margin_bottom = defaults.margin_bottom;
+    styles.margin_left = defaults.margin_left;
+
+    styles.padding_top = defaults.padding_top;
+    styles.padding_right = defaults.padding_right;
+    styles.padding_bottom = defaults.padding_bottom;
+    styles.padding_left = defaults.padding_left;
+
+    styles.border_top_width = defaults.border_top_width;
+    styles.border_right_width = defaults.border_right_width;
+    styles.border_bottom_width = defaults.border_bottom_width;
+    styles.border_left_width = defaults.border_left_width;
+
+    styles.border_top_style = defaults.border_top_style;
+    styles.border_right_style = defaults.border_right_style;
+    styles.border_bottom_style = defaults.border_bottom_style;
+    styles.border_left_style = defaults.border_left_style;
+
+    styles.border_top_color = defaults.border_top_color;
+    styles.border_right_color = defaults.border_right_color;
+    styles.border_bottom_color = defaults.border_bottom_color;
+    styles.border_left_color = defaults.border_left_color;
+
+    styles.border_top_left_radius = defaults.border_top_left_radius;
+    styles.border_top_right_radius = defaults.border_top_right_radius;
+    styles.border_bottom_left_radius = defaults.border_bottom_left_radius;
+    styles.border_bottom_right_radius = defaults.border_bottom_right_radius;
+
+    styles.background_color = defaults.background_color;
+    styles.background_image = defaults.background_image.clone();
+    styles.background_size = defaults.background_size.clone();
+    styles.background_position = defaults.background_position.clone();
+    styles.background_repeat = defaults.background_repeat.clone();
+    styles.background_origin = defaults.background_origin;
+    styles.background_clip = defaults.background_clip;
+    styles.object_fit = defaults.object_fit;
+    styles.object_position = defaults.object_position.clone();
+
+    styles.box_shadow.clear();
+    styles.text_shadow.clear();
+    styles.filter.clear();
+    styles.backdrop_filter.clear();
+    styles.mix_blend_mode = defaults.mix_blend_mode;
+    styles.isolation = defaults.isolation;
+    styles.transform.clear();
+    styles.transform_origin = defaults.transform_origin.clone();
+    styles.overflow_x = defaults.overflow_x;
+    styles.overflow_y = defaults.overflow_y;
+    styles.opacity = defaults.opacity;
+
+    // Markers should not carry table/layout-specific state
+    styles.border_spacing_horizontal = defaults.border_spacing_horizontal;
+    styles.border_spacing_vertical = defaults.border_spacing_vertical;
+    styles.border_collapse = defaults.border_collapse;
+    styles.table_layout = defaults.table_layout;
 }
