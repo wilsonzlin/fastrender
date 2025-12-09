@@ -1179,12 +1179,29 @@ impl InlineFormattingContext {
             return;
         }
 
+        let mut breaks = text_item.break_opportunities.clone();
+        if text_item.style.word_break == WordBreak::BreakWord
+            && !matches!(text_item.style.white_space, WhiteSpace::Nowrap | WhiteSpace::Pre)
+        {
+            breaks.extend(char_boundary_breaks(&text_item.text));
+            breaks.sort_by_key(|b| b.byte_offset);
+            breaks.dedup_by(|a, b| {
+                if a.byte_offset != b.byte_offset {
+                    return false;
+                }
+                if a.break_type == BreakType::Mandatory {
+                    *b = *a;
+                }
+                true
+            });
+        }
+
         let len = text_item.text.len();
         let mut last_break = 0;
         let mut hyphen_width: Option<f32> = None;
         let last_char = text_item.text.chars().last();
 
-        for brk in &text_item.break_opportunities {
+        for brk in &breaks {
             if brk.byte_offset > len {
                 continue;
             }
@@ -1636,9 +1653,10 @@ fn apply_break_properties(
     let mut result = breaks;
 
     match word_break {
-        WordBreak::BreakAll | WordBreak::BreakWord => {
+        WordBreak::BreakAll => {
             result.extend(char_boundary_breaks(text));
         }
+        WordBreak::BreakWord => {}
         WordBreak::KeepAll => {
             result.retain(|brk| {
                 if brk.break_type == BreakType::Mandatory {
@@ -2155,6 +2173,7 @@ fn accumulate_scripts(item: &InlineItem, counts: &mut ScriptCounts) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::formatting_context::IntrinsicSizingMode;
     use crate::style::display::{Display, FormattingContextType};
     use crate::style::types::{HyphensMode, OverflowWrap, TextTransform, WhiteSpace, WordBreak};
     use crate::style::values::Length;
@@ -2639,6 +2658,78 @@ mod tests {
         assert_eq!(normalized.forced_breaks.len(), 1);
         assert_eq!(normalized.forced_breaks[0].byte_offset, 1);
         assert!(!normalized.allow_soft_wrap);
+    }
+
+    #[test]
+    fn word_break_break_word_splits_when_overflowing() {
+        let mut text_style = ComputedStyle::default();
+        text_style.word_break = WordBreak::BreakWord;
+        text_style.white_space = WhiteSpace::Normal;
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "supercalifragilisticexpialidocious".to_string(),
+            )],
+        );
+        let constraints = LayoutConstraints::definite_width(40.0);
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert!(
+            fragment.children.len() > 1,
+            "break-word should allow breaking long tokens when they overflow"
+        );
+    }
+
+    #[test]
+    fn word_break_break_word_respects_nowrap() {
+        let mut text_style = ComputedStyle::default();
+        text_style.word_break = WordBreak::BreakWord;
+        text_style.white_space = WhiteSpace::Nowrap;
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "supercalifragilisticexpialidocious".to_string(),
+            )],
+        );
+        let constraints = LayoutConstraints::definite_width(40.0);
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert_eq!(
+            fragment.children.len(),
+            1,
+            "nowrap should suppress break-word forced wraps"
+        );
+    }
+
+    #[test]
+    fn word_break_break_word_reduces_min_content_width() {
+        let mut text_style = ComputedStyle::default();
+        text_style.word_break = WordBreak::BreakWord;
+        text_style.white_space = WhiteSpace::Normal;
+        let breaking = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(text_style.clone()), "longtoken".to_string())],
+        );
+        let normal = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(ComputedStyle::default()),
+                "longtoken".to_string(),
+            )],
+        );
+        let ifc = InlineFormattingContext::new();
+        let breaking_min = ifc.calculate_intrinsic_width(&breaking, IntrinsicSizingMode::MinContent);
+        let normal_min = ifc.calculate_intrinsic_width(&normal, IntrinsicSizingMode::MinContent);
+        assert!(
+            breaking_min < normal_min,
+            "break-word should provide smaller min-content widths"
+        );
     }
 
     #[test]

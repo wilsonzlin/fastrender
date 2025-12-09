@@ -33,7 +33,7 @@
 
 use super::baseline::{BaselineMetrics, LineBaselineAccumulator, VerticalAlign};
 use crate::geometry::Size;
-use crate::style::types::{Direction, UnicodeBidi};
+use crate::style::types::{Direction, UnicodeBidi, WhiteSpace, WordBreak};
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::text::line_break::{BreakOpportunity, BreakType};
@@ -150,6 +150,10 @@ impl InlineItem {
             }
         }
     }
+}
+
+fn allows_soft_wrap(style: &ComputedStyle) -> bool {
+    !matches!(style.white_space, WhiteSpace::Nowrap | WhiteSpace::Pre)
 }
 
 /// A shaped text item
@@ -507,6 +511,22 @@ impl TextItem {
                 best_break = Some(*brk);
             } else {
                 break;
+            }
+        }
+
+        if best_break.is_some() || !allows_soft_wrap(self.style.as_ref()) {
+            return best_break;
+        }
+
+        if self.style.word_break == WordBreak::BreakWord {
+            // Allow breaking anywhere within the word if nothing else fits
+            for (idx, _) in self.text.char_indices().skip(1) {
+                let width_at_break = self.advance_at_offset(idx);
+                if width_at_break <= max_width {
+                    best_break = Some(BreakOpportunity::allowed(idx));
+                } else {
+                    break;
+                }
             }
         }
 
@@ -1180,6 +1200,14 @@ impl LineBuilder {
                 // Split at the earliest opportunity to avoid keeping multiple words
                 // on an overflowing line.
                 break_opportunity = text_item.break_opportunities.first().copied();
+                if break_opportunity.is_none()
+                    && allows_soft_wrap(text_item.style.as_ref())
+                    && text_item.style.word_break == WordBreak::BreakWord
+                {
+                    if let Some((idx, _)) = text_item.text.char_indices().nth(1) {
+                        break_opportunity = Some(BreakOpportunity::allowed(idx));
+                    }
+                }
             }
 
             if let Some(break_opportunity) = break_opportunity {
