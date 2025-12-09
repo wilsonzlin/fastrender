@@ -757,6 +757,43 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
 
             styles.text_decoration = decoration;
         }
+        "list-style-type" => {
+            if let Some(t) = parse_list_style_type(&resolved_value) {
+                styles.list_style_type = t;
+            }
+        }
+        "list-style-position" => {
+            if let Some(p) = parse_list_style_position(&resolved_value) {
+                styles.list_style_position = p;
+            }
+        }
+        "list-style" => {
+            let tokens: Vec<PropertyValue> = match resolved_value {
+                PropertyValue::Multiple(ref values) => values.clone(),
+                _ => vec![resolved_value.clone()],
+            };
+
+            if tokens.is_empty() {
+                return;
+            }
+
+            // Reset to initial values
+            let mut list_type = ListStyleType::Disc;
+            let mut list_pos = ListStylePosition::Outside;
+
+            for token in tokens {
+                if let Some(t) = parse_list_style_type(&token) {
+                    list_type = t;
+                    continue;
+                }
+                if let Some(p) = parse_list_style_position(&token) {
+                    list_pos = p;
+                }
+            }
+
+            styles.list_style_type = list_type;
+            styles.list_style_position = list_pos;
+        }
         "text-transform" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.text_transform = match kw.as_str() {
@@ -1942,6 +1979,36 @@ fn parse_text_decoration_thickness(
     }
 }
 
+fn parse_list_style_type(value: &PropertyValue) -> Option<ListStyleType> {
+    match value {
+        PropertyValue::Keyword(kw) => match kw.as_str() {
+            "disc" => Some(ListStyleType::Disc),
+            "circle" => Some(ListStyleType::Circle),
+            "square" => Some(ListStyleType::Square),
+            "decimal" => Some(ListStyleType::Decimal),
+            "decimal-leading-zero" => Some(ListStyleType::DecimalLeadingZero),
+            "lower-roman" => Some(ListStyleType::LowerRoman),
+            "upper-roman" => Some(ListStyleType::UpperRoman),
+            "lower-alpha" | "lower-latin" => Some(ListStyleType::LowerAlpha),
+            "upper-alpha" | "upper-latin" => Some(ListStyleType::UpperAlpha),
+            "none" => Some(ListStyleType::None),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn parse_list_style_position(value: &PropertyValue) -> Option<ListStylePosition> {
+    match value {
+        PropertyValue::Keyword(kw) => match kw.as_str() {
+            "inside" => Some(ListStylePosition::Inside),
+            "outside" => Some(ListStylePosition::Outside),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 pub fn extract_margin_values(value: &PropertyValue) -> Option<Vec<Option<Length>>> {
     match value {
         PropertyValue::Length(len) => Some(vec![Some(*len)]),
@@ -2065,7 +2132,8 @@ pub fn parse_border_style(kw: &str) -> BorderStyle {
 mod tests {
     use super::*;
     use crate::style::types::{
-        BackgroundRepeatKeyword, PositionComponent, PositionKeyword, TextDecorationLine, TextDecorationStyle,
+        BackgroundRepeatKeyword, ListStylePosition, ListStyleType, PositionComponent, PositionKeyword,
+        TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
     };
 
     #[test]
@@ -2256,10 +2324,7 @@ mod tests {
         assert!(!style.text_decoration.lines.contains(TextDecorationLine::LINE_THROUGH));
         assert_eq!(style.text_decoration.style, TextDecorationStyle::Dotted);
         assert_eq!(style.text_decoration.color, Some(Rgba::RED));
-        assert!(matches!(
-            style.text_decoration.thickness,
-            TextDecorationThickness::Auto
-        ));
+        assert!(matches!(style.text_decoration.thickness, TextDecorationThickness::Auto));
 
         // currentcolor leaves color unset, shorthand resets missing pieces back to initial
         let decl = Declaration {
@@ -2275,10 +2340,7 @@ mod tests {
         assert!(style.text_decoration.lines.contains(TextDecorationLine::LINE_THROUGH));
         assert_eq!(style.text_decoration.style, TextDecorationStyle::Wavy);
         assert_eq!(style.text_decoration.color, None);
-        assert!(matches!(
-            style.text_decoration.thickness,
-            TextDecorationThickness::Auto
-        ));
+        assert!(matches!(style.text_decoration.thickness, TextDecorationThickness::Auto));
 
         // thickness in shorthand
         let decl = Declaration {
@@ -2299,6 +2361,38 @@ mod tests {
             style.text_decoration.thickness,
             TextDecorationThickness::Length(l) if (l.to_px() - 3.2).abs() < 0.01
         ));
+    }
+
+    #[test]
+    fn parses_list_style_properties() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "list-style-type".to_string(),
+            value: PropertyValue::Keyword("square".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.list_style_type, ListStyleType::Square);
+
+        let decl = Declaration {
+            property: "list-style-position".to_string(),
+            value: PropertyValue::Keyword("inside".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.list_style_position, ListStylePosition::Inside);
+
+        let decl = Declaration {
+            property: "list-style".to_string(),
+            value: PropertyValue::Multiple(vec![
+                PropertyValue::Keyword("upper-roman".to_string()),
+                PropertyValue::Keyword("outside".to_string()),
+            ]),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.list_style_type, ListStyleType::UpperRoman);
+        assert_eq!(style.list_style_position, ListStylePosition::Outside);
     }
 
     #[test]

@@ -493,6 +493,28 @@ pub enum TextDecorationThickness {
     Length(Length),
 }
 
+/// list-style-type values
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListStyleType {
+    Disc,
+    Circle,
+    Square,
+    Decimal,
+    DecimalLeadingZero,
+    LowerRoman,
+    UpperRoman,
+    LowerAlpha,
+    UpperAlpha,
+    None,
+}
+
+/// list-style-position values
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListStylePosition {
+    Outside,
+    Inside,
+}
+
 /// Text case transformation
 ///
 /// CSS: `text-transform`

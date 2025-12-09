@@ -30,9 +30,9 @@ use types::{
     AlignContent, AlignItems, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundPosition,
     BackgroundPositionComponent, BackgroundRepeat, BackgroundSize, BackgroundSizeComponent, BorderCollapse,
     BorderStyle, Direction, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack,
-    HyphensMode, Isolation, JustifyContent, LineHeight, MixBlendMode, ObjectFit, ObjectPosition, Overflow,
-    OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration, TextIndent, TextJustify,
-    TextTransform, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
+    HyphensMode, Isolation, JustifyContent, LineHeight, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit,
+    ObjectPosition, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration,
+    TextIndent, TextJustify, TextTransform, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
 };
 use values::Length;
 
@@ -138,6 +138,8 @@ pub struct ComputedStyle {
     pub vertical_align: VerticalAlign,
     /// BCP47 language tag inherited from DOM (lang/xml:lang)
     pub language: String,
+    pub list_style_type: ListStyleType,
+    pub list_style_position: ListStylePosition,
 
     // Color and background
     pub color: Rgba,
@@ -271,6 +273,8 @@ impl Default for ComputedStyle {
             overflow_wrap: OverflowWrap::Normal,
             vertical_align: VerticalAlign::Baseline,
             language: "en".to_string(),
+            list_style_type: ListStyleType::Disc,
+            list_style_position: ListStylePosition::Outside,
 
             color: Rgba::BLACK,
             background_color: Rgba::TRANSPARENT,
