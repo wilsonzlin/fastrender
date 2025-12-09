@@ -130,6 +130,8 @@ pub struct ComputedStyle {
     pub word_break: WordBreak,
     pub overflow_wrap: OverflowWrap,
     pub vertical_align: VerticalAlign,
+    /// BCP47 language tag inherited from DOM (lang/xml:lang)
+    pub language: String,
 
     // Color and background
     pub color: Rgba,
@@ -246,6 +248,7 @@ impl Default for ComputedStyle {
             word_break: WordBreak::Normal,
             overflow_wrap: OverflowWrap::Normal,
             vertical_align: VerticalAlign::Baseline,
+            language: "en".to_string(),
 
             color: Rgba::BLACK,
             background_color: Rgba::TRANSPARENT,

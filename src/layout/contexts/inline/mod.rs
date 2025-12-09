@@ -80,7 +80,7 @@ pub struct InlineFormattingContext {
     /// Text shaping pipeline (bidi/script/fallback aware)
     pipeline: ShapingPipeline,
     font_context: FontContext,
-    hyphenator: Option<Hyphenator>,
+    default_hyphenator: Option<Hyphenator>,
 }
 
 impl InlineFormattingContext {
@@ -89,7 +89,7 @@ impl InlineFormattingContext {
         Self {
             pipeline: ShapingPipeline::new(),
             font_context: FontContext::new(),
-            hyphenator: Hyphenator::new("en-us").ok(),
+            default_hyphenator: Hyphenator::new("en-us").ok(),
         }
     }
 
@@ -97,8 +97,14 @@ impl InlineFormattingContext {
         Self {
             pipeline: ShapingPipeline::new(),
             font_context,
-            hyphenator: Hyphenator::new("en-us").ok(),
+            default_hyphenator: Hyphenator::new("en-us").ok(),
         }
+    }
+
+    fn hyphenator_for(&self, language: &str) -> Option<Hyphenator> {
+        Hyphenator::new(language)
+            .ok()
+            .or_else(|| self.default_hyphenator.clone())
     }
 
     /// Collects inline items from box node children
@@ -242,12 +248,9 @@ impl InlineFormattingContext {
         let line_height = compute_line_height(style);
 
         let (normalized_text, forced_breaks, allow_soft_wrap) = normalize_text_for_white_space(text, style.white_space);
-        let (hyphen_free, hyphen_breaks) = hyphenation_breaks(
-            &normalized_text,
-            style.hyphens,
-            self.hyphenator.as_ref(),
-            allow_soft_wrap,
-        );
+        let hyphenator = self.hyphenator_for(&style.language);
+        let (hyphen_free, hyphen_breaks) =
+            hyphenation_breaks(&normalized_text, style.hyphens, hyphenator.as_ref(), allow_soft_wrap);
 
         let shaped_runs = match self.pipeline.shape(&hyphen_free, style, &self.font_context) {
             Ok(runs) => runs,

@@ -88,6 +88,15 @@ fn apply_styles_internal(
         }
     }
 
+    // Apply language from attributes (inherits by default)
+    if let Some(lang) = node
+        .get_attribute("lang")
+        .or_else(|| node.get_attribute("xml:lang"))
+        .filter(|l| !l.is_empty())
+    {
+        styles.language = lang;
+    }
+
     // Finalize grid placement - resolve named grid lines
     finalize_grid_placement(&mut styles);
 
@@ -204,6 +213,10 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.letter_spacing = parent.letter_spacing;
     styles.word_spacing = parent.word_spacing;
     styles.white_space = parent.white_space;
+    styles.hyphens = parent.hyphens;
+    styles.word_break = parent.word_break;
+    styles.overflow_wrap = parent.overflow_wrap;
+    styles.language = parent.language.clone();
 
     // Color inherits
     styles.color = parent.color;
