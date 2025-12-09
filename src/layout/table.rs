@@ -37,7 +37,7 @@ use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, 
 use crate::style::color::Rgba;
 use crate::style::display::Display;
 use crate::style::types::{BorderCollapse, BorderStyle, TableLayout, VerticalAlign};
-use crate::style::values::LengthUnit;
+use crate::style::values::{Length, LengthUnit};
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 use std::sync::Arc;
@@ -1780,56 +1780,93 @@ impl FormattingContext for TableFormattingContext {
         let table_bounds = Rect::from_xywh(0.0, 0.0, total_width.max(0.0), total_height);
 
         if structure.border_collapse == BorderCollapse::Collapse {
-            let mut col_boundaries: Vec<f32> = Vec::with_capacity(structure.column_count + 1);
-            let mut x_cursor = 0.0;
-            col_boundaries.push(x_cursor);
-            for col_idx in 0..structure.column_count {
-                x_cursor += vertical_borders.get(col_idx).copied().unwrap_or(0.0);
-                x_cursor += col_widths[col_idx];
-                col_boundaries.push(x_cursor);
-            }
-            let mut row_boundaries: Vec<f32> = Vec::with_capacity(structure.row_count + 1);
-            let mut y_cursor = 0.0;
-            row_boundaries.push(y_cursor);
-            for row_idx in 0..structure.row_count {
-                y_cursor += horizontal_borders.get(row_idx).copied().unwrap_or(0.0);
-                y_cursor += row_metrics[row_idx].height;
-                row_boundaries.push(y_cursor);
-            }
-
-            let make_border_style = |color: Rgba| -> Arc<crate::style::ComputedStyle> {
+            let make_border_style = |color: Rgba,
+                                     left: f32,
+                                     right: f32,
+                                     top: f32,
+                                     bottom: f32,
+                                     left_style: BorderStyle,
+                                     right_style: BorderStyle,
+                                     top_style: BorderStyle,
+                                     bottom_style: BorderStyle|
+             -> Arc<crate::style::ComputedStyle> {
                 let mut style = crate::style::ComputedStyle::default();
                 style.display = Display::Block;
-                style.background_color = color;
+                style.border_left_width = Length::px(left);
+                style.border_right_width = Length::px(right);
+                style.border_top_width = Length::px(top);
+                style.border_bottom_width = Length::px(bottom);
+                style.border_left_color = color;
+                style.border_right_color = color;
+                style.border_top_color = color;
+                style.border_bottom_color = color;
+                style.border_left_style = left_style;
+                style.border_right_style = right_style;
+                style.border_top_style = top_style;
+                style.border_bottom_style = bottom_style;
                 Arc::new(style)
             };
 
-            for (idx, border) in collapsed_borders.vertical.iter().enumerate() {
-                if border.width <= 0.0 || matches!(border.style, BorderStyle::None | BorderStyle::Hidden) {
-                    continue;
+            // Vertical grid lines: border before column 0, between columns, after last column.
+            let mut x_cursor = 0.0;
+            for (col_idx, border) in collapsed_borders.vertical.iter().enumerate() {
+                if border.width > 0.0 && !matches!(border.style, BorderStyle::None | BorderStyle::Hidden) {
+                    let x = (x_cursor + border.width * 0.5).max(0.0) - border.width * 0.5;
+                    let rect = Rect::from_xywh(x, 0.0, border.width, total_height);
+                    let style = make_border_style(
+                        border.color,
+                        border.width,
+                        0.0,
+                        0.0,
+                        0.0,
+                        border.style,
+                        BorderStyle::None,
+                        BorderStyle::None,
+                        BorderStyle::None,
+                    );
+                    fragments.push(FragmentNode::new_with_style(
+                        rect,
+                        FragmentContent::Block { box_id: None },
+                        vec![],
+                        style,
+                    ));
                 }
-                let x = col_boundaries.get(idx).copied().unwrap_or(0.0);
-                let rect = Rect::from_xywh(x, 0.0, border.width, total_height);
-                fragments.push(FragmentNode::new_with_style(
-                    rect,
-                    FragmentContent::Block { box_id: None },
-                    vec![],
-                    make_border_style(border.color),
-                ));
+
+                x_cursor += border.width;
+                if col_idx < structure.column_count {
+                    x_cursor += col_widths[col_idx];
+                }
             }
 
-            for (idx, border) in collapsed_borders.horizontal.iter().enumerate() {
-                if border.width <= 0.0 || matches!(border.style, BorderStyle::None | BorderStyle::Hidden) {
-                    continue;
+            // Horizontal grid lines: border before row 0, between rows, after last row.
+            let mut y_cursor = 0.0;
+            for (row_idx, border) in collapsed_borders.horizontal.iter().enumerate() {
+                if border.width > 0.0 && !matches!(border.style, BorderStyle::None | BorderStyle::Hidden) {
+                    let y = (y_cursor + border.width * 0.5).max(0.0) - border.width * 0.5;
+                    let rect = Rect::from_xywh(0.0, y, total_width, border.width);
+                    let style = make_border_style(
+                        border.color,
+                        0.0,
+                        0.0,
+                        border.width,
+                        0.0,
+                        BorderStyle::None,
+                        BorderStyle::None,
+                        border.style,
+                        BorderStyle::None,
+                    );
+                    fragments.push(FragmentNode::new_with_style(
+                        rect,
+                        FragmentContent::Block { box_id: None },
+                        vec![],
+                        style,
+                    ));
                 }
-                let y = row_boundaries.get(idx).copied().unwrap_or(0.0);
-                let rect = Rect::from_xywh(0.0, y, total_width, border.width);
-                fragments.push(FragmentNode::new_with_style(
-                    rect,
-                    FragmentContent::Block { box_id: None },
-                    vec![],
-                    make_border_style(border.color),
-                ));
+
+                y_cursor += border.width;
+                if row_idx < structure.row_count {
+                    y_cursor += row_metrics[row_idx].height;
+                }
             }
         }
 
