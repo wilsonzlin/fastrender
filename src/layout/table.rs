@@ -1660,6 +1660,7 @@ impl TableFormattingContext {
         structure: &TableStructure,
         constraints: &mut [ColumnConstraints],
         mode: DistributionMode,
+        percent_base: Option<f32>,
     ) {
         for cell in &structure.cells {
             if matches!(mode, DistributionMode::Fixed) && cell.row > 0 {
@@ -1673,6 +1674,10 @@ impl TableFormattingContext {
                 DistributionMode::Fixed => (0.0, 0.0), // content is ignored in fixed layout
                 _ => self.measure_cell_intrinsic_widths(cell_box, structure.border_collapse),
             };
+            let specified_width = cell_box.style.width.as_ref().and_then(|width| match width.unit {
+                LengthUnit::Percent => percent_base.map(|base| (width.value / 100.0) * base),
+                _ => Some(width.to_px()),
+            });
 
             if cell.colspan == 1 {
                 if let Some(width) = &cell_box.style.width {
@@ -1701,7 +1706,9 @@ impl TableFormattingContext {
             } else {
                 let start = cell.col;
                 let end = (cell.col + cell.colspan).min(constraints.len());
-                distribute_spanning_cell_width(constraints, start, end, min_w, max_w);
+                let target_min = specified_width.map(|w| min_w.max(w)).unwrap_or(min_w);
+                let target_max = specified_width.map(|w| max_w.max(w)).unwrap_or(max_w);
+                distribute_spanning_cell_width(constraints, start, end, target_min, target_max);
             }
         }
 
@@ -1860,17 +1867,23 @@ impl FormattingContext for TableFormattingContext {
         } else {
             DistributionMode::Auto
         };
-        self.populate_column_constraints(box_node, &structure, &mut column_constraints, mode);
-        self.normalize_percentage_constraints(&mut column_constraints, table_width, &constraints.available_width);
-
         let spacing = structure.total_horizontal_spacing();
-        let min_content_sum: f32 = column_constraints.iter().map(|c| c.min_width).sum();
-        let max_content_sum: f32 = column_constraints.iter().map(|c| c.max_width).sum();
         let edge_consumption = if structure.border_collapse == BorderCollapse::Collapse {
             0.0
         } else {
             padding_h + border_h
         };
+        let percent_base = match (table_width, constraints.available_width) {
+            (Some(w), _) => Some((w - spacing - edge_consumption).max(0.0)),
+            (None, AvailableSpace::Definite(w)) => Some((w - spacing - edge_consumption).max(0.0)),
+            _ => None,
+        };
+
+        self.populate_column_constraints(box_node, &structure, &mut column_constraints, mode, percent_base);
+        self.normalize_percentage_constraints(&mut column_constraints, table_width, &constraints.available_width);
+
+        let min_content_sum: f32 = column_constraints.iter().map(|c| c.min_width).sum();
+        let max_content_sum: f32 = column_constraints.iter().map(|c| c.max_width).sum();
         let available_content = match (table_width, constraints.available_width) {
             (Some(w), _) => (w - spacing - edge_consumption).max(0.0),
             (None, AvailableSpace::Definite(w)) => (w - spacing - edge_consumption).max(0.0),
@@ -2525,7 +2538,13 @@ impl FormattingContext for TableFormattingContext {
         let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
             .map(|_| ColumnConstraints::new(0.0, 0.0))
             .collect();
-        self.populate_column_constraints(box_node, &structure, &mut column_constraints, DistributionMode::Auto);
+        self.populate_column_constraints(
+            box_node,
+            &structure,
+            &mut column_constraints,
+            DistributionMode::Auto,
+            None,
+        );
 
         let spacing = structure.total_horizontal_spacing();
         let edges = if structure.border_collapse == BorderCollapse::Collapse {
@@ -2697,6 +2716,55 @@ mod tests {
         let fragment = tfc.layout(&table, &constraints).expect("table layout");
 
         assert!((fragment.bounds.width() - 200.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn colspan_specified_width_increases_spanned_columns() {
+        // First row has a single cell spanning two columns with a fixed width; it should raise the
+        // combined minimum of the spanned columns.
+        let mut span_style = ComputedStyle::default();
+        span_style.display = Display::TableCell;
+        span_style.width = Some(Length::px(200.0));
+        let span_cell = BoxNode::new_block(Arc::new(span_style), FormattingContextType::Block, vec![])
+            .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(2, 1));
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        let cell_a = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![]);
+        let cell_b = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let row_with_span = BoxNode::new_block(
+            Arc::new(row_style.clone()),
+            FormattingContextType::Block,
+            vec![span_cell],
+        );
+        let row_normal = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell_a, cell_b]);
+
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+        let table = BoxNode::new_block(
+            Arc::new(table_style),
+            FormattingContextType::Table,
+            vec![row_with_span, row_normal],
+        );
+
+        let structure = TableStructure::from_box_tree(&table);
+        let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+            .map(|_| ColumnConstraints::new(0.0, 0.0))
+            .collect();
+        let tfc = TableFormattingContext::new();
+        tfc.populate_column_constraints(&table, &structure, &mut constraints, DistributionMode::Auto, None);
+
+        let total_min: f32 = constraints.iter().map(|c| c.min_width).sum();
+        assert!(
+            total_min >= 200.0,
+            "spanned cell width should contribute to column minima: {:?}",
+            constraints.iter().map(|c| c.min_width).collect::<Vec<_>>()
+        );
     }
 
     #[test]
