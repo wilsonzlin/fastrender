@@ -29,11 +29,11 @@ use position::Position;
 use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundPosition,
-    BackgroundPositionComponent, BackgroundRepeat, BackgroundSize, BackgroundSizeComponent, BorderCollapse, BorderStyle,
-    Direction, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack, HyphensMode,
-    Isolation, JustifyContent, LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit,
-    ObjectPosition, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration, TextIndent,
-    TextJustify, TextTransform, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
+    BackgroundPositionComponent, BackgroundRepeat, BackgroundSize, BackgroundSizeComponent, BorderCollapse,
+    BorderStyle, Direction, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack,
+    HyphensMode, Isolation, JustifyContent, LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode,
+    ObjectFit, ObjectPosition, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration,
+    TextIndent, TextJustify, TextTransform, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
 };
 use values::Length;
 

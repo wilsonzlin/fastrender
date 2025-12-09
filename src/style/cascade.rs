@@ -282,8 +282,8 @@ fn resolve_match_parent_text_align(styles: &mut ComputedStyle, parent: &Computed
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::css::parser::parse_stylesheet;
     use crate::css::parser::parse_declarations;
+    use crate::css::parser::parse_stylesheet;
     use crate::css::types::StyleSheet;
     use crate::dom::DomNodeType;
     use crate::style::color::Rgba;
@@ -463,7 +463,10 @@ mod tests {
         assert!(marker.padding_right.is_zero());
         assert!(marker.margin_left.unwrap().is_zero());
         assert_eq!(marker.background_color, Rgba::TRANSPARENT);
-        assert!(matches!(marker.text_transform, crate::style::types::TextTransform::None));
+        assert!(matches!(
+            marker.text_transform,
+            crate::style::types::TextTransform::None
+        ));
         assert!(marker.text_decoration.lines == crate::style::types::TextDecorationLine::NONE);
         assert!(matches!(marker.text_align, crate::style::types::TextAlign::Start));
         assert_eq!(marker.text_indent, crate::style::types::TextIndent::default());

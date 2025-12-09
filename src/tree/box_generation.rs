@@ -1064,7 +1064,10 @@ fn marker_content_from_style(style: &ComputedStyle, counters: &CounterManager) -
     match &style.list_style_image {
         crate::style::types::ListStyleImage::Url(url) => {
             let replaced = ReplacedBox {
-                replaced_type: ReplacedType::Image { src: url.clone(), alt: None },
+                replaced_type: ReplacedType::Image {
+                    src: url.clone(),
+                    alt: None,
+                },
                 intrinsic_size: None,
                 aspect_ratio: None,
             };
@@ -1186,6 +1189,7 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
     // Get src attribute if available
     let src = styled.node.get_attribute("src").unwrap_or_default();
     let alt = styled.node.get_attribute("alt").filter(|s| !s.is_empty());
+    let data_attr = styled.node.get_attribute("data").unwrap_or_default();
 
     // Determine replaced type
     let replaced_type = match tag.to_lowercase().as_str() {
@@ -1194,6 +1198,8 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
         "canvas" => ReplacedType::Canvas,
         "svg" => ReplacedType::Svg { content: String::new() },
         "iframe" => ReplacedType::Iframe { src },
+        "embed" => ReplacedType::Embed { src },
+        "object" => ReplacedType::Object { data: data_attr },
         _ => ReplacedType::Image { src, alt },
     };
 
@@ -1214,7 +1220,11 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
 
     if intrinsic_size.is_none() && aspect_ratio.is_none() {
         match replaced_type {
-            ReplacedType::Canvas | ReplacedType::Video { .. } | ReplacedType::Iframe { .. } => {
+            ReplacedType::Canvas
+            | ReplacedType::Video { .. }
+            | ReplacedType::Iframe { .. }
+            | ReplacedType::Embed { .. }
+            | ReplacedType::Object { .. } => {
                 intrinsic_size = Some(Size::new(300.0, 150.0));
                 aspect_ratio = Some(2.0);
             }
@@ -1240,8 +1250,8 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
 mod tests {
     use super::*;
     use crate::geometry::Size;
-    use crate::tree::box_tree::{MarkerContent, ReplacedType};
     use crate::style::types::ListStylePosition;
+    use crate::tree::box_tree::{MarkerContent, ReplacedType};
     use crate::{dom, style};
 
     fn default_style() -> Arc<ComputedStyle> {
@@ -1838,7 +1848,7 @@ mod tests {
     fn replaced_media_defaults_to_300_by_150() {
         let style = default_style();
 
-        for tag in ["canvas", "video", "iframe"] {
+        for tag in ["canvas", "video", "iframe", "embed", "object"] {
             let styled = styled_element(tag);
             let box_node = create_replaced_box_from_styled(&styled, style.clone());
             match &box_node.box_type {

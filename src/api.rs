@@ -662,12 +662,7 @@ impl FastRender {
         }
     }
 
-    fn resolve_intrinsic_for_replaced(
-        &self,
-        replaced_box: &mut ReplacedBox,
-        style: &ComputedStyle,
-        alt: Option<&str>,
-    ) {
+    fn resolve_intrinsic_for_replaced(&self, replaced_box: &mut ReplacedBox, style: &ComputedStyle, alt: Option<&str>) {
         match &mut replaced_box.replaced_type {
             ReplacedType::Image { src, alt: stored_alt } => {
                 let needs_intrinsic = replaced_box.intrinsic_size.is_none();
