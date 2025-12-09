@@ -73,10 +73,12 @@ ul, ol {
     margin-top: 1em;
     margin-bottom: 1em;
     padding-left: 40px;
+    counter-reset: list-item;
 }
 
 li {
     display: list-item;
+    counter-increment: list-item;
 }
 
 /* Block elements */

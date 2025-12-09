@@ -28,6 +28,7 @@
 - Text decoration now matches CSS Text Decoration: line/style/color longhands are parsed, the shorthand resets unspecified parts, currentColor is honored, and painter draws solid/double/dotted/dashed/wavy lines with per-line positions.
 - Text-decoration thickness is supported: longhand and shorthand accept lengths/keywords, defaulting to auto/from-font when unspecified; painter resolves authored thickness (including font/viewport-relative units) for underline/overline/line-through.
 - list-style properties parsed and reset via shorthand (type/position), defaulting to `disc outside`.
+- CSS counters parsed (`counter-reset`, `counter-increment`, `counter-set`), default list counters are scoped with CounterManager (default reset on `ol/ul`, default increment on `list-item` unless overridden), list markers format from counter values, and `lower-greek` is supported.
 - Stacking-context display list path no longer double-emits descendants: stacking-context roots paint shallowly, child layers inherit the context origin for offsets, and stacking-tree construction keeps only direct children in layers while hoisting nested stacking contexts.
 - Replaced content paints inside the content box: canvas images/SVGs now respect padding/border space during painting, dynamic images convert to premultiplied RGBA instead of BGRA to avoid channel swapping, and a regression covers padding isolation for replaced elements.
 - Overflow clipping now applies in paint: stacking contexts generated for overflow hidden/scroll/auto clip descendants to the padding box with radius-aware masks and a hard pixel clip (prevents filter bleed); backgrounds/borders are left unclipped, and partial-axis overflow (x hidden / y visible) keeps visible axis unmasked. Regression updated accordingly.
@@ -191,6 +192,7 @@
 - Replaced elements still skip backgrounds and non-image types (SVG/iframe/video remain unrendered); object-fit only applies when image decoding succeeds.
 - Painting lacks filters and isolation nuances (auto/isolate behavior), and still doesn't integrate the richer display list module; mix-blend-mode is supported but 3D transforms/transform-origin z and filter/mix-blend/isolation interplay are ignored.
 - Root line strut still provides minimum line-height rather than full descendant baseline synthesis; replaced backgrounds/non-image types remain unpainted.
+- List markers still flow as inline text (no dedicated marker boxes or outside positioning) and ignore full Counter Styles; ::marker pseudo remains unimplemented.
 
 ## To-do / next steps (spec-oriented)
 1. Inline/text:

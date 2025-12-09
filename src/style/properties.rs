@@ -8,6 +8,7 @@
 
 use crate::css::types::{Declaration, PropertyValue};
 use crate::style::color::Rgba;
+use crate::style::counters::CounterSet;
 use crate::style::display::Display;
 use crate::style::grid::parse_grid_tracks_with_names;
 use crate::style::position::Position;
@@ -793,6 +794,21 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
 
             styles.list_style_type = list_type;
             styles.list_style_position = list_pos;
+        }
+        "counter-reset" => {
+            if let Some(parsed) = parse_counter_property(&resolved_value, CounterPropertyKind::Reset) {
+                styles.counters.counter_reset = Some(parsed);
+            }
+        }
+        "counter-increment" => {
+            if let Some(parsed) = parse_counter_property(&resolved_value, CounterPropertyKind::Increment) {
+                styles.counters.counter_increment = Some(parsed);
+            }
+        }
+        "counter-set" => {
+            if let Some(parsed) = parse_counter_property(&resolved_value, CounterPropertyKind::Set) {
+                styles.counters.counter_set = Some(parsed);
+            }
         }
         "text-transform" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
@@ -1991,6 +2007,7 @@ fn parse_list_style_type(value: &PropertyValue) -> Option<ListStyleType> {
             "upper-roman" => Some(ListStyleType::UpperRoman),
             "lower-alpha" | "lower-latin" => Some(ListStyleType::LowerAlpha),
             "upper-alpha" | "upper-latin" => Some(ListStyleType::UpperAlpha),
+            "lower-greek" => Some(ListStyleType::LowerGreek),
             "none" => Some(ListStyleType::None),
             _ => None,
         },
@@ -2005,6 +2022,48 @@ fn parse_list_style_position(value: &PropertyValue) -> Option<ListStylePosition>
             "outside" => Some(ListStylePosition::Outside),
             _ => None,
         },
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CounterPropertyKind {
+    Reset,
+    Increment,
+    Set,
+}
+
+fn parse_counter_property(value: &PropertyValue, kind: CounterPropertyKind) -> Option<CounterSet> {
+    let input = counter_value_to_string(value)?;
+    let parsed = match kind {
+        CounterPropertyKind::Reset => CounterSet::parse_reset(&input)?,
+        CounterPropertyKind::Increment => CounterSet::parse_increment(&input)?,
+        CounterPropertyKind::Set => CounterSet::parse_set(&input)?,
+    };
+
+    Some(parsed)
+}
+
+fn counter_value_to_string(value: &PropertyValue) -> Option<String> {
+    match value {
+        PropertyValue::Keyword(kw) => Some(kw.trim().to_string()),
+        PropertyValue::Multiple(parts) => {
+            let mut tokens = Vec::new();
+            for part in parts {
+                match part {
+                    PropertyValue::Keyword(kw) => tokens.push(kw.clone()),
+                    PropertyValue::Number(num) if num.fract().abs() < f32::EPSILON => {
+                        tokens.push((*num as i32).to_string())
+                    }
+                    _ => return None,
+                }
+            }
+            if tokens.is_empty() {
+                None
+            } else {
+                Some(tokens.join(" "))
+            }
+        }
         _ => None,
     }
 }
@@ -2393,6 +2452,69 @@ mod tests {
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert_eq!(style.list_style_type, ListStyleType::UpperRoman);
         assert_eq!(style.list_style_position, ListStylePosition::Outside);
+
+        let decl = Declaration {
+            property: "list-style-type".to_string(),
+            value: PropertyValue::Keyword("lower-greek".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.list_style_type, ListStyleType::LowerGreek);
+    }
+
+    #[test]
+    fn parses_counter_properties() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "counter-reset".to_string(),
+            value: PropertyValue::Keyword("chapter 3 section".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        let reset = style.counters.counter_reset.as_ref().unwrap();
+        assert_eq!(reset.items.len(), 2);
+        assert_eq!(reset.items[0].name, "chapter");
+        assert_eq!(reset.items[0].value, 3);
+        assert_eq!(reset.items[1].name, "section");
+        assert_eq!(reset.items[1].value, 0);
+
+        let decl = Declaration {
+            property: "counter-increment".to_string(),
+            value: PropertyValue::Multiple(vec![
+                PropertyValue::Keyword("item".to_string()),
+                PropertyValue::Number(2.0),
+            ]),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        let increment = style.counters.counter_increment.as_ref().unwrap();
+        assert_eq!(increment.items.len(), 1);
+        assert_eq!(increment.items[0].name, "item");
+        assert_eq!(increment.items[0].value, 2);
+
+        let decl = Declaration {
+            property: "counter-set".to_string(),
+            value: PropertyValue::Keyword("item 7".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        let set = style.counters.counter_set.as_ref().unwrap();
+        assert_eq!(set.items.len(), 1);
+        assert_eq!(set.items[0].name, "item");
+        assert_eq!(set.items[0].value, 7);
+
+        let decl = Declaration {
+            property: "counter-increment".to_string(),
+            value: PropertyValue::Keyword("none".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(style
+            .counters
+            .counter_increment
+            .as_ref()
+            .map(|c| c.is_empty())
+            .unwrap_or(false));
     }
 
     #[test]

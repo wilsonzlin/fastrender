@@ -23,6 +23,7 @@ pub mod variables;
 // Internal imports used by ComputedStyle
 use crate::css::types::{BoxShadow, TextShadow, Transform};
 use color::Rgba;
+use counters::CounterProperties;
 use display::Display;
 use position::Position;
 use std::collections::HashMap;
@@ -31,8 +32,8 @@ use types::{
     BackgroundPositionComponent, BackgroundRepeat, BackgroundSize, BackgroundSizeComponent, BorderCollapse,
     BorderStyle, Direction, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack,
     HyphensMode, Isolation, JustifyContent, LineHeight, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit,
-    ObjectPosition, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration,
-    TextIndent, TextJustify, TextTransform, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
+    ObjectPosition, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration, TextIndent,
+    TextJustify, TextTransform, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
 };
 use values::Length;
 
@@ -140,6 +141,8 @@ pub struct ComputedStyle {
     pub language: String,
     pub list_style_type: ListStyleType,
     pub list_style_position: ListStylePosition,
+    /// Counter properties (reset/increment/set)
+    pub counters: CounterProperties,
 
     // Color and background
     pub color: Rgba,
@@ -275,6 +278,7 @@ impl Default for ComputedStyle {
             language: "en".to_string(),
             list_style_type: ListStyleType::Disc,
             list_style_position: ListStylePosition::Outside,
+            counters: CounterProperties::default(),
 
             color: Rgba::BLACK,
             background_color: Rgba::TRANSPARENT,

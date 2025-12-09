@@ -505,6 +505,7 @@ pub enum ListStyleType {
     UpperRoman,
     LowerAlpha,
     UpperAlpha,
+    LowerGreek,
     None,
 }
 

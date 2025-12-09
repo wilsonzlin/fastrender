@@ -7,7 +7,10 @@
 //! <https://www.w3.org/TR/CSS21/visuren.html#box-gen>
 
 use crate::geometry::Size;
+use crate::style::content::CounterStyle;
+use crate::style::counters::{CounterManager, CounterSet};
 use crate::style::display::{Display, FormattingContextType};
+use crate::style::types::{ListStylePosition, ListStyleType};
 use crate::style::ComputedStyle;
 use crate::tree::anonymous::AnonymousBoxCreator;
 use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, ReplacedType};
@@ -375,8 +378,12 @@ impl BoxGenerator {
             return Err(BoxGenerationError::RootDisplayContents);
         }
 
+        let mut counters = CounterManager::new();
+        counters.enter_scope();
+        let root_result = self.generate_box_for_element(dom_root, &mut counters);
+        counters.leave_scope();
         // Generate box for root
-        let root_box = self.generate_box_for_element(dom_root)?;
+        let root_box = root_result?;
 
         // Apply anonymous box fixup if enabled
         let final_root = if self.config.insert_anonymous_boxes {
@@ -408,8 +415,13 @@ impl BoxGenerator {
             return Err(BoxGenerationError::RootDisplayContents);
         }
 
+        let mut counters = CounterManager::new();
+        counters.enter_scope();
+        let root_result = self.generate_box_for_element(dom_root, &mut counters);
+        counters.leave_scope();
+
         // Generate box for root
-        let root_box = self.generate_box_for_element(dom_root)?;
+        let root_box = root_result?;
 
         // Always apply anonymous box fixup
         let fixed_root = AnonymousBoxCreator::fixup_tree(root_box);
@@ -425,11 +437,28 @@ impl BoxGenerator {
     /// 1. Element type (text node, element, replaced element)
     /// 2. Display property value
     /// 3. Replaced element status (img, video, etc.)
-    fn generate_box_for_element(&self, node: &DOMNode) -> Result<BoxNode, BoxGenerationError> {
+    fn generate_box_for_element(
+        &self,
+        node: &DOMNode,
+        counters: &mut CounterManager,
+    ) -> Result<BoxNode, BoxGenerationError> {
         // Handle text nodes
         if node.is_text() {
             return Ok(self.create_text_box(node));
         }
+
+        counters.enter_scope();
+        let result = self.generate_box_for_element_in_scope(node, counters);
+        counters.leave_scope();
+        result
+    }
+
+    fn generate_box_for_element_in_scope(
+        &self,
+        node: &DOMNode,
+        counters: &mut CounterManager,
+    ) -> Result<BoxNode, BoxGenerationError> {
+        self.apply_counter_properties(node, counters);
 
         // Handle replaced elements (img, video, canvas, etc.)
         // Replaced elements don't have children in the CSS sense
@@ -438,7 +467,7 @@ impl BoxGenerator {
         }
 
         // Generate boxes for children first
-        let child_boxes = self.generate_child_boxes(node)?;
+        let child_boxes = self.generate_child_boxes(node, counters)?;
 
         // Determine what kind of box to create
         let display = node.display();
@@ -491,13 +520,19 @@ impl BoxGenerator {
             }
         };
 
+        let mut box_node = if box_node.style.display == Display::ListItem {
+            self.attach_list_marker(box_node, counters)
+        } else {
+            box_node
+        };
+
         // Add debug info if enabled
         if self.config.include_debug_info {
             let debug_info = self.create_debug_info(node);
-            Ok(box_node.with_debug_info(debug_info))
-        } else {
-            Ok(box_node)
+            box_node = box_node.with_debug_info(debug_info);
         }
+
+        Ok(box_node)
     }
 
     /// Creates a replaced box for replaced elements (img, video, canvas, etc.)
@@ -534,7 +569,11 @@ impl BoxGenerator {
     /// - Skipping display: none children
     /// - Adopting display: contents children's children
     /// - Preserving document order
-    fn generate_child_boxes(&self, parent: &DOMNode) -> Result<Vec<BoxNode>, BoxGenerationError> {
+    fn generate_child_boxes(
+        &self,
+        parent: &DOMNode,
+        counters: &mut CounterManager,
+    ) -> Result<Vec<BoxNode>, BoxGenerationError> {
         let mut child_boxes = Vec::new();
 
         for child in &parent.children {
@@ -545,14 +584,20 @@ impl BoxGenerator {
 
             // Handle display: contents - adopt grandchildren
             if self.is_display_contents(child) {
+                // For display: contents, skip the element box but still apply counter properties
+                counters.enter_scope();
+                self.apply_counter_properties(child, counters);
+                let grandchild_boxes = self.generate_child_boxes(child, counters)?;
+                counters.leave_scope();
+
                 // For display: contents, skip the element but process its children
-                let grandchild_boxes = self.generate_child_boxes(child)?;
                 child_boxes.extend(grandchild_boxes);
                 continue;
             }
 
             // Generate box for child
-            let child_box = self.generate_box_for_element(child)?;
+            let child_box = self.generate_box_for_element(child, counters)?;
+
             child_boxes.push(child_box);
         }
 
@@ -596,6 +641,74 @@ impl BoxGenerator {
         }
 
         matches!(node.display(), Display::Contents)
+    }
+
+    /// Applies CSS counter operations for the current element
+    ///
+    /// Order follows CSS Lists & Counters: reset → set → increment. If the
+    /// element is a list item and no explicit counter-increment is present,
+    /// increment the `list-item` counter by 1 per spec defaults.
+    fn apply_counter_properties(&self, node: &DOMNode, counters: &mut CounterManager) {
+        if node.is_text() {
+            return;
+        }
+
+        let mut applied_default_reset = false;
+        if let Some(reset) = &node.style.counters.counter_reset {
+            counters.apply_reset(reset);
+            applied_default_reset = true;
+        }
+
+        if !applied_default_reset {
+            if let Some(tag) = &node.tag_name {
+                if tag.eq_ignore_ascii_case("ol") || tag.eq_ignore_ascii_case("ul") {
+                    let default_reset = CounterSet::single("list-item", 0);
+                    counters.apply_reset(&default_reset);
+                }
+            }
+        }
+
+        if let Some(set) = &node.style.counters.counter_set {
+            counters.apply_set(set);
+        }
+
+        if let Some(increment) = &node.style.counters.counter_increment {
+            counters.apply_increment(increment);
+        } else if node.display() == Display::ListItem {
+            counters.apply_increment(&CounterSet::single("list-item", 1));
+        }
+    }
+
+    /// Prepends a marker box for list items based on list-style-* properties
+    fn attach_list_marker(&self, mut list_item: BoxNode, counters: &CounterManager) -> BoxNode {
+        let style = list_item.style.clone();
+        let marker_text = list_marker_text(style.list_style_type, counters);
+        if marker_text.is_empty() {
+            return list_item;
+        }
+
+        let mut marker_style = (*style).clone();
+        marker_style.display = Display::Inline;
+        marker_style.margin_left = None;
+        marker_style.margin_right = Some(crate::style::values::Length::px(8.0));
+        marker_style.padding_left = crate::style::values::Length::px(0.0);
+        marker_style.padding_right = crate::style::values::Length::px(0.0);
+        marker_style.padding_top = crate::style::values::Length::px(0.0);
+        marker_style.padding_bottom = crate::style::values::Length::px(0.0);
+        marker_style.border_top_width = crate::style::values::Length::px(0.0);
+        marker_style.border_right_width = crate::style::values::Length::px(0.0);
+        marker_style.border_bottom_width = crate::style::values::Length::px(0.0);
+        marker_style.border_left_width = crate::style::values::Length::px(0.0);
+        marker_style.list_style_type = ListStyleType::None;
+
+        // Position inside/outside: both remain inline for now; outside can be spaced a bit more.
+        if style.list_style_position == ListStylePosition::Outside {
+            marker_style.margin_right = Some(crate::style::values::Length::px(12.0));
+        }
+
+        let marker_node = BoxNode::new_text(Arc::new(marker_style), marker_text);
+        list_item.children.insert(0, marker_node);
+        list_item
     }
 }
 
@@ -1738,5 +1851,151 @@ mod tests {
 
         let replaced = BoxGenerator::find_replaced_boxes(&box_tree.root);
         assert_eq!(replaced.len(), 1);
+    }
+
+    #[test]
+    fn test_list_item_generates_marker() {
+        let generator = BoxGenerator::new();
+        let mut li_style = ComputedStyle::default();
+        li_style.display = Display::ListItem;
+        li_style.list_style_type = ListStyleType::Decimal;
+        li_style.list_style_position = ListStylePosition::Inside;
+        let li_style = Arc::new(li_style);
+
+        let li1 = DOMNode::new_element(
+            "li",
+            li_style.clone(),
+            vec![DOMNode::new_text("First", li_style.clone())],
+        );
+        let li2 = DOMNode::new_element(
+            "li",
+            li_style.clone(),
+            vec![DOMNode::new_text("Second", li_style.clone())],
+        );
+        let ul = DOMNode::new_element("ul", style_with_display(Display::Block), vec![li1, li2]);
+
+        let tree = generator.generate(&ul).unwrap();
+        let first_li = &tree.root.children[0];
+        if let BoxType::Text(text_box) = &first_li.children[0].box_type {
+            assert_eq!(text_box.text, "1 ");
+        } else {
+            panic!("expected marker text box");
+        }
+        if let BoxType::Text(text_box) = &tree.root.children[1].children[0].box_type {
+            assert_eq!(text_box.text, "2 ");
+        } else {
+            panic!("expected marker text box");
+        }
+    }
+
+    #[test]
+    fn list_counters_respect_resets_and_custom_increments() {
+        let generator = BoxGenerator::new();
+
+        let mut container_style = ComputedStyle::default();
+        container_style.display = Display::Block;
+        container_style.counters.counter_reset = Some(CounterSet::single("list-item", 4));
+        let container_style = Arc::new(container_style);
+
+        let mut li_style = ComputedStyle::default();
+        li_style.display = Display::ListItem;
+        li_style.list_style_type = ListStyleType::Decimal;
+        let li_style = Arc::new(li_style);
+
+        let first = DOMNode::new_element(
+            "li",
+            li_style.clone(),
+            vec![DOMNode::new_text("first", li_style.clone())],
+        );
+
+        let mut custom_increment = (*li_style).clone();
+        custom_increment.counters.counter_increment = Some(CounterSet::single("list-item", 2));
+        let custom_increment = Arc::new(custom_increment);
+        let second = DOMNode::new_element(
+            "li",
+            custom_increment.clone(),
+            vec![DOMNode::new_text("second", custom_increment.clone())],
+        );
+
+        let list = DOMNode::new_element("ol", container_style, vec![first, second]);
+        let tree = generator.generate(&list).unwrap();
+
+        if let BoxType::Text(text_box) = &tree.root.children[0].children[0].box_type {
+            assert_eq!(text_box.text, "5 ");
+        } else {
+            panic!("expected first marker text");
+        }
+
+        if let BoxType::Text(text_box) = &tree.root.children[1].children[0].box_type {
+            assert_eq!(text_box.text, "7 ");
+        } else {
+            panic!("expected second marker text");
+        }
+    }
+
+    #[test]
+    fn nested_lists_reset_counters() {
+        let generator = BoxGenerator::new();
+
+        let mut li_style = ComputedStyle::default();
+        li_style.display = Display::ListItem;
+        li_style.list_style_type = ListStyleType::Decimal;
+        let li_style = Arc::new(li_style);
+
+        let inner_li = DOMNode::new_element(
+            "li",
+            li_style.clone(),
+            vec![DOMNode::new_text("inner", li_style.clone())],
+        );
+        let inner_list = DOMNode::new_element("ul", style_with_display(Display::Block), vec![inner_li]);
+
+        let outer_li = DOMNode::new_element(
+            "li",
+            li_style.clone(),
+            vec![DOMNode::new_text("outer", li_style.clone()), inner_list],
+        );
+        let outer = DOMNode::new_element("ul", style_with_display(Display::Block), vec![outer_li]);
+
+        let tree = generator.generate(&outer).unwrap();
+
+        // Outer marker should start at 1
+        if let BoxType::Text(text_box) = &tree.root.children[0].children[0].box_type {
+            assert_eq!(text_box.text, "1 ");
+        } else {
+            panic!("expected outer marker text");
+        }
+
+        let inner_list_box = tree.root.children[0]
+            .children
+            .iter()
+            .find(|child| matches!(child.box_type, BoxType::Block(_)))
+            .expect("inner list block");
+        if let BoxType::Text(text_box) = &inner_list_box.children[0].children[0].box_type {
+            assert_eq!(text_box.text, "1 ");
+        } else {
+            panic!("expected inner marker text");
+        }
+    }
+}
+
+fn list_marker_text(list_style: ListStyleType, counters: &CounterManager) -> String {
+    let core = match list_style {
+        ListStyleType::None => return String::new(),
+        ListStyleType::Disc => "•".to_string(),
+        ListStyleType::Circle => "◦".to_string(),
+        ListStyleType::Square => "▪".to_string(),
+        ListStyleType::Decimal => counters.format("list-item", CounterStyle::Decimal),
+        ListStyleType::DecimalLeadingZero => counters.format("list-item", CounterStyle::DecimalLeadingZero),
+        ListStyleType::LowerRoman => counters.format("list-item", CounterStyle::LowerRoman),
+        ListStyleType::UpperRoman => counters.format("list-item", CounterStyle::UpperRoman),
+        ListStyleType::LowerAlpha => counters.format("list-item", CounterStyle::LowerAlpha),
+        ListStyleType::UpperAlpha => counters.format("list-item", CounterStyle::UpperAlpha),
+        ListStyleType::LowerGreek => counters.format("list-item", CounterStyle::LowerGreek),
+    };
+
+    if core.is_empty() {
+        core
+    } else {
+        format!("{} ", core)
     }
 }
