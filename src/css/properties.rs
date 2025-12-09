@@ -38,6 +38,28 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
         }
     }
 
+    // Try to parse as a space-separated list first
+    let tokens: Vec<&str> = value_str.split_whitespace().collect();
+    if tokens.len() > 1
+        && matches!(
+            property,
+            "object-position" | "border-spacing" | "background-position" | "transform-origin"
+        )
+    {
+        let mut parts = Vec::new();
+        for token in tokens {
+            if let Some(v) = parse_simple_value(token) {
+                parts.push(v);
+            } else {
+                parts.clear();
+                break;
+            }
+        }
+        if !parts.is_empty() {
+            return Some(PropertyValue::Multiple(parts));
+        }
+    }
+
     // Try to parse as length
     if let Some(length) = parse_length(value_str) {
         return Some(PropertyValue::Length(length));
@@ -66,6 +88,48 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
 
     // Default to keyword
     Some(PropertyValue::Keyword(value_str.to_string()))
+}
+
+fn parse_simple_value(value_str: &str) -> Option<PropertyValue> {
+    if let Some(length) = parse_length(value_str) {
+        return Some(PropertyValue::Length(length));
+    }
+
+    if value_str.ends_with('%') {
+        if let Ok(num) = value_str[..value_str.len() - 1].parse::<f32>() {
+            return Some(PropertyValue::Percentage(num));
+        }
+    }
+
+    if let Ok(num) = value_str.parse::<f32>() {
+        return Some(PropertyValue::Number(num));
+    }
+
+    csscolorparser::parse(value_str).ok().map(|color| {
+        PropertyValue::Color(Rgba::new(
+            (color.r * 255.0) as u8,
+            (color.g * 255.0) as u8,
+            (color.b * 255.0) as u8,
+            color.a as f32,
+        ))
+    }).or_else(|| Some(PropertyValue::Keyword(value_str.to_string())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_space_separated_values_into_multiple() {
+        let parsed = parse_property_value("object-position", "left 25%");
+        let PropertyValue::Multiple(list) = parsed.expect("parsed") else {
+            panic!("expected Multiple");
+        };
+        assert_eq!(list.len(), 2);
+        assert!(matches!(list[0], PropertyValue::Keyword(ref k) if k == "left"));
+        assert!(matches!(list[1], PropertyValue::Length(len) if (len.value - 25.0).abs() < 0.01 && len.unit.is_percentage())
+            || matches!(list[1], PropertyValue::Percentage(p) if (p - 25.0).abs() < 0.01));
+    }
 }
 
 /// Parse a CSS length value
