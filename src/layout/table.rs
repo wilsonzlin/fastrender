@@ -607,8 +607,10 @@ impl ResolvedBorder {
 
 #[derive(Debug, Clone)]
 struct CollapsedBorders {
-    vertical: Vec<ResolvedBorder>,
-    horizontal: Vec<ResolvedBorder>,
+    /// Vertical grid lines: index is column boundary (0..=columns), inner vec is per row segment.
+    vertical: Vec<Vec<ResolvedBorder>>,
+    /// Horizontal grid lines: index is row boundary (0..=rows), inner vec is per column segment.
+    horizontal: Vec<Vec<ResolvedBorder>>,
 }
 
 /// Resolve the border widths for a table in collapsed border model.
@@ -709,23 +711,29 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     }
 
     let mut vertical = vec![
-        BorderCandidate {
-            width: 0.0,
-            style: BorderStyle::None,
-            color: Rgba::TRANSPARENT,
-            origin: BorderOrigin::Table,
-            source_order: 0
-        };
+        vec![
+            BorderCandidate {
+                width: 0.0,
+                style: BorderStyle::None,
+                color: Rgba::TRANSPARENT,
+                origin: BorderOrigin::Table,
+                source_order: 0
+            };
+            structure.row_count
+        ];
         structure.column_count + 1
     ];
     let mut horizontal = vec![
-        BorderCandidate {
-            width: 0.0,
-            style: BorderStyle::None,
-            color: Rgba::TRANSPARENT,
-            origin: BorderOrigin::Table,
-            source_order: 0
-        };
+        vec![
+            BorderCandidate {
+                width: 0.0,
+                style: BorderStyle::None,
+                color: Rgba::TRANSPARENT,
+                origin: BorderOrigin::Table,
+                source_order: 0
+            };
+            structure.column_count
+        ];
         structure.row_count + 1
     ];
 
@@ -811,14 +819,17 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         source_counter += 1;
     }
 
-    // Table outer borders
-    let tstyle = &table_box.style;
-    let update_line = |line: &mut BorderCandidate,
-                       style: BorderStyle,
-                       width: &crate::style::values::Length,
-                       color: &Rgba,
-                       origin: BorderOrigin,
-                       source_order: u32| {
+    let mut apply_vertical = |col_idx: usize,
+                              row_start: usize,
+                              row_end: usize,
+                              style: BorderStyle,
+                              width: &crate::style::values::Length,
+                              color: &Rgba,
+                              origin: BorderOrigin,
+                              source_order: u32| {
+        if col_idx >= vertical.len() || row_start >= row_end {
+            return;
+        }
         let candidate = BorderCandidate {
             width: resolved_border_width(style, width),
             style,
@@ -826,129 +837,150 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
             origin,
             source_order,
         };
-        *line = pick_winner(*line, candidate);
+        for row in row_start..row_end.min(vertical[col_idx].len()) {
+            let line = &mut vertical[col_idx][row];
+            *line = pick_winner(*line, candidate);
+        }
     };
 
-    update_line(
-        &mut vertical[0],
-        tstyle.border_left_style,
-        &tstyle.border_left_width,
-        &tstyle.border_left_color,
+    let mut apply_horizontal = |row_idx: usize,
+                                col_start: usize,
+                                col_end: usize,
+                                style: BorderStyle,
+                                width: &crate::style::values::Length,
+                                color: &Rgba,
+                                origin: BorderOrigin,
+                                source_order: u32| {
+        if row_idx >= horizontal.len() || col_start >= col_end {
+            return;
+        }
+        let candidate = BorderCandidate {
+            width: resolved_border_width(style, width),
+            style,
+            color: *color,
+            origin,
+            source_order,
+        };
+        for col in col_start..col_end.min(horizontal[row_idx].len()) {
+            let line = &mut horizontal[row_idx][col];
+            *line = pick_winner(*line, candidate);
+        }
+    };
+
+    // Table outer borders
+    let tstyle = &table_box.style;
+    apply_vertical(0, 0, structure.row_count, tstyle.border_left_style, &tstyle.border_left_width, &tstyle.border_left_color, BorderOrigin::Table, 0);
+    apply_vertical(
+        structure.column_count,
+        0,
+        structure.row_count,
+        tstyle.border_right_style,
+        &tstyle.border_right_width,
+        &tstyle.border_right_color,
         BorderOrigin::Table,
         0,
     );
-    if let Some(v) = vertical.last_mut() {
-        update_line(
-            v,
-            tstyle.border_right_style,
-            &tstyle.border_right_width,
-            &tstyle.border_right_color,
-            BorderOrigin::Table,
-            0,
-        );
-    }
-    update_line(
-        &mut horizontal[0],
-        tstyle.border_top_style,
-        &tstyle.border_top_width,
-        &tstyle.border_top_color,
+    apply_horizontal(0, 0, structure.column_count, tstyle.border_top_style, &tstyle.border_top_width, &tstyle.border_top_color, BorderOrigin::Table, 0);
+    apply_horizontal(
+        structure.row_count,
+        0,
+        structure.column_count,
+        tstyle.border_bottom_style,
+        &tstyle.border_bottom_width,
+        &tstyle.border_bottom_color,
         BorderOrigin::Table,
         0,
     );
-    if let Some(h) = horizontal.last_mut() {
-        update_line(
-            h,
-            tstyle.border_bottom_style,
-            &tstyle.border_bottom_width,
-            &tstyle.border_bottom_color,
-            BorderOrigin::Table,
-            0,
-        );
-    }
 
     // Row group borders
     for (start, end, style, order) in &row_groups {
-        if *start < horizontal.len() {
-            update_line(
-                &mut horizontal[*start],
-                style.border_top_style,
-                &style.border_top_width,
-                &style.border_top_color,
-                BorderOrigin::RowGroup,
-                *order,
-            );
-        }
-        if *end < horizontal.len() {
-            update_line(
-                &mut horizontal[*end],
-                style.border_bottom_style,
-                &style.border_bottom_width,
-                &style.border_bottom_color,
-                BorderOrigin::RowGroup,
-                *order,
-            );
-        }
+        apply_horizontal(
+            *start,
+            0,
+            structure.column_count,
+            style.border_top_style,
+            &style.border_top_width,
+            &style.border_top_color,
+            BorderOrigin::RowGroup,
+            *order,
+        );
+        apply_horizontal(
+            *end,
+            0,
+            structure.column_count,
+            style.border_bottom_style,
+            &style.border_bottom_width,
+            &style.border_bottom_color,
+            BorderOrigin::RowGroup,
+            *order,
+        );
     }
 
     // Row borders
     for (row_idx, (style, order)) in row_styles.iter().enumerate() {
-        update_line(
-            &mut horizontal[row_idx],
+        apply_horizontal(
+            row_idx,
+            0,
+            structure.column_count,
             style.border_top_style,
             &style.border_top_width,
             &style.border_top_color,
             BorderOrigin::Row,
             *order,
         );
-        if row_idx + 1 < horizontal.len() {
-            update_line(
-                &mut horizontal[row_idx + 1],
-                style.border_bottom_style,
-                &style.border_bottom_width,
-                &style.border_bottom_color,
-                BorderOrigin::Row,
-                *order,
-            );
-        }
+        apply_horizontal(
+            row_idx + 1,
+            0,
+            structure.column_count,
+            style.border_bottom_style,
+            &style.border_bottom_width,
+            &style.border_bottom_color,
+            BorderOrigin::Row,
+            *order,
+        );
     }
 
     // Column group borders
     for (start, end, style, order) in &column_groups {
-        if *start < vertical.len() {
-            update_line(
-                &mut vertical[*start],
-                style.border_left_style,
-                &style.border_left_width,
-                &style.border_left_color,
-                BorderOrigin::ColumnGroup,
-                *order,
-            );
-        }
-        if *end < vertical.len() {
-            update_line(
-                &mut vertical[*end],
-                style.border_right_style,
-                &style.border_right_width,
-                &style.border_right_color,
-                BorderOrigin::ColumnGroup,
-                *order,
-            );
-        }
+        apply_vertical(
+            *start,
+            0,
+            structure.row_count,
+            style.border_left_style,
+            &style.border_left_width,
+            &style.border_left_color,
+            BorderOrigin::ColumnGroup,
+            *order,
+        );
+        apply_vertical(
+            *end,
+            0,
+            structure.row_count,
+            style.border_right_style,
+            &style.border_right_width,
+            &style.border_right_color,
+            BorderOrigin::ColumnGroup,
+            *order,
+        );
     }
 
     // Column borders
     for (col_idx, col_style) in column_styles.iter().enumerate() {
         if let Some((style, order)) = col_style {
-            update_line(
-                &mut vertical[col_idx],
+            apply_vertical(
+                col_idx,
+                0,
+                structure.row_count,
                 style.border_left_style,
                 &style.border_left_width,
                 &style.border_left_color,
                 BorderOrigin::Column,
                 *order,
             );
-            update_line(
-                &mut vertical[col_idx + 1],
+            apply_vertical(
+                col_idx + 1,
+                0,
+                structure.row_count,
                 style.border_right_style,
                 &style.border_right_width,
                 &style.border_right_color,
@@ -968,32 +1000,40 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
             let start_row = cell.row;
             let end_row = (cell.row + cell.rowspan).min(structure.row_count);
 
-            update_line(
-                &mut vertical[start_col],
+            apply_vertical(
+                start_col,
+                start_row,
+                end_row,
                 style.border_left_style,
                 &style.border_left_width,
                 &style.border_left_color,
                 BorderOrigin::Cell,
                 cell.index as u32,
             );
-            update_line(
-                &mut vertical[end_col],
+            apply_vertical(
+                end_col,
+                start_row,
+                end_row,
                 style.border_right_style,
                 &style.border_right_width,
                 &style.border_right_color,
                 BorderOrigin::Cell,
                 cell.index as u32,
             );
-            update_line(
-                &mut horizontal[start_row],
+            apply_horizontal(
+                start_row,
+                start_col,
+                end_col,
                 style.border_top_style,
                 &style.border_top_width,
                 &style.border_top_color,
                 BorderOrigin::Cell,
                 cell.index as u32,
             );
-            update_line(
-                &mut horizontal[end_row],
+            apply_horizontal(
+                end_row,
+                start_col,
+                end_col,
                 style.border_bottom_style,
                 &style.border_bottom_width,
                 &style.border_bottom_color,
@@ -1003,33 +1043,41 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         }
     }
 
-    let resolved_vertical: Vec<ResolvedBorder> = vertical
-        .iter()
-        .map(|c| {
-            if matches!(c.style, BorderStyle::None | BorderStyle::Hidden) {
-                ResolvedBorder::none()
-            } else {
-                ResolvedBorder {
-                    width: c.width,
-                    style: c.style,
-                    color: c.color,
-                }
-            }
+    let resolved_vertical: Vec<Vec<ResolvedBorder>> = vertical
+        .into_iter()
+        .map(|line| {
+            line.into_iter()
+                .map(|c| {
+                    if matches!(c.style, BorderStyle::None | BorderStyle::Hidden) {
+                        ResolvedBorder::none()
+                    } else {
+                        ResolvedBorder {
+                            width: c.width,
+                            style: c.style,
+                            color: c.color,
+                        }
+                    }
+                })
+                .collect()
         })
         .collect();
 
-    let resolved_horizontal: Vec<ResolvedBorder> = horizontal
-        .iter()
-        .map(|c| {
-            if matches!(c.style, BorderStyle::None | BorderStyle::Hidden) {
-                ResolvedBorder::none()
-            } else {
-                ResolvedBorder {
-                    width: c.width,
-                    style: c.style,
-                    color: c.color,
-                }
-            }
+    let resolved_horizontal: Vec<Vec<ResolvedBorder>> = horizontal
+        .into_iter()
+        .map(|line| {
+            line.into_iter()
+                .map(|c| {
+                    if matches!(c.style, BorderStyle::None | BorderStyle::Hidden) {
+                        ResolvedBorder::none()
+                    } else {
+                        ResolvedBorder {
+                            width: c.width,
+                            style: c.style,
+                            color: c.color,
+                        }
+                    }
+                })
+                .collect()
         })
         .collect();
 
@@ -1680,33 +1728,59 @@ impl FormattingContext for TableFormattingContext {
             }
         }
 
-        // Compute row offsets
-        let mut row_offsets = Vec::with_capacity(structure.row_count);
-        let mut y = v_spacing;
-
         // Border-collapse adjustments
         let collapsed_borders = if structure.border_collapse == BorderCollapse::Collapse {
             compute_collapsed_borders(box_node, &structure)
         } else {
             CollapsedBorders {
-                vertical: vec![ResolvedBorder::none(); structure.column_count + 1],
-                horizontal: vec![ResolvedBorder::none(); structure.row_count + 1],
+                vertical: vec![vec![ResolvedBorder::none(); structure.row_count]; structure.column_count + 1],
+                horizontal: vec![vec![ResolvedBorder::none(); structure.column_count]; structure.row_count + 1],
             }
         };
-        let vertical_borders: Vec<f32> = collapsed_borders.vertical.iter().map(|b| b.width).collect();
-        let horizontal_borders: Vec<f32> = collapsed_borders.horizontal.iter().map(|b| b.width).collect();
+
+        let vertical_line_max: Vec<f32> = collapsed_borders
+            .vertical
+            .iter()
+            .map(|segments| segments.iter().map(|b| b.width).fold(0.0, f32::max))
+            .collect();
+        let horizontal_line_max: Vec<f32> = collapsed_borders
+            .horizontal
+            .iter()
+            .map(|segments| segments.iter().map(|b| b.width).fold(0.0, f32::max))
+            .collect();
+
+        let mut row_offsets = Vec::with_capacity(structure.row_count);
+        let mut y = if structure.border_collapse == BorderCollapse::Collapse {
+            0.0
+        } else {
+            v_spacing
+        };
 
         for (row_idx, row) in row_metrics.iter().enumerate() {
-            // For collapsed borders, add current horizontal border before row content.
             if structure.border_collapse == BorderCollapse::Collapse {
-                y += horizontal_borders.get(row_idx).copied().unwrap_or(0.0);
+                y += horizontal_line_max.get(row_idx).copied().unwrap_or(0.0);
             }
             row_offsets.push(y);
             y += row.height;
-            if structure.border_collapse == BorderCollapse::Collapse {
-                y += horizontal_borders.get(row_idx + 1).copied().unwrap_or(0.0);
-            } else {
+            if structure.border_collapse != BorderCollapse::Collapse {
                 y += v_spacing;
+            }
+        }
+
+        // Precompute column offsets for positioning
+        let mut col_offsets = Vec::with_capacity(structure.column_count);
+        if structure.border_collapse == BorderCollapse::Collapse {
+            let mut x = 0.0;
+            for col_idx in 0..structure.column_count {
+                x += vertical_line_max.get(col_idx).copied().unwrap_or(0.0);
+                col_offsets.push(x);
+                x += col_widths[col_idx];
+            }
+        } else {
+            let mut x = h_spacing;
+            for col_idx in 0..structure.column_count {
+                col_offsets.push(x);
+                x += col_widths[col_idx] + h_spacing;
             }
         }
 
@@ -1716,11 +1790,7 @@ impl FormattingContext for TableFormattingContext {
             // Compute horizontal position
             let mut x = h_spacing;
             if structure.border_collapse == BorderCollapse::Collapse {
-                x = vertical_borders.get(0).copied().unwrap_or(0.0);
-                for col_idx in 0..cell.col {
-                    x += col_widths[col_idx];
-                    x += vertical_borders.get(col_idx + 1).copied().unwrap_or(0.0);
-                }
+                x = col_offsets.get(cell.col).copied().unwrap_or(0.0);
             } else {
                 for col_idx in 0..cell.col {
                     x += col_widths[col_idx] + h_spacing;
@@ -1729,17 +1799,17 @@ impl FormattingContext for TableFormattingContext {
 
             let row_start = cell.row;
             let span_end = (cell.row + cell.rowspan).min(row_metrics.len());
-            let spanned_height: f32 = row_metrics[row_start..span_end].iter().map(|r| r.height).sum::<f32>()
-                + if structure.border_collapse == BorderCollapse::Collapse {
-                    // sum interior borders within the span
-                    horizontal_borders
-                        .get(row_start + 1..=span_end.saturating_sub(1))
-                        .unwrap_or(&[])
-                        .iter()
-                        .sum::<f32>()
-                } else {
-                    v_spacing * cell.rowspan.saturating_sub(1) as f32
-                };
+            let spanned_height: f32 = if structure.border_collapse == BorderCollapse::Collapse {
+                let mut h = horizontal_line_max.get(row_start).copied().unwrap_or(0.0);
+                for r in row_start..span_end {
+                    h += row_metrics[r].height;
+                    h += horizontal_line_max.get(r + 1).copied().unwrap_or(0.0);
+                }
+                h
+            } else {
+                row_metrics[row_start..span_end].iter().map(|r| r.height).sum::<f32>()
+                    + v_spacing * cell.rowspan.saturating_sub(1) as f32
+            };
 
             let y_offset = match laid.vertical_align {
                 VerticalAlign::Top => 0.0,
@@ -1760,20 +1830,25 @@ impl FormattingContext for TableFormattingContext {
         }
 
         let total_width: f32 = if structure.border_collapse == BorderCollapse::Collapse {
-            col_widths.iter().sum::<f32>() + vertical_borders.iter().copied().sum::<f32>()
+            col_widths.iter().sum::<f32>() + vertical_line_max.iter().copied().sum::<f32>()
         } else {
             col_widths.iter().sum::<f32>() + spacing
         };
         let total_height = if structure.row_count > 0 {
-            row_offsets
-                .last()
-                .map(|start| start + row_metrics.last().map(|r| r.height).unwrap_or(0.0))
-                .unwrap_or(0.0)
-                + if structure.border_collapse == BorderCollapse::Collapse {
-                    horizontal_borders.last().copied().unwrap_or(0.0)
-                } else {
-                    v_spacing
+            if structure.border_collapse == BorderCollapse::Collapse {
+                let mut h = horizontal_line_max.get(0).copied().unwrap_or(0.0);
+                for (idx, row) in row_metrics.iter().enumerate() {
+                    h += row.height;
+                    h += horizontal_line_max.get(idx + 1).copied().unwrap_or(0.0);
                 }
+                h
+            } else {
+                row_offsets
+                    .last()
+                    .map(|start| start + row_metrics.last().map(|r| r.height).unwrap_or(0.0))
+                    .unwrap_or(0.0)
+                    + v_spacing
+            }
         } else {
             0.0
         };
@@ -1807,12 +1882,48 @@ impl FormattingContext for TableFormattingContext {
                 Arc::new(style)
             };
 
-            // Vertical grid lines: border before column 0, between columns, after last column.
+            let mut column_line_pos = Vec::with_capacity(structure.column_count + 1);
             let mut x_cursor = 0.0;
-            for (col_idx, border) in collapsed_borders.vertical.iter().enumerate() {
-                if border.width > 0.0 && !matches!(border.style, BorderStyle::None | BorderStyle::Hidden) {
-                    let x = (x_cursor + border.width * 0.5).max(0.0) - border.width * 0.5;
-                    let rect = Rect::from_xywh(x, 0.0, border.width, total_height);
+            column_line_pos.push(x_cursor);
+            for col_idx in 0..structure.column_count {
+                x_cursor += vertical_line_max.get(col_idx).copied().unwrap_or(0.0) + col_widths[col_idx];
+                column_line_pos.push(x_cursor);
+            }
+            if let Some(last) = vertical_line_max.get(structure.column_count) {
+                if let Some(end) = column_line_pos.last_mut() {
+                    *end += *last;
+                }
+            }
+
+            let mut row_line_pos = Vec::with_capacity(structure.row_count + 1);
+            let mut y_cursor = 0.0;
+            row_line_pos.push(y_cursor);
+            for row_idx in 0..structure.row_count {
+                y_cursor += horizontal_line_max.get(row_idx).copied().unwrap_or(0.0) + row_metrics[row_idx].height;
+                row_line_pos.push(y_cursor);
+            }
+            if let Some(last) = horizontal_line_max.get(structure.row_count) {
+                if let Some(end) = row_line_pos.last_mut() {
+                    *end += *last;
+                }
+            }
+
+            // Vertical grid lines: border before column 0, between columns, after last column.
+            for col_idx in 0..collapsed_borders.vertical.len() {
+                let base_x = column_line_pos.get(col_idx).copied().unwrap_or(0.0);
+                for row_idx in 0..structure.row_count {
+                    let border = &collapsed_borders.vertical[col_idx][row_idx];
+                    if border.width <= 0.0 || matches!(border.style, BorderStyle::None | BorderStyle::Hidden) {
+                        continue;
+                    }
+                    let x = base_x - border.width * 0.5;
+                    let row_start = row_line_pos.get(row_idx).copied().unwrap_or(0.0);
+                    let row_height = row_metrics[row_idx].height;
+                    let height = row_height
+                        + horizontal_line_max.get(row_idx).copied().unwrap_or(0.0) * 0.5
+                        + horizontal_line_max.get(row_idx + 1).copied().unwrap_or(0.0) * 0.5;
+                    let y = row_start - horizontal_line_max.get(row_idx).copied().unwrap_or(0.0) * 0.5;
+                    let rect = Rect::from_xywh(x, y, border.width, height);
                     let style = make_border_style(
                         border.color,
                         border.width,
@@ -1830,20 +1941,25 @@ impl FormattingContext for TableFormattingContext {
                         vec![],
                         style,
                     ));
-                }
-
-                x_cursor += border.width;
-                if col_idx < structure.column_count {
-                    x_cursor += col_widths[col_idx];
                 }
             }
 
             // Horizontal grid lines: border before row 0, between rows, after last row.
-            let mut y_cursor = 0.0;
-            for (row_idx, border) in collapsed_borders.horizontal.iter().enumerate() {
-                if border.width > 0.0 && !matches!(border.style, BorderStyle::None | BorderStyle::Hidden) {
-                    let y = (y_cursor + border.width * 0.5).max(0.0) - border.width * 0.5;
-                    let rect = Rect::from_xywh(0.0, y, total_width, border.width);
+            for row_idx in 0..collapsed_borders.horizontal.len() {
+                let base_y = row_line_pos.get(row_idx).copied().unwrap_or(0.0);
+                for col_idx in 0..structure.column_count {
+                    let border = &collapsed_borders.horizontal[row_idx][col_idx];
+                    if border.width <= 0.0 || matches!(border.style, BorderStyle::None | BorderStyle::Hidden) {
+                        continue;
+                    }
+                    let y = base_y - border.width * 0.5;
+                    let col_start = column_line_pos.get(col_idx).copied().unwrap_or(0.0);
+                    let col_width = col_widths[col_idx];
+                    let width = col_width
+                        + vertical_line_max.get(col_idx).copied().unwrap_or(0.0) * 0.5
+                        + vertical_line_max.get(col_idx + 1).copied().unwrap_or(0.0) * 0.5;
+                    let x = col_start - vertical_line_max.get(col_idx).copied().unwrap_or(0.0) * 0.5;
+                    let rect = Rect::from_xywh(x, y, width, border.width);
                     let style = make_border_style(
                         border.color,
                         0.0,
@@ -1861,11 +1977,6 @@ impl FormattingContext for TableFormattingContext {
                         vec![],
                         style,
                     ));
-                }
-
-                y_cursor += border.width;
-                if row_idx < structure.row_count {
-                    y_cursor += row_metrics[row_idx].height;
                 }
             }
         }
@@ -2071,7 +2182,7 @@ mod tests {
         let borders = compute_collapsed_borders(&table, &structure);
 
         assert_eq!(borders.horizontal.len(), 2);
-        assert!((borders.horizontal[0].width - 0.0).abs() < f32::EPSILON);
+        assert!((borders.horizontal[0][0].width - 0.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -2101,7 +2212,7 @@ mod tests {
         let borders = compute_collapsed_borders(&table, &structure);
 
         assert_eq!(borders.vertical.len(), 3);
-        assert!((borders.vertical[1].width - 2.0).abs() < f32::EPSILON);
+        assert!((borders.vertical[1][0].width - 2.0).abs() < f32::EPSILON);
     }
 
     #[test]
