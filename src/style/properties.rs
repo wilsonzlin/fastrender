@@ -976,10 +976,15 @@ pub fn apply_box_values(
 pub fn parse_border_style(kw: &str) -> BorderStyle {
     match kw {
         "none" => BorderStyle::None,
+        "hidden" => BorderStyle::Hidden,
         "solid" => BorderStyle::Solid,
         "dashed" => BorderStyle::Dashed,
         "dotted" => BorderStyle::Dotted,
         "double" => BorderStyle::Double,
+        "groove" => BorderStyle::Groove,
+        "ridge" => BorderStyle::Ridge,
+        "inset" => BorderStyle::Inset,
+        "outset" => BorderStyle::Outset,
         _ => BorderStyle::None,
     }
 }

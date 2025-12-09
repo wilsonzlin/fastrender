@@ -436,9 +436,7 @@ impl FormattingContext for BlockFormattingContext {
         let inline_fc = InlineFormattingContext::new();
 
         // Inline formatting context contribution (text and inline-level children)
-        let inline_width = inline_fc
-            .compute_intrinsic_inline_size(box_node, mode)
-            .unwrap_or(0.0);
+        let inline_width = inline_fc.compute_intrinsic_inline_size(box_node, mode).unwrap_or(0.0);
 
         // Block-level in-flow children contribute their own intrinsic widths
         let mut block_child_width = 0.0f32;
@@ -446,9 +444,7 @@ impl FormattingContext for BlockFormattingContext {
             if !child.is_block_level() || is_out_of_flow(child) {
                 continue;
             }
-            let fc_type = child
-                .formatting_context()
-                .unwrap_or(FormattingContextType::Block);
+            let fc_type = child.formatting_context().unwrap_or(FormattingContextType::Block);
             let fc = factory.create(fc_type);
             let child_width = fc.compute_intrinsic_inline_size(child, mode)?;
             block_child_width = block_child_width.max(child_width);

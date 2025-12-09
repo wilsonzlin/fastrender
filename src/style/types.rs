@@ -68,10 +68,15 @@ pub enum TableLayout {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BorderStyle {
     None,
+    Hidden,
     Solid,
     Dashed,
     Dotted,
     Double,
+    Groove,
+    Ridge,
+    Inset,
+    Outset,
 }
 
 /// Flex container main axis direction

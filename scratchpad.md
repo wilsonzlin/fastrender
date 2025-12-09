@@ -47,10 +47,11 @@
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
 - Min/max content sizing still uses simple break-opportunity offsets rather than cluster-aware shaping widths; no hyphenation support yet in IFC.
-- Table layout is partial: border-collapse unimplemented, row/col spans not truly honored, percent/fixed widths still simplified vs CSS 2.1, colspans split evenly, rowspan baseline alignment still coarse.
+- Table layout still partial: collapsed borders resolve widths but ignore per-segment geometry/color painting; row/col spans not fully honored, percent/fixed widths still simplified vs CSS 2.1, colspans split evenly, rowspan baseline alignment still coarse.
 - Replaced elements still ignore object-fit/object-position/backgrounds on the content box; SVG/iframe/video remain unrendered.
 - Painting still bypasses display list; no shared font context between layout and paint (painter builds its own).
 - Inline-blocks/replaced elements still rely on display hints rather than full anonymous inline box generation and lack percent/min-height handling.
+- Border styles now parse the full CSS 2.1 set (hidden, groove, ridge, inset, outset); collapsed-border conflict resolution honors style priority (hidden > double > solid > dashed > dotted > ridge > outset > groove > inset > none), border widths, and origin order (cell > row > row group > column > column group > table) across table/row/row-group/column/column-group/cell sources, with hidden suppressing competing borders. New tests cover hidden vs solid and style priority over width.
 
 ## To-do / next steps (spec-oriented)
 1. Inline/text:
@@ -58,7 +59,7 @@
    - Integrate shared `FontContext` across layout/paint to avoid divergent font fallback; propagate font metrics into inline box metrics consistently.
    - Harden RTL run positioning and visual reordering in painter/layout so mixed-direction text paints correctly.
 2. Tables:
-   - Finish CSS 2.1 auto table layout: full border-collapse model, percent/fixed widths resolved per spec, correct colspan/rowspan distribution (including baseline handling for rowspans), and row height/baseline behavior under collapsed borders.
+   - Finish CSS 2.1 auto table layout: full border-collapse model including per-segment conflict resolution, painting of collapsed borders (color/style geometry), percent/fixed widths resolved per spec, correct colspan/rowspan distribution (including baseline handling for rowspans), and row height/baseline behavior under collapsed borders.
 3. Replaced content:
    - Render images for `ReplacedType::Image` instead of placeholders.
 4. General bidi:

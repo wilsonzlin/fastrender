@@ -34,7 +34,7 @@ use crate::layout::contexts::table::column_distribution::{
     distribute_spanning_cell_width, ColumnConstraints, ColumnDistributor, DistributionMode,
 };
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::style::types::{BorderCollapse, TableLayout, VerticalAlign};
+use crate::style::types::{BorderCollapse, BorderStyle, TableLayout, VerticalAlign};
 use crate::style::values::LengthUnit;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
@@ -589,50 +589,395 @@ fn horizontal_padding(style: &crate::style::ComputedStyle) -> f32 {
 /// Returns (vertical_lines, horizontal_lines) where each entry is the resolved border width
 /// for that grid line. Lengths: vertical_lines = columns + 1, horizontal_lines = rows + 1.
 fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) -> (Vec<f32>, Vec<f32>) {
-    let mut vertical = vec![0.0f32; structure.column_count + 1];
-    let mut horizontal = vec![0.0f32; structure.row_count + 1];
+    #[derive(Clone, Copy)]
+    enum BorderOrigin {
+        Table,
+        ColumnGroup,
+        Column,
+        RowGroup,
+        Row,
+        Cell,
+    }
 
-    // Helper to resolve a border width Length to px
-    let bw = |len: &crate::style::values::Length| {
+    #[derive(Clone, Copy)]
+    struct BorderCandidate {
+        width: f32,
+        style: BorderStyle,
+        origin: BorderOrigin,
+        source_order: u32,
+    }
+
+    fn style_priority(style: BorderStyle) -> u8 {
+        match style {
+            BorderStyle::Hidden => 9,
+            BorderStyle::Double => 8,
+            BorderStyle::Solid => 7,
+            BorderStyle::Dashed => 6,
+            BorderStyle::Dotted => 5,
+            BorderStyle::Ridge => 4,
+            BorderStyle::Outset => 3,
+            BorderStyle::Groove => 2,
+            BorderStyle::Inset => 1,
+            BorderStyle::None => 0,
+        }
+    }
+
+    fn origin_priority(origin: BorderOrigin) -> u8 {
+        match origin {
+            BorderOrigin::Cell => 6,
+            BorderOrigin::Row => 5,
+            BorderOrigin::RowGroup => 4,
+            BorderOrigin::Column => 3,
+            BorderOrigin::ColumnGroup => 2,
+            BorderOrigin::Table => 1,
+        }
+    }
+
+    fn pick_winner(current: BorderCandidate, candidate: BorderCandidate) -> BorderCandidate {
+        if style_priority(candidate.style) != style_priority(current.style) {
+            return if style_priority(candidate.style) > style_priority(current.style) {
+                candidate
+            } else {
+                current
+            };
+        }
+
+        if (candidate.width - current.width).abs() > f32::EPSILON {
+            return if candidate.width > current.width {
+                candidate
+            } else {
+                current
+            };
+        }
+
+        if origin_priority(candidate.origin) != origin_priority(current.origin) {
+            return if origin_priority(candidate.origin) > origin_priority(current.origin) {
+                candidate
+            } else {
+                current
+            };
+        }
+
+        if candidate.source_order >= current.source_order {
+            candidate
+        } else {
+            current
+        }
+    }
+
+    fn length_to_px(len: &crate::style::values::Length) -> f32 {
         if len.unit.is_absolute() {
             len.to_px()
         } else {
             len.value
         }
-    };
+    }
+
+    fn resolved_border_width(style: BorderStyle, len: &crate::style::values::Length) -> f32 {
+        if matches!(style, BorderStyle::None | BorderStyle::Hidden) {
+            0.0
+        } else {
+            length_to_px(len)
+        }
+    }
+
+    let mut vertical = vec![
+        BorderCandidate {
+            width: 0.0,
+            style: BorderStyle::None,
+            origin: BorderOrigin::Table,
+            source_order: 0
+        };
+        structure.column_count + 1
+    ];
+    let mut horizontal = vec![
+        BorderCandidate {
+            width: 0.0,
+            style: BorderStyle::None,
+            origin: BorderOrigin::Table,
+            source_order: 0
+        };
+        structure.row_count + 1
+    ];
+
+    // Gather row, row-group, column, and column-group styles with document order.
+    let mut row_styles: Vec<(std::sync::Arc<crate::style::ComputedStyle>, u32)> = Vec::new();
+    let mut row_groups: Vec<(usize, usize, std::sync::Arc<crate::style::ComputedStyle>, u32)> = Vec::new();
+    let mut column_styles: Vec<Option<(std::sync::Arc<crate::style::ComputedStyle>, u32)>> =
+        vec![None; structure.column_count];
+    let mut column_groups: Vec<(usize, usize, std::sync::Arc<crate::style::ComputedStyle>, u32)> = Vec::new();
+
+    let mut source_counter: u32 = 1;
+    let mut row_cursor = 0usize;
+    let mut col_cursor = 0usize;
+
+    for child in &table_box.children {
+        match TableStructure::get_table_element_type(child) {
+            TableElementType::RowGroup | TableElementType::HeaderGroup | TableElementType::FooterGroup => {
+                let group_start = row_cursor;
+                let group_order = source_counter;
+                source_counter += 1;
+                for row_child in &child.children {
+                    if TableStructure::get_table_element_type(row_child) == TableElementType::Row {
+                        if row_cursor < structure.row_count {
+                            row_styles.push((row_child.style.clone(), source_counter));
+                            source_counter += 1;
+                        }
+                        row_cursor += 1;
+                    }
+                }
+                let group_end = row_cursor.min(structure.row_count);
+                if group_start < group_end {
+                    row_groups.push((group_start, group_end, child.style.clone(), group_order));
+                }
+            }
+            TableElementType::Row => {
+                if row_cursor < structure.row_count {
+                    row_styles.push((child.style.clone(), source_counter));
+                    source_counter += 1;
+                }
+                row_cursor += 1;
+            }
+            TableElementType::Column => {
+                if col_cursor < structure.column_count {
+                    column_styles[col_cursor] = Some((child.style.clone(), source_counter));
+                    source_counter += 1;
+                }
+                col_cursor += 1;
+            }
+            TableElementType::ColumnGroup => {
+                let group_start = col_cursor;
+                let group_order = source_counter;
+                source_counter += 1;
+                if child.children.is_empty() {
+                    if col_cursor < structure.column_count {
+                        column_styles[col_cursor] = column_styles[col_cursor]
+                            .take()
+                            .or_else(|| Some((child.style.clone(), source_counter)));
+                        source_counter += 1;
+                        col_cursor += 1;
+                    }
+                } else {
+                    for group_child in &child.children {
+                        if TableStructure::get_table_element_type(group_child) == TableElementType::Column {
+                            if col_cursor < structure.column_count {
+                                column_styles[col_cursor] = Some((group_child.style.clone(), source_counter));
+                                source_counter += 1;
+                            }
+                            col_cursor += 1;
+                        }
+                    }
+                }
+                let group_end = col_cursor.min(structure.column_count);
+                if group_start < group_end {
+                    column_groups.push((group_start, group_end, child.style.clone(), group_order));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    while row_styles.len() < structure.row_count {
+        row_styles.push((table_box.style.clone(), source_counter));
+        source_counter += 1;
+    }
 
     // Table outer borders
     let tstyle = &table_box.style;
-    vertical[0] = vertical[0].max(bw(&tstyle.border_left_width));
+    let update_line = |line: &mut BorderCandidate,
+                       style: BorderStyle,
+                       width: &crate::style::values::Length,
+                       origin: BorderOrigin,
+                       source_order: u32| {
+        let candidate = BorderCandidate {
+            width: resolved_border_width(style, width),
+            style,
+            origin,
+            source_order,
+        };
+        *line = pick_winner(*line, candidate);
+    };
+
+    update_line(
+        &mut vertical[0],
+        tstyle.border_left_style,
+        &tstyle.border_left_width,
+        BorderOrigin::Table,
+        0,
+    );
     if let Some(v) = vertical.last_mut() {
-        *v = (*v).max(bw(&tstyle.border_right_width));
+        update_line(
+            v,
+            tstyle.border_right_style,
+            &tstyle.border_right_width,
+            BorderOrigin::Table,
+            0,
+        );
     }
-    horizontal[0] = horizontal[0].max(bw(&tstyle.border_top_width));
+    update_line(
+        &mut horizontal[0],
+        tstyle.border_top_style,
+        &tstyle.border_top_width,
+        BorderOrigin::Table,
+        0,
+    );
     if let Some(h) = horizontal.last_mut() {
-        *h = (*h).max(bw(&tstyle.border_bottom_width));
+        update_line(
+            h,
+            tstyle.border_bottom_style,
+            &tstyle.border_bottom_width,
+            BorderOrigin::Table,
+            0,
+        );
     }
 
-    for cell in &structure.cells {
-        if let Some(cell_box) = TableFormattingContext::new().get_cell_box(table_box, cell) {
-            let style = &cell_box.style;
-            let left = bw(&style.border_left_width);
-            let right = bw(&style.border_right_width);
-            let top = bw(&style.border_top_width);
-            let bottom = bw(&style.border_bottom_width);
+    // Row group borders
+    for (start, end, style, order) in &row_groups {
+        if *start < horizontal.len() {
+            update_line(
+                &mut horizontal[*start],
+                style.border_top_style,
+                &style.border_top_width,
+                BorderOrigin::RowGroup,
+                *order,
+            );
+        }
+        if *end < horizontal.len() {
+            update_line(
+                &mut horizontal[*end],
+                style.border_bottom_style,
+                &style.border_bottom_width,
+                BorderOrigin::RowGroup,
+                *order,
+            );
+        }
+    }
 
+    // Row borders
+    for (row_idx, (style, order)) in row_styles.iter().enumerate() {
+        update_line(
+            &mut horizontal[row_idx],
+            style.border_top_style,
+            &style.border_top_width,
+            BorderOrigin::Row,
+            *order,
+        );
+        if row_idx + 1 < horizontal.len() {
+            update_line(
+                &mut horizontal[row_idx + 1],
+                style.border_bottom_style,
+                &style.border_bottom_width,
+                BorderOrigin::Row,
+                *order,
+            );
+        }
+    }
+
+    // Column group borders
+    for (start, end, style, order) in &column_groups {
+        if *start < vertical.len() {
+            update_line(
+                &mut vertical[*start],
+                style.border_left_style,
+                &style.border_left_width,
+                BorderOrigin::ColumnGroup,
+                *order,
+            );
+        }
+        if *end < vertical.len() {
+            update_line(
+                &mut vertical[*end],
+                style.border_right_style,
+                &style.border_right_width,
+                BorderOrigin::ColumnGroup,
+                *order,
+            );
+        }
+    }
+
+    // Column borders
+    for (col_idx, col_style) in column_styles.iter().enumerate() {
+        if let Some((style, order)) = col_style {
+            update_line(
+                &mut vertical[col_idx],
+                style.border_left_style,
+                &style.border_left_width,
+                BorderOrigin::Column,
+                *order,
+            );
+            update_line(
+                &mut vertical[col_idx + 1],
+                style.border_right_style,
+                &style.border_right_width,
+                BorderOrigin::Column,
+                *order,
+            );
+        }
+    }
+
+    // Cells
+    let tfc = TableFormattingContext::new();
+    for cell in &structure.cells {
+        if let Some(cell_box) = tfc.get_cell_box(table_box, cell) {
+            let style = &cell_box.style;
             let start_col = cell.col;
             let end_col = (cell.col + cell.colspan).min(structure.column_count);
             let start_row = cell.row;
             let end_row = (cell.row + cell.rowspan).min(structure.row_count);
 
-            vertical[start_col] = vertical[start_col].max(left);
-            vertical[end_col] = vertical[end_col].max(right);
-            horizontal[start_row] = horizontal[start_row].max(top);
-            horizontal[end_row] = horizontal[end_row].max(bottom);
+            update_line(
+                &mut vertical[start_col],
+                style.border_left_style,
+                &style.border_left_width,
+                BorderOrigin::Cell,
+                cell.index as u32,
+            );
+            update_line(
+                &mut vertical[end_col],
+                style.border_right_style,
+                &style.border_right_width,
+                BorderOrigin::Cell,
+                cell.index as u32,
+            );
+            update_line(
+                &mut horizontal[start_row],
+                style.border_top_style,
+                &style.border_top_width,
+                BorderOrigin::Cell,
+                cell.index as u32,
+            );
+            update_line(
+                &mut horizontal[end_row],
+                style.border_bottom_style,
+                &style.border_bottom_width,
+                BorderOrigin::Cell,
+                cell.index as u32,
+            );
         }
     }
 
-    (vertical, horizontal)
+    (
+        vertical
+            .iter()
+            .map(|c| {
+                if matches!(c.style, BorderStyle::None | BorderStyle::Hidden) {
+                    0.0
+                } else {
+                    c.width
+                }
+            })
+            .collect(),
+        horizontal
+            .iter()
+            .map(|c| {
+                if matches!(c.style, BorderStyle::None | BorderStyle::Hidden) {
+                    0.0
+                } else {
+                    c.width
+                }
+            })
+            .collect(),
+    )
 }
 
 fn find_first_baseline(fragment: &FragmentNode, parent_offset: f32) -> Option<f32> {
@@ -1041,7 +1386,9 @@ impl TableFormattingContext {
 
         // Apply specified widths from column info (<col>/<colgroup>)
         for (i, col_info) in structure.columns.iter().enumerate() {
-            let Some(constraint) = constraints.get_mut(i) else { continue };
+            let Some(constraint) = constraints.get_mut(i) else {
+                continue;
+            };
             if let Some(specified) = col_info.specified_width {
                 match specified {
                     SpecifiedWidth::Fixed(px) => {
@@ -1272,7 +1619,10 @@ impl FormattingContext for TableFormattingContext {
         let (vertical_borders, horizontal_borders) = if structure.border_collapse == BorderCollapse::Collapse {
             compute_collapsed_borders(box_node, &structure)
         } else {
-            (vec![0.0; structure.column_count + 1], vec![0.0; structure.row_count + 1])
+            (
+                vec![0.0; structure.column_count + 1],
+                vec![0.0; structure.row_count + 1],
+            )
         };
 
         for (row_idx, row) in row_metrics.iter().enumerate() {
@@ -1308,10 +1658,7 @@ impl FormattingContext for TableFormattingContext {
 
             let row_start = cell.row;
             let span_end = (cell.row + cell.rowspan).min(row_metrics.len());
-            let spanned_height: f32 = row_metrics[row_start..span_end]
-                .iter()
-                .map(|r| r.height)
-                .sum::<f32>()
+            let spanned_height: f32 = row_metrics[row_start..span_end].iter().map(|r| r.height).sum::<f32>()
                 + if structure.border_collapse == BorderCollapse::Collapse {
                     // sum interior borders within the span
                     horizontal_borders
@@ -1342,11 +1689,7 @@ impl FormattingContext for TableFormattingContext {
         }
 
         let total_width: f32 = if structure.border_collapse == BorderCollapse::Collapse {
-            col_widths.iter().sum::<f32>()
-                + vertical_borders
-                    .iter()
-                    .copied()
-                    .sum::<f32>()
+            col_widths.iter().sum::<f32>() + vertical_borders.iter().copied().sum::<f32>()
         } else {
             col_widths.iter().sum::<f32>() + spacing
         };
@@ -1356,10 +1699,7 @@ impl FormattingContext for TableFormattingContext {
                 .map(|start| start + row_metrics.last().map(|r| r.height).unwrap_or(0.0))
                 .unwrap_or(0.0)
                 + if structure.border_collapse == BorderCollapse::Collapse {
-                    horizontal_borders
-                        .last()
-                        .copied()
-                        .unwrap_or(0.0)
+                    horizontal_borders.last().copied().unwrap_or(0.0)
                 } else {
                     v_spacing
                 }
@@ -1382,12 +1722,7 @@ impl FormattingContext for TableFormattingContext {
         let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
             .map(|_| ColumnConstraints::new(0.0, 0.0))
             .collect();
-        self.populate_column_constraints(
-            box_node,
-            &structure,
-            &mut column_constraints,
-            DistributionMode::Auto,
-        );
+        self.populate_column_constraints(box_node, &structure, &mut column_constraints, DistributionMode::Auto);
 
         let spacing = structure.total_horizontal_spacing();
         let width = match mode {
@@ -1403,9 +1738,9 @@ impl FormattingContext for TableFormattingContext {
 mod tests {
     use super::*;
     use crate::layout::constraints::LayoutConstraints;
-    use crate::style::display::FormattingContextType;
     use crate::style::display::Display;
-    use crate::style::types::{TableLayout, VerticalAlign};
+    use crate::style::display::FormattingContextType;
+    use crate::style::types::{BorderCollapse, BorderStyle, TableLayout, VerticalAlign};
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
     use crate::tree::debug::DebugInfo;
@@ -1478,9 +1813,8 @@ mod tests {
         let mut style = ComputedStyle::default();
         style.display = Display::Table;
         style.table_layout = TableLayout::Fixed;
-        let table = BoxNode::new_block(Arc::new(style), FormattingContextType::Table, vec![]).with_debug_info(
-            DebugInfo::new(Some("table".to_string()), None, vec![]),
-        );
+        let table = BoxNode::new_block(Arc::new(style), FormattingContextType::Table, vec![])
+            .with_debug_info(DebugInfo::new(Some("table".to_string()), None, vec![]));
 
         let structure = TableStructure::from_box_tree(&table);
         assert!(structure.is_fixed_layout);
@@ -1544,6 +1878,63 @@ mod tests {
     }
 
     #[test]
+    fn collapsed_border_hidden_suppresses_other_styles() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_collapse = BorderCollapse::Collapse;
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        row_style.border_top_style = BorderStyle::Hidden;
+        row_style.border_top_width = Length::px(10.0);
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.border_top_style = BorderStyle::Solid;
+        cell_style.border_top_width = Length::px(4.0);
+
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        let (_vertical, horizontal) = compute_collapsed_borders(&table, &structure);
+
+        assert_eq!(horizontal.len(), 2);
+        assert!((horizontal[0] - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn collapsed_border_style_priority_beats_width() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_collapse = BorderCollapse::Collapse;
+
+        let mut cell_left = ComputedStyle::default();
+        cell_left.display = Display::TableCell;
+        cell_left.border_right_style = BorderStyle::Solid;
+        cell_left.border_right_width = Length::px(8.0);
+
+        let mut cell_right = ComputedStyle::default();
+        cell_right.display = Display::TableCell;
+        cell_right.border_left_style = BorderStyle::Double;
+        cell_right.border_left_width = Length::px(2.0);
+
+        let left = BoxNode::new_block(Arc::new(cell_left), FormattingContextType::Block, vec![]);
+        let right = BoxNode::new_block(Arc::new(cell_right), FormattingContextType::Block, vec![]);
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![left, right]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        let (vertical, _horizontal) = compute_collapsed_borders(&table, &structure);
+
+        assert_eq!(vertical.len(), 3);
+        assert!((vertical[1] - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
     fn test_fixed_layout_uses_first_row_only() {
         // First row specifies widths; second row should not affect fixed layout distribution.
         let mut table_style = ComputedStyle::default();
@@ -1572,8 +1963,11 @@ mod tests {
         second_cell_style.display = Display::TableCell;
         second_cell_style.width = Some(Length::px(400.0));
         let second_cell = BoxNode::new_block(Arc::new(second_cell_style), FormattingContextType::Block, vec![]);
-        let second_row =
-            BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![second_cell.clone()]);
+        let second_row = BoxNode::new_block(
+            Arc::new(row_style),
+            FormattingContextType::Block,
+            vec![second_cell.clone()],
+        );
 
         let table = BoxNode::new_block(
             Arc::new(table_style),
