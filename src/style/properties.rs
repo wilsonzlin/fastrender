@@ -7,6 +7,7 @@
 //! <https://www.w3.org/TR/css-cascade-4/>
 
 use crate::css::types::{Declaration, PropertyValue};
+use crate::style::color::Rgba;
 use crate::style::display::Display;
 use crate::style::grid::parse_grid_tracks_with_names;
 use crate::style::position::Position;
@@ -14,6 +15,7 @@ use crate::style::types::*;
 use crate::style::values::{Length, LengthUnit};
 use crate::style::var_resolution::resolve_var;
 use crate::style::ComputedStyle;
+use cssparser::{Parser, ParserInput, Token};
 
 pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_font_size: f32, root_font_size: f32) {
     // Handle CSS Custom Properties (--*)
@@ -819,6 +821,11 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 styles.transform = transforms.clone();
             }
         }
+        "filter" => {
+            if let Some(filters) = parse_filter_list(&resolved_value) {
+                styles.filter = filters;
+            }
+        }
         "transform-origin" => {
             if let Some(origin) = parse_transform_origin(&resolved_value) {
                 styles.transform_origin = origin;
@@ -1082,6 +1089,252 @@ fn parse_transform_origin(value: &PropertyValue) -> Option<TransformOrigin> {
     let x = x.unwrap_or_else(|| Length::percent(50.0));
     let y = y.unwrap_or_else(|| Length::percent(50.0));
     Some(TransformOrigin { x, y })
+}
+
+fn parse_filter_list(value: &PropertyValue) -> Option<Vec<FilterFunction>> {
+    let text = match value {
+        PropertyValue::Keyword(kw) => kw.as_str(),
+        PropertyValue::String(s) => s.as_str(),
+        PropertyValue::Multiple(values) if values.len() == 1 => match &values[0] {
+            PropertyValue::Keyword(kw) => kw.as_str(),
+            PropertyValue::String(s) => s.as_str(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+
+    let trimmed = text.trim();
+    if trimmed.eq_ignore_ascii_case("none") {
+        return Some(Vec::new());
+    }
+
+    let mut input = ParserInput::new(trimmed);
+    let mut parser = Parser::new(&mut input);
+    let mut filters = Vec::new();
+
+    while !parser.is_exhausted() {
+        parser.skip_whitespace();
+        if parser.is_exhausted() {
+            break;
+        }
+
+        let func_name = match parser.next() {
+            Ok(Token::Function(name)) => name.as_ref().to_ascii_lowercase(),
+            _ => return None,
+        };
+
+        let parsed = parser
+            .parse_nested_block(|block| parse_filter_function(&func_name, block))
+            .ok()?;
+        filters.push(parsed);
+        parser.skip_whitespace();
+    }
+
+    Some(filters)
+}
+
+fn parse_filter_function<'i, 't>(
+    name: &str,
+    input: &mut Parser<'i, 't>,
+) -> Result<FilterFunction, cssparser::ParseError<'i, ()>> {
+    match name {
+        "blur" => {
+            let len = parse_length_component(input)?;
+            input.skip_whitespace();
+            if !input.is_exhausted() {
+                return Err(input.new_custom_error(()));
+            }
+            Ok(FilterFunction::Blur(len))
+        }
+        "brightness" => {
+            let v = parse_number_or_percentage(input)?;
+            input.skip_whitespace();
+            if !input.is_exhausted() {
+                return Err(input.new_custom_error(()));
+            }
+            Ok(FilterFunction::Brightness(v))
+        }
+        "contrast" => {
+            let v = parse_number_or_percentage(input)?;
+            input.skip_whitespace();
+            if !input.is_exhausted() {
+                return Err(input.new_custom_error(()));
+            }
+            Ok(FilterFunction::Contrast(v))
+        }
+        "grayscale" => {
+            let v = parse_number_or_percentage(input)?;
+            input.skip_whitespace();
+            if !input.is_exhausted() {
+                return Err(input.new_custom_error(()));
+            }
+            Ok(FilterFunction::Grayscale(v))
+        }
+        "sepia" => {
+            let v = parse_number_or_percentage(input)?;
+            input.skip_whitespace();
+            if !input.is_exhausted() {
+                return Err(input.new_custom_error(()));
+            }
+            Ok(FilterFunction::Sepia(v))
+        }
+        "saturate" => {
+            let v = parse_number_or_percentage(input)?;
+            input.skip_whitespace();
+            if !input.is_exhausted() {
+                return Err(input.new_custom_error(()));
+            }
+            Ok(FilterFunction::Saturate(v))
+        }
+        "hue-rotate" => {
+            let v = parse_angle_degrees(input)?;
+            input.skip_whitespace();
+            if !input.is_exhausted() {
+                return Err(input.new_custom_error(()));
+            }
+            Ok(FilterFunction::HueRotate(v))
+        }
+        "invert" => {
+            let v = parse_number_or_percentage(input)?;
+            input.skip_whitespace();
+            if !input.is_exhausted() {
+                return Err(input.new_custom_error(()));
+            }
+            Ok(FilterFunction::Invert(v))
+        }
+        "opacity" => {
+            let v = parse_number_or_percentage(input)?;
+            input.skip_whitespace();
+            if !input.is_exhausted() {
+                return Err(input.new_custom_error(()));
+            }
+            Ok(FilterFunction::Opacity(v))
+        }
+        "drop-shadow" => parse_drop_shadow(input),
+        _ => Err(input.new_custom_error(())),
+    }
+}
+
+fn parse_number_or_percentage<'i, 't>(input: &mut Parser<'i, 't>) -> Result<f32, cssparser::ParseError<'i, ()>> {
+    let location = input.current_source_location();
+    match input.next()? {
+        Token::Number { value, .. } => Ok(*value),
+        Token::Percentage { unit_value, .. } => Ok(*unit_value),
+        _ => Err(location.new_custom_error(())),
+    }
+}
+
+fn parse_angle_degrees<'i, 't>(input: &mut Parser<'i, 't>) -> Result<f32, cssparser::ParseError<'i, ()>> {
+    let location = input.current_source_location();
+    match input.next()? {
+        Token::Dimension { value, ref unit, .. } => match unit.as_ref() {
+            "deg" => Ok(*value),
+            "grad" => Ok(*value * 0.9),
+            "turn" => Ok(*value * 360.0),
+            "rad" => Ok(*value * (180.0 / std::f32::consts::PI)),
+            _ => Err(location.new_custom_error(())),
+        },
+        Token::Number { value, .. } if *value == 0.0 => Ok(0.0),
+        _ => Err(location.new_custom_error(())),
+    }
+}
+
+fn parse_length_component<'i, 't>(input: &mut Parser<'i, 't>) -> Result<Length, cssparser::ParseError<'i, ()>> {
+    let location = input.current_source_location();
+    match input.next()? {
+        Token::Dimension { value, ref unit, .. } => {
+            let unit = unit.as_ref();
+            let len = match unit {
+                "px" => Length::px(*value),
+                "em" => Length::em(*value),
+                "rem" => Length::rem(*value),
+                "pt" => Length::pt(*value),
+                "pc" => Length::pc(*value),
+                "in" => Length::inches(*value),
+                "cm" => Length::cm(*value),
+                "mm" => Length::mm(*value),
+                _ => return Err(location.new_custom_error(())),
+            };
+            Ok(len)
+        }
+        Token::Percentage { unit_value, .. } => Ok(Length::percent(*unit_value)),
+        Token::Number { value, .. } if *value == 0.0 => Ok(Length::px(0.0)),
+        _ => Err(location.new_custom_error(())),
+    }
+}
+
+fn parse_css_color_value<'i, 't>(
+    input: &mut Parser<'i, 't>,
+) -> Result<FilterColor, cssparser::ParseError<'i, ()>> {
+    let location = input.current_source_location();
+    let token = input.next()?;
+    let raw = match token {
+        Token::Ident(ref ident) => ident.as_ref().to_string(),
+        Token::Hash(ref value) | Token::IDHash(ref value) => format!("#{}", value),
+        Token::Function(ref name) => {
+            let func = name.as_ref().to_string();
+            let inner = input.parse_nested_block(|block| Ok(block.slice_from(block.position()).to_string()))?;
+            format!("{}({})", func, inner)
+        }
+        _ => return Err(location.new_custom_error(())),
+    };
+
+    if raw.eq_ignore_ascii_case("currentcolor") {
+        return Ok(FilterColor::CurrentColor);
+    }
+
+    let parsed = csscolorparser::parse(&raw).map_err(|_| location.new_custom_error(()))?;
+    Ok(FilterColor::Color(Rgba::new(
+        (parsed.r * 255.0).round().clamp(0.0, 255.0) as u8,
+        (parsed.g * 255.0).round().clamp(0.0, 255.0) as u8,
+        (parsed.b * 255.0).round().clamp(0.0, 255.0) as u8,
+        parsed.a as f32,
+    )))
+}
+
+fn parse_drop_shadow<'i, 't>(
+    input: &mut Parser<'i, 't>,
+) -> Result<FilterFunction, cssparser::ParseError<'i, ()>> {
+    let mut lengths = Vec::new();
+    let mut color: Option<FilterColor> = None;
+
+    while !input.is_exhausted() {
+        input.skip_whitespace();
+        if input.is_exhausted() {
+            break;
+        }
+
+        if color.is_none() {
+            if let Ok(c) = input.try_parse(parse_css_color_value) {
+                color = Some(c);
+                continue;
+            }
+        }
+
+        if let Ok(len) = input.try_parse(parse_length_component) {
+            lengths.push(len);
+            continue;
+        }
+
+        // Unexpected token
+        let _ = input.next();
+        return Err(input.new_custom_error(()));
+    }
+
+    if lengths.len() < 2 {
+        return Err(input.new_custom_error(()));
+    }
+
+    let blur = lengths.get(2).copied().unwrap_or_else(|| Length::px(0.0));
+    let spread = lengths.get(3).copied().unwrap_or_else(|| Length::px(0.0));
+
+    Ok(FilterFunction::DropShadow(FilterShadow {
+        offset_x: lengths[0],
+        offset_y: lengths[1],
+        blur_radius: blur,
+        spread,
+        color: color.unwrap_or(FilterColor::CurrentColor),
+    }))
 }
 
 fn parse_mix_blend_mode(kw: &str) -> Option<MixBlendMode> {
@@ -1388,5 +1641,35 @@ mod tests {
         };
         apply_declaration(&mut style, &clip_decl, 16.0, 16.0);
         assert_eq!(style.background_clip, BackgroundBox::PaddingBox);
+    }
+
+    #[test]
+    fn parses_filter_list_with_lengths_and_numbers() {
+        let filters =
+            parse_filter_list(&PropertyValue::Keyword("blur(4px) brightness(50%)".to_string())).expect("filters");
+        assert_eq!(filters.len(), 2);
+        match &filters[0] {
+            FilterFunction::Blur(len) => assert!((len.to_px() - 4.0).abs() < 0.01),
+            _ => panic!("expected blur filter"),
+        }
+        match &filters[1] {
+            FilterFunction::Brightness(v) => assert!((*v - 0.5).abs() < 0.001),
+            _ => panic!("expected brightness filter"),
+        }
+    }
+
+    #[test]
+    fn parses_drop_shadow_defaulting_to_current_color() {
+        let filters =
+            parse_filter_list(&PropertyValue::Keyword("drop-shadow(2px 3px 4px)".to_string())).expect("filters");
+        assert_eq!(filters.len(), 1);
+        match &filters[0] {
+            FilterFunction::DropShadow(shadow) => {
+                assert!(matches!(shadow.color, FilterColor::CurrentColor));
+                assert!((shadow.offset_x.to_px() - 2.0).abs() < 0.01);
+                assert!((shadow.offset_y.to_px() - 3.0).abs() < 0.01);
+            }
+            _ => panic!("expected drop-shadow"),
+        }
     }
 }

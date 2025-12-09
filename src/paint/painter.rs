@@ -26,7 +26,7 @@ use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
 use crate::paint::stacking::creates_stacking_context;
 use crate::style::color::Rgba;
-use crate::style::types::MixBlendMode;
+use crate::style::types::{FilterColor, FilterFunction, MixBlendMode};
 use crate::style::types::{
     BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderStyle as CssBorderStyle, ObjectFit,
     ObjectPosition, PositionComponent,
@@ -42,7 +42,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use tiny_skia::{
     BlendMode as SkiaBlendMode, FilterQuality, IntSize, Paint, PathBuilder, Pattern, Pixmap, PixmapPaint,
-    Rect as SkiaRect, SpreadMode, Stroke, Transform,
+    PremultipliedColorU8, Rect as SkiaRect, SpreadMode, Stroke, Transform,
 };
 
 /// Main painter that rasterizes a FragmentTree to pixels
@@ -57,6 +57,26 @@ pub struct Painter {
     font_ctx: FontContext,
     /// Image cache for replaced content
     image_cache: ImageCache,
+}
+
+#[derive(Debug, Clone)]
+enum ResolvedFilter {
+    Blur(f32),
+    Brightness(f32),
+    Contrast(f32),
+    Grayscale(f32),
+    Sepia(f32),
+    Saturate(f32),
+    HueRotate(f32),
+    Invert(f32),
+    Opacity(f32),
+    DropShadow {
+        offset_x: f32,
+        offset_y: f32,
+        blur_radius: f32,
+        spread: f32,
+        color: Rgba,
+    },
 }
 
 #[derive(Debug)]
@@ -86,6 +106,7 @@ enum DisplayCommand {
         transform: Option<Transform>,
         blend_mode: MixBlendMode,
         isolated: bool,
+        filters: Vec<ResolvedFilter>,
         commands: Vec<DisplayCommand>,
     },
 }
@@ -365,12 +386,19 @@ impl Painter {
         let isolated = style_ref
             .map(|s| matches!(s.isolation, crate::style::types::Isolation::Isolate))
             .unwrap_or(false);
-        if opacity < 1.0 || transform.is_some() || !matches!(blend_mode, MixBlendMode::Normal) || isolated {
+        let filters = style_ref
+            .as_deref()
+            .map(|s| resolve_filters(&s.filter, s))
+            .unwrap_or_default();
+        let has_filters = !filters.is_empty();
+        if opacity < 1.0 || transform.is_some() || !matches!(blend_mode, MixBlendMode::Normal) || isolated || has_filters
+        {
             items.push(DisplayCommand::StackingContext {
                 opacity,
                 transform,
                 blend_mode,
                 isolated,
+                filters,
                 commands: local_commands,
             });
         } else {
@@ -488,15 +516,26 @@ impl Painter {
                 transform,
                 blend_mode,
                 isolated,
+                filters,
                 commands,
             } => {
                 if opacity <= 0.0 {
                     return Ok(());
                 }
 
-                let Some(bounds) = compute_commands_bounds(&commands) else {
+                let Some(mut bounds) = compute_commands_bounds(&commands) else {
                     return Ok(());
                 };
+
+                let (out_l, out_t, out_r, out_b) = filter_outset(&filters);
+                if out_l > 0.0 || out_t > 0.0 || out_r > 0.0 || out_b > 0.0 {
+                    bounds = Rect::from_xywh(
+                        bounds.min_x() - out_l,
+                        bounds.min_y() - out_t,
+                        bounds.width() + out_l + out_r,
+                        bounds.height() + out_t + out_b,
+                    );
+                }
 
                 // Reduce layer size by translating to the top-left of the local bounds.
                 let offset = Point::new(bounds.min_x(), bounds.min_y());
@@ -523,6 +562,10 @@ impl Painter {
                 for cmd in translated {
                     painter.execute_command(cmd)?;
                 }
+                let mut layer_pixmap = painter.pixmap;
+                if !filters.is_empty() {
+                    apply_filters(&mut layer_pixmap, &filters);
+                }
 
                 let mut paint = PixmapPaint::default();
                 paint.opacity = opacity.min(1.0);
@@ -534,7 +577,7 @@ impl Painter {
                     map_blend_mode(blend_mode)
                 };
                 self.pixmap
-                    .draw_pixmap(0, 0, painter.pixmap.as_ref(), &paint, final_transform, None);
+                    .draw_pixmap(0, 0, layer_pixmap.as_ref(), &paint, final_transform, None);
             }
         }
         Ok(())
@@ -1300,7 +1343,19 @@ fn command_bounds(cmd: &DisplayCommand) -> Option<Rect> {
         | DisplayCommand::Border { rect, .. }
         | DisplayCommand::Text { rect, .. }
         | DisplayCommand::Replaced { rect, .. } => Some(*rect),
-        DisplayCommand::StackingContext { commands, .. } => compute_commands_bounds(commands),
+        DisplayCommand::StackingContext { commands, filters, .. } => {
+            let mut bounds = compute_commands_bounds(commands)?;
+            let (l, t, r, b) = filter_outset(filters);
+            if l > 0.0 || t > 0.0 || r > 0.0 || b > 0.0 {
+                bounds = Rect::from_xywh(
+                    bounds.min_x() - l,
+                    bounds.min_y() - t,
+                    bounds.width() + l + r,
+                    bounds.height() + t + b,
+                );
+            }
+            Some(bounds)
+        }
     }
 }
 
@@ -1357,16 +1412,412 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
                 transform,
                 blend_mode,
                 isolated,
+                filters,
                 commands,
             } => DisplayCommand::StackingContext {
                 opacity,
                 transform,
                 blend_mode,
                 isolated,
+                filters,
                 commands: translate_commands(commands, dx, dy),
             },
         })
         .collect()
+}
+
+fn resolve_filters(filters: &[FilterFunction], style: &ComputedStyle) -> Vec<ResolvedFilter> {
+    filters
+        .iter()
+        .filter_map(|f| match f {
+            FilterFunction::Blur(len) => Some(ResolvedFilter::Blur(resolve_filter_length(len, style))),
+            FilterFunction::Brightness(v) => Some(ResolvedFilter::Brightness(*v)),
+            FilterFunction::Contrast(v) => Some(ResolvedFilter::Contrast(*v)),
+            FilterFunction::Grayscale(v) => Some(ResolvedFilter::Grayscale(*v)),
+            FilterFunction::Sepia(v) => Some(ResolvedFilter::Sepia(*v)),
+            FilterFunction::Saturate(v) => Some(ResolvedFilter::Saturate(*v)),
+            FilterFunction::HueRotate(deg) => Some(ResolvedFilter::HueRotate(*deg)),
+            FilterFunction::Invert(v) => Some(ResolvedFilter::Invert(*v)),
+            FilterFunction::Opacity(v) => Some(ResolvedFilter::Opacity(*v)),
+            FilterFunction::DropShadow(shadow) => {
+                let color = match shadow.color {
+                    FilterColor::CurrentColor => style.color,
+                    FilterColor::Color(c) => c,
+                };
+                Some(ResolvedFilter::DropShadow {
+                    offset_x: resolve_filter_length(&shadow.offset_x, style),
+                    offset_y: resolve_filter_length(&shadow.offset_y, style),
+                    blur_radius: resolve_filter_length(&shadow.blur_radius, style),
+                    spread: resolve_filter_length(&shadow.spread, style),
+                    color,
+                })
+            }
+        })
+        .collect()
+}
+
+fn resolve_filter_length(len: &Length, style: &ComputedStyle) -> f32 {
+    match len.unit {
+        LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(style.font_size),
+        LengthUnit::Percent => len.resolve_against(style.font_size),
+        unit if unit.is_absolute() => len.to_px(),
+        _ => 0.0,
+    }
+}
+
+fn filter_outset(filters: &[ResolvedFilter]) -> (f32, f32, f32, f32) {
+    let mut left: f32 = 0.0;
+    let mut top: f32 = 0.0;
+    let mut right: f32 = 0.0;
+    let mut bottom: f32 = 0.0;
+
+    for filter in filters {
+        match *filter {
+            ResolvedFilter::Blur(radius) => {
+                let delta = radius.abs() * 3.0;
+                left = left.max(delta);
+                right = right.max(delta);
+                top = top.max(delta);
+                bottom = bottom.max(delta);
+            }
+            ResolvedFilter::DropShadow {
+                offset_x,
+                offset_y,
+                blur_radius,
+                spread,
+                ..
+            } => {
+                let delta = blur_radius.abs() * 3.0 + spread.max(0.0);
+                left = left.max(delta - offset_x.min(0.0));
+                right = right.max(delta + offset_x.max(0.0));
+                top = top.max(delta - offset_y.min(0.0));
+                bottom = bottom.max(delta + offset_y.max(0.0));
+            }
+            _ => {}
+        }
+    }
+
+    (left.max(0.0), top.max(0.0), right.max(0.0), bottom.max(0.0))
+}
+
+fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter]) {
+    for filter in filters {
+        match *filter {
+            ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, radius),
+            ResolvedFilter::Brightness(amount) => apply_color_filter(pixmap, |c, a| (scale_color(c, amount), a)),
+            ResolvedFilter::Contrast(amount) => apply_color_filter(pixmap, |c, a| (apply_contrast(c, amount), a)),
+            ResolvedFilter::Grayscale(amount) => apply_color_filter(pixmap, |c, a| (grayscale(c, amount), a)),
+            ResolvedFilter::Sepia(amount) => apply_color_filter(pixmap, |c, a| (sepia(c, amount), a)),
+            ResolvedFilter::Saturate(amount) => apply_color_filter(pixmap, |c, a| (saturate(c, amount), a)),
+            ResolvedFilter::HueRotate(deg) => apply_color_filter(pixmap, |c, a| (hue_rotate(c, deg), a)),
+            ResolvedFilter::Invert(amount) => apply_color_filter(pixmap, |c, a| (invert(c, amount), a)),
+            ResolvedFilter::Opacity(amount) => apply_color_filter(pixmap, |c, a| (c, a * amount)),
+            ResolvedFilter::DropShadow {
+                offset_x,
+                offset_y,
+                blur_radius,
+                spread,
+                color,
+            } => apply_drop_shadow(pixmap, offset_x, offset_y, blur_radius, spread, color),
+        }
+    }
+}
+
+fn apply_color_filter<F>(pixmap: &mut Pixmap, mut f: F)
+where
+    F: FnMut([f32; 3], f32) -> ([f32; 3], f32),
+{
+    for px in pixmap.pixels_mut() {
+        let alpha = px.alpha() as f32 / 255.0;
+        let base = if alpha > 0.0 {
+            [
+                (px.red() as f32 / 255.0) / alpha,
+                (px.green() as f32 / 255.0) / alpha,
+                (px.blue() as f32 / 255.0) / alpha,
+            ]
+        } else {
+            [0.0, 0.0, 0.0]
+        };
+        let (mut color, mut new_alpha) = f(base, alpha);
+        new_alpha = new_alpha.clamp(0.0, 1.0);
+        color[0] = color[0].clamp(0.0, 1.0);
+        color[1] = color[1].clamp(0.0, 1.0);
+        color[2] = color[2].clamp(0.0, 1.0);
+
+        let r = (color[0] * new_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+        let g = (color[1] * new_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+        let b = (color[2] * new_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+        let a = (new_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+
+        *px = PremultipliedColorU8::from_rgba(r, g, b, a).unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+}
+
+fn scale_color(color: [f32; 3], factor: f32) -> [f32; 3] {
+    [color[0] * factor, color[1] * factor, color[2] * factor]
+}
+
+fn apply_contrast(color: [f32; 3], factor: f32) -> [f32; 3] {
+    [
+        ((color[0] - 0.5) * factor + 0.5),
+        ((color[1] - 0.5) * factor + 0.5),
+        ((color[2] - 0.5) * factor + 0.5),
+    ]
+}
+
+fn grayscale(color: [f32; 3], amount: f32) -> [f32; 3] {
+    let gray = color[0] * 0.2126 + color[1] * 0.7152 + color[2] * 0.0722;
+    [
+        color[0] + (gray - color[0]) * amount,
+        color[1] + (gray - color[1]) * amount,
+        color[2] + (gray - color[2]) * amount,
+    ]
+}
+
+fn sepia(color: [f32; 3], amount: f32) -> [f32; 3] {
+    let sepia_r = color[0] * 0.393 + color[1] * 0.769 + color[2] * 0.189;
+    let sepia_g = color[0] * 0.349 + color[1] * 0.686 + color[2] * 0.168;
+    let sepia_b = color[0] * 0.272 + color[1] * 0.534 + color[2] * 0.131;
+    [
+        color[0] + (sepia_r - color[0]) * amount,
+        color[1] + (sepia_g - color[1]) * amount,
+        color[2] + (sepia_b - color[2]) * amount,
+    ]
+}
+
+fn saturate(color: [f32; 3], factor: f32) -> [f32; 3] {
+    let rw = 0.213;
+    let gw = 0.715;
+    let bw = 0.072;
+    [
+        (rw + (1.0 - rw) * factor) * color[0] + (gw - gw * factor) * color[1] + (bw - bw * factor) * color[2],
+        (rw - rw * factor) * color[0] + (gw + (1.0 - gw) * factor) * color[1] + (bw - bw * factor) * color[2],
+        (rw - rw * factor) * color[0] + (gw - gw * factor) * color[1] + (bw + (1.0 - bw) * factor) * color[2],
+    ]
+}
+
+fn hue_rotate(color: [f32; 3], degrees: f32) -> [f32; 3] {
+    let angle = degrees.to_radians();
+    let cos = angle.cos();
+    let sin = angle.sin();
+
+    let r = color[0];
+    let g = color[1];
+    let b = color[2];
+
+    [
+        r * (0.213 + cos * 0.787 - sin * 0.213) + g * (0.715 - 0.715 * cos - 0.715 * sin)
+            + b * (0.072 - 0.072 * cos + 0.928 * sin),
+        r * (0.213 - 0.213 * cos + 0.143 * sin) + g * (0.715 + 0.285 * cos + 0.140 * sin)
+            + b * (0.072 - 0.072 * cos - 0.283 * sin),
+        r * (0.213 - 0.213 * cos - 0.787 * sin) + g * (0.715 - 0.715 * cos + 0.715 * sin)
+            + b * (0.072 + 0.928 * cos + 0.072 * sin),
+    ]
+}
+
+fn invert(color: [f32; 3], amount: f32) -> [f32; 3] {
+    [
+        color[0] + (1.0 - color[0] - color[0]) * amount,
+        color[1] + (1.0 - color[1] - color[1]) * amount,
+        color[2] + (1.0 - color[2] - color[2]) * amount,
+    ]
+}
+
+fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
+    let radius = (sigma.abs() * 3.0).ceil() as usize;
+    if radius == 0 {
+        return;
+    }
+
+    let (kernel, radius) = gaussian_kernel(sigma);
+    if kernel.is_empty() {
+        return;
+    }
+
+    let width = pixmap.width() as usize;
+    let height = pixmap.height() as usize;
+    let src: Vec<[f32; 4]> = pixmap
+        .pixels()
+        .iter()
+        .map(|p| {
+            [
+                p.red() as f32 / 255.0,
+                p.green() as f32 / 255.0,
+                p.blue() as f32 / 255.0,
+                p.alpha() as f32 / 255.0,
+            ]
+        })
+        .collect();
+
+    let mut temp = vec![[0.0; 4]; src.len()];
+    let mut dst = vec![[0.0; 4]; src.len()];
+
+    // Horizontal pass
+    for y in 0..height {
+        for x in 0..width {
+            let mut accum = [0.0; 4];
+            let mut weight_sum = 0.0;
+            for (i, weight) in kernel.iter().enumerate() {
+                let offset = i as isize - radius as isize;
+                let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
+                let sample = src[y * width + cx];
+                accum[0] += sample[0] * weight;
+                accum[1] += sample[1] * weight;
+                accum[2] += sample[2] * weight;
+                accum[3] += sample[3] * weight;
+                weight_sum += weight;
+            }
+            let idx = y * width + x;
+            temp[idx] = [
+                accum[0] / weight_sum,
+                accum[1] / weight_sum,
+                accum[2] / weight_sum,
+                accum[3] / weight_sum,
+            ];
+        }
+    }
+
+    // Vertical pass
+    for y in 0..height {
+        for x in 0..width {
+            let mut accum = [0.0; 4];
+            let mut weight_sum = 0.0;
+            for (i, weight) in kernel.iter().enumerate() {
+                let offset = i as isize - radius as isize;
+                let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
+                let sample = temp[cy * width + x];
+                accum[0] += sample[0] * weight;
+                accum[1] += sample[1] * weight;
+                accum[2] += sample[2] * weight;
+                accum[3] += sample[3] * weight;
+                weight_sum += weight;
+            }
+            let idx = y * width + x;
+            dst[idx] = [
+                accum[0] / weight_sum,
+                accum[1] / weight_sum,
+                accum[2] / weight_sum,
+                accum[3] / weight_sum,
+            ];
+        }
+    }
+
+    for (i, pixel) in pixmap.pixels_mut().iter_mut().enumerate() {
+        let a = (dst[i][3] * 255.0).round().clamp(0.0, 255.0);
+        let r = (dst[i][0] * 255.0).round().clamp(0.0, a) as u8;
+        let g = (dst[i][1] * 255.0).round().clamp(0.0, a) as u8;
+        let b = (dst[i][2] * 255.0).round().clamp(0.0, a) as u8;
+        *pixel = PremultipliedColorU8::from_rgba(r, g, b, a as u8).unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+}
+
+fn gaussian_kernel(sigma: f32) -> (Vec<f32>, usize) {
+    let sigma = sigma.abs();
+    if sigma <= 0.0 {
+        return (Vec::new(), 0);
+    }
+    let radius = (sigma * 3.0).ceil() as usize;
+    if radius == 0 {
+        return (vec![1.0], 0);
+    }
+    let two_sigma_sq = 2.0 * sigma * sigma;
+    let mut kernel = Vec::with_capacity(radius * 2 + 1);
+    for i in 0..=radius * 2 {
+        let x = i as f32 - radius as f32;
+        kernel.push((-x * x / two_sigma_sq).exp());
+    }
+    let sum: f32 = kernel.iter().sum();
+    if sum > 0.0 {
+        for k in kernel.iter_mut() {
+            *k /= sum;
+        }
+    }
+    (kernel, radius)
+}
+
+fn apply_drop_shadow(pixmap: &mut Pixmap, offset_x: f32, offset_y: f32, blur_radius: f32, spread: f32, color: Rgba) {
+    if pixmap.width() == 0 || pixmap.height() == 0 {
+        return;
+    }
+
+    let source = pixmap.clone();
+    let mut shadow = match Pixmap::new(source.width(), source.height()) {
+        Some(p) => p,
+        None => return,
+    };
+
+    {
+        let src = source.pixels();
+        let dst = shadow.pixels_mut();
+        for (src_px, dst_px) in src.iter().zip(dst.iter_mut()) {
+            let alpha = src_px.alpha() as f32 / 255.0;
+            if alpha == 0.0 {
+                *dst_px = PremultipliedColorU8::TRANSPARENT;
+                continue;
+            }
+            let total_alpha = (color.a * alpha).clamp(0.0, 1.0);
+            let r = (color.r as f32 / 255.0) * total_alpha;
+            let g = (color.g as f32 / 255.0) * total_alpha;
+            let b = (color.b as f32 / 255.0) * total_alpha;
+            let a = total_alpha * 255.0;
+            *dst_px =
+                PremultipliedColorU8::from_rgba((r * 255.0).round() as u8, (g * 255.0).round() as u8, (b * 255.0).round() as u8, a.round().clamp(0.0, 255.0) as u8)
+                    .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+        }
+    }
+
+    if spread > 0.0 {
+        apply_spread(&mut shadow, spread);
+    }
+
+    if blur_radius > 0.0 {
+        apply_gaussian_blur(&mut shadow, blur_radius);
+    }
+
+    let mut result = match Pixmap::new(source.width(), source.height()) {
+        Some(p) => p,
+        None => return,
+    };
+
+    let mut paint = PixmapPaint::default();
+    paint.blend_mode = SkiaBlendMode::SourceOver;
+    result.draw_pixmap(0, 0, shadow.as_ref(), &paint, Transform::from_translate(offset_x, offset_y), None);
+    result.draw_pixmap(0, 0, source.as_ref(), &paint, Transform::identity(), None);
+
+    *pixmap = result;
+}
+
+fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
+    let radius = spread.ceil() as i32;
+    if radius <= 0 {
+        return;
+    }
+    let width = pixmap.width() as i32;
+    let height = pixmap.height() as i32;
+    let original = pixmap.clone();
+    let src = original.pixels();
+    let dst = pixmap.pixels_mut();
+
+    for y in 0..height {
+        for x in 0..width {
+            let mut max = [0u8; 4];
+            for dy in -radius..=radius {
+                for dx in -radius..=radius {
+                    let ny = (y + dy).clamp(0, height - 1);
+                    let nx = (x + dx).clamp(0, width - 1);
+                    let idx = (ny as usize) * (width as usize) + nx as usize;
+                    let px = src[idx];
+                    max[0] = max[0].max(px.red());
+                    max[1] = max[1].max(px.green());
+                    max[2] = max[2].max(px.blue());
+                    max[3] = max[3].max(px.alpha());
+                }
+            }
+            let idx = (y as usize) * (width as usize) + x as usize;
+            dst[idx] = PremultipliedColorU8::from_rgba(max[0], max[1], max[2], max[3])
+                .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+        }
+    }
 }
 
 fn map_blend_mode(mode: MixBlendMode) -> SkiaBlendMode {

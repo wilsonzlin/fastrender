@@ -71,6 +71,10 @@
 - Stacking contexts now honor CSS `transform`: transforms are composed into the context’s layer, applied around the fragment’s top-left, and rendered via a translated offscreen buffer before compositing back. Basic translate/scale/rotate/skew/matrix forms are supported; percentages resolve against the context’s box (`src/paint/painter.rs`).
 - CSS `transform-origin` is parsed (length/percentage/keywords), stored in computed styles (default 50% 50%), and respected when composing stacking-context transforms so rotation/scale occur around the authored origin instead of top-left (`src/style/{mod.rs,properties.rs,types.rs}`, `src/paint/painter.rs`).
 - CSS `mix-blend-mode` and `isolation` are parsed and stored; stacking contexts are created for non-normal blend modes or isolation, and painter composites layers using the mapped blend mode (`src/style/{types.rs,mod.rs,properties.rs}`, `src/paint/{stacking.rs,painter.rs}`).
+- Isolation `isolate` now forces SourceOver when compositing the isolated layer back into its parent to prevent backdrop blending across contexts (`src/paint/painter.rs`).
+- CSS `filter` is parsed and stored (blur, brightness, contrast, grayscale, sepia, saturate, hue-rotate, invert, opacity, drop-shadow). CurrentColor is deferred, lengths stay unresolved until paint, and `filter != none` creates a stacking context (`src/style/{types.rs,mod.rs,properties.rs}`, `src/paint/stacking.rs`).
+- Painter resolves filters per stacking context, expands layer bounds for blur/drop-shadow outsets, and applies effects in order: color matrix filters, opacity, Gaussian blur, and drop-shadow with spread/blur/offset composited behind content (`src/paint/painter.rs`).
+- Added filter parsing unit coverage for multi-function lists and drop-shadow defaults (`src/style/properties.rs` tests).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).

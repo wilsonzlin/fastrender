@@ -433,6 +433,11 @@ pub fn creates_stacking_context(style: &ComputedStyle, parent_style: Option<&Com
         return true;
     }
 
+    // 6b. Has CSS filter (filter list is non-empty)
+    if !style.filter.is_empty() {
+        return true;
+    }
+
     // 7. Mix-blend-mode or isolation
     if !matches!(style.mix_blend_mode, crate::style::types::MixBlendMode::Normal) {
         return true;
@@ -512,6 +517,10 @@ pub fn get_stacking_context_reason(
 
     if !style.transform.is_empty() {
         return Some(StackingContextReason::Transform);
+    }
+
+    if !style.filter.is_empty() {
+        return Some(StackingContextReason::Filter);
     }
 
     if is_positioned(style)

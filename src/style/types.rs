@@ -4,6 +4,7 @@
 //! These types represent CSS property values that can be applied to elements.
 
 use crate::css::types::ColorStop;
+use crate::style::color::Rgba;
 use crate::style::values::Length;
 pub use crate::text::hyphenation::HyphensMode;
 
@@ -167,6 +168,38 @@ pub enum MixBlendMode {
 pub enum Isolation {
     Auto,
     Isolate,
+}
+
+/// Color value that can defer to currentcolor
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FilterColor {
+    CurrentColor,
+    Color(Rgba),
+}
+
+/// Shadow parameters for drop-shadow()
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilterShadow {
+    pub offset_x: Length,
+    pub offset_y: Length,
+    pub blur_radius: Length,
+    pub spread: Length,
+    pub color: FilterColor,
+}
+
+/// CSS filter() functions
+#[derive(Debug, Clone, PartialEq)]
+pub enum FilterFunction {
+    Blur(Length),
+    Brightness(f32),
+    Contrast(f32),
+    Grayscale(f32),
+    Sepia(f32),
+    Saturate(f32),
+    HueRotate(f32), // degrees
+    Invert(f32),
+    Opacity(f32),
+    DropShadow(FilterShadow),
 }
 
 /// Transform origin for x/y axes
