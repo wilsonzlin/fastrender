@@ -529,6 +529,19 @@ fn resolve_border_spacing(style: &crate::style::ComputedStyle) -> (f32, f32) {
     )
 }
 
+fn resolve_length_against(
+    length: &crate::style::values::Length,
+    font_size: f32,
+    containing_width: Option<f32>,
+) -> Option<f32> {
+    match length.unit {
+        LengthUnit::Percent => containing_width.map(|w| (length.value / 100.0) * w),
+        LengthUnit::Em | LengthUnit::Rem => Some(length.value * font_size),
+        _ if length.unit.is_absolute() => Some(length.to_px()),
+        _ => None,
+    }
+}
+
 fn horizontal_padding_and_borders(style: &crate::style::ComputedStyle) -> f32 {
     // Percentages would need containing block; treat them as zero for intrinsic measurement fallback.
     let resolve_abs = |l: &crate::style::values::Length| match l.unit {
@@ -1013,6 +1026,19 @@ impl FormattingContext for TableFormattingContext {
             ));
         }
 
+        let containing_width = match constraints.available_width {
+            AvailableSpace::Definite(w) => Some(w),
+            _ => None,
+        };
+
+        // Honor explicit table width if present.
+        let table_width = box_node
+            .style
+            .width
+            .as_ref()
+            .and_then(|len| resolve_length_against(len, box_node.style.font_size, containing_width))
+            .or(containing_width);
+
         let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
             .map(|_| ColumnConstraints::new(0.0, 0.0))
             .collect();
@@ -1024,10 +1050,11 @@ impl FormattingContext for TableFormattingContext {
         self.populate_column_constraints(box_node, &structure, &mut column_constraints, mode);
 
         let spacing = structure.total_horizontal_spacing();
-        let available_content = match constraints.available_width {
-            AvailableSpace::Definite(w) => (w - spacing).max(0.0),
-            AvailableSpace::MinContent => 0.0,
-            AvailableSpace::MaxContent | AvailableSpace::Indefinite => {
+        let available_content = match (table_width, constraints.available_width) {
+            (Some(w), _) => (w - spacing).max(0.0),
+            (None, AvailableSpace::Definite(w)) => (w - spacing).max(0.0),
+            (None, AvailableSpace::MinContent) => 0.0,
+            (None, AvailableSpace::MaxContent) | (None, AvailableSpace::Indefinite) => {
                 column_constraints.iter().map(|c| c.max_width).sum::<f32>()
             }
         };
@@ -1296,6 +1323,35 @@ mod tests {
 
         let structure = TableStructure::from_box_tree(&table);
         assert!(structure.is_fixed_layout);
+    }
+
+    #[test]
+    fn test_table_respects_explicit_width() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.width = Some(Length::px(300.0));
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        let cell_a = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![]);
+        let cell_b = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell_a, cell_b]);
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let tfc = TableFormattingContext::new();
+        let constraints = LayoutConstraints::definite_width(800.0);
+        let fragment = tfc.layout(&table, &constraints).expect("table layout");
+
+        assert!((fragment.bounds.width() - 300.0).abs() < 0.1);
+        assert_eq!(fragment.children.len(), 2);
+        assert!((fragment.children[0].bounds.width() - 150.0).abs() < 0.1);
+        assert!((fragment.children[1].bounds.width() - 150.0).abs() < 0.1);
     }
 
     #[test]
