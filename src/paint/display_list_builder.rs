@@ -31,6 +31,7 @@ use crate::paint::display_list::{
     ClipItem, DisplayItem, DisplayList, FillRectItem, GlyphInstance, ImageData, ImageItem, OpacityItem, StrokeRectItem,
     TextItem,
 };
+use crate::style::types::{ObjectFit, ObjectPosition, PositionComponent};
 use crate::style::color::Rgba;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
@@ -144,9 +145,7 @@ impl DisplayListBuilder {
     /// Emits display items for fragment content
     fn emit_content(&mut self, fragment: &FragmentNode, rect: Rect) {
         match &fragment.content {
-            FragmentContent::Text {
-                text, baseline_offset, ..
-            } => {
+            FragmentContent::Text { text, baseline_offset, .. } => {
                 if !text.is_empty() {
                     // Create simple glyph instances (one per character)
                     // In a full implementation, this would come from text shaping
@@ -175,15 +174,36 @@ impl DisplayListBuilder {
                 }
             }
 
-            FragmentContent::Replaced {
-                replaced_type: ReplacedType::Image { src },
-                ..
-            } => {
+            FragmentContent::Replaced { replaced_type, .. } => {
+                let source = match replaced_type {
+                    ReplacedType::Image { src } => src.as_str(),
+                    ReplacedType::Svg { content } => content.as_str(),
+                    _ => "",
+                };
                 let image = self
-                    .decode_image(src)
+                    .decode_image(source)
                     .unwrap_or_else(|| ImageData::new(1, 1, vec![128, 128, 128, 255]));
+                let (dest_x, dest_y, dest_w, dest_h) =
+                    if let Some(style) = fragment.style.as_deref() {
+                        let fit = style.object_fit;
+                        let position = style.object_position;
+                        compute_object_fit_rect(
+                            fit,
+                            position,
+                            rect.width(),
+                            rect.height(),
+                            image.width as f32,
+                            image.height as f32,
+                        )
+                        .unwrap_or((0.0, 0.0, rect.width(), rect.height()))
+                    } else {
+                        (0.0, 0.0, rect.width(), rect.height())
+                    };
+
+                let dest_rect =
+                    Rect::from_xywh(rect.x() + dest_x, rect.y() + dest_y, dest_w, dest_h);
                 self.list.push(DisplayItem::Image(ImageItem {
-                    dest_rect: rect,
+                    dest_rect,
                     image: Arc::new(image),
                     src_rect: None,
                 }));
@@ -253,6 +273,67 @@ impl DisplayListBuilder {
     }
 }
 
+fn resolve_object_position(comp: PositionComponent, free: f32) -> f32 {
+    match comp {
+        PositionComponent::Keyword(crate::style::types::PositionKeyword::Center) => free / 2.0,
+        PositionComponent::Keyword(crate::style::types::PositionKeyword::Start) => 0.0,
+        PositionComponent::Keyword(crate::style::types::PositionKeyword::End) => free,
+        PositionComponent::Length(len) => {
+            // Length percentages resolve against the free space.
+            if len.unit.is_percentage() {
+                (len.value / 100.0) * free
+            } else {
+                len.to_px()
+            }
+        }
+        PositionComponent::Percentage(pct) => free * (pct / 100.0),
+    }
+}
+
+fn compute_object_fit_rect(
+    fit: ObjectFit,
+    position: ObjectPosition,
+    box_width: f32,
+    box_height: f32,
+    image_width: f32,
+    image_height: f32,
+) -> Option<(f32, f32, f32, f32)> {
+    if box_width <= 0.0 || box_height <= 0.0 || image_width <= 0.0 || image_height <= 0.0 {
+        return None;
+    }
+
+    let scale_x = box_width / image_width;
+    let scale_y = box_height / image_height;
+
+    let scale = match fit {
+        ObjectFit::Fill => (scale_x, scale_y),
+        ObjectFit::Contain => {
+            let s = scale_x.min(scale_y);
+            (s, s)
+        }
+        ObjectFit::Cover => {
+            let s = scale_x.max(scale_y);
+            (s, s)
+        }
+        ObjectFit::None => (1.0, 1.0),
+        ObjectFit::ScaleDown => {
+            let contain = scale_x.min(scale_y);
+            let (s, _) = if contain >= 1.0 { (1.0, 1.0) } else { (contain, contain) };
+            (s, s)
+        }
+    };
+
+    let dest_w = image_width * scale.0;
+    let dest_h = image_height * scale.1;
+
+    let free_x = (box_width - dest_w).max(0.0);
+    let free_y = (box_height - dest_h).max(0.0);
+    let offset_x = resolve_object_position(position.x, free_x);
+    let offset_y = resolve_object_position(position.y, free_y);
+
+    Some((offset_x, offset_y, dest_w, dest_h))
+}
+
 impl Default for DisplayListBuilder {
     fn default() -> Self {
         Self::new()
@@ -268,6 +349,8 @@ mod tests {
     use super::*;
     use crate::tree::box_tree::ReplacedType;
     use crate::image_loader::ImageCache;
+    use crate::style::ComputedStyle;
+    use crate::style::display::Display;
 
     fn create_block_fragment(x: f32, y: f32, width: f32, height: f32) -> FragmentNode {
         FragmentNode::new_block(Rect::from_xywh(x, y, width, height), vec![])
@@ -525,5 +608,41 @@ mod tests {
         let pixels = img.image.pixels.as_ref();
         assert_eq!(pixels.len(), 4);
         assert_eq!(pixels, &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn test_object_fit_contain_applied_in_display_list() {
+        let mut style = ComputedStyle::default();
+        style.display = Display::Inline;
+        style.object_fit = ObjectFit::Contain;
+        style.object_position = ObjectPosition {
+            x: PositionComponent::Keyword(crate::style::types::PositionKeyword::Center),
+            y: PositionComponent::Keyword(crate::style::types::PositionKeyword::Center),
+        };
+
+        let fragment = FragmentNode {
+            bounds: Rect::from_xywh(0.0, 0.0, 200.0, 100.0),
+            content: FragmentContent::Replaced {
+                box_id: None,
+                replaced_type: ReplacedType::Image {
+                    src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6X1ru4AAAAASUVORK5CYII=".to_string(),
+                },
+            },
+            children: vec![],
+            style: Some(Arc::new(style)),
+        };
+
+        let builder = DisplayListBuilder::with_image_cache(ImageCache::new());
+        let list = builder.build(&fragment);
+
+        assert_eq!(list.len(), 1);
+        let DisplayItem::Image(img) = &list.items()[0] else {
+            panic!("Expected image item");
+        };
+        // Image is 1x1, box is 200x100, contain => scale to min(200,100) => 100x100, centered horizontally.
+        assert!((img.dest_rect.width() - 100.0).abs() < 0.1);
+        assert!((img.dest_rect.height() - 100.0).abs() < 0.1);
+        assert!((img.dest_rect.x() - 50.0).abs() < 0.1);
+        assert!((img.dest_rect.y() - 0.0).abs() < 0.1);
     }
 }
