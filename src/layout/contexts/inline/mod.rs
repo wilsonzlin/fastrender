@@ -539,10 +539,22 @@ impl InlineFormattingContext {
         .with_vertical_align(va);
 
         if is_marker {
-            let gap = style.font_size * 0.5;
+            let gap = style
+                .margin_right
+                .as_ref()
+                .map(|m| resolve_length_for_width(*m, 0.0))
+                .unwrap_or(style.font_size * 0.5);
+            let sign = if style.direction == crate::style::types::Direction::Rtl {
+                1.0
+            } else {
+                -1.0
+            };
             if style.list_style_position == ListStylePosition::Outside {
                 item.advance_for_layout = 0.0;
-                item.paint_offset = -(item.advance + gap);
+                item.paint_offset = sign * (item.advance + gap);
+            } else {
+                item.advance_for_layout = item.advance;
+                item.paint_offset = 0.0;
             }
             item.is_marker = true;
         }
@@ -1051,8 +1063,9 @@ impl InlineFormattingContext {
     fn create_item_fragment(&self, item: &InlineItem, x: f32, y: f32) -> FragmentNode {
         match item {
             InlineItem::Text(text_item) => {
-                let width = text_item.advance + text_item.paint_offset.abs();
-                let bounds = Rect::from_xywh(x + text_item.paint_offset, y, width, text_item.metrics.height);
+                let paint_offset = text_item.paint_offset;
+                let width = text_item.advance + paint_offset.abs();
+                let bounds = Rect::from_xywh(x + paint_offset, y, width, text_item.metrics.height);
                 FragmentNode::new_text_shaped(
                     bounds,
                     text_item.text.clone(),

@@ -388,7 +388,7 @@ impl TextItem {
             after_item.is_marker = true;
             before_item.paint_offset = self.paint_offset;
             after_item.paint_offset = self.paint_offset;
-            before_item.advance_for_layout = self.advance_for_layout.min(before_item.advance);
+            before_item.advance_for_layout = self.advance_for_layout.min(before_item.advance_for_layout);
             after_item.advance_for_layout = (self.advance_for_layout - before_item.advance_for_layout).max(0.0);
         }
 
