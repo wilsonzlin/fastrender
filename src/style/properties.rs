@@ -657,6 +657,13 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "hyphens" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                if let Some(mode) = crate::text::hyphenation::HyphensMode::parse(kw) {
+                    styles.hyphens = mode;
+                }
+            }
+        }
         "word-break" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.word_break = match kw.as_str() {

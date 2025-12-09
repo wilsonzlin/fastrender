@@ -28,9 +28,9 @@ use position::Position;
 use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse,
-    BorderStyle, Direction, FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack, JustifyContent,
-    LineHeight, Overflow, OverflowWrap, TableLayout, TextAlign, TextDecoration, TextTransform, UnicodeBidi,
-    VerticalAlign, WhiteSpace, WordBreak,
+    BorderStyle, Direction, FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack, HyphensMode,
+    JustifyContent, LineHeight, Overflow, OverflowWrap, TableLayout, TextAlign, TextDecoration, TextTransform,
+    UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
 };
 use values::Length;
 
@@ -126,6 +126,7 @@ pub struct ComputedStyle {
     pub letter_spacing: f32,
     pub word_spacing: f32,
     pub white_space: WhiteSpace,
+    pub hyphens: HyphensMode,
     pub word_break: WordBreak,
     pub overflow_wrap: OverflowWrap,
     pub vertical_align: VerticalAlign,
@@ -241,6 +242,7 @@ impl Default for ComputedStyle {
             letter_spacing: 0.0,
             word_spacing: 0.0,
             white_space: WhiteSpace::Normal,
+            hyphens: HyphensMode::Manual,
             word_break: WordBreak::Normal,
             overflow_wrap: OverflowWrap::Normal,
             vertical_align: VerticalAlign::Baseline,

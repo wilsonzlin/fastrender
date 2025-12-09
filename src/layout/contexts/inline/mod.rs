@@ -44,10 +44,11 @@ use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::utils::compute_replaced_size;
-use crate::style::types::{FontStyle, OverflowWrap, WhiteSpace, WordBreak};
+use crate::style::types::{FontStyle, HyphensMode, OverflowWrap, WhiteSpace, WordBreak};
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
+use crate::text::hyphenation::Hyphenator;
 use crate::text::line_break::{find_break_opportunities, BreakType};
 use crate::text::pipeline::ShapingPipeline;
 use crate::tree::box_tree::{BoxNode, BoxType, ReplacedBox};
@@ -79,6 +80,7 @@ pub struct InlineFormattingContext {
     /// Text shaping pipeline (bidi/script/fallback aware)
     pipeline: ShapingPipeline,
     font_context: FontContext,
+    hyphenator: Option<Hyphenator>,
 }
 
 impl InlineFormattingContext {
@@ -87,6 +89,7 @@ impl InlineFormattingContext {
         Self {
             pipeline: ShapingPipeline::new(),
             font_context: FontContext::new(),
+            hyphenator: Hyphenator::new("en-us").ok(),
         }
     }
 
@@ -94,6 +97,7 @@ impl InlineFormattingContext {
         Self {
             pipeline: ShapingPipeline::new(),
             font_context,
+            hyphenator: Hyphenator::new("en-us").ok(),
         }
     }
 
@@ -238,15 +242,21 @@ impl InlineFormattingContext {
         let line_height = compute_line_height(style);
 
         let (normalized_text, forced_breaks, allow_soft_wrap) = normalize_text_for_white_space(text, style.white_space);
+        let (hyphen_free, hyphen_breaks) = hyphenation_breaks(
+            &normalized_text,
+            style.hyphens,
+            self.hyphenator.as_ref(),
+            allow_soft_wrap,
+        );
 
-        let shaped_runs = match self.pipeline.shape(&normalized_text, style, &self.font_context) {
+        let shaped_runs = match self.pipeline.shape(&hyphen_free, style, &self.font_context) {
             Ok(runs) => runs,
             Err(err) => {
                 if let Some(fallback_font) = self.font_context.get_sans_serif() {
                     let mut fallback_style = (*style).as_ref().clone();
                     fallback_style.font_family = vec![fallback_font.family.clone()];
                     self.pipeline
-                        .shape(&normalized_text, &fallback_style, &self.font_context)
+                        .shape(&hyphen_free, &fallback_style, &self.font_context)
                         .map_err(|e| {
                             LayoutError::MissingContext(format!(
                                 "Shaping failed (fonts={}): {:?}",
@@ -267,10 +277,11 @@ impl InlineFormattingContext {
         let metrics = TextItem::metrics_from_runs(&shaped_runs, line_height, style.font_size);
 
         // Find break opportunities and filter based on white-space handling
-        let base_breaks = find_break_opportunities(&normalized_text);
-        let merged = merge_breaks(base_breaks, forced_breaks, allow_soft_wrap);
+        let base_breaks = find_break_opportunities(&hyphen_free);
+        let mut merged = merge_breaks(base_breaks, forced_breaks, allow_soft_wrap);
+        merged.extend(hyphen_breaks);
         let breaks = apply_break_properties(
-            &normalized_text,
+            &hyphen_free,
             merged,
             style.word_break,
             style.overflow_wrap,
@@ -279,7 +290,7 @@ impl InlineFormattingContext {
 
         Ok(TextItem::new(
             shaped_runs,
-            normalized_text,
+            hyphen_free,
             metrics,
             breaks,
             box_node.style.clone(),
@@ -786,6 +797,74 @@ fn apply_break_properties(
     result
 }
 
+fn hyphenation_breaks(
+    text: &str,
+    hyphens: HyphensMode,
+    hyphenator: Option<&Hyphenator>,
+    allow_soft_wrap: bool,
+) -> (String, Vec<crate::text::line_break::BreakOpportunity>) {
+    use crate::text::line_break::BreakOpportunity;
+
+    // Remove soft hyphens while tracking their positions in the output string
+    let mut cleaned = String::with_capacity(text.len());
+    let mut soft_breaks = Vec::new();
+    for ch in text.chars() {
+        if ch == '\u{00AD}' {
+            soft_breaks.push(BreakOpportunity::allowed(cleaned.len()));
+            continue;
+        }
+        cleaned.push(ch);
+    }
+
+    if !allow_soft_wrap || matches!(hyphens, HyphensMode::None) {
+        return (cleaned, Vec::new());
+    }
+
+    let mut breaks = match hyphens {
+        HyphensMode::Manual => soft_breaks,
+        HyphensMode::Auto => {
+            let mut auto_breaks = soft_breaks;
+            if let Some(hyph) = hyphenator {
+                let mut idx = 0;
+                let chars: Vec<(usize, char)> = cleaned.char_indices().collect();
+                while idx < chars.len() {
+                    if chars[idx].1.is_alphabetic() {
+                        let start = chars[idx].0;
+                        let mut end_idx = idx + 1;
+                        while end_idx < chars.len() && chars[end_idx].1.is_alphabetic() {
+                            end_idx += 1;
+                        }
+                        let end = if end_idx < chars.len() {
+                            chars[end_idx].0
+                        } else {
+                            cleaned.len()
+                        };
+                        let word = &cleaned[start..end];
+                        for rel in hyph.hyphenate(word) {
+                            auto_breaks.push(BreakOpportunity::allowed(start + rel));
+                        }
+                        idx = end_idx;
+                    } else {
+                        idx += 1;
+                    }
+                }
+            }
+            auto_breaks
+        }
+        HyphensMode::None => Vec::new(),
+    };
+
+    breaks.sort_by_key(|b| b.byte_offset);
+    breaks.dedup_by(|a, b| {
+        if a.byte_offset != b.byte_offset {
+            return false;
+        }
+        true
+    });
+
+    (cleaned, breaks)
+}
+
 impl FormattingContext for InlineFormattingContext {
     fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
         let style = &box_node.style;
@@ -1089,5 +1168,21 @@ mod tests {
         let item = ifc.create_text_item(&node, text).unwrap();
 
         assert!(item.break_opportunities.iter().any(|b| b.byte_offset == 4));
+    }
+
+    #[test]
+    fn hyphens_auto_adds_breaks() {
+        let mut style = ComputedStyle::default();
+        style.hyphens = HyphensMode::Auto;
+        let text = "hyphenation";
+
+        let ifc = InlineFormattingContext::new();
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+
+        assert!(item
+            .break_opportunities
+            .iter()
+            .any(|b| b.byte_offset > 0 && b.byte_offset < text.len()));
     }
 }

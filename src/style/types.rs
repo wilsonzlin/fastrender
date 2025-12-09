@@ -5,6 +5,7 @@
 
 use crate::css::types::ColorStop;
 use crate::style::values::Length;
+pub use crate::text::hyphenation::HyphensMode;
 
 /// Text direction
 ///
