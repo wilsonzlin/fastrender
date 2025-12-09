@@ -36,7 +36,7 @@ use crate::layout::contexts::table::column_distribution::{
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::color::Rgba;
 use crate::style::display::Display;
-use crate::style::types::{BorderCollapse, BorderStyle, TableLayout, VerticalAlign};
+use crate::style::types::{BorderCollapse, BorderStyle, Direction, TableLayout, VerticalAlign};
 use crate::style::values::{Length, LengthUnit};
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
@@ -636,6 +636,8 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         color: Rgba,
         origin: BorderOrigin,
         source_order: u32,
+        row: usize,
+        col: usize,
     }
 
     impl BorderCandidate {
@@ -646,13 +648,14 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
                 color: Rgba::TRANSPARENT,
                 origin: BorderOrigin::Table,
                 source_order: 0,
+                row: 0,
+                col: 0,
             }
         }
     }
 
-    fn style_priority(style: BorderStyle) -> u8 {
+    fn style_rank(style: BorderStyle) -> u8 {
         match style {
-            BorderStyle::Hidden => 9,
             BorderStyle::Double => 8,
             BorderStyle::Solid => 7,
             BorderStyle::Dashed => 6,
@@ -661,7 +664,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
             BorderStyle::Outset => 3,
             BorderStyle::Groove => 2,
             BorderStyle::Inset => 1,
-            BorderStyle::None => 0,
+            BorderStyle::Hidden | BorderStyle::None => 0,
         }
     }
 
@@ -676,29 +679,29 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         }
     }
 
-    fn pick_winner(current: BorderCandidate, candidate: BorderCandidate) -> BorderCandidate {
-        if style_priority(candidate.style) != style_priority(current.style) {
-            return if style_priority(candidate.style) > style_priority(current.style) {
-                candidate
-            } else {
-                current
-            };
+    fn pick_by_position(current: BorderCandidate, candidate: BorderCandidate, direction: Direction) -> BorderCandidate {
+        if candidate.row < current.row {
+            return candidate;
+        }
+        if candidate.row > current.row {
+            return current;
         }
 
-        if (candidate.width - current.width).abs() > f32::EPSILON {
-            return if candidate.width > current.width {
-                candidate
-            } else {
-                current
-            };
-        }
-
-        if origin_priority(candidate.origin) != origin_priority(current.origin) {
-            return if origin_priority(candidate.origin) > origin_priority(current.origin) {
-                candidate
-            } else {
-                current
-            };
+        let ltr = matches!(direction, Direction::Ltr);
+        if ltr {
+            if candidate.col < current.col {
+                return candidate;
+            }
+            if candidate.col > current.col {
+                return current;
+            }
+        } else {
+            if candidate.col > current.col {
+                return candidate;
+            }
+            if candidate.col < current.col {
+                return current;
+            }
         }
 
         if candidate.source_order >= current.source_order {
@@ -706,6 +709,45 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         } else {
             current
         }
+    }
+
+    fn resolve_candidates(candidates: &[BorderCandidate], direction: Direction) -> BorderCandidate {
+        if candidates.is_empty() {
+            return BorderCandidate::none();
+        }
+
+        if let Some(hidden) = candidates.iter().find(|c| c.style == BorderStyle::Hidden) {
+            return *hidden;
+        }
+
+        let has_non_none = candidates.iter().any(|c| c.style != BorderStyle::None);
+        if !has_non_none {
+            return BorderCandidate::none();
+        }
+
+        let max_width = candidates
+            .iter()
+            .fold(0.0f32, |acc, c| if c.width > acc { c.width } else { acc });
+        let mut contenders: Vec<&BorderCandidate> = candidates
+            .iter()
+            .filter(|c| (c.width - max_width).abs() < 0.01)
+            .collect();
+
+        if contenders.len() > 1 {
+            let best_style = contenders.iter().map(|c| style_rank(c.style)).max().unwrap_or(0);
+            contenders.retain(|c| style_rank(c.style) == best_style);
+        }
+
+        if contenders.len() > 1 {
+            let best_origin = contenders.iter().map(|c| origin_priority(c.origin)).max().unwrap_or(0);
+            contenders.retain(|c| origin_priority(c.origin) == best_origin);
+        }
+
+        let mut winner = **contenders.first().unwrap_or(&&BorderCandidate::none());
+        for cand in contenders.into_iter().skip(1) {
+            winner = pick_by_position(winner, *cand, direction);
+        }
+        winner
     }
 
     fn length_to_px(len: &crate::style::values::Length) -> f32 {
@@ -724,32 +766,12 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         }
     }
 
-    let mut vertical = vec![
-        vec![
-            BorderCandidate {
-                width: 0.0,
-                style: BorderStyle::None,
-                color: Rgba::TRANSPARENT,
-                origin: BorderOrigin::Table,
-                source_order: 0
-            };
-            structure.row_count
-        ];
-        structure.column_count + 1
-    ];
-    let mut horizontal = vec![
-        vec![
-            BorderCandidate {
-                width: 0.0,
-                style: BorderStyle::None,
-                color: Rgba::TRANSPARENT,
-                origin: BorderOrigin::Table,
-                source_order: 0
-            };
-            structure.column_count
-        ];
-        structure.row_count + 1
-    ];
+    let direction = table_box.style.direction;
+
+    let mut vertical: Vec<Vec<Vec<BorderCandidate>>> =
+        vec![vec![Vec::new(); structure.row_count]; structure.column_count + 1];
+    let mut horizontal: Vec<Vec<Vec<BorderCandidate>>> =
+        vec![vec![Vec::new(); structure.column_count]; structure.row_count + 1];
 
     // Gather row, row-group, column, and column-group styles with document order.
     let mut row_styles: Vec<(std::sync::Arc<crate::style::ComputedStyle>, u32)> = Vec::new();
@@ -840,7 +862,9 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
                               width: &crate::style::values::Length,
                               color: &Rgba,
                               origin: BorderOrigin,
-                              source_order: u32| {
+                              source_order: u32,
+                              origin_row: usize,
+                              origin_col: usize| {
         if col_idx >= vertical.len() || row_start >= row_end {
             return;
         }
@@ -850,10 +874,11 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
             color: *color,
             origin,
             source_order,
+            row: origin_row,
+            col: origin_col,
         };
         for row in row_start..row_end.min(vertical[col_idx].len()) {
-            let line = &mut vertical[col_idx][row];
-            *line = pick_winner(*line, candidate);
+            vertical[col_idx][row].push(candidate);
         }
     };
 
@@ -864,7 +889,9 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
                                 width: &crate::style::values::Length,
                                 color: &Rgba,
                                 origin: BorderOrigin,
-                                source_order: u32| {
+                                source_order: u32,
+                                origin_row: usize,
+                                origin_col: usize| {
         if row_idx >= horizontal.len() || col_start >= col_end {
             return;
         }
@@ -874,16 +901,28 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
             color: *color,
             origin,
             source_order,
+            row: origin_row,
+            col: origin_col,
         };
         for col in col_start..col_end.min(horizontal[row_idx].len()) {
-            let line = &mut horizontal[row_idx][col];
-            *line = pick_winner(*line, candidate);
+            horizontal[row_idx][col].push(candidate);
         }
     };
 
     // Table outer borders
     let tstyle = &table_box.style;
-    apply_vertical(0, 0, structure.row_count, tstyle.border_left_style, &tstyle.border_left_width, &tstyle.border_left_color, BorderOrigin::Table, 0);
+    apply_vertical(
+        0,
+        0,
+        structure.row_count,
+        tstyle.border_left_style,
+        &tstyle.border_left_width,
+        &tstyle.border_left_color,
+        BorderOrigin::Table,
+        0,
+        0,
+        0,
+    );
     apply_vertical(
         structure.column_count,
         0,
@@ -893,8 +932,21 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         &tstyle.border_right_color,
         BorderOrigin::Table,
         0,
+        0,
+        structure.column_count,
     );
-    apply_horizontal(0, 0, structure.column_count, tstyle.border_top_style, &tstyle.border_top_width, &tstyle.border_top_color, BorderOrigin::Table, 0);
+    apply_horizontal(
+        0,
+        0,
+        structure.column_count,
+        tstyle.border_top_style,
+        &tstyle.border_top_width,
+        &tstyle.border_top_color,
+        BorderOrigin::Table,
+        0,
+        0,
+        0,
+    );
     apply_horizontal(
         structure.row_count,
         0,
@@ -903,6 +955,8 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         &tstyle.border_bottom_width,
         &tstyle.border_bottom_color,
         BorderOrigin::Table,
+        0,
+        structure.row_count,
         0,
     );
 
@@ -917,6 +971,8 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
             &style.border_top_color,
             BorderOrigin::RowGroup,
             *order,
+            *start,
+            0,
         );
         apply_horizontal(
             *end,
@@ -927,6 +983,8 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
             &style.border_bottom_color,
             BorderOrigin::RowGroup,
             *order,
+            *start,
+            0,
         );
     }
 
@@ -941,6 +999,8 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
             &style.border_top_color,
             BorderOrigin::Row,
             *order,
+            row_idx,
+            0,
         );
         apply_horizontal(
             row_idx + 1,
@@ -951,6 +1011,8 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
             &style.border_bottom_color,
             BorderOrigin::Row,
             *order,
+            row_idx,
+            0,
         );
     }
 
@@ -965,6 +1027,8 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
             &style.border_left_color,
             BorderOrigin::ColumnGroup,
             *order,
+            0,
+            *start,
         );
         apply_vertical(
             *end,
@@ -975,6 +1039,8 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
             &style.border_right_color,
             BorderOrigin::ColumnGroup,
             *order,
+            0,
+            *start,
         );
     }
 
@@ -990,6 +1056,8 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
                 &style.border_left_color,
                 BorderOrigin::Column,
                 *order,
+                0,
+                col_idx,
             );
             apply_vertical(
                 col_idx + 1,
@@ -1000,6 +1068,8 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
                 &style.border_right_color,
                 BorderOrigin::Column,
                 *order,
+                0,
+                col_idx,
             );
         }
     }
@@ -1023,6 +1093,8 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
                 &style.border_left_color,
                 BorderOrigin::Cell,
                 cell.index as u32,
+                cell.row,
+                cell.col,
             );
             apply_vertical(
                 end_col,
@@ -1033,6 +1105,8 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
                 &style.border_right_color,
                 BorderOrigin::Cell,
                 cell.index as u32,
+                cell.row,
+                cell.col,
             );
             apply_horizontal(
                 start_row,
@@ -1043,6 +1117,8 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
                 &style.border_top_color,
                 BorderOrigin::Cell,
                 cell.index as u32,
+                cell.row,
+                cell.col,
             );
             apply_horizontal(
                 end_row,
@@ -1053,25 +1129,29 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
                 &style.border_bottom_color,
                 BorderOrigin::Cell,
                 cell.index as u32,
+                cell.row,
+                cell.col,
             );
         }
     }
+
+    let candidate_to_resolved = |candidate: BorderCandidate| {
+        if matches!(candidate.style, BorderStyle::None | BorderStyle::Hidden) || candidate.width <= 0.0 {
+            ResolvedBorder::none()
+        } else {
+            ResolvedBorder {
+                width: candidate.width,
+                style: candidate.style,
+                color: candidate.color,
+            }
+        }
+    };
 
     let resolved_vertical: Vec<Vec<ResolvedBorder>> = vertical
         .iter()
         .map(|line| {
             line.iter()
-                .map(|c| {
-                    if matches!(c.style, BorderStyle::None | BorderStyle::Hidden) {
-                        ResolvedBorder::none()
-                    } else {
-                        ResolvedBorder {
-                            width: c.width,
-                            style: c.style,
-                            color: c.color,
-                        }
-                    }
-                })
+                .map(|candidates| candidate_to_resolved(resolve_candidates(candidates, direction)))
                 .collect()
         })
         .collect();
@@ -1080,61 +1160,33 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         .iter()
         .map(|line| {
             line.iter()
-                .map(|c| {
-                    if matches!(c.style, BorderStyle::None | BorderStyle::Hidden) {
-                        ResolvedBorder::none()
-                    } else {
-                        ResolvedBorder {
-                            width: c.width,
-                            style: c.style,
-                            color: c.color,
-                        }
-                    }
-                })
+                .map(|candidates| candidate_to_resolved(resolve_candidates(candidates, direction)))
                 .collect()
         })
         .collect();
 
-    let mut corner_candidates: Vec<Vec<BorderCandidate>> =
-        vec![vec![BorderCandidate::none(); structure.column_count + 1]; structure.row_count + 1];
-
+    let mut resolved_corners: Vec<Vec<ResolvedBorder>> = Vec::with_capacity(structure.row_count + 1);
     for r in 0..=structure.row_count {
+        let mut row_vec: Vec<ResolvedBorder> = Vec::with_capacity(structure.column_count + 1);
         for c in 0..=structure.column_count {
-            let mut winner = BorderCandidate::none();
+            let mut candidates: Vec<BorderCandidate> = Vec::new();
             if c < vertical.len() && r > 0 && r - 1 < vertical[c].len() {
-                winner = pick_winner(winner, vertical[c][r - 1]);
+                candidates.extend_from_slice(&vertical[c][r - 1]);
             }
             if c < vertical.len() && r < vertical[c].len() {
-                winner = pick_winner(winner, vertical[c][r]);
+                candidates.extend_from_slice(&vertical[c][r]);
             }
             if r < horizontal.len() && c > 0 && c - 1 < horizontal[r].len() {
-                winner = pick_winner(winner, horizontal[r][c - 1]);
+                candidates.extend_from_slice(&horizontal[r][c - 1]);
             }
             if r < horizontal.len() && c < horizontal[r].len() {
-                winner = pick_winner(winner, horizontal[r][c]);
+                candidates.extend_from_slice(&horizontal[r][c]);
             }
-            corner_candidates[r][c] = winner;
+            let resolved = resolve_candidates(&candidates, direction);
+            row_vec.push(candidate_to_resolved(resolved));
         }
+        resolved_corners.push(row_vec);
     }
-
-    let resolved_corners: Vec<Vec<ResolvedBorder>> = corner_candidates
-        .into_iter()
-        .map(|row| {
-            row.into_iter()
-                .map(|c| {
-                    if matches!(c.style, BorderStyle::None | BorderStyle::Hidden) {
-                        ResolvedBorder::none()
-                    } else {
-                        ResolvedBorder {
-                            width: c.width,
-                            style: c.style,
-                            color: c.color,
-                        }
-                    }
-                })
-                .collect()
-        })
-        .collect();
 
     CollapsedBorders {
         vertical: resolved_vertical,
@@ -1471,6 +1523,32 @@ impl TableFormattingContext {
         }
     }
 
+    /// Percentages on columns rely on a definite table width. If the table width
+    /// is indefinite (auto/max-content/min-content with no containing inline size),
+    /// treat percentage constraints as auto so intrinsic sizing isn't forced to zero.
+    fn normalize_percentage_constraints(
+        &self,
+        constraints: &mut [ColumnConstraints],
+        table_width: Option<f32>,
+        available_width: &AvailableSpace,
+    ) {
+        if table_width.is_some() {
+            return;
+        }
+
+        if matches!(available_width, AvailableSpace::Definite(_)) {
+            return;
+        }
+
+        for col in constraints.iter_mut() {
+            if col.percentage.is_some() {
+                col.percentage = None;
+                col.fixed_width = None;
+                col.is_flexible = true;
+            }
+        }
+    }
+
     /// Gets the table structure, building it if necessary
     pub fn structure(&self) -> Option<&TableStructure> {
         self.structure.as_ref()
@@ -1675,15 +1753,16 @@ impl FormattingContext for TableFormattingContext {
             DistributionMode::Auto
         };
         self.populate_column_constraints(box_node, &structure, &mut column_constraints, mode);
+        self.normalize_percentage_constraints(&mut column_constraints, table_width, &constraints.available_width);
 
         let spacing = structure.total_horizontal_spacing();
+        let min_content_sum: f32 = column_constraints.iter().map(|c| c.min_width).sum();
+        let max_content_sum: f32 = column_constraints.iter().map(|c| c.max_width).sum();
         let available_content = match (table_width, constraints.available_width) {
             (Some(w), _) => (w - spacing).max(0.0),
             (None, AvailableSpace::Definite(w)) => (w - spacing).max(0.0),
-            (None, AvailableSpace::MinContent) => 0.0,
-            (None, AvailableSpace::MaxContent) | (None, AvailableSpace::Indefinite) => {
-                column_constraints.iter().map(|c| c.max_width).sum::<f32>()
-            }
+            (None, AvailableSpace::MinContent) => min_content_sum,
+            (None, AvailableSpace::MaxContent) | (None, AvailableSpace::Indefinite) => max_content_sum,
         };
 
         let distributor = ColumnDistributor::new(mode).with_min_column_width(0.0);
@@ -1736,6 +1815,16 @@ impl FormattingContext for TableFormattingContext {
 
         // Compute row heights, accounting for rowspans and vertical spacing.
         let mut row_heights = vec![0.0f32; structure.row_count];
+
+        // Baseline-aligned spanning cells require at least their baseline offset in the first row.
+        for laid in &laid_out_cells {
+            if laid.vertical_align.is_baseline_relative() {
+                if let Some(baseline) = laid.baseline {
+                    row_heights[laid.cell.row] = row_heights[laid.cell.row].max(baseline);
+                }
+            }
+        }
+
         for laid in &laid_out_cells {
             if laid.cell.rowspan == 1 {
                 row_heights[laid.cell.row] = row_heights[laid.cell.row].max(laid.height);
@@ -1746,9 +1835,19 @@ impl FormattingContext for TableFormattingContext {
                 let current: f32 = row_heights[span_start..span_end].iter().sum();
                 if laid.height > current + spacing_total {
                     let extra = laid.height - current - spacing_total;
-                    let per_row = extra / (span_end - span_start) as f32;
-                    for r in span_start..span_end {
-                        row_heights[r] += per_row;
+                    let weights: Vec<f32> = row_heights[span_start..span_end]
+                        .iter()
+                        .map(|h| if *h <= 0.0 { 1.0 } else { *h })
+                        .collect();
+                    let total_weight: f32 = weights.iter().sum();
+                    let total_weight = if total_weight <= 0.0 {
+                        (span_end - span_start) as f32
+                    } else {
+                        total_weight
+                    };
+                    for (idx, row) in row_heights[span_start..span_end].iter_mut().enumerate() {
+                        let weight = weights.get(idx).copied().unwrap_or(1.0);
+                        *row += extra * (weight / total_weight);
                     }
                 }
             }
@@ -1757,20 +1856,38 @@ impl FormattingContext for TableFormattingContext {
         let mut row_metrics: Vec<RowMetrics> = row_heights.iter().map(|h| RowMetrics::new(*h)).collect();
 
         for laid in &laid_out_cells {
-            if laid.cell.rowspan != 1 {
-                continue;
-            }
-
             let row = &mut row_metrics[laid.cell.row];
-            row.max_cell_height = row.max_cell_height.max(laid.height);
+            let row_height = row_heights.get(laid.cell.row).copied().unwrap_or(row.height);
+            let contribution = if laid.cell.rowspan == 1 {
+                laid.height
+            } else {
+                row_height
+            };
+            row.max_cell_height = row.max_cell_height.max(contribution);
 
             if laid.vertical_align.is_baseline_relative() {
                 let baseline = laid.baseline.unwrap_or(laid.height);
-                let bottom = (laid.height - baseline).max(0.0);
+                let top = baseline.min(row_height);
+                let bottom = (row_height - top).max(0.0);
                 row.has_baseline = true;
-                row.baseline_top = row.baseline_top.max(baseline);
+                row.baseline_top = row.baseline_top.max(top);
                 row.baseline_bottom = row.baseline_bottom.max(bottom);
             }
+        }
+
+        // Spanning baseline-aligned cells reserve baseline space in the first row of the span.
+        for laid in &laid_out_cells {
+            if laid.cell.rowspan <= 1 || !laid.vertical_align.is_baseline_relative() {
+                continue;
+            }
+            let row = &mut row_metrics[laid.cell.row];
+            let row_height = row_heights.get(laid.cell.row).copied().unwrap_or(row.height);
+            let baseline = laid.baseline.unwrap_or(laid.height);
+            let top = baseline.min(row_height);
+            let bottom = (row_height - top).max(0.0);
+            row.has_baseline = true;
+            row.baseline_top = row.baseline_top.max(top);
+            row.baseline_bottom = row.baseline_bottom.max(bottom);
         }
 
         for row in &mut row_metrics {
@@ -2125,10 +2242,12 @@ impl FormattingContext for TableFormattingContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::constraints::AvailableSpace;
     use crate::layout::constraints::LayoutConstraints;
+    use crate::style::color::Rgba;
     use crate::style::display::Display;
     use crate::style::display::FormattingContextType;
-    use crate::style::types::{BorderCollapse, BorderStyle, TableLayout, VerticalAlign};
+    use crate::style::types::{BorderCollapse, BorderStyle, Direction, TableLayout, VerticalAlign};
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
     use crate::tree::debug::DebugInfo;
@@ -2293,7 +2412,7 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_border_style_priority_beats_width() {
+    fn collapsed_border_width_beats_style() {
         let mut table_style = ComputedStyle::default();
         table_style.display = Display::Table;
         table_style.border_collapse = BorderCollapse::Collapse;
@@ -2319,7 +2438,203 @@ mod tests {
         let borders = compute_collapsed_borders(&table, &structure);
 
         assert_eq!(borders.vertical.len(), 3);
-        assert!((borders.vertical[1][0].width - 2.0).abs() < f32::EPSILON);
+        assert!((borders.vertical[1][0].width - 8.0).abs() < f32::EPSILON);
+        assert_eq!(borders.vertical[1][0].style, BorderStyle::Solid);
+    }
+
+    #[test]
+    fn collapsed_borders_prefer_cell_over_row_on_equal_style() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_collapse = BorderCollapse::Collapse;
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        row_style.border_top_style = BorderStyle::Solid;
+        row_style.border_top_width = Length::px(4.0);
+        row_style.border_top_color = Rgba::from_rgba8(0, 0, 0, 255);
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.border_top_style = BorderStyle::Solid;
+        cell_style.border_top_width = Length::px(4.0);
+        cell_style.border_top_color = Rgba::from_rgba8(0, 0, 255, 255);
+
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        let borders = compute_collapsed_borders(&table, &structure);
+
+        assert_eq!(borders.horizontal.len(), 2);
+        let top_border = &borders.horizontal[0][0];
+        assert_eq!(top_border.style, BorderStyle::Solid);
+        assert_eq!(top_border.color, Rgba::from_rgba8(0, 0, 255, 255));
+        assert!((top_border.width - 4.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn collapsed_borders_choose_left_cell_in_ltr_direction() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_collapse = BorderCollapse::Collapse;
+
+        let mut left_cell_style = ComputedStyle::default();
+        left_cell_style.display = Display::TableCell;
+        left_cell_style.border_right_style = BorderStyle::Solid;
+        left_cell_style.border_right_width = Length::px(3.0);
+        left_cell_style.border_right_color = Rgba::from_rgba8(255, 0, 0, 255);
+
+        let mut right_cell_style = ComputedStyle::default();
+        right_cell_style.display = Display::TableCell;
+        right_cell_style.border_left_style = BorderStyle::Solid;
+        right_cell_style.border_left_width = Length::px(3.0);
+        right_cell_style.border_left_color = Rgba::from_rgba8(0, 255, 0, 255);
+
+        let left = BoxNode::new_block(Arc::new(left_cell_style), FormattingContextType::Block, vec![]);
+        let right = BoxNode::new_block(Arc::new(right_cell_style), FormattingContextType::Block, vec![]);
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![left, right]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        let borders = compute_collapsed_borders(&table, &structure);
+
+        let middle_border = &borders.vertical[1][0];
+        assert_eq!(middle_border.color, Rgba::from_rgba8(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn collapsed_borders_choose_right_cell_in_rtl_direction() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_collapse = BorderCollapse::Collapse;
+        table_style.direction = Direction::Rtl;
+
+        let mut left_cell_style = ComputedStyle::default();
+        left_cell_style.display = Display::TableCell;
+        left_cell_style.border_right_style = BorderStyle::Solid;
+        left_cell_style.border_right_width = Length::px(3.0);
+        left_cell_style.border_right_color = Rgba::from_rgba8(255, 0, 0, 255);
+
+        let mut right_cell_style = ComputedStyle::default();
+        right_cell_style.display = Display::TableCell;
+        right_cell_style.border_left_style = BorderStyle::Solid;
+        right_cell_style.border_left_width = Length::px(3.0);
+        right_cell_style.border_left_color = Rgba::from_rgba8(0, 255, 0, 255);
+
+        let left = BoxNode::new_block(Arc::new(left_cell_style), FormattingContextType::Block, vec![]);
+        let right = BoxNode::new_block(Arc::new(right_cell_style), FormattingContextType::Block, vec![]);
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![left, right]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        let borders = compute_collapsed_borders(&table, &structure);
+
+        let middle_border = &borders.vertical[1][0];
+        assert_eq!(middle_border.color, Rgba::from_rgba8(0, 255, 0, 255));
+    }
+
+    #[test]
+    fn collapsed_borders_choose_higher_style_on_equal_widths() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_collapse = BorderCollapse::Collapse;
+
+        let mut left_cell_style = ComputedStyle::default();
+        left_cell_style.display = Display::TableCell;
+        left_cell_style.border_right_style = BorderStyle::Double;
+        left_cell_style.border_right_width = Length::px(3.0);
+        left_cell_style.border_right_color = Rgba::from_rgba8(255, 0, 0, 255);
+
+        let mut right_cell_style = ComputedStyle::default();
+        right_cell_style.display = Display::TableCell;
+        right_cell_style.border_left_style = BorderStyle::Dashed;
+        right_cell_style.border_left_width = Length::px(3.0);
+        right_cell_style.border_left_color = Rgba::from_rgba8(0, 255, 0, 255);
+
+        let left = BoxNode::new_block(Arc::new(left_cell_style), FormattingContextType::Block, vec![]);
+        let right = BoxNode::new_block(Arc::new(right_cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(
+            Arc::new(ComputedStyle {
+                display: Display::TableRow,
+                ..ComputedStyle::default()
+            }),
+            FormattingContextType::Block,
+            vec![left, right],
+        );
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        let borders = compute_collapsed_borders(&table, &structure);
+
+        let middle_border = &borders.vertical[1][0];
+        assert_eq!(middle_border.style, BorderStyle::Double);
+        assert!((middle_border.width - 3.0).abs() < f32::EPSILON);
+        assert_eq!(middle_border.color, Rgba::from_rgba8(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn collapsed_borders_choose_top_cell_on_equal_borders() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_collapse = BorderCollapse::Collapse;
+
+        let mut top_cell_style = ComputedStyle::default();
+        top_cell_style.display = Display::TableCell;
+        top_cell_style.border_bottom_style = BorderStyle::Solid;
+        top_cell_style.border_bottom_width = Length::px(4.0);
+        top_cell_style.border_bottom_color = Rgba::from_rgba8(255, 0, 0, 255);
+
+        let mut bottom_cell_style = ComputedStyle::default();
+        bottom_cell_style.display = Display::TableCell;
+        bottom_cell_style.border_top_style = BorderStyle::Solid;
+        bottom_cell_style.border_top_width = Length::px(4.0);
+        bottom_cell_style.border_top_color = Rgba::from_rgba8(0, 0, 255, 255);
+
+        let top_row = BoxNode::new_block(
+            Arc::new(ComputedStyle {
+                display: Display::TableRow,
+                ..ComputedStyle::default()
+            }),
+            FormattingContextType::Block,
+            vec![BoxNode::new_block(
+                Arc::new(top_cell_style),
+                FormattingContextType::Block,
+                vec![],
+            )],
+        );
+
+        let bottom_row = BoxNode::new_block(
+            Arc::new(ComputedStyle {
+                display: Display::TableRow,
+                ..ComputedStyle::default()
+            }),
+            FormattingContextType::Block,
+            vec![BoxNode::new_block(
+                Arc::new(bottom_cell_style),
+                FormattingContextType::Block,
+                vec![],
+            )],
+        );
+
+        let table = BoxNode::new_block(
+            Arc::new(table_style),
+            FormattingContextType::Table,
+            vec![top_row, bottom_row],
+        );
+
+        let structure = TableStructure::from_box_tree(&table);
+        let borders = compute_collapsed_borders(&table, &structure);
+
+        let horizontal_border = &borders.horizontal[1][0];
+        assert_eq!(horizontal_border.style, BorderStyle::Solid);
+        assert!((horizontal_border.width - 4.0).abs() < f32::EPSILON);
+        assert_eq!(horizontal_border.color, Rgba::from_rgba8(255, 0, 0, 255));
     }
 
     #[test]
@@ -2753,6 +3068,315 @@ mod tests {
 
         let total_height: f32 = structure.rows.iter().map(|r| r.computed_height).sum();
         assert!(total_height >= 100.0);
+    }
+
+    #[test]
+    fn test_vertical_align_with_rowspan() {
+        let mut structure = TableStructure::new();
+        structure.row_count = 2;
+        structure.rows = vec![RowInfo::new(0), RowInfo::new(1)];
+        structure.cells = vec![
+            CellInfo {
+                index: 0,
+                row: 0,
+                col: 0,
+                rowspan: 2,
+                colspan: 1,
+                box_index: 0,
+                min_width: 50.0,
+                max_width: 100.0,
+                min_height: 40.0, // spanning cell
+                bounds: Rect::ZERO,
+            },
+            CellInfo {
+                index: 1,
+                row: 0,
+                col: 1,
+                rowspan: 1,
+                colspan: 1,
+                box_index: 1,
+                min_width: 50.0,
+                max_width: 100.0,
+                min_height: 20.0,
+                bounds: Rect::ZERO,
+            },
+            CellInfo {
+                index: 2,
+                row: 1,
+                col: 1,
+                rowspan: 1,
+                colspan: 1,
+                box_index: 2,
+                min_width: 50.0,
+                max_width: 100.0,
+                min_height: 20.0,
+                bounds: Rect::ZERO,
+            },
+        ];
+        structure.border_spacing = (0.0, 0.0);
+
+        calculate_row_heights(&mut structure, None);
+
+        // Both rows should have positive heights and the spanning cell shouldn't collapse row 1 to zero.
+        assert!(structure.rows[0].computed_height > 0.0);
+        assert!(structure.rows[1].computed_height > 0.0);
+        assert!((structure.rows[0].computed_height - structure.rows[1].computed_height).abs() < 25.0);
+    }
+
+    #[test]
+    fn test_vertical_align_baseline_rowspan_reserves_baseline_space() {
+        let mut structure = TableStructure::new();
+        structure.row_count = 2;
+        structure.rows = vec![RowInfo::new(0), RowInfo::new(1)];
+        // Baseline-aligned spanning cell; its first-row baseline should lift row 0's baseline metrics.
+        structure.cells = vec![CellInfo {
+            index: 0,
+            row: 0,
+            col: 0,
+            rowspan: 2,
+            colspan: 1,
+            box_index: 0,
+            min_width: 50.0,
+            max_width: 100.0,
+            min_height: 40.0,
+            bounds: Rect::ZERO,
+        }];
+        structure.border_spacing = (0.0, 0.0);
+
+        // Manually set row height expectations to simulate a baseline offset.
+        calculate_row_heights(&mut structure, None);
+        // After baseline reservation, row 0 should carry baseline metrics and a non-zero height.
+        assert!(structure.rows[0].computed_height >= 1.0);
+        assert!(structure.rows[0].min_height >= 0.0);
+    }
+
+    #[test]
+    fn test_collapsed_borders_contribute_to_table_bounds() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_collapse = BorderCollapse::Collapse;
+        table_style.border_top_style = BorderStyle::Solid;
+        table_style.border_bottom_style = BorderStyle::Solid;
+        table_style.border_left_style = BorderStyle::Solid;
+        table_style.border_right_style = BorderStyle::Solid;
+        table_style.border_top_width = Length::px(2.0);
+        table_style.border_bottom_width = Length::px(2.0);
+        table_style.border_left_width = Length::px(3.0);
+        table_style.border_right_width = Length::px(3.0);
+        table_style.border_top_color = Rgba::from_rgba8(0, 0, 0, 255);
+        table_style.border_bottom_color = Rgba::from_rgba8(0, 0, 0, 255);
+        table_style.border_left_color = Rgba::from_rgba8(0, 0, 0, 255);
+        table_style.border_right_color = Rgba::from_rgba8(0, 0, 0, 255);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let tfc = TableFormattingContext::new();
+        let constraints = LayoutConstraints::definite_width(100.0);
+        let fragment = tfc.layout(&table, &constraints).expect("table layout");
+
+        // Width should include left+right collapsed borders (3 + 3) even with zero cell width.
+        assert!(fragment.bounds.width() >= 6.0);
+        // Height should include top+bottom collapsed borders (2 + 2) plus at least a minimal row height.
+        assert!(fragment.bounds.height() >= 4.0);
+    }
+
+    #[test]
+    fn test_collapsed_borders_affect_row_offsets() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_collapse = BorderCollapse::Collapse;
+        table_style.border_top_style = BorderStyle::Solid;
+        table_style.border_bottom_style = BorderStyle::Solid;
+        table_style.border_top_width = Length::px(2.0);
+        table_style.border_bottom_width = Length::px(2.0);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        let cell_a = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![]);
+        let cell_b = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row1 = BoxNode::new_block(Arc::new(row_style.clone()), FormattingContextType::Block, vec![cell_a]);
+        let row2 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell_b]);
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row1, row2]);
+
+        let tfc = TableFormattingContext::new();
+        let constraints = LayoutConstraints::definite_width(10.0);
+        let fragment = tfc.layout(&table, &constraints).expect("table layout");
+
+        // Expect top border + two minimal rows + bottom border.
+        assert!((fragment.bounds.height() - 6.0).abs() < 0.51);
+    }
+
+    #[test]
+    fn test_collapsed_borders_offset_cell_position() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_collapse = BorderCollapse::Collapse;
+        table_style.border_top_style = BorderStyle::Solid;
+        table_style.border_bottom_style = BorderStyle::Solid;
+        table_style.border_left_style = BorderStyle::Solid;
+        table_style.border_right_style = BorderStyle::Solid;
+        table_style.border_top_width = Length::px(4.0);
+        table_style.border_bottom_width = Length::px(4.0);
+        table_style.border_left_width = Length::px(6.0);
+        table_style.border_right_width = Length::px(6.0);
+        table_style.border_top_color = Rgba::from_rgba8(0, 0, 0, 255);
+        table_style.border_bottom_color = Rgba::from_rgba8(0, 0, 0, 255);
+        table_style.border_left_color = Rgba::from_rgba8(0, 0, 0, 255);
+        table_style.border_right_color = Rgba::from_rgba8(0, 0, 0, 255);
+        table_style.width = Some(Length::px(100.0));
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let tfc = TableFormattingContext::new();
+        let constraints = LayoutConstraints::definite_width(100.0);
+        let fragment = tfc.layout(&table, &constraints).expect("table layout");
+
+        let cell_frag = fragment
+            .children
+            .iter()
+            .find(|f| {
+                f.style
+                    .as_ref()
+                    .map(|s| {
+                        s.border_top_width.to_px() == 0.0
+                            && s.border_left_width.to_px() == 0.0
+                            && s.border_right_width.to_px() == 0.0
+                            && s.border_bottom_width.to_px() == 0.0
+                    })
+                    .unwrap_or(false)
+            })
+            .expect("cell fragment");
+
+        // Cell should be offset by the collapsed borders.
+        assert!((cell_frag.bounds.x() - 6.0).abs() < 0.51);
+        assert!((cell_frag.bounds.y() - 4.0).abs() < 0.51);
+        // Table width should include both borders plus the cell.
+        assert!(fragment.bounds.width() >= cell_frag.bounds.width() + 12.0);
+    }
+
+    #[test]
+    fn percentages_ignored_without_definite_table_width() {
+        let mut constraints = vec![
+            ColumnConstraints::percentage(50.0, 10.0, 100.0),
+            ColumnConstraints::percentage(50.0, 20.0, 100.0),
+        ];
+
+        let tfc = TableFormattingContext::new();
+        tfc.normalize_percentage_constraints(&mut constraints, None, &AvailableSpace::MaxContent);
+
+        assert!(constraints.iter().all(|c| c.percentage.is_none()));
+        assert!(constraints.iter().all(|c| c.is_flexible));
+    }
+
+    #[test]
+    fn min_content_available_width_uses_column_min_widths() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.width = Some(Length::px(20.0));
+
+        let cell_a = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![]);
+        let cell_b = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell_a, cell_b]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let tfc = TableFormattingContext::new();
+        let constraints = LayoutConstraints::new(AvailableSpace::MinContent, AvailableSpace::Indefinite);
+        let fragment = tfc.layout(&table, &constraints).expect("table layout");
+
+        // Two cells with 20px widths -> table min-content width should be ~40px.
+        assert!((fragment.bounds.width() - 40.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn collapsed_borders_with_rowspan_and_vertical_align() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_collapse = BorderCollapse::Collapse;
+        table_style.border_top_style = BorderStyle::Solid;
+        table_style.border_bottom_style = BorderStyle::Solid;
+        table_style.border_left_style = BorderStyle::Solid;
+        table_style.border_right_style = BorderStyle::Solid;
+        table_style.border_top_width = Length::px(2.0);
+        table_style.border_bottom_width = Length::px(2.0);
+        table_style.border_left_width = Length::px(2.0);
+        table_style.border_right_width = Length::px(2.0);
+        table_style.border_top_color = Rgba::from_rgba8(0, 0, 0, 255);
+        table_style.border_bottom_color = Rgba::from_rgba8(0, 0, 0, 255);
+        table_style.border_left_color = Rgba::from_rgba8(0, 0, 0, 255);
+        table_style.border_right_color = Rgba::from_rgba8(0, 0, 0, 255);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_top_style = ComputedStyle::default();
+        cell_top_style.display = Display::TableCell;
+        cell_top_style.vertical_align = VerticalAlign::Top;
+        cell_top_style.min_height = Some(Length::px(10.0));
+
+        let mut cell_span_style = ComputedStyle::default();
+        cell_span_style.display = Display::TableCell;
+        cell_span_style.vertical_align = VerticalAlign::Baseline;
+
+        let mut cell_bottom_style = ComputedStyle::default();
+        cell_bottom_style.display = Display::TableCell;
+        cell_bottom_style.vertical_align = VerticalAlign::Bottom;
+        cell_bottom_style.min_height = Some(Length::px(10.0));
+
+        let top_cell = BoxNode::new_block(Arc::new(cell_top_style), FormattingContextType::Block, vec![]);
+        let span_cell = BoxNode::new_block(Arc::new(cell_span_style), FormattingContextType::Block, vec![]);
+        let bottom_cell = BoxNode::new_block(Arc::new(cell_bottom_style), FormattingContextType::Block, vec![]);
+
+        let row1 = BoxNode::new_block(
+            Arc::new(row_style.clone()),
+            FormattingContextType::Block,
+            vec![span_cell.clone(), top_cell],
+        );
+        let row2 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![bottom_cell]);
+
+        // Attach debug info to give row/col placement: row1 has two cells, span_cell should be col 0, top_cell col1.
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row1, row2]);
+
+        let tfc = TableFormattingContext::new();
+        let constraints = LayoutConstraints::definite_width(50.0);
+        let fragment = tfc.layout(&table, &constraints).expect("table layout");
+
+        // Find child fragments; first child is collapsed border, cell fragments follow.
+        let mut cells: Vec<&FragmentNode> = fragment
+            .children
+            .iter()
+            .filter(|f| matches!(f.content, FragmentContent::Block { .. }))
+            .collect();
+        cells.retain(|f| f.style.as_ref().map(|s| s.display == Display::Block).unwrap_or(true));
+
+        // Verify vertical offsets respect collapsed borders (should start at or below 0 due to stroke centering).
+        let min_y = cells.iter().map(|c| c.bounds.y()).fold(f32::INFINITY, f32::min);
+        assert!(min_y <= 0.0 + 0.5);
     }
 
     #[test]

@@ -2007,6 +2007,7 @@ mod tests {
         root_style.text_align = TextAlign::Justify;
         root_style.text_justify = TextJustify::Auto;
         root_style.white_space = WhiteSpace::PreWrap;
+        root_style.text_align_last = crate::style::types::TextAlignLast::Justify;
         let mut text_style = ComputedStyle::default();
         text_style.white_space = WhiteSpace::PreWrap;
         let root = BoxNode::new_block(
