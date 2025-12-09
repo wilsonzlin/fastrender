@@ -871,7 +871,11 @@ impl InlineFormattingContext {
             } else {
                 subsequent_line_box_width
             };
-            let indent_raw = if idx == 0 { first_line_indent } else { subsequent_line_indent };
+            let indent_raw = if idx == 0 {
+                first_line_indent
+            } else {
+                subsequent_line_indent
+            };
             let indent_offset = if matches!(line_direction, crate::style::types::Direction::Rtl) {
                 -indent_raw
             } else {
@@ -882,8 +886,13 @@ impl InlineFormattingContext {
             if matches!(base_align, TextAlign::Justify) && matches!(resolved_justify, TextJustify::None) {
                 base_align = map_text_align(TextAlign::Start, line_direction);
             }
-            let mut effective_align =
-                resolve_text_align_for_line(base_align, text_align_last, line_direction, is_last_line, is_single_line);
+            let mut effective_align = resolve_text_align_for_line(
+                base_align,
+                text_align_last,
+                line_direction,
+                is_last_line,
+                is_single_line,
+            );
             let justify_probe_items =
                 if matches!(effective_align, TextAlign::Justify) && !matches!(resolved_justify, TextJustify::None) {
                     self.expand_items_for_justification(&line.items, resolved_justify)
@@ -1174,8 +1183,12 @@ impl InlineFormattingContext {
             }
             InlineItem::Replaced(replaced_item) => {
                 let paint_offset = replaced_item.paint_offset;
-                let bounds =
-                    Rect::from_xywh(x + replaced_item.margin_left + paint_offset, y, replaced_item.width, replaced_item.height);
+                let bounds = Rect::from_xywh(
+                    x + replaced_item.margin_left + paint_offset,
+                    y,
+                    replaced_item.width,
+                    replaced_item.height,
+                );
                 FragmentNode::new_with_style(
                     bounds,
                     FragmentContent::Replaced {
@@ -3345,7 +3358,10 @@ mod tests {
         let root = BoxNode::new_block(
             Arc::new(root_style),
             FormattingContextType::Block,
-            vec![BoxNode::new_text(Arc::new(ComputedStyle::default()), "שלום".to_string())],
+            vec![BoxNode::new_text(
+                Arc::new(ComputedStyle::default()),
+                "שלום".to_string(),
+            )],
         );
         let constraints = LayoutConstraints::definite_width(200.0);
 
@@ -3369,7 +3385,10 @@ mod tests {
         let root = BoxNode::new_block(
             Arc::new(root_style),
             FormattingContextType::Block,
-            vec![BoxNode::new_text(Arc::new(ComputedStyle::default()), "hello".to_string())],
+            vec![BoxNode::new_text(
+                Arc::new(ComputedStyle::default()),
+                "hello".to_string(),
+            )],
         );
         let constraints = LayoutConstraints::definite_width(200.0);
 
