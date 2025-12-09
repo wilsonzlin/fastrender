@@ -2760,6 +2760,32 @@ mod tests {
     }
 
     #[test]
+    fn overflow_y_hidden_clips_vertical_only() {
+        let mut parent_style = ComputedStyle::default();
+        parent_style.overflow_x = Overflow::Visible;
+        parent_style.overflow_y = Overflow::Hidden;
+        parent_style.position = Position::Relative;
+        parent_style.background_color = Rgba::BLUE;
+        let parent_style = Arc::new(parent_style);
+
+        let mut child_style = ComputedStyle::default();
+        child_style.background_color = Rgba::RED;
+        let child = FragmentNode::new_block_styled(
+            Rect::from_xywh(-5.0, -5.0, 30.0, 40.0),
+            vec![],
+            Arc::new(child_style),
+        );
+        let parent = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![child], parent_style);
+        let tree = FragmentTree::new(parent);
+
+        let pixmap = paint_tree(&tree, 40, 40, Rgba::WHITE).expect("paint");
+        // Vertical overflow clipped; horizontal overflow visible.
+        assert_eq!(color_at(&pixmap, 10, 10), (255, 0, 0, 255));
+        assert_eq!(color_at(&pixmap, 10, 25), (255, 255, 255, 255));
+        assert_eq!(color_at(&pixmap, 22, 10), (255, 0, 0, 255));
+    }
+
+    #[test]
     fn object_fit_contain_centers_image() {
         let fit = ObjectFit::Contain;
         let position = ObjectPosition {
