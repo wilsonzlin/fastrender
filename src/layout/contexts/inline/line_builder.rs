@@ -1204,9 +1204,13 @@ impl LineBuilder {
             return;
         }
 
-        let has_plaintext = leaves
-            .iter()
-            .any(|leaf| matches!(leaf.item.unicode_bidi(), UnicodeBidi::Plaintext));
+        let has_plaintext = leaves.iter().any(|leaf| {
+            matches!(leaf.item.unicode_bidi(), UnicodeBidi::Plaintext)
+                || leaf
+                    .box_stack
+                    .iter()
+                    .any(|ctx| matches!(ctx.unicode_bidi, UnicodeBidi::Plaintext))
+        });
         let effective_base = if has_plaintext { None } else { self.base_level };
 
         let bidi = BidiInfo::new(&logical_text, effective_base);
@@ -1895,6 +1899,45 @@ mod tests {
             .collect();
 
         assert_eq!(texts, vec!["ABC ".to_string(), "אבג".to_string(), " DEF".to_string()]);
+    }
+
+    #[test]
+    fn bidi_plaintext_on_inline_box_forces_first_strong() {
+        let mut builder = make_builder_with_base(200.0, Level::rtl());
+
+        let mut inline_box = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            0,
+            Direction::Ltr,
+            UnicodeBidi::Plaintext,
+        );
+        inline_box.add_child(InlineItem::Text(make_text_item("abc אבג", 70.0)));
+        builder.add_item(InlineItem::InlineBox(inline_box));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 1);
+        let texts: Vec<String> = lines[0]
+            .items
+            .iter()
+            .flat_map(|p| match &p.item {
+                InlineItem::InlineBox(b) => b
+                    .children
+                    .iter()
+                    .filter_map(|c| match c {
+                        InlineItem::Text(t) => Some(t.text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                InlineItem::Text(t) => vec![t.text.clone()],
+                _ => vec![],
+            })
+            .collect();
+
+        assert_eq!(texts, vec!["abc ".to_string(), "אבג".to_string()]);
     }
 
     #[test]
