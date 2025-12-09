@@ -93,6 +93,7 @@
 pub mod canvas;
 pub mod display_list;
 pub mod display_list_builder;
+pub mod object_fit;
 pub mod optimize;
 pub mod painter;
 pub mod rasterize;

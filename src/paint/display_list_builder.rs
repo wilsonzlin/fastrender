@@ -31,7 +31,7 @@ use crate::paint::display_list::{
     ClipItem, DisplayItem, DisplayList, FillRectItem, GlyphInstance, ImageData, ImageItem, OpacityItem, StrokeRectItem,
     TextItem,
 };
-use crate::style::types::{ObjectFit, ObjectPosition, PositionComponent, PositionKeyword};
+use crate::paint::object_fit::compute_object_fit;
 use crate::style::color::Rgba;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
@@ -187,7 +187,7 @@ impl DisplayListBuilder {
                     if let Some(style) = fragment.style.as_deref() {
                         let fit = style.object_fit;
                         let position = style.object_position;
-                        compute_object_fit_rect(
+                        compute_object_fit(
                             fit,
                             position,
                             rect.width(),
@@ -271,69 +271,6 @@ impl DisplayListBuilder {
         let rgba = image.to_rgba8();
         Some(ImageData::new(w, h, rgba.into_raw()))
     }
-}
-
-fn resolve_object_position(comp: PositionComponent, free: f32) -> f32 {
-    match comp {
-        PositionComponent::Keyword(PositionKeyword::Center) => free * 0.5,
-        PositionComponent::Keyword(PositionKeyword::Start) => 0.0,
-        PositionComponent::Keyword(PositionKeyword::End) => free,
-        PositionComponent::Length(len) => {
-            // Length percentages resolve against the free space.
-            if len.unit.is_percentage() {
-                len.resolve_against(free)
-            } else if len.unit.is_absolute() {
-                len.to_px()
-            } else {
-                len.value
-            }
-        }
-        PositionComponent::Percentage(pct) => free * pct,
-    }
-}
-
-fn compute_object_fit_rect(
-    fit: ObjectFit,
-    position: ObjectPosition,
-    box_width: f32,
-    box_height: f32,
-    image_width: f32,
-    image_height: f32,
-) -> Option<(f32, f32, f32, f32)> {
-    if box_width <= 0.0 || box_height <= 0.0 || image_width <= 0.0 || image_height <= 0.0 {
-        return None;
-    }
-
-    let scale_x = box_width / image_width;
-    let scale_y = box_height / image_height;
-
-    let scale = match fit {
-        ObjectFit::Fill => (scale_x, scale_y),
-        ObjectFit::Contain => {
-            let s = scale_x.min(scale_y);
-            (s, s)
-        }
-        ObjectFit::Cover => {
-            let s = scale_x.max(scale_y);
-            (s, s)
-        }
-        ObjectFit::None => (1.0, 1.0),
-        ObjectFit::ScaleDown => {
-            let contain = scale_x.min(scale_y);
-            let (s, _) = if contain >= 1.0 { (1.0, 1.0) } else { (contain, contain) };
-            (s, s)
-        }
-    };
-
-    let dest_w = image_width * scale.0;
-    let dest_h = image_height * scale.1;
-
-    let free_x = (box_width - dest_w).max(0.0);
-    let free_y = (box_height - dest_h).max(0.0);
-    let offset_x = resolve_object_position(position.x, free_x);
-    let offset_y = resolve_object_position(position.y, free_y);
-
-    Some((offset_x, offset_y, dest_w, dest_h))
 }
 
 impl Default for DisplayListBuilder {
@@ -616,10 +553,10 @@ mod tests {
     fn test_object_fit_contain_applied_in_display_list() {
         let mut style = ComputedStyle::default();
         style.display = Display::Inline;
-        style.object_fit = ObjectFit::Contain;
-        style.object_position = ObjectPosition {
-            x: PositionComponent::Keyword(crate::style::types::PositionKeyword::Center),
-            y: PositionComponent::Keyword(crate::style::types::PositionKeyword::Center),
+        style.object_fit = crate::style::types::ObjectFit::Contain;
+        style.object_position = crate::style::types::ObjectPosition {
+            x: crate::style::types::PositionComponent::Keyword(crate::style::types::PositionKeyword::Center),
+            y: crate::style::types::PositionComponent::Keyword(crate::style::types::PositionKeyword::Center),
         };
 
         let fragment = FragmentNode {

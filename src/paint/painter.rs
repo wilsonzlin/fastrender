@@ -25,6 +25,7 @@ use crate::error::{RenderError, Result};
 use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
 use crate::paint::display_list::BorderRadii;
+use crate::paint::object_fit::compute_object_fit;
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::stacking::creates_stacking_context;
 use crate::style::color::Rgba;
@@ -1562,73 +1563,6 @@ fn default_object_position() -> ObjectPosition {
         x: PositionComponent::Keyword(Center),
         y: PositionComponent::Keyword(Center),
     }
-}
-
-fn resolve_object_position(comp: PositionComponent, free: f32) -> f32 {
-    use crate::style::types::PositionKeyword::{Center, End, Start};
-
-    match comp {
-        PositionComponent::Keyword(Start) => 0.0,
-        PositionComponent::Keyword(Center) => free * 0.5,
-        PositionComponent::Keyword(End) => free,
-        PositionComponent::Length(len) => {
-            if len.unit.is_percentage() {
-                len.resolve_against(free)
-            } else if len.unit.is_absolute() {
-                len.to_px()
-            } else {
-                len.value
-            }
-        }
-        PositionComponent::Percentage(pct) => free * pct,
-    }
-}
-
-fn compute_object_fit(
-    fit: ObjectFit,
-    position: ObjectPosition,
-    box_width: f32,
-    box_height: f32,
-    image_width: f32,
-    image_height: f32,
-) -> Option<(f32, f32, f32, f32)> {
-    if box_width <= 0.0 || box_height <= 0.0 || image_width <= 0.0 || image_height <= 0.0 {
-        return None;
-    }
-
-    let scale_x = box_width / image_width;
-    let scale_y = box_height / image_height;
-
-    let scale = match fit {
-        ObjectFit::Fill => (scale_x, scale_y),
-        ObjectFit::Contain => {
-            let s = scale_x.min(scale_y);
-            (s, s)
-        }
-        ObjectFit::Cover => {
-            let s = scale_x.max(scale_y);
-            (s, s)
-        }
-        ObjectFit::None => (1.0, 1.0),
-        ObjectFit::ScaleDown => {
-            if image_width <= box_width && image_height <= box_height {
-                (1.0, 1.0)
-            } else {
-                let s = scale_x.min(scale_y);
-                (s, s)
-            }
-        }
-    };
-
-    let dest_w = image_width * scale.0;
-    let dest_h = image_height * scale.1;
-    let free_x = box_width - dest_w;
-    let free_y = box_height - dest_h;
-
-    let offset_x = resolve_object_position(position.x, free_x);
-    let offset_y = resolve_object_position(position.y, free_y);
-
-    Some((offset_x, offset_y, dest_w, dest_h))
 }
 
 fn build_transform(style: Option<&ComputedStyle>, bounds: Rect) -> Option<Transform> {
