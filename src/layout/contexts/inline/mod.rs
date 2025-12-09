@@ -44,7 +44,7 @@ use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::utils::compute_replaced_size;
-use crate::style::types::{FontStyle, WhiteSpace};
+use crate::style::types::{FontStyle, OverflowWrap, WhiteSpace, WordBreak};
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
@@ -268,7 +268,14 @@ impl InlineFormattingContext {
 
         // Find break opportunities and filter based on white-space handling
         let base_breaks = find_break_opportunities(&normalized_text);
-        let breaks = merge_breaks(base_breaks, forced_breaks, allow_soft_wrap);
+        let merged = merge_breaks(base_breaks, forced_breaks, allow_soft_wrap);
+        let breaks = apply_break_properties(
+            &normalized_text,
+            merged,
+            style.word_break,
+            style.overflow_wrap,
+            allow_soft_wrap,
+        );
 
         Ok(TextItem::new(
             shaped_runs,
@@ -716,6 +723,69 @@ fn merge_breaks(
     base
 }
 
+fn char_boundary_breaks(text: &str) -> Vec<crate::text::line_break::BreakOpportunity> {
+    use crate::text::line_break::BreakOpportunity;
+    let mut breaks = Vec::new();
+    for (idx, _) in text.char_indices().skip(1) {
+        breaks.push(BreakOpportunity::allowed(idx));
+    }
+    breaks.push(BreakOpportunity::allowed(text.len()));
+    breaks
+}
+
+fn apply_break_properties(
+    text: &str,
+    breaks: Vec<crate::text::line_break::BreakOpportunity>,
+    word_break: WordBreak,
+    overflow_wrap: OverflowWrap,
+    allow_soft_wrap: bool,
+) -> Vec<crate::text::line_break::BreakOpportunity> {
+    use crate::text::line_break::BreakType;
+
+    if !allow_soft_wrap {
+        return breaks;
+    }
+
+    let mut result = breaks;
+
+    match word_break {
+        WordBreak::BreakAll | WordBreak::BreakWord => {
+            result.extend(char_boundary_breaks(text));
+        }
+        WordBreak::KeepAll => {
+            result.retain(|brk| {
+                if brk.break_type == BreakType::Mandatory {
+                    return true;
+                }
+                let prev = text[..brk.byte_offset.min(text.len())].chars().rev().next();
+                prev.map(|c| c.is_whitespace() || c == '-' || c == '\u{00AD}')
+                    .unwrap_or(false)
+            });
+        }
+        WordBreak::Normal => {}
+    }
+
+    match overflow_wrap {
+        OverflowWrap::Anywhere | OverflowWrap::BreakWord => {
+            result.extend(char_boundary_breaks(text));
+        }
+        OverflowWrap::Normal => {}
+    }
+
+    result.sort_by_key(|b| b.byte_offset);
+    result.dedup_by(|a, b| {
+        if a.byte_offset != b.byte_offset {
+            return false;
+        }
+        if let BreakType::Mandatory = a.break_type {
+            *b = *a;
+        }
+        true
+    });
+
+    result
+}
+
 impl FormattingContext for InlineFormattingContext {
     fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
         let style = &box_node.style;
@@ -765,7 +835,7 @@ impl Default for InlineFormattingContext {
 mod tests {
     use super::*;
     use crate::style::display::FormattingContextType;
-    use crate::style::types::WhiteSpace;
+    use crate::style::types::{OverflowWrap, WhiteSpace, WordBreak};
     use crate::style::ComputedStyle;
     use std::sync::Arc;
 
@@ -967,7 +1037,10 @@ mod tests {
         let node = BoxNode::new_text(Arc::new(style), text.to_string());
         let item = ifc.create_text_item(&node, text).unwrap();
 
-        assert!(item.break_opportunities.iter().all(|b| b.break_type == BreakType::Mandatory));
+        assert!(item
+            .break_opportunities
+            .iter()
+            .all(|b| b.break_type == BreakType::Mandatory));
         assert_eq!(item.text, "foo bar");
     }
 
@@ -990,5 +1063,31 @@ mod tests {
             .break_opportunities
             .iter()
             .any(|b| b.byte_offset == 3 && b.break_type == BreakType::Mandatory));
+    }
+
+    #[test]
+    fn word_break_break_all_adds_cluster_breaks() {
+        let mut style = ComputedStyle::default();
+        style.word_break = WordBreak::BreakAll;
+        let text = "abcd";
+
+        let ifc = InlineFormattingContext::new();
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+
+        assert!(item.break_opportunities.len() >= text.len());
+    }
+
+    #[test]
+    fn overflow_wrap_anywhere_adds_breaks_when_wrapping_allowed() {
+        let mut style = ComputedStyle::default();
+        style.overflow_wrap = OverflowWrap::Anywhere;
+        let text = "longword";
+
+        let ifc = InlineFormattingContext::new();
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+
+        assert!(item.break_opportunities.iter().any(|b| b.byte_offset == 4));
     }
 }

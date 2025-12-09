@@ -657,6 +657,27 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "word-break" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.word_break = match kw.as_str() {
+                    "normal" => WordBreak::Normal,
+                    "break-all" => WordBreak::BreakAll,
+                    "keep-all" => WordBreak::KeepAll,
+                    "break-word" => WordBreak::BreakWord,
+                    _ => styles.word_break,
+                };
+            }
+        }
+        "overflow-wrap" | "word-wrap" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.overflow_wrap = match kw.as_str() {
+                    "normal" => OverflowWrap::Normal,
+                    "break-word" => OverflowWrap::BreakWord,
+                    "anywhere" => OverflowWrap::Anywhere,
+                    _ => styles.overflow_wrap,
+                };
+            }
+        }
         "unicode-bidi" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.unicode_bidi = match kw.as_str() {

@@ -307,6 +307,27 @@ pub enum WhiteSpace {
     PreLine,
 }
 
+/// CSS `word-break`
+///
+/// Reference: CSS Text Module Level 3
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WordBreak {
+    Normal,
+    BreakAll,
+    KeepAll,
+    BreakWord,
+}
+
+/// CSS `overflow-wrap` (formerly `word-wrap`)
+///
+/// Reference: CSS Text Module Level 3
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverflowWrap {
+    Normal,
+    BreakWord,
+    Anywhere,
+}
+
 /// Background image specification
 ///
 /// CSS: `background-image`
