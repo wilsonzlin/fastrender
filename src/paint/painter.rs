@@ -430,39 +430,56 @@ impl Painter {
                     for cmd in commands {
                         self.execute_command(cmd)?;
                     }
-                } else {
-                    let layer = Pixmap::new(self.pixmap.width(), self.pixmap.height()).ok_or_else(|| {
-                        RenderError::InvalidParameters {
-                            message: format!(
-                                "Failed to create stacking context layer {}x{}",
-                                self.pixmap.width(),
-                                self.pixmap.height()
-                            ),
-                        }
-                    })?;
-
-                    let mut painter = Painter {
-                        pixmap: layer,
-                        background: Rgba::new(0, 0, 0, 0.0),
-                        shaper: ShapingPipeline::new(),
-                        font_ctx: self.font_ctx.clone(),
-                        image_cache: self.image_cache.clone(),
-                    };
-                    for cmd in commands {
-                        painter.execute_command(cmd)?;
-                    }
-
-                    let mut paint = PixmapPaint::default();
-                    paint.opacity = opacity;
-                    self.pixmap.draw_pixmap(
-                        0,
-                        0,
-                        painter.pixmap.as_ref(),
-                        &paint,
-                        Transform::identity(),
-                        None,
-                    );
+                    return Ok(());
                 }
+
+                if opacity <= 0.0 {
+                    return Ok(());
+                }
+
+                let Some(bounds) = compute_commands_bounds(&commands) else {
+                    return Ok(());
+                };
+
+                let min_x = bounds.min_x().floor();
+                let min_y = bounds.min_y().floor();
+                let max_x = bounds.max_x().ceil();
+                let max_y = bounds.max_y().ceil();
+                let width = (max_x - min_x).max(0.0);
+                let height = (max_y - min_y).max(0.0);
+
+                if width <= 0.0 || height <= 0.0 {
+                    return Ok(());
+                }
+
+                let translated = translate_commands(commands, -min_x, -min_y);
+
+                let layer = match Pixmap::new(width.ceil() as u32, height.ceil() as u32) {
+                    Some(p) => p,
+                    None => return Ok(()),
+                };
+
+                let mut painter = Painter {
+                    pixmap: layer,
+                    background: Rgba::new(0, 0, 0, 0.0),
+                    shaper: ShapingPipeline::new(),
+                    font_ctx: self.font_ctx.clone(),
+                    image_cache: self.image_cache.clone(),
+                };
+                for cmd in translated {
+                    painter.execute_command(cmd)?;
+                }
+
+                let mut paint = PixmapPaint::default();
+                paint.opacity = opacity;
+                self.pixmap.draw_pixmap(
+                    0,
+                    0,
+                    painter.pixmap.as_ref(),
+                    &paint,
+                    Transform::from_translate(min_x, min_y),
+                    None,
+                );
             }
         }
         Ok(())
@@ -1166,6 +1183,72 @@ fn compute_object_fit(
     let offset_y = resolve_object_position(position.y, free_y);
 
     Some((offset_x, offset_y, dest_w, dest_h))
+}
+
+fn command_bounds(cmd: &DisplayCommand) -> Option<Rect> {
+    match cmd {
+        DisplayCommand::Background { rect, .. }
+        | DisplayCommand::Border { rect, .. }
+        | DisplayCommand::Text { rect, .. }
+        | DisplayCommand::Replaced { rect, .. } => Some(*rect),
+        DisplayCommand::StackingContext { commands, .. } => compute_commands_bounds(commands),
+    }
+}
+
+fn compute_commands_bounds(commands: &[DisplayCommand]) -> Option<Rect> {
+    let mut current: Option<Rect> = None;
+    for cmd in commands {
+        if let Some(r) = command_bounds(cmd) {
+            current = Some(match current {
+                Some(acc) => acc.union(r),
+                None => r,
+            });
+        }
+    }
+    current
+}
+
+fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<DisplayCommand> {
+    let offset = Point::new(dx, dy);
+    commands
+        .into_iter()
+        .map(|cmd| match cmd {
+            DisplayCommand::Background { rect, style } => DisplayCommand::Background {
+                rect: rect.translate(offset),
+                style,
+            },
+            DisplayCommand::Border { rect, style } => DisplayCommand::Border {
+                rect: rect.translate(offset),
+                style,
+            },
+            DisplayCommand::Text {
+                rect,
+                baseline_offset,
+                text,
+                runs,
+                style,
+            } => DisplayCommand::Text {
+                rect: rect.translate(offset),
+                baseline_offset,
+                text,
+                runs,
+                style,
+            },
+            DisplayCommand::Replaced {
+                rect,
+                replaced_type,
+                style,
+            } => DisplayCommand::Replaced {
+                rect: rect.translate(offset),
+                replaced_type,
+                style,
+            },
+            DisplayCommand::StackingContext { opacity, commands } => DisplayCommand::StackingContext {
+                opacity,
+                commands: translate_commands(commands, dx, dy),
+            },
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy)]
