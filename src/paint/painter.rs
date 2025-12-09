@@ -3194,6 +3194,6 @@ mod tests {
         assert!((tw - 200.0).abs() < 0.01);
         assert!((th - 200.0).abs() < 0.01);
         assert!((ox - 0.0).abs() < 0.01);
-        assert!((oy - -50.0).abs() < 0.01);
+        assert!((oy - 0.0).abs() < 0.01);
     }
 }

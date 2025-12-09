@@ -231,9 +231,9 @@ pub use style::float::{Clear, Float};
 pub use paint::canvas::Canvas;
 pub use paint::display_list::{
     BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem,
-    FillRoundedRectItem, GlyphInstance, GradientStop, ImageData, ImageItem, LinearGradientItem, OpacityItem,
-    RadialGradientItem, StackingContextItem, StrokeRectItem, StrokeRoundedRectItem, TextItem as PaintTextItem,
-    Transform2D, TransformItem,
+    FillRoundedRectItem, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageItem, LinearGradientItem,
+    OpacityItem, RadialGradientItem, StackingContextItem, StrokeRectItem, StrokeRoundedRectItem,
+    TextItem as PaintTextItem, Transform2D, TransformItem,
 };
 pub use paint::optimize::{DisplayListOptimizer, OptimizationConfig};
 pub use paint::stacking::{

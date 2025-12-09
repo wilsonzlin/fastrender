@@ -7,8 +7,8 @@ use fastrender::geometry::{Point, Rect};
 use fastrender::Rgba;
 use fastrender::{
     BlendMode, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FillRoundedRectItem,
-    GlyphInstance, GradientStop, ImageData, ImageItem, LinearGradientItem, OpacityItem, PaintTextItem as TextItem,
-    RadialGradientItem, StrokeRectItem, StrokeRoundedRectItem, Transform2D, TransformItem,
+    GlyphInstance, GradientSpread, GradientStop, ImageData, ImageItem, LinearGradientItem, OpacityItem,
+    PaintTextItem as TextItem, RadialGradientItem, StrokeRectItem, StrokeRoundedRectItem, Transform2D, TransformItem,
 };
 use std::sync::Arc;
 
@@ -282,6 +282,7 @@ fn test_linear_gradient() {
         rect: Rect::from_xywh(0.0, 0.0, 200.0, 100.0),
         start: Point::new(0.0, 0.0),
         end: Point::new(200.0, 0.0),
+        spread: GradientSpread::Pad,
         stops: vec![
             GradientStop {
                 position: 0.0,
@@ -311,6 +312,7 @@ fn test_radial_gradient() {
         rect: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
         center: Point::new(50.0, 50.0),
         radius: 50.0,
+        spread: GradientSpread::Pad,
         stops: vec![
             GradientStop {
                 position: 0.0,

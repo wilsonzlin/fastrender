@@ -512,6 +512,9 @@ pub struct LinearGradientItem {
 
     /// Color stops
     pub stops: Vec<GradientStop>,
+
+    /// Spread mode for tiling beyond 0..1
+    pub spread: GradientSpread,
 }
 
 /// Draw a radial gradient
@@ -528,6 +531,9 @@ pub struct RadialGradientItem {
 
     /// Color stops
     pub stops: Vec<GradientStop>,
+
+    /// Spread mode for tiling beyond 0..1
+    pub spread: GradientSpread,
 }
 
 /// Gradient color stop
@@ -538,6 +544,14 @@ pub struct GradientStop {
 
     /// Color at this stop
     pub color: Rgba,
+}
+
+/// Spread mode for gradients
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GradientSpread {
+    Pad,
+    Repeat,
+    Reflect,
 }
 
 // ============================================================================
@@ -896,6 +910,42 @@ impl DisplayList {
         // Invalidate cached bounds
         self.bounds = None;
         self.items.push(item);
+    }
+
+    /// Convenience for linear gradients
+    pub fn push_linear_gradient(
+        &mut self,
+        rect: Rect,
+        start: Point,
+        end: Point,
+        stops: Vec<GradientStop>,
+        spread: GradientSpread,
+    ) {
+        self.push(DisplayItem::LinearGradient(LinearGradientItem {
+            rect,
+            start,
+            end,
+            stops,
+            spread,
+        }));
+    }
+
+    /// Convenience for radial gradients
+    pub fn push_radial_gradient(
+        &mut self,
+        rect: Rect,
+        center: Point,
+        radius: f32,
+        stops: Vec<GradientStop>,
+        spread: GradientSpread,
+    ) {
+        self.push(DisplayItem::RadialGradient(RadialGradientItem {
+            rect,
+            center,
+            radius,
+            stops,
+            spread,
+        }));
     }
 
     /// Extend the display list with items from an iterator

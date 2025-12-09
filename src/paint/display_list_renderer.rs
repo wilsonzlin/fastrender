@@ -40,7 +40,12 @@ impl DisplayListRenderer {
         };
         let start = SkiaPoint::from_xy(item.rect.x() + item.start.x, item.rect.y() + item.start.y);
         let end = SkiaPoint::from_xy(item.rect.x() + item.end.x, item.rect.y() + item.end.y);
-        let Some(shader) = LinearGradient::new(start, end, stops, SpreadMode::Pad, Transform::identity()) else {
+        let spread = match item.spread {
+            crate::paint::display_list::GradientSpread::Pad => SpreadMode::Pad,
+            crate::paint::display_list::GradientSpread::Repeat => SpreadMode::Repeat,
+            crate::paint::display_list::GradientSpread::Reflect => SpreadMode::Reflect,
+        };
+        let Some(shader) = LinearGradient::new(start, end, stops, spread, Transform::identity()) else {
             return;
         };
 
@@ -68,12 +73,17 @@ impl DisplayListRenderer {
             return;
         };
         let center = SkiaPoint::from_xy(item.rect.x() + item.center.x, item.rect.y() + item.center.y);
+        let spread = match item.spread {
+            crate::paint::display_list::GradientSpread::Pad => SpreadMode::Pad,
+            crate::paint::display_list::GradientSpread::Repeat => SpreadMode::Repeat,
+            crate::paint::display_list::GradientSpread::Reflect => SpreadMode::Reflect,
+        };
         let Some(shader) = RadialGradient::new(
             center,
             center,
             item.radius,
             stops,
-            SpreadMode::Pad,
+            spread,
             Transform::identity(),
         ) else {
             return;
@@ -341,7 +351,8 @@ mod tests {
     use super::*;
     use crate::geometry::{Point, Rect};
     use crate::paint::display_list::{
-        DisplayItem, DisplayList, FillRectItem, GradientStop, LinearGradientItem, RadialGradientItem, Transform2D,
+        BoxShadowItem, DisplayItem, DisplayList, FillRectItem, GradientSpread, GradientStop, LinearGradientItem,
+        RadialGradientItem, Transform2D,
     };
     use crate::style::color::Rgba;
 
@@ -388,6 +399,7 @@ mod tests {
             rect: Rect::from_xywh(0.0, 0.0, 2.0, 1.0),
             start: Point::new(0.0, 0.0),
             end: Point::new(2.0, 0.0),
+            spread: GradientSpread::Pad,
             stops: vec![
                 GradientStop {
                     position: 0.0,
@@ -410,6 +422,34 @@ mod tests {
     }
 
     #[test]
+    fn renders_repeating_linear_gradient() {
+        let renderer = DisplayListRenderer::new(4, 1, Rgba::WHITE, FontContext::new()).unwrap();
+        let mut list = DisplayList::new();
+        list.push(DisplayItem::LinearGradient(LinearGradientItem {
+            rect: Rect::from_xywh(0.0, 0.0, 4.0, 1.0),
+            start: Point::new(0.0, 0.0),
+            end: Point::new(1.0, 0.0),
+            spread: GradientSpread::Repeat,
+            stops: vec![
+                GradientStop {
+                    position: 0.0,
+                    color: Rgba::rgb(255, 0, 0),
+                },
+                GradientStop {
+                    position: 1.0,
+                    color: Rgba::rgb(0, 0, 255),
+                },
+            ],
+        }));
+
+        let pixmap = renderer.render(&list).unwrap();
+        let right = pixel(&pixmap, 3, 0);
+        assert!(right.0 > 0, "repeat spread should reintroduce the start color");
+        assert!(right.2 > 0);
+        assert_eq!(right.3, 255);
+    }
+
+    #[test]
     fn renders_radial_gradient_center_color() {
         let renderer = DisplayListRenderer::new(3, 3, Rgba::WHITE, FontContext::new()).unwrap();
         let mut list = DisplayList::new();
@@ -417,6 +457,7 @@ mod tests {
             rect: Rect::from_xywh(0.0, 0.0, 3.0, 3.0),
             center: Point::new(1.5, 1.5),
             radius: 2.0,
+            spread: GradientSpread::Pad,
             stops: vec![
                 GradientStop {
                     position: 0.0,

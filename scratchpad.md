@@ -14,6 +14,7 @@
 - Display list renderer now draws box shadows via the rasterizer (honoring opacity/blend/clip) and scopes stacking contexts through save/restore so nested clips don’t leak; added regressions for shadows and clip restoration.
 - CSS gradients (linear/radial) now parse through the CSS value parser and paint as background images in the main painter, including stop normalization and clip-radius masking; gradient parsing/paint regressions added.
 - Repeating gradients parsed and painted: repeating-linear/radial-gradient now map to background images, using repeat spread in the painter; parsing and paint regressions added.
+- Display list gradients carry spread modes (pad/repeat/reflect) and the renderer maps them to tiny-skia; tests updated to set spreads and cover repeating linear gradients. Background cover offset test now matches the spec default `background-position: 0% 0%`.
 - Background initial position now matches the spec default (0% 0% instead of center).
 - Stacking-context display list path no longer double-emits descendants: stacking-context roots paint shallowly, child layers inherit the context origin for offsets, and stacking-tree construction keeps only direct children in layers while hoisting nested stacking contexts.
 - Replaced content paints inside the content box: canvas images/SVGs now respect padding/border space during painting, dynamic images convert to premultiplied RGBA instead of BGRA to avoid channel swapping, and a regression covers padding isolation for replaced elements.

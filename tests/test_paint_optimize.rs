@@ -7,9 +7,9 @@ use fastrender::geometry::{Point, Rect};
 use fastrender::Rgba;
 use fastrender::{
     BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, DisplayListOptimizer,
-    FillRectItem, FillRoundedRectItem, GradientStop, ImageData, ImageItem, LinearGradientItem, OpacityItem,
-    OptimizationConfig, PaintTextItem as TextItem, RadialGradientItem, StackingContextItem, StrokeRectItem,
-    StrokeRoundedRectItem, Transform2D, TransformItem,
+    FillRectItem, FillRoundedRectItem, GradientSpread, GradientStop, ImageData, ImageItem, LinearGradientItem,
+    OpacityItem, OptimizationConfig, PaintTextItem as TextItem, RadialGradientItem, StackingContextItem,
+    StrokeRectItem, StrokeRoundedRectItem, Transform2D, TransformItem,
 };
 use std::sync::Arc;
 
@@ -580,6 +580,7 @@ fn test_linear_gradient_culling() {
         rect: Rect::from_xywh(10.0, 10.0, 80.0, 80.0),
         start: Point::new(0.0, 0.0),
         end: Point::new(80.0, 80.0),
+        spread: GradientSpread::Pad,
         stops: vec![
             GradientStop {
                 position: 0.0,
@@ -605,6 +606,7 @@ fn test_radial_gradient_culling() {
         rect: Rect::from_xywh(10.0, 10.0, 80.0, 80.0),
         center: Point::new(40.0, 40.0),
         radius: 40.0,
+        spread: GradientSpread::Pad,
         stops: vec![
             GradientStop {
                 position: 0.0,
