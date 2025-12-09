@@ -39,8 +39,8 @@
 pub mod baseline;
 pub mod line_builder;
 
-use crate::geometry::Rect;
-use crate::layout::constraints::LayoutConstraints;
+use crate::geometry::{Rect, Size};
+use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::line_builder::InlineBoxItem;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
@@ -154,7 +154,12 @@ impl InlineFormattingContext {
     }
 
     /// Collects inline items from box node children
-    fn collect_inline_items(&self, box_node: &BoxNode, available_width: f32) -> Result<Vec<InlineItem>, LayoutError> {
+    fn collect_inline_items(
+        &self,
+        box_node: &BoxNode,
+        available_width: f32,
+        available_height: Option<f32>,
+    ) -> Result<Vec<InlineItem>, LayoutError> {
         let mut items = Vec::new();
 
         for child in &box_node.children {
@@ -165,7 +170,7 @@ impl InlineFormattingContext {
                 }
                 BoxType::Inline(_) => {
                     if child.formatting_context().is_some() {
-                        let item = self.layout_inline_block(child, available_width)?;
+                        let item = self.layout_inline_block(child, available_width, available_height)?;
                         items.push(InlineItem::InlineBlock(item));
                         continue;
                     }
@@ -189,7 +194,7 @@ impl InlineFormattingContext {
                     let content_offset_y = padding_top + border_top;
 
                     // Recursively collect children first
-                    let child_items = self.collect_inline_items(child, available_width)?;
+                    let child_items = self.collect_inline_items(child, available_width, available_height)?;
                     let fallback_metrics = self.compute_strut_metrics(&child.style);
                     let metrics = compute_inline_box_metrics(
                         &child_items,
@@ -220,7 +225,7 @@ impl InlineFormattingContext {
                     items.push(InlineItem::InlineBox(inline_box));
                 }
                 BoxType::Replaced(replaced_box) => {
-                    let item = self.create_replaced_item(child, replaced_box, available_width)?;
+                    let item = self.create_replaced_item(child, replaced_box, available_width, available_height)?;
                     items.push(InlineItem::Replaced(item));
                 }
                 _ => {
@@ -232,7 +237,12 @@ impl InlineFormattingContext {
         Ok(items)
     }
 
-    fn layout_inline_block(&self, box_node: &BoxNode, available_width: f32) -> Result<InlineBlockItem, LayoutError> {
+    fn layout_inline_block(
+        &self,
+        box_node: &BoxNode,
+        available_width: f32,
+        available_height: Option<f32>,
+    ) -> Result<InlineBlockItem, LayoutError> {
         let fc_type = box_node.formatting_context().ok_or_else(|| {
             LayoutError::UnsupportedBoxType("Inline-level box missing formatting context".to_string())
         })?;
@@ -312,7 +322,11 @@ impl InlineFormattingContext {
             used
         };
 
-        let constraints = LayoutConstraints::definite_width(constraint_width);
+        let height_space = available_height
+            .filter(|h| h.is_finite())
+            .map(AvailableSpace::Definite)
+            .unwrap_or(AvailableSpace::Indefinite);
+        let constraints = LayoutConstraints::new(AvailableSpace::Definite(constraint_width), height_space);
         let fragment = fc.layout(box_node, &constraints)?;
 
         let margin_left = style
@@ -409,16 +423,19 @@ impl InlineFormattingContext {
         &self,
         box_node: &BoxNode,
         replaced_box: &ReplacedBox,
-        percentage_base: f32,
+        available_width: f32,
+        available_height: Option<f32>,
     ) -> Result<ReplacedItem, LayoutError> {
         let style = &box_node.style;
         let line_height = compute_line_height(style);
-        let percentage_size = if percentage_base.is_finite() {
-            Some(crate::geometry::Size::new(percentage_base, f32::NAN))
-        } else {
-            None
+        let width_base = available_width.is_finite().then_some(available_width);
+        let height_base = available_height.filter(|h| h.is_finite());
+        let percentage_size = match (width_base, height_base) {
+            (None, None) => None,
+            (w, h) => Some(Size::new(w.unwrap_or(f32::NAN), h.unwrap_or(f32::NAN))),
         };
         let size = compute_replaced_size(style, replaced_box, percentage_size);
+        let percentage_base = if available_width.is_finite() { available_width } else { 0.0 };
         let margin_left = style
             .margin_left
             .as_ref()
@@ -643,7 +660,7 @@ impl InlineFormattingContext {
 
     /// Calculates intrinsic width for inline content
     fn calculate_intrinsic_width(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> f32 {
-        let items = match self.collect_inline_items(box_node, f32::INFINITY) {
+        let items = match self.collect_inline_items(box_node, f32::INFINITY, None) {
             Ok(items) => items,
             Err(_) => return 0.0,
         };
@@ -1128,12 +1145,13 @@ impl FormattingContext for InlineFormattingContext {
     fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
         let style = &box_node.style;
         let available_width = constraints.width().unwrap_or(f32::MAX);
+        let available_height = constraints.height();
 
         // Create strut metrics from containing block style
         let strut_metrics = self.compute_strut_metrics(style);
 
         // Collect inline items
-        let items = self.collect_inline_items(box_node, available_width)?;
+        let items = self.collect_inline_items(box_node, available_width, available_height)?;
 
         let base_level = match style.unicode_bidi {
             crate::style::types::UnicodeBidi::Plaintext => None,
@@ -1274,7 +1292,7 @@ fn first_char_of_item(item: &InlineItem) -> Option<char> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::display::FormattingContextType;
+    use crate::style::display::{Display, FormattingContextType};
     use crate::style::types::{HyphensMode, OverflowWrap, WhiteSpace, WordBreak};
     use crate::style::ComputedStyle;
     use std::sync::Arc;
@@ -1417,6 +1435,24 @@ mod tests {
 
         // Should produce valid output
         assert!(fragment.bounds.width() >= 0.0);
+    }
+
+    #[test]
+    fn inline_block_percentage_height_uses_containing_height() {
+        let ifc = InlineFormattingContext::new();
+        let mut ib_style = ComputedStyle::default();
+        ib_style.display = Display::InlineBlock;
+        ib_style.height = Some(Length::percent(50.0));
+        ib_style.width = Some(Length::px(20.0));
+        let inline_block =
+            BoxNode::new_inline_block(Arc::new(ib_style), FormattingContextType::Block, vec![]);
+        let root = make_inline_container(vec![inline_block]);
+        let constraints = LayoutConstraints::definite(200.0, 120.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let line = fragment.children.first().expect("line fragment");
+        let child = line.children.first().expect("inline-block fragment");
+        assert!((child.bounds.height() - 60.0).abs() < 0.1);
     }
 
     #[test]

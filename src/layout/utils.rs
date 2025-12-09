@@ -7,6 +7,22 @@ use crate::style::values::{Length, LengthOrAuto};
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::ReplacedBox;
 
+/// Resolves a length using the provided percentage base and font size.
+///
+/// Returns `None` when a percentage cannot be resolved due to a missing base.
+pub fn resolve_length_with_percentage(length: Length, percentage_base: Option<f32>, font_size: f32) -> Option<f32> {
+    if length.unit.is_percentage() {
+        percentage_base.map(|b| length.resolve_against(b))
+    } else if length.unit.is_font_relative() {
+        Some(length.resolve_with_font_size(font_size))
+    } else if length.unit.is_absolute() {
+        Some(length.to_px())
+    } else {
+        // Viewport/unknown units should already have been handled earlier; fall back to raw value.
+        Some(length.value)
+    }
+}
+
 /// Resolves a length-or-auto value to an optional pixel value.
 ///
 /// Used for CSS offset properties (top, right, bottom, left) in positioned layout.
@@ -63,8 +79,8 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
         }
     });
 
-    let width_base = percentage_base.map(|s| s.width);
-    let height_base = percentage_base.map(|s| s.height);
+    let width_base = percentage_base.and_then(|s| s.width.is_finite().then_some(s.width));
+    let height_base = percentage_base.and_then(|s| s.height.is_finite().then_some(s.height));
     let font_size = style.font_size;
 
     let mut width = style

@@ -60,6 +60,7 @@
 - Inline-level elements now materialize as `InlineBoxItem`s carrying padding/borders, vertical offsets, and styles so backgrounds/borders participate in painting; `vertical-align` from computed styles is resolved (length/percentage) and applied to text, inline boxes, inline-blocks, and replaced elements (`src/layout/contexts/inline/{mod.rs,line_builder.rs}`).
 - Inline box baselines are derived from their children (falling back to strut when empty) instead of always using the parent strut; padding/border insets adjust ascent/descent so nested inline boxes contribute realistic baselines (`src/layout/contexts/inline/mod.rs`).
 - Replaced element sizing now resolves percentage widths/heights/min/max when a containing block size is available; percentage lengths with no base fall back to intrinsic sizes to avoid bogus zeros (`src/layout/utils.rs`, `src/layout/contexts/{block,inline}/mod.rs`).
+- Block and inline formatting contexts propagate definite containing-block heights; percentage heights/min-heights/max-heights resolve when a base exists and fall back to auto/0/∞ when not. Vertical padding/border resolution uses the containing width to avoid panics on percentages, inline-block percentage heights honor available block height, and percentage bases for replaced sizing ignore NaN placeholders. Added tests for block/inline-block percentage height resolution (`src/layout/utils.rs`, `src/layout/contexts/{block,inline}/mod.rs`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
@@ -67,7 +68,7 @@
 - Table layout still partial: collapsed border painting is line-uniform (not per-segment) and styles are rendered as solid fills; row/col spans not fully honored, percent/fixed widths still simplified vs CSS 2.1, colspans split evenly, rowspan baseline alignment still coarse.
 - Replaced elements still skip backgrounds and non-image types (SVG/iframe/video remain unrendered); object-fit only applies when image decoding succeeds.
 - Painting still bypasses a display list; rendering order/compositing need a pass.
-- Inline-block/replaced elements still lack percent/min-height handling; root line strut still provides minimum line-height rather than full descendant baseline synthesis.
+- Root line strut still provides minimum line-height rather than full descendant baseline synthesis; replaced backgrounds/non-image types remain unpainted.
 
 ## To-do / next steps (spec-oriented)
 1. Inline/text:
@@ -81,7 +82,7 @@
 4. General bidi:
    - Ensure visual ordering in layout and paint for RTL/mixed runs.
 5. Inline blocks:
-   - Generate proper anonymous inline wrappers and honor percent/min-height sizing for inline-block/replaced; ensure baseline alignment matches spec.
+   - Generate proper anonymous inline wrappers and ensure inline-block/replaced baseline alignment matches spec; validate remaining percentage/min-height edge cases.
 
 ## Notes
 - Current table code uses `InlineFormattingContext` for cell intrinsic widths; this fails for block/table/replaced content—needs a per-context intrinsic measurement.

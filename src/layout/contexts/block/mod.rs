@@ -27,12 +27,12 @@ pub mod margin_collapse;
 pub mod width;
 
 use crate::geometry::Rect;
-use crate::layout::constraints::LayoutConstraints;
+use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
 use crate::layout::contexts::block::width::MarginValue;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::InlineFormattingContext;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::layout::utils::compute_replaced_size;
+use crate::layout::utils::{compute_replaced_size, resolve_length_with_percentage};
 use crate::style::display::FormattingContextType;
 use crate::style::position::Position;
 use crate::style::values::Length;
@@ -88,15 +88,24 @@ impl BlockFormattingContext {
         &self,
         child: &BoxNode,
         containing_width: f32,
+        constraints: &LayoutConstraints,
         margin_ctx: &mut MarginCollapseContext,
         current_y: f32,
     ) -> Result<(FragmentNode, f32), LayoutError> {
         if let BoxType::Replaced(replaced_box) = &child.box_type {
-            return self.layout_replaced_child(child, replaced_box, containing_width, margin_ctx, current_y);
+            return self.layout_replaced_child(
+                child,
+                replaced_box,
+                containing_width,
+                constraints,
+                margin_ctx,
+                current_y,
+            );
         }
 
         let style = &child.style;
         let font_size = style.font_size; // Get font-size for resolving em units
+        let containing_height = constraints.height();
 
         // Compute width using CSS 2.1 Section 10.3.3 algorithm
         let computed_width = compute_block_width(style, containing_width);
@@ -113,7 +122,18 @@ impl BlockFormattingContext {
         let box_y = current_y + collapsed_margin;
 
         // Create constraints for child layout
-        let child_constraints = LayoutConstraints::definite_width(computed_width.content_width);
+        let specified_height = style
+            .height
+            .as_ref()
+            .and_then(|h| resolve_length_with_percentage(*h, containing_height, font_size));
+        let child_height_space = specified_height
+            .map(AvailableSpace::Definite)
+            .unwrap_or(AvailableSpace::Indefinite);
+
+        let child_constraints = LayoutConstraints::new(
+            AvailableSpace::Definite(computed_width.content_width),
+            child_height_space,
+        );
 
         // Check if this child establishes a different formatting context
         let fc_type = child.formatting_context();
@@ -140,26 +160,26 @@ impl BlockFormattingContext {
         };
 
         // Compute height (resolve em/rem units with font-size)
-        let border_top = resolve_length(&style.border_top_width, font_size, containing_width);
-        let border_bottom = resolve_length(&style.border_bottom_width, font_size, containing_width);
-        let padding_top = resolve_length(&style.padding_top, font_size, containing_width);
-        let padding_bottom = resolve_length(&style.padding_bottom, font_size, containing_width);
+        let border_top = resolve_length_for_width(style.border_top_width, containing_width);
+        let border_bottom = resolve_length_for_width(style.border_bottom_width, containing_width);
+        let padding_top = resolve_length_for_width(style.padding_top, containing_width);
+        let padding_bottom = resolve_length_for_width(style.padding_bottom, containing_width);
 
         // Height computation (CSS 2.1 Section 10.6.3)
-        let height = if let Some(h) = &style.height {
-            resolve_length(h, font_size, containing_width)
-        } else {
-            content_height
-        };
+        let height = specified_height.unwrap_or(content_height);
 
         // Apply min/max height constraints
-        let min_height = resolve_opt_length(style.min_height.as_ref(), font_size, containing_width);
+        let min_height = style
+            .min_height
+            .as_ref()
+            .and_then(|l| resolve_length_with_percentage(*l, containing_height, font_size))
+            .unwrap_or(0.0);
         let max_height = style
             .max_height
             .as_ref()
-            .map(|l| resolve_length(l, font_size, containing_width))
+            .and_then(|l| resolve_length_with_percentage(*l, containing_height, font_size))
             .unwrap_or(f32::INFINITY);
-        let height = height.max(min_height).min(max_height);
+        let height = height.clamp(min_height, max_height);
 
         // Create the fragment
         let box_height = border_top + padding_top + height + padding_bottom + border_bottom;
@@ -183,13 +203,16 @@ impl BlockFormattingContext {
         child: &BoxNode,
         replaced_box: &ReplacedBox,
         containing_width: f32,
+        constraints: &LayoutConstraints,
         margin_ctx: &mut MarginCollapseContext,
         current_y: f32,
     ) -> Result<(FragmentNode, f32), LayoutError> {
         let style = &child.style;
         let font_size = style.font_size;
 
-        let percentage_base = Some(crate::geometry::Size::new(containing_width, f32::NAN));
+        let percentage_base = constraints
+            .height()
+            .map(|h| crate::geometry::Size::new(containing_width, h));
         let used_size = compute_replaced_size(style, replaced_box, percentage_base);
 
         // Vertical margins collapse as normal blocks
@@ -200,11 +223,11 @@ impl BlockFormattingContext {
         let box_y = current_y + collapsed_margin;
 
         // Resolve padding and borders
-        let padding_top = resolve_length(&style.padding_top, font_size, containing_width);
-        let padding_bottom = resolve_length(&style.padding_bottom, font_size, containing_width);
+        let padding_top = resolve_length_for_width(style.padding_top, containing_width);
+        let padding_bottom = resolve_length_for_width(style.padding_bottom, containing_width);
 
-        let border_top = resolve_length(&style.border_top_width, font_size, containing_width);
-        let border_bottom = resolve_length(&style.border_bottom_width, font_size, containing_width);
+        let border_top = resolve_length_for_width(style.border_top_width, containing_width);
+        let border_bottom = resolve_length_for_width(style.border_bottom_width, containing_width);
 
         // Use the resolved replaced width when computing horizontal metrics
         let mut width_style = (*style).as_ref().clone();
@@ -245,10 +268,11 @@ impl BlockFormattingContext {
 
         // Get containing width from constraints
         let containing_width = constraints.width().unwrap_or(0.0);
+        let available_height = constraints.available_height;
 
         // Check for border/padding that prevents margin collapse with first child
-        let parent_has_top_separation =
-            parent.style.border_top_width.to_px() > 0.0 || parent.style.padding_top.to_px() > 0.0;
+        let parent_has_top_separation = resolve_length_for_width(parent.style.border_top_width, containing_width) > 0.0
+            || resolve_length_for_width(parent.style.padding_top, containing_width) > 0.0;
 
         if parent_has_top_separation {
             margin_ctx.mark_content_encountered();
@@ -270,7 +294,7 @@ impl BlockFormattingContext {
 
             let inline_container = BoxNode::new_inline(parent.style.clone(), buffer.clone());
             let inline_fc = InlineFormattingContext::with_font_context(self.font_context.clone());
-            let inline_constraints = LayoutConstraints::definite_width(containing_width);
+            let inline_constraints = LayoutConstraints::new(AvailableSpace::Definite(containing_width), available_height);
             let mut inline_fragment = inline_fc.layout(&inline_container, &inline_constraints)?;
 
             inline_fragment.bounds = Rect::from_xywh(
@@ -309,7 +333,7 @@ impl BlockFormattingContext {
                 )?;
 
                 let (fragment, next_y) =
-                    self.layout_block_child(child, containing_width, &mut margin_ctx, current_y)?;
+                    self.layout_block_child(child, containing_width, constraints, &mut margin_ctx, current_y)?;
 
                 content_height = content_height.max(fragment.bounds.max_y());
                 current_y = next_y;
@@ -332,7 +356,8 @@ impl BlockFormattingContext {
 
         // Check for bottom separation
         let parent_has_bottom_separation =
-            parent.style.border_bottom_width.to_px() > 0.0 || parent.style.padding_bottom.to_px() > 0.0;
+            resolve_length_for_width(parent.style.border_bottom_width, containing_width) > 0.0
+                || resolve_length_for_width(parent.style.padding_bottom, containing_width) > 0.0;
 
         if parent_has_bottom_separation {
             content_height += trailing_margin.max(0.0);
@@ -359,6 +384,7 @@ impl FormattingContext for BlockFormattingContext {
         let style = &box_node.style;
 
         let containing_width = constraints.width().unwrap_or(0.0);
+        let containing_height = constraints.height();
         let mut computed_width = compute_block_width(style, containing_width);
 
         let min_width = style
@@ -388,24 +414,39 @@ impl FormattingContext for BlockFormattingContext {
             computed_width.margin_right = margin_right;
         }
 
-        let child_constraints = LayoutConstraints::definite_width(computed_width.content_width);
+        let resolved_height =
+            style
+                .height
+                .as_ref()
+                .and_then(|h| resolve_length_with_percentage(*h, containing_height, style.font_size));
+        let child_height_space = resolved_height
+            .map(AvailableSpace::Definite)
+            .unwrap_or(AvailableSpace::Indefinite);
+
+        let child_constraints = LayoutConstraints::new(
+            AvailableSpace::Definite(computed_width.content_width),
+            child_height_space,
+        );
 
         let (child_fragments, content_height) = self.layout_children(box_node, &child_constraints)?;
 
-        let border_top = style.border_top_width.to_px();
-        let border_bottom = style.border_bottom_width.to_px();
-        let padding_top = style.padding_top.to_px();
-        let padding_bottom = style.padding_bottom.to_px();
+        let border_top = resolve_length_for_width(style.border_top_width, containing_width);
+        let border_bottom = resolve_length_for_width(style.border_bottom_width, containing_width);
+        let padding_top = resolve_length_for_width(style.padding_top, containing_width);
+        let padding_bottom = resolve_length_for_width(style.padding_bottom, containing_width);
 
-        let height = if let Some(h) = &style.height {
-            h.to_px()
-        } else {
-            content_height
-        };
+        let min_height = style
+            .min_height
+            .as_ref()
+            .and_then(|l| resolve_length_with_percentage(*l, containing_height, style.font_size))
+            .unwrap_or(0.0);
+        let max_height = style
+            .max_height
+            .as_ref()
+            .and_then(|l| resolve_length_with_percentage(*l, containing_height, style.font_size))
+            .unwrap_or(f32::INFINITY);
 
-        let min_height = style.min_height.as_ref().map(|l| l.to_px()).unwrap_or(0.0);
-        let max_height = style.max_height.as_ref().map(|l| l.to_px()).unwrap_or(f32::INFINITY);
-        let height = height.max(min_height).min(max_height);
+        let height = resolved_height.unwrap_or(content_height).clamp(min_height, max_height);
 
         let box_height = border_top + padding_top + height + padding_bottom + border_bottom;
         let box_width = computed_width.total_width();
@@ -618,6 +659,40 @@ mod tests {
 
         assert_eq!(fragment.children.len(), 2);
         assert!(fragment.bounds.height() >= 250.0);
+    }
+
+    #[test]
+    fn percentage_height_uses_definite_containing_block() {
+        let bfc = BlockFormattingContext::new();
+
+        let mut child_style = ComputedStyle::default();
+        child_style.display = Display::Block;
+        child_style.height = Some(Length::percent(50.0));
+        let child = BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![]);
+        let mut root_style = ComputedStyle::default();
+        root_style.display = Display::Block;
+        root_style.height = Some(Length::px(300.0));
+        let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![child]);
+        let constraints = LayoutConstraints::definite(200.0, 400.0);
+
+        let fragment = bfc.layout(&root, &constraints).unwrap();
+        let child_fragment = fragment.children.first().expect("child fragment");
+        assert!((child_fragment.bounds.height() - 150.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn percentage_height_without_base_falls_back_to_auto() {
+        let bfc = BlockFormattingContext::new();
+        let mut child_style = ComputedStyle::default();
+        child_style.display = Display::Block;
+        child_style.height = Some(Length::percent(60.0));
+        let child = BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![]);
+        let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![child]);
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let fragment = bfc.layout(&root, &constraints).unwrap();
+        let child_fragment = fragment.children.first().expect("child fragment");
+        assert_eq!(child_fragment.bounds.height(), 0.0);
     }
 
     #[test]
