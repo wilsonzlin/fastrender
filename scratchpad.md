@@ -6,6 +6,21 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Collapsing border conflict resolution now follows CSS 2.1 ordering (hidden suppression, width before style ranking, cell/row/col/table precedence, and left/top bias honoring `direction`), with new coverage for width-vs-style and LTR/RTL tie cases.
+- Column span constraints distribute minimums using existing headroom (max-min) before evenly inflating all spanned columns; max constraints inflate evenly. New tests cover headroom-preferred splits and no-headroom fallback (`src/layout/contexts/table/column_distribution.rs`).
+- Rowspan height distribution now uses weighted expansion (preferring existing row heights/baseline requirements) instead of equal splits, and baseline-aligned spanning cells reserve their baseline offset in the first row so baseline positioning has room (`src/layout/table.rs`).
+- Auto table distribution now preserves min-content when over-constrained: available < total min keeps min widths and flags overflow. Percentage columns shrink (but not below their min) when fixed+percent would starve flexible columns, leaving room for flexible mins; percent columns still honor their mins if that means over-constraint. Added targeted tests for both behaviors (`src/layout/contexts/table/column_distribution.rs`).
+- Percentage-only tables over 100% now scale percents proportionally (respecting min/max) when no flexible columns exist; if mins alone over-constrain, we keep them and expose overflow. Added tests for over-100% percent tables with/without min over-constraint (`src/layout/contexts/table/column_distribution.rs`).
+- Over-constraint integration tests now expect min widths to be preserved (no proportional scaling) with explicit overflow reporting; fixed-width overflow test updated accordingly (`tests/table_columns_test.rs`).
+- Inline bidi reordering now uses byte indices (not char counts) when selecting run directions, walks all paragraphs in the line, and has a regression for multi-byte RTL followed by LTR text to prevent incorrect run reversal (`src/layout/contexts/inline/line_builder.rs`).
+- Added rowspan vertical-align regression to ensure spanning cells don't collapse subsequent rows and heights remain positive (`src/layout/table.rs` test).
+- Baseline-aligned rowspans now explicitly reserve baseline space in the first row; added regression to guard the baseline reservation for spanning cells (`src/layout/table.rs`).
+- Collapsed border model now covered by a bounds regression: table fragments include collapsed stroke widths even with empty cells (`src/layout/table.rs` test).
+- Collapsed border row offsets covered by regression: total height accounts for collapsed top/bottom strokes plus minimal row height (`src/layout/table.rs` test).
+- Collapsed border positioning regression ensures cell fragments are offset by collapsed border widths and overall table width reflects stroke thickness (`src/layout/table.rs` test).
+- Percent columns are treated as auto when the table inline size is indefinite (auto/max-content/min-content without a definite containing block); regression added (`src/layout/table.rs`).
+- Collapsed border + rowspan vertical-align regression asserts placement under collapsed borders (`src/layout/table.rs` test).
+- Auto layout now keeps percentage columns at their authored percentages (clamped to min/max) even if they over-constrain the table; flexible columns take their mins and over-constraint is reported instead of shrinking percents. Updated tests to reflect CSS2.1 behavior (`src/layout/contexts/table/column_distribution.rs`).
 - Removed HN-specific hacks (vote arrow injection, navigation text forcing) from `src/tree/box_generation.rs`.
 - Default font size restored to 16px (`src/style/mod.rs`); table margins stripped back to zero in defaults.
 - Fixed BGRA → RGBA conversion during image encoding (`src/image_output.rs`).
@@ -82,7 +97,7 @@
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
 - Max-content sizing now honors mandatory breaks but still ignores anonymous inline box generation and percent-driven height constraints.
-- Table layout still partial: border-collapsed corners/segments need better conflict resolution (origin/source-order aware joins), row/col spans not fully honored, percent/fixed widths still simplified vs CSS 2.1, colspans split evenly, rowspan baseline alignment still coarse.
+- Table layout still partial: row/col spans not fully honored (rowspan baselines, percent/fixed widths still simplified vs CSS 2.1), colspan distribution still heuristic.
 - Replaced elements still skip backgrounds and non-image types (SVG/iframe/video remain unrendered); object-fit only applies when image decoding succeeds.
 - Painting lacks filters and isolation nuances (auto/isolate behavior), and still doesn't integrate the richer display list module; mix-blend-mode is supported but 3D transforms/transform-origin z and filter/mix-blend/isolation interplay are ignored.
 - Root line strut still provides minimum line-height rather than full descendant baseline synthesis; replaced backgrounds/non-image types remain unpainted.

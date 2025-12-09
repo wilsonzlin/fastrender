@@ -1191,28 +1191,29 @@ impl LineBuilder {
         }
 
         let bidi = BidiInfo::new(&logical_text, self.base_level);
-        let para = match bidi.paragraphs.first() {
-            Some(p) => p,
-            None => return,
-        };
-        let line_range = para.range.clone();
         let mut visual_indices: Vec<usize> = Vec::with_capacity(self.current_line.items.len());
 
-        let (reordered_levels, runs) = bidi.visual_runs(para, line_range);
-        for run in runs {
-            let mut run_indices: Vec<usize> = spans
-                .iter()
-                .filter(|(_, range)| range.start < run.end && range.end > run.start)
-                .map(|(idx, _)| *idx)
-                .collect();
-
-            let char_index = logical_text[..run.start].chars().count();
-            let level = reordered_levels.get(char_index).copied().unwrap_or_else(Level::ltr);
-            if level.is_rtl() {
-                run_indices.reverse();
+        for para in &bidi.paragraphs {
+            let line_range = para.range.clone();
+            if line_range.is_empty() {
+                continue;
             }
 
-            visual_indices.extend(run_indices);
+            let (reordered_levels, runs) = bidi.visual_runs(para, line_range);
+            for run in runs {
+                let mut run_indices: Vec<usize> = spans
+                    .iter()
+                    .filter(|(_, range)| range.start < run.end && range.end > run.start)
+                    .map(|(idx, _)| *idx)
+                    .collect();
+
+                let level = reordered_levels.get(run.start).copied().unwrap_or_else(Level::ltr);
+                if level.is_rtl() {
+                    run_indices.reverse();
+                }
+
+                visual_indices.extend(run_indices);
+            }
         }
 
         if visual_indices.len() != self.current_line.items.len() {
@@ -1538,6 +1539,29 @@ mod tests {
         let line = Line::default();
         assert!(line.is_empty());
         assert_eq!(line.width, 0.0);
+    }
+
+    #[test]
+    fn bidi_runs_use_byte_indices_for_levels() {
+        // Hebrew characters are multi-byte; the RTL byte length must not confuse run-level lookup.
+        let mut builder = make_builder(200.0);
+
+        builder.add_item(InlineItem::Text(make_text_item("א", 10.0)));
+        builder.add_item(InlineItem::Text(make_text_item("a", 10.0)));
+        builder.add_item(InlineItem::Text(make_text_item("b", 10.0)));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 1);
+        let texts: Vec<String> = lines[0]
+            .items
+            .iter()
+            .map(|p| match &p.item {
+                InlineItem::Text(t) => t.text.clone(),
+                _ => String::new(),
+            })
+            .collect();
+
+        assert_eq!(texts, vec!["א".to_string(), "a".to_string(), "b".to_string()]);
     }
 
     #[test]
