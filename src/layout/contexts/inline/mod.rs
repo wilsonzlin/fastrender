@@ -559,13 +559,19 @@ impl InlineFormattingContext {
 
         match mode {
             IntrinsicSizingMode::MinContent => self.min_content_width(&items),
-            IntrinsicSizingMode::MaxContent => items.iter().map(|item| item.intrinsic_width()).sum(),
+            IntrinsicSizingMode::MaxContent => self.max_content_width(&items),
         }
     }
 
     fn min_content_width(&self, items: &[InlineItem]) -> f32 {
         let mut tracker = SegmentTracker::new();
         self.accumulate_min_segments(items, &mut tracker);
+        tracker.finish()
+    }
+
+    fn max_content_width(&self, items: &[InlineItem]) -> f32 {
+        let mut tracker = SegmentTracker::new();
+        self.accumulate_max_segments(items, &mut tracker);
         tracker.finish()
     }
 
@@ -591,6 +597,27 @@ impl InlineFormattingContext {
                     tracker.break_segment();
                     tracker.add_width(replaced.total_width());
                     tracker.break_segment();
+                }
+            }
+        }
+    }
+
+    fn accumulate_max_segments(&self, items: &[InlineItem], tracker: &mut dyn SegmentConsumer) {
+        for item in items {
+            match item {
+                InlineItem::Text(text) => {
+                    self.measure_text_max_content(text, tracker);
+                }
+                InlineItem::InlineBox(inline_box) => {
+                    let mut boxed = InlineBoxSegment::new(tracker, inline_box.start_edge, inline_box.end_edge);
+                    self.accumulate_max_segments(&inline_box.children, &mut boxed);
+                    boxed.finish();
+                }
+                InlineItem::InlineBlock(block) => {
+                    tracker.add_width(block.total_width());
+                }
+                InlineItem::Replaced(replaced) => {
+                    tracker.add_width(replaced.total_width());
                 }
             }
         }
@@ -648,6 +675,34 @@ impl InlineFormattingContext {
             tracker.add_width(segment_width);
             tracker.break_segment();
             last_break = brk.byte_offset;
+        }
+
+        if last_break < len {
+            let trailing =
+                (text_item.advance_at_offset(len) - text_item.advance_at_offset(last_break)).max(0.0);
+            tracker.add_width(trailing);
+        }
+    }
+
+    fn measure_text_max_content(&self, text_item: &TextItem, tracker: &mut dyn SegmentConsumer) {
+        if text_item.text.is_empty() {
+            return;
+        }
+
+        let len = text_item.text.len();
+        let mut last_break = 0;
+
+        for brk in &text_item.break_opportunities {
+            if brk.byte_offset > len {
+                continue;
+            }
+            if brk.break_type == BreakType::Mandatory {
+                let segment_width =
+                    (text_item.advance_at_offset(brk.byte_offset) - text_item.advance_at_offset(last_break)).max(0.0);
+                tracker.add_width(segment_width);
+                tracker.break_segment();
+                last_break = brk.byte_offset;
+            }
         }
 
         if last_break < len {
@@ -1413,5 +1468,31 @@ mod tests {
             .unwrap();
 
         assert!((min_width - expected).abs() < 0.25, "min_width={min_width}, expected={expected}");
+    }
+
+    #[test]
+    fn max_content_respects_mandatory_breaks() {
+        let ifc = InlineFormattingContext::new();
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::Pre;
+        let style = Arc::new(style);
+        let text = "foo\nbar";
+
+        let node = BoxNode::new_text(style.clone(), text.to_string());
+        let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![node.clone()]);
+
+        let item = ifc.create_text_item(&node, text).unwrap();
+        let width_foo = item.advance_at_offset(3);
+        let width_bar = (item.advance_at_offset(item.text.len()) - item.advance_at_offset(3)).max(0.0);
+        let expected = width_foo.max(width_bar);
+
+        let max_width = ifc
+            .compute_intrinsic_inline_size(&root, IntrinsicSizingMode::MaxContent)
+            .unwrap();
+
+        assert!(
+            (max_width - expected).abs() < 0.25,
+            "max_width={max_width}, expected={expected}"
+        );
     }
 }
