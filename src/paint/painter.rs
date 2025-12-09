@@ -25,13 +25,13 @@ use crate::error::{RenderError, Result};
 use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
 use crate::paint::display_list::BorderRadii;
-use crate::paint::object_fit::compute_object_fit;
+use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::stacking::creates_stacking_context;
 use crate::style::color::Rgba;
 use crate::style::types::{
     BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderStyle as CssBorderStyle, ObjectFit,
-    ObjectPosition, PositionComponent, TextDecoration,
+    TextDecoration,
 };
 use crate::style::types::{FilterColor, FilterFunction, MixBlendMode, Overflow};
 use crate::style::values::{Length, LengthUnit};
@@ -1555,14 +1555,6 @@ struct DecorationMetrics {
 fn color_to_skia(color: Rgba) -> tiny_skia::Color {
     let alpha = (color.a * 255.0).clamp(0.0, 255.0).round() as u8;
     tiny_skia::Color::from_rgba8(color.r, color.g, color.b, alpha)
-}
-
-fn default_object_position() -> ObjectPosition {
-    use crate::style::types::PositionKeyword::Center;
-    ObjectPosition {
-        x: PositionComponent::Keyword(Center),
-        y: PositionComponent::Keyword(Center),
-    }
 }
 
 fn build_transform(style: Option<&ComputedStyle>, bounds: Rect) -> Option<Transform> {

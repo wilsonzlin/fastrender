@@ -31,8 +31,9 @@ use crate::paint::display_list::{
     ClipItem, DisplayItem, DisplayList, FillRectItem, GlyphInstance, ImageData, ImageItem, OpacityItem, StrokeRectItem,
     TextItem,
 };
-use crate::paint::object_fit::compute_object_fit;
+use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::style::color::Rgba;
+use crate::style::types::ObjectFit;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 use crate::image_loader::ImageCache;
@@ -183,22 +184,23 @@ impl DisplayListBuilder {
                 let image = self
                     .decode_image(source)
                     .unwrap_or_else(|| ImageData::new(1, 1, vec![128, 128, 128, 255]));
-                let (dest_x, dest_y, dest_w, dest_h) =
-                    if let Some(style) = fragment.style.as_deref() {
-                        let fit = style.object_fit;
-                        let position = style.object_position;
-                        compute_object_fit(
-                            fit,
-                            position,
-                            rect.width(),
-                            rect.height(),
-                            image.width as f32,
-                            image.height as f32,
-                        )
-                        .unwrap_or((0.0, 0.0, rect.width(), rect.height()))
+                let (dest_x, dest_y, dest_w, dest_h) = {
+                    let (fit, position) = if let Some(style) = fragment.style.as_deref() {
+                        (style.object_fit, style.object_position)
                     } else {
-                        (0.0, 0.0, rect.width(), rect.height())
+                        (ObjectFit::Fill, default_object_position())
                     };
+
+                    compute_object_fit(
+                        fit,
+                        position,
+                        rect.width(),
+                        rect.height(),
+                        image.width as f32,
+                        image.height as f32,
+                    )
+                    .unwrap_or((0.0, 0.0, rect.width(), rect.height()))
+                };
 
                 let dest_rect =
                     Rect::from_xywh(rect.x() + dest_x, rect.y() + dest_y, dest_w, dest_h);

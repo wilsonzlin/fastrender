@@ -1,6 +1,14 @@
 //! Object-fit and object-position utilities shared by paint and display list building.
 use crate::style::types::{ObjectFit, ObjectPosition, PositionComponent, PositionKeyword};
 
+/// CSS initial value for `object-position` (50% 50%).
+pub fn default_object_position() -> ObjectPosition {
+    ObjectPosition {
+        x: PositionComponent::Keyword(PositionKeyword::Center),
+        y: PositionComponent::Keyword(PositionKeyword::Center),
+    }
+}
+
 /// Resolve a single position component (x or y) against the available free space.
 pub fn resolve_object_position(comp: PositionComponent, free: f32) -> f32 {
     match comp {
