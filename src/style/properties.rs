@@ -586,20 +586,28 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         },
         "text-align" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.text_align = match kw.as_str() {
-                    "start" => TextAlign::Start,
-                    "end" => TextAlign::End,
-                    "left" => TextAlign::Left,
-                    "right" => TextAlign::Right,
-                    "center" => TextAlign::Center,
-                    "justify" => TextAlign::Justify,
-                    "justify-all" => {
-                        styles.text_align_last = TextAlignLast::Justify;
-                        TextAlign::Justify
-                    }
-                    "match-parent" => TextAlign::MatchParent,
-                    _ => styles.text_align,
+                let parsed = match kw.as_str() {
+                    "start" => Some(TextAlign::Start),
+                    "end" => Some(TextAlign::End),
+                    "left" => Some(TextAlign::Left),
+                    "right" => Some(TextAlign::Right),
+                    "center" => Some(TextAlign::Center),
+                    "justify" => Some(TextAlign::Justify),
+                    "justify-all" => Some(TextAlign::Justify),
+                    "match-parent" => Some(TextAlign::MatchParent),
+                    _ => None,
                 };
+                if let Some(value) = parsed {
+                    styles.text_align = value;
+                    styles.text_align_last = match value {
+                        TextAlign::Justify => TextAlignLast::Auto,
+                        TextAlign::MatchParent => TextAlignLast::Auto,
+                        _ => TextAlignLast::Auto,
+                    };
+                    if matches!(value, TextAlign::Justify) && kw.as_str() == "justify-all" {
+                        styles.text_align_last = TextAlignLast::Justify;
+                    }
+                }
             }
         }
         "text-align-all" => {

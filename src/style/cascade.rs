@@ -246,6 +246,45 @@ fn resolve_match_parent_text_align(styles: &mut ComputedStyle, parent_direction:
     };
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::css::types::StyleSheet;
+    use crate::dom::DomNodeType;
+
+    fn element_with_style(style: &str) -> DomNode {
+        DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), style.to_string())],
+            },
+            children: vec![],
+        }
+    }
+
+    #[test]
+    fn text_align_shorthand_resets_text_align_last_to_auto() {
+        let dom = element_with_style("text-align-last: right; text-align: center;");
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(styled.styles.text_align, crate::style::types::TextAlign::Center));
+        assert!(matches!(
+            styled.styles.text_align_last,
+            crate::style::types::TextAlignLast::Auto
+        ));
+    }
+
+    #[test]
+    fn text_align_justify_all_sets_last_line_justify() {
+        let dom = element_with_style("text-align-last: right; text-align: justify-all;");
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(styled.styles.text_align, crate::style::types::TextAlign::Justify));
+        assert!(matches!(
+            styled.styles.text_align_last,
+            crate::style::types::TextAlignLast::Justify
+        ));
+    }
+}
+
 fn find_matching_rules(node: &DomNode, rules: &[&StyleRule], ancestors: &[&DomNode]) -> Vec<(u32, Vec<Declaration>)> {
     let mut matches = Vec::new();
 
