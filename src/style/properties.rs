@@ -894,6 +894,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         // Shorthand: background (treat as background-color for now)
         "background" => {
             let mut reset_background_fields = || {
+                styles.background_color = Rgba::TRANSPARENT;
                 styles.background_image = None;
                 styles.background_repeat = BackgroundRepeat::repeat();
                 styles.background_position = BackgroundPosition::Position {
@@ -914,38 +915,58 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
             };
 
             match resolved_value {
-                PropertyValue::Color(c) => {
+                PropertyValue::Multiple(ref parts) => {
                     reset_background_fields();
-                    styles.background_color = c;
+                    if let Some(parsed) = parse_background_shorthand(parts) {
+                        if let Some(color) = parsed.color {
+                            styles.background_color = color;
+                        }
+                        if let Some(image) = parsed.image {
+                            styles.background_image = Some(image);
+                        }
+                        if let Some(rep) = parsed.repeat {
+                            styles.background_repeat = rep;
+                        }
+                        if let Some(pos) = parsed.position {
+                            styles.background_position = pos;
+                        }
+                        if let Some(size) = parsed.size {
+                            styles.background_size = size;
+                        }
+                        if let Some(att) = parsed.attachment {
+                            styles.background_attachment = att;
+                        }
+                        if let Some(origin) = parsed.origin {
+                            styles.background_origin = origin;
+                        }
+                        if let Some(clip) = parsed.clip {
+                            styles.background_clip = clip;
+                        }
+                    }
                 }
-                PropertyValue::Keyword(ref kw) if kw == "none" => {
+                _ => {
                     reset_background_fields();
-                    styles.background_color = Rgba::TRANSPARENT;
+                    match resolved_value {
+                        PropertyValue::Color(c) => styles.background_color = c,
+                        PropertyValue::Keyword(ref kw) if kw == "none" => {}
+                        PropertyValue::LinearGradient { angle, ref stops } => {
+                            styles.background_image =
+                                Some(BackgroundImage::LinearGradient { angle, stops: stops.clone() });
+                        }
+                        PropertyValue::RadialGradient { ref stops } => {
+                            styles.background_image = Some(BackgroundImage::RadialGradient { stops: stops.clone() });
+                        }
+                        PropertyValue::RepeatingLinearGradient { angle, ref stops } => {
+                            styles.background_image =
+                                Some(BackgroundImage::RepeatingLinearGradient { angle, stops: stops.clone() });
+                        }
+                        PropertyValue::RepeatingRadialGradient { ref stops } => {
+                            styles.background_image =
+                                Some(BackgroundImage::RepeatingRadialGradient { stops: stops.clone() });
+                        }
+                        _ => {}
+                    }
                 }
-                PropertyValue::LinearGradient { angle, ref stops } => {
-                    reset_background_fields();
-                    styles.background_color = Rgba::TRANSPARENT;
-                    styles.background_image =
-                        Some(BackgroundImage::LinearGradient { angle, stops: stops.clone() });
-                }
-                PropertyValue::RadialGradient { ref stops } => {
-                    reset_background_fields();
-                    styles.background_color = Rgba::TRANSPARENT;
-                    styles.background_image = Some(BackgroundImage::RadialGradient { stops: stops.clone() });
-                }
-                PropertyValue::RepeatingLinearGradient { angle, ref stops } => {
-                    reset_background_fields();
-                    styles.background_color = Rgba::TRANSPARENT;
-                    styles.background_image =
-                        Some(BackgroundImage::RepeatingLinearGradient { angle, stops: stops.clone() });
-                }
-                PropertyValue::RepeatingRadialGradient { ref stops } => {
-                    reset_background_fields();
-                    styles.background_color = Rgba::TRANSPARENT;
-                    styles.background_image =
-                        Some(BackgroundImage::RepeatingRadialGradient { stops: stops.clone() });
-                }
-                _ => {}
             }
         }
 
@@ -1207,6 +1228,11 @@ fn parse_background_size(value: &PropertyValue) -> Option<BackgroundSize> {
             _ => None,
         },
         PropertyValue::Multiple(values) => {
+            if values.len() == 1 {
+                if let Some(single) = parse_background_size(&values[0]) {
+                    return Some(single);
+                }
+            }
             let components: Vec<BackgroundSizeComponent> =
                 values.iter().filter_map(parse_background_size_component).collect();
             match components.len() {
@@ -2082,29 +2108,36 @@ mod tests {
 
         let decl = Declaration {
             property: "background".to_string(),
-            value: PropertyValue::Color(Rgba::RED),
+            value: PropertyValue::Multiple(vec![
+                PropertyValue::Url("example.png".to_string()),
+                PropertyValue::Keyword("no-repeat".to_string()),
+                PropertyValue::Keyword("right".to_string()),
+                PropertyValue::Keyword("/".to_string()),
+                PropertyValue::Keyword("contain".to_string()),
+                PropertyValue::Keyword("fixed".to_string()),
+                PropertyValue::Keyword("content-box".to_string()),
+                PropertyValue::Keyword("padding-box".to_string()),
+                PropertyValue::Color(Rgba::RED),
+            ]),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
 
         assert_eq!(style.background_color, Rgba::RED);
-        assert!(style.background_image.is_none());
-        assert_eq!(style.background_repeat, BackgroundRepeat::repeat());
-        if let BackgroundPosition::Position { x, y } = style.background_position {
-            assert!((x.alignment - 0.0).abs() < 0.01);
-            assert!(x.offset.is_zero());
-            assert!((y.alignment - 0.0).abs() < 0.01);
-            assert!(y.offset.is_zero());
-        } else {
-            panic!("expected position");
-        }
+        assert!(matches!(style.background_image, Some(BackgroundImage::Url(ref s)) if s == "example.png"));
+        assert_eq!(style.background_repeat, BackgroundRepeat::no_repeat());
+        let BackgroundPosition::Position { x, y } = style.background_position;
+        assert!((x.alignment - 1.0).abs() < 0.01);
+        assert!(x.offset.is_zero());
+        assert!((y.alignment - 0.5).abs() < 0.01);
+        assert!(y.offset.is_zero());
         assert_eq!(
             style.background_size,
-            BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
+            BackgroundSize::Keyword(BackgroundSizeKeyword::Contain)
         );
-        assert_eq!(style.background_attachment, BackgroundAttachment::Scroll);
-        assert_eq!(style.background_origin, BackgroundBox::PaddingBox);
-        assert_eq!(style.background_clip, BackgroundBox::BorderBox);
+        assert_eq!(style.background_attachment, BackgroundAttachment::Fixed);
+        assert_eq!(style.background_origin, BackgroundBox::ContentBox);
+        assert_eq!(style.background_clip, BackgroundBox::PaddingBox);
     }
 
     #[test]
@@ -2284,4 +2317,187 @@ mod tests {
             other => panic!("expected length tab size, got {:?}", other),
         }
     }
+}
+#[derive(Default)]
+struct BackgroundShorthand {
+    color: Option<Rgba>,
+    image: Option<BackgroundImage>,
+    repeat: Option<BackgroundRepeat>,
+    position: Option<BackgroundPosition>,
+    size: Option<BackgroundSize>,
+    attachment: Option<BackgroundAttachment>,
+    origin: Option<BackgroundBox>,
+    clip: Option<BackgroundBox>,
+}
+
+fn parse_background_shorthand(tokens: &[PropertyValue]) -> Option<BackgroundShorthand> {
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let mut shorthand = BackgroundShorthand::default();
+
+    // Split position/size by `/` if present
+    let mut slash_idx = None;
+    let mut size_end = tokens.len();
+    if let Some(idx) = tokens.iter().position(|t| matches!(t, PropertyValue::Keyword(k) if k == "/")) {
+        slash_idx = Some(idx);
+        let mut size_tokens: Vec<PropertyValue> = Vec::new();
+        let mut cursor = idx + 1;
+        while cursor < tokens.len() {
+            let t = &tokens[cursor];
+            let is_size_token = match t {
+                PropertyValue::Length(_) | PropertyValue::Percentage(_) => true,
+                PropertyValue::Number(n) if *n == 0.0 => true,
+                PropertyValue::Keyword(k) if k == "auto" || k == "cover" || k == "contain" => true,
+                _ => false,
+            };
+            if is_size_token {
+                size_tokens.push(t.clone());
+                cursor += 1;
+            } else {
+                break;
+            }
+        }
+        size_end = cursor;
+        let pos_tokens = &tokens[..idx];
+        if !pos_tokens.is_empty() {
+            if let Some(pos) = parse_background_position(&PropertyValue::Multiple(pos_tokens.to_vec())) {
+                shorthand.position = Some(pos);
+            }
+        }
+        if !size_tokens.is_empty() {
+            if let Some(size) = parse_background_size(&PropertyValue::Multiple(size_tokens.clone())) {
+                shorthand.size = Some(size);
+            }
+        }
+    }
+
+    let mut boxes: Vec<BackgroundBox> = Vec::new();
+    let mut idx = 0;
+    while idx < tokens.len() {
+        if slash_idx == Some(idx) {
+            idx = size_end;
+            continue;
+        }
+
+        let token = &tokens[idx];
+
+        // Color
+        if shorthand.color.is_none() {
+            if let PropertyValue::Color(c) = token {
+                shorthand.color = Some(*c);
+                idx += 1;
+                continue;
+            }
+        }
+
+        // Image
+        if shorthand.image.is_none() {
+            match token {
+                PropertyValue::Url(url) => {
+                    shorthand.image = Some(BackgroundImage::Url(url.clone()));
+                    idx += 1;
+                    continue;
+                }
+                PropertyValue::LinearGradient { angle, stops } => {
+                    shorthand.image = Some(BackgroundImage::LinearGradient {
+                        angle: *angle,
+                        stops: stops.clone(),
+                    });
+                    idx += 1;
+                    continue;
+                }
+                PropertyValue::RadialGradient { stops } => {
+                    shorthand.image = Some(BackgroundImage::RadialGradient { stops: stops.clone() });
+                    idx += 1;
+                    continue;
+                }
+                PropertyValue::RepeatingLinearGradient { angle, stops } => {
+                    shorthand.image = Some(BackgroundImage::RepeatingLinearGradient {
+                        angle: *angle,
+                        stops: stops.clone(),
+                    });
+                    idx += 1;
+                    continue;
+                }
+                PropertyValue::RepeatingRadialGradient { stops } => {
+                    shorthand.image = Some(BackgroundImage::RepeatingRadialGradient { stops: stops.clone() });
+                    idx += 1;
+                    continue;
+                }
+                PropertyValue::Keyword(kw) if kw == "none" => {
+                    shorthand.image = None;
+                    idx += 1;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        // Repeat
+        if shorthand.repeat.is_none() {
+            if let Some(rep) = parse_background_repeat(token) {
+                shorthand.repeat = Some(rep);
+                idx += 1;
+                continue;
+            }
+            if idx + 1 < tokens.len() {
+                if let PropertyValue::Keyword(_) = token {
+                    if let PropertyValue::Keyword(_) = tokens[idx + 1] {
+                        let pair = PropertyValue::Multiple(vec![token.clone(), tokens[idx + 1].clone()]);
+                        if let Some(rep) = parse_background_repeat(&pair) {
+                            shorthand.repeat = Some(rep);
+                            idx += 2;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Attachment
+        if shorthand.attachment.is_none() {
+            if let PropertyValue::Keyword(kw) = token {
+                shorthand.attachment = match kw.as_str() {
+                    "scroll" => Some(BackgroundAttachment::Scroll),
+                    "fixed" => Some(BackgroundAttachment::Fixed),
+                    "local" => Some(BackgroundAttachment::Local),
+                    _ => None,
+                };
+                if shorthand.attachment.is_some() {
+                    idx += 1;
+                    continue;
+                }
+            }
+        }
+
+        // Background boxes
+        if let Some(b) = parse_background_box(token) {
+            boxes.push(b);
+            idx += 1;
+            continue;
+        }
+
+        // Position (if not already parsed via slash)
+        if shorthand.position.is_none() {
+            if let Some(pos) = parse_background_position(token) {
+                shorthand.position = Some(pos);
+                idx += 1;
+                continue;
+            }
+        }
+
+        idx += 1;
+    }
+
+    if boxes.len() == 1 {
+        shorthand.origin = Some(boxes[0]);
+        shorthand.clip = Some(boxes[0]);
+    } else if boxes.len() >= 2 {
+        shorthand.origin = Some(boxes[0]);
+        shorthand.clip = Some(boxes[1]);
+    }
+
+    Some(shorthand)
 }

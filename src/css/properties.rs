@@ -48,11 +48,15 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
     if tokens.len() > 1
         && matches!(
             property,
-            "object-position" | "border-spacing" | "background-position" | "transform-origin"
+            "object-position" | "border-spacing" | "background-position" | "transform-origin" | "background"
         )
     {
         let mut parts = Vec::new();
         for token in tokens {
+            if token == "/" {
+                parts.push(PropertyValue::Keyword("/".to_string()));
+                continue;
+            }
             if let Some(v) = parse_simple_value(token) {
                 parts.push(v);
             } else {
@@ -98,6 +102,12 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
 fn parse_simple_value(value_str: &str) -> Option<PropertyValue> {
     if let Some(length) = parse_length(value_str) {
         return Some(PropertyValue::Length(length));
+    }
+
+    if value_str.starts_with("url(") && value_str.ends_with(')') {
+        let inner = value_str.trim_start_matches("url(").trim_end_matches(')').trim();
+        let inner = inner.trim_matches(|c| c == '"' || c == '\'');
+        return Some(PropertyValue::Url(inner.to_string()));
     }
 
     if value_str.ends_with('%') {
