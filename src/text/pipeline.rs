@@ -319,6 +319,8 @@ pub struct BidiAnalysis {
     text: String,
     /// Bidi levels for each byte position (matching BidiInfo).
     levels: Vec<Level>,
+    /// Byte offsets for each character in the source text.
+    char_starts: Vec<usize>,
     /// Base paragraph level.
     base_level: Level,
     /// Whether the text contains RTL content requiring reordering.
@@ -347,6 +349,7 @@ impl BidiAnalysis {
             return Self {
                 text: String::new(),
                 levels: Vec::new(),
+                char_starts: Vec::new(),
                 base_level,
                 needs_reordering: false,
             };
@@ -356,15 +359,27 @@ impl BidiAnalysis {
         let bidi_info = BidiInfo::new(text, Some(base_level));
 
         // Check if any RTL content exists
-        let needs_reordering = bidi_info.levels.iter().any(|&level| level.is_rtl());
+        let mut needs_reordering = bidi_info.levels.iter().any(|&level| level.is_rtl());
 
         // Clone owned text for storage
         let text = text.to_string();
-        let levels = bidi_info.levels.clone();
+        let mut levels = bidi_info.levels.clone();
+        let char_starts: Vec<usize> = text.char_indices().map(|(idx, _)| idx).collect();
+
+        // CSS bidi overrides force all characters to the element's direction.
+        use crate::style::types::UnicodeBidi;
+        if matches!(
+            style.unicode_bidi,
+            UnicodeBidi::BidiOverride | UnicodeBidi::IsolateOverride
+        ) {
+            levels = vec![base_level; levels.len()];
+            needs_reordering = false;
+        }
 
         Self {
             text,
             levels,
+            char_starts,
             base_level,
             needs_reordering,
         }
@@ -379,7 +394,14 @@ impl BidiAnalysis {
     /// Gets the bidi level at a byte index.
     #[inline]
     pub fn level_at(&self, index: usize) -> Level {
-        self.levels.get(index).copied().unwrap_or(self.base_level)
+        if self.levels.is_empty() {
+            return self.base_level;
+        }
+        let pos = match self.char_starts.binary_search(&index) {
+            Ok(idx) => idx,
+            Err(idx) => idx.saturating_sub(1),
+        };
+        self.levels.get(pos).copied().unwrap_or(self.base_level)
     }
 
     /// Gets the direction at a byte index.
@@ -1051,6 +1073,35 @@ mod tests {
         let bidi = BidiAnalysis::analyze("Hello שלום World", &style);
 
         assert!(bidi.needs_reordering());
+    }
+
+    #[test]
+    fn bidi_analysis_uses_char_indices() {
+        let style = ComputedStyle::default();
+        let text = "a\u{05d0}\u{05d1}"; // a + two Hebrew letters
+        let bidi = BidiAnalysis::analyze(text, &style);
+
+        let indices: Vec<_> = text.char_indices().collect();
+        let a_level = bidi.level_at(indices[0].0);
+        let hebrew_level = bidi.level_at(indices[1].0);
+
+        assert!(a_level.is_ltr(), "latin char should be LTR");
+        assert!(hebrew_level.is_rtl(), "hebrew char should be RTL");
+    }
+
+    #[test]
+    fn bidi_override_forces_base_direction() {
+        let mut style = ComputedStyle::default();
+        style.direction = CssDirection::Rtl;
+        style.unicode_bidi = crate::style::types::UnicodeBidi::BidiOverride;
+        let text = "abc";
+        let bidi = BidiAnalysis::analyze(text, &style);
+
+        let indices: Vec<_> = text.char_indices().collect();
+        for (byte_idx, _) in indices {
+            assert!(bidi.level_at(byte_idx).is_rtl(), "override should force RTL level");
+        }
+        assert!(!bidi.needs_reordering(), "override should not request reordering");
     }
 
     #[test]
