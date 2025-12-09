@@ -607,6 +607,8 @@ impl InlineFormattingContext {
         start_y: f32,
         first_line_width: f32,
         subsequent_line_width: f32,
+        first_line_box_width: f32,
+        subsequent_line_box_width: f32,
         text_align: TextAlign,
         text_align_last: crate::style::types::TextAlignLast,
         direction: crate::style::types::Direction,
@@ -622,6 +624,11 @@ impl InlineFormattingContext {
             let is_last_line = idx + 1 == total;
             let is_single_line = total == 1;
             let line_width = if idx == 0 { first_line_width } else { subsequent_line_width };
+            let line_box_width = if idx == 0 {
+                first_line_box_width
+            } else {
+                subsequent_line_box_width
+            };
             let indent_offset = if idx == 0 { first_line_indent } else { subsequent_line_indent };
             let mut base_align = map_text_align(text_align, direction);
             if matches!(base_align, TextAlign::Justify) && matches!(text_justify, TextJustify::None) {
@@ -636,6 +643,7 @@ impl InlineFormattingContext {
                 &line,
                 y,
                 line_width,
+                line_box_width,
                 effective_align,
                 direction,
                 text_justify,
@@ -654,6 +662,7 @@ impl InlineFormattingContext {
         line: &Line,
         y: f32,
         available_width: f32,
+        line_box_width: f32,
         text_align: TextAlign,
         direction: crate::style::types::Direction,
         text_justify: TextJustify,
@@ -696,7 +705,7 @@ impl InlineFormattingContext {
             }
         }
 
-        let bounds = Rect::from_xywh(0.0, y, usable_width, line.height);
+        let bounds = Rect::from_xywh(0.0, y, line_box_width, line.height);
         FragmentNode::new_line(bounds, line.baseline, children)
     }
 
@@ -1430,13 +1439,39 @@ impl FormattingContext for InlineFormattingContext {
             },
         };
 
+        let first_line_box_width = if available_width.is_finite() {
+            available_width
+        } else {
+            first_line_width + indent_value.abs()
+        };
+        let subsequent_line_box_width = if available_width.is_finite() {
+            available_width
+        } else {
+            subsequent_line_width + indent_value.abs()
+        };
+
         // Build lines
         let lines =
             self.build_lines(items, first_line_width, subsequent_line_width, &strut_metrics, base_level);
 
         // Calculate total height
         let total_height: f32 = lines.iter().map(|l| l.height).sum();
-        let max_width: f32 = lines.iter().map(|l| l.width).fold(0.0, f32::max);
+        let max_width: f32 = if available_width.is_finite() {
+            available_width
+        } else {
+            lines
+                .iter()
+                .enumerate()
+                .map(|(idx, l)| {
+                    let box_width = if idx == 0 {
+                        first_line_box_width
+                    } else {
+                        subsequent_line_box_width
+                    };
+                    box_width.max(l.width + indent_value.abs())
+                })
+                .fold(0.0, f32::max)
+        };
 
         // Create fragments
         let children = self.create_fragments(
@@ -1444,6 +1479,8 @@ impl FormattingContext for InlineFormattingContext {
             0.0,
             first_line_width,
             subsequent_line_width,
+            first_line_box_width,
+            subsequent_line_box_width,
             style.text_align,
             style.text_align_last,
             style.direction,
