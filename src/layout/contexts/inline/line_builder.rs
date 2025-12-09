@@ -1479,7 +1479,7 @@ fn reorder_paragraph(
         let mut line_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(lines.len());
         let mut active_stack: Vec<BoxContext> = Vec::new();
         let mut global_idx = 0usize;
-        let mut stack: Vec<char> = Vec::new();
+        let mut control_stack: Vec<char> = Vec::new();
 
         for (line_idx, leaves) in line_leaves.iter().enumerate() {
             let line_start = logical_text.len();
@@ -1496,15 +1496,16 @@ fn reorder_paragraph(
                     .take(active_stack.len().saturating_sub(shared))
                 {
                     for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
-                        stack.pop();
+                        control_stack.pop();
                         logical_text.push(ch);
                     }
                 }
                 active_stack.truncate(shared);
 
                 for ctx in leaf.box_stack.iter().skip(shared) {
-                    for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).0 {
-                        stack.push(ch);
+                    let (opens, closes) = bidi_controls(ctx.unicode_bidi, ctx.direction);
+                    for ch in opens {
+                        control_stack.push(*closes.last().unwrap_or(&'\u{202c}'));
                         logical_text.push(ch);
                     }
                     active_stack.push(ctx.clone());
@@ -1512,9 +1513,9 @@ fn reorder_paragraph(
 
                 let (leaf_opens, leaf_closes) = bidi_controls(leaf.item.unicode_bidi(), leaf.item.direction());
 
-                for ch in leaf_opens {
-                    stack.push(ch);
-                    logical_text.push(ch);
+                for ch in &leaf_opens {
+                    control_stack.push(*leaf_closes.last().unwrap_or(&'\u{202c}'));
+                    logical_text.push(*ch);
                 }
 
                 let content_start = logical_text.len();
@@ -1526,7 +1527,7 @@ fn reorder_paragraph(
                 let content_end = logical_text.len();
 
                 for ch in leaf_closes {
-                    stack.pop();
+                    control_stack.pop();
                     logical_text.push(ch);
                 }
 
@@ -1545,8 +1546,14 @@ fn reorder_paragraph(
 
         for ctx in active_stack.iter().rev() {
             for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
+                control_stack.pop();
                 logical_text.push(ch);
             }
+        }
+
+        // Close any remaining explicit controls
+        while let Some(close) = control_stack.pop() {
+            logical_text.push(close);
         }
 
         if logical_text.is_empty() {
@@ -2338,6 +2345,74 @@ mod tests {
             .collect();
 
         assert_eq!(texts, vec!["abc ".to_string(), "אבג".to_string()]);
+    }
+
+    #[test]
+    fn bidi_nested_isolates_close_properly() {
+        let mut builder = make_builder(200.0);
+
+        builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
+
+        let mut inner = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            1,
+            Direction::Ltr,
+            UnicodeBidi::Isolate,
+        );
+        inner.add_child(InlineItem::Text(make_text_item("מ", 10.0)));
+
+        let mut outer = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            0,
+            Direction::Rtl,
+            UnicodeBidi::Isolate,
+        );
+        outer.add_child(InlineItem::InlineBox(inner));
+        outer.add_child(InlineItem::Text(make_text_item("א", 10.0)));
+
+        builder.add_item(InlineItem::InlineBox(outer));
+        builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 1);
+        let texts: Vec<String> = lines[0]
+            .items
+            .iter()
+            .map(|p| match &p.item {
+                InlineItem::Text(t) => t.text.clone(),
+                InlineItem::InlineBox(b) => b
+                    .children
+                    .iter()
+                    .filter_map(|c| match c {
+                        InlineItem::Text(t) => Some(t.text.clone()),
+                        InlineItem::InlineBox(inner) => Some(
+                            inner
+                                .children
+                                .iter()
+                                .filter_map(|c| match c {
+                                    InlineItem::Text(t) => Some(t.text.clone()),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>()
+                                .join(""),
+                        ),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(""),
+                _ => String::new(),
+            })
+            .collect();
+
+        assert_eq!(texts, vec!["L ".to_string(), "א".to_string(), "מ".to_string(), " R".to_string()]);
     }
 
     #[test]
