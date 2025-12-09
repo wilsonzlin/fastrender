@@ -551,6 +551,16 @@ pub enum BackgroundPosition {
     Position(Length, Length),
 }
 
+/// Background attachment behavior
+///
+/// CSS: `background-attachment`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundAttachment {
+    Scroll,
+    Fixed,
+    Local,
+}
+
 /// Background image repeat mode
 ///
 /// CSS: `background-repeat`

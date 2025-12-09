@@ -27,11 +27,11 @@ use display::Display;
 use position::Position;
 use std::collections::HashMap;
 use types::{
-    AlignContent, AlignItems, BackgroundBox, BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize,
-    BorderCollapse, BorderStyle, Direction, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight,
-    GridTrack, HyphensMode, Isolation, JustifyContent, LineHeight, MixBlendMode, ObjectFit, ObjectPosition, Overflow,
-    OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration, TextIndent, TextJustify,
-    TextTransform, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
+    AlignContent, AlignItems, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundPosition, BackgroundRepeat,
+    BackgroundSize, BorderCollapse, BorderStyle, Direction, FilterFunction, FlexBasis, FlexDirection, FlexWrap,
+    FontStyle, FontWeight, GridTrack, HyphensMode, Isolation, JustifyContent, LineHeight, MixBlendMode, ObjectFit,
+    ObjectPosition, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration,
+    TextIndent, TextJustify, TextTransform, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
 };
 use values::Length;
 
@@ -144,6 +144,7 @@ pub struct ComputedStyle {
     pub background_image: Option<BackgroundImage>,
     pub background_size: BackgroundSize,
     pub background_position: BackgroundPosition,
+    pub background_attachment: BackgroundAttachment,
     pub background_repeat: BackgroundRepeat,
     pub background_origin: BackgroundBox,
     pub background_clip: BackgroundBox,
@@ -276,6 +277,7 @@ impl Default for ComputedStyle {
             background_size: BackgroundSize::Auto,
             background_position: BackgroundPosition::Position(Length::percent(0.0), Length::percent(0.0)),
             background_repeat: BackgroundRepeat::repeat(),
+            background_attachment: BackgroundAttachment::Scroll,
             background_origin: BackgroundBox::PaddingBox,
             background_clip: BackgroundBox::BorderBox,
             object_fit: ObjectFit::Fill,

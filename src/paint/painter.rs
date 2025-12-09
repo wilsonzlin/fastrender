@@ -33,8 +33,8 @@ use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::stacking::creates_stacking_context;
 use crate::style::color::Rgba;
 use crate::style::types::{
-    BackgroundImage, BackgroundPosition, BackgroundRepeatKeyword, BackgroundSize, BorderStyle as CssBorderStyle,
-    ObjectFit, TextDecoration,
+    BackgroundAttachment, BackgroundImage, BackgroundPosition, BackgroundRepeatKeyword, BackgroundSize,
+    BorderStyle as CssBorderStyle, ObjectFit, TextDecoration,
 };
 use crate::style::types::{FilterColor, FilterFunction, MixBlendMode, Overflow};
 use crate::style::values::{Length, LengthUnit};
@@ -741,10 +741,14 @@ impl Painter {
             crate::style::types::BackgroundBox::PaddingBox => rects.padding,
             crate::style::types::BackgroundBox::ContentBox => rects.content,
         };
-        let origin_rect = match style.background_origin {
-            crate::style::types::BackgroundBox::BorderBox => rects.border,
-            crate::style::types::BackgroundBox::PaddingBox => rects.padding,
-            crate::style::types::BackgroundBox::ContentBox => rects.content,
+        let origin_rect = if style.background_attachment == BackgroundAttachment::Fixed {
+            Rect::from_xywh(0.0, 0.0, self.pixmap.width() as f32, self.pixmap.height() as f32)
+        } else {
+            match style.background_origin {
+                crate::style::types::BackgroundBox::BorderBox => rects.border,
+                crate::style::types::BackgroundBox::PaddingBox => rects.padding,
+                crate::style::types::BackgroundBox::ContentBox => rects.content,
+            }
         };
 
         if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 {
@@ -763,19 +767,33 @@ impl Painter {
         match bg {
             BackgroundImage::LinearGradient { angle, stops } => {
                 let resolved = normalize_color_stops(stops);
-                self.paint_linear_gradient(clip_rect, clip_mask.as_ref(), *angle, &resolved, SpreadMode::Pad);
+                self.paint_linear_gradient(
+                    origin_rect,
+                    clip_rect,
+                    clip_mask.as_ref(),
+                    *angle,
+                    &resolved,
+                    SpreadMode::Pad,
+                );
             }
             BackgroundImage::RadialGradient { stops } => {
                 let resolved = normalize_color_stops(stops);
-                self.paint_radial_gradient(clip_rect, clip_mask.as_ref(), &resolved, SpreadMode::Pad);
+                self.paint_radial_gradient(origin_rect, clip_rect, clip_mask.as_ref(), &resolved, SpreadMode::Pad);
             }
             BackgroundImage::RepeatingLinearGradient { angle, stops } => {
                 let resolved = normalize_color_stops(stops);
-                self.paint_linear_gradient(clip_rect, clip_mask.as_ref(), *angle, &resolved, SpreadMode::Repeat);
+                self.paint_linear_gradient(
+                    origin_rect,
+                    clip_rect,
+                    clip_mask.as_ref(),
+                    *angle,
+                    &resolved,
+                    SpreadMode::Repeat,
+                );
             }
             BackgroundImage::RepeatingRadialGradient { stops } => {
                 let resolved = normalize_color_stops(stops);
-                self.paint_radial_gradient(clip_rect, clip_mask.as_ref(), &resolved, SpreadMode::Repeat);
+                self.paint_radial_gradient(origin_rect, clip_rect, clip_mask.as_ref(), &resolved, SpreadMode::Repeat);
             }
             BackgroundImage::Url(src) => {
                 let image = match self.image_cache.load(src) {
@@ -871,7 +889,8 @@ impl Painter {
 
     fn paint_linear_gradient(
         &mut self,
-        rect: Rect,
+        gradient_rect: Rect,
+        paint_rect: Rect,
         clip_mask: Option<&Mask>,
         angle: f32,
         stops: &[(f32, Rgba)],
@@ -885,9 +904,9 @@ impl Painter {
         let rad = angle.to_radians();
         let dx = rad.sin();
         let dy = -rad.cos(); // CSS 0deg points up
-        let len = 0.5 * (rect.width() * dx.abs() + rect.height() * dy.abs());
-        let cx = rect.x() + rect.width() / 2.0;
-        let cy = rect.y() + rect.height() / 2.0;
+        let len = 0.5 * (gradient_rect.width() * dx.abs() + gradient_rect.height() * dy.abs());
+        let cx = gradient_rect.x() + gradient_rect.width() / 2.0;
+        let cy = gradient_rect.y() + gradient_rect.height() / 2.0;
 
         let start = tiny_skia::Point::from_xy(cx - dx * len, cy - dy * len);
         let end = tiny_skia::Point::from_xy(cx + dx * len, cy + dy * len);
@@ -895,7 +914,7 @@ impl Painter {
             return;
         };
 
-        let Some(skia_rect) = SkiaRect::from_xywh(rect.x(), rect.y(), rect.width(), rect.height()) else {
+        let Some(skia_rect) = SkiaRect::from_xywh(paint_rect.x(), paint_rect.y(), paint_rect.width(), paint_rect.height()) else {
             return;
         };
         let path = PathBuilder::from_rect(skia_rect);
@@ -909,7 +928,8 @@ impl Painter {
 
     fn paint_radial_gradient(
         &mut self,
-        rect: Rect,
+        gradient_rect: Rect,
+        paint_rect: Rect,
         clip_mask: Option<&Mask>,
         stops: &[(f32, Rgba)],
         spread: SpreadMode,
@@ -919,16 +939,24 @@ impl Painter {
         }
 
         let skia_stops = gradient_stops(stops);
-        let cx = rect.x() + rect.width() / 2.0;
-        let cy = rect.y() + rect.height() / 2.0;
-        let radius = ((rect.width() * rect.width() + rect.height() * rect.height()) as f32).sqrt() / 2.0;
+        let cx = gradient_rect.x() + gradient_rect.width() / 2.0;
+        let cy = gradient_rect.y() + gradient_rect.height() / 2.0;
+        let radius = ((gradient_rect.width() * gradient_rect.width() + gradient_rect.height() * gradient_rect.height())
+            as f32)
+            .sqrt()
+            / 2.0;
 
         let center = tiny_skia::Point::from_xy(cx, cy);
         let Some(shader) = RadialGradient::new(center, center, radius, skia_stops, spread, Transform::identity()) else {
             return;
         };
 
-        let Some(skia_rect) = SkiaRect::from_xywh(rect.x(), rect.y(), rect.width(), rect.height()) else {
+        let Some(skia_rect) = SkiaRect::from_xywh(
+            paint_rect.x(),
+            paint_rect.y(),
+            paint_rect.width(),
+            paint_rect.height(),
+        ) else {
             return;
         };
         let path = PathBuilder::from_rect(skia_rect);
@@ -2869,7 +2897,7 @@ mod tests {
     use crate::geometry::Rect;
     use crate::image_loader::ImageCache;
     use crate::paint::display_list::BorderRadii;
-    use crate::style::types::{Isolation, Overflow};
+    use crate::style::types::{BackgroundAttachment, Isolation, Overflow};
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
     use crate::text::font_loader::FontContext;
@@ -3102,6 +3130,40 @@ mod tests {
         distinct.insert(middle);
         distinct.insert(bottom);
         assert!(distinct.len() >= 2, "expected at least two colors in repeating gradient");
+    }
+
+    #[test]
+    fn background_attachment_fixed_anchors_to_viewport() {
+        let mut style = ComputedStyle::default();
+        style.background_image = Some(BackgroundImage::LinearGradient {
+            angle: 90.0,
+            stops: vec![
+                crate::css::types::ColorStop {
+                    color: Rgba::RED,
+                    position: Some(0.0),
+                },
+                crate::css::types::ColorStop {
+                    color: Rgba::BLUE,
+                    position: Some(1.0),
+                },
+            ],
+        });
+        style.background_attachment = BackgroundAttachment::Fixed;
+
+        // Gradient anchors to viewport: samples at successive x positions diverge even though elements have their own origins.
+        let style_arc = Arc::new(style);
+        let first =
+            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), vec![], style_arc.clone());
+        let second =
+            FragmentNode::new_block_styled(Rect::from_xywh(1.0, 0.0, 1.0, 1.0), vec![], style_arc.clone());
+        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 4.0, 2.0), vec![first, second]);
+        let tree = FragmentTree::new(root);
+        let pixmap = paint_tree(&tree, 4, 2, Rgba::WHITE).expect("paint");
+
+        let left = color_at(&pixmap, 0, 0);
+        let right = color_at(&pixmap, 1, 0);
+        assert!(left.0 > right.0, "fixed attachment should keep gradient anchored to viewport");
+        assert!(right.2 > left.2);
     }
 
     #[test]

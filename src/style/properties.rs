@@ -881,6 +881,16 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 styles.background_position = pos;
             }
         }
+        "background-attachment" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.background_attachment = match kw.as_str() {
+                    "scroll" => BackgroundAttachment::Scroll,
+                    "fixed" => BackgroundAttachment::Fixed,
+                    "local" => BackgroundAttachment::Local,
+                    _ => styles.background_attachment,
+                };
+            }
+        }
         "background-origin" => {
             if let Some(origin) = parse_background_box(&resolved_value) {
                 styles.background_origin = origin;
@@ -1713,7 +1723,7 @@ pub fn parse_border_style(kw: &str) -> BorderStyle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::types::{PositionComponent, PositionKeyword};
+    use crate::style::types::{BackgroundRepeatKeyword, PositionComponent, PositionKeyword};
 
     #[test]
     fn parses_object_fit_keyword() {
