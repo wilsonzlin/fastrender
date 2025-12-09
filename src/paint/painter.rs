@@ -763,11 +763,19 @@ impl Painter {
         match bg {
             BackgroundImage::LinearGradient { angle, stops } => {
                 let resolved = normalize_color_stops(stops);
-                self.paint_linear_gradient(clip_rect, clip_mask.as_ref(), *angle, &resolved);
+                self.paint_linear_gradient(clip_rect, clip_mask.as_ref(), *angle, &resolved, SpreadMode::Pad);
             }
             BackgroundImage::RadialGradient { stops } => {
                 let resolved = normalize_color_stops(stops);
-                self.paint_radial_gradient(clip_rect, clip_mask.as_ref(), &resolved);
+                self.paint_radial_gradient(clip_rect, clip_mask.as_ref(), &resolved, SpreadMode::Pad);
+            }
+            BackgroundImage::RepeatingLinearGradient { angle, stops } => {
+                let resolved = normalize_color_stops(stops);
+                self.paint_linear_gradient(clip_rect, clip_mask.as_ref(), *angle, &resolved, SpreadMode::Repeat);
+            }
+            BackgroundImage::RepeatingRadialGradient { stops } => {
+                let resolved = normalize_color_stops(stops);
+                self.paint_radial_gradient(clip_rect, clip_mask.as_ref(), &resolved, SpreadMode::Repeat);
             }
             BackgroundImage::Url(src) => {
                 let image = match self.image_cache.load(src) {
@@ -886,7 +894,14 @@ impl Painter {
         }
     }
 
-    fn paint_linear_gradient(&mut self, rect: Rect, clip_mask: Option<&Mask>, angle: f32, stops: &[(f32, Rgba)]) {
+    fn paint_linear_gradient(
+        &mut self,
+        rect: Rect,
+        clip_mask: Option<&Mask>,
+        angle: f32,
+        stops: &[(f32, Rgba)],
+        spread: SpreadMode,
+    ) {
         if stops.is_empty() {
             return;
         }
@@ -901,7 +916,7 @@ impl Painter {
 
         let start = tiny_skia::Point::from_xy(cx - dx * len, cy - dy * len);
         let end = tiny_skia::Point::from_xy(cx + dx * len, cy + dy * len);
-        let Some(shader) = LinearGradient::new(start, end, skia_stops, SpreadMode::Pad, Transform::identity()) else {
+        let Some(shader) = LinearGradient::new(start, end, skia_stops, spread, Transform::identity()) else {
             return;
         };
 
@@ -917,7 +932,13 @@ impl Painter {
             .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), clip_mask);
     }
 
-    fn paint_radial_gradient(&mut self, rect: Rect, clip_mask: Option<&Mask>, stops: &[(f32, Rgba)]) {
+    fn paint_radial_gradient(
+        &mut self,
+        rect: Rect,
+        clip_mask: Option<&Mask>,
+        stops: &[(f32, Rgba)],
+        spread: SpreadMode,
+    ) {
         if stops.is_empty() {
             return;
         }
@@ -928,7 +949,7 @@ impl Painter {
         let radius = ((rect.width() * rect.width() + rect.height() * rect.height()) as f32).sqrt() / 2.0;
 
         let center = tiny_skia::Point::from_xy(cx, cy);
-        let Some(shader) = RadialGradient::new(center, center, radius, skia_stops, SpreadMode::Pad, Transform::identity()) else {
+        let Some(shader) = RadialGradient::new(center, center, radius, skia_stops, spread, Transform::identity()) else {
             return;
         };
 
@@ -3017,6 +3038,41 @@ mod tests {
         let right = color_at(&pixmap, 18, 10);
         assert!(left.0 > right.0, "left should be redder than right");
         assert!(right.2 > left.2, "right should be bluer than left");
+    }
+
+    #[test]
+    fn paints_repeating_linear_gradient_background() {
+        let mut style = ComputedStyle::default();
+        style.background_image = Some(BackgroundImage::RepeatingLinearGradient {
+            angle: 0.0,
+            stops: vec![
+                crate::css::types::ColorStop {
+                    color: Rgba::RED,
+                    position: Some(0.0),
+                },
+                crate::css::types::ColorStop {
+                    color: Rgba::BLUE,
+                    position: Some(0.5),
+                },
+            ],
+        });
+
+        let fragment =
+            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
+        let tree = FragmentTree::new(fragment);
+        let pixmap = paint_tree(&tree, 20, 20, Rgba::WHITE).expect("paint");
+
+        let top = color_at(&pixmap, 10, 2);
+        let middle = color_at(&pixmap, 10, 10);
+        let bottom = color_at(&pixmap, 10, 18);
+
+        // Repeating stripes: samples at different rows should not all match; require at least two distinct colors.
+        assert!(top != middle || middle != bottom);
+        let mut distinct = std::collections::HashSet::new();
+        distinct.insert(top);
+        distinct.insert(middle);
+        distinct.insert(bottom);
+        assert!(distinct.len() >= 2, "expected at least two colors in repeating gradient");
     }
 
     #[test]

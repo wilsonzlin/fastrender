@@ -514,6 +514,8 @@ pub enum BackgroundImage {
     Url(String),
     LinearGradient { angle: f32, stops: Vec<ColorStop> },
     RadialGradient { stops: Vec<ColorStop> },
+    RepeatingLinearGradient { angle: f32, stops: Vec<ColorStop> },
+    RepeatingRadialGradient { stops: Vec<ColorStop> },
 }
 
 /// Background image sizing

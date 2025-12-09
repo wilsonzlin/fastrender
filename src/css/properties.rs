@@ -126,16 +126,25 @@ fn parse_simple_value(value_str: &str) -> Option<PropertyValue> {
 fn parse_gradient(value: &str) -> Option<PropertyValue> {
     let lower = value.trim().to_ascii_lowercase();
     if lower.starts_with("linear-gradient(") {
-        return parse_linear_gradient(&lower);
+        return parse_linear_gradient(&lower, false);
     }
     if lower.starts_with("radial-gradient(") {
-        return parse_radial_gradient(&lower);
+        return parse_radial_gradient(&lower, false);
+    }
+    if lower.starts_with("repeating-linear-gradient(") {
+        return parse_linear_gradient(&lower, true);
+    }
+    if lower.starts_with("repeating-radial-gradient(") {
+        return parse_radial_gradient(&lower, true);
     }
     None
 }
 
-fn parse_linear_gradient(value: &str) -> Option<PropertyValue> {
-    let inner = value.strip_prefix("linear-gradient(")?.strip_suffix(')')?;
+fn parse_linear_gradient(value: &str, repeating: bool) -> Option<PropertyValue> {
+    let inner = value
+        .strip_prefix("linear-gradient(")
+        .or_else(|| value.strip_prefix("repeating-linear-gradient("))?
+        .strip_suffix(')')?;
     let parts = split_top_level_commas(inner);
     if parts.len() < 2 {
         return None;
@@ -164,11 +173,18 @@ fn parse_linear_gradient(value: &str) -> Option<PropertyValue> {
         return None;
     }
 
-    Some(PropertyValue::LinearGradient { angle, stops })
+    if repeating {
+        Some(PropertyValue::RepeatingLinearGradient { angle, stops })
+    } else {
+        Some(PropertyValue::LinearGradient { angle, stops })
+    }
 }
 
-fn parse_radial_gradient(value: &str) -> Option<PropertyValue> {
-    let inner = value.strip_prefix("radial-gradient(")?.strip_suffix(')')?;
+fn parse_radial_gradient(value: &str, repeating: bool) -> Option<PropertyValue> {
+    let inner = value
+        .strip_prefix("radial-gradient(")
+        .or_else(|| value.strip_prefix("repeating-radial-gradient("))?
+        .strip_suffix(')')?;
     let parts = split_top_level_commas(inner);
     if parts.len() < 2 {
         return None;
@@ -185,7 +201,11 @@ fn parse_radial_gradient(value: &str) -> Option<PropertyValue> {
         return None;
     }
 
-    Some(PropertyValue::RadialGradient { stops })
+    if repeating {
+        Some(PropertyValue::RepeatingRadialGradient { stops })
+    } else {
+        Some(PropertyValue::RadialGradient { stops })
+    }
 }
 
 fn split_top_level_commas(input: &str) -> Vec<&str> {
@@ -385,6 +405,31 @@ mod tests {
         };
         assert_eq!(stops.len(), 2);
         assert_eq!(stops[1].position, Some(0.75));
+    }
+
+    #[test]
+    fn parses_repeating_linear_gradient() {
+        let value = "repeating-linear-gradient(180deg, red 0%, blue 50%)";
+        let PropertyValue::RepeatingLinearGradient { angle, stops } =
+            parse_property_value("background-image", value).expect("gradient")
+        else {
+            panic!("expected repeating linear gradient");
+        };
+        assert!((angle - 180.0).abs() < 0.01);
+        assert_eq!(stops.len(), 2);
+    }
+
+    #[test]
+    fn parses_repeating_radial_gradient() {
+        let value = "repeating-radial-gradient(red 10%, blue 60%)";
+        let PropertyValue::RepeatingRadialGradient { stops } =
+            parse_property_value("background-image", value).expect("gradient")
+        else {
+            panic!("expected repeating radial gradient");
+        };
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].position, Some(0.10));
+        assert_eq!(stops[1].position, Some(0.60));
     }
 }
 

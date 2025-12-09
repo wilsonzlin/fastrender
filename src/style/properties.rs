@@ -841,6 +841,15 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
             PropertyValue::RadialGradient { stops } => {
                 styles.background_image = Some(BackgroundImage::RadialGradient { stops: stops.clone() });
             }
+            PropertyValue::RepeatingLinearGradient { angle, stops } => {
+                styles.background_image = Some(BackgroundImage::RepeatingLinearGradient {
+                    angle: *angle,
+                    stops: stops.clone(),
+                });
+            }
+            PropertyValue::RepeatingRadialGradient { stops } => {
+                styles.background_image = Some(BackgroundImage::RepeatingRadialGradient { stops: stops.clone() });
+            }
             PropertyValue::Keyword(kw) if kw == "none" => {
                 styles.background_image = None;
             }
@@ -900,6 +909,13 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 });
             } else if let PropertyValue::RadialGradient { stops } = &resolved_value {
                 styles.background_image = Some(BackgroundImage::RadialGradient { stops: stops.clone() });
+            } else if let PropertyValue::RepeatingLinearGradient { angle, stops } = &resolved_value {
+                styles.background_image = Some(BackgroundImage::RepeatingLinearGradient {
+                    angle: *angle,
+                    stops: stops.clone(),
+                });
+            } else if let PropertyValue::RepeatingRadialGradient { stops } = &resolved_value {
+                styles.background_image = Some(BackgroundImage::RepeatingRadialGradient { stops: stops.clone() });
             }
         }
 
