@@ -113,6 +113,13 @@ impl DisplayListBuilder {
         self.list
     }
 
+    /// Builds a display list by first constructing a stacking context tree from the fragment tree.
+    pub fn build_with_stacking_tree(mut self, root: &FragmentNode) -> DisplayList {
+        let stacking = crate::paint::stacking::build_stacking_tree_from_fragment_tree(root);
+        self.build_stacking_context(&stacking, Point::ZERO);
+        self.list
+    }
+
     /// Builds a display list with clipping support
     ///
     /// Fragments with box_ids in the `clips` set will have clipping applied.
@@ -123,6 +130,15 @@ impl DisplayListBuilder {
 
     /// Recursively builds display items for a fragment
     fn build_fragment(&mut self, fragment: &FragmentNode, offset: Point) {
+        self.build_fragment_internal(fragment, offset, true);
+    }
+
+    /// Builds display items for a fragment without descending into children.
+    fn build_fragment_shallow(&mut self, fragment: &FragmentNode, offset: Point) {
+        self.build_fragment_internal(fragment, offset, false);
+    }
+
+    fn build_fragment_internal(&mut self, fragment: &FragmentNode, offset: Point, recurse_children: bool) {
         let absolute_rect = Rect::new(
             Point::new(fragment.bounds.origin.x + offset.x, fragment.bounds.origin.y + offset.y),
             fragment.bounds.size,
@@ -136,10 +152,11 @@ impl DisplayListBuilder {
 
         self.emit_content(fragment, absolute_rect);
 
-        // Recurse to children
-        let child_offset = absolute_rect.origin;
-        for child in &fragment.children {
-            self.build_fragment(child, child_offset);
+        if recurse_children {
+            let child_offset = absolute_rect.origin;
+            for child in &fragment.children {
+                self.build_fragment_internal(child, child_offset, true);
+            }
         }
     }
 
@@ -183,28 +200,41 @@ impl DisplayListBuilder {
         let (neg, non_neg): (Vec<_>, Vec<_>) = children.into_iter().partition(|c| c.z_index < 0);
         let (zero, pos): (Vec<_>, Vec<_>) = non_neg.into_iter().partition(|c| c.z_index == 0);
 
+        let context_origin = context
+            .fragments
+            .first()
+            .map(|f| f.bounds.origin)
+            .unwrap_or(Point::ZERO);
+        let descendant_offset = Point::new(offset.x + context_origin.x, offset.y + context_origin.y);
+
         for child in neg {
-            self.build_stacking_context(child, offset);
+            self.build_stacking_context(child, descendant_offset);
         }
 
-        self.emit_fragment_list(&context.fragments, offset);
-        self.emit_fragment_list(&context.layer3_blocks, offset);
-        self.emit_fragment_list(&context.layer4_floats, offset);
-        self.emit_fragment_list(&context.layer5_inlines, offset);
-        self.emit_fragment_list(&context.layer6_positioned, offset);
+        self.emit_fragment_list_shallow(&context.fragments, offset);
+        self.emit_fragment_list(&context.layer3_blocks, descendant_offset);
+        self.emit_fragment_list(&context.layer4_floats, descendant_offset);
+        self.emit_fragment_list(&context.layer5_inlines, descendant_offset);
+        self.emit_fragment_list(&context.layer6_positioned, descendant_offset);
 
         for child in zero {
-            self.build_stacking_context(child, offset);
+            self.build_stacking_context(child, descendant_offset);
         }
 
         for child in pos {
-            self.build_stacking_context(child, offset);
+            self.build_stacking_context(child, descendant_offset);
         }
     }
 
     fn emit_fragment_list(&mut self, fragments: &[FragmentNode], offset: Point) {
         for fragment in fragments {
             self.build_fragment(fragment, offset);
+        }
+    }
+
+    fn emit_fragment_list_shallow(&mut self, fragments: &[FragmentNode], offset: Point) {
+        for fragment in fragments {
+            self.build_fragment_shallow(fragment, offset);
         }
     }
 
@@ -495,6 +525,7 @@ mod tests {
     use crate::image_loader::ImageCache;
     use crate::paint::stacking::{StackingContext, StackingContextReason};
     use crate::style::display::Display;
+    use crate::style::position::Position;
     use crate::style::ComputedStyle;
     use crate::tree::box_tree::ReplacedType;
 
@@ -578,6 +609,46 @@ mod tests {
         root.add_child(pos);
 
         let list = DisplayListBuilder::new().build_from_stacking(&root);
+        let origins: Vec<f32> = list
+            .items()
+            .iter()
+            .filter_map(|item| match item {
+                DisplayItem::Text(t) => Some(t.origin.x),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(origins, vec![0.0, 20.0, 40.0]);
+    }
+
+    #[test]
+    fn build_with_stacking_tree_respects_z_order_from_styles() {
+        fn styled_fragment(x: f32, label: &str, z: i32) -> FragmentNode {
+            let mut style = ComputedStyle::default();
+            style.position = Position::Relative;
+            style.z_index = z;
+            FragmentNode::new_inline_styled(
+                Rect::from_xywh(x, 0.0, 10.0, 10.0),
+                0,
+                vec![FragmentNode::new_text(
+                    Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+                    label.to_string(),
+                    12.0,
+                )],
+                Arc::new(style),
+            )
+        }
+
+        let child_neg = styled_fragment(0.0, "neg", -1);
+        let child_zero = styled_fragment(20.0, "zero", 0);
+        let child_pos = styled_fragment(40.0, "pos", 1);
+
+        let root = FragmentNode::new_block(
+            Rect::from_xywh(0.0, 0.0, 100.0, 20.0),
+            vec![child_neg, child_zero, child_pos],
+        );
+
+        let list = DisplayListBuilder::new().build_with_stacking_tree(&root);
         let origins: Vec<f32> = list
             .items()
             .iter()

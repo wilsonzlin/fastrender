@@ -662,18 +662,19 @@ fn build_stacking_tree_internal(
                 style, false, tree_order,
             );
 
-            // If child created its own stacking context, add as child
-            // Otherwise, merge its fragments into appropriate layers
-            if child_context.reason != StackingContextReason::Root || !child_context.children.is_empty() {
+            let child_creates_context =
+                child_context.reason != StackingContextReason::Root || child_context.z_index != 0;
+
+            if child_creates_context {
                 // Child has its own stacking context structure
                 context.add_child(child_context);
             } else {
-                // Merge child's fragments into our layers
-                context.layer3_blocks.extend(child_context.layer3_blocks);
-                context.layer4_floats.extend(child_context.layer4_floats);
-                context.layer5_inlines.extend(child_context.layer5_inlines);
-                context.layer6_positioned.extend(child_context.layer6_positioned);
-                context.fragments.extend(child_context.fragments);
+                // Propagate any nested child contexts upward
+                if !child_context.children.is_empty() {
+                    context.children.extend(child_context.children);
+                }
+                // Keep the direct child in the appropriate layer; children will be painted via recursion
+                context.add_fragment_to_layer(child.clone(), None);
             }
         }
 
@@ -702,20 +703,16 @@ fn build_stacking_tree_internal(
         for child in &fragment.children {
             let child_context = build_stacking_tree_internal(child, None, style, false, tree_order);
 
-            // Check if child created its own stacking context
-            let child_creates_context = !child_context.children.is_empty()
-                || child_context.reason != StackingContextReason::Root
-                || child_context.z_index != 0;
+            let child_creates_context =
+                child_context.reason != StackingContextReason::Root || child_context.z_index != 0;
 
             if child_creates_context {
                 context.add_child(child_context);
             } else {
-                // Merge fragments
-                context.layer3_blocks.extend(child_context.layer3_blocks);
-                context.layer4_floats.extend(child_context.layer4_floats);
-                context.layer5_inlines.extend(child_context.layer5_inlines);
-                context.layer6_positioned.extend(child_context.layer6_positioned);
-                context.fragments.extend(child_context.fragments);
+                if !child_context.children.is_empty() {
+                    context.children.extend(child_context.children);
+                }
+                context.add_fragment_to_layer(child.clone(), None);
             }
         }
 
@@ -754,6 +751,11 @@ where
     context.sort_children();
     context.compute_bounds();
     context
+}
+
+/// Builds a stacking context tree from a fragment tree using the fragment's embedded styles.
+pub fn build_stacking_tree_from_fragment_tree(root: &FragmentNode) -> StackingContext {
+    build_stacking_tree_with_styles(root, |fragment| fragment.style.clone())
 }
 
 /// Internal recursive function to build stacking context tree with styles
@@ -797,14 +799,16 @@ where
                 get_style,
             );
 
-            if child_context.reason != StackingContextReason::Root || !child_context.children.is_empty() {
+            let child_creates_context =
+                child_context.reason != StackingContextReason::Root || child_context.z_index != 0;
+
+            if child_creates_context {
                 context.add_child(child_context);
             } else {
-                context.layer3_blocks.extend(child_context.layer3_blocks);
-                context.layer4_floats.extend(child_context.layer4_floats);
-                context.layer5_inlines.extend(child_context.layer5_inlines);
-                context.layer6_positioned.extend(child_context.layer6_positioned);
-                context.fragments.extend(child_context.fragments);
+                if !child_context.children.is_empty() {
+                    context.children.extend(child_context.children);
+                }
+                context.add_fragment_to_layer(child.clone(), child_style.as_deref());
             }
         }
 
@@ -837,18 +841,16 @@ where
                 get_style,
             );
 
-            let child_creates_context = !child_context.children.is_empty()
-                || child_context.reason != StackingContextReason::Root
-                || child_context.z_index != 0;
+            let child_creates_context =
+                child_context.reason != StackingContextReason::Root || child_context.z_index != 0;
 
             if child_creates_context {
                 context.add_child(child_context);
             } else {
-                context.layer3_blocks.extend(child_context.layer3_blocks);
-                context.layer4_floats.extend(child_context.layer4_floats);
-                context.layer5_inlines.extend(child_context.layer5_inlines);
-                context.layer6_positioned.extend(child_context.layer6_positioned);
-                context.fragments.extend(child_context.fragments);
+                if !child_context.children.is_empty() {
+                    context.children.extend(child_context.children);
+                }
+                context.add_fragment_to_layer(child.clone(), child_style.as_deref());
             }
         }
 
