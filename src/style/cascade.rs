@@ -461,6 +461,7 @@ mod tests {
         assert!(marker.margin_left.unwrap().is_zero());
         assert_eq!(marker.background_color, Rgba::TRANSPARENT);
         assert!(matches!(marker.text_transform, crate::style::types::TextTransform::None));
+        assert!(marker.text_decoration.lines == crate::style::types::TextDecorationLine::NONE);
     }
 }
 
@@ -713,6 +714,7 @@ fn reset_marker_box_properties(styles: &mut ComputedStyle) {
     styles.overflow_x = defaults.overflow_x;
     styles.overflow_y = defaults.overflow_y;
     styles.opacity = defaults.opacity;
+    styles.text_decoration = defaults.text_decoration.clone();
 
     // Markers should not carry table/layout-specific state
     styles.border_spacing_horizontal = defaults.border_spacing_horizontal;
