@@ -1977,22 +1977,15 @@ impl FormattingContext for TableFormattingContext {
                 percent_rows.clone()
             };
             let flex_total: f32 = flex_indices.iter().map(|i| row_heights[*i]).sum();
-            let mut available = target_rows;
+            let available = target_rows - percent_total;
 
-            // If percent rows alone exceed the target, scale them down proportionally.
-            if percent_total > available && percent_total > 0.0 {
-                let scale = available / percent_total;
-                for i in &percent_rows {
-                    row_heights[*i] = (row_heights[*i] * scale).max(content_min_heights[*i]);
-                }
-            } else {
-                available = (available - percent_total).max(0.0);
-                if available > 0.0 && flex_total > 0.0 {
+            if available > 0.0 {
+                if flex_total > 0.0 {
                     let scale = available / flex_total;
                     for i in &flex_indices {
                         row_heights[*i] = (row_heights[*i] * scale).max(content_min_heights[*i]);
                     }
-                } else if available > 0.0 && !flex_indices.is_empty() {
+                } else if !flex_indices.is_empty() {
                     let share = available / flex_indices.len() as f32;
                     for i in &flex_indices {
                         row_heights[*i] = share;
@@ -3154,6 +3147,50 @@ mod tests {
         let second_y = fragment.children[1].bounds.y();
         // Even though the percentages sum to 120% of the table height, rows must not shrink below their 80px content.
         assert!(second_y - first_y >= 79.9);
+    }
+
+    #[test]
+    fn percent_rows_over_100_percent_do_not_scale_down() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.height = Some(Length::px(100.0));
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut row1_style = ComputedStyle::default();
+        row1_style.display = Display::TableRow;
+        row1_style.height = Some(Length::percent(60.0));
+
+        let mut row2_style = ComputedStyle::default();
+        row2_style.display = Display::TableRow;
+        row2_style.height = Some(Length::percent(60.0));
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+
+        let row1 = BoxNode::new_block(
+            Arc::new(row1_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![])],
+        );
+        let row2 = BoxNode::new_block(
+            Arc::new(row2_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![])],
+        );
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row1, row2]);
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(&table, &LayoutConstraints::definite(200.0, 200.0))
+            .expect("table layout");
+
+        assert_eq!(fragment.children.len(), 2);
+        let first_y = fragment.children[0].bounds.y();
+        let second_y = fragment.children[1].bounds.y();
+        // Percent rows totalling 120% of the table height should keep their targets even if the table overflows.
+        assert!((second_y - first_y - 60.0).abs() < 0.5);
+        assert!((fragment.bounds.height() - 100.0).abs() < 0.1);
     }
 
     #[test]
