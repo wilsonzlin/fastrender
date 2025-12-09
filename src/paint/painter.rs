@@ -1340,7 +1340,16 @@ impl Painter {
         let fit = style.map(|s| s.object_fit).unwrap_or(ObjectFit::Fill);
         let pos = style.map(|s| s.object_position).unwrap_or(default_object_position());
 
-        let (dest_x, dest_y, dest_w, dest_h) = match compute_object_fit(fit, pos, width, height, img_w, img_h) {
+        let (dest_x, dest_y, dest_w, dest_h) = match compute_object_fit(
+            fit,
+            pos,
+            width,
+            height,
+            img_w,
+            img_h,
+            style.map(|s| s.font_size).unwrap_or(16.0),
+            Some((self.pixmap.width() as f32, self.pixmap.height() as f32)),
+        ) {
             Some(v) => v,
             None => return false,
         };
@@ -1398,7 +1407,16 @@ impl Painter {
         let fit = style.map(|s| s.object_fit).unwrap_or(ObjectFit::Fill);
         let pos = style.map(|s| s.object_position).unwrap_or(default_object_position());
 
-        let (dest_x, dest_y, dest_w, dest_h) = match compute_object_fit(fit, pos, width, height, img_w, img_h) {
+        let (dest_x, dest_y, dest_w, dest_h) = match compute_object_fit(
+            fit,
+            pos,
+            width,
+            height,
+            img_w,
+            img_h,
+            style.map(|s| s.font_size).unwrap_or(16.0),
+            Some((self.pixmap.width() as f32, self.pixmap.height() as f32)),
+        ) {
             Some(v) => v,
             None => return false,
         };
@@ -2842,8 +2860,17 @@ mod tests {
             y: crate::style::types::PositionComponent::Keyword(crate::style::types::PositionKeyword::Center),
         };
 
-        let (offset_x, offset_y, dest_w, dest_h) =
-            compute_object_fit(fit, position, 200.0, 100.0, 100.0, 100.0).expect("fit computed");
+        let (offset_x, offset_y, dest_w, dest_h) = compute_object_fit(
+            fit,
+            position,
+            200.0,
+            100.0,
+            100.0,
+            100.0,
+            16.0,
+            Some((200.0, 100.0)),
+        )
+        .expect("fit computed");
         assert_eq!(dest_h, 100.0);
         assert_eq!(dest_w, 100.0);
         assert!((offset_x - 50.0).abs() < 0.01);

@@ -185,10 +185,10 @@ impl DisplayListBuilder {
                     .decode_image(source)
                     .unwrap_or_else(|| ImageData::new(1, 1, vec![128, 128, 128, 255]));
                 let (dest_x, dest_y, dest_w, dest_h) = {
-                    let (fit, position) = if let Some(style) = fragment.style.as_deref() {
-                        (style.object_fit, style.object_position)
+                    let (fit, position, font_size) = if let Some(style) = fragment.style.as_deref() {
+                        (style.object_fit, style.object_position, style.font_size)
                     } else {
-                        (ObjectFit::Fill, default_object_position())
+                        (ObjectFit::Fill, default_object_position(), 16.0)
                     };
 
                     compute_object_fit(
@@ -198,6 +198,8 @@ impl DisplayListBuilder {
                         rect.height(),
                         image.width as f32,
                         image.height as f32,
+                        font_size,
+                        None,
                     )
                     .unwrap_or((0.0, 0.0, rect.width(), rect.height()))
                 };
