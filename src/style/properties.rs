@@ -893,22 +893,59 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
 
         // Shorthand: background (treat as background-color for now)
         "background" => {
-            if let PropertyValue::Color(c) = resolved_value {
-                styles.background_color = c;
-            } else if let PropertyValue::LinearGradient { angle, stops } = &resolved_value {
-                styles.background_image = Some(BackgroundImage::LinearGradient {
-                    angle: *angle,
-                    stops: stops.clone(),
-                });
-            } else if let PropertyValue::RadialGradient { stops } = &resolved_value {
-                styles.background_image = Some(BackgroundImage::RadialGradient { stops: stops.clone() });
-            } else if let PropertyValue::RepeatingLinearGradient { angle, stops } = &resolved_value {
-                styles.background_image = Some(BackgroundImage::RepeatingLinearGradient {
-                    angle: *angle,
-                    stops: stops.clone(),
-                });
-            } else if let PropertyValue::RepeatingRadialGradient { stops } = &resolved_value {
-                styles.background_image = Some(BackgroundImage::RepeatingRadialGradient { stops: stops.clone() });
+            let mut reset_background_fields = || {
+                styles.background_image = None;
+                styles.background_repeat = BackgroundRepeat::repeat();
+                styles.background_position = BackgroundPosition::Position {
+                    x: crate::style::types::BackgroundPositionComponent {
+                        alignment: 0.0,
+                        offset: Length::px(0.0),
+                    },
+                    y: crate::style::types::BackgroundPositionComponent {
+                        alignment: 0.0,
+                        offset: Length::px(0.0),
+                    },
+                };
+                styles.background_size =
+                    BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto);
+                styles.background_attachment = BackgroundAttachment::Scroll;
+                styles.background_origin = BackgroundBox::PaddingBox;
+                styles.background_clip = BackgroundBox::BorderBox;
+            };
+
+            match resolved_value {
+                PropertyValue::Color(c) => {
+                    reset_background_fields();
+                    styles.background_color = c;
+                }
+                PropertyValue::Keyword(ref kw) if kw == "none" => {
+                    reset_background_fields();
+                    styles.background_color = Rgba::TRANSPARENT;
+                }
+                PropertyValue::LinearGradient { angle, ref stops } => {
+                    reset_background_fields();
+                    styles.background_color = Rgba::TRANSPARENT;
+                    styles.background_image =
+                        Some(BackgroundImage::LinearGradient { angle, stops: stops.clone() });
+                }
+                PropertyValue::RadialGradient { ref stops } => {
+                    reset_background_fields();
+                    styles.background_color = Rgba::TRANSPARENT;
+                    styles.background_image = Some(BackgroundImage::RadialGradient { stops: stops.clone() });
+                }
+                PropertyValue::RepeatingLinearGradient { angle, ref stops } => {
+                    reset_background_fields();
+                    styles.background_color = Rgba::TRANSPARENT;
+                    styles.background_image =
+                        Some(BackgroundImage::RepeatingLinearGradient { angle, stops: stops.clone() });
+                }
+                PropertyValue::RepeatingRadialGradient { ref stops } => {
+                    reset_background_fields();
+                    styles.background_color = Rgba::TRANSPARENT;
+                    styles.background_image =
+                        Some(BackgroundImage::RepeatingRadialGradient { stops: stops.clone() });
+                }
+                _ => {}
             }
         }
 
@@ -2021,6 +2058,53 @@ mod tests {
         assert!((x.alignment - 0.5).abs() < 0.01);
         assert!(x.offset.is_zero());
         assert!((y.alignment - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn background_shorthand_resets_unspecified_fields() {
+        let mut style = ComputedStyle::default();
+        style.background_repeat = BackgroundRepeat::repeat_x();
+        style.background_attachment = BackgroundAttachment::Fixed;
+        style.background_position = BackgroundPosition::Position {
+            x: crate::style::types::BackgroundPositionComponent {
+                alignment: 1.0,
+                offset: Length::px(5.0),
+            },
+            y: crate::style::types::BackgroundPositionComponent {
+                alignment: 1.0,
+                offset: Length::px(5.0),
+            },
+        };
+        style.background_size =
+            BackgroundSize::Explicit(BackgroundSizeComponent::Length(Length::px(10.0)), BackgroundSizeComponent::Auto);
+        style.background_origin = BackgroundBox::ContentBox;
+        style.background_clip = BackgroundBox::ContentBox;
+
+        let decl = Declaration {
+            property: "background".to_string(),
+            value: PropertyValue::Color(Rgba::RED),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+
+        assert_eq!(style.background_color, Rgba::RED);
+        assert!(style.background_image.is_none());
+        assert_eq!(style.background_repeat, BackgroundRepeat::repeat());
+        if let BackgroundPosition::Position { x, y } = style.background_position {
+            assert!((x.alignment - 0.0).abs() < 0.01);
+            assert!(x.offset.is_zero());
+            assert!((y.alignment - 0.0).abs() < 0.01);
+            assert!(y.offset.is_zero());
+        } else {
+            panic!("expected position");
+        }
+        assert_eq!(
+            style.background_size,
+            BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
+        );
+        assert_eq!(style.background_attachment, BackgroundAttachment::Scroll);
+        assert_eq!(style.background_origin, BackgroundBox::PaddingBox);
+        assert_eq!(style.background_clip, BackgroundBox::BorderBox);
     }
 
     #[test]
