@@ -96,7 +96,7 @@
 - Background colors and images respect border-radius and `background-clip`: clip radii shrink with border/padding/content edges, fills draw as rounded rects, and image tiling is masked to the clipped rounded box (`src/paint/painter.rs`).
 
 ## Current issues / gaps
-- Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
+- Bidi: inline boxes still reorder as atomic containers; need a bidi-aware flattening that preserves box backgrounds/borders while reordering descendants per UAX#9 instead of using control-character approximation for isolation. `unicode-bidi: plaintext` still treats the full line as one paragraph.
 - Max-content sizing now honors mandatory breaks but still ignores anonymous inline box generation and percent-driven height constraints.
 - Table layout still partial: row/col spans not fully honored (rowspan baselines, percent/fixed widths still simplified vs CSS 2.1), colspan distribution still heuristic.
 - Replaced elements still skip backgrounds and non-image types (SVG/iframe/video remain unrendered); object-fit only applies when image decoding succeeds.
@@ -105,7 +105,7 @@
 
 ## To-do / next steps (spec-oriented)
 1. Inline/text:
-   - Make line breaking cluster-aware and bidi-sensitive (UAX #14 + UAX #9 ordering), and keep shaped runs when splitting.
+   - Build bidi-aware flattening of inline boxes so descendants reorder per UAX#9 while maintaining box edges/backgrounds; lift `unicode-bidi: plaintext` to paragraph-scoped handling.
    - Align baseline/line-height calculations with real font metrics across multi-font runs.
    - Harden RTL run positioning and visual reordering in painter/layout so mixed-direction text paints correctly.
 2. Tables:
