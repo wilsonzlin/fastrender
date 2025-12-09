@@ -390,7 +390,7 @@ impl InlineFormattingContext {
                     items.push(InlineItem::Text(item));
                 }
             }
-            let tab = self.create_tab_item(box_node)?;
+            let tab = self.create_tab_item(box_node, allow_soft_wrap)?;
             items.push(tab);
             segment_start = idx + ch.len_utf8();
         }
@@ -499,7 +499,7 @@ impl InlineFormattingContext {
         Ok(runs.iter().map(|r| r.advance).sum())
     }
 
-    fn create_tab_item(&self, box_node: &BoxNode) -> Result<InlineItem, LayoutError> {
+    fn create_tab_item(&self, box_node: &BoxNode, allow_wrap: bool) -> Result<InlineItem, LayoutError> {
         let style = &box_node.style;
         let metrics = self.compute_strut_metrics(style);
         let space_advance = self.space_advance(style)?;
@@ -509,7 +509,7 @@ impl InlineFormattingContext {
         };
         let va = self.convert_vertical_align(style.vertical_align, style.font_size, metrics.line_height);
         Ok(InlineItem::Tab(
-            TabItem::new(style.clone(), metrics, tab_interval).with_vertical_align(va),
+            TabItem::new(style.clone(), metrics, tab_interval, allow_wrap).with_vertical_align(va),
         ))
     }
 
@@ -1064,8 +1064,12 @@ impl InlineFormattingContext {
                     let next_char = next_item.and_then(first_char_of_item);
                     self.measure_text_min_content(text, tracker, next_char);
                 }
-                InlineItem::Tab(_) => {
-                    tracker.break_segment();
+                InlineItem::Tab(tab) => {
+                    if tab.allow_wrap() {
+                        tracker.break_segment();
+                    } else {
+                        tracker.add_width(tab.width());
+                    }
                 }
                 InlineItem::InlineBox(inline_box) => {
                     let mut boxed = InlineBoxSegment::new(tracker, inline_box.start_edge, inline_box.end_edge);
@@ -1093,7 +1097,7 @@ impl InlineFormattingContext {
                     self.measure_text_max_content(text, tracker);
                 }
                 InlineItem::Tab(tab) => {
-                    tracker.add_width(tab.interval().max(0.0));
+                    tracker.add_width(tab.width());
                 }
                 InlineItem::InlineBox(inline_box) => {
                     let mut boxed = InlineBoxSegment::new(tracker, inline_box.start_edge, inline_box.end_edge);
@@ -1279,7 +1283,10 @@ fn normalize_text_for_white_space(
                         }
                         in_whitespace = true;
                     }
-                    ' ' | '\t' | '\n' => {
+                    '\n' | '\u{000B}' | '\u{000C}' => {
+                        in_whitespace = true;
+                    }
+                    ' ' | '\t' => {
                         in_whitespace = true;
                     }
                     _ => {
@@ -1314,7 +1321,7 @@ fn normalize_text_for_white_space(
                         }
                         run_has_newline = true;
                     }
-                    '\n' => {
+                    '\n' | '\u{000B}' | '\u{000C}' => {
                         run_has_newline = true;
                     }
                     _ => {
@@ -1359,7 +1366,7 @@ fn normalize_text_for_white_space(
                         }
                         mandatory_breaks.push(BreakOpportunity::mandatory(out.len()));
                     }
-                    '\n' => {
+                    '\n' | '\u{000B}' | '\u{000C}' => {
                         mandatory_breaks.push(BreakOpportunity::mandatory(out.len()));
                     }
                     '\t' => out.push('\t'),
@@ -2411,6 +2418,27 @@ mod tests {
         assert_eq!(forced.len(), 1);
         assert_eq!(forced[0].byte_offset, 1);
         assert!(!allow_soft);
+    }
+
+    #[test]
+    fn pre_treats_form_feed_as_break() {
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::Pre;
+        let (normalized, forced, allow_soft) = normalize_text_for_white_space("a\u{000C}b", style.white_space);
+        assert_eq!(normalized, "ab");
+        assert_eq!(forced.len(), 1);
+        assert_eq!(forced[0].byte_offset, 1);
+        assert!(!allow_soft);
+    }
+
+    #[test]
+    fn normal_collapses_vertical_tab_to_space() {
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::Normal;
+        let (normalized, forced, allow_soft) = normalize_text_for_white_space("a\u{000B} b", style.white_space);
+        assert_eq!(normalized, "a b");
+        assert!(forced.is_empty());
+        assert!(allow_soft);
     }
 
     #[test]

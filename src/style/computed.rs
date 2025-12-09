@@ -27,8 +27,8 @@ use crate::geometry::EdgeOffsets;
 use crate::style::color::{Color, Rgba};
 use crate::style::display::Display;
 use crate::style::position::Position;
-use crate::style::values::{Length, LengthOrAuto};
 use crate::style::types::{TextAlignLast, TextIndent, TextJustify};
+use crate::style::values::{Length, LengthOrAuto};
 
 /// Computed CSS styles for an element
 ///

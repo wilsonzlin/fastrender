@@ -953,10 +953,11 @@ pub struct TabItem {
     resolved_width: f32,
     direction: Direction,
     unicode_bidi: UnicodeBidi,
+    allow_wrap: bool,
 }
 
 impl TabItem {
-    pub fn new(style: Arc<ComputedStyle>, metrics: BaselineMetrics, tab_interval: f32) -> Self {
+    pub fn new(style: Arc<ComputedStyle>, metrics: BaselineMetrics, tab_interval: f32, allow_wrap: bool) -> Self {
         let direction = style.direction;
         let unicode_bidi = style.unicode_bidi;
         Self {
@@ -967,6 +968,7 @@ impl TabItem {
             resolved_width: 0.0,
             direction,
             unicode_bidi,
+            allow_wrap,
         }
     }
 
@@ -991,7 +993,7 @@ impl TabItem {
     }
 
     pub fn width(&self) -> f32 {
-        self.resolved_width
+        self.used_width()
     }
 
     pub fn interval(&self) -> f32 {
@@ -1004,6 +1006,18 @@ impl TabItem {
 
     pub fn metrics(&self) -> BaselineMetrics {
         self.metrics
+    }
+
+    pub fn allow_wrap(&self) -> bool {
+        self.allow_wrap
+    }
+
+    fn used_width(&self) -> f32 {
+        if self.resolved_width > 0.0 {
+            self.resolved_width
+        } else {
+            self.tab_interval.max(0.0)
+        }
     }
 }
 

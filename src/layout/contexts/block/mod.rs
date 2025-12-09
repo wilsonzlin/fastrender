@@ -294,7 +294,8 @@ impl BlockFormattingContext {
 
             let inline_container = BoxNode::new_inline(parent.style.clone(), buffer.clone());
             let inline_fc = InlineFormattingContext::with_font_context(self.font_context.clone());
-            let inline_constraints = LayoutConstraints::new(AvailableSpace::Definite(containing_width), available_height);
+            let inline_constraints =
+                LayoutConstraints::new(AvailableSpace::Definite(containing_width), available_height);
             let mut inline_fragment = inline_fc.layout(&inline_container, &inline_constraints)?;
 
             inline_fragment.bounds = Rect::from_xywh(
@@ -355,9 +356,9 @@ impl BlockFormattingContext {
         let trailing_margin = margin_ctx.pending_margin();
 
         // Check for bottom separation
-        let parent_has_bottom_separation =
-            resolve_length_for_width(parent.style.border_bottom_width, containing_width) > 0.0
-                || resolve_length_for_width(parent.style.padding_bottom, containing_width) > 0.0;
+        let parent_has_bottom_separation = resolve_length_for_width(parent.style.border_bottom_width, containing_width)
+            > 0.0
+            || resolve_length_for_width(parent.style.padding_bottom, containing_width) > 0.0;
 
         if parent_has_bottom_separation {
             content_height += trailing_margin.max(0.0);
@@ -414,11 +415,10 @@ impl FormattingContext for BlockFormattingContext {
             computed_width.margin_right = margin_right;
         }
 
-        let resolved_height =
-            style
-                .height
-                .as_ref()
-                .and_then(|h| resolve_length_with_percentage(*h, containing_height, style.font_size));
+        let resolved_height = style
+            .height
+            .as_ref()
+            .and_then(|h| resolve_length_with_percentage(*h, containing_height, style.font_size));
         let child_height_space = resolved_height
             .map(AvailableSpace::Definite)
             .unwrap_or(AvailableSpace::Indefinite);
