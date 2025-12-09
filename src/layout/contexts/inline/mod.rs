@@ -940,7 +940,7 @@ impl InlineFormattingContext {
         };
         let total_width: f32 = items.iter().map(|p| p.item.width()).sum();
         let extra_space = (usable_width - total_width).max(0.0);
-        let (offset, gap_extra) = match text_align {
+        let (lead, gap_extra) = match text_align {
             TextAlign::Right => (extra_space, 0.0),
             TextAlign::Center => (extra_space * 0.5, 0.0),
             TextAlign::Justify if should_justify && items.len() > 1 => {
@@ -954,15 +954,32 @@ impl InlineFormattingContext {
             _ => (0.0, 0.0),
         };
 
-        let mut running_offset = indent_offset + offset;
+        let rtl = matches!(direction, crate::style::types::Direction::Rtl);
+        let mut cursor = if rtl {
+            indent_offset + lead + total_width
+        } else {
+            indent_offset + lead
+        };
+
         for (i, positioned) in items.iter().enumerate() {
+            let item_width = positioned.item.width();
+            let item_x = if rtl { cursor - item_width } else { cursor };
             let item_y =
                 line.baseline + positioned.baseline_offset - positioned.item.baseline_metrics().baseline_offset;
 
-            let fragment = self.create_item_fragment(&positioned.item, positioned.x + running_offset, item_y);
+            let fragment = self.create_item_fragment(&positioned.item, item_x, item_y);
             children.push(fragment);
-            if should_justify && gap_extra > 0.0 && Self::is_justifiable_gap(&items, i, text_justify) {
-                running_offset += gap_extra;
+
+            if rtl {
+                cursor -= item_width;
+                if should_justify && gap_extra > 0.0 && Self::is_justifiable_gap(&items, i, text_justify) {
+                    cursor -= gap_extra;
+                }
+            } else {
+                cursor += item_width;
+                if should_justify && gap_extra > 0.0 && Self::is_justifiable_gap(&items, i, text_justify) {
+                    cursor += gap_extra;
+                }
             }
         }
 
@@ -3285,6 +3302,39 @@ mod tests {
         // Match-parent should align to the parent's start (right in RTL)
         let expected = line.bounds.width() - child.bounds.width();
         assert!((child.bounds.x() - expected).abs() < 1.0);
+    }
+
+    #[test]
+    fn rtl_lines_position_items_from_right_edge() {
+        let mut root_style = ComputedStyle::default();
+        root_style.direction = crate::style::types::Direction::Rtl;
+        let text_style = Arc::new(ComputedStyle::default());
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![
+                BoxNode::new_text(text_style.clone(), "abc".to_string()),
+                BoxNode::new_text(text_style.clone(), "def".to_string()),
+            ],
+        );
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        let line = fragment.children.first().expect("line fragment");
+        assert_eq!(line.children.len(), 2, "expected two text fragments");
+        let first = &line.children[0];
+        let second = &line.children[1];
+
+        assert!(
+            first.bounds.x() > second.bounds.x(),
+            "in RTL the first fragment should be positioned to the right of the second"
+        );
+        let right_edge = first.bounds.x() + first.bounds.width();
+        assert!(
+            right_edge > line.bounds.width() * 0.5,
+            "RTL start alignment should push the first fragment toward the right edge"
+        );
     }
 
     #[test]

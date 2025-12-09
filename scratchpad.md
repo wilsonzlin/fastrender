@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Inline RTL placement now positions visual fragments from the right edge using the resolved paragraph direction, so start/end alignment and indentation respect RTL flow; added regression for multi-fragment RTL lines.
 - Paragraph direction now resolves from first-strong content for `unicode-bidi: plaintext`: line records carry the resolved bidi base direction from UAX#9, start/end alignment and text-indent mapping use the per-line direction, and plaintext blocks align to RTL/LTR starts per their content. Tests cover RTL/LTR plaintext alignment.
 - `unicode-bidi: plaintext` now wraps content with FSI/PDI isolates so paragraph base directions stay stable while plaintext spans choose their own first-strong direction; bidi control insertion always runs so isolates/embeds for other runs aren’t dropped, and a regression guards plaintext isolates not flipping the paragraph.
 - Canvas now maintains clip masks (including rounded radii) and applies them to all primitives/text; display list renderer uses the clip radii, keeps transforms scoped with save/restore, avoids shrinking images to the clip rect, and has a regression for transform stacking plus clip-mask coverage in Canvas tests.
