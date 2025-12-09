@@ -518,16 +518,31 @@ pub enum BackgroundImage {
     RepeatingRadialGradient { stops: Vec<ColorStop> },
 }
 
+/// Background sizing keywords
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundSizeKeyword {
+    Cover,
+    Contain,
+}
+
+/// Background sizing component (per axis)
+///
+/// CSS: `background-size`
+/// Reference: CSS Backgrounds and Borders Module Level 3
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BackgroundSizeComponent {
+    Auto,
+    Length(Length),
+}
+
 /// Background image sizing
 ///
 /// CSS: `background-size`
 /// Reference: CSS Backgrounds and Borders Module Level 3
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BackgroundSize {
-    Auto,
-    Cover,
-    Contain,
-    Length(Length, Length),
+    Keyword(BackgroundSizeKeyword),
+    Explicit(BackgroundSizeComponent, BackgroundSizeComponent),
 }
 
 /// Box reference for background painting/positioning

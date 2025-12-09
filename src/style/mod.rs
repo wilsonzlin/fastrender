@@ -27,11 +27,12 @@ use display::Display;
 use position::Position;
 use std::collections::HashMap;
 use types::{
-    AlignContent, AlignItems, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundPosition, BackgroundRepeat,
-    BackgroundSize, BorderCollapse, BorderStyle, Direction, FilterFunction, FlexBasis, FlexDirection, FlexWrap,
-    FontStyle, FontWeight, GridTrack, HyphensMode, Isolation, JustifyContent, LineHeight, MixBlendMode, ObjectFit,
-    ObjectPosition, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration,
-    TextIndent, TextJustify, TextTransform, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
+    AlignContent, AlignItems, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundPosition,
+    BackgroundRepeat, BackgroundSize, BackgroundSizeComponent, BorderCollapse, BorderStyle, Direction, FilterFunction,
+    FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack, HyphensMode, Isolation, JustifyContent,
+    LineHeight, MixBlendMode, ObjectFit, ObjectPosition, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign,
+    TextAlignLast, TextDecoration, TextIndent, TextJustify, TextTransform, TransformOrigin, UnicodeBidi, VerticalAlign,
+    WhiteSpace, WordBreak,
 };
 use values::Length;
 
@@ -274,7 +275,7 @@ impl Default for ComputedStyle {
             color: Rgba::BLACK,
             background_color: Rgba::TRANSPARENT,
             background_image: None,
-            background_size: BackgroundSize::Auto,
+            background_size: BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto),
             background_position: BackgroundPosition::Position(Length::percent(0.0), Length::percent(0.0)),
             background_repeat: BackgroundRepeat::repeat(),
             background_attachment: BackgroundAttachment::Scroll,

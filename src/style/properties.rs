@@ -855,22 +855,11 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
             }
             _ => {}
         },
-        "background-size" => match &resolved_value {
-            PropertyValue::Keyword(kw) => {
-                styles.background_size = match kw.as_str() {
-                    "auto" => BackgroundSize::Auto,
-                    "cover" => BackgroundSize::Cover,
-                    "contain" => BackgroundSize::Contain,
-                    _ => styles.background_size,
-                };
+        "background-size" => {
+            if let Some(size) = parse_background_size(&resolved_value) {
+                styles.background_size = size;
             }
-            PropertyValue::Multiple(values) if values.len() == 2 => {
-                if let (Some(w), Some(h)) = (extract_length(&values[0]), extract_length(&values[1])) {
-                    styles.background_size = BackgroundSize::Length(w, h);
-                }
-            }
-            _ => {}
-        },
+        }
         "background-repeat" => {
             if let Some(rep) = parse_background_repeat(&resolved_value) {
                 styles.background_repeat = rep;
@@ -1157,6 +1146,44 @@ fn parse_object_position(value: &PropertyValue) -> Option<ObjectPosition> {
     };
 
     Some(ObjectPosition { x, y })
+}
+
+fn parse_background_size_component(value: &PropertyValue) -> Option<BackgroundSizeComponent> {
+    match value {
+        PropertyValue::Keyword(kw) if kw == "auto" => Some(BackgroundSizeComponent::Auto),
+        PropertyValue::Length(len) => Some(BackgroundSizeComponent::Length(*len)),
+        PropertyValue::Number(n) if *n == 0.0 => Some(BackgroundSizeComponent::Length(Length::px(0.0))),
+        PropertyValue::Percentage(p) => Some(BackgroundSizeComponent::Length(Length::percent(*p))),
+        _ => None,
+    }
+}
+
+fn parse_background_size(value: &PropertyValue) -> Option<BackgroundSize> {
+    match value {
+        PropertyValue::Keyword(kw) => match kw.as_str() {
+            "cover" => Some(BackgroundSize::Keyword(BackgroundSizeKeyword::Cover)),
+            "contain" => Some(BackgroundSize::Keyword(BackgroundSizeKeyword::Contain)),
+            "auto" => Some(BackgroundSize::Explicit(
+                BackgroundSizeComponent::Auto,
+                BackgroundSizeComponent::Auto,
+            )),
+            _ => None,
+        },
+        PropertyValue::Multiple(values) => {
+            let components: Vec<BackgroundSizeComponent> =
+                values.iter().filter_map(parse_background_size_component).collect();
+            match components.len() {
+                0 => None,
+                1 => Some(BackgroundSize::Explicit(
+                    components[0],
+                    BackgroundSizeComponent::Auto,
+                )),
+                _ => Some(BackgroundSize::Explicit(components[0], components[1])),
+            }
+        }
+        _ => parse_background_size_component(value)
+            .map(|c| BackgroundSize::Explicit(c, BackgroundSizeComponent::Auto)),
+    }
 }
 
 fn parse_transform_origin(value: &PropertyValue) -> Option<TransformOrigin> {
@@ -1816,6 +1843,46 @@ mod tests {
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert_eq!(style.background_repeat.x, BackgroundRepeatKeyword::Space);
         assert_eq!(style.background_repeat.y, BackgroundRepeatKeyword::Round);
+    }
+
+    #[test]
+    fn parses_background_size_components_and_defaults() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "background-size".to_string(),
+            value: PropertyValue::Length(Length::px(25.0)),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(
+            style.background_size,
+            BackgroundSize::Explicit(BackgroundSizeComponent::Length(Length::px(25.0)), BackgroundSizeComponent::Auto)
+        );
+
+        let decl = Declaration {
+            property: "background-size".to_string(),
+            value: PropertyValue::Multiple(vec![
+                PropertyValue::Keyword("auto".to_string()),
+                PropertyValue::Percentage(50.0),
+            ]),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(
+            style.background_size,
+            BackgroundSize::Explicit(
+                BackgroundSizeComponent::Auto,
+                BackgroundSizeComponent::Length(Length::percent(50.0))
+            )
+        );
+
+        let decl = Declaration {
+            property: "background-size".to_string(),
+            value: PropertyValue::Keyword("contain".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.background_size, BackgroundSize::Keyword(BackgroundSizeKeyword::Contain));
     }
 
     #[test]

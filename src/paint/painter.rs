@@ -34,7 +34,7 @@ use crate::paint::stacking::creates_stacking_context;
 use crate::style::color::Rgba;
 use crate::style::types::{
     BackgroundAttachment, BackgroundImage, BackgroundPosition, BackgroundRepeatKeyword, BackgroundSize,
-    BorderStyle as CssBorderStyle, ObjectFit, TextDecoration,
+    BackgroundSizeComponent, BackgroundSizeKeyword, BorderStyle as CssBorderStyle, ObjectFit, TextDecoration,
 };
 use crate::style::types::{FilterColor, FilterFunction, MixBlendMode, Overflow};
 use crate::style::values::{Length, LengthUnit};
@@ -842,7 +842,12 @@ impl Painter {
                     tile_h = round_tile_length(origin_rect.height(), tile_h);
                     rounded_y = true;
                 }
-                if rounded_x ^ rounded_y && matches!(style.background_size, BackgroundSize::Auto) {
+                if rounded_x ^ rounded_y
+                    && matches!(
+                        style.background_size,
+                        BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
+                    )
+                {
                     let aspect = if img_h != 0.0 { img_w / img_h } else { 1.0 };
                     if rounded_x {
                         tile_h = tile_w / aspect;
@@ -2704,20 +2709,69 @@ fn resolve_length_for_paint(len: &Length, font_size: f32, percentage_base: f32) 
 }
 
 fn compute_background_size(style: &ComputedStyle, area_w: f32, area_h: f32, img_w: f32, img_h: f32) -> (f32, f32) {
+    let natural_w = if img_w > 0.0 { Some(img_w) } else { None };
+    let natural_h = if img_h > 0.0 { Some(img_h) } else { None };
+    let ratio = if img_w > 0.0 && img_h > 0.0 { Some(img_w / img_h) } else { None };
+    let font_size = style.font_size;
+
     match style.background_size {
-        BackgroundSize::Auto => (img_w, img_h),
-        BackgroundSize::Cover => {
-            let scale = (area_w / img_w).max(area_h / img_h);
-            (img_w * scale, img_h * scale)
+        BackgroundSize::Keyword(BackgroundSizeKeyword::Cover) => {
+            if let (Some(w), Some(h)) = (natural_w, natural_h) {
+                let scale = (area_w / w).max(area_h / h);
+                (w * scale, h * scale)
+            } else {
+                (area_w.max(0.0), area_h.max(0.0))
+            }
         }
-        BackgroundSize::Contain => {
-            let scale = (area_w / img_w).min(area_h / img_h);
-            (img_w * scale, img_h * scale)
+        BackgroundSize::Keyword(BackgroundSizeKeyword::Contain) => {
+            if let (Some(w), Some(h)) = (natural_w, natural_h) {
+                let scale = (area_w / w).min(area_h / h);
+                (w * scale, h * scale)
+            } else {
+                (area_w.max(0.0), area_h.max(0.0))
+            }
         }
-        BackgroundSize::Length(w, h) => {
-            let resolved_w = resolve_length_for_paint(&w, style.font_size, area_w);
-            let resolved_h = resolve_length_for_paint(&h, style.font_size, area_h);
-            (resolved_w.max(0.0), resolved_h.max(0.0))
+        BackgroundSize::Explicit(x, y) => {
+            let resolve = |component: BackgroundSizeComponent, area: f32| -> Option<f32> {
+                match component {
+                    BackgroundSizeComponent::Auto => None,
+                    BackgroundSizeComponent::Length(len) => {
+                        Some(resolve_length_for_paint(&len, font_size, area).max(0.0))
+                    }
+                }
+            };
+
+            let resolved_x = resolve(x, area_w);
+            let resolved_y = resolve(y, area_h);
+
+            match (resolved_x, resolved_y) {
+                (Some(w), Some(h)) => (w, h),
+                (Some(w), None) => {
+                    if let Some(r) = ratio {
+                        (w, (w / r).max(0.0))
+                    } else if let Some(h) = natural_h {
+                        (w, h)
+                    } else {
+                        (w, area_h.max(0.0))
+                    }
+                }
+                (None, Some(h)) => {
+                    if let Some(r) = ratio {
+                        ((h * r).max(0.0), h)
+                    } else if let Some(w) = natural_w {
+                        (w, h)
+                    } else {
+                        (area_w.max(0.0), h)
+                    }
+                }
+                (None, None) => {
+                    if let (Some(w), Some(h)) = (natural_w, natural_h) {
+                        (w, h)
+                    } else {
+                        (area_w.max(0.0), area_h.max(0.0))
+                    }
+                }
+            }
         }
     }
 }
@@ -3338,13 +3392,37 @@ mod tests {
     #[test]
     fn background_cover_scales_to_fill() {
         let mut style = ComputedStyle::default();
-        style.background_size = BackgroundSize::Cover;
+        style.background_size = BackgroundSize::Keyword(BackgroundSizeKeyword::Cover);
         let (tw, th) = compute_background_size(&style, 200.0, 100.0, 50.0, 50.0);
         let (ox, oy) = resolve_background_offset(style.background_position, 200.0, 100.0, tw, th, style.font_size);
         assert!((tw - 200.0).abs() < 0.01);
         assert!((th - 200.0).abs() < 0.01);
         assert!((ox - 0.0).abs() < 0.01);
         assert!((oy - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn background_size_single_dimension_auto_uses_intrinsic_ratio() {
+        let mut style = ComputedStyle::default();
+        style.background_size = BackgroundSize::Explicit(
+            BackgroundSizeComponent::Auto,
+            BackgroundSizeComponent::Length(Length::px(25.0)),
+        );
+        let (tw, th) = compute_background_size(&style, 200.0, 100.0, 100.0, 50.0);
+        assert!((tw - 50.0).abs() < 0.01);
+        assert!((th - 25.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn background_size_auto_auto_uses_intrinsic_size_or_falls_back() {
+        let style = ComputedStyle::default();
+        let (tw, th) = compute_background_size(&style, 120.0, 80.0, 30.0, 10.0);
+        assert!((tw - 30.0).abs() < 0.01);
+        assert!((th - 10.0).abs() < 0.01);
+
+        let (tw, th) = compute_background_size(&style, 50.0, 60.0, 0.0, 0.0);
+        assert!((tw - 50.0).abs() < 0.01);
+        assert!((th - 60.0).abs() < 0.01);
     }
 
     #[test]
