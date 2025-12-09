@@ -106,10 +106,10 @@ impl ImageCache {
         // Resolve the URL first
         let resolved_url = self.resolve_url(url);
 
-        // Check cache first (using original URL as key)
+        // Check cache first (using resolved URL as key)
         {
             let cache = self.cache.lock().unwrap();
-            if let Some(img) = cache.get(url) {
+            if let Some(img) = cache.get(&resolved_url) {
                 return Ok(Arc::clone(img));
             }
         }
@@ -133,11 +133,11 @@ impl ImageCache {
             self.decode_image_bytes(&bytes, None, ext_hint.as_deref(), &resolved_url)?
         };
 
-        // Cache it (using original URL as key)
+        // Cache it (using resolved URL as key)
         let img_arc = Arc::new(img);
         {
             let mut cache = self.cache.lock().unwrap();
-            cache.insert(url.to_string(), Arc::clone(&img_arc));
+            cache.insert(resolved_url, Arc::clone(&img_arc));
         }
 
         Ok(img_arc)
