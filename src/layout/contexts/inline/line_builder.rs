@@ -1930,7 +1930,10 @@ mod tests {
 
         let replaced = ReplacedItem::new(
             Size::new(100.0, 50.0),
-            ReplacedType::Image { src: String::new() },
+            ReplacedType::Image {
+                src: String::new(),
+                alt: None,
+            },
             Arc::new(ComputedStyle::default()),
             0.0,
             0.0,

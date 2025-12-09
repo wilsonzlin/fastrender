@@ -874,6 +874,7 @@ mod tests {
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
             ReplacedType::Image {
                 src: "test.png".to_string(),
+                alt: None,
             },
         );
 

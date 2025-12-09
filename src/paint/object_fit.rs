@@ -104,17 +104,8 @@ mod tests {
             y: PositionComponent::Keyword(PositionKeyword::Center),
         };
 
-        let (offset_x, offset_y, dest_w, dest_h) = compute_object_fit(
-            fit,
-            position,
-            200.0,
-            100.0,
-            100.0,
-            100.0,
-            16.0,
-            None,
-        )
-        .expect("fit computed");
+        let (offset_x, offset_y, dest_w, dest_h) =
+            compute_object_fit(fit, position, 200.0, 100.0, 100.0, 100.0, 16.0, None).expect("fit computed");
         assert_eq!(dest_h, 100.0);
         assert_eq!(dest_w, 100.0);
         assert!((offset_x - 50.0).abs() < 0.01);
@@ -128,17 +119,8 @@ mod tests {
             y: PositionComponent::Keyword(PositionKeyword::Center),
         };
 
-        let (offset_x, offset_y, dest_w, dest_h) = compute_object_fit(
-            ObjectFit::None,
-            position,
-            100.0,
-            100.0,
-            200.0,
-            50.0,
-            16.0,
-            None,
-        )
-        .expect("fit computed");
+        let (offset_x, offset_y, dest_w, dest_h) =
+            compute_object_fit(ObjectFit::None, position, 100.0, 100.0, 200.0, 50.0, 16.0, None).expect("fit computed");
         assert_eq!(dest_w, 200.0);
         assert_eq!(dest_h, 50.0);
         // Alignment space is negative; center should shift left instead of clamping to zero.
@@ -153,17 +135,9 @@ mod tests {
             y: PositionComponent::Percentage(0.75),
         };
 
-        let (offset_x, offset_y, _, _) = compute_object_fit(
-            ObjectFit::Contain,
-            position,
-            120.0,
-            60.0,
-            60.0,
-            60.0,
-            16.0,
-            None,
-        )
-        .expect("fit computed");
+        let (offset_x, offset_y, _, _) =
+            compute_object_fit(ObjectFit::Contain, position, 120.0, 60.0, 60.0, 60.0, 16.0, None)
+                .expect("fit computed");
         // Contain yields dest_w=60,dest_h=60 so free_x=60, free_y=0.
         assert!((offset_x - 15.0).abs() < 0.01);
         assert!((offset_y - 0.0).abs() < 0.01);
@@ -177,17 +151,8 @@ mod tests {
         };
 
         // free_x is 50 (100 - 50). 2em at 20px font size => 40px.
-        let (offset_x, offset_y, _, _) = compute_object_fit(
-            ObjectFit::None,
-            position,
-            100.0,
-            50.0,
-            50.0,
-            50.0,
-            20.0,
-            None,
-        )
-        .expect("fit computed");
+        let (offset_x, offset_y, _, _) =
+            compute_object_fit(ObjectFit::None, position, 100.0, 50.0, 50.0, 50.0, 20.0, None).expect("fit computed");
         assert!((offset_x - 40.0).abs() < 0.01);
         assert!((offset_y - 0.0).abs() < 0.01);
     }

@@ -55,6 +55,9 @@ pub struct DOMNode {
 
     /// Source URL for replaced elements (img src, video src, etc.)
     pub src: Option<String>,
+
+    /// Alternative text for replaced elements (e.g., <img alt="...">)
+    pub alt: Option<String>,
 }
 
 impl DOMNode {
@@ -69,6 +72,7 @@ impl DOMNode {
             children,
             intrinsic_size: None,
             src: None,
+            alt: None,
         }
     }
 
@@ -83,6 +87,7 @@ impl DOMNode {
             children: Vec::new(),
             intrinsic_size: None,
             src: None,
+            alt: None,
         }
     }
 
@@ -124,6 +129,7 @@ impl DOMNode {
             children: Vec::new(),
             intrinsic_size,
             src: Some(src.into()),
+            alt: None,
         }
     }
 
@@ -136,6 +142,12 @@ impl DOMNode {
     /// Adds a class (builder pattern)
     pub fn with_class(mut self, class: impl Into<String>) -> Self {
         self.classes.push(class.into());
+        self
+    }
+
+    /// Sets the alt text (builder pattern)
+    pub fn with_alt(mut self, alt: impl Into<String>) -> Self {
+        self.alt = Some(alt.into());
         self
     }
 
@@ -221,9 +233,10 @@ impl DOMNode {
 
         let tag = self.tag_name.as_ref()?;
         let src = self.src.clone().unwrap_or_default();
+        let alt = self.alt.clone().filter(|s| !s.is_empty());
 
         match tag.as_str() {
-            "img" => Some(ReplacedType::Image { src }),
+            "img" => Some(ReplacedType::Image { src, alt }),
             "video" => Some(ReplacedType::Video { src }),
             "canvas" => Some(ReplacedType::Canvas),
             "svg" => Some(ReplacedType::Svg { content: src }),
@@ -924,15 +937,16 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
 
     // Get src attribute if available
     let src = styled.node.get_attribute("src").unwrap_or_default();
+    let alt = styled.node.get_attribute("alt").filter(|s| !s.is_empty());
 
     // Determine replaced type
     let replaced_type = match tag.to_lowercase().as_str() {
-        "img" => ReplacedType::Image { src },
+        "img" => ReplacedType::Image { src, alt },
         "video" => ReplacedType::Video { src },
         "canvas" => ReplacedType::Canvas,
         "svg" => ReplacedType::Svg { content: String::new() },
         "iframe" => ReplacedType::Iframe { src },
-        _ => ReplacedType::Image { src },
+        _ => ReplacedType::Image { src, alt },
     };
 
     // Get intrinsic size from attributes when provided
@@ -1577,6 +1591,7 @@ mod tests {
             style.clone(),
             ReplacedType::Image {
                 src: "test.png".to_string(),
+                alt: None,
             },
             Some(Size::new(100.0, 100.0)),
             Some(1.0),

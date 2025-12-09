@@ -99,6 +99,8 @@ pub enum ReplacedType {
     Image {
         /// Source URL or data URI
         src: String,
+        /// Alternative text for fallback rendering
+        alt: Option<String>,
     },
 
     /// Video element
@@ -624,6 +626,7 @@ mod tests {
             default_style(),
             ReplacedType::Image {
                 src: "image.png".to_string(),
+                alt: None,
             },
             Some(Size::new(100.0, 50.0)),
             Some(2.0),
@@ -740,6 +743,7 @@ mod tests {
             default_style(),
             ReplacedType::Image {
                 src: "img.png".to_string(),
+                alt: None,
             },
             None,
             None,

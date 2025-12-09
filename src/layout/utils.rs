@@ -193,7 +193,10 @@ mod tests {
         style.height = None;
 
         let replaced = ReplacedBox {
-            replaced_type: crate::tree::box_tree::ReplacedType::Image { src: "img".into() },
+            replaced_type: crate::tree::box_tree::ReplacedType::Image {
+                src: "img".into(),
+                alt: None,
+            },
             intrinsic_size: Some(Size::new(640.0, 480.0)),
             aspect_ratio: None,
         };
@@ -210,7 +213,10 @@ mod tests {
         style.height = None;
 
         let replaced = ReplacedBox {
-            replaced_type: crate::tree::box_tree::ReplacedType::Image { src: "img".into() },
+            replaced_type: crate::tree::box_tree::ReplacedType::Image {
+                src: "img".into(),
+                alt: None,
+            },
             intrinsic_size: Some(Size::new(100.0, 50.0)),
             aspect_ratio: Some(2.0),
         };
@@ -226,7 +232,10 @@ mod tests {
         style.width = Some(Length::percent(50.0));
         style.height = Some(Length::percent(25.0));
         let replaced = ReplacedBox {
-            replaced_type: crate::tree::box_tree::ReplacedType::Image { src: "img".into() },
+            replaced_type: crate::tree::box_tree::ReplacedType::Image {
+                src: "img".into(),
+                alt: None,
+            },
             intrinsic_size: Some(Size::new(200.0, 200.0)),
             aspect_ratio: None,
         };
@@ -243,7 +252,10 @@ mod tests {
         style.height = None;
 
         let replaced = ReplacedBox {
-            replaced_type: crate::tree::box_tree::ReplacedType::Image { src: "img".into() },
+            replaced_type: crate::tree::box_tree::ReplacedType::Image {
+                src: "img".into(),
+                alt: None,
+            },
             intrinsic_size: Some(Size::new(120.0, 80.0)),
             aspect_ratio: Some(1.5),
         };

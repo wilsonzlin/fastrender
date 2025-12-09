@@ -51,10 +51,16 @@ spawn_agent() {
     local prompt="$1"
     local resume="$2"
 
+    local args=(
+        --sandbox danger-full-access
+        --skip-git-repo-check
+        -c 'model_reasoning_effort="xhigh"'
+    )
+
     if [ "$resume" = "true" ]; then
-        echo "$prompt" | codex exec --skip-git-repo-check resume --last -
+        echo "$prompt" | codex exec "${args[@]}" resume --last -
     else
-        echo "$prompt" | codex exec -m gpt-5.1-codex-max --skip-git-repo-check -
+        echo "$prompt" | codex exec "${args[@]}" -m gpt-5.1-codex-max -
     fi
 }
 

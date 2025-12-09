@@ -60,11 +60,15 @@ use crate::error::{Error, RenderError, Result};
 use crate::geometry::Size;
 use crate::image_loader::ImageCache;
 use crate::image_output::{encode_image, OutputFormat};
+use crate::layout::contexts::inline::baseline::compute_line_height;
+use crate::layout::contexts::inline::line_builder::TextItem;
 use crate::layout::engine::{LayoutConfig, LayoutEngine};
 use crate::paint::painter::paint_tree_with_resources;
 use crate::style::cascade::apply_styles;
 use crate::style::color::Rgba;
+use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
+use crate::text::pipeline::ShapingPipeline;
 use crate::tree::box_generation::generate_box_tree;
 use crate::tree::box_tree::{BoxNode, BoxType, ReplacedType};
 use crate::tree::fragment_tree::FragmentTree;
@@ -641,10 +645,11 @@ impl FastRender {
     fn resolve_replaced_intrinsic_sizes(&self, node: &mut BoxNode) {
         if let BoxType::Replaced(replaced_box) = &mut node.box_type {
             // Fill missing intrinsic size/aspect ratio for images
-            match &replaced_box.replaced_type {
-                ReplacedType::Image { src } => {
+            match &mut replaced_box.replaced_type {
+                ReplacedType::Image { src, alt } => {
                     let needs_intrinsic = replaced_box.intrinsic_size.is_none();
                     let needs_ratio = replaced_box.aspect_ratio.is_none();
+                    let mut have_resource_dimensions = false;
 
                     if (needs_intrinsic || needs_ratio) && !src.is_empty() {
                         if let Ok(image) = self.image_cache.load(src) {
@@ -657,6 +662,22 @@ impl FastRender {
                                 if needs_ratio {
                                     replaced_box.aspect_ratio = Some(size.width / size.height);
                                 }
+                                have_resource_dimensions = true;
+                            }
+                        }
+                    }
+
+                    if !have_resource_dimensions && (needs_intrinsic || needs_ratio) {
+                        if let Some(size) = alt
+                            .as_deref()
+                            .filter(|s| !s.is_empty())
+                            .and_then(|text| self.alt_intrinsic_size(node.style.as_ref(), text))
+                        {
+                            if needs_intrinsic {
+                                replaced_box.intrinsic_size.get_or_insert(size);
+                            }
+                            if needs_ratio && size.height > 0.0 && replaced_box.aspect_ratio.is_none() {
+                                replaced_box.aspect_ratio = Some(size.width / size.height);
                             }
                         }
                     }
@@ -707,6 +728,32 @@ impl FastRender {
 
         for child in &mut node.children {
             self.resolve_replaced_intrinsic_sizes(child);
+        }
+    }
+
+    /// Computes an intrinsic size for alt text when replaced content cannot be loaded.
+    fn alt_intrinsic_size(&self, style: &ComputedStyle, alt: &str) -> Option<Size> {
+        let text = alt.trim();
+        if text.is_empty() {
+            return None;
+        }
+
+        let mut runs = ShapingPipeline::new().shape(text, style, &self.font_context).ok()?;
+        if runs.is_empty() {
+            return None;
+        }
+
+        TextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
+
+        let line_height = compute_line_height(style);
+        let metrics = TextItem::metrics_from_runs(&runs, line_height, style.font_size);
+        let width: f32 = runs.iter().map(|r| r.advance).sum();
+        let height = metrics.height;
+
+        if width.is_finite() && height.is_finite() && height > 0.0 {
+            Some(Size::new(width, height))
+        } else {
+            None
         }
     }
 
@@ -770,6 +817,9 @@ impl FastRender {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::contexts::inline::baseline::compute_line_height;
+    use crate::layout::contexts::inline::line_builder::TextItem;
+    use crate::text::pipeline::ShapingPipeline;
     use crate::ComputedStyle;
     use std::sync::Arc;
 
@@ -922,6 +972,52 @@ mod tests {
             Rgba::rgb(255, 0, 0), // Red background
         );
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn resolve_intrinsic_sizes_use_alt_text_when_image_missing() {
+        let renderer = FastRender::new().expect("init renderer");
+        let style = Arc::new(ComputedStyle::default());
+        let alt_text = "fallback alt";
+
+        let mut node = BoxNode::new_replaced(
+            style.clone(),
+            ReplacedType::Image {
+                src: String::new(),
+                alt: Some(alt_text.to_string()),
+            },
+            None,
+            None,
+        );
+
+        renderer.resolve_replaced_intrinsic_sizes(&mut node);
+        let replaced = match node.box_type {
+            BoxType::Replaced(ref r) => r,
+            _ => panic!("not replaced"),
+        };
+
+        let mut runs = ShapingPipeline::new()
+            .shape(alt_text, &style, renderer.font_context())
+            .expect("shape alt text");
+        TextItem::apply_spacing_to_runs(&mut runs, alt_text, style.letter_spacing, style.word_spacing);
+        let line_height = compute_line_height(&style);
+        let metrics = TextItem::metrics_from_runs(&runs, line_height, style.font_size);
+        let expected = Size::new(runs.iter().map(|r| r.advance).sum(), metrics.height);
+
+        let intrinsic = replaced.intrinsic_size.expect("alt intrinsic size");
+        assert!(
+            (intrinsic.width - expected.width).abs() < 0.01,
+            "alt text width should drive intrinsic width"
+        );
+        assert!(
+            (intrinsic.height - expected.height).abs() < 0.01,
+            "alt text height should match line height"
+        );
+        assert_eq!(
+            replaced.aspect_ratio,
+            Some(expected.width / expected.height),
+            "alt text should set aspect ratio"
+        );
     }
 
     #[test]

@@ -38,6 +38,7 @@
 
 use crate::geometry::{Point, Rect, Size};
 use crate::style::color::Rgba;
+use crate::text::font_db::{FontStretch, FontStyle};
 use std::fmt;
 use std::sync::Arc;
 
@@ -403,8 +404,11 @@ pub struct FontId {
     /// Font weight (100-900)
     pub weight: u16,
 
-    /// Is italic?
-    pub italic: bool,
+    /// Font style (normal/italic/oblique)
+    pub style: FontStyle,
+
+    /// Font stretch (percentage of normal width)
+    pub stretch: FontStretch,
 }
 
 // ============================================================================
