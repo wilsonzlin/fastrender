@@ -64,6 +64,7 @@
 - Inline-block baselines now come from the last in-flow line box inside the fragment when present, falling back to the bottom border edge only when no lines exist. Baseline metrics for inline-blocks now use ascent/descent derived from that line instead of treating them as replaced elements (`src/layout/contexts/inline/line_builder.rs`).
 - Collapsed table borders are painted as individual border edges using the resolved style/color/width for each grid line instead of flat stripes; vertical/horizontal borders are centered on grid boundaries and drawn with border styles (dotted/dashed/double/inset/outset/etc.) via the painter (`src/layout/table.rs`).
 - Collapsed border data now carries per-segment winners (one border resolution per grid line segment), and painting renders each segment with its own style/color/width using boundary-aware positioning based on adjacent perpendicular segment widths so adjoining borders meet cleanly instead of flattening to a uniform line (`src/layout/table.rs`).
+- Collapsed border corners now resolve a winner per grid junction and paint a square join using that style/color/width, reducing double-paint overlaps at intersections (`src/layout/table.rs`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).

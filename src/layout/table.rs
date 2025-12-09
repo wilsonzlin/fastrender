@@ -611,6 +611,8 @@ struct CollapsedBorders {
     vertical: Vec<Vec<ResolvedBorder>>,
     /// Horizontal grid lines: index is row boundary (0..=rows), inner vec is per column segment.
     horizontal: Vec<Vec<ResolvedBorder>>,
+    /// Corner joins: index [row][col] for grid junctions.
+    corners: Vec<Vec<ResolvedBorder>>,
 }
 
 /// Resolve the border widths for a table in collapsed border model.
@@ -634,6 +636,18 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         color: Rgba,
         origin: BorderOrigin,
         source_order: u32,
+    }
+
+    impl BorderCandidate {
+        fn none() -> Self {
+            Self {
+                width: 0.0,
+                style: BorderStyle::None,
+                color: Rgba::TRANSPARENT,
+                origin: BorderOrigin::Table,
+                source_order: 0,
+            }
+        }
     }
 
     fn style_priority(style: BorderStyle) -> u8 {
@@ -1044,9 +1058,9 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     }
 
     let resolved_vertical: Vec<Vec<ResolvedBorder>> = vertical
-        .into_iter()
+        .iter()
         .map(|line| {
-            line.into_iter()
+            line.iter()
                 .map(|c| {
                     if matches!(c.style, BorderStyle::None | BorderStyle::Hidden) {
                         ResolvedBorder::none()
@@ -1063,9 +1077,50 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         .collect();
 
     let resolved_horizontal: Vec<Vec<ResolvedBorder>> = horizontal
-        .into_iter()
+        .iter()
         .map(|line| {
-            line.into_iter()
+            line.iter()
+                .map(|c| {
+                    if matches!(c.style, BorderStyle::None | BorderStyle::Hidden) {
+                        ResolvedBorder::none()
+                    } else {
+                        ResolvedBorder {
+                            width: c.width,
+                            style: c.style,
+                            color: c.color,
+                        }
+                    }
+                })
+                .collect()
+        })
+        .collect();
+
+    let mut corner_candidates: Vec<Vec<BorderCandidate>> =
+        vec![vec![BorderCandidate::none(); structure.column_count + 1]; structure.row_count + 1];
+
+    for r in 0..=structure.row_count {
+        for c in 0..=structure.column_count {
+            let mut winner = BorderCandidate::none();
+            if c < vertical.len() && r > 0 && r - 1 < vertical[c].len() {
+                winner = pick_winner(winner, vertical[c][r - 1]);
+            }
+            if c < vertical.len() && r < vertical[c].len() {
+                winner = pick_winner(winner, vertical[c][r]);
+            }
+            if r < horizontal.len() && c > 0 && c - 1 < horizontal[r].len() {
+                winner = pick_winner(winner, horizontal[r][c - 1]);
+            }
+            if r < horizontal.len() && c < horizontal[r].len() {
+                winner = pick_winner(winner, horizontal[r][c]);
+            }
+            corner_candidates[r][c] = winner;
+        }
+    }
+
+    let resolved_corners: Vec<Vec<ResolvedBorder>> = corner_candidates
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
                 .map(|c| {
                     if matches!(c.style, BorderStyle::None | BorderStyle::Hidden) {
                         ResolvedBorder::none()
@@ -1084,6 +1139,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     CollapsedBorders {
         vertical: resolved_vertical,
         horizontal: resolved_horizontal,
+        corners: resolved_corners,
     }
 }
 
@@ -1735,6 +1791,7 @@ impl FormattingContext for TableFormattingContext {
             CollapsedBorders {
                 vertical: vec![vec![ResolvedBorder::none(); structure.row_count]; structure.column_count + 1],
                 horizontal: vec![vec![ResolvedBorder::none(); structure.column_count]; structure.row_count + 1],
+                corners: vec![vec![ResolvedBorder::none(); structure.column_count + 1]; structure.row_count + 1],
             }
         };
 
@@ -1990,6 +2047,36 @@ impl FormattingContext for TableFormattingContext {
                         BorderStyle::None,
                         border.style,
                         BorderStyle::None,
+                    );
+                    fragments.push(FragmentNode::new_with_style(
+                        rect,
+                        FragmentContent::Block { box_id: None },
+                        vec![],
+                        style,
+                    ));
+                }
+            }
+
+            // Corner joins
+            for r in 0..=structure.row_count {
+                for c in 0..=structure.column_count {
+                    let corner = &collapsed_borders.corners[r][c];
+                    if corner.width <= 0.0 || matches!(corner.style, BorderStyle::None | BorderStyle::Hidden) {
+                        continue;
+                    }
+                    let x = column_line_pos.get(c).copied().unwrap_or(0.0) - corner.width * 0.5;
+                    let y = row_line_pos.get(r).copied().unwrap_or(0.0) - corner.width * 0.5;
+                    let rect = Rect::from_xywh(x, y, corner.width, corner.width);
+                    let style = make_border_style(
+                        corner.color,
+                        corner.width,
+                        corner.width,
+                        corner.width,
+                        corner.width,
+                        corner.style,
+                        corner.style,
+                        corner.style,
+                        corner.style,
                     );
                     fragments.push(FragmentNode::new_with_style(
                         rect,
