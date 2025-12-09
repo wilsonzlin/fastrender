@@ -463,6 +463,7 @@ pub enum WhiteSpace {
     Pre,
     PreWrap,
     PreLine,
+    BreakSpaces,
 }
 
 /// Tab stop sizing

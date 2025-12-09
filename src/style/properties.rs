@@ -756,6 +756,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     "pre" => WhiteSpace::Pre,
                     "pre-wrap" => WhiteSpace::PreWrap,
                     "pre-line" => WhiteSpace::PreLine,
+                    "break-spaces" => WhiteSpace::BreakSpaces,
                     _ => styles.white_space,
                 };
             }
@@ -1731,6 +1732,19 @@ mod tests {
         } else {
             panic!("expected position variant");
         }
+    }
+
+    #[test]
+    fn parses_white_space_break_spaces() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "white-space".to_string(),
+            value: PropertyValue::Keyword("break-spaces".to_string()),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.white_space, WhiteSpace::BreakSpaces);
     }
 
     #[test]

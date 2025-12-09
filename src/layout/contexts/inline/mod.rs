@@ -1478,6 +1478,36 @@ fn normalize_text_for_white_space(text: &str, white_space: WhiteSpace) -> Normal
                 trailing_collapsible: false,
             }
         }
+        WhiteSpace::BreakSpaces => {
+            let mut out = String::with_capacity(text.len());
+            let mut mandatory_breaks = Vec::new();
+            let mut iter = text.chars().peekable();
+
+            while let Some(ch) = iter.next() {
+                match ch {
+                    '\r' => {
+                        if matches!(iter.peek(), Some('\n')) {
+                            iter.next();
+                        }
+                        mandatory_breaks.push(BreakOpportunity::mandatory(out.len()));
+                    }
+                    '\n' | '\u{000B}' | '\u{000C}' => {
+                        mandatory_breaks.push(BreakOpportunity::mandatory(out.len()));
+                    }
+                    _ => out.push(ch),
+                }
+            }
+
+            // In break-spaces every preserved space creates a break opportunity; we leave that
+            // to the line breaker by keeping all spaces and allowing soft wrap.
+            NormalizedText {
+                text: out,
+                forced_breaks: mandatory_breaks,
+                allow_soft_wrap: true,
+                leading_collapsible: false,
+                trailing_collapsible: false,
+            }
+        }
     };
 
     result
@@ -2619,6 +2649,19 @@ mod tests {
         assert_eq!(normalized.text, "a b");
         assert!(normalized.forced_breaks.is_empty());
         assert!(normalized.allow_soft_wrap);
+    }
+
+    #[test]
+    fn break_spaces_preserves_sequences() {
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::BreakSpaces;
+        let normalized = normalize_text_for_white_space("  a  \n b ", style.white_space);
+        assert_eq!(normalized.text, "  a   b ");
+        assert_eq!(normalized.forced_breaks.len(), 1);
+        assert_eq!(normalized.forced_breaks[0].byte_offset, 5);
+        assert!(normalized.allow_soft_wrap);
+        assert!(!normalized.leading_collapsible);
+        assert!(!normalized.trailing_collapsible);
     }
 
     #[test]
