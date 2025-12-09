@@ -1171,6 +1171,14 @@ impl LineBuilder {
             return;
         }
 
+        let has_plaintext = leaves.iter().any(|leaf| {
+            matches!(leaf.item.unicode_bidi(), UnicodeBidi::Plaintext)
+                || leaf
+                    .box_stack
+                    .iter()
+                    .any(|ctx| matches!(ctx.unicode_bidi, UnicodeBidi::Plaintext))
+        });
+
         // Build the logical text for this line and map byte ranges back to leaf indices.
         let mut logical_text = String::new();
         let mut spans: Vec<(usize, std::ops::Range<usize>)> = Vec::with_capacity(leaves.len());
@@ -1178,7 +1186,11 @@ impl LineBuilder {
         for (idx, leaf) in leaves.iter().enumerate() {
             let dir = leaf.item.direction();
             let ub = leaf.item.unicode_bidi();
-            let (open_controls, close_controls) = bidi_controls_for_stack(&leaf.box_stack, ub, dir);
+            let (open_controls, close_controls) = if has_plaintext {
+                (Vec::new(), Vec::new())
+            } else {
+                bidi_controls_for_stack(&leaf.box_stack, ub, dir)
+            };
 
             for ch in open_controls {
                 logical_text.push(ch);
@@ -1204,13 +1216,6 @@ impl LineBuilder {
             return;
         }
 
-        let has_plaintext = leaves.iter().any(|leaf| {
-            matches!(leaf.item.unicode_bidi(), UnicodeBidi::Plaintext)
-                || leaf
-                    .box_stack
-                    .iter()
-                    .any(|ctx| matches!(ctx.unicode_bidi, UnicodeBidi::Plaintext))
-        });
         let effective_base = if has_plaintext {
             determine_plaintext_base_level(&leaves)
         } else {
