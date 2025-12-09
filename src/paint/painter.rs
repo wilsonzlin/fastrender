@@ -730,19 +730,34 @@ impl Painter {
         }
 
         if style.background_image.is_some() {
-            self.paint_background_image(&rects, style, clip_radii);
+            self.paint_background_image(&rects, style);
         }
     }
 
-    fn paint_background_image(&mut self, rects: &BackgroundRects, style: &ComputedStyle, clip_radii: BorderRadii) {
+    fn paint_background_image(&mut self, rects: &BackgroundRects, style: &ComputedStyle) {
         let Some(bg) = &style.background_image else { return };
-        let clip_rect = match style.background_clip {
+        let is_local = style.background_attachment == BackgroundAttachment::Local;
+        let clip_box = if is_local {
+            match style.background_clip {
+                crate::style::types::BackgroundBox::ContentBox => crate::style::types::BackgroundBox::ContentBox,
+                _ => crate::style::types::BackgroundBox::PaddingBox,
+            }
+        } else {
+            style.background_clip
+        };
+        let clip_rect = match clip_box {
             crate::style::types::BackgroundBox::BorderBox => rects.border,
             crate::style::types::BackgroundBox::PaddingBox => rects.padding,
             crate::style::types::BackgroundBox::ContentBox => rects.content,
         };
+        let clip_radii = resolve_clip_radii(style, rects, clip_box);
         let origin_rect = if style.background_attachment == BackgroundAttachment::Fixed {
             Rect::from_xywh(0.0, 0.0, self.pixmap.width() as f32, self.pixmap.height() as f32)
+        } else if is_local {
+            match style.background_origin {
+                crate::style::types::BackgroundBox::ContentBox => rects.content,
+                _ => rects.padding,
+            }
         } else {
             match style.background_origin {
                 crate::style::types::BackgroundBox::BorderBox => rects.border,
@@ -3164,6 +3179,50 @@ mod tests {
         let right = color_at(&pixmap, 1, 0);
         assert!(left.0 > right.0, "fixed attachment should keep gradient anchored to viewport");
         assert!(right.2 > left.2);
+    }
+
+    #[test]
+    fn background_attachment_local_uses_scrollable_overflow_area() {
+        let mut style = ComputedStyle::default();
+        style.background_image = Some(BackgroundImage::LinearGradient {
+            angle: 0.0,
+            stops: vec![
+                crate::css::types::ColorStop {
+                    color: Rgba::RED,
+                    position: Some(0.0),
+                },
+                crate::css::types::ColorStop {
+                    color: Rgba::RED,
+                    position: Some(1.0),
+                },
+            ],
+        });
+        style.background_attachment = BackgroundAttachment::Local;
+        style.overflow_x = Overflow::Scroll;
+        style.overflow_y = Overflow::Scroll;
+        style.border_top_width = Length::px(2.0);
+        style.border_right_width = Length::px(2.0);
+        style.border_bottom_width = Length::px(2.0);
+        style.border_left_width = Length::px(2.0);
+        style.border_top_style = CssBorderStyle::Solid;
+        style.border_right_style = CssBorderStyle::Solid;
+        style.border_bottom_style = CssBorderStyle::Solid;
+        style.border_left_style = CssBorderStyle::Solid;
+        style.border_top_color = Rgba::TRANSPARENT;
+        style.border_right_color = Rgba::TRANSPARENT;
+        style.border_bottom_color = Rgba::TRANSPARENT;
+        style.border_left_color = Rgba::TRANSPARENT;
+
+        let fragment =
+            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 12.0, 12.0), vec![], Arc::new(style));
+        let tree = FragmentTree::new(fragment);
+        let pixmap = paint_tree(&tree, 12, 12, Rgba::WHITE).expect("paint");
+
+        // Border-box samples should stay transparent because local attachment anchors to the scrollable overflow area
+        // (padding box) and border-box clipping collapses to padding-box per CSS Backgrounds 3.
+        assert_eq!(color_at(&pixmap, 1, 1), (255, 255, 255, 255));
+        // Padding box should still paint the background image.
+        assert_eq!(color_at(&pixmap, 6, 6), (255, 0, 0, 255));
     }
 
     #[test]
