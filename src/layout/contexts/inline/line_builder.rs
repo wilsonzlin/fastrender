@@ -240,6 +240,8 @@ impl TextItem {
         shaper: &ShapingPipeline,
         font_context: &FontContext,
     ) -> Option<(TextItem, TextItem)> {
+        const INSERTED_HYPHEN: char = '\u{2010}'; // CSS hyphenation hyphen
+
         let split_offset = self.cluster_boundary_at_or_before(byte_offset).map(|b| b.byte_offset)?;
 
         if split_offset == 0 || split_offset >= self.text.len() {
@@ -257,7 +259,8 @@ impl TextItem {
 
         let mut before_text_owned: Option<String> = None;
         if insert_hyphen {
-            let hyphen_text = "-";
+            let mut hyphen_buf = [0u8; 3];
+            let hyphen_text = INSERTED_HYPHEN.encode_utf8(&mut hyphen_buf);
             let offset = before_text.len();
             let mut hyphen_runs = shaper.shape(hyphen_text, &self.style, font_context).ok()?;
             TextItem::apply_spacing_to_runs(
@@ -1551,7 +1554,7 @@ mod tests {
             .split_at(1, true, &pipeline, &font_ctx)
             .expect("split succeeds");
 
-        assert_eq!(before.text, "a-");
+        assert_eq!(before.text, format!("a{}", '\u{2010}'));
         assert_eq!(after.text, "bc");
     }
 }
