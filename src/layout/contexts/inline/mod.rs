@@ -45,7 +45,7 @@ use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::line_builder::InlineBoxItem;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::utils::compute_replaced_size;
-use crate::style::types::{FontStyle, HyphensMode, OverflowWrap, WhiteSpace, WordBreak};
+use crate::style::types::{FontStyle, HyphensMode, OverflowWrap, TextTransform, WhiteSpace, WordBreak};
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
@@ -357,7 +357,9 @@ impl InlineFormattingContext {
         let style = &box_node.style;
         let line_height = compute_line_height(style);
 
-        let (normalized_text, forced_breaks, allow_soft_wrap) = normalize_text_for_white_space(text, style.white_space);
+        let transformed = apply_text_transform(text, style.text_transform);
+        let (normalized_text, forced_breaks, allow_soft_wrap) =
+            normalize_text_for_white_space(&transformed, style.white_space);
         let hyphenator = self.hyphenator_for(&style.language);
         let (hyphen_free, hyphen_breaks) =
             hyphenation_breaks(&normalized_text, style.hyphens, hyphenator.as_ref(), allow_soft_wrap);
@@ -435,7 +437,11 @@ impl InlineFormattingContext {
             (w, h) => Some(Size::new(w.unwrap_or(f32::NAN), h.unwrap_or(f32::NAN))),
         };
         let size = compute_replaced_size(style, replaced_box, percentage_size);
-        let percentage_base = if available_width.is_finite() { available_width } else { 0.0 };
+        let percentage_base = if available_width.is_finite() {
+            available_width
+        } else {
+            0.0
+        };
         let margin_left = style
             .margin_left
             .as_ref()
@@ -1009,6 +1015,50 @@ fn merge_breaks(
     base
 }
 
+fn apply_text_transform(text: &str, transform: TextTransform) -> String {
+    match transform {
+        TextTransform::None => text.to_string(),
+        TextTransform::Uppercase => {
+            let mut out = String::with_capacity(text.len());
+            for ch in text.chars() {
+                for up in ch.to_uppercase() {
+                    out.push(up);
+                }
+            }
+            out
+        }
+        TextTransform::Lowercase => {
+            let mut out = String::with_capacity(text.len());
+            for ch in text.chars() {
+                for low in ch.to_lowercase() {
+                    out.push(low);
+                }
+            }
+            out
+        }
+        TextTransform::Capitalize => {
+            let mut out = String::with_capacity(text.len());
+            let mut start_of_word = true;
+            for ch in text.chars() {
+                if ch.is_whitespace() {
+                    start_of_word = true;
+                    out.push(ch);
+                    continue;
+                }
+                if start_of_word {
+                    for up in ch.to_uppercase() {
+                        out.push(up);
+                    }
+                    start_of_word = false;
+                } else {
+                    out.push(ch);
+                }
+            }
+            out
+        }
+    }
+}
+
 fn char_boundary_breaks(text: &str) -> Vec<crate::text::line_break::BreakOpportunity> {
     use crate::text::line_break::BreakOpportunity;
     let mut breaks = Vec::new();
@@ -1293,7 +1343,7 @@ fn first_char_of_item(item: &InlineItem) -> Option<char> {
 mod tests {
     use super::*;
     use crate::style::display::{Display, FormattingContextType};
-    use crate::style::types::{HyphensMode, OverflowWrap, WhiteSpace, WordBreak};
+    use crate::style::types::{HyphensMode, OverflowWrap, TextTransform, WhiteSpace, WordBreak};
     use crate::style::ComputedStyle;
     use std::sync::Arc;
 
@@ -1444,8 +1494,7 @@ mod tests {
         ib_style.display = Display::InlineBlock;
         ib_style.height = Some(Length::percent(50.0));
         ib_style.width = Some(Length::px(20.0));
-        let inline_block =
-            BoxNode::new_inline_block(Arc::new(ib_style), FormattingContextType::Block, vec![]);
+        let inline_block = BoxNode::new_inline_block(Arc::new(ib_style), FormattingContextType::Block, vec![]);
         let root = make_inline_container(vec![inline_block]);
         let constraints = LayoutConstraints::definite(200.0, 120.0);
 
@@ -1539,6 +1588,32 @@ mod tests {
             .break_opportunities
             .iter()
             .any(|b| b.byte_offset == 3 && b.break_type == BreakType::Mandatory));
+    }
+
+    #[test]
+    fn text_transform_uppercase_applies_before_layout() {
+        let mut style = ComputedStyle::default();
+        style.text_transform = TextTransform::Uppercase;
+        let text = "Hello World";
+
+        let ifc = InlineFormattingContext::new();
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+
+        assert_eq!(item.text, "HELLO WORLD");
+    }
+
+    #[test]
+    fn text_transform_capitalize_only_leading_letters() {
+        let mut style = ComputedStyle::default();
+        style.text_transform = TextTransform::Capitalize;
+        let text = "foo bar";
+
+        let ifc = InlineFormattingContext::new();
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+
+        assert_eq!(item.text, "Foo Bar");
     }
 
     #[test]
