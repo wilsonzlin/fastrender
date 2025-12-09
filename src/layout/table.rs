@@ -186,14 +186,6 @@ pub enum SpecifiedHeight {
     Auto,
 }
 
-fn resolve_row_height(row: &RowInfo, percent_base: Option<f32>) -> Option<f32> {
-    match row.specified_height {
-        Some(SpecifiedHeight::Fixed(h)) => Some(h),
-        Some(SpecifiedHeight::Percent(p)) => percent_base.map(|t| (p / 100.0) * t),
-        _ => None,
-    }
-}
-
 fn resolve_row_min_max(row: &RowInfo, percent_base: Option<f32>) -> (Option<f32>, Option<f32>) {
     let min = match row.author_min_height {
         Some(SpecifiedHeight::Fixed(h)) => Some(h),
