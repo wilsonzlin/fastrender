@@ -27,9 +27,9 @@ use display::Display;
 use position::Position;
 use std::collections::HashMap;
 use types::{
-    AlignContent, AlignItems, BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse,
-    BorderStyle, Direction, FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack, HyphensMode,
-    JustifyContent, LineHeight, ObjectFit, ObjectPosition, Overflow, OverflowWrap, TableLayout, TextAlign,
+    AlignContent, AlignItems, BackgroundBox, BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize,
+    BorderCollapse, BorderStyle, Direction, FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack,
+    HyphensMode, JustifyContent, LineHeight, ObjectFit, ObjectPosition, Overflow, OverflowWrap, TableLayout, TextAlign,
     TextDecoration, TextTransform, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
 };
 use values::Length;
@@ -140,6 +140,8 @@ pub struct ComputedStyle {
     pub background_size: BackgroundSize,
     pub background_position: BackgroundPosition,
     pub background_repeat: BackgroundRepeat,
+    pub background_origin: BackgroundBox,
+    pub background_clip: BackgroundBox,
     pub object_fit: ObjectFit,
     pub object_position: ObjectPosition,
 
@@ -258,6 +260,8 @@ impl Default for ComputedStyle {
             background_size: BackgroundSize::Auto,
             background_position: BackgroundPosition::Center,
             background_repeat: BackgroundRepeat::Repeat,
+            background_origin: BackgroundBox::PaddingBox,
+            background_clip: BackgroundBox::BorderBox,
             object_fit: ObjectFit::Fill,
             object_position: ObjectPosition {
                 x: types::PositionComponent::Keyword(types::PositionKeyword::Center),

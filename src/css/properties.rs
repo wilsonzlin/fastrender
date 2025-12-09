@@ -105,14 +105,17 @@ fn parse_simple_value(value_str: &str) -> Option<PropertyValue> {
         return Some(PropertyValue::Number(num));
     }
 
-    csscolorparser::parse(value_str).ok().map(|color| {
-        PropertyValue::Color(Rgba::new(
-            (color.r * 255.0) as u8,
-            (color.g * 255.0) as u8,
-            (color.b * 255.0) as u8,
-            color.a as f32,
-        ))
-    }).or_else(|| Some(PropertyValue::Keyword(value_str.to_string())))
+    csscolorparser::parse(value_str)
+        .ok()
+        .map(|color| {
+            PropertyValue::Color(Rgba::new(
+                (color.r * 255.0) as u8,
+                (color.g * 255.0) as u8,
+                (color.b * 255.0) as u8,
+                color.a as f32,
+            ))
+        })
+        .or_else(|| Some(PropertyValue::Keyword(value_str.to_string())))
 }
 
 #[cfg(test)]
@@ -127,8 +130,10 @@ mod tests {
         };
         assert_eq!(list.len(), 2);
         assert!(matches!(list[0], PropertyValue::Keyword(ref k) if k == "left"));
-        assert!(matches!(list[1], PropertyValue::Length(len) if (len.value - 25.0).abs() < 0.01 && len.unit.is_percentage())
-            || matches!(list[1], PropertyValue::Percentage(p) if (p - 25.0).abs() < 0.01));
+        assert!(
+            matches!(list[1], PropertyValue::Length(len) if (len.value - 25.0).abs() < 0.01 && len.unit.is_percentage())
+                || matches!(list[1], PropertyValue::Percentage(p) if (p - 25.0).abs() < 0.01)
+        );
     }
 }
 

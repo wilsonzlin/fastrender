@@ -390,6 +390,17 @@ pub enum BackgroundSize {
     Length(Length, Length),
 }
 
+/// Box reference for background painting/positioning
+///
+/// CSS: `background-origin`, `background-clip`
+/// Reference: CSS Backgrounds and Borders Module Level 3
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundBox {
+    BorderBox,
+    PaddingBox,
+    ContentBox,
+}
+
 /// Background image positioning
 ///
 /// CSS: `background-position`

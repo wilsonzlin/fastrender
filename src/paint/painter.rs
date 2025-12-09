@@ -22,9 +22,14 @@
 //! using the system's default font.
 
 use crate::error::{RenderError, Result};
+use crate::geometry::Rect;
 use crate::image_loader::ImageCache;
 use crate::style::color::Rgba;
-use crate::style::types::{BorderStyle as CssBorderStyle, ObjectFit, ObjectPosition, PositionComponent};
+use crate::style::types::{
+    BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderStyle as CssBorderStyle, ObjectFit,
+    ObjectPosition, PositionComponent,
+};
+use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::{ShapedRun, ShapingPipeline};
@@ -33,7 +38,8 @@ use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 use image::DynamicImage;
 use std::borrow::Cow;
 use tiny_skia::{
-    FilterQuality, IntSize, Paint, PathBuilder, Pixmap, PixmapPaint, Rect as SkiaRect, Stroke, Transform,
+    FilterQuality, IntSize, Paint, PathBuilder, Pattern, Pixmap, PixmapPaint, Rect as SkiaRect, SpreadMode, Stroke,
+    Transform,
 };
 
 /// Main painter that rasterizes a FragmentTree to pixels
@@ -73,7 +79,14 @@ impl BorderEdge {
     }
 
     /// Returns a pair of parallel paths offset by `offset` from the center line.
-    fn parallel_lines(&self, x1: f32, y1: f32, x2: f32, y2: f32, offset: f32) -> (Option<tiny_skia::Path>, Option<tiny_skia::Path>) {
+    fn parallel_lines(
+        &self,
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        offset: f32,
+    ) -> (Option<tiny_skia::Path>, Option<tiny_skia::Path>) {
         match self.orientation() {
             EdgeOrientation::Horizontal => {
                 let mut first = PathBuilder::new();
@@ -206,6 +219,7 @@ impl Painter {
         // Paint background first (if present)
         if let Some(style) = style {
             self.paint_background(x, y, width, height, style);
+            self.paint_background_image(x, y, width, height, style);
             self.paint_borders(x, y, width, height, style);
         }
 
@@ -247,6 +261,17 @@ impl Painter {
             return;
         }
 
+        let rects = background_rects(x, y, width, height, style);
+        let clip = match style.background_clip {
+            crate::style::types::BackgroundBox::BorderBox => rects.border,
+            crate::style::types::BackgroundBox::PaddingBox => rects.padding,
+            crate::style::types::BackgroundBox::ContentBox => rects.content,
+        };
+
+        if clip.width() <= 0.0 || clip.height() <= 0.0 {
+            return;
+        }
+
         let mut paint = Paint::default();
         paint.set_color_rgba8(
             style.background_color.r,
@@ -256,10 +281,168 @@ impl Painter {
         );
         paint.anti_alias = true;
 
-        if let Some(rect) = SkiaRect::from_xywh(x, y, width, height) {
+        if let Some(rect) = SkiaRect::from_xywh(clip.x(), clip.y(), clip.width(), clip.height()) {
             let path = PathBuilder::from_rect(rect);
             self.pixmap
                 .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+        }
+    }
+
+    fn paint_background_image(&mut self, x: f32, y: f32, width: f32, height: f32, style: &ComputedStyle) {
+        let Some(bg) = &style.background_image else { return };
+        let src = match bg {
+            BackgroundImage::Url(u) => u,
+            _ => return, // Gradients not supported yet
+        };
+
+        let image = match self.image_cache.load(src) {
+            Ok(img) => img,
+            Err(_) => return,
+        };
+
+        let pixmap = match Self::dynamic_image_to_pixmap(&image) {
+            Some(p) => p,
+            None => return,
+        };
+        let img_w = pixmap.width() as f32;
+        let img_h = pixmap.height() as f32;
+        if img_w <= 0.0 || img_h <= 0.0 {
+            return;
+        }
+
+        if width <= 0.0 || height <= 0.0 {
+            return;
+        }
+
+        let rects = background_rects(x, y, width, height, style);
+        let clip_rect = match style.background_clip {
+            crate::style::types::BackgroundBox::BorderBox => rects.border,
+            crate::style::types::BackgroundBox::PaddingBox => rects.padding,
+            crate::style::types::BackgroundBox::ContentBox => rects.content,
+        };
+        let origin_rect = match style.background_origin {
+            crate::style::types::BackgroundBox::BorderBox => rects.border,
+            crate::style::types::BackgroundBox::PaddingBox => rects.padding,
+            crate::style::types::BackgroundBox::ContentBox => rects.content,
+        };
+
+        if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 {
+            return;
+        }
+        if origin_rect.width() <= 0.0 || origin_rect.height() <= 0.0 {
+            return;
+        }
+
+        let (tile_w, tile_h) = compute_background_size(style, origin_rect.width(), origin_rect.height(), img_w, img_h);
+        if tile_w <= 0.0 || tile_h <= 0.0 {
+            return;
+        }
+
+        let (offset_x, offset_y) = resolve_background_offset(
+            style.background_position,
+            origin_rect.width(),
+            origin_rect.height(),
+            tile_w,
+            tile_h,
+            style.font_size,
+        );
+
+        let tile_origin_x = origin_rect.x() + offset_x;
+        let tile_origin_y = origin_rect.y() + offset_y;
+        let repeat = style.background_repeat;
+        let repeat_x = matches!(repeat, BackgroundRepeat::Repeat | BackgroundRepeat::RepeatX);
+        let repeat_y = matches!(repeat, BackgroundRepeat::Repeat | BackgroundRepeat::RepeatY);
+
+        let start_x = if repeat_x {
+            aligned_start(tile_origin_x, tile_w, clip_rect.min_x())
+        } else {
+            tile_origin_x
+        };
+        let start_y = if repeat_y {
+            aligned_start(tile_origin_y, tile_h, clip_rect.min_y())
+        } else {
+            tile_origin_y
+        };
+
+        let max_x = clip_rect.max_x();
+        let max_y = clip_rect.max_y();
+
+        match repeat {
+            BackgroundRepeat::NoRepeat => {
+                self.paint_background_tile(&pixmap, tile_origin_x, tile_origin_y, tile_w, tile_h, clip_rect);
+            }
+            BackgroundRepeat::RepeatX => {
+                let mut tx = start_x;
+                while tx < max_x {
+                    self.paint_background_tile(&pixmap, tx, tile_origin_y, tile_w, tile_h, clip_rect);
+                    tx += tile_w;
+                }
+            }
+            BackgroundRepeat::RepeatY => {
+                let mut ty = start_y;
+                while ty < max_y {
+                    self.paint_background_tile(&pixmap, tile_origin_x, ty, tile_w, tile_h, clip_rect);
+                    ty += tile_h;
+                }
+            }
+            BackgroundRepeat::Repeat => {
+                let mut ty = start_y;
+                while ty < max_y {
+                    let mut tx = start_x;
+                    while tx < max_x {
+                        self.paint_background_tile(&pixmap, tx, ty, tile_w, tile_h, clip_rect);
+                        tx += tile_w;
+                    }
+                    ty += tile_h;
+                }
+            }
+        }
+    }
+
+    fn paint_background_tile(
+        &mut self,
+        pixmap: &Pixmap,
+        tile_x: f32,
+        tile_y: f32,
+        tile_w: f32,
+        tile_h: f32,
+        clip: Rect,
+    ) {
+        if tile_w <= 0.0 || tile_h <= 0.0 {
+            return;
+        }
+
+        let tile_rect = Rect::from_xywh(tile_x, tile_y, tile_w, tile_h);
+        let Some(intersection) = tile_rect.intersection(clip) else {
+            return;
+        };
+        if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
+            return;
+        }
+
+        let scale_x = tile_w / pixmap.width() as f32;
+        let scale_y = tile_h / pixmap.height() as f32;
+        if !scale_x.is_finite() || !scale_y.is_finite() {
+            return;
+        }
+
+        let mut paint = Paint::default();
+        paint.shader = Pattern::new(
+            pixmap.as_ref(),
+            SpreadMode::Pad,
+            FilterQuality::Bilinear,
+            1.0,
+            Transform::from_row(scale_x, 0.0, 0.0, scale_y, tile_x, tile_y),
+        );
+        paint.anti_alias = false;
+
+        if let Some(rect) = SkiaRect::from_xywh(
+            intersection.x(),
+            intersection.y(),
+            intersection.width(),
+            intersection.height(),
+        ) {
+            self.pixmap.fill_rect(rect, &paint, Transform::identity(), None);
         }
     }
 
@@ -669,8 +852,7 @@ impl Painter {
         paint.quality = FilterQuality::Bilinear;
 
         let transform = Transform::from_row(scale_x, 0.0, 0.0, scale_y, x + dest_x, y + dest_y);
-        self.pixmap
-            .draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);
+        self.pixmap.draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);
         true
     }
 
@@ -772,6 +954,109 @@ fn compute_object_fit(
     Some((offset_x, offset_y, dest_w, dest_h))
 }
 
+#[derive(Clone, Copy)]
+struct BackgroundRects {
+    border: Rect,
+    padding: Rect,
+    content: Rect,
+}
+
+fn background_rects(x: f32, y: f32, width: f32, height: f32, style: &ComputedStyle) -> BackgroundRects {
+    let base = width.max(0.0);
+    let font_size = style.font_size;
+
+    let border_left = resolve_length_for_paint(&style.border_left_width, font_size, base);
+    let border_right = resolve_length_for_paint(&style.border_right_width, font_size, base);
+    let border_top = resolve_length_for_paint(&style.border_top_width, font_size, base);
+    let border_bottom = resolve_length_for_paint(&style.border_bottom_width, font_size, base);
+
+    let padding_left = resolve_length_for_paint(&style.padding_left, font_size, base);
+    let padding_right = resolve_length_for_paint(&style.padding_right, font_size, base);
+    let padding_top = resolve_length_for_paint(&style.padding_top, font_size, base);
+    let padding_bottom = resolve_length_for_paint(&style.padding_bottom, font_size, base);
+
+    let border_rect = Rect::from_xywh(x, y, width, height);
+    let padding_rect = inset_rect(border_rect, border_left, border_top, border_right, border_bottom);
+    let content_rect = inset_rect(padding_rect, padding_left, padding_top, padding_right, padding_bottom);
+
+    BackgroundRects {
+        border: border_rect,
+        padding: padding_rect,
+        content: content_rect,
+    }
+}
+
+fn inset_rect(rect: Rect, left: f32, top: f32, right: f32, bottom: f32) -> Rect {
+    let new_x = rect.x() + left;
+    let new_y = rect.y() + top;
+    let new_w = (rect.width() - left - right).max(0.0);
+    let new_h = (rect.height() - top - bottom).max(0.0);
+    Rect::from_xywh(new_x, new_y, new_w, new_h)
+}
+
+fn resolve_length_for_paint(len: &Length, font_size: f32, percentage_base: f32) -> f32 {
+    match len.unit {
+        LengthUnit::Percent => len.resolve_against(percentage_base),
+        LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size),
+        _ if len.unit.is_absolute() => len.to_px(),
+        _ => len.value,
+    }
+}
+
+fn compute_background_size(style: &ComputedStyle, area_w: f32, area_h: f32, img_w: f32, img_h: f32) -> (f32, f32) {
+    match style.background_size {
+        BackgroundSize::Auto => (img_w, img_h),
+        BackgroundSize::Cover => {
+            let scale = (area_w / img_w).max(area_h / img_h);
+            (img_w * scale, img_h * scale)
+        }
+        BackgroundSize::Contain => {
+            let scale = (area_w / img_w).min(area_h / img_h);
+            (img_w * scale, img_h * scale)
+        }
+        BackgroundSize::Length(w, h) => {
+            let resolved_w = resolve_length_for_paint(&w, style.font_size, area_w);
+            let resolved_h = resolve_length_for_paint(&h, style.font_size, area_h);
+            (resolved_w.max(0.0), resolved_h.max(0.0))
+        }
+    }
+}
+
+fn resolve_background_offset(
+    pos: BackgroundPosition,
+    area_w: f32,
+    area_h: f32,
+    tile_w: f32,
+    tile_h: f32,
+    font_size: f32,
+) -> (f32, f32) {
+    let resolve_axis = |len: Length, area: f32, tile: f32| -> f32 {
+        match len.unit {
+            LengthUnit::Percent => (len.value / 100.0) * (area - tile),
+            LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size),
+            _ if len.unit.is_absolute() => len.to_px(),
+            _ => len.value,
+        }
+    };
+
+    match pos {
+        BackgroundPosition::Center => ((area_w - tile_w) * 0.5, (area_h - tile_h) * 0.5),
+        BackgroundPosition::Position(x_len, y_len) => {
+            let x = resolve_axis(x_len, area_w, tile_w);
+            let y = resolve_axis(y_len, area_h, tile_h);
+            (x, y)
+        }
+    }
+}
+
+fn aligned_start(origin: f32, tile: f32, clip_min: f32) -> f32 {
+    if tile == 0.0 {
+        return origin;
+    }
+    let steps = ((clip_min - origin) / tile).floor();
+    origin + steps * tile
+}
+
 /// Paints a fragment tree to a pixmap
 ///
 /// This is the main entry point for painting.
@@ -864,11 +1149,23 @@ mod tests {
             y: PositionComponent::Keyword(crate::style::types::PositionKeyword::Center),
         };
 
-        let (offset_x, offset_y, dest_w, dest_h) = compute_object_fit(fit, position, 200.0, 100.0, 100.0, 100.0)
-            .expect("fit computed");
+        let (offset_x, offset_y, dest_w, dest_h) =
+            compute_object_fit(fit, position, 200.0, 100.0, 100.0, 100.0).expect("fit computed");
         assert_eq!(dest_h, 100.0);
         assert_eq!(dest_w, 100.0);
         assert!((offset_x - 50.0).abs() < 0.01);
         assert!((offset_y - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn background_cover_scales_to_fill() {
+        let mut style = ComputedStyle::default();
+        style.background_size = BackgroundSize::Cover;
+        let (tw, th) = compute_background_size(&style, 200.0, 100.0, 50.0, 50.0);
+        let (ox, oy) = resolve_background_offset(style.background_position, 200.0, 100.0, tw, th, style.font_size);
+        assert!((tw - 200.0).abs() < 0.01);
+        assert!((th - 200.0).abs() < 0.01);
+        assert!((ox - 0.0).abs() < 0.01);
+        assert!((oy - -50.0).abs() < 0.01);
     }
 }
