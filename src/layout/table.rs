@@ -556,6 +556,16 @@ fn horizontal_padding_and_borders(style: &crate::style::ComputedStyle) -> f32 {
         + resolve_abs(&style.border_right_width)
 }
 
+fn horizontal_padding(style: &crate::style::ComputedStyle) -> f32 {
+    let resolve_abs = |l: &crate::style::values::Length| match l.unit {
+        LengthUnit::Percent => 0.0,
+        _ if l.unit.is_absolute() => l.to_px(),
+        _ => l.value,
+    };
+
+    resolve_abs(&style.padding_left) + resolve_abs(&style.padding_right)
+}
+
 fn find_first_baseline(fragment: &FragmentNode, parent_offset: f32) -> Option<f32> {
     let origin = parent_offset + fragment.bounds.y();
     match &fragment.content {
@@ -880,7 +890,7 @@ impl TableFormattingContext {
     }
 
     /// Measures cell intrinsic widths using inline min/max content rules
-    fn measure_cell_intrinsic_widths(&self, cell_box: &BoxNode) -> (f32, f32) {
+    fn measure_cell_intrinsic_widths(&self, cell_box: &BoxNode, border_collapse: BorderCollapse) -> (f32, f32) {
         let fc_type = cell_box
             .formatting_context()
             .unwrap_or(crate::style::display::FormattingContextType::Block);
@@ -893,9 +903,15 @@ impl TableFormattingContext {
             .compute_intrinsic_inline_size(cell_box, IntrinsicSizingMode::MaxContent)
             .unwrap_or(min);
 
-        // Add horizontal padding and borders to intrinsic widths
+        // Add horizontal padding (and borders in separate model) to intrinsic widths
         let style = &cell_box.style;
-        let padding_and_borders = horizontal_padding_and_borders(style);
+        let padding_and_borders = match border_collapse {
+            BorderCollapse::Separate => horizontal_padding_and_borders(style),
+            BorderCollapse::Collapse => {
+                // Collapsed borders don't add to box width; include padding only.
+                horizontal_padding(style)
+            }
+        };
         min += padding_and_borders;
         max += padding_and_borders;
 
@@ -920,7 +936,7 @@ impl TableFormattingContext {
             };
             let (min_w, max_w) = match mode {
                 DistributionMode::Fixed => (0.0, 0.0), // content is ignored in fixed layout
-                _ => self.measure_cell_intrinsic_widths(cell_box),
+                _ => self.measure_cell_intrinsic_widths(cell_box, structure.border_collapse),
             };
 
             if cell.colspan == 1 {
