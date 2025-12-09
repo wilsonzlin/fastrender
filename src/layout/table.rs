@@ -1944,6 +1944,10 @@ impl FormattingContext for TableFormattingContext {
             if let Some(max) = max_len {
                 row_heights[idx] = row_heights[idx].min(max);
             }
+            if let (Some(base), Some(SpecifiedHeight::Percent(pct))) = (percent_height_base, row.specified_height) {
+                let target = (pct / 100.0) * base;
+                row_heights[idx] = row_heights[idx].max(target);
+            }
         }
 
         let mut row_metrics: Vec<RowMetrics> = row_heights.iter().map(|h| RowMetrics::new(*h)).collect();
