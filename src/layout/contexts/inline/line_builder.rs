@@ -1211,7 +1211,11 @@ impl LineBuilder {
                     .iter()
                     .any(|ctx| matches!(ctx.unicode_bidi, UnicodeBidi::Plaintext))
         });
-        let effective_base = if has_plaintext { None } else { self.base_level };
+        let effective_base = if has_plaintext {
+            determine_plaintext_base_level(&leaves)
+        } else {
+            self.base_level
+        };
 
         let bidi = BidiInfo::new(&logical_text, effective_base);
         let mut visual_fragments: Vec<BidiLeaf> = Vec::new();
@@ -1477,7 +1481,9 @@ fn bidi_controls(unicode_bidi: UnicodeBidi, direction: Direction) -> (Vec<char>,
             ];
             (open, vec!['\u{202c}', '\u{2069}'])
         }
-        UnicodeBidi::Plaintext => (vec!['\u{2068}'], vec!['\u{2069}']),
+        // Plaintext paragraphs determine their base direction from first strong; we avoid
+        // injecting controls so the actual text drives paragraph resolution.
+        UnicodeBidi::Plaintext => (Vec::new(), Vec::new()),
     }
 }
 
@@ -1521,6 +1527,23 @@ struct BidiLeaf {
     item: InlineItem,
     baseline_offset: f32,
     box_stack: Vec<BoxContext>,
+}
+
+fn determine_plaintext_base_level(leaves: &[BidiLeaf]) -> Option<Level> {
+    let mut logical = String::new();
+    for leaf in leaves {
+        match &leaf.item {
+            InlineItem::Text(t) => logical.push_str(&t.text),
+            _ => logical.push('\u{FFFC}'),
+        }
+    }
+
+    if logical.is_empty() {
+        return None;
+    }
+
+    let bidi = BidiInfo::new(&logical, None);
+    bidi.paragraphs.first().map(|p| p.level)
 }
 
 fn flatten_positioned_item(
@@ -1938,6 +1961,30 @@ mod tests {
             .collect();
 
         assert_eq!(texts, vec!["abc ".to_string(), "אבג".to_string()]);
+    }
+
+    #[test]
+    fn bidi_plaintext_uses_first_strong_rtl_when_text_starts_rtl() {
+        let mut builder = make_builder_with_base(200.0, Level::ltr());
+        builder.add_item(InlineItem::Text(make_text_item_with_bidi(
+            "אבג abc",
+            70.0,
+            UnicodeBidi::Plaintext,
+        )));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 1);
+        let texts: Vec<String> = lines[0]
+            .items
+            .iter()
+            .map(|p| match &p.item {
+                InlineItem::Text(t) => t.text.clone(),
+                _ => String::new(),
+            })
+            .collect();
+
+        // Base came from first strong RTL; visual order (left-to-right positions) places the LTR run left.
+        assert_eq!(texts, vec!["abc".to_string(), "אבג ".to_string()]);
     }
 
     #[test]
