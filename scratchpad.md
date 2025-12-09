@@ -48,19 +48,20 @@
 - CSS `white-space` behaviors are respected in inline layout: text is normalized per mode (collapse for normal/nowrap/pre-line, preservation for pre/pre-wrap), explicit breaks are inserted for newlines, wrapping is suppressed for `nowrap`/`pre`, and break opportunities are filtered accordingly. New unit coverage for normal/nowrap/pre flows (`src/layout/contexts/inline/mod.rs`).
 - CSS text breaking properties added: `word-break` and `overflow-wrap` parsed into computed styles, and inline layout augments/removes break opportunities accordingly (`break-all`/`anywhere` add cluster breaks, `keep-all` prunes non-whitespace breaks) so min/max-content sizing and line breaking respond to author settings (`src/style/{types,mod,properties}.rs`, `src/layout/contexts/inline/mod.rs`).
 - Hyphenation support added: `hyphens` parsed into computed styles, soft hyphens are removed while preserving their break points, and `hyphens:auto` uses a default English hyphenator to inject additional break opportunities so wrapped words can hyphenate per author intent (`src/style/{types,mod,properties}.rs`, `src/layout/contexts/inline/mod.rs`).
+- Language inheritance from `lang`/`xml:lang` is normalized to lower-case BCP47 strings and passed through to shaping; HarfBuzz buffers now receive the computed language and shaped runs record it for debugging (`src/style/{mod,cascade}.rs`, `src/text/pipeline.rs`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
 - Min/max content sizing still uses simple break-opportunity offsets rather than cluster-aware shaping widths; no hyphenation support yet in IFC.
 - Table layout still partial: collapsed border painting is line-uniform (not per-segment) and styles are rendered as solid fills; row/col spans not fully honored, percent/fixed widths still simplified vs CSS 2.1, colspans split evenly, rowspan baseline alignment still coarse.
 - Replaced elements still ignore object-fit/object-position/backgrounds on the content box; SVG/iframe/video remain unrendered.
-- Painting still bypasses display list; no shared font context between layout and paint (painter builds its own).
+- Painting still bypasses a display list; rendering order/compositing need a pass.
 - Inline-blocks/replaced elements still rely on display hints rather than full anonymous inline box generation and lack percent/min-height handling.
 
 ## To-do / next steps (spec-oriented)
 1. Inline/text:
    - Make line breaking cluster-aware and bidi-sensitive (UAX #14 + UAX #9 ordering), and keep shaped runs when splitting.
-   - Integrate shared `FontContext` across layout/paint to avoid divergent font fallback; propagate font metrics into inline box metrics consistently.
+   - Align baseline/line-height calculations with real font metrics across multi-font runs.
    - Harden RTL run positioning and visual reordering in painter/layout so mixed-direction text paints correctly.
 2. Tables:
    - Finish CSS 2.1 auto table layout: full border-collapse model including per-segment conflict resolution, style-aware painting (dotted/dashed/double geometry), percent/fixed widths resolved per spec, correct colspan/rowspan distribution (including baseline handling for rowspans), and row height/baseline behavior under collapsed borders.

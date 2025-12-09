@@ -52,7 +52,8 @@ use crate::style::types::{Direction as CssDirection, FontStyle as CssFontStyle};
 use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
-use rustybuzz::{Direction as HbDirection, Face, UnicodeBuffer};
+use rustybuzz::{Direction as HbDirection, Face, Language as HbLanguage, UnicodeBuffer};
+use std::str::FromStr;
 use std::sync::Arc;
 use unicode_bidi::{BidiInfo, Level};
 
@@ -541,6 +542,8 @@ pub struct FontRun {
     pub level: u8,
     /// Font size in pixels.
     pub font_size: f32,
+    /// BCP47 language tag (lowercased).
+    pub language: String,
 }
 
 /// Assigns fonts to itemized runs.
@@ -563,6 +566,7 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
             direction: run.direction,
             level: run.level,
             font_size: style.font_size,
+            language: style.language.clone(),
         });
     }
 
@@ -666,6 +670,8 @@ pub struct ShapedRun {
     pub font: Arc<LoadedFont>,
     /// Font size in pixels.
     pub font_size: f32,
+    /// Language set on the shaping buffer (if provided).
+    pub language: Option<HbLanguage>,
 }
 
 impl ShapedRun {
@@ -694,12 +700,20 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     let mut buffer = UnicodeBuffer::new();
     buffer.push_str(&run.text);
 
+    let mut language: Option<HbLanguage> = None;
+
     // Set buffer properties
     buffer.set_direction(run.direction.to_harfbuzz());
     if let Some(script) = run.script.to_harfbuzz() {
         buffer.set_script(script);
     }
-    // TODO: Set language from style when available
+    let lang_tag = run.language.trim();
+    if !lang_tag.is_empty() {
+        if let Ok(lang) = HbLanguage::from_str(lang_tag) {
+            buffer.set_language(lang.clone());
+            language = Some(lang);
+        }
+    }
 
     // Shape the text
     let output = rustybuzz::shape(&rb_face, &[], buffer);
@@ -743,6 +757,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
         advance: x_position,
         font: Arc::clone(&run.font),
         font_size: run.font_size,
+        language,
     })
 }
 
@@ -1091,6 +1106,18 @@ mod tests {
         let pipeline = ShapingPipeline::new();
         // Should not panic
         let _ = pipeline;
+    }
+
+    #[test]
+    fn shaping_sets_language_from_style() {
+        let mut style = ComputedStyle::default();
+        style.language = "tr-TR".to_string();
+        let pipeline = ShapingPipeline::new();
+        let font_ctx = FontContext::new();
+
+        let runs = pipeline.shape("i", &style, &font_ctx).expect("shape succeeds");
+        assert!(!runs.is_empty());
+        assert_eq!(runs[0].language.as_ref().map(|l| l.as_str()), Some("tr-tr"));
     }
 
     #[test]

@@ -15,7 +15,7 @@ use crate::style::display::Display;
 use crate::style::grid::finalize_grid_placement;
 use crate::style::media::MediaContext;
 use crate::style::properties::apply_declaration;
-use crate::style::ComputedStyle;
+use crate::style::{normalize_language_tag, ComputedStyle};
 use selectors::context::{QuirksMode, SelectorCaches};
 use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
 
@@ -94,7 +94,7 @@ fn apply_styles_internal(
         .or_else(|| node.get_attribute("xml:lang"))
         .filter(|l| !l.is_empty())
     {
-        styles.language = lang;
+        styles.language = normalize_language_tag(&lang);
     }
 
     // Finalize grid placement - resolve named grid lines

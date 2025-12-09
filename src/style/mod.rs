@@ -274,3 +274,35 @@ impl Default for ComputedStyle {
         }
     }
 }
+
+/// Normalize a language tag for internal use.
+///
+/// - Trims surrounding whitespace
+/// - Converts underscores to hyphens
+/// - Lowercases all subtags (BCP47 is case-insensitive; lowercase helps downstream consumers)
+pub(crate) fn normalize_language_tag(tag: &str) -> String {
+    let trimmed = tag.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    trimmed
+        .replace('_', "-")
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_language_tag;
+
+    #[test]
+    fn normalizes_language_tags_to_lower_hyphenated() {
+        assert_eq!(normalize_language_tag("En-US"), "en-us");
+        assert_eq!(normalize_language_tag(" sr_Cyrl_RS "), "sr-cyrl-rs");
+        assert_eq!(normalize_language_tag(""), "");
+    }
+}
