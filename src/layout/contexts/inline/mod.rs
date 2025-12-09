@@ -188,11 +188,15 @@ impl InlineFormattingContext {
                     let end_edge = padding_right + border_right;
                     let content_offset_y = padding_top + border_top;
 
-                    let mut metrics = self.compute_strut_metrics(&child.style);
-                    metrics.baseline_offset += content_offset_y;
-                    metrics.ascent += content_offset_y;
-                    metrics.descent += padding_bottom + border_bottom;
-                    metrics.height += content_offset_y + padding_bottom + border_bottom;
+                    // Recursively collect children first
+                    let child_items = self.collect_inline_items(child, available_width)?;
+                    let fallback_metrics = self.compute_strut_metrics(&child.style);
+                    let metrics = compute_inline_box_metrics(
+                        &child_items,
+                        content_offset_y,
+                        padding_bottom + border_bottom,
+                        fallback_metrics,
+                    );
 
                     let mut inline_box = InlineBoxItem::new(
                         start_edge,
@@ -209,9 +213,6 @@ impl InlineFormattingContext {
                         child.style.font_size,
                         metrics.line_height,
                     );
-
-                    // Recursively collect children and attach
-                    let child_items = self.collect_inline_items(child, available_width)?;
                     for item in child_items {
                         inline_box.add_child(item);
                     }
@@ -812,6 +813,48 @@ fn horizontal_padding_and_borders(style: &ComputedStyle, percentage_base: f32) -
         + resolve_length_for_width(style.padding_right, percentage_base)
         + resolve_length_for_width(style.border_left_width, percentage_base)
         + resolve_length_for_width(style.border_right_width, percentage_base)
+}
+
+fn compute_inline_box_metrics(
+    children: &[InlineItem],
+    content_offset_y: f32,
+    bottom_inset: f32,
+    fallback: BaselineMetrics,
+) -> BaselineMetrics {
+    if children.is_empty() {
+        let mut metrics = fallback;
+        metrics.baseline_offset += content_offset_y;
+        metrics.ascent += content_offset_y;
+        metrics.descent += bottom_inset;
+        metrics.height += content_offset_y + bottom_inset;
+        metrics.line_height = metrics.height;
+        return metrics;
+    }
+
+    let mut content_height: f32 = 0.0;
+    for child in children {
+        content_height = content_height.max(child.baseline_metrics().height);
+    }
+
+    let baseline_child = children
+        .iter()
+        .find(|c| c.vertical_align().is_baseline_relative())
+        .unwrap_or(&children[0]);
+    let child_metrics = baseline_child.baseline_metrics();
+
+    let baseline_offset = content_offset_y + child_metrics.baseline_offset;
+    let ascent = content_offset_y + child_metrics.ascent;
+    let height = content_offset_y + content_height + bottom_inset;
+    let descent = height - baseline_offset;
+
+    BaselineMetrics {
+        baseline_offset,
+        height,
+        ascent,
+        descent,
+        line_gap: child_metrics.line_gap,
+        line_height: height,
+    }
 }
 
 fn normalize_text_for_white_space(
