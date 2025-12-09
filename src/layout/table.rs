@@ -1935,7 +1935,7 @@ impl FormattingContext for TableFormattingContext {
             }
         });
 
-        // Enforce row-specified minimums (length or percentage of table height).
+        // Enforce row-specified minimums (length or percentage of table height) and percent targets.
         for (idx, row) in structure.rows.iter().enumerate() {
             let (min_len, max_len) = resolve_row_min_max(row, percent_height_base);
             if let Some(min) = min_len {
@@ -1947,6 +1947,53 @@ impl FormattingContext for TableFormattingContext {
             if let (Some(base), Some(SpecifiedHeight::Percent(pct))) = (percent_height_base, row.specified_height) {
                 let target = (pct / 100.0) * base;
                 row_heights[idx] = row_heights[idx].max(target);
+            }
+        }
+
+        // If the table has a definite height, adjust rows so percent rows meet their targets and remaining space is distributed.
+        if let Some(percent_base) = percent_height_base {
+            let spacing_total = if structure.border_collapse == BorderCollapse::Collapse {
+                0.0
+            } else {
+                v_spacing * (structure.row_count as f32 + 1.0)
+            };
+            let target_rows = (percent_base + spacing_total).max(0.0);
+            let mut percent_rows = Vec::new();
+            let mut adjustable_rows = Vec::new();
+            for (idx, row) in structure.rows.iter().enumerate() {
+                if matches!(row.specified_height, Some(SpecifiedHeight::Percent(_))) {
+                    percent_rows.push(idx);
+                } else {
+                    adjustable_rows.push(idx);
+                }
+            }
+            let fixed_total: f32 = percent_rows.iter().map(|i| row_heights[*i]).sum();
+            let flex_indices = if !adjustable_rows.is_empty() {
+                adjustable_rows
+            } else {
+                percent_rows.clone()
+            };
+            let flex_total: f32 = flex_indices.iter().map(|i| row_heights[*i]).sum();
+            let available = (target_rows - fixed_total).max(0.0);
+            if flex_total > 0.0 {
+                let scale = available / flex_total;
+                for i in &flex_indices {
+                    row_heights[*i] *= scale;
+                }
+            } else if available > 0.0 && !flex_indices.is_empty() {
+                let share = available / flex_indices.len() as f32;
+                for i in &flex_indices {
+                    row_heights[*i] = share;
+                }
+            }
+            for (idx, row) in structure.rows.iter().enumerate() {
+                let (min_len, max_len) = resolve_row_min_max(row, percent_height_base);
+                if let Some(min) = min_len {
+                    row_heights[idx] = row_heights[idx].max(min);
+                }
+                if let Some(max) = max_len {
+                    row_heights[idx] = row_heights[idx].min(max);
+                }
             }
         }
 
@@ -2991,6 +3038,49 @@ mod tests {
         let second_y = fragment.children[1].bounds.y();
         assert!((second_y - first_y) < 10.0);
         assert!(fragment.bounds.height() >= 100.0);
+    }
+
+    #[test]
+    fn percent_rows_fill_target_height() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.height = Some(Length::px(200.0));
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut row1_style = ComputedStyle::default();
+        row1_style.display = Display::TableRow;
+        row1_style.height = Some(Length::percent(50.0));
+
+        let mut row2_style = ComputedStyle::default();
+        row2_style.display = Display::TableRow;
+        // auto row with small intrinsic height
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+
+        let row1 = BoxNode::new_block(
+            Arc::new(row1_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![])],
+        );
+        let row2 = BoxNode::new_block(
+            Arc::new(row2_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![])],
+        );
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row1, row2]);
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(&table, &LayoutConstraints::definite(100.0, 300.0))
+            .expect("table layout");
+
+        assert!((fragment.bounds.height() - 200.0).abs() < 0.1);
+        assert_eq!(fragment.children.len(), 2);
+        let first_y = fragment.children[0].bounds.y();
+        let second_y = fragment.children[1].bounds.y();
+        assert!((second_y - first_y - 100.0).abs() < 0.5);
     }
 
     #[test]
