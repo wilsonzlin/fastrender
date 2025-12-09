@@ -65,7 +65,7 @@
 - Collapsed table borders are painted as individual border edges using the resolved style/color/width for each grid line instead of flat stripes; vertical/horizontal borders are centered on grid boundaries and drawn with border styles (dotted/dashed/double/inset/outset/etc.) via the painter (`src/layout/table.rs`).
 - Collapsed border data now carries per-segment winners (one border resolution per grid line segment), and painting renders each segment with its own style/color/width using boundary-aware positioning based on adjacent perpendicular segment widths so adjoining borders meet cleanly instead of flattening to a uniform line (`src/layout/table.rs`).
 - Collapsed border corners now resolve a winner per grid junction and paint a square join using that style/color/width, reducing double-paint overlaps at intersections (`src/layout/table.rs`).
-- Painting now builds a display list with z-index buckets and paints in sorted order instead of immediate DFS, separating command generation from rasterization (`src/paint/painter.rs`).
+- Display-list construction now walks stacking contexts using `paint::stacking::creates_stacking_context`, emitting commands in stacking order (negative/zero/positive contexts) rather than globally sorting by z-index; backgrounds/borders for each context stay ahead of its content and descendants (`src/paint/painter.rs`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).

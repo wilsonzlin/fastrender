@@ -31,6 +31,7 @@ use crate::style::types::{
 };
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
+use crate::paint::stacking::creates_stacking_context;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::{ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::ReplacedType;
@@ -59,8 +60,6 @@ pub struct Painter {
 
 #[derive(Debug)]
 struct DisplayItem {
-    z_index: i32,
-    order: u64,
     command: DisplayCommand,
 }
 
@@ -211,10 +210,9 @@ impl Painter {
         // Fill background
         self.fill_background();
 
-        // Build display list then paint in stacking order
+        // Build display list in stacking-context order then paint
         let mut items = Vec::new();
-        self.collect_commands(&tree.root, Point::ZERO, 0, &mut 0, &mut items);
-        items.sort_by(|a, b| a.z_index.cmp(&b.z_index).then_with(|| a.order.cmp(&b.order)));
+        self.collect_stacking_context(&tree.root, Point::ZERO, None, true, &mut items);
         for item in items {
             self.execute_command(item.command)?;
         }
@@ -233,13 +231,18 @@ impl Painter {
         self.pixmap.fill(color);
     }
 
-    /// Collect display commands in CSS painting order (local) while tracking z-index buckets.
-    fn collect_commands(
+    /// Collect display commands respecting stacking-context ordering.
+    ///
+    /// This follows the simplified CSS painting order for a stacking context:
+    /// element background/border → negative z-index stacking contexts →
+    /// in-flow/non-positioned content → z-index:auto/0 stacking contexts →
+    /// positive z-index stacking contexts.
+    fn collect_stacking_context(
         &self,
         fragment: &FragmentNode,
         offset: Point,
-        z_hint: i32,
-        order_counter: &mut u64,
+        parent_style: Option<&ComputedStyle>,
+        is_root_context: bool,
         items: &mut Vec<DisplayItem>,
     ) {
         let abs_bounds = Rect::from_xywh(
@@ -249,44 +252,112 @@ impl Painter {
             fragment.bounds.height(),
         );
 
-        let mut z_index = z_hint;
-        if let Some(style) = fragment.style.as_ref() {
-            if style.position.is_positioned() {
-                z_index = style.z_index;
+        let style_ref = fragment.style.as_deref();
+        let establishes_context = style_ref
+            .map(|s| creates_stacking_context(s, parent_style, is_root_context))
+            .unwrap_or(is_root_context);
+
+        if !establishes_context {
+            self.enqueue_background_and_borders(fragment, abs_bounds, items);
+            self.enqueue_content(fragment, abs_bounds, items);
+
+            let next_offset = Point::new(abs_bounds.x(), abs_bounds.y());
+            for child in &fragment.children {
+                self.collect_stacking_context(child, next_offset, style_ref, false, items);
             }
+            return;
         }
 
-        if let Some(style) = fragment.style.clone() {
-            let has_background = style.background_color.alpha_u8() > 0 || style.background_image.is_some();
-            if has_background {
-                items.push(DisplayItem {
-                    z_index,
-                    order: *order_counter,
-                    command: DisplayCommand::Background {
-                        rect: abs_bounds,
-                        style: style.clone(),
-                    },
-                });
-                *order_counter += 1;
-            }
+        // Stacking context: paint own background/border first
+        self.enqueue_background_and_borders(fragment, abs_bounds, items);
 
-            let has_border = style.border_top_width.to_px() > 0.0
-                || style.border_right_width.to_px() > 0.0
-                || style.border_bottom_width.to_px() > 0.0
-                || style.border_left_width.to_px() > 0.0;
-            if has_border {
-                items.push(DisplayItem {
-                    z_index,
-                    order: *order_counter,
-                    command: DisplayCommand::Border {
-                        rect: abs_bounds,
-                        style: style.clone(),
-                    },
-                });
-                *order_counter += 1;
+        // Partition children into stacking-context buckets and normal content
+        let mut negative_contexts = Vec::new();
+        let mut zero_contexts = Vec::new();
+        let mut positive_contexts = Vec::new();
+        let mut normal_children = Vec::new();
+
+        for (idx, child) in fragment.children.iter().enumerate() {
+            if let Some(style) = child.style.as_deref() {
+                if creates_stacking_context(style, style_ref, false) {
+                    let z = style.z_index;
+                    if z < 0 {
+                        negative_contexts.push((z, idx));
+                    } else if z == 0 {
+                        zero_contexts.push((z, idx));
+                    } else {
+                        positive_contexts.push((z, idx));
+                    }
+                    continue;
+                }
             }
+            normal_children.push(idx);
         }
 
+        let child_offset = Point::new(abs_bounds.x(), abs_bounds.y());
+
+        negative_contexts.sort_by(|(z1, i1), (z2, i2)| z1.cmp(z2).then_with(|| i1.cmp(i2)));
+        for (_, idx) in negative_contexts {
+            self.collect_stacking_context(&fragment.children[idx], child_offset, style_ref, false, items);
+        }
+
+        // In-flow/non-positioned content for this context
+        self.enqueue_content(fragment, abs_bounds, items);
+        for idx in normal_children {
+            self.collect_stacking_context(&fragment.children[idx], child_offset, style_ref, false, items);
+        }
+
+        zero_contexts.sort_by(|(z1, i1), (z2, i2)| z1.cmp(z2).then_with(|| i1.cmp(i2)));
+        for (_, idx) in zero_contexts {
+            self.collect_stacking_context(&fragment.children[idx], child_offset, style_ref, false, items);
+        }
+
+        positive_contexts.sort_by(|(z1, i1), (z2, i2)| z1.cmp(z2).then_with(|| i1.cmp(i2)));
+        for (_, idx) in positive_contexts {
+            self.collect_stacking_context(&fragment.children[idx], child_offset, style_ref, false, items);
+        }
+    }
+
+    /// Enqueue background and border commands for a fragment (no children).
+    fn enqueue_background_and_borders(
+        &self,
+        fragment: &FragmentNode,
+        abs_bounds: Rect,
+        items: &mut Vec<DisplayItem>,
+    ) {
+        let Some(style) = fragment.style.clone() else { return };
+
+        let has_background = style.background_color.alpha_u8() > 0 || style.background_image.is_some();
+        if has_background {
+            items.push(DisplayItem {
+                command: DisplayCommand::Background {
+                    rect: abs_bounds,
+                    style: style.clone(),
+                },
+            });
+        }
+
+        let has_border = style.border_top_width.to_px() > 0.0
+            || style.border_right_width.to_px() > 0.0
+            || style.border_bottom_width.to_px() > 0.0
+            || style.border_left_width.to_px() > 0.0;
+        if has_border {
+            items.push(DisplayItem {
+                command: DisplayCommand::Border {
+                    rect: abs_bounds,
+                    style: style.clone(),
+                },
+            });
+        }
+    }
+
+    /// Enqueue paint commands for the fragment's own content (text/replaced).
+    fn enqueue_content(
+        &self,
+        fragment: &FragmentNode,
+        abs_bounds: Rect,
+        items: &mut Vec<DisplayItem>,
+    ) {
         match &fragment.content {
             FragmentContent::Text {
                 text,
@@ -296,8 +367,6 @@ impl Painter {
             } => {
                 if let Some(style) = fragment.style.clone() {
                     items.push(DisplayItem {
-                        z_index,
-                        order: *order_counter,
                         command: DisplayCommand::Text {
                             rect: abs_bounds,
                             baseline_offset: *baseline_offset,
@@ -306,29 +375,20 @@ impl Painter {
                             style,
                         },
                     });
-                    *order_counter += 1;
                 }
             }
             FragmentContent::Replaced { replaced_type, .. } => {
                 if let Some(style) = fragment.style.clone() {
                     items.push(DisplayItem {
-                        z_index,
-                        order: *order_counter,
                         command: DisplayCommand::Replaced {
                             rect: abs_bounds,
                             replaced_type: replaced_type.clone(),
                             style,
                         },
                     });
-                    *order_counter += 1;
                 }
             }
             _ => {}
-        }
-
-        let next_offset = Point::new(abs_bounds.x(), abs_bounds.y());
-        for child in &fragment.children {
-            self.collect_commands(child, next_offset, z_index, order_counter, items);
         }
     }
 
