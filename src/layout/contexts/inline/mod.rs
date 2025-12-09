@@ -875,11 +875,22 @@ impl InlineFormattingContext {
             Ok(items) => items,
             Err(_) => return 0.0,
         };
+        let style = &box_node.style;
+        let indent_value =
+            resolve_length_with_percentage(style.text_indent.length, None, style.font_size).unwrap_or(0.0);
+        let indent_positive = indent_value.max(0.0);
+        let indent_applies_first = !style.text_indent.hanging || style.text_indent.each_line;
+        let indent_applies_subsequent = style.text_indent.each_line || style.text_indent.hanging;
 
-        match mode {
+        let mut width = match mode {
             IntrinsicSizingMode::MinContent => self.min_content_width(&items),
             IntrinsicSizingMode::MaxContent => self.max_content_width(&items),
+        };
+
+        if indent_positive > 0.0 && (indent_applies_first || indent_applies_subsequent) {
+            width += indent_positive;
         }
+        width
     }
 
     fn min_content_width(&self, items: &[InlineItem]) -> f32 {
@@ -1790,6 +1801,35 @@ mod tests {
 
         // "Hello" = 5 chars * 0.5 * 16px = 40px
         assert!(max_width > 0.0);
+    }
+
+    #[test]
+    fn intrinsic_width_accounts_for_text_indent() {
+        let ifc = InlineFormattingContext::new();
+        let mut parent_style = ComputedStyle::default();
+        parent_style.text_indent.length = Length::px(12.0);
+        let text = "word";
+        let text_node = make_text_box(text);
+        let root = BoxNode::new_block(Arc::new(parent_style), FormattingContextType::Block, vec![text_node]);
+
+        let base_item = ifc.create_text_item(&make_text_box(text), text).unwrap();
+        let base_width = base_item.advance;
+
+        let min_width = ifc
+            .compute_intrinsic_inline_size(&root, IntrinsicSizingMode::MinContent)
+            .unwrap();
+        assert!(
+            min_width >= base_width + 10.0,
+            "min-content should include indent; got {min_width}, base {base_width}"
+        );
+
+        let max_width = ifc
+            .compute_intrinsic_inline_size(&root, IntrinsicSizingMode::MaxContent)
+            .unwrap();
+        assert!(
+            max_width >= base_width + 10.0,
+            "max-content should include indent; got {max_width}, base {base_width}"
+        );
     }
 
     #[test]
