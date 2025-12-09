@@ -849,7 +849,6 @@ impl InlineFormattingContext {
         subsequent_line_box_width: f32,
         text_align: TextAlign,
         text_align_last: crate::style::types::TextAlignLast,
-        direction: crate::style::types::Direction,
         text_justify: TextJustify,
         first_line_indent: f32,
         subsequent_line_indent: f32,
@@ -860,6 +859,7 @@ impl InlineFormattingContext {
         let paragraph_info = compute_paragraph_line_flags(&lines);
 
         for (idx, line) in lines.into_iter().enumerate() {
+            let line_direction = line.resolved_direction;
             let (is_last_line, is_single_line) = paragraph_info[idx];
             let line_width = if idx == 0 {
                 first_line_width
@@ -871,18 +871,19 @@ impl InlineFormattingContext {
             } else {
                 subsequent_line_box_width
             };
-            let indent_offset = if idx == 0 {
-                first_line_indent
+            let indent_raw = if idx == 0 { first_line_indent } else { subsequent_line_indent };
+            let indent_offset = if matches!(line_direction, crate::style::types::Direction::Rtl) {
+                -indent_raw
             } else {
-                subsequent_line_indent
+                indent_raw
             };
-            let mut base_align = map_text_align(text_align, direction);
+            let mut base_align = map_text_align(text_align, line_direction);
             let resolved_justify = resolve_auto_text_justify(text_justify, &line.items);
             if matches!(base_align, TextAlign::Justify) && matches!(resolved_justify, TextJustify::None) {
-                base_align = map_text_align(TextAlign::Start, direction);
+                base_align = map_text_align(TextAlign::Start, line_direction);
             }
             let mut effective_align =
-                resolve_text_align_for_line(base_align, text_align_last, direction, is_last_line, is_single_line);
+                resolve_text_align_for_line(base_align, text_align_last, line_direction, is_last_line, is_single_line);
             let justify_probe_items =
                 if matches!(effective_align, TextAlign::Justify) && !matches!(resolved_justify, TextJustify::None) {
                     self.expand_items_for_justification(&line.items, resolved_justify)
@@ -891,9 +892,9 @@ impl InlineFormattingContext {
                 };
             let has_justify = has_justify_opportunities(&justify_probe_items, resolved_justify);
             if matches!(effective_align, TextAlign::Justify) && matches!(resolved_justify, TextJustify::None) {
-                effective_align = map_text_align(TextAlign::Start, direction);
+                effective_align = map_text_align(TextAlign::Start, line_direction);
             } else if matches!(effective_align, TextAlign::Justify) && !has_justify {
-                effective_align = map_text_align(TextAlign::Start, direction);
+                effective_align = map_text_align(TextAlign::Start, line_direction);
             }
             let line_fragment = self.create_line_fragment(
                 &line,
@@ -901,7 +902,7 @@ impl InlineFormattingContext {
                 line_width,
                 line_box_width,
                 effective_align,
-                direction,
+                line_direction,
                 resolved_justify,
                 indent_offset,
             );
@@ -1848,6 +1849,12 @@ impl FormattingContext for InlineFormattingContext {
         // Collect inline items
         let items = self.collect_inline_items(box_node, available_width, available_height)?;
 
+        let base_direction = if matches!(style.unicode_bidi, crate::style::types::UnicodeBidi::Plaintext) {
+            determine_paragraph_direction(&items).unwrap_or(style.direction)
+        } else {
+            style.direction
+        };
+
         let indent_value =
             resolve_length_with_percentage(style.text_indent.length, constraints.width(), style.font_size)
                 .unwrap_or(0.0);
@@ -1865,17 +1872,9 @@ impl FormattingContext for InlineFormattingContext {
             available_width
         };
 
-        let mapped_indent = if matches!(style.direction, crate::style::types::Direction::Rtl) {
-            -indent_value
-        } else {
-            indent_value
-        };
-        let first_line_indent_offset = if indent_applies_first { mapped_indent } else { 0.0 };
-        let subsequent_line_indent_offset = if indent_applies_subsequent { mapped_indent } else { 0.0 };
-
         let base_level = match style.unicode_bidi {
             crate::style::types::UnicodeBidi::Plaintext => None,
-            _ => match style.direction {
+            _ => match base_direction {
                 crate::style::types::Direction::Rtl => Some(unicode_bidi::Level::rtl()),
                 _ => Some(unicode_bidi::Level::ltr()),
             },
@@ -1930,10 +1929,9 @@ impl FormattingContext for InlineFormattingContext {
             subsequent_line_box_width,
             style.text_align,
             style.text_align_last,
-            style.direction,
             style.text_justify,
-            first_line_indent_offset,
-            subsequent_line_indent_offset,
+            if indent_applies_first { indent_value } else { 0.0 },
+            if indent_applies_subsequent { indent_value } else { 0.0 },
         );
 
         // Create containing fragment
@@ -2148,6 +2146,41 @@ fn compute_paragraph_line_flags(lines: &[Line]) -> Vec<(bool, bool)> {
     }
 
     flags
+}
+
+fn determine_paragraph_direction(items: &[InlineItem]) -> Option<crate::style::types::Direction> {
+    const OBJECT_REPLACEMENT: char = '\u{FFFC}';
+
+    fn collect_text(item: &InlineItem, out: &mut String) {
+        match item {
+            InlineItem::Text(t) => out.push_str(&t.text),
+            InlineItem::Tab(_) => out.push('\t'),
+            InlineItem::InlineBox(b) => {
+                for child in &b.children {
+                    collect_text(child, out);
+                }
+            }
+            InlineItem::InlineBlock(_) | InlineItem::Replaced(_) => out.push(OBJECT_REPLACEMENT),
+        }
+    }
+
+    let mut logical = String::new();
+    for item in items {
+        collect_text(item, &mut logical);
+    }
+
+    if logical.is_empty() {
+        return None;
+    }
+
+    let bidi = unicode_bidi::BidiInfo::new(&logical, None);
+    bidi.paragraphs.first().map(|p| {
+        if p.level.is_rtl() {
+            crate::style::types::Direction::Rtl
+        } else {
+            crate::style::types::Direction::Ltr
+        }
+    })
 }
 
 fn resolve_auto_text_justify(mode: TextJustify, items: &[PositionedItem]) -> TextJustify {
@@ -3252,6 +3285,52 @@ mod tests {
         // Match-parent should align to the parent's start (right in RTL)
         let expected = line.bounds.width() - child.bounds.width();
         assert!((child.bounds.x() - expected).abs() < 1.0);
+    }
+
+    #[test]
+    fn plaintext_blocks_use_first_strong_direction_for_alignment() {
+        let mut root_style = ComputedStyle::default();
+        root_style.unicode_bidi = crate::style::types::UnicodeBidi::Plaintext;
+        root_style.text_align = TextAlign::Start;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(ComputedStyle::default()), "שלום".to_string())],
+        );
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        let line = fragment.children.first().expect("line fragment");
+        let child = line.children.first().expect("text fragment");
+
+        let expected = line.bounds.width() - child.bounds.width();
+        assert!(
+            (child.bounds.x() - expected).abs() < 1.0,
+            "plaintext with RTL first-strong should align start at the right edge"
+        );
+    }
+
+    #[test]
+    fn plaintext_blocks_align_ltr_text_to_start() {
+        let mut root_style = ComputedStyle::default();
+        root_style.unicode_bidi = crate::style::types::UnicodeBidi::Plaintext;
+        root_style.text_align = TextAlign::Start;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(ComputedStyle::default()), "hello".to_string())],
+        );
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        let line = fragment.children.first().expect("line fragment");
+        let child = line.children.first().expect("text fragment");
+        assert!(
+            child.bounds.x() < 1.0,
+            "plaintext with LTR text should keep start alignment at the left edge"
+        );
     }
 
     #[test]

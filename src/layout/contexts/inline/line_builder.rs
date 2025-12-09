@@ -1116,6 +1116,9 @@ pub struct Line {
     /// Positioned items in this line
     pub items: Vec<PositionedItem>,
 
+    /// Resolved paragraph direction for this line (LTR/RTL from bidi base level)
+    pub resolved_direction: Direction,
+
     /// Total width used by items
     pub width: f32,
 
@@ -1134,6 +1137,7 @@ impl Line {
     pub fn new() -> Self {
         Self {
             items: Vec::new(),
+            resolved_direction: Direction::Ltr,
             width: 0.0,
             height: 0.0,
             baseline: 0.0,
@@ -1197,10 +1201,22 @@ impl LineBuilder {
         font_context: FontContext,
         base_level: Option<Level>,
     ) -> Self {
+        let initial_direction = if let Some(level) = base_level {
+            if level.is_rtl() {
+                Direction::Rtl
+            } else {
+                Direction::Ltr
+            }
+        } else {
+            Direction::Ltr
+        };
         Self {
             first_line_width,
             subsequent_line_width,
-            current_line: Line::new(),
+            current_line: Line {
+                resolved_direction: initial_direction,
+                ..Line::new()
+            },
             current_x: 0.0,
             lines: Vec::new(),
             baseline_acc: LineBaselineAccumulator::new(&strut_metrics),
@@ -1371,7 +1387,19 @@ impl LineBuilder {
         // Reset for new line
         self.current_x = 0.0;
         self.baseline_acc = LineBaselineAccumulator::new(&self.strut_metrics);
-        self.current_line = Line::new();
+        let next_direction = if let Some(level) = self.base_level {
+            if level.is_rtl() {
+                Direction::Rtl
+            } else {
+                Direction::Ltr
+            }
+        } else {
+            Direction::Ltr
+        };
+        self.current_line = Line {
+            resolved_direction: next_direction,
+            ..Line::new()
+        };
     }
 
     /// Run bidi reordering across all built lines, respecting paragraph boundaries.
@@ -1446,14 +1474,6 @@ fn reorder_paragraph(
         line_leaves.push(leaves);
     }
 
-    let has_plaintext = line_leaves.iter().flatten().any(|leaf| {
-        matches!(leaf.item.unicode_bidi(), UnicodeBidi::Plaintext)
-            || leaf
-                .box_stack
-                .iter()
-                .any(|ctx| matches!(ctx.unicode_bidi, UnicodeBidi::Plaintext))
-    });
-
     let mut logical_text = String::new();
     let mut paragraph_leaves: Vec<ParagraphLeaf> = Vec::new();
     let mut line_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(lines.len());
@@ -1463,37 +1483,31 @@ fn reorder_paragraph(
     for (line_idx, leaves) in line_leaves.iter().enumerate() {
         let line_start = logical_text.len();
         for leaf in leaves {
-            if !has_plaintext {
-                let shared = active_stack
-                    .iter()
-                    .zip(leaf.box_stack.iter())
-                    .take_while(|(a, b)| a.id == b.id)
-                    .count();
+            let shared = active_stack
+                .iter()
+                .zip(leaf.box_stack.iter())
+                .take_while(|(a, b)| a.id == b.id)
+                .count();
 
-                for ctx in active_stack
-                    .iter()
-                    .rev()
-                    .take(active_stack.len().saturating_sub(shared))
-                {
-                    for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
-                        logical_text.push(ch);
-                    }
-                }
-                active_stack.truncate(shared);
-
-                for ctx in leaf.box_stack.iter().skip(shared) {
-                    for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).0 {
-                        logical_text.push(ch);
-                    }
-                    active_stack.push(ctx.clone());
+            for ctx in active_stack
+                .iter()
+                .rev()
+                .take(active_stack.len().saturating_sub(shared))
+            {
+                for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
+                    logical_text.push(ch);
                 }
             }
+            active_stack.truncate(shared);
 
-            let (leaf_opens, leaf_closes) = if has_plaintext {
-                (Vec::new(), Vec::new())
-            } else {
-                bidi_controls(leaf.item.unicode_bidi(), leaf.item.direction())
-            };
+            for ctx in leaf.box_stack.iter().skip(shared) {
+                for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).0 {
+                    logical_text.push(ch);
+                }
+                active_stack.push(ctx.clone());
+            }
+
+            let (leaf_opens, leaf_closes) = bidi_controls(leaf.item.unicode_bidi(), leaf.item.direction());
 
             for ch in leaf_opens {
                 logical_text.push(ch);
@@ -1524,11 +1538,9 @@ fn reorder_paragraph(
         line_ranges.push(line_start..logical_text.len());
     }
 
-    if !has_plaintext {
-        for ctx in active_stack.iter().rev() {
-            for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
-                logical_text.push(ch);
-            }
+    for ctx in active_stack.iter().rev() {
+        for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
+            logical_text.push(ch);
         }
     }
 
@@ -1536,14 +1548,7 @@ fn reorder_paragraph(
         return;
     }
 
-    let effective_base = if has_plaintext {
-        let leaves: Vec<BidiLeaf> = paragraph_leaves.iter().map(|p| p.leaf.clone()).collect();
-        determine_plaintext_base_level(&leaves)
-    } else {
-        base_level
-    };
-
-    let bidi = BidiInfo::new(&logical_text, effective_base);
+    let bidi = BidiInfo::new(&logical_text, base_level);
 
     for (line_idx, line_range) in line_ranges.iter().enumerate() {
         if line_range.is_empty() {
@@ -1555,6 +1560,12 @@ fn reorder_paragraph(
             .iter()
             .find(|p| p.range.start <= line_range.start && p.range.end >= line_range.end)
             .unwrap_or_else(|| bidi.paragraphs.last().unwrap());
+        let para_direction = if para.level.is_rtl() {
+            Direction::Rtl
+        } else {
+            Direction::Ltr
+        };
+        lines[line_idx].resolved_direction = para_direction;
 
         let (reordered_levels, runs) = bidi.visual_runs(para, line_range.clone());
         let mut visual_fragments: Vec<BidiLeaf> = Vec::new();
@@ -1808,9 +1819,9 @@ fn bidi_controls(unicode_bidi: UnicodeBidi, direction: Direction) -> (Vec<char>,
             ];
             (open, vec!['\u{202c}', '\u{2069}'])
         }
-        // Plaintext paragraphs determine their base direction from first strong; we avoid
-        // injecting controls so the actual text drives paragraph resolution.
-        UnicodeBidi::Plaintext => (Vec::new(), Vec::new()),
+        // Plaintext acts like a first-strong isolate: wrap in FSI/PDI so the isolate picks
+        // its own base direction from content while staying isolated from surrounding text.
+        UnicodeBidi::Plaintext => (vec!['\u{2068}'], vec!['\u{2069}']),
     }
 }
 
@@ -1841,24 +1852,6 @@ struct ParagraphLeaf {
     line_index: usize,
     logical_range: std::ops::Range<usize>,
     leaf: BidiLeaf,
-}
-
-fn determine_plaintext_base_level(leaves: &[BidiLeaf]) -> Option<Level> {
-    let mut logical = String::new();
-    for leaf in leaves {
-        match &leaf.item {
-            InlineItem::Text(t) => logical.push_str(&t.text),
-            InlineItem::Tab(_) => logical.push('\t'),
-            _ => logical.push('\u{FFFC}'),
-        }
-    }
-
-    if logical.is_empty() {
-        return None;
-    }
-
-    let bidi = BidiInfo::new(&logical, None);
-    bidi.paragraphs.first().map(|p| p.level)
 }
 
 fn flatten_positioned_item(
@@ -2340,6 +2333,32 @@ mod tests {
             .collect();
 
         assert_eq!(texts, vec!["abc ".to_string(), "אבג".to_string()]);
+    }
+
+    #[test]
+    fn bidi_plaintext_isolate_keeps_paragraph_base() {
+        let mut builder = make_builder(200.0);
+
+        builder.add_item(InlineItem::Text(make_text_item("A ", 10.0)));
+        builder.add_item(InlineItem::Text(make_text_item_with_bidi(
+            "אבג",
+            15.0,
+            UnicodeBidi::Plaintext,
+        )));
+        builder.add_item(InlineItem::Text(make_text_item(" C", 10.0)));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 1);
+        let texts: Vec<String> = lines[0]
+            .items
+            .iter()
+            .map(|p| match &p.item {
+                InlineItem::Text(t) => t.text.clone(),
+                _ => String::new(),
+            })
+            .collect();
+
+        assert_eq!(texts, vec!["A ".to_string(), "אבג".to_string(), " C".to_string()]);
     }
 
     #[test]

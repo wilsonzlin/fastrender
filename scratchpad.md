@@ -6,6 +6,8 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Paragraph direction now resolves from first-strong content for `unicode-bidi: plaintext`: line records carry the resolved bidi base direction from UAX#9, start/end alignment and text-indent mapping use the per-line direction, and plaintext blocks align to RTL/LTR starts per their content. Tests cover RTL/LTR plaintext alignment.
+- `unicode-bidi: plaintext` now wraps content with FSI/PDI isolates so paragraph base directions stay stable while plaintext spans choose their own first-strong direction; bidi control insertion always runs so isolates/embeds for other runs aren’t dropped, and a regression guards plaintext isolates not flipping the paragraph.
 - Canvas now maintains clip masks (including rounded radii) and applies them to all primitives/text; display list renderer uses the clip radii, keeps transforms scoped with save/restore, avoids shrinking images to the clip rect, and has a regression for transform stacking plus clip-mask coverage in Canvas tests.
 - `<img>` alt text now flows through the pipeline: ReplacedType::Image carries alt, intrinsic sizing falls back to shaped alt text when image loading fails/`src` is empty, and painter renders alt text instead of the gray placeholder. Tests cover both sizing and paint fallback.
 - Display list builder now shapes text with the shared font context (using existing shaped runs when present) and emits alt text when images fail instead of gray placeholders, so display-list output matches painter fallback semantics.
@@ -195,15 +197,15 @@
 - Background colors and images respect border-radius and `background-clip`: clip radii shrink with border/padding/content edges, fills draw as rounded rects, and image tiling is masked to the clipped rounded box (`src/paint/painter.rs`).
 
 ## Current issues / gaps
-- Bidi: still relies on injected controls to drive UAX#9 (no dedicated embedding/isolate stack), though paragraph-level resolution and stack handling now opens/closes on context transitions.
+- Bidi: still relies on injected controls instead of a dedicated embedding/isolate stack; nested isolates/overrides need validation against UAX#9 beyond the FSI/PDI wrapping.
 - Justification lacks script-aware expansion (kashida/justification alternates, punctuation stretching) and `text-justify` is still approximated (auto treated as inter-word; no trim/edge handling).
 - `text-align-last` currently maps start/end via direction; nuanced interaction with `text-justify` and additional values still pending.
 - `text-indent` hanging/each-line semantics are approximate; indentation doesn’t yet handle hanging outdents per spec nuances.
 - Max-content sizing now honors mandatory breaks but still ignores anonymous inline box generation and percent-driven height constraints.
 - Table layout still partial: row/col spans not fully honored (rowspan baselines, percent/fixed widths still simplified vs CSS 2.1), colspan distribution still heuristic.
-- Replaced elements still skip backgrounds and non-image types (SVG/iframe/video remain unrendered); object-fit only applies when image decoding succeeds.
-- Painting lacks filters and isolation nuances (auto/isolate behavior), and still doesn't integrate the richer display list module; mix-blend-mode is supported but 3D transforms/transform-origin z and filter/mix-blend/isolation interplay are ignored.
-- Root line strut still provides minimum line-height rather than full descendant baseline synthesis; replaced backgrounds/non-image types remain unpainted.
+- Non-image replaced content (iframe/video/etc.) remains unrendered; need full replaced-element handling beyond images/SVG.
+- Painting still lacks 3D transforms/transform-origin z and fuller filter/blend/isolation interplay, and the richer display list module remains partially integrated.
+- Root line strut still provides minimum line-height rather than full descendant baseline synthesis.
 
 ## To-do / next steps (spec-oriented)
 1. Inline/text:
