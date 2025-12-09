@@ -22,7 +22,7 @@
 //! using the system's default font.
 
 use crate::error::{RenderError, Result};
-use crate::geometry::Rect;
+use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
 use crate::style::color::Rgba;
 use crate::style::types::{
@@ -37,6 +37,7 @@ use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 use image::DynamicImage;
 use std::borrow::Cow;
+use std::sync::Arc;
 use tiny_skia::{
     FilterQuality, IntSize, Paint, PathBuilder, Pattern, Pixmap, PixmapPaint, Rect as SkiaRect, SpreadMode, Stroke,
     Transform,
@@ -54,6 +55,27 @@ pub struct Painter {
     font_ctx: FontContext,
     /// Image cache for replaced content
     image_cache: ImageCache,
+}
+
+#[derive(Debug)]
+struct DisplayItem {
+    z_index: i32,
+    order: u64,
+    command: DisplayCommand,
+}
+
+#[derive(Debug)]
+enum DisplayCommand {
+    Background { rect: Rect, style: Arc<ComputedStyle> },
+    Border { rect: Rect, style: Arc<ComputedStyle> },
+    Text {
+        rect: Rect,
+        baseline_offset: f32,
+        text: String,
+        runs: Option<Vec<ShapedRun>>,
+        style: Arc<ComputedStyle>,
+    },
+    Replaced { rect: Rect, replaced_type: ReplacedType, style: Arc<ComputedStyle> },
 }
 
 #[derive(Copy, Clone)]
@@ -189,8 +211,13 @@ impl Painter {
         // Fill background
         self.fill_background();
 
-        // Paint the root fragment and all children
-        self.paint_fragment(&tree.root, 0.0, 0.0);
+        // Build display list then paint in stacking order
+        let mut items = Vec::new();
+        self.collect_commands(&tree.root, Point::ZERO, 0, &mut 0, &mut items);
+        items.sort_by(|a, b| a.z_index.cmp(&b.z_index).then_with(|| a.order.cmp(&b.order)));
+        for item in items {
+            self.execute_command(item.command)?;
+        }
 
         Ok(self.pixmap)
     }
@@ -206,52 +233,137 @@ impl Painter {
         self.pixmap.fill(color);
     }
 
-    /// Paints a fragment and its children recursively
-    fn paint_fragment(&mut self, fragment: &FragmentNode, offset_x: f32, offset_y: f32) {
-        let x = fragment.bounds.x() + offset_x;
-        let y = fragment.bounds.y() + offset_y;
-        let width = fragment.bounds.width();
-        let height = fragment.bounds.height();
+    /// Collect display commands in CSS painting order (local) while tracking z-index buckets.
+    fn collect_commands(
+        &self,
+        fragment: &FragmentNode,
+        offset: Point,
+        z_hint: i32,
+        order_counter: &mut u64,
+        items: &mut Vec<DisplayItem>,
+    ) {
+        let abs_bounds = Rect::from_xywh(
+            fragment.bounds.x() + offset.x,
+            fragment.bounds.y() + offset.y,
+            fragment.bounds.width(),
+            fragment.bounds.height(),
+        );
 
-        // Get style if available
-        let style = fragment.get_style();
-
-        // Paint background first (if present)
-        if let Some(style) = style {
-            self.paint_background(x, y, width, height, style);
-            self.paint_background_image(x, y, width, height, style);
-            self.paint_borders(x, y, width, height, style);
+        let mut z_index = z_hint;
+        if let Some(style) = fragment.style.as_ref() {
+            if style.position.is_positioned() {
+                z_index = style.z_index;
+            }
         }
 
-        // Paint based on content type
+        if let Some(style) = fragment.style.clone() {
+            let has_background = style.background_color.alpha_u8() > 0 || style.background_image.is_some();
+            if has_background {
+                items.push(DisplayItem {
+                    z_index,
+                    order: *order_counter,
+                    command: DisplayCommand::Background {
+                        rect: abs_bounds,
+                        style: style.clone(),
+                    },
+                });
+                *order_counter += 1;
+            }
+
+            let has_border = style.border_top_width.to_px() > 0.0
+                || style.border_right_width.to_px() > 0.0
+                || style.border_bottom_width.to_px() > 0.0
+                || style.border_left_width.to_px() > 0.0;
+            if has_border {
+                items.push(DisplayItem {
+                    z_index,
+                    order: *order_counter,
+                    command: DisplayCommand::Border {
+                        rect: abs_bounds,
+                        style: style.clone(),
+                    },
+                });
+                *order_counter += 1;
+            }
+        }
+
         match &fragment.content {
-            FragmentContent::Block { .. } => {}
-            FragmentContent::Inline { .. } => {}
             FragmentContent::Text {
                 text,
                 baseline_offset,
                 shaped,
                 ..
             } => {
-                // Get text color from style
-                let color = style.map(|s| s.color).unwrap_or(Rgba::BLACK);
-                let font_size = style.map(|s| s.font_size).unwrap_or(16.0);
-                if let Some(runs) = shaped {
-                    self.paint_shaped_runs(runs, x, y + baseline_offset, color);
-                } else {
-                    self.paint_text(text, style, x, y + baseline_offset, font_size, color);
+                if let Some(style) = fragment.style.clone() {
+                    items.push(DisplayItem {
+                        z_index,
+                        order: *order_counter,
+                        command: DisplayCommand::Text {
+                            rect: abs_bounds,
+                            baseline_offset: *baseline_offset,
+                            text: text.clone(),
+                            runs: shaped.clone(),
+                            style,
+                        },
+                    });
+                    *order_counter += 1;
                 }
             }
-            FragmentContent::Line { .. } => {}
             FragmentContent::Replaced { replaced_type, .. } => {
-                self.paint_replaced(replaced_type, style, x, y, width, height);
+                if let Some(style) = fragment.style.clone() {
+                    items.push(DisplayItem {
+                        z_index,
+                        order: *order_counter,
+                        command: DisplayCommand::Replaced {
+                            rect: abs_bounds,
+                            replaced_type: replaced_type.clone(),
+                            style,
+                        },
+                    });
+                    *order_counter += 1;
+                }
             }
+            _ => {}
         }
 
-        // Paint children (depth-first)
+        let next_offset = Point::new(abs_bounds.x(), abs_bounds.y());
         for child in &fragment.children {
-            self.paint_fragment(child, x, y);
+            self.collect_commands(child, next_offset, z_index, order_counter, items);
         }
+    }
+
+    fn execute_command(&mut self, command: DisplayCommand) -> Result<()> {
+        match command {
+            DisplayCommand::Background { rect, style } => {
+                self.paint_background(rect.x(), rect.y(), rect.width(), rect.height(), &style);
+                self.paint_background_image(rect.x(), rect.y(), rect.width(), rect.height(), &style);
+            }
+            DisplayCommand::Border { rect, style } => {
+                self.paint_borders(rect.x(), rect.y(), rect.width(), rect.height(), &style);
+            }
+            DisplayCommand::Text {
+                rect,
+                baseline_offset,
+                text,
+                runs,
+                style,
+            } => {
+                let color = style.color;
+                if let Some(runs) = runs {
+                    self.paint_shaped_runs(&runs, rect.x(), rect.y() + baseline_offset, color);
+                } else {
+                    self.paint_text(&text, Some(&style), rect.x(), rect.y() + baseline_offset, style.font_size, color);
+                }
+            }
+            DisplayCommand::Replaced {
+                rect,
+                replaced_type,
+                style,
+            } => {
+                self.paint_replaced(&replaced_type, Some(&style), rect.x(), rect.y(), rect.width(), rect.height());
+            }
+        }
+        Ok(())
     }
 
     /// Paints the background of a fragment
