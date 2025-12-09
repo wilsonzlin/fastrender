@@ -40,7 +40,7 @@ use crate::text::line_break::{BreakOpportunity, BreakType};
 use crate::text::pipeline::{ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use unicode_bidi::{BidiInfo, Level};
 
@@ -1163,8 +1163,9 @@ impl LineBuilder {
         // Build the logical text for this line and map byte ranges back to item indices.
         let mut logical_text = String::new();
         let mut spans: Vec<(usize, std::ops::Range<usize>)> = Vec::with_capacity(self.current_line.items.len());
+        let original_items = self.current_line.items.clone();
 
-        for (idx, positioned) in self.current_line.items.iter().enumerate() {
+        for (idx, positioned) in original_items.iter().enumerate() {
             let dir = positioned.item.direction();
             let ub = positioned.item.unicode_bidi();
             let (open_controls, close_controls) = bidi_controls(ub, dir);
@@ -1191,7 +1192,9 @@ impl LineBuilder {
         }
 
         let bidi = BidiInfo::new(&logical_text, self.base_level);
-        let mut visual_indices: Vec<usize> = Vec::with_capacity(self.current_line.items.len());
+        let mut reordered: Vec<PositionedItem> = Vec::new();
+        let mut x = 0.0;
+        let mut seen_atomic = HashSet::new();
 
         for para in &bidi.paragraphs {
             let line_range = para.range.clone();
@@ -1201,33 +1204,56 @@ impl LineBuilder {
 
             let (reordered_levels, runs) = bidi.visual_runs(para, line_range);
             for run in runs {
-                let mut run_indices: Vec<usize> = spans
+                // Collect the slices of items that fall within this run.
+                let mut run_parts: Vec<PositionedItem> = spans
                     .iter()
                     .filter(|(_, range)| range.start < run.end && range.end > run.start)
-                    .map(|(idx, _)| *idx)
+                    .flat_map(|(idx, range)| {
+                        let item = &original_items[*idx];
+                        let overlap_start = run.start.max(range.start);
+                        let overlap_end = run.end.min(range.end);
+
+                        match &item.item {
+                            InlineItem::Text(text_item) => {
+                                let slice_start = overlap_start - range.start;
+                                let slice_end = overlap_end - range.start;
+                                let sliced =
+                                    slice_text_item(text_item, slice_start..slice_end, &self.shaper, &self.font_context)
+                                .unwrap_or_else(|| text_item.clone());
+
+                                Some(PositionedItem {
+                                    item: InlineItem::Text(sliced),
+                                    x: 0.0,
+                                    baseline_offset: item.baseline_offset,
+                                })
+                            }
+                            _ => {
+                                // Atomic items: include them only once.
+                                if seen_atomic.insert(*idx) {
+                                    Some(PositionedItem {
+                                        item: item.item.clone(),
+                                        x: 0.0,
+                                        baseline_offset: item.baseline_offset,
+                                    })
+                                } else {
+                                    None
+                                }
+                            }
+                        }
+                    })
                     .collect();
 
                 let level = reordered_levels.get(run.start).copied().unwrap_or_else(Level::ltr);
                 if level.is_rtl() {
-                    run_indices.reverse();
+                    run_parts.reverse();
                 }
 
-                visual_indices.extend(run_indices);
+                for mut part in run_parts {
+                    part.x = x;
+                    x += part.item.width();
+                    reordered.push(part);
+                }
             }
-        }
-
-        if visual_indices.len() != self.current_line.items.len() {
-            // Fallback to logical order if reordering failed
-            return;
-        }
-
-        let mut x = 0.0;
-        let mut reordered: Vec<PositionedItem> = Vec::with_capacity(self.current_line.items.len());
-        for idx in visual_indices {
-            let mut item = self.current_line.items[idx].clone();
-            item.x = x;
-            x += item.item.width();
-            reordered.push(item);
         }
 
         self.current_line.items = reordered;
@@ -1280,6 +1306,106 @@ impl LineBuilder {
     pub fn is_current_line_empty(&self) -> bool {
         self.current_line.is_empty()
     }
+}
+
+fn slice_text_item(
+    item: &TextItem,
+    range: std::ops::Range<usize>,
+    pipeline: &ShapingPipeline,
+    font_context: &FontContext,
+) -> Option<TextItem> {
+    if range.start >= range.end || range.end > item.text.len() {
+        return None;
+    }
+
+    // Fast path for synthetic items used in tests that don't carry shaped runs.
+    if item.runs.is_empty() {
+        let advance_at = |byte_offset: usize| -> f32 {
+            item.cluster_advances
+                .iter()
+                .rev()
+                .find(|b| b.byte_offset <= byte_offset)
+                .map(|b| b.advance)
+                .unwrap_or(0.0)
+        };
+        let start_adv = advance_at(range.start);
+        let end_adv = advance_at(range.end);
+        let width = (end_adv - start_adv).max(0.0);
+
+        let cluster_advances = item
+            .cluster_advances
+            .iter()
+            .filter(|b| b.byte_offset >= range.start && b.byte_offset <= range.end)
+            .map(|b| ClusterBoundary {
+                byte_offset: b.byte_offset - range.start,
+                advance: (b.advance - start_adv).max(0.0),
+            })
+            .collect();
+
+        let breaks = item
+            .break_opportunities
+            .iter()
+            .filter(|b| b.byte_offset >= range.start && b.byte_offset <= range.end)
+            .map(|b| BreakOpportunity::with_hyphen(
+                b.byte_offset - range.start,
+                b.break_type,
+                b.adds_hyphen,
+            ))
+            .collect();
+        let forced = item
+            .forced_break_offsets
+            .iter()
+            .copied()
+            .filter(|o| *o >= range.start && *o <= range.end)
+            .map(|o| o - range.start)
+            .collect();
+
+        return Some(TextItem {
+            runs: Vec::new(),
+            advance: width,
+            metrics: item.metrics,
+            vertical_align: item.vertical_align,
+            break_opportunities: breaks,
+            forced_break_offsets: forced,
+            text: item.text[range.clone()].to_string(),
+            font_size: item.font_size,
+            style: item.style.clone(),
+            cluster_advances,
+        });
+    }
+
+    let slice_text = &item.text[range.clone()];
+    let mut runs = pipeline.shape(slice_text, &item.style, font_context).ok()?;
+    TextItem::apply_spacing_to_runs(
+        &mut runs,
+        slice_text,
+        item.style.letter_spacing,
+        item.style.word_spacing,
+    );
+
+    let metrics = TextItem::metrics_from_runs(&runs, item.metrics.line_height, item.font_size);
+    let breaks = item
+        .break_opportunities
+        .iter()
+        .filter(|b| b.byte_offset >= range.start && b.byte_offset <= range.end)
+        .map(|b| BreakOpportunity::with_hyphen(
+            b.byte_offset - range.start,
+            b.break_type,
+            b.adds_hyphen,
+        ))
+        .collect();
+    let forced = item
+        .forced_break_offsets
+        .iter()
+        .copied()
+        .filter(|o| *o >= range.start && *o <= range.end)
+        .map(|o| o - range.start)
+        .collect();
+
+    Some(
+        TextItem::new(runs, slice_text.to_string(), metrics, breaks, forced, item.style.clone())
+            .with_vertical_align(item.vertical_align),
+    )
 }
 
 fn bidi_controls(unicode_bidi: UnicodeBidi, direction: Direction) -> (Vec<char>, Vec<char>) {
@@ -1562,6 +1688,26 @@ mod tests {
             .collect();
 
         assert_eq!(texts, vec!["א".to_string(), "a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn bidi_mixed_direction_splits_text_item() {
+        let mut builder = make_builder(200.0);
+
+        builder.add_item(InlineItem::Text(make_text_item("abc אבג", 70.0)));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 1);
+        let texts: Vec<String> = lines[0]
+            .items
+            .iter()
+            .map(|p| match &p.item {
+                InlineItem::Text(t) => t.text.clone(),
+                _ => String::new(),
+            })
+            .collect();
+
+        assert_eq!(texts, vec!["abc ".to_string(), "אבג".to_string()]);
     }
 
     #[test]
