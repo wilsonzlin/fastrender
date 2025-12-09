@@ -178,6 +178,14 @@ pub enum SpecifiedHeight {
     Auto,
 }
 
+fn resolve_row_height(row: &RowInfo, percent_base: Option<f32>) -> Option<f32> {
+    match row.specified_height {
+        Some(SpecifiedHeight::Fixed(h)) => Some(h),
+        Some(SpecifiedHeight::Percent(p)) => percent_base.map(|t| (p / 100.0) * t),
+        _ => None,
+    }
+}
+
 /// Information about a table cell
 #[derive(Debug, Clone)]
 pub struct CellInfo {
@@ -287,6 +295,7 @@ impl TableStructure {
         // Phase 1: Count rows and discover maximum column count
         let mut current_row = 0;
         let mut max_cols = 0;
+        let mut row_heights: Vec<Option<SpecifiedHeight>> = Vec::new();
 
         // Collect all cells first
         let mut cell_data: Vec<(usize, usize, usize, usize, usize)> = Vec::new(); // (row, col, rowspan, colspan, box_idx)
@@ -297,6 +306,12 @@ impl TableStructure {
                     // Process rows within the group
                     for (row_child_idx, row_child) in child.children.iter().enumerate() {
                         if matches!(Self::get_table_element_type(row_child), TableElementType::Row) {
+                            let spec_height = row_child
+                                .style
+                                .height
+                                .as_ref()
+                                .map(|len| Self::length_to_specified_height(len, row_child.style.font_size));
+                            row_heights.push(spec_height);
                             let row_cells =
                                 Self::process_row(row_child, current_row, row_child_idx, &mut structure.grid);
                             for cell in row_cells {
@@ -311,6 +326,12 @@ impl TableStructure {
                     }
                 }
                 TableElementType::Row => {
+                    let spec_height = child
+                        .style
+                        .height
+                        .as_ref()
+                        .map(|len| Self::length_to_specified_height(len, child.style.font_size));
+                    row_heights.push(spec_height);
                     let row_cells = Self::process_row(child, current_row, child_idx, &mut structure.grid);
                     for cell in row_cells {
                         let col_end = cell.1 + cell.3;
@@ -371,7 +392,9 @@ impl TableStructure {
 
         // Initialize rows
         for i in 0..structure.row_count {
-            structure.rows.push(RowInfo::new(i));
+            let mut row = RowInfo::new(i);
+            row.specified_height = row_heights.get(i).cloned().unwrap_or(None);
+            structure.rows.push(row);
         }
 
         // Initialize grid
@@ -506,6 +529,16 @@ impl TableStructure {
         match length.unit {
             LengthUnit::Percent => SpecifiedWidth::Percent(length.value),
             _ => SpecifiedWidth::Fixed(length.to_px()),
+        }
+    }
+
+    fn length_to_specified_height(length: &crate::style::values::Length, font_size: f32) -> SpecifiedHeight {
+        use crate::style::values::LengthUnit;
+        match length.unit {
+            LengthUnit::Percent => SpecifiedHeight::Percent(length.value),
+            LengthUnit::Em | LengthUnit::Rem => SpecifiedHeight::Fixed(length.value * font_size),
+            _ if length.unit.is_absolute() => SpecifiedHeight::Fixed(length.to_px()),
+            _ => SpecifiedHeight::Auto,
         }
     }
 }
@@ -1729,6 +1762,10 @@ impl FormattingContext for TableFormattingContext {
             AvailableSpace::Definite(w) => Some(w),
             _ => None,
         };
+        let containing_height = match constraints.available_height {
+            AvailableSpace::Definite(h) => Some(h),
+            _ => None,
+        };
 
         // Honor explicit table width if present.
         let font_size = box_node.style.font_size;
@@ -1743,6 +1780,21 @@ impl FormattingContext for TableFormattingContext {
         let table_width = specified_width
             .or(containing_width)
             .map(|w| clamp_to_min_max(w, min_width, max_width));
+        let specified_height = box_node
+            .style
+            .height
+            .as_ref()
+            .and_then(|len| resolve_length_against(len, font_size, containing_height));
+        let percent_height_base = specified_height;
+        let min_height = resolve_opt_length_against(box_node.style.min_height.as_ref(), font_size, containing_height);
+        let max_height = resolve_opt_length_against(box_node.style.max_height.as_ref(), font_size, containing_height);
+        let mut table_height = specified_height.map(|h| clamp_to_min_max(h, min_height, max_height));
+        if table_height.is_none() {
+            if let Some(min) = min_height {
+                let clamped = if let Some(max) = max_height { min.min(max) } else { min };
+                table_height = Some(clamped);
+            }
+        }
 
         let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
             .map(|_| ColumnConstraints::new(0.0, 0.0))
@@ -1853,6 +1905,13 @@ impl FormattingContext for TableFormattingContext {
             }
         }
 
+        // Enforce row-specified minimums (length or percentage of table height).
+        for (idx, row) in structure.rows.iter().enumerate() {
+            if let Some(min) = resolve_row_height(row, percent_height_base) {
+                row_heights[idx] = row_heights[idx].max(min);
+            }
+        }
+
         let mut row_metrics: Vec<RowMetrics> = row_heights.iter().map(|h| RowMetrics::new(*h)).collect();
 
         for laid in &laid_out_cells {
@@ -1898,6 +1957,39 @@ impl FormattingContext for TableFormattingContext {
             }
             if row.height <= 0.0 {
                 row.height = 1.0;
+            }
+        }
+
+        // If the table has a definite (or minimum) height and rows don't fill it, distribute the extra.
+        if let Some(target_height) = table_height {
+            let rows_space: f32 = row_metrics.iter().map(|r| r.height).sum();
+            let spacing_total = if structure.border_collapse == BorderCollapse::Collapse {
+                0.0
+            } else {
+                v_spacing * (structure.row_count as f32 + 1.0)
+            };
+            let target_rows = (target_height - spacing_total).max(0.0);
+            if target_rows > rows_space && !row_metrics.is_empty() {
+                let extra = target_rows - rows_space;
+                let weights: Vec<f32> = structure
+                    .rows
+                    .iter()
+                    .map(|row| match row.specified_height {
+                        Some(SpecifiedHeight::Percent(pct)) if percent_height_base.is_some() => pct.max(0.0),
+                        Some(SpecifiedHeight::Fixed(_)) => 0.0,
+                        _ => 1.0,
+                    })
+                    .collect();
+                let total_weight: f32 = weights.iter().copied().sum();
+                let norm = if total_weight <= 0.0 {
+                    structure.row_count as f32
+                } else {
+                    total_weight
+                };
+                for (row, weight) in row_metrics.iter_mut().zip(weights) {
+                    let share = if norm > 0.0 { weight / norm } else { 0.0 };
+                    row.height += extra * share;
+                }
             }
         }
 
@@ -2687,6 +2779,77 @@ mod tests {
         assert_eq!(widths.len(), 2);
         assert!((widths[0] - 100.0).abs() < 0.1);
         assert!((widths[1] - 100.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn table_respects_specified_height() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.height = Some(Length::px(100.0));
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+
+        let cell1 = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![]);
+        let row1 = BoxNode::new_block(Arc::new(row_style.clone()), FormattingContextType::Block, vec![cell1]);
+        let cell2 = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row2 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell2]);
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row1, row2]);
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(&table, &LayoutConstraints::definite(100.0, 200.0))
+            .expect("table layout");
+
+        assert!((fragment.bounds.height() - 100.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn percent_row_heights_resolve_when_table_height_definite() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.height = Some(Length::px(120.0));
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut row1_style = ComputedStyle::default();
+        row1_style.display = Display::TableRow;
+        row1_style.height = Some(Length::percent(25.0));
+
+        let mut row2_style = ComputedStyle::default();
+        row2_style.display = Display::TableRow;
+        row2_style.height = Some(Length::percent(75.0));
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+
+        let row1 = BoxNode::new_block(
+            Arc::new(row1_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![])],
+        );
+        let row2 = BoxNode::new_block(
+            Arc::new(row2_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![])],
+        );
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row1, row2]);
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(&table, &LayoutConstraints::definite(100.0, 200.0))
+            .expect("table layout");
+
+        assert!((fragment.bounds.height() - 120.0).abs() < 0.1);
+        assert!(fragment.children.len() >= 2);
+        let first_y = fragment.children[0].bounds.y();
+        let second_y = fragment.children[1].bounds.y();
+        assert!((second_y - first_y - 30.0).abs() < 0.1);
     }
 
     #[test]
