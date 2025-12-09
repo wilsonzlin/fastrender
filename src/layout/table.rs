@@ -1815,13 +1815,7 @@ impl FormattingContext for TableFormattingContext {
             .and_then(|len| resolve_length_against(len, font_size, containing_height));
         let min_height = resolve_opt_length_against(box_node.style.min_height.as_ref(), font_size, containing_height);
         let max_height = resolve_opt_length_against(box_node.style.max_height.as_ref(), font_size, containing_height);
-        let mut table_height = specified_height.map(|h| clamp_to_min_max(h, min_height, max_height));
-        if table_height.is_none() {
-            if let Some(min) = min_height {
-                let clamped = if let Some(max) = max_height { min.min(max) } else { min };
-                table_height = Some(clamped);
-            }
-        }
+        let table_height = specified_height.map(|h| clamp_to_min_max(h, min_height, max_height));
 
         let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
             .map(|_| ColumnConstraints::new(0.0, 0.0))
@@ -2147,7 +2141,7 @@ impl FormattingContext for TableFormattingContext {
         } else {
             col_widths.iter().sum::<f32>() + spacing
         };
-        let total_height = if structure.row_count > 0 {
+        let mut total_height = if structure.row_count > 0 {
             if structure.border_collapse == BorderCollapse::Collapse {
                 let mut h = horizontal_line_max.get(0).copied().unwrap_or(0.0);
                 for (idx, row) in row_metrics.iter().enumerate() {
@@ -2165,14 +2159,13 @@ impl FormattingContext for TableFormattingContext {
         } else {
             0.0
         };
-        let mut used_height = total_height;
         if let Some(max_h) = max_height {
-            used_height = used_height.min(max_h);
+            total_height = total_height.min(max_h);
         }
         if let Some(min_h) = min_height {
-            used_height = used_height.max(min_h);
+            total_height = total_height.max(min_h);
         }
-        let table_bounds = Rect::from_xywh(0.0, 0.0, total_width.max(0.0), used_height);
+        let table_bounds = Rect::from_xywh(0.0, 0.0, total_width.max(0.0), total_height);
 
         if structure.border_collapse == BorderCollapse::Collapse {
             let make_border_style = |color: Rgba,
@@ -2948,6 +2941,46 @@ mod tests {
         let first_y = fragment.children[0].bounds.y();
         let second_y = fragment.children[1].bounds.y();
         assert!((second_y - first_y - 55.0).abs() < 0.1); // 45 height + 10 spacing
+    }
+
+    #[test]
+    fn percent_rows_ignored_without_table_height() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.min_height = Some(Length::px(100.0));
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        row_style.height = Some(Length::percent(50.0));
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+
+        let row1 = BoxNode::new_block(
+            Arc::new(row_style.clone()),
+            FormattingContextType::Block,
+            vec![BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![])],
+        );
+        let row2 = BoxNode::new_block(
+            Arc::new(row_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![])],
+        );
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row1, row2]);
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(&table, &LayoutConstraints::definite(100.0, 400.0))
+            .expect("table layout");
+
+        // Percent rows should not use the table min-height as a percentage base; they should collapse to intrinsic size.
+        assert!(fragment.children.len() >= 2);
+        let first_y = fragment.children[0].bounds.y();
+        let second_y = fragment.children[1].bounds.y();
+        assert!((second_y - first_y) < 10.0);
+        assert!(fragment.bounds.height() >= 100.0);
     }
 
     #[test]
