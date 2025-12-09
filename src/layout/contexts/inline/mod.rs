@@ -359,8 +359,12 @@ impl InlineFormattingContext {
     fn create_inline_items_for_text(&self, box_node: &BoxNode, text: &str) -> Result<Vec<InlineItem>, LayoutError> {
         let style = &box_node.style;
         let transformed = apply_text_transform(text, style.text_transform);
-        let (normalized_text, forced_breaks, allow_soft_wrap) =
-            normalize_text_for_white_space(&transformed, style.white_space);
+        let NormalizedText {
+            text: normalized_text,
+            forced_breaks,
+            allow_soft_wrap,
+            ..
+        } = normalize_text_for_white_space(&transformed, style.white_space);
 
         if !normalized_text.contains('\t') {
             if normalized_text.is_empty() {
@@ -416,8 +420,12 @@ impl InlineFormattingContext {
     fn create_text_item(&self, box_node: &BoxNode, text: &str) -> Result<TextItem, LayoutError> {
         let style = &box_node.style;
         let transformed = apply_text_transform(text, style.text_transform);
-        let (normalized_text, forced_breaks, allow_soft_wrap) =
-            normalize_text_for_white_space(&transformed, style.white_space);
+        let NormalizedText {
+            text: normalized_text,
+            forced_breaks,
+            allow_soft_wrap,
+            ..
+        } = normalize_text_for_white_space(&transformed, style.white_space);
         self.create_text_item_from_normalized(box_node, &normalized_text, forced_breaks, allow_soft_wrap)
     }
 
@@ -1262,17 +1270,25 @@ fn compute_inline_box_metrics(
     }
 }
 
-fn normalize_text_for_white_space(
-    text: &str,
-    white_space: WhiteSpace,
-) -> (String, Vec<crate::text::line_break::BreakOpportunity>, bool) {
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct NormalizedText {
+    text: String,
+    forced_breaks: Vec<crate::text::line_break::BreakOpportunity>,
+    allow_soft_wrap: bool,
+    leading_collapsible: bool,
+    trailing_collapsible: bool,
+}
+
+fn normalize_text_for_white_space(text: &str, white_space: WhiteSpace) -> NormalizedText {
     use crate::text::line_break::BreakOpportunity;
 
-    match white_space {
+    let result = match white_space {
         WhiteSpace::Normal | WhiteSpace::Nowrap => {
             let mut out = String::with_capacity(text.len());
             let mut in_whitespace = false;
             let mut seen_content = false;
+            let mut leading_collapsible = false;
             let mut iter = text.chars().peekable();
 
             while let Some(ch) = iter.next() {
@@ -1282,12 +1298,15 @@ fn normalize_text_for_white_space(
                             iter.next();
                         }
                         in_whitespace = true;
+                        if !seen_content {
+                            leading_collapsible = true;
+                        }
                     }
-                    '\n' | '\u{000B}' | '\u{000C}' => {
+                    '\n' | '\u{000B}' | '\u{000C}' | ' ' | '\t' => {
                         in_whitespace = true;
-                    }
-                    ' ' | '\t' => {
-                        in_whitespace = true;
+                        if !seen_content {
+                            leading_collapsible = true;
+                        }
                     }
                     _ => {
                         if in_whitespace && seen_content {
@@ -1300,7 +1319,15 @@ fn normalize_text_for_white_space(
                 }
             }
 
-            (out, Vec::new(), white_space != WhiteSpace::Nowrap)
+            let trailing_collapsible = in_whitespace && seen_content;
+
+            NormalizedText {
+                text: out,
+                forced_breaks: Vec::new(),
+                allow_soft_wrap: white_space != WhiteSpace::Nowrap,
+                leading_collapsible,
+                trailing_collapsible,
+            }
         }
         WhiteSpace::PreLine => {
             let mut out = String::with_capacity(text.len());
@@ -1309,11 +1336,15 @@ fn normalize_text_for_white_space(
             let mut run_has_newline = false;
             let mut seen_content = false;
             let mut iter = text.chars().peekable();
+            let mut leading_collapsible = false;
 
             while let Some(ch) = iter.next() {
                 match ch {
                     ' ' | '\t' => {
                         run_has_space = true;
+                        if !seen_content && !run_has_newline {
+                            leading_collapsible = true;
+                        }
                     }
                     '\r' => {
                         if matches!(iter.peek(), Some('\n')) {
@@ -1351,7 +1382,13 @@ fn normalize_text_for_white_space(
                 out.push(' ');
             }
 
-            (out, mandatory_breaks, true)
+            NormalizedText {
+                text: out,
+                forced_breaks: mandatory_breaks,
+                allow_soft_wrap: true,
+                leading_collapsible,
+                trailing_collapsible: false,
+            }
         }
         WhiteSpace::Pre | WhiteSpace::PreWrap => {
             let mut out = String::with_capacity(text.len());
@@ -1374,9 +1411,17 @@ fn normalize_text_for_white_space(
                 }
             }
 
-            (out, mandatory_breaks, white_space == WhiteSpace::PreWrap)
+            NormalizedText {
+                text: out,
+                forced_breaks: mandatory_breaks,
+                allow_soft_wrap: white_space == WhiteSpace::PreWrap,
+                leading_collapsible: false,
+                trailing_collapsible: false,
+            }
         }
-    }
+    };
+
+    result
 }
 
 fn slice_breaks(
@@ -2392,10 +2437,10 @@ mod tests {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::Normal;
 
-        let (normalized, forced, allow_soft) = normalize_text_for_white_space("  foo \n\tbar  ", style.white_space);
-        assert_eq!(normalized, "foo bar");
-        assert!(allow_soft);
-        assert!(forced.is_empty());
+        let normalized = normalize_text_for_white_space("  foo \n\tbar  ", style.white_space);
+        assert_eq!(normalized.text, "foo bar");
+        assert!(normalized.allow_soft_wrap);
+        assert!(normalized.forced_breaks.is_empty());
     }
 
     #[test]
@@ -2413,43 +2458,43 @@ mod tests {
     fn pre_collapses_crlf_to_single_break() {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::Pre;
-        let (normalized, forced, allow_soft) = normalize_text_for_white_space("a\r\nb", style.white_space);
-        assert_eq!(normalized, "ab");
-        assert_eq!(forced.len(), 1);
-        assert_eq!(forced[0].byte_offset, 1);
-        assert!(!allow_soft);
+        let normalized = normalize_text_for_white_space("a\r\nb", style.white_space);
+        assert_eq!(normalized.text, "ab");
+        assert_eq!(normalized.forced_breaks.len(), 1);
+        assert_eq!(normalized.forced_breaks[0].byte_offset, 1);
+        assert!(!normalized.allow_soft_wrap);
     }
 
     #[test]
     fn pre_treats_form_feed_as_break() {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::Pre;
-        let (normalized, forced, allow_soft) = normalize_text_for_white_space("a\u{000C}b", style.white_space);
-        assert_eq!(normalized, "ab");
-        assert_eq!(forced.len(), 1);
-        assert_eq!(forced[0].byte_offset, 1);
-        assert!(!allow_soft);
+        let normalized = normalize_text_for_white_space("a\u{000C}b", style.white_space);
+        assert_eq!(normalized.text, "ab");
+        assert_eq!(normalized.forced_breaks.len(), 1);
+        assert_eq!(normalized.forced_breaks[0].byte_offset, 1);
+        assert!(!normalized.allow_soft_wrap);
     }
 
     #[test]
     fn normal_collapses_vertical_tab_to_space() {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::Normal;
-        let (normalized, forced, allow_soft) = normalize_text_for_white_space("a\u{000B} b", style.white_space);
-        assert_eq!(normalized, "a b");
-        assert!(forced.is_empty());
-        assert!(allow_soft);
+        let normalized = normalize_text_for_white_space("a\u{000B} b", style.white_space);
+        assert_eq!(normalized.text, "a b");
+        assert!(normalized.forced_breaks.is_empty());
+        assert!(normalized.allow_soft_wrap);
     }
 
     #[test]
     fn pre_line_treats_crlf_as_single_break() {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::PreLine;
-        let (normalized, forced, allow_soft) = normalize_text_for_white_space("a\r\n b", style.white_space);
-        assert_eq!(normalized, "a b");
-        assert_eq!(forced.len(), 1);
-        assert_eq!(forced[0].byte_offset, 2);
-        assert!(allow_soft);
+        let normalized = normalize_text_for_white_space("a\r\n b", style.white_space);
+        assert_eq!(normalized.text, "a b");
+        assert_eq!(normalized.forced_breaks.len(), 1);
+        assert_eq!(normalized.forced_breaks[0].byte_offset, 2);
+        assert!(normalized.allow_soft_wrap);
     }
 
     #[test]
