@@ -2118,7 +2118,14 @@ impl FormattingContext for TableFormattingContext {
         } else {
             0.0
         };
-        let table_bounds = Rect::from_xywh(0.0, 0.0, total_width.max(0.0), total_height);
+        let mut used_height = total_height;
+        if let Some(max_h) = max_height {
+            used_height = used_height.min(max_h);
+        }
+        if let Some(min_h) = min_height {
+            used_height = used_height.max(min_h);
+        }
+        let table_bounds = Rect::from_xywh(0.0, 0.0, total_width.max(0.0), used_height);
 
         if structure.border_collapse == BorderCollapse::Collapse {
             let make_border_style = |color: Rgba,
@@ -2850,6 +2857,43 @@ mod tests {
         let first_y = fragment.children[0].bounds.y();
         let second_y = fragment.children[1].bounds.y();
         assert!((second_y - first_y - 30.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn table_max_height_clamps_bounds() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.max_height = Some(Length::px(40.0));
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+
+        let tall_cell = BoxNode::new_block(
+            Arc::new(cell_style.clone()),
+            FormattingContextType::Block,
+            vec![BoxNode::new_block(
+                Arc::new(ComputedStyle {
+                    height: Some(Length::px(100.0)),
+                    display: Display::Block,
+                    ..ComputedStyle::default()
+                }),
+                FormattingContextType::Block,
+                vec![],
+            )],
+        );
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![tall_cell]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(&table, &LayoutConstraints::definite(100.0, 200.0))
+            .expect("table layout");
+        assert!(fragment.bounds.height() <= 40.0 + 0.01);
     }
 
     #[test]
