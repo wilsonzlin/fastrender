@@ -589,8 +589,10 @@ impl InlineFormattingContext {
         let mut fragments = Vec::new();
         let mut y = start_y;
 
-        for line in lines {
-            let line_fragment = self.create_line_fragment(&line, y, available_width, text_align);
+        let total = lines.len();
+        for (idx, line) in lines.into_iter().enumerate() {
+            let is_last_line = idx + 1 == total;
+            let line_fragment = self.create_line_fragment(&line, y, available_width, text_align, is_last_line);
             y += line.height;
             fragments.push(line_fragment);
         }
@@ -605,6 +607,7 @@ impl InlineFormattingContext {
         y: f32,
         available_width: f32,
         text_align: TextAlign,
+        is_last_line: bool,
     ) -> FragmentNode {
         let mut children = Vec::new();
         let usable_width = if available_width.is_finite() {
@@ -613,22 +616,32 @@ impl InlineFormattingContext {
             line.width
         };
         let extra_space = (usable_width - line.width).max(0.0);
+        let mut gap_extra = 0.0;
         let offset = match text_align {
             TextAlign::Right => extra_space,
             TextAlign::Center => extra_space * 0.5,
-            // TODO: implement justify distribution.
+            TextAlign::Justify if !is_last_line && line.items.len() > 1 => {
+                gap_extra = extra_space / (line.items.len() as f32 - 1.0);
+                0.0
+            }
             _ => 0.0,
         };
 
-        for positioned in &line.items {
+        let mut running_offset = offset;
+        let item_count = line.items.len();
+
+        for (i, positioned) in line.items.iter().enumerate() {
             let item_y =
                 line.baseline + positioned.baseline_offset - positioned.item.baseline_metrics().baseline_offset;
 
-            let fragment = self.create_item_fragment(&positioned.item, positioned.x + offset, item_y);
+            let fragment = self.create_item_fragment(&positioned.item, positioned.x + running_offset, item_y);
             children.push(fragment);
+            if gap_extra > 0.0 && i + 1 < item_count {
+                running_offset += gap_extra;
+            }
         }
 
-        let bounds = Rect::from_xywh(0.0, y, (line.width + offset).min(usable_width), line.height);
+        let bounds = Rect::from_xywh(0.0, y, usable_width, line.height);
         FragmentNode::new_line(bounds, line.baseline, children)
     }
 
