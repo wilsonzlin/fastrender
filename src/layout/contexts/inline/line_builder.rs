@@ -39,7 +39,7 @@ use crate::text::font_loader::FontContext;
 use crate::text::line_break::{BreakOpportunity, BreakType};
 use crate::text::pipeline::{ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::ReplacedType;
-use crate::tree::fragment_tree::FragmentNode;
+use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use unicode_bidi::{BidiInfo, Level};
@@ -794,7 +794,16 @@ impl InlineBlockItem {
     ) -> Self {
         let width = fragment.bounds.width();
         let height = fragment.bounds.height();
-        let metrics = BaselineMetrics::for_replaced(height);
+        let mut last_baseline: Option<f32> = None;
+        collect_last_line_baseline(&fragment, 0.0, &mut last_baseline);
+
+        let metrics = if let Some(baseline) = last_baseline {
+            let clamped_baseline = baseline.clamp(0.0, height);
+            let descent = (height - clamped_baseline).max(0.0);
+            BaselineMetrics::new(clamped_baseline, height, clamped_baseline, descent)
+        } else {
+            BaselineMetrics::for_replaced(height)
+        };
 
         Self {
             fragment,
@@ -817,6 +826,16 @@ impl InlineBlockItem {
 
     pub fn total_width(&self) -> f32 {
         self.margin_left + self.width + self.margin_right
+    }
+}
+
+fn collect_last_line_baseline(fragment: &FragmentNode, y_offset: f32, last: &mut Option<f32>) {
+    let current_offset = y_offset + fragment.bounds.y();
+    if let FragmentContent::Line { baseline } = fragment.content {
+        *last = Some(current_offset + baseline);
+    }
+    for child in &fragment.children {
+        collect_last_line_baseline(child, current_offset, last);
     }
 }
 
@@ -1459,6 +1478,19 @@ mod tests {
         let lines = builder.finish();
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].items[0].item.width(), 80.0);
+    }
+
+    #[test]
+    fn inline_block_baseline_prefers_last_line_box() {
+        // Create an inline-block fragment that contains a line box at y=5 with baseline 8 (relative to the line box).
+        let line = FragmentNode::new_line(Rect::from_xywh(0.0, 5.0, 60.0, 10.0), 8.0, vec![]);
+        let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 80.0, 20.0), vec![line]);
+
+        let inline_block = InlineBlockItem::new(fragment, Direction::Ltr, UnicodeBidi::Normal, 0.0, 0.0);
+
+        // Baseline should be derived from the line (5 + 8 = 13) rather than the bottom border edge (20).
+        assert!((inline_block.metrics.baseline_offset - 13.0).abs() < 0.001);
+        assert!((inline_block.metrics.descent - 7.0).abs() < 0.001);
     }
 
     #[test]

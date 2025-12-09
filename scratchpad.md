@@ -61,6 +61,7 @@
 - Inline box baselines are derived from their children (falling back to strut when empty) instead of always using the parent strut; padding/border insets adjust ascent/descent so nested inline boxes contribute realistic baselines (`src/layout/contexts/inline/mod.rs`).
 - Replaced element sizing now resolves percentage widths/heights/min/max when a containing block size is available; percentage lengths with no base fall back to intrinsic sizes to avoid bogus zeros (`src/layout/utils.rs`, `src/layout/contexts/{block,inline}/mod.rs`).
 - Block and inline formatting contexts propagate definite containing-block heights; percentage heights/min-heights/max-heights resolve when a base exists and fall back to auto/0/∞ when not. Vertical padding/border resolution uses the containing width to avoid panics on percentages, inline-block percentage heights honor available block height, and percentage bases for replaced sizing ignore NaN placeholders. Added tests for block/inline-block percentage height resolution (`src/layout/utils.rs`, `src/layout/contexts/{block,inline}/mod.rs`).
+- Inline-block baselines now come from the last in-flow line box inside the fragment when present, falling back to the bottom border edge only when no lines exist. Baseline metrics for inline-blocks now use ascent/descent derived from that line instead of treating them as replaced elements (`src/layout/contexts/inline/line_builder.rs`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
@@ -82,7 +83,7 @@
 4. General bidi:
    - Ensure visual ordering in layout and paint for RTL/mixed runs.
 5. Inline blocks:
-   - Generate proper anonymous inline wrappers and ensure inline-block/replaced baseline alignment matches spec; validate remaining percentage/min-height edge cases.
+   - Generate proper anonymous inline wrappers; validate remaining percentage/min-height edge cases and baseline behavior in nested formatting contexts.
 
 ## Notes
 - Current table code uses `InlineFormattingContext` for cell intrinsic widths; this fails for block/table/replaced content—needs a per-context intrinsic measurement.
