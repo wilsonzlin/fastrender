@@ -1182,6 +1182,7 @@ impl LineBuilder {
         // Build the logical text for this line and map byte ranges back to leaf indices.
         let mut logical_text = String::new();
         let mut spans: Vec<(usize, std::ops::Range<usize>)> = Vec::with_capacity(leaves.len());
+        let mut current_stack: Vec<BoxContext> = Vec::new();
 
         for (idx, leaf) in leaves.iter().enumerate() {
             let dir = leaf.item.direction();
@@ -1191,6 +1192,27 @@ impl LineBuilder {
             } else {
                 bidi_controls_for_stack(&leaf.box_stack, ub, dir)
             };
+
+            if !has_plaintext {
+                // Close contexts not shared with this leaf
+                let shared = current_stack
+                    .iter()
+                    .zip(leaf.box_stack.iter())
+                    .take_while(|(a, b)| a.id == b.id)
+                    .count();
+                for ctx in current_stack.iter().rev().skip(leaf.box_stack.len().saturating_sub(shared)) {
+                    for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
+                        logical_text.push(ch);
+                    }
+                }
+                // Open new contexts
+                for ctx in leaf.box_stack.iter().skip(shared) {
+                    for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).0 {
+                        logical_text.push(ch);
+                    }
+                }
+                current_stack = leaf.box_stack.clone();
+            }
 
             for ch in open_controls {
                 logical_text.push(ch);
@@ -1209,6 +1231,15 @@ impl LineBuilder {
 
             if content_start < content_end {
                 spans.push((idx, content_start..content_end));
+            }
+        }
+
+        if !has_plaintext {
+            // Close any remaining open contexts.
+            for ctx in current_stack.iter().rev() {
+                for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
+                    logical_text.push(ch);
+                }
             }
         }
 
@@ -1927,6 +1958,51 @@ mod tests {
             .collect();
 
         assert_eq!(texts, vec!["ABC ".to_string(), "אבג".to_string(), " DEF".to_string()]);
+    }
+
+    #[test]
+    fn bidi_isolate_wraps_multiple_leaves_once() {
+        let mut builder = make_builder(200.0);
+
+        let mut inline_box = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            0,
+            Direction::Rtl,
+            UnicodeBidi::Isolate,
+        );
+        inline_box.add_child(InlineItem::Text(make_text_item("אב", 20.0)));
+        inline_box.add_child(InlineItem::Text(make_text_item("ג", 10.0)));
+
+        builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
+        builder.add_item(InlineItem::InlineBox(inline_box));
+        builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 1);
+        let texts: Vec<String> = lines[0]
+            .items
+            .iter()
+            .map(|p| match &p.item {
+                InlineItem::Text(t) => t.text.clone(),
+                InlineItem::InlineBox(b) => b
+                    .children
+                    .iter()
+                    .filter_map(|c| match c {
+                        InlineItem::Text(t) => Some(t.text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(""),
+                _ => String::new(),
+            })
+            .collect();
+
+        // Children stay adjacent and isolate prevents surrounding runs from interleaving.
+        assert_eq!(texts, vec!["L ".to_string(), "אב".to_string(), "ג".to_string(), " R".to_string()]);
     }
 
     #[test]
