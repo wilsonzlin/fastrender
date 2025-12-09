@@ -24,6 +24,7 @@
 use crate::error::{RenderError, Result};
 use crate::image_loader::ImageCache;
 use crate::style::color::Rgba;
+use crate::style::types::BorderStyle as CssBorderStyle;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::{ShapedRun, ShapingPipeline};
@@ -31,7 +32,9 @@ use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 use image::DynamicImage;
 use std::borrow::Cow;
-use tiny_skia::{FilterQuality, IntSize, Paint, PathBuilder, Pixmap, PixmapPaint, Rect as SkiaRect, Transform};
+use tiny_skia::{
+    FilterQuality, IntSize, Paint, PathBuilder, Pixmap, PixmapPaint, Rect as SkiaRect, Stroke, Transform,
+};
 
 /// Main painter that rasterizes a FragmentTree to pixels
 pub struct Painter {
@@ -45,6 +48,12 @@ pub struct Painter {
     font_ctx: FontContext,
     /// Image cache for replaced content
     image_cache: ImageCache,
+}
+
+#[derive(Copy, Clone)]
+enum EdgeOrientation {
+    Horizontal,
+    Vertical,
 }
 
 impl Painter {
@@ -180,53 +189,154 @@ impl Painter {
 
         // Top border
         if top > 0.0 {
-            let mut paint = Paint::default();
-            let color = &style.border_top_color;
-            paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
-            paint.anti_alias = true;
-            if let Some(rect) = SkiaRect::from_xywh(x, y, width, top) {
-                let path = PathBuilder::from_rect(rect);
-                self.pixmap
-                    .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
-            }
+            self.paint_border_edge(
+                x,
+                y + top * 0.5,
+                x + width,
+                y + top * 0.5,
+                top,
+                style.border_top_style,
+                &style.border_top_color,
+                EdgeOrientation::Horizontal,
+            );
         }
 
         // Right border
         if right > 0.0 {
-            let mut paint = Paint::default();
-            let color = &style.border_right_color;
-            paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
-            paint.anti_alias = true;
-            if let Some(rect) = SkiaRect::from_xywh(x + width - right, y, right, height) {
-                let path = PathBuilder::from_rect(rect);
-                self.pixmap
-                    .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
-            }
+            self.paint_border_edge(
+                x + width - right * 0.5,
+                y,
+                x + width - right * 0.5,
+                y + height,
+                right,
+                style.border_right_style,
+                &style.border_right_color,
+                EdgeOrientation::Vertical,
+            );
         }
 
         // Bottom border
         if bottom > 0.0 {
-            let mut paint = Paint::default();
-            let color = &style.border_bottom_color;
-            paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
-            paint.anti_alias = true;
-            if let Some(rect) = SkiaRect::from_xywh(x, y + height - bottom, width, bottom) {
-                let path = PathBuilder::from_rect(rect);
-                self.pixmap
-                    .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
-            }
+            self.paint_border_edge(
+                x,
+                y + height - bottom * 0.5,
+                x + width,
+                y + height - bottom * 0.5,
+                bottom,
+                style.border_bottom_style,
+                &style.border_bottom_color,
+                EdgeOrientation::Horizontal,
+            );
         }
 
         // Left border
         if left > 0.0 {
-            let mut paint = Paint::default();
-            let color = &style.border_left_color;
-            paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
-            paint.anti_alias = true;
-            if let Some(rect) = SkiaRect::from_xywh(x, y, left, height) {
-                let path = PathBuilder::from_rect(rect);
+            self.paint_border_edge(
+                x + left * 0.5,
+                y,
+                x + left * 0.5,
+                y + height,
+                left,
+                style.border_left_style,
+                &style.border_left_color,
+                EdgeOrientation::Vertical,
+            );
+        }
+    }
+
+    fn paint_border_edge(
+        &mut self,
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        width: f32,
+        style: CssBorderStyle,
+        color: &Rgba,
+        orientation: EdgeOrientation,
+    ) {
+        if width <= 0.0 || matches!(style, CssBorderStyle::None | CssBorderStyle::Hidden) {
+            return;
+        }
+
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
+        paint.anti_alias = true;
+
+        let mut stroke = Stroke::default();
+        stroke.width = width;
+        stroke.line_cap = tiny_skia::LineCap::Butt;
+
+        // Dash patterns per CSS styles
+        match style {
+            CssBorderStyle::Dotted => {
+                stroke.dash = tiny_skia::StrokeDash::new(vec![width, width], 0.0);
+            }
+            CssBorderStyle::Dashed => {
+                stroke.dash = tiny_skia::StrokeDash::new(vec![3.0 * width, width], 0.0);
+            }
+            _ => {}
+        }
+
+        let mut path = PathBuilder::new();
+        path.move_to(x1, y1);
+        path.line_to(x2, y2);
+        let base_path = match path.finish() {
+            Some(p) => p,
+            None => return,
+        };
+
+        match style {
+            CssBorderStyle::Double => {
+                let third = width / 3.0;
+                let offset = third + third * 0.5;
+
+                let (outer_path, inner_path) = match orientation {
+                    EdgeOrientation::Horizontal => {
+                        let mut outer_pb = PathBuilder::new();
+                        outer_pb.move_to(x1, y1 - offset);
+                        outer_pb.line_to(x2, y2 - offset);
+
+                        let mut inner_pb = PathBuilder::new();
+                        inner_pb.move_to(x1, y1 + offset);
+                        inner_pb.line_to(x2, y2 + offset);
+
+                        (outer_pb.finish(), inner_pb.finish())
+                    }
+                    EdgeOrientation::Vertical => {
+                        let mut outer_pb = PathBuilder::new();
+                        outer_pb.move_to(x1 - offset, y1);
+                        outer_pb.line_to(x2 - offset, y2);
+
+                        let mut inner_pb = PathBuilder::new();
+                        inner_pb.move_to(x1 + offset, y1);
+                        inner_pb.line_to(x2 + offset, y2);
+
+                        (outer_pb.finish(), inner_pb.finish())
+                    }
+                };
+
+                let mut inner_stroke = stroke.clone();
+                inner_stroke.width = third;
+                stroke.width = third;
+
+                if let Some(outer) = outer_path {
+                    self.pixmap
+                        .stroke_path(&outer, &paint, &stroke, Transform::identity(), None);
+                }
+                if let Some(inner) = inner_path {
+                    self.pixmap
+                        .stroke_path(&inner, &paint, &inner_stroke, Transform::identity(), None);
+                }
+            }
+            CssBorderStyle::Groove | CssBorderStyle::Ridge | CssBorderStyle::Inset | CssBorderStyle::Outset => {
+                // TODO: implement light/dark splitting for 3D borders. For now, draw as solid.
                 self.pixmap
-                    .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+                    .stroke_path(&base_path, &paint, &stroke, Transform::identity(), None);
+            }
+            _ => {
+                self.pixmap
+                    .stroke_path(&base_path, &paint, &stroke, Transform::identity(), None);
             }
         }
     }
