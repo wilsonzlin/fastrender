@@ -32,8 +32,7 @@ use crate::style::types::{
     BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderStyle as CssBorderStyle, ObjectFit,
     ObjectPosition, PositionComponent, TextDecoration,
 };
-use crate::style::types::{FilterColor, FilterFunction, MixBlendMode};
-use crate::style::types::{Overflow};
+use crate::style::types::{FilterColor, FilterFunction, MixBlendMode, Overflow};
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
@@ -570,28 +569,11 @@ impl Painter {
                     return Ok(());
                 }
 
-                let Some(mut bounds) = compute_commands_bounds(&commands) else {
+                let Some(bounds) =
+                    stacking_context_bounds(&commands, &filters, &backdrop_filters, context_rect, transform.as_ref())
+                else {
                     return Ok(());
                 };
-
-                let (out_l, out_t, out_r, out_b) = filter_outset(&filters);
-                let (bd_l, bd_t, bd_r, bd_b) = filter_outset(&backdrop_filters);
-                if out_l > 0.0 || out_t > 0.0 || out_r > 0.0 || out_b > 0.0 {
-                    bounds = Rect::from_xywh(
-                        bounds.min_x() - out_l,
-                        bounds.min_y() - out_t,
-                        bounds.width() + out_l + out_r,
-                        bounds.height() + out_t + out_b,
-                    );
-                }
-                if bd_l > 0.0 || bd_t > 0.0 || bd_r > 0.0 || bd_b > 0.0 {
-                    bounds = Rect::from_xywh(
-                        bounds.min_x() - bd_l,
-                        bounds.min_y() - bd_t,
-                        bounds.width() + bd_l + bd_r,
-                        bounds.height() + bd_t + bd_b,
-                    );
-                }
 
                 // Reduce layer size by translating to the top-left of the local bounds.
                 let offset = Point::new(bounds.min_x(), bounds.min_y());
@@ -604,8 +586,8 @@ impl Painter {
                 }
 
                 let root_rect = Rect::from_xywh(
-                    context_rect.x() - bounds.min_x(),
-                    context_rect.y() - bounds.min_y(),
+                    context_rect.x() - offset.x,
+                    context_rect.y() - offset.y,
                     context_rect.width(),
                     context_rect.height(),
                 );
@@ -649,21 +631,21 @@ impl Painter {
                     for cmd in clipped {
                         clip_painter.execute_command(cmd)?;
                     }
-                let mut clip_pixmap = clip_painter.pixmap;
+                    let mut clip_pixmap = clip_painter.pixmap;
                     if let Some((mut clip_rect, mut clip_radii, clip_x, clip_y)) = clip {
                         if !clip_x {
                             clip_rect =
-                                Rect::from_xywh(bounds.min_x(), clip_rect.y(), bounds.width(), clip_rect.height());
+                                Rect::from_xywh(offset.x, clip_rect.y(), bounds.width(), clip_rect.height());
                             clip_radii = BorderRadii::ZERO;
                         }
                         if !clip_y {
                             clip_rect =
-                                Rect::from_xywh(clip_rect.x(), bounds.min_y(), clip_rect.width(), bounds.height());
+                                Rect::from_xywh(clip_rect.x(), offset.y, clip_rect.width(), bounds.height());
                             clip_radii = BorderRadii::ZERO;
                         }
                         let local_clip = Rect::from_xywh(
-                            clip_rect.x() - bounds.min_x(),
-                            clip_rect.y() - bounds.min_y(),
+                            clip_rect.x() - offset.x,
+                            clip_rect.y() - offset.y,
                             clip_rect.width(),
                             clip_rect.height(),
                         );
@@ -1697,6 +1679,60 @@ fn resolve_transform_length(len: &Length, font_size: f32, percentage_base: f32) 
     }
 }
 
+fn transform_rect(rect: Rect, ts: &Transform) -> Rect {
+    let corners = [
+        (rect.min_x(), rect.min_y()),
+        (rect.max_x(), rect.min_y()),
+        (rect.max_x(), rect.max_y()),
+        (rect.min_x(), rect.max_y()),
+    ];
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+
+    for (x, y) in corners {
+        let tx = x * ts.sx + y * ts.kx + ts.tx;
+        let ty = x * ts.ky + y * ts.sy + ts.ty;
+        min_x = min_x.min(tx);
+        min_y = min_y.min(ty);
+        max_x = max_x.max(tx);
+        max_y = max_y.max(ty);
+    }
+
+    Rect::from_xywh(min_x, min_y, max_x - min_x, max_y - min_y)
+}
+
+fn stacking_context_bounds(
+    commands: &[DisplayCommand],
+    filters: &[ResolvedFilter],
+    backdrop_filters: &[ResolvedFilter],
+    rect: Rect,
+    transform: Option<&Transform>,
+) -> Option<Rect> {
+    let mut bounds = compute_commands_bounds(commands).unwrap_or(rect);
+    let (l, t, r, b) = filter_outset(filters);
+    let (bl, bt, br, bb) = filter_outset(backdrop_filters);
+    let total_l = l.max(bl);
+    let total_t = t.max(bt);
+    let total_r = r.max(br);
+    let total_b = b.max(bb);
+    if total_l > 0.0 || total_t > 0.0 || total_r > 0.0 || total_b > 0.0 {
+        bounds = Rect::from_xywh(
+            bounds.min_x() - total_l,
+            bounds.min_y() - total_t,
+            bounds.width() + total_l + total_r,
+            bounds.height() + total_t + total_b,
+        );
+    }
+    bounds = bounds.union(rect);
+    if let Some(ts) = transform {
+        let transformed = transform_rect(bounds, ts);
+        bounds = bounds.union(transformed);
+    }
+    Some(bounds)
+}
+
 fn command_bounds(cmd: &DisplayCommand) -> Option<Rect> {
     match cmd {
         DisplayCommand::Background { rect, .. }
@@ -1709,24 +1745,10 @@ fn command_bounds(cmd: &DisplayCommand) -> Option<Rect> {
             backdrop_filters,
             clip: _,
             rect,
+            transform,
             ..
         } => {
-            let mut bounds = compute_commands_bounds(commands)?;
-            let (l, t, r, b) = filter_outset(filters);
-            let (bl, bt, br, bb) = filter_outset(backdrop_filters);
-            let total_l = l.max(bl);
-            let total_t = t.max(bt);
-            let total_r = r.max(br);
-            let total_b = b.max(bb);
-            if total_l > 0.0 || total_t > 0.0 || total_r > 0.0 || total_b > 0.0 {
-                bounds = Rect::from_xywh(
-                    bounds.min_x() - total_l,
-                    bounds.min_y() - total_t,
-                    bounds.width() + total_l + total_r,
-                    bounds.height() + total_t + total_b,
-                );
-            }
-            Some(bounds.union(*rect))
+            stacking_context_bounds(commands, filters, backdrop_filters, *rect, transform.as_ref())
         }
     }
 }
@@ -2600,7 +2622,7 @@ mod tests {
     use crate::geometry::Rect;
     use crate::image_loader::ImageCache;
     use crate::style::ComputedStyle;
-    use crate::style::types::Overflow;
+    use crate::style::types::{Isolation, Overflow};
     use crate::style::values::Length;
     use crate::text::font_loader::FontContext;
     use crate::Position;
@@ -2783,6 +2805,32 @@ mod tests {
         assert_eq!(color_at(&pixmap, 10, 10), (255, 0, 0, 255));
         assert_eq!(color_at(&pixmap, 10, 25), (255, 255, 255, 255));
         assert_eq!(color_at(&pixmap, 22, 10), (255, 0, 0, 255));
+    }
+
+    #[test]
+    fn transformed_child_extends_parent_bounds() {
+        let mut parent_style = ComputedStyle::default();
+        parent_style.isolation = Isolation::Isolate;
+        let parent_style = Arc::new(parent_style);
+
+        let mut child_style = ComputedStyle::default();
+        child_style.background_color = Rgba::RED;
+        child_style.transform =
+            vec![crate::css::types::Transform::Translate(Length::px(60.0), Length::px(0.0))];
+        let child_style = Arc::new(child_style);
+
+        let child =
+            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], child_style);
+        let parent =
+            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), vec![child], parent_style);
+        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 120.0, 40.0), vec![parent]);
+        let tree = FragmentTree::new(root);
+
+        let pixmap = paint_tree(&tree, 120, 40, Rgba::WHITE).expect("paint");
+        // The translated child should remain visible even though the parent stacking context bounds
+        // are derived from its untransformed content.
+        assert_eq!(color_at(&pixmap, 70, 10), (255, 0, 0, 255));
+        assert_eq!(color_at(&pixmap, 5, 5), (255, 255, 255, 255));
     }
 
     #[test]
