@@ -602,6 +602,35 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "text-align-all" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                let parsed = match kw.as_str() {
+                    "start" => Some(TextAlign::Start),
+                    "end" => Some(TextAlign::End),
+                    "left" => Some(TextAlign::Left),
+                    "right" => Some(TextAlign::Right),
+                    "center" => Some(TextAlign::Center),
+                    "justify" => Some(TextAlign::Justify),
+                    "justify-all" => Some(TextAlign::Justify),
+                    "match-parent" => Some(TextAlign::MatchParent),
+                    _ => None,
+                };
+                if let Some(value) = parsed {
+                    styles.text_align = value;
+                    match value {
+                        TextAlign::Justify => {
+                            styles.text_align_last = TextAlignLast::Justify;
+                        }
+                        TextAlign::MatchParent => {
+                            // text-align-last left unchanged per spec carve-out
+                        }
+                        _ => {
+                            styles.text_align_last = TextAlignLast::Auto;
+                        }
+                    }
+                }
+            }
+        }
         "text-align-last" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.text_align_last = match kw.as_str() {

@@ -2445,6 +2445,28 @@ mod tests {
     }
 
     #[test]
+    fn text_align_all_resets_last_line_alignment() {
+        let mut root_style = ComputedStyle::default();
+        root_style.font_size = 16.0;
+        root_style.text_align = TextAlign::Start;
+        root_style.text_align_last = crate::style::types::TextAlignLast::Auto;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(text_style), "word word".to_string())],
+        );
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        let last_line = fragment.children.last().expect("last line");
+        let child = last_line.children.first().expect("text fragment");
+        assert!(child.bounds.x() < 1.0, "text-align-all should reset last-line alignment to auto/start");
+    }
+
+    #[test]
     fn text_align_justify_all_justifies_last_line() {
         let mut root_style = ComputedStyle::default();
         root_style.font_size = 16.0;
