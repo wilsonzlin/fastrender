@@ -47,7 +47,8 @@ use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
 use crate::text::shaper::GlyphPosition;
 use tiny_skia::{
-    BlendMode as SkiaBlendMode, FillRule, Paint, PathBuilder, Pixmap, Rect as SkiaRect, Stroke, Transform,
+    BlendMode as SkiaBlendMode, FillRule, Mask, MaskType, Paint, PathBuilder, Pixmap, Rect as SkiaRect, Stroke,
+    Transform,
 };
 
 use super::display_list::{BlendMode, BorderRadii};
@@ -67,7 +68,9 @@ struct CanvasState {
     /// Current opacity (0.0 to 1.0)
     opacity: f32,
     /// Clip rectangle (if any)
-    clip: Option<Rect>,
+    clip_rect: Option<Rect>,
+    /// Clip mask (respects radii/intersections)
+    clip_mask: Option<Mask>,
     /// Blend mode
     blend_mode: SkiaBlendMode,
 }
@@ -78,7 +81,8 @@ impl CanvasState {
         Self {
             transform: Transform::identity(),
             opacity: 1.0,
-            clip: None,
+            clip_rect: None,
+            clip_mask: None,
             blend_mode: SkiaBlendMode::SourceOver,
         }
     }
@@ -348,12 +352,42 @@ impl Canvas {
     ///
     /// Subsequent drawing operations will be clipped to this rectangle.
     pub fn set_clip(&mut self, rect: Rect) {
-        self.current_state.clip = Some(rect);
+        self.set_clip_with_radii(rect, None);
+    }
+
+    /// Sets a clip rectangle with optional corner radii.
+    pub fn set_clip_with_radii(&mut self, rect: Rect, radii: Option<BorderRadii>) {
+        let base_clip = match self.current_state.clip_rect {
+            Some(existing) => existing.intersection(rect).unwrap_or(Rect::ZERO),
+            None => rect,
+        };
+        self.current_state.clip_rect = Some(base_clip);
+
+        let new_mask = self.build_clip_mask(rect, radii.unwrap_or(BorderRadii::ZERO));
+        self.current_state.clip_mask = match (new_mask, self.current_state.clip_mask.take()) {
+            (Some(mut next), Some(existing)) => {
+                combine_masks(&mut next, &existing);
+                Some(next)
+            }
+            (Some(mask), None) => Some(mask),
+            (None, existing) => existing,
+        };
     }
 
     /// Clears the clip rectangle
     pub fn clear_clip(&mut self) {
-        self.current_state.clip = None;
+        self.current_state.clip_rect = None;
+        self.current_state.clip_mask = None;
+    }
+
+    /// Returns the current clip bounds if any.
+    pub(crate) fn clip_bounds(&self) -> Option<Rect> {
+        self.current_state.clip_rect
+    }
+
+    /// Returns the current clip mask, including any rounded radii.
+    pub(crate) fn clip_mask(&self) -> Option<&Mask> {
+        self.current_state.clip_mask.as_ref()
     }
 
     // ========================================================================
@@ -388,8 +422,13 @@ impl Canvas {
         if let Some(skia_rect) = self.to_skia_rect(rect) {
             let path = PathBuilder::from_rect(skia_rect);
             let paint = self.current_state.create_paint(color);
-            self.pixmap
-                .fill_path(&path, &paint, FillRule::Winding, self.current_state.transform, None);
+            self.pixmap.fill_path(
+                &path,
+                &paint,
+                FillRule::Winding,
+                self.current_state.transform,
+                self.current_state.clip_mask.as_ref(),
+            );
         }
     }
 
@@ -418,8 +457,13 @@ impl Canvas {
                 width,
                 ..Default::default()
             };
-            self.pixmap
-                .stroke_path(&path, &paint, &stroke, self.current_state.transform, None);
+            self.pixmap.stroke_path(
+                &path,
+                &paint,
+                &stroke,
+                self.current_state.transform,
+                self.current_state.clip_mask.as_ref(),
+            );
         }
     }
 
@@ -447,10 +491,21 @@ impl Canvas {
             return self.draw_rect(rect, color);
         }
 
+        if let Some(clip) = self.current_state.clip_rect {
+            if rect.intersection(clip).is_none() {
+                return;
+            }
+        }
+
         if let Some(path) = self.build_rounded_rect_path(rect, radii) {
             let paint = self.current_state.create_paint(color);
-            self.pixmap
-                .fill_path(&path, &paint, FillRule::Winding, self.current_state.transform, None);
+            self.pixmap.fill_path(
+                &path,
+                &paint,
+                FillRule::Winding,
+                self.current_state.transform,
+                self.current_state.clip_mask.as_ref(),
+            );
         }
     }
 
@@ -464,14 +519,25 @@ impl Canvas {
             return self.stroke_rect(rect, color, width);
         }
 
+        if let Some(clip) = self.current_state.clip_rect {
+            if rect.intersection(clip).is_none() {
+                return;
+            }
+        }
+
         if let Some(path) = self.build_rounded_rect_path(rect, radii) {
             let paint = self.current_state.create_paint(color);
             let stroke = Stroke {
                 width,
                 ..Default::default()
             };
-            self.pixmap
-                .stroke_path(&path, &paint, &stroke, self.current_state.transform, None);
+            self.pixmap.stroke_path(
+                &path,
+                &paint,
+                &stroke,
+                self.current_state.transform,
+                self.current_state.clip_mask.as_ref(),
+            );
         }
     }
 
@@ -524,8 +590,13 @@ impl Canvas {
 
             // Get the glyph outline
             if let Some(path) = self.build_glyph_path(&face, glyph.glyph_id as u16, glyph_x, glyph_y, scale) {
-                self.pixmap
-                    .fill_path(&path, &paint, FillRule::Winding, self.current_state.transform, None);
+                self.pixmap.fill_path(
+                    &path,
+                    &paint,
+                    FillRule::Winding,
+                    self.current_state.transform,
+                    self.current_state.clip_mask.as_ref(),
+                );
             }
 
             x += glyph.advance;
@@ -555,8 +626,13 @@ impl Canvas {
                 width,
                 ..Default::default()
             };
-            self.pixmap
-                .stroke_path(&path, &paint, &stroke, self.current_state.transform, None);
+            self.pixmap.stroke_path(
+                &path,
+                &paint,
+                &stroke,
+                self.current_state.transform,
+                self.current_state.clip_mask.as_ref(),
+            );
         }
     }
 
@@ -574,8 +650,13 @@ impl Canvas {
 
         if let Some(path) = self.build_circle_path(center, radius) {
             let paint = self.current_state.create_paint(color);
-            self.pixmap
-                .fill_path(&path, &paint, FillRule::Winding, self.current_state.transform, None);
+            self.pixmap.fill_path(
+                &path,
+                &paint,
+                FillRule::Winding,
+                self.current_state.transform,
+                self.current_state.clip_mask.as_ref(),
+            );
         }
     }
 
@@ -591,8 +672,13 @@ impl Canvas {
                 width,
                 ..Default::default()
             };
-            self.pixmap
-                .stroke_path(&path, &paint, &stroke, self.current_state.transform, None);
+            self.pixmap.stroke_path(
+                &path,
+                &paint,
+                &stroke,
+                self.current_state.transform,
+                self.current_state.clip_mask.as_ref(),
+            );
         }
     }
 
@@ -606,12 +692,33 @@ impl Canvas {
     }
 
     /// Applies the current clip to a rectangle
-    fn apply_clip(&self, rect: Rect) -> Option<Rect> {
-        if let Some(clip) = self.current_state.clip {
+    /// Applies the current clip to a rectangle.
+    pub(crate) fn apply_clip(&self, rect: Rect) -> Option<Rect> {
+        if let Some(clip) = self.current_state.clip_rect {
+            if clip.width() <= 0.0 || clip.height() <= 0.0 {
+                return None;
+            }
             rect.intersection(clip)
         } else {
             Some(rect)
         }
+    }
+
+    fn build_clip_mask(&self, rect: Rect, radii: BorderRadii) -> Option<Mask> {
+        if rect.width() <= 0.0 || rect.height() <= 0.0 || self.width() == 0 || self.height() == 0 {
+            return None;
+        }
+
+        let mut mask_pixmap = Pixmap::new(self.width(), self.height())?;
+        let paint = {
+            let mut p = Paint::default();
+            p.set_color_rgba8(255, 255, 255, 255);
+            p
+        };
+
+        let path = self.build_rounded_rect_path(rect, radii)?;
+        mask_pixmap.fill_path(&path, &paint, FillRule::Winding, self.current_state.transform, None);
+        Some(Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha))
     }
 
     /// Builds a path for a rounded rectangle
@@ -823,6 +930,17 @@ impl ttf_parser::OutlineBuilder for GlyphPathBuilder {
     }
 }
 
+fn combine_masks(into: &mut Mask, existing: &Mask) {
+    if into.width() != existing.width() || into.height() != existing.height() {
+        return;
+    }
+
+    for (dst, src) in into.data_mut().iter_mut().zip(existing.data().iter()) {
+        let multiplied = (*dst as u16 * *src as u16 + 127) / 255;
+        *dst = multiplied as u8;
+    }
+}
+
 // ============================================================================
 // Blend Mode Conversion
 // ============================================================================
@@ -863,6 +981,13 @@ impl BlendModeExt for BlendMode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
+        let width = pixmap.width();
+        let idx = ((y * width + x) * 4) as usize;
+        let data = pixmap.data();
+        (data[idx], data[idx + 1], data[idx + 2], data[idx + 3])
+    }
 
     #[test]
     fn test_canvas_creation() {
@@ -1075,5 +1200,27 @@ mod tests {
         canvas.clear_clip();
 
         let _ = canvas.into_pixmap();
+    }
+
+    #[test]
+    fn clip_limits_rect_fill() {
+        let mut canvas = Canvas::new(10, 10, Rgba::WHITE).unwrap();
+        canvas.set_clip(Rect::from_xywh(2.0, 2.0, 4.0, 4.0));
+        canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), Rgba::rgb(255, 0, 0));
+        let pixmap = canvas.into_pixmap();
+
+        assert_eq!(pixel(&pixmap, 3, 3), (255, 0, 0, 255));
+        assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
+    }
+
+    #[test]
+    fn rounded_clip_masks_corners() {
+        let mut canvas = Canvas::new(12, 12, Rgba::WHITE).unwrap();
+        canvas.set_clip_with_radii(Rect::from_xywh(2.0, 2.0, 8.0, 8.0), Some(BorderRadii::uniform(4.0)));
+        canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 12.0, 12.0), Rgba::rgb(0, 0, 255));
+        let pixmap = canvas.into_pixmap();
+
+        assert_eq!(pixel(&pixmap, 6, 6), (0, 0, 255, 255));
+        assert_eq!(pixel(&pixmap, 2, 2), (255, 255, 255, 255));
     }
 }

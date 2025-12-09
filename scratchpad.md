@@ -6,6 +6,10 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Canvas now maintains clip masks (including rounded radii) and applies them to all primitives/text; display list renderer uses the clip radii, keeps transforms scoped with save/restore, avoids shrinking images to the clip rect, and has a regression for transform stacking plus clip-mask coverage in Canvas tests.
+- `<img>` alt text now flows through the pipeline: ReplacedType::Image carries alt, intrinsic sizing falls back to shaped alt text when image loading fails/`src` is empty, and painter renders alt text instead of the gray placeholder. Tests cover both sizing and paint fallback.
+- Display list builder now shapes text with the shared font context (using existing shaped runs when present) and emits alt text when images fail instead of gray placeholders, so display-list output matches painter fallback semantics.
+- Display list text items now preserve font identity per shaped run (family/weight/style) and emit one item per run with correct bidi-aware glyph offsets; glyphs inherit the run’s direction/advance instead of flattening to a single anonymous font.
 - Replaced content paints inside the content box: canvas images/SVGs now respect padding/border space during painting, dynamic images convert to premultiplied RGBA instead of BGRA to avoid channel swapping, and a regression covers padding isolation for replaced elements.
 - Overflow clipping now applies in paint: stacking contexts generated for overflow hidden/scroll/auto clip descendants to the padding box with radius-aware masks and a hard pixel clip (prevents filter bleed); backgrounds/borders are left unclipped, and partial-axis overflow (x hidden / y visible) keeps visible axis unmasked. Regression updated accordingly.
  - Added per-axis overflow clipping regression for `overflow-y: hidden` with horizontal overflow visible; painter respects axis-specific clipping.
