@@ -34,6 +34,8 @@ use crate::paint::display_list::{
 use crate::style::color::Rgba;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
+use crate::image_loader::ImageCache;
+use image::GenericImageView;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -44,6 +46,7 @@ use std::sync::Arc;
 pub struct DisplayListBuilder {
     /// The display list being built
     list: DisplayList,
+    image_cache: Option<ImageCache>,
 }
 
 impl DisplayListBuilder {
@@ -51,6 +54,15 @@ impl DisplayListBuilder {
     pub fn new() -> Self {
         Self {
             list: DisplayList::new(),
+            image_cache: None,
+        }
+    }
+
+    /// Creates a display list builder backed by an image cache to rasterize replaced images.
+    pub fn with_image_cache(image_cache: ImageCache) -> Self {
+        Self {
+            list: DisplayList::new(),
+            image_cache: Some(image_cache),
         }
     }
 
@@ -164,15 +176,15 @@ impl DisplayListBuilder {
             }
 
             FragmentContent::Replaced {
-                replaced_type: ReplacedType::Image { src: _ },
+                replaced_type: ReplacedType::Image { src },
                 ..
             } => {
-                // Create placeholder image (1x1 gray pixel)
-                // In a full implementation, image loading would happen elsewhere
-                let placeholder = ImageData::new(1, 1, vec![128, 128, 128, 255]);
+                let image = self
+                    .decode_image(src)
+                    .unwrap_or_else(|| ImageData::new(1, 1, vec![128, 128, 128, 255]));
                 self.list.push(DisplayItem::Image(ImageItem {
                     dest_rect: rect,
-                    image: Arc::new(placeholder),
+                    image: Arc::new(image),
                     src_rect: None,
                 }));
             }
@@ -227,6 +239,18 @@ impl DisplayListBuilder {
     pub fn pop_clip(&mut self) {
         self.list.push(DisplayItem::PopClip);
     }
+
+    fn decode_image(&self, src: &str) -> Option<ImageData> {
+        let cache = self.image_cache.as_ref()?;
+        let image = match cache.load(src) {
+            Ok(img) => img,
+            Err(_) if src.trim_start().starts_with('<') => cache.render_svg(src).ok()?,
+            Err(_) => return None,
+        };
+        let (w, h) = image.dimensions();
+        let rgba = image.to_rgba8();
+        Some(ImageData::new(w, h, rgba.into_raw()))
+    }
 }
 
 impl Default for DisplayListBuilder {
@@ -243,6 +267,7 @@ impl Default for DisplayListBuilder {
 mod tests {
     use super::*;
     use crate::tree::box_tree::ReplacedType;
+    use crate::image_loader::ImageCache;
 
     fn create_block_fragment(x: f32, y: f32, width: f32, height: f32) -> FragmentNode {
         FragmentNode::new_block(Rect::from_xywh(x, y, width, height), vec![])
@@ -481,5 +506,24 @@ mod tests {
 
         assert_eq!(text_count, 2);
         assert_eq!(image_count, 1);
+    }
+
+    #[test]
+    fn test_image_decoding_uses_cache() {
+        // 1x1 red inline SVG
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="red"/></svg>"#;
+        let fragment = create_image_fragment(0.0, 0.0, 10.0, 10.0, svg);
+        let builder = DisplayListBuilder::with_image_cache(ImageCache::new());
+        let list = builder.build(&fragment);
+
+        assert_eq!(list.len(), 1);
+        let DisplayItem::Image(img) = &list.items()[0] else {
+            panic!("Expected image item");
+        };
+        assert_eq!(img.image.width, 1);
+        assert_eq!(img.image.height, 1);
+        let pixels = img.image.pixels.as_ref();
+        assert_eq!(pixels.len(), 4);
+        assert_eq!(pixels, &[255, 0, 0, 255]);
     }
 }
