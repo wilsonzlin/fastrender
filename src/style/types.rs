@@ -556,9 +556,46 @@ pub enum BackgroundPosition {
 /// CSS: `background-repeat`
 /// Reference: CSS Backgrounds and Borders Module Level 3
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BackgroundRepeat {
+pub enum BackgroundRepeatKeyword {
     Repeat,
-    RepeatX,
-    RepeatY,
+    Space,
+    Round,
     NoRepeat,
+}
+
+/// Per-axis repeat keywords (x then y)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackgroundRepeat {
+    pub x: BackgroundRepeatKeyword,
+    pub y: BackgroundRepeatKeyword,
+}
+
+impl BackgroundRepeat {
+    pub const fn repeat() -> Self {
+        Self {
+            x: BackgroundRepeatKeyword::Repeat,
+            y: BackgroundRepeatKeyword::Repeat,
+        }
+    }
+
+    pub const fn repeat_x() -> Self {
+        Self {
+            x: BackgroundRepeatKeyword::Repeat,
+            y: BackgroundRepeatKeyword::NoRepeat,
+        }
+    }
+
+    pub const fn repeat_y() -> Self {
+        Self {
+            x: BackgroundRepeatKeyword::NoRepeat,
+            y: BackgroundRepeatKeyword::Repeat,
+        }
+    }
+
+    pub const fn no_repeat() -> Self {
+        Self {
+            x: BackgroundRepeatKeyword::NoRepeat,
+            y: BackgroundRepeatKeyword::NoRepeat,
+        }
+    }
 }

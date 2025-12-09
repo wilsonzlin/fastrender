@@ -275,7 +275,7 @@ impl Default for ComputedStyle {
             background_image: None,
             background_size: BackgroundSize::Auto,
             background_position: BackgroundPosition::Position(Length::percent(0.0), Length::percent(0.0)),
-            background_repeat: BackgroundRepeat::Repeat,
+            background_repeat: BackgroundRepeat::repeat(),
             background_origin: BackgroundBox::PaddingBox,
             background_clip: BackgroundBox::BorderBox,
             object_fit: ObjectFit::Fill,

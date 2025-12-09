@@ -872,14 +872,8 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
             _ => {}
         },
         "background-repeat" => {
-            if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.background_repeat = match kw.as_str() {
-                    "repeat" => BackgroundRepeat::Repeat,
-                    "repeat-x" => BackgroundRepeat::RepeatX,
-                    "repeat-y" => BackgroundRepeat::RepeatY,
-                    "no-repeat" => BackgroundRepeat::NoRepeat,
-                    _ => styles.background_repeat,
-                };
+            if let Some(rep) = parse_background_repeat(&resolved_value) {
+                styles.background_repeat = rep;
             }
         }
         "background-position" => {
@@ -1495,6 +1489,36 @@ fn parse_background_box(value: &PropertyValue) -> Option<BackgroundBox> {
             "content-box" => Some(BackgroundBox::ContentBox),
             _ => None,
         },
+        _ => None,
+    }
+}
+
+fn parse_repeat_keyword(kw: &str) -> Option<BackgroundRepeatKeyword> {
+    match kw {
+        "repeat" => Some(BackgroundRepeatKeyword::Repeat),
+        "space" => Some(BackgroundRepeatKeyword::Space),
+        "round" => Some(BackgroundRepeatKeyword::Round),
+        "no-repeat" => Some(BackgroundRepeatKeyword::NoRepeat),
+        _ => None,
+    }
+}
+
+fn parse_background_repeat(value: &PropertyValue) -> Option<BackgroundRepeat> {
+    match value {
+        PropertyValue::Keyword(kw) => match kw.as_str() {
+            "repeat-x" => Some(BackgroundRepeat::repeat_x()),
+            "repeat-y" => Some(BackgroundRepeat::repeat_y()),
+            _ => parse_repeat_keyword(kw).map(|k| BackgroundRepeat { x: k, y: k }),
+        },
+        PropertyValue::Multiple(values) if values.len() == 2 => {
+            if let (PropertyValue::Keyword(x_kw), PropertyValue::Keyword(y_kw)) = (&values[0], &values[1]) {
+                let x = parse_repeat_keyword(x_kw)?;
+                let y = parse_repeat_keyword(y_kw)?;
+                Some(BackgroundRepeat { x, y })
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }

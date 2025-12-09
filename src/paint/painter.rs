@@ -33,8 +33,8 @@ use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::stacking::creates_stacking_context;
 use crate::style::color::Rgba;
 use crate::style::types::{
-    BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderStyle as CssBorderStyle, ObjectFit,
-    TextDecoration,
+    BackgroundImage, BackgroundPosition, BackgroundRepeatKeyword, BackgroundSize, BorderStyle as CssBorderStyle,
+    ObjectFit, TextDecoration,
 };
 use crate::style::types::{FilterColor, FilterFunction, MixBlendMode, Overflow};
 use crate::style::values::{Length, LengthUnit};
@@ -793,10 +793,29 @@ impl Painter {
                     return;
                 }
 
-                let (tile_w, tile_h) =
+                let (mut tile_w, mut tile_h) =
                     compute_background_size(style, origin_rect.width(), origin_rect.height(), img_w, img_h);
                 if tile_w <= 0.0 || tile_h <= 0.0 {
                     return;
+                }
+
+                let mut rounded_x = false;
+                let mut rounded_y = false;
+                if style.background_repeat.x == BackgroundRepeatKeyword::Round {
+                    tile_w = round_tile_length(origin_rect.width(), tile_w);
+                    rounded_x = true;
+                }
+                if style.background_repeat.y == BackgroundRepeatKeyword::Round {
+                    tile_h = round_tile_length(origin_rect.height(), tile_h);
+                    rounded_y = true;
+                }
+                if rounded_x ^ rounded_y && matches!(style.background_size, BackgroundSize::Auto) {
+                    let aspect = if img_h != 0.0 { img_w / img_h } else { 1.0 };
+                    if rounded_x {
+                        tile_h = tile_w / aspect;
+                    } else {
+                        tile_w = tile_h * aspect;
+                    }
                 }
 
                 let (offset_x, offset_y) = resolve_background_offset(
@@ -808,86 +827,42 @@ impl Painter {
                     style.font_size,
                 );
 
-                let tile_origin_x = origin_rect.x() + offset_x;
-                let tile_origin_y = origin_rect.y() + offset_y;
-                let repeat = style.background_repeat;
-                let repeat_x = matches!(repeat, BackgroundRepeat::Repeat | BackgroundRepeat::RepeatX);
-                let repeat_y = matches!(repeat, BackgroundRepeat::Repeat | BackgroundRepeat::RepeatY);
-
-                let start_x = if repeat_x {
-                    aligned_start(tile_origin_x, tile_w, clip_rect.min_x())
-                } else {
-                    tile_origin_x
-                };
-                let start_y = if repeat_y {
-                    aligned_start(tile_origin_y, tile_h, clip_rect.min_y())
-                } else {
-                    tile_origin_y
-                };
+                let positions_x = tile_positions(
+                    style.background_repeat.x,
+                    origin_rect.x(),
+                    origin_rect.width(),
+                    tile_w,
+                    offset_x,
+                    clip_rect.min_x(),
+                    clip_rect.max_x(),
+                );
+                let positions_y = tile_positions(
+                    style.background_repeat.y,
+                    origin_rect.y(),
+                    origin_rect.height(),
+                    tile_h,
+                    offset_y,
+                    clip_rect.min_y(),
+                    clip_rect.max_y(),
+                );
 
                 let max_x = clip_rect.max_x();
                 let max_y = clip_rect.max_y();
 
-                match repeat {
-                    BackgroundRepeat::NoRepeat => {
+                for ty in positions_y.iter().copied() {
+                    for tx in positions_x.iter().copied() {
+                        if tx >= max_x || ty >= max_y {
+                            continue;
+                        }
                         self.paint_background_tile(
                             &pixmap,
-                            tile_origin_x,
-                            tile_origin_y,
+                            tx,
+                            ty,
                             tile_w,
                             tile_h,
                             clip_rect,
                             clip_mask.as_ref(),
                         );
-                    }
-                    BackgroundRepeat::RepeatX => {
-                        let mut tx = start_x;
-                        while tx < max_x {
-                            self.paint_background_tile(
-                                &pixmap,
-                                tx,
-                                tile_origin_y,
-                                tile_w,
-                                tile_h,
-                                clip_rect,
-                                clip_mask.as_ref(),
-                            );
-                            tx += tile_w;
-                        }
-                    }
-                    BackgroundRepeat::RepeatY => {
-                        let mut ty = start_y;
-                        while ty < max_y {
-                            self.paint_background_tile(
-                                &pixmap,
-                                tile_origin_x,
-                                ty,
-                                tile_w,
-                                tile_h,
-                                clip_rect,
-                                clip_mask.as_ref(),
-                            );
-                            ty += tile_h;
-                        }
-                    }
-                    BackgroundRepeat::Repeat => {
-                        let mut ty = start_y;
-                        while ty < max_y {
-                            let mut tx = start_x;
-                            while tx < max_x {
-                                self.paint_background_tile(
-                                    &pixmap,
-                                    tx,
-                                    ty,
-                                    tile_w,
-                                    tile_h,
-                                    clip_rect,
-                                    clip_mask.as_ref(),
-                                );
-                                tx += tile_w;
-                            }
-                            ty += tile_h;
-                        }
                     }
                 }
             }
@@ -2813,6 +2788,60 @@ fn aligned_start(origin: f32, tile: f32, clip_min: f32) -> f32 {
     origin + steps * tile
 }
 
+fn round_tile_length(area_len: f32, tile_len: f32) -> f32 {
+    if tile_len == 0.0 {
+        return 0.0;
+    }
+    let count = (area_len / tile_len).round().max(1.0);
+    area_len / count
+}
+
+fn tile_positions(
+    repeat: BackgroundRepeatKeyword,
+    area_start: f32,
+    area_len: f32,
+    tile_len: f32,
+    offset: f32,
+    clip_min: f32,
+    clip_max: f32,
+) -> Vec<f32> {
+    if tile_len <= 0.0 {
+        return Vec::new();
+    }
+
+    match repeat {
+        BackgroundRepeatKeyword::NoRepeat => vec![area_start + offset],
+        BackgroundRepeatKeyword::Repeat | BackgroundRepeatKeyword::Round => {
+            let start = aligned_start(area_start + offset, tile_len, clip_min);
+            let mut positions = Vec::new();
+            let mut pos = start;
+            while pos < clip_max {
+                positions.push(pos);
+                pos += tile_len;
+            }
+            positions
+        }
+        BackgroundRepeatKeyword::Space => {
+            let count = (area_len / tile_len).floor() as i32;
+            if count >= 2 {
+                let spacing = (area_len - tile_len * count as f32) / (count as f32 - 1.0);
+                let step = tile_len + spacing;
+                let anchor = area_start;
+                let mut positions = Vec::new();
+                let k = ((clip_min - anchor) / step).floor();
+                let mut pos = anchor + k * step;
+                while pos < clip_max {
+                    positions.push(pos);
+                    pos += step;
+                }
+                positions
+            } else {
+                vec![area_start + offset]
+            }
+        }
+    }
+}
+
 /// Paints a fragment tree to a pixmap
 ///
 /// This is the main entry point for painting.
@@ -3195,5 +3224,21 @@ mod tests {
         assert!((th - 200.0).abs() < 0.01);
         assert!((ox - 0.0).abs() < 0.01);
         assert!((oy - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn background_repeat_space_distributes_evenly() {
+        let positions =
+            tile_positions(BackgroundRepeatKeyword::Space, 0.0, 100.0, 30.0, 0.0, 0.0, 100.0);
+        assert_eq!(positions.len(), 3);
+        assert!((positions[0] - 0.0).abs() < 1e-4);
+        assert!((positions[1] - 35.0).abs() < 1e-3);
+        assert!((positions[2] - 70.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn background_repeat_round_resizes_to_integer_tiles() {
+        let rounded = round_tile_length(1099.0, 100.0);
+        assert!((rounded - (1099.0 / 11.0)).abs() < 1e-3);
     }
 }
