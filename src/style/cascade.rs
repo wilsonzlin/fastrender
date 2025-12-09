@@ -281,8 +281,12 @@ fn resolve_match_parent_text_align(styles: &mut ComputedStyle, parent: &Computed
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::css::parser::parse_stylesheet;
+    use crate::css::parser::parse_declarations;
     use crate::css::types::StyleSheet;
     use crate::dom::DomNodeType;
+    use crate::style::color::Rgba;
+    use crate::style::display::Display;
     use crate::style::types::{ListStylePosition, ListStyleType};
 
     fn element_with_style(style: &str) -> DomNode {
@@ -379,7 +383,7 @@ mod tests {
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "li".to_string(),
-                    attributes: vec![],
+                    attributes: vec![("style".to_string(), "color: red;".to_string())],
                 },
                 children: vec![],
             }],
@@ -389,6 +393,73 @@ mod tests {
         let li = styled.children.first().expect("li");
         assert!(matches!(li.styles.list_style_type, ListStyleType::Square));
         assert!(matches!(li.styles.list_style_position, ListStylePosition::Inside));
+    }
+
+    #[test]
+    fn marker_pseudo_resets_box_model_and_forces_inline_display() {
+        let lone_li = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "li".to_string(),
+                attributes: vec![("style".to_string(), "color: red;".to_string())],
+            },
+            children: vec![],
+        };
+        assert_eq!(lone_li.get_attribute("style"), Some("color: red;".to_string()));
+        let decls = parse_declarations("color: red;");
+        assert_eq!(decls.len(), 1);
+        if let crate::css::types::PropertyValue::Color(c) = decls[0].value {
+            assert_eq!(c, Rgba::RED);
+        } else {
+            panic!("color did not parse");
+        }
+        let mut manual = get_default_styles_for_element(&lone_li);
+        inherit_styles(&mut manual, &ComputedStyle::default());
+        let fs = manual.font_size;
+        for decl in parse_declarations("color: red;") {
+            apply_declaration(&mut manual, &decl, fs, fs);
+        }
+        assert_eq!(manual.color, Rgba::RED);
+        let lone_styled = apply_styles(&lone_li, &StyleSheet::new());
+        assert_eq!(lone_styled.styles.color, Rgba::RED);
+
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "ul".to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: vec![("style".to_string(), "color: red;".to_string())],
+                },
+                children: vec![],
+            }],
+        };
+
+        let stylesheet = parse_stylesheet(
+            r#"
+            li::marker {
+                color: red;
+                display: block;
+                padding: 10px;
+                margin-left: 12px;
+                background: blue;
+            }
+        "#,
+        )
+        .unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        let li = styled.children.first().expect("li");
+        assert_eq!(li.styles.color, Rgba::RED);
+        let marker = li.marker_styles.as_ref().expect("marker styles");
+
+        assert_eq!(marker.color, Rgba::RED);
+        assert!(matches!(marker.display, Display::Inline));
+        assert!(marker.padding_left.is_zero());
+        assert!(marker.padding_right.is_zero());
+        assert!(marker.margin_left.unwrap().is_zero());
+        assert_eq!(marker.background_color, Rgba::TRANSPARENT);
     }
 }
 
@@ -569,6 +640,7 @@ fn compute_marker_styles(
     }
 
     reset_marker_box_properties(&mut styles);
+    styles.display = Display::Inline;
     Some(styles)
 }
 
