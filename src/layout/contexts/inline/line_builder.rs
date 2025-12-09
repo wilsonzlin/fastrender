@@ -1478,8 +1478,8 @@ fn reorder_paragraph(
     let mut paragraph_leaves: Vec<ParagraphLeaf> = Vec::new();
     let mut line_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(lines.len());
     let mut active_stack: Vec<BoxContext> = Vec::new();
+    let mut context_closers: Vec<Vec<char>> = Vec::new();
     let mut global_idx = 0usize;
-    let mut control_stack: Vec<char> = Vec::new();
 
     for (line_idx, leaves) in line_leaves.iter().enumerate() {
         let line_start = logical_text.len();
@@ -1490,33 +1490,32 @@ fn reorder_paragraph(
                 .take_while(|(a, b)| a.id == b.id)
                 .count();
 
-            for ctx in active_stack
-                .iter()
-                .rev()
-                .take(active_stack.len().saturating_sub(shared))
-            {
-                for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
-                    control_stack.pop();
-                    logical_text.push(ch);
+            // Close contexts no longer shared
+            for _ in 0..active_stack.len().saturating_sub(shared) {
+                if let Some(ctx) = active_stack.pop() {
+                    if let Some(close_seq) = context_closers.pop() {
+                        for ch in close_seq {
+                            logical_text.push(ch);
+                        }
+                    } else {
+                        for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
+                            logical_text.push(ch);
+                        }
+                    }
                 }
             }
-            active_stack.truncate(shared);
 
+            // Open new contexts
             for ctx in leaf.box_stack.iter().skip(shared) {
                 let (opens, closes) = bidi_controls(ctx.unicode_bidi, ctx.direction);
-                for ch in opens {
-                    control_stack.push(*closes.last().unwrap_or(&'\u{202c}'));
-                    logical_text.push(ch);
-                }
+                logical_text.extend(opens);
+                context_closers.push(closes);
                 active_stack.push(ctx.clone());
             }
 
+            // Leaf-local controls
             let (leaf_opens, leaf_closes) = bidi_controls(leaf.item.unicode_bidi(), leaf.item.direction());
-
-            for ch in &leaf_opens {
-                control_stack.push(*leaf_closes.last().unwrap_or(&'\u{202c}'));
-                logical_text.push(*ch);
-            }
+            logical_text.extend(leaf_opens.iter());
 
             let content_start = logical_text.len();
             match &leaf.item {
@@ -1527,7 +1526,6 @@ fn reorder_paragraph(
             let content_end = logical_text.len();
 
             for ch in leaf_closes {
-                control_stack.pop();
                 logical_text.push(ch);
             }
 
@@ -1544,16 +1542,17 @@ fn reorder_paragraph(
         line_ranges.push(line_start..logical_text.len());
     }
 
-    for ctx in active_stack.iter().rev() {
-        for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
-            control_stack.pop();
-            logical_text.push(ch);
+    // Close any remaining contexts
+    while let Some(ctx) = active_stack.pop() {
+        if let Some(close_seq) = context_closers.pop() {
+            for ch in close_seq {
+                logical_text.push(ch);
+            }
+        } else {
+            for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
+                logical_text.push(ch);
+            }
         }
-    }
-
-    // Close any remaining explicit controls
-    while let Some(close) = control_stack.pop() {
-        logical_text.push(close);
     }
 
     if logical_text.is_empty() {
