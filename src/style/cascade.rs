@@ -240,9 +240,9 @@ fn resolve_match_parent_text_align(styles: &mut ComputedStyle, parent_direction:
         return;
     }
     styles.text_align = if matches!(parent_direction, crate::style::types::Direction::Rtl) {
-        TextAlign::Right
+        TextAlign::End
     } else {
-        TextAlign::Left
+        TextAlign::Start
     };
 }
 
