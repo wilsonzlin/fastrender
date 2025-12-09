@@ -641,7 +641,10 @@ impl InlineFormattingContext {
             }
             let mut effective_align =
                 resolve_text_align_for_line(base_align, text_align_last, direction, is_last_line, is_single_line);
+            let has_justify = has_justify_opportunities(&line.items, resolved_justify);
             if matches!(effective_align, TextAlign::Justify) && matches!(resolved_justify, TextJustify::None) {
+                effective_align = map_text_align(TextAlign::Start, direction);
+            } else if matches!(effective_align, TextAlign::Justify) && !has_justify {
                 effective_align = map_text_align(TextAlign::Start, direction);
             }
             let line_fragment = self.create_line_fragment(
@@ -1750,6 +1753,50 @@ fn resolve_auto_text_justify(mode: TextJustify, items: &[PositionedItem]) -> Tex
     } else {
         TextJustify::InterWord
     }
+}
+
+fn has_justify_opportunities(items: &[PositionedItem], mode: TextJustify) -> bool {
+    if matches!(mode, TextJustify::None) {
+        return false;
+    }
+
+    for pos in items {
+        match &pos.item {
+            InlineItem::Text(t) => match mode {
+                TextJustify::InterCharacter | TextJustify::Distribute => {
+                    if t.cluster_byte_offsets().skip(1).next().is_some() || t.text.chars().count() > 1 {
+                        return true;
+                    }
+                }
+                _ => {
+                    if t.text.chars().any(is_expandable_space) {
+                        return true;
+                    }
+                }
+            },
+            InlineItem::InlineBox(b) => {
+                for child in &b.children {
+                    if let InlineItem::Text(t) = child {
+                        match mode {
+                            TextJustify::InterCharacter | TextJustify::Distribute => {
+                                if t.cluster_byte_offsets().skip(1).next().is_some() || t.text.chars().count() > 1 {
+                                    return true;
+                                }
+                            }
+                            _ => {
+                                if t.text.chars().any(is_expandable_space) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    false
 }
 
 #[derive(Default)]
