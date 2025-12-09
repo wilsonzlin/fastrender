@@ -1204,7 +1204,12 @@ impl LineBuilder {
             return;
         }
 
-        let bidi = BidiInfo::new(&logical_text, self.base_level);
+        let has_plaintext = leaves
+            .iter()
+            .any(|leaf| matches!(leaf.item.unicode_bidi(), UnicodeBidi::Plaintext));
+        let effective_base = if has_plaintext { None } else { self.base_level };
+
+        let bidi = BidiInfo::new(&logical_text, effective_base);
         let mut visual_fragments: Vec<BidiLeaf> = Vec::new();
         let mut seen_non_text = HashMap::new();
         for para in &bidi.paragraphs {
@@ -1561,8 +1566,19 @@ mod tests {
         )
     }
 
+    fn make_builder_with_base(width: f32, base: Level) -> LineBuilder {
+        let strut = make_strut_metrics();
+        LineBuilder::new(width, strut, ShapingPipeline::new(), FontContext::new(), Some(base))
+    }
+
     fn make_text_item(text: &str, advance: f32) -> TextItem {
-        let style = Arc::new(ComputedStyle::default());
+        make_text_item_with_bidi(text, advance, UnicodeBidi::Normal)
+    }
+
+    fn make_text_item_with_bidi(text: &str, advance: f32, ub: UnicodeBidi) -> TextItem {
+        let mut style = ComputedStyle::default();
+        style.unicode_bidi = ub;
+        let style = Arc::new(style);
         let mut cluster_advances = Vec::new();
         if !text.is_empty() {
             let step = advance / text.len() as f32;
@@ -1789,6 +1805,30 @@ mod tests {
             })
             .collect();
 
+        assert_eq!(texts, vec!["abc ".to_string(), "אבג".to_string()]);
+    }
+
+    #[test]
+    fn bidi_plaintext_chooses_first_strong_base_direction() {
+        let mut builder = make_builder_with_base(200.0, Level::rtl());
+        builder.add_item(InlineItem::Text(make_text_item_with_bidi(
+            "abc אבג",
+            70.0,
+            UnicodeBidi::Plaintext,
+        )));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 1);
+        let texts: Vec<String> = lines[0]
+            .items
+            .iter()
+            .map(|p| match &p.item {
+                InlineItem::Text(t) => t.text.clone(),
+                _ => String::new(),
+            })
+            .collect();
+
+        // Base was RTL, but plaintext forces first-strong (LTR here), so visual order stays logical LTR then RTL.
         assert_eq!(texts, vec!["abc ".to_string(), "אבג".to_string()]);
     }
 
