@@ -731,76 +731,69 @@ pub fn distribute_spanning_cell_width(
         return;
     }
 
-    let spanned_count = end_col - start_col;
+    let spanned = &mut columns[start_col..end_col];
 
-    // Compute current sum of spanned columns
-    let current_min: f32 = columns[start_col..end_col].iter().map(|c| c.min_width).sum();
+    // Ensure the span can satisfy the cell's minimum width. Use headroom up to
+    // each column's max width first (water-filling), then grow all columns
+    // together if the span still falls short.
+    let mut grow_minimum = |target_sum: f32| {
+        let mut current_sum: f32 = spanned.iter().map(|c| c.min_width).sum();
+        if current_sum >= target_sum {
+            return;
+        }
 
-    // First, ensure the span can satisfy the cell's minimum width. Prefer to
-    // consume existing headroom (max - min) before inflating all columns
-    // evenly.
-    if cell_min > current_min {
-        let mut needed = cell_min - current_min;
-        let span = &mut columns[start_col..end_col];
-        // Try to use available headroom up to max_width.
-        for _ in 0..4 {
-            let headrooms: Vec<f32> = span.iter().map(|c| (c.max_width - c.min_width).max(0.0)).collect();
+        let mut needed = target_sum - current_sum;
+        loop {
+            let headrooms: Vec<f32> = spanned.iter().map(|c| (c.max_width - c.min_width).max(0.0)).collect();
             let total_headroom: f32 = headrooms.iter().sum();
-            if total_headroom <= 0.0 || needed <= 0.0 {
+
+            if total_headroom <= 0.0 {
                 break;
             }
 
-            for (col, headroom) in span.iter_mut().zip(headrooms.iter()) {
+            for (col, headroom) in spanned.iter_mut().zip(headrooms.iter()) {
                 if *headroom <= 0.0 {
                     continue;
                 }
                 let delta = needed * (*headroom / total_headroom);
                 col.min_width += delta;
-                if col.max_width < col.min_width {
+                if col.min_width > col.max_width {
                     col.max_width = col.min_width;
                 }
             }
 
-            let new_sum: f32 = span.iter().map(|c| c.min_width).sum();
-            let new_needed = (cell_min - new_sum).max(0.0);
-            if (new_needed - needed).abs() < 0.01 {
-                // Progress stalled; stop iterating.
-                needed = new_needed;
+            current_sum = spanned.iter().map(|c| c.min_width).sum();
+            let remaining = (target_sum - current_sum).max(0.0);
+            if remaining <= 0.01 || (remaining - needed).abs() < 0.01 {
+                needed = remaining;
                 break;
             }
-            needed = new_needed;
+            needed = remaining;
         }
 
-        // If still short, spread the remainder evenly (all columns must grow).
         if needed > 0.0 {
-            let per_column = needed / spanned_count as f32;
-            for col in span.iter_mut() {
-                col.min_width += per_column;
+            let per = needed / spanned.len() as f32;
+            for col in spanned.iter_mut() {
+                col.min_width += per;
                 if col.max_width < col.min_width {
                     col.max_width = col.min_width;
                 }
             }
         }
-    }
+    };
+
+    grow_minimum(cell_min);
 
     // Then ensure the span can satisfy the cell's maximum width request.
-    // If max content sum is too small, inflate max widths evenly.
-    let current_max_sum: f32 = columns[start_col..end_col].iter().map(|c| c.max_width).sum();
+    let current_max_sum: f32 = spanned.iter().map(|c| c.max_width).sum();
     if cell_max > current_max_sum {
         let extra = cell_max - current_max_sum;
-        let per_column = extra / spanned_count as f32;
-        for col in &mut columns[start_col..end_col] {
-            col.max_width += per_column;
+        let per = extra / spanned.len() as f32;
+        for col in spanned.iter_mut() {
+            col.max_width += per;
             if col.max_width < col.min_width {
                 col.max_width = col.min_width;
             }
-        }
-    }
-
-    // Final guard: keep max >= min for all affected columns.
-    for col in &mut columns[start_col..end_col] {
-        if col.max_width < col.min_width {
-            col.max_width = col.min_width;
         }
     }
 }
