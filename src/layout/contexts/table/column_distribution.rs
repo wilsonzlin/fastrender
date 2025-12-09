@@ -787,12 +787,42 @@ pub fn distribute_spanning_cell_width(
     // Then ensure the span can satisfy the cell's maximum width request.
     let current_max_sum: f32 = spanned.iter().map(|c| c.max_width).sum();
     if cell_max > current_max_sum {
-        let extra = cell_max - current_max_sum;
-        let per = extra / spanned.len() as f32;
-        for col in spanned.iter_mut() {
-            col.max_width += per;
-            if col.max_width < col.min_width {
-                col.max_width = col.min_width;
+        let mut extra = cell_max - current_max_sum;
+        for _ in 0..4 {
+            let headrooms: Vec<f32> = spanned
+                .iter()
+                .map(|c| (c.max_width - c.min_width).max(0.0).max(0.01))
+                .collect();
+            let total_headroom: f32 = headrooms.iter().sum();
+            if total_headroom <= 0.0 || extra <= 0.0 {
+                break;
+            }
+
+            for (col, headroom) in spanned.iter_mut().zip(headrooms.iter()) {
+                let delta = extra * (*headroom / total_headroom);
+                col.max_width += delta;
+                if col.max_width < col.min_width {
+                    col.max_width = col.min_width;
+                }
+            }
+
+            let new_sum: f32 = spanned.iter().map(|c| c.max_width).sum();
+            let new_extra = (cell_max - new_sum).max(0.0);
+            if (new_extra - extra).abs() < 0.01 {
+                extra = new_extra;
+                break;
+            }
+            extra = new_extra;
+        }
+
+        // If still short, split the remainder evenly.
+        if extra > 0.0 {
+            let per = extra / spanned.len() as f32;
+            for col in spanned.iter_mut() {
+                col.max_width += per;
+                if col.max_width < col.min_width {
+                    col.max_width = col.min_width;
+                }
             }
         }
     }
@@ -1325,6 +1355,18 @@ mod tests {
         assert!((total_max - 150.0).abs() < 0.5);
         assert!((columns[0].min_width - 75.0).abs() < 0.5);
         assert!((columns[1].min_width - 75.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn distribute_spanning_max_prefers_headroom_then_even() {
+        let mut columns = vec![ColumnConstraints::new(50.0, 70.0), ColumnConstraints::new(50.0, 120.0)];
+
+        // Need 260 total max; headroom is 20 + 70 before even split.
+        distribute_spanning_cell_width(&mut columns, 0, 2, 100.0, 260.0);
+
+        let total_max: f32 = columns.iter().map(|c| c.max_width).sum();
+        assert!((total_max - 260.0).abs() < 0.5);
+        assert!(columns[1].max_width > columns[0].max_width);
     }
 
     // ========== Compute Column Constraints Tests ==========
