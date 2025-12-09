@@ -2837,9 +2837,9 @@ mod tests {
     #[test]
     fn object_fit_contain_centers_image() {
         let fit = ObjectFit::Contain;
-        let position = ObjectPosition {
-            x: PositionComponent::Keyword(crate::style::types::PositionKeyword::Center),
-            y: PositionComponent::Keyword(crate::style::types::PositionKeyword::Center),
+        let position = crate::style::types::ObjectPosition {
+            x: crate::style::types::PositionComponent::Keyword(crate::style::types::PositionKeyword::Center),
+            y: crate::style::types::PositionComponent::Keyword(crate::style::types::PositionKeyword::Center),
         };
 
         let (offset_x, offset_y, dest_w, dest_h) =
