@@ -113,7 +113,7 @@ enum DisplayCommand {
         filters: Vec<ResolvedFilter>,
         backdrop_filters: Vec<ResolvedFilter>,
         radii: BorderRadii,
-        clip: Option<(Rect, BorderRadii)>,
+        clip: Option<(Rect, BorderRadii, bool, bool)>,
         commands: Vec<DisplayCommand>,
     },
 }
@@ -404,9 +404,9 @@ impl Painter {
             .unwrap_or_default();
         let has_backdrop = !backdrop_filters.is_empty();
         let clip = style_ref.and_then(|style| {
-            let clips_overflow = matches!(style.overflow_x, Overflow::Hidden | Overflow::Scroll | Overflow::Auto)
-                || matches!(style.overflow_y, Overflow::Hidden | Overflow::Scroll | Overflow::Auto);
-            if !clips_overflow {
+            let clip_x = matches!(style.overflow_x, Overflow::Hidden | Overflow::Scroll | Overflow::Auto);
+            let clip_y = matches!(style.overflow_y, Overflow::Hidden | Overflow::Scroll | Overflow::Auto);
+            if !clip_x && !clip_y {
                 return None;
             }
             let rects =
@@ -417,7 +417,7 @@ impl Painter {
             }
             let clip_radii =
                 resolve_clip_radii(style, &rects, crate::style::types::BackgroundBox::PaddingBox);
-            Some((clip_rect, clip_radii))
+            Some((clip_rect, clip_radii, clip_x, clip_y))
         });
         if opacity < 1.0
             || transform.is_some()
@@ -649,8 +649,18 @@ impl Painter {
                     for cmd in clipped {
                         clip_painter.execute_command(cmd)?;
                     }
-                    let mut clip_pixmap = clip_painter.pixmap;
-                    if let Some((clip_rect, clip_radii)) = clip {
+                let mut clip_pixmap = clip_painter.pixmap;
+                    if let Some((mut clip_rect, mut clip_radii, clip_x, clip_y)) = clip {
+                        if !clip_x {
+                            clip_rect =
+                                Rect::from_xywh(bounds.min_x(), clip_rect.y(), bounds.width(), clip_rect.height());
+                            clip_radii = BorderRadii::ZERO;
+                        }
+                        if !clip_y {
+                            clip_rect =
+                                Rect::from_xywh(clip_rect.x(), bounds.min_y(), clip_rect.width(), bounds.height());
+                            clip_radii = BorderRadii::ZERO;
+                        }
                         let local_clip = Rect::from_xywh(
                             clip_rect.x() - bounds.min_x(),
                             clip_rect.y() - bounds.min_y(),
@@ -1789,7 +1799,7 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
                 filters,
                 backdrop_filters,
                 radii,
-                clip: clip.map(|(rect, r)| (rect.translate(offset), r)),
+                clip: clip.map(|(rect, r, cx, cy)| (rect.translate(offset), r, cx, cy)),
                 commands: translate_commands(commands, dx, dy),
             },
         })
@@ -2727,7 +2737,7 @@ mod tests {
     fn overflow_hidden_clips_children() {
         let mut parent_style = ComputedStyle::default();
         parent_style.overflow_x = Overflow::Hidden;
-        parent_style.overflow_y = Overflow::Hidden;
+        parent_style.overflow_y = Overflow::Visible;
         parent_style.position = Position::Relative;
         parent_style.background_color = Rgba::BLUE;
         let parent_style = Arc::new(parent_style);
@@ -2735,7 +2745,7 @@ mod tests {
         let mut child_style = ComputedStyle::default();
         child_style.background_color = Rgba::RED;
         let child = FragmentNode::new_block_styled(
-            Rect::from_xywh(-5.0, -5.0, 30.0, 30.0),
+            Rect::from_xywh(-5.0, -5.0, 30.0, 40.0),
             vec![],
             Arc::new(child_style),
         );
@@ -2744,7 +2754,9 @@ mod tests {
 
         let pixmap = paint_tree(&tree, 40, 40, Rgba::WHITE).expect("paint");
         assert_eq!(color_at(&pixmap, 10, 10), (255, 0, 0, 255));
+        // Horizontal overflow should clip; vertical overflow should remain visible.
         assert_eq!(color_at(&pixmap, 22, 2), (255, 255, 255, 255));
+        assert_eq!(color_at(&pixmap, 10, 25), (255, 0, 0, 255));
     }
 
     #[test]
