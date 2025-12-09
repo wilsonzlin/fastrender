@@ -1046,16 +1046,22 @@ impl LineBuilder {
         let line_width = self.current_line_width();
 
         // Check if item fits
-        if self.current_x + item_width <= line_width || self.current_line.is_empty() {
-            // Item fits (or line is empty, so we must take it)
+        if self.current_x + item_width <= line_width {
+            // Item fits
             self.place_item(item);
         } else if item.is_breakable() {
-            // Try to break the item
+            // Try to break the item even on an empty line; oversized items should
+            // still honor break opportunities instead of overflowing the line.
             self.add_breakable_item(item);
         } else {
-            // Item doesn't fit and can't be broken - start new line
-            self.finish_line();
-            self.place_item(item);
+            // Item doesn't fit and can't be broken
+            if self.current_line.is_empty() {
+                // No break possible; overflow this line
+                self.place_item(item);
+            } else {
+                self.finish_line();
+                self.place_item(item);
+            }
         }
     }
 
@@ -1064,7 +1070,15 @@ impl LineBuilder {
         if let InlineItem::Text(text_item) = item {
             let remaining_width = (self.current_line_width() - self.current_x).max(0.0);
 
-            if let Some(break_opportunity) = text_item.find_break_point(remaining_width) {
+            let mut break_opportunity = text_item.find_break_point(remaining_width);
+            if break_opportunity.is_none() && self.current_line.is_empty() {
+                // No break fits within the remaining width, but the line is empty.
+                // Split at the earliest opportunity to avoid keeping multiple words
+                // on an overflowing line.
+                break_opportunity = text_item.break_opportunities.first().copied();
+            }
+
+            if let Some(break_opportunity) = break_opportunity {
                 // Split at break point
                 if let Some((before, after)) = text_item.split_at(
                     break_opportunity.byte_offset,
@@ -1213,7 +1227,11 @@ impl LineBuilder {
                     .take_while(|(a, b)| a.id == b.id)
                     .count();
 
-                for ctx in active_stack.iter().rev().take(active_stack.len().saturating_sub(shared)) {
+                for ctx in active_stack
+                    .iter()
+                    .rev()
+                    .take(active_stack.len().saturating_sub(shared))
+                {
                     for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
                         logical_text.push(ch);
                     }
@@ -1433,11 +1451,7 @@ fn slice_text_item(
             .break_opportunities
             .iter()
             .filter(|b| b.byte_offset >= range.start && b.byte_offset <= range.end)
-            .map(|b| BreakOpportunity::with_hyphen(
-                b.byte_offset - range.start,
-                b.break_type,
-                b.adds_hyphen,
-            ))
+            .map(|b| BreakOpportunity::with_hyphen(b.byte_offset - range.start, b.break_type, b.adds_hyphen))
             .collect();
         let forced = item
             .forced_break_offsets
@@ -1463,23 +1477,19 @@ fn slice_text_item(
 
     let slice_text = &item.text[range.clone()];
     let mut runs = pipeline.shape(slice_text, &item.style, font_context).ok()?;
-        TextItem::apply_spacing_to_runs(
-            &mut runs,
-            slice_text,
-            item.style.letter_spacing,
-            item.style.word_spacing,
-        );
+    TextItem::apply_spacing_to_runs(
+        &mut runs,
+        slice_text,
+        item.style.letter_spacing,
+        item.style.word_spacing,
+    );
 
-        let metrics = TextItem::metrics_from_runs(&runs, item.metrics.line_height, item.font_size);
+    let metrics = TextItem::metrics_from_runs(&runs, item.metrics.line_height, item.font_size);
     let breaks = item
         .break_opportunities
         .iter()
         .filter(|b| b.byte_offset >= range.start && b.byte_offset <= range.end)
-        .map(|b| BreakOpportunity::with_hyphen(
-            b.byte_offset - range.start,
-            b.break_type,
-            b.adds_hyphen,
-        ))
+        .map(|b| BreakOpportunity::with_hyphen(b.byte_offset - range.start, b.break_type, b.adds_hyphen))
         .collect();
     let forced = item
         .forced_break_offsets
@@ -1490,8 +1500,15 @@ fn slice_text_item(
         .collect();
 
     Some(
-        TextItem::new(runs, slice_text.to_string(), metrics, breaks, forced, item.style.clone())
-            .with_vertical_align(item.vertical_align),
+        TextItem::new(
+            runs,
+            slice_text.to_string(),
+            metrics,
+            breaks,
+            forced,
+            item.style.clone(),
+        )
+        .with_vertical_align(item.vertical_align),
     )
 }
 
@@ -1632,8 +1649,8 @@ mod tests {
     use crate::text::font_loader::FontContext;
     use crate::text::line_break::find_break_opportunities;
     use crate::text::pipeline::ShapingPipeline;
-    use unicode_bidi::BidiInfo;
     use std::sync::Arc;
+    use unicode_bidi::BidiInfo;
 
     fn make_strut_metrics() -> BaselineMetrics {
         BaselineMetrics::new(12.0, 16.0, 12.0, 4.0)
@@ -1653,7 +1670,14 @@ mod tests {
 
     fn make_builder_with_base(width: f32, base: Level) -> LineBuilder {
         let strut = make_strut_metrics();
-        LineBuilder::new(width, width, strut, ShapingPipeline::new(), FontContext::new(), Some(base))
+        LineBuilder::new(
+            width,
+            width,
+            strut,
+            ShapingPipeline::new(),
+            FontContext::new(),
+            Some(base),
+        )
     }
 
     fn make_text_item(text: &str, advance: f32) -> TextItem {
@@ -2004,7 +2028,10 @@ mod tests {
 
         // Children stay adjacent and isolate prevents surrounding runs from interleaving; RTL order places the later
         // child earlier in visual order.
-        assert_eq!(texts, vec!["L ".to_string(), "ג".to_string(), "אב".to_string(), " R".to_string()]);
+        assert_eq!(
+            texts,
+            vec!["L ".to_string(), "ג".to_string(), "אב".to_string(), " R".to_string()]
+        );
     }
 
     #[test]
@@ -2075,9 +2102,10 @@ mod tests {
         let para = &bidi.paragraphs[0];
         bidi.reorder_line(para, para.range.clone())
             .chars()
-            .filter(|c| !matches!(
-                c,
-                '\u{202a}' // LRE
+            .filter(|c| {
+                !matches!(
+                    c,
+                    '\u{202a}' // LRE
                     | '\u{202b}' // RLE
                     | '\u{202c}' // PDF
                     | '\u{202d}' // LRO
@@ -2086,7 +2114,8 @@ mod tests {
                     | '\u{2067}' // RLI
                     | '\u{2068}' // FSI
                     | '\u{2069}' // PDI
-            ))
+                )
+            })
             .collect()
     }
 
@@ -2101,10 +2130,7 @@ mod tests {
     #[test]
     fn bidi_isolate_spans_children_as_single_context() {
         // Logical text with a single RTL isolate containing both child segments.
-        let expected = reorder_with_controls(
-            &format!("A \u{2067}XY\u{2069} Z"),
-            Some(Level::ltr()),
-        );
+        let expected = reorder_with_controls(&format!("A \u{2067}XY\u{2069} Z"), Some(Level::ltr()));
 
         let mut builder = make_builder(200.0);
         builder.add_item(InlineItem::Text(make_text_item("A ", 20.0)));

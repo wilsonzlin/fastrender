@@ -489,16 +489,12 @@ impl InlineFormattingContext {
         for item in items {
             // Check for mandatory breaks in text
             if let InlineItem::Text(ref text_item) = item {
-                let has_mandatory = text_item
-                    .break_opportunities
-                    .iter()
-                    .any(|b| {
-                        if b.break_type != BreakType::Mandatory {
-                            return false;
-                        }
-                        b.byte_offset < text_item.text.len()
-                            || text_item.forced_break_offsets.contains(&b.byte_offset)
-                    });
+                let has_mandatory = text_item.break_opportunities.iter().any(|b| {
+                    if b.break_type != BreakType::Mandatory {
+                        return false;
+                    }
+                    b.byte_offset < text_item.text.len() || text_item.forced_break_offsets.contains(&b.byte_offset)
+                });
 
                 if has_mandatory {
                     // Split at mandatory breaks
@@ -623,13 +619,21 @@ impl InlineFormattingContext {
         for (idx, line) in lines.into_iter().enumerate() {
             let is_last_line = idx + 1 == total;
             let is_single_line = total == 1;
-            let line_width = if idx == 0 { first_line_width } else { subsequent_line_width };
+            let line_width = if idx == 0 {
+                first_line_width
+            } else {
+                subsequent_line_width
+            };
             let line_box_width = if idx == 0 {
                 first_line_box_width
             } else {
                 subsequent_line_box_width
             };
-            let indent_offset = if idx == 0 { first_line_indent } else { subsequent_line_indent };
+            let indent_offset = if idx == 0 {
+                first_line_indent
+            } else {
+                subsequent_line_indent
+            };
             let mut base_align = map_text_align(text_align, direction);
             let resolved_justify = resolve_auto_text_justify(text_justify, &line.items);
             if matches!(base_align, TextAlign::Justify) && matches!(resolved_justify, TextJustify::None) {
@@ -670,15 +674,18 @@ impl InlineFormattingContext {
         indent_offset: f32,
     ) -> FragmentNode {
         let text_align = map_text_align(text_align, direction);
-        let should_justify =
-            matches!(text_align, TextAlign::Justify) && !matches!(text_justify, TextJustify::None);
+        let should_justify = matches!(text_align, TextAlign::Justify) && !matches!(text_justify, TextJustify::None);
         let items: Vec<PositionedItem> = if should_justify {
             self.expand_items_for_justification(&line.items, text_justify)
         } else {
             line.items.clone()
         };
         let mut children = Vec::new();
-        let usable_width = if available_width.is_finite() { available_width.max(0.0) } else { line.width };
+        let usable_width = if available_width.is_finite() {
+            available_width.max(0.0)
+        } else {
+            line.width
+        };
         let total_width: f32 = items.iter().map(|p| p.item.width()).sum();
         let extra_space = (usable_width - total_width).max(0.0);
         let (offset, gap_extra) = match text_align {
@@ -802,8 +809,8 @@ impl InlineFormattingContext {
                     let next = item.text[off..].chars().next();
                     let is_space_boundary = prev.map(is_expandable_space).unwrap_or(false)
                         && next.map(|c| !is_expandable_space(c)).unwrap_or(false);
-                    let is_cjk_boundary = prev.map(is_cjk_character).unwrap_or(false)
-                        || next.map(is_cjk_character).unwrap_or(false);
+                    let is_cjk_boundary =
+                        prev.map(is_cjk_character).unwrap_or(false) || next.map(is_cjk_character).unwrap_or(false);
                     if is_space_boundary || is_cjk_boundary {
                         Some(off)
                     } else {
@@ -897,7 +904,7 @@ impl InlineFormattingContext {
         let indent_value =
             resolve_length_with_percentage(style.text_indent.length, None, style.font_size).unwrap_or(0.0);
         let indent_positive = indent_value.max(0.0);
-        let indent_applies_first = !style.text_indent.hanging || style.text_indent.each_line;
+        let indent_applies_first = !style.text_indent.hanging;
         let indent_applies_subsequent = style.text_indent.each_line || style.text_indent.hanging;
 
         let mut width = match mode {
@@ -1437,17 +1444,19 @@ impl FormattingContext for InlineFormattingContext {
         // Collect inline items
         let items = self.collect_inline_items(box_node, available_width, available_height)?;
 
-        let indent_value = resolve_length_with_percentage(style.text_indent.length, constraints.width(), style.font_size)
-            .unwrap_or(0.0);
+        let indent_value =
+            resolve_length_with_percentage(style.text_indent.length, constraints.width(), style.font_size)
+                .unwrap_or(0.0);
         let indent_applies_first = !style.text_indent.hanging;
         let indent_applies_subsequent = style.text_indent.each_line || style.text_indent.hanging;
+        let indent_positive = indent_value.max(0.0);
         let first_line_width = if indent_applies_first {
-            (available_width - indent_value).max(0.0)
+            (available_width - indent_positive).max(0.0)
         } else {
             available_width
         };
         let subsequent_line_width = if indent_applies_subsequent {
-            (available_width - indent_value).max(0.0)
+            (available_width - indent_positive).max(0.0)
         } else {
             available_width
         };
@@ -1471,17 +1480,22 @@ impl FormattingContext for InlineFormattingContext {
         let first_line_box_width = if available_width.is_finite() {
             available_width
         } else {
-            first_line_width + indent_value.abs()
+            first_line_width + indent_positive
         };
         let subsequent_line_box_width = if available_width.is_finite() {
             available_width
         } else {
-            subsequent_line_width + indent_value.abs()
+            subsequent_line_width + indent_positive
         };
 
         // Build lines
-        let lines =
-            self.build_lines(items, first_line_width, subsequent_line_width, &strut_metrics, base_level);
+        let lines = self.build_lines(
+            items,
+            first_line_width,
+            subsequent_line_width,
+            &strut_metrics,
+            base_level,
+        );
 
         // Calculate total height
         let total_height: f32 = lines.iter().map(|l| l.height).sum();
@@ -1660,16 +1674,14 @@ fn resolve_text_align_for_line(
         return text_align;
     }
 
-    let mapped_start_end = |align_last: crate::style::types::TextAlignLast| {
-        match align_last {
-            crate::style::types::TextAlignLast::Start => map_text_align(TextAlign::Start, direction),
-            crate::style::types::TextAlignLast::End => map_text_align(TextAlign::End, direction),
-            crate::style::types::TextAlignLast::Left => TextAlign::Left,
-            crate::style::types::TextAlignLast::Right => TextAlign::Right,
-            crate::style::types::TextAlignLast::Center => TextAlign::Center,
-            crate::style::types::TextAlignLast::Justify => TextAlign::Justify,
-            crate::style::types::TextAlignLast::Auto => text_align,
-        }
+    let mapped_start_end = |align_last: crate::style::types::TextAlignLast| match align_last {
+        crate::style::types::TextAlignLast::Start => map_text_align(TextAlign::Start, direction),
+        crate::style::types::TextAlignLast::End => map_text_align(TextAlign::End, direction),
+        crate::style::types::TextAlignLast::Left => TextAlign::Left,
+        crate::style::types::TextAlignLast::Right => TextAlign::Right,
+        crate::style::types::TextAlignLast::Center => TextAlign::Center,
+        crate::style::types::TextAlignLast::Justify => TextAlign::Justify,
+        crate::style::types::TextAlignLast::Auto => text_align,
     };
 
     match text_align_last {
@@ -1902,6 +1914,28 @@ mod tests {
     }
 
     #[test]
+    fn intrinsic_width_accounts_for_hanging_indent() {
+        let ifc = InlineFormattingContext::new();
+        let mut parent_style = ComputedStyle::default();
+        parent_style.text_indent.length = Length::px(14.0);
+        parent_style.text_indent.hanging = true;
+        let text = "word";
+        let text_node = make_text_box(text);
+        let root = BoxNode::new_block(Arc::new(parent_style), FormattingContextType::Block, vec![text_node]);
+
+        let base_item = ifc.create_text_item(&make_text_box(text), text).unwrap();
+        let base_width = base_item.advance;
+
+        let min_width = ifc
+            .compute_intrinsic_inline_size(&root, IntrinsicSizingMode::MinContent)
+            .unwrap();
+        assert!(
+            min_width >= base_width + 10.0,
+            "min-content should include hanging indent for subsequent lines"
+        );
+    }
+
+    #[test]
     fn text_justify_auto_uses_inter_character_for_cjk() {
         let mut root_style = ComputedStyle::default();
         root_style.text_align = TextAlign::Justify;
@@ -1917,7 +1951,9 @@ mod tests {
         let constraints = LayoutConstraints::definite_width(200.0);
 
         let ifc = InlineFormattingContext::new();
-        let items = ifc.collect_inline_items(&root, constraints.width().unwrap(), constraints.height()).unwrap();
+        let items = ifc
+            .collect_inline_items(&root, constraints.width().unwrap(), constraints.height())
+            .unwrap();
         let strut = ifc.compute_strut_metrics(&root.style);
         let lines = ifc.build_lines(
             items,
@@ -1950,7 +1986,10 @@ mod tests {
         let a = &first_line.children[0];
         let b = &first_line.children[1];
         let gap = b.bounds.x() - (a.bounds.x() + a.bounds.width());
-        assert!(gap > 0.5, "justify should expand gaps between CJK clusters; gap={gap}, count={count}");
+        assert!(
+            gap > 0.5,
+            "justify should expand gaps between CJK clusters; gap={gap}, count={count}"
+        );
     }
 
     #[test]
@@ -1994,7 +2033,9 @@ mod tests {
         let constraints = LayoutConstraints::definite_width(200.0);
 
         let ifc = InlineFormattingContext::new();
-        let items = ifc.collect_inline_items(&root, constraints.width().unwrap(), constraints.height()).unwrap();
+        let items = ifc
+            .collect_inline_items(&root, constraints.width().unwrap(), constraints.height())
+            .unwrap();
         let strut = ifc.compute_strut_metrics(&root.style);
         let lines = ifc.build_lines(
             items,
@@ -2342,6 +2383,88 @@ mod tests {
                 "each-line indent should shift every line start"
             );
         }
+    }
+
+    #[test]
+    fn text_indent_hanging_skips_first_line() {
+        let mut root_style = ComputedStyle::default();
+        root_style.text_indent.length = Length::px(10.0);
+        root_style.text_indent.hanging = true;
+        root_style.font_size = 16.0;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(text_style), "first\nsecond".to_string())],
+        );
+        let constraints = LayoutConstraints::definite_width(80.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert!(fragment.children.len() >= 2, "two lines expected");
+        let first_x = fragment.children[0].children[0].bounds.x();
+        let second_x = fragment.children[1].children[0].bounds.x();
+        assert!(first_x < 1.0, "first line should not be indented under hanging");
+        assert!(second_x >= 9.0, "subsequent lines should be indented under hanging");
+    }
+
+    #[test]
+    fn text_indent_hanging_each_line_still_skips_first_line() {
+        let mut root_style = ComputedStyle::default();
+        root_style.text_indent.length = Length::px(12.0);
+        root_style.text_indent.hanging = true;
+        root_style.text_indent.each_line = true;
+        root_style.font_size = 16.0;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(text_style), "first\nsecond".to_string())],
+        );
+        let constraints = LayoutConstraints::definite_width(80.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert!(fragment.children.len() >= 2, "two lines expected");
+        let first_x = fragment.children[0].children[0].bounds.x();
+        let second_x = fragment.children[1].children[0].bounds.x();
+        assert!(
+            first_x < 1.0,
+            "first line should remain unindented even with each-line + hanging"
+        );
+        assert!(
+            second_x >= 11.0,
+            "subsequent lines should be indented under hanging + each-line"
+        );
+    }
+
+    #[test]
+    fn negative_text_indent_does_not_expand_line_width() {
+        let mut root_style = ComputedStyle::default();
+        root_style.text_indent.length = Length::px(-20.0);
+        root_style.font_size = 16.0;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "averyverylongwordthatshouldwrapproperly averyverylongwordthatshouldwrapproperly".to_string(),
+            )],
+        );
+        // With a narrow width and long words, negative indent must not expand the
+        // available width; expect wrap into two lines.
+        let constraints = LayoutConstraints::definite_width(30.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert!(
+            fragment.children.len() >= 2,
+            "negative indent should not increase available width enough to prevent wrapping"
+        );
     }
 
     #[test]

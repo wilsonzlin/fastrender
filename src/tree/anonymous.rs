@@ -41,7 +41,8 @@
 //! ```
 
 use crate::style::ComputedStyle;
-use crate::tree::box_tree::{AnonymousBox, AnonymousType, BoxNode, BoxType};
+use crate::tree::box_tree::{AnonymousBox, AnonymousType, BoxNode, BoxType, InlineBox};
+use crate::tree::debug::DebugInfo;
 use std::sync::Arc;
 
 /// Creates anonymous boxes in a box tree
@@ -141,6 +142,151 @@ impl AnonymousBoxCreator {
         }
     }
 
+    /// Determines whether a child should participate as inline-level content for fixup.
+    ///
+    /// Replaced elements with inline display behave as inline-level boxes even though
+    /// `BoxType::is_inline_level` returns false.
+    fn is_inline_level_child(child: &BoxNode) -> bool {
+        match &child.box_type {
+            BoxType::Replaced(_) => child.style.display.is_inline_level(),
+            _ => child.is_inline_level(),
+        }
+    }
+
+    /// Determines whether a child should participate as block-level content for fixup.
+    ///
+    /// Replaced elements with inline display are treated as inline-level and shouldn't
+    /// be counted as blocks when deciding anonymous box insertion.
+    fn is_block_level_child(child: &BoxNode) -> bool {
+        match &child.box_type {
+            BoxType::Replaced(_) => !child.style.display.is_inline_level(),
+            _ => child.is_block_level(),
+        }
+    }
+
+    /// Returns true if an inline box (without its own formatting context) contains
+    /// any block-level descendants.
+    fn inline_contains_block_descendants(node: &BoxNode) -> bool {
+        if node.formatting_context().is_some() {
+            return false;
+        }
+
+        node.children.iter().any(|child| {
+            if Self::is_block_level_child(child) {
+                true
+            } else if Self::is_inline_level_child(child) && child.formatting_context().is_none() {
+                Self::inline_contains_block_descendants(child)
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Splits an inline box around any block-level descendants, returning a list of boxes
+    /// that should replace the original inline in its parent.
+    ///
+    /// Inline fragments preserve the original inline's style/debug info; block descendants
+    /// are lifted into the returned list so callers can place them directly in the block
+    /// formatting context.
+    fn split_inline_with_blocks(inline: BoxNode) -> Vec<BoxNode> {
+        let style = inline.style.clone();
+        let box_type = inline.box_type.clone();
+        let debug_info = inline.debug_info.clone();
+        let children = inline.children;
+
+        let mut result = Vec::new();
+        let mut inline_run: Vec<BoxNode> = Vec::new();
+
+        let flush_run = |run: &mut Vec<BoxNode>, out: &mut Vec<BoxNode>| {
+            if run.is_empty() {
+                return;
+            }
+            let fragment = Self::clone_inline_fragment(&style, &box_type, debug_info.as_ref(), std::mem::take(run));
+            out.push(fragment);
+        };
+
+        for child in children {
+            if Self::is_block_level_child(&child) {
+                flush_run(&mut inline_run, &mut result);
+                result.push(child);
+                continue;
+            }
+
+            if Self::is_inline_level_child(&child)
+                && child.formatting_context().is_none()
+                && Self::inline_contains_block_descendants(&child)
+            {
+                let pieces = Self::split_inline_with_blocks(child);
+                for piece in pieces {
+                    if Self::is_block_level_child(&piece) {
+                        flush_run(&mut inline_run, &mut result);
+                        result.push(piece);
+                    } else {
+                        inline_run.push(piece);
+                    }
+                }
+                continue;
+            }
+
+            inline_run.push(child);
+        }
+
+        flush_run(&mut inline_run, &mut result);
+        result
+    }
+
+    /// Splits inline-level children that contain block-level descendants so that block
+    /// boxes participate directly in the parent's block formatting context.
+    fn split_inline_children_with_block_descendants(children: Vec<BoxNode>) -> Vec<BoxNode> {
+        let mut result = Vec::new();
+
+        for child in children {
+            if Self::is_inline_level_child(&child)
+                && child.formatting_context().is_none()
+                && Self::inline_contains_block_descendants(&child)
+            {
+                let pieces = Self::split_inline_with_blocks(child);
+                result.extend(pieces);
+            } else {
+                result.push(child);
+            }
+        }
+
+        result
+    }
+
+    /// Clones an inline box fragment preserving the inline/anonymous inline identity and debug info.
+    fn clone_inline_fragment(
+        style: &Arc<ComputedStyle>,
+        box_type: &BoxType,
+        debug_info: Option<&DebugInfo>,
+        children: Vec<BoxNode>,
+    ) -> BoxNode {
+        let fragment = match box_type {
+            BoxType::Inline(inline) => BoxNode {
+                style: style.clone(),
+                box_type: BoxType::Inline(InlineBox {
+                    formatting_context: inline.formatting_context,
+                }),
+                children,
+                debug_info: debug_info.cloned(),
+            },
+            BoxType::Anonymous(anon) if matches!(anon.anonymous_type, AnonymousType::Inline) => BoxNode {
+                style: style.clone(),
+                box_type: BoxType::Anonymous(anon.clone()),
+                children,
+                debug_info: debug_info.cloned(),
+            },
+            _ => {
+                let mut node = BoxNode::new_inline(style.clone(), children);
+                node.debug_info = debug_info.cloned();
+                node
+            }
+        };
+
+        fragment
+    }
+
     /// Fixes up children of block containers
     ///
     /// CSS 2.1 Section 9.2.1.1: Block containers can only contain:
@@ -156,9 +302,13 @@ impl AnonymousBoxCreator {
     /// 3. If all inline-level: wrap any bare text in anonymous inline boxes
     /// 4. If mixed: wrap runs of inline content in anonymous block boxes
     fn fixup_block_children(children: Vec<BoxNode>) -> Vec<BoxNode> {
-        // Determine what kind of content we have
-        let has_block = children.iter().any(|c| c.is_block_level());
-        let has_inline = children.iter().any(|c| c.is_inline_level());
+        // First, split any inline boxes that illegally contain block-level descendants
+        // so the block descendants participate directly in the block formatting context.
+        let children = Self::split_inline_children_with_block_descendants(children);
+
+        // Determine what kind of content we have after splitting
+        let has_block = children.iter().any(Self::is_block_level_child);
+        let has_inline = children.iter().any(Self::is_inline_level_child);
 
         if has_block && has_inline {
             // Mixed content - wrap inline runs in anonymous blocks
@@ -215,7 +365,7 @@ impl AnonymousBoxCreator {
         let mut inline_run: Vec<BoxNode> = Vec::new();
 
         for child in children {
-            if child.is_inline_level() {
+            if Self::is_inline_level_child(&child) {
                 // Accumulate inline boxes
                 inline_run.push(child);
             } else {
@@ -343,19 +493,19 @@ impl AnonymousBoxCreator {
     ///
     /// Returns true if children contain both block-level and inline-level boxes.
     pub fn has_mixed_content(children: &[BoxNode]) -> bool {
-        let has_block = children.iter().any(|c| c.is_block_level());
-        let has_inline = children.iter().any(|c| c.is_inline_level());
+        let has_block = children.iter().any(Self::is_block_level_child);
+        let has_inline = children.iter().any(Self::is_inline_level_child);
         has_block && has_inline
     }
 
     /// Checks if all children are block-level
     pub fn all_block_level(children: &[BoxNode]) -> bool {
-        children.iter().all(|c| c.is_block_level())
+        children.iter().all(Self::is_block_level_child)
     }
 
     /// Checks if all children are inline-level
     pub fn all_inline_level(children: &[BoxNode]) -> bool {
-        children.iter().all(|c| c.is_inline_level())
+        children.iter().all(Self::is_inline_level_child)
     }
 
     /// Counts the number of anonymous boxes that would be created
