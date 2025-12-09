@@ -2145,7 +2145,7 @@ impl FormattingContext for TableFormattingContext {
         } else {
             col_widths.iter().sum::<f32>() + spacing
         };
-        let mut total_height = if structure.row_count > 0 {
+        let total_height = if structure.row_count > 0 {
             if structure.border_collapse == BorderCollapse::Collapse {
                 let mut h = horizontal_line_max.get(0).copied().unwrap_or(0.0);
                 for (idx, row) in row_metrics.iter().enumerate() {
@@ -2163,13 +2163,19 @@ impl FormattingContext for TableFormattingContext {
         } else {
             0.0
         };
-        if let Some(max_h) = max_height {
-            total_height = total_height.min(max_h);
-        }
-        if let Some(min_h) = min_height {
-            total_height = total_height.max(min_h);
-        }
-        let table_bounds = Rect::from_xywh(0.0, 0.0, total_width.max(0.0), total_height);
+        let used_height = if let Some(specified) = table_height {
+            specified
+        } else {
+            let mut h = total_height;
+            if let Some(max_h) = max_height {
+                h = h.min(max_h);
+            }
+            if let Some(min_h) = min_height {
+                h = h.max(min_h);
+            }
+            h
+        };
+        let table_bounds = Rect::from_xywh(0.0, 0.0, total_width.max(0.0), used_height);
 
         if structure.border_collapse == BorderCollapse::Collapse {
             let make_border_style = |color: Rgba,
