@@ -1178,7 +1178,7 @@ impl LineBuilder {
         for (idx, leaf) in leaves.iter().enumerate() {
             let dir = leaf.item.direction();
             let ub = leaf.item.unicode_bidi();
-            let (open_controls, close_controls) = bidi_controls(ub, dir);
+            let (open_controls, close_controls) = bidi_controls_for_stack(&leaf.box_stack, ub, dir);
 
             for ch in open_controls {
                 logical_text.push(ch);
@@ -1475,6 +1475,27 @@ fn bidi_controls(unicode_bidi: UnicodeBidi, direction: Direction) -> (Vec<char>,
         }
         UnicodeBidi::Plaintext => (vec!['\u{2068}'], vec!['\u{2069}']),
     }
+}
+
+fn bidi_controls_for_stack(
+    stack: &[BoxContext],
+    leaf_bidi: UnicodeBidi,
+    leaf_dir: Direction,
+) -> (Vec<char>, Vec<char>) {
+    let mut opens = Vec::new();
+    let mut closes = Vec::new();
+
+    for ctx in stack {
+        let (o, c) = bidi_controls(ctx.unicode_bidi, ctx.direction);
+        opens.extend(o);
+        closes.extend(c);
+    }
+
+    let (leaf_opens, leaf_closes) = bidi_controls(leaf_bidi, leaf_dir);
+    opens.extend(leaf_opens);
+    closes.extend(leaf_closes);
+
+    (opens, closes.into_iter().rev().collect())
 }
 
 #[derive(Clone)]
@@ -1830,6 +1851,50 @@ mod tests {
 
         // Base was RTL, but plaintext forces first-strong (LTR here), so visual order stays logical LTR then RTL.
         assert_eq!(texts, vec!["abc ".to_string(), "אבג".to_string()]);
+    }
+
+    #[test]
+    fn bidi_isolate_inline_box_prevents_surrounding_reordering() {
+        let mut builder = make_builder(200.0);
+
+        builder.add_item(InlineItem::Text(make_text_item("ABC ", 40.0)));
+
+        let mut inline_box = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            0,
+            Direction::Rtl,
+            UnicodeBidi::Isolate,
+        );
+        inline_box.add_child(InlineItem::Text(make_text_item("אבג", 30.0)));
+        builder.add_item(InlineItem::InlineBox(inline_box));
+
+        builder.add_item(InlineItem::Text(make_text_item(" DEF", 40.0)));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 1);
+        let texts: Vec<String> = lines[0]
+            .items
+            .iter()
+            .map(|p| match &p.item {
+                InlineItem::Text(t) => t.text.clone(),
+                InlineItem::InlineBox(b) => b
+                    .children
+                    .iter()
+                    .filter_map(|c| match c {
+                        InlineItem::Text(t) => Some(t.text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(""),
+                _ => String::new(),
+            })
+            .collect();
+
+        assert_eq!(texts, vec!["ABC ".to_string(), "אבג".to_string(), " DEF".to_string()]);
     }
 
     #[test]
