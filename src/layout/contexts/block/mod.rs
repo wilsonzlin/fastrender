@@ -189,7 +189,8 @@ impl BlockFormattingContext {
         let style = &child.style;
         let font_size = style.font_size;
 
-        let used_size = compute_replaced_size(style, replaced_box);
+        let percentage_base = Some(crate::geometry::Size::new(containing_width, f32::NAN));
+        let used_size = compute_replaced_size(style, replaced_box, percentage_base);
 
         // Vertical margins collapse as normal blocks
         let margin_top = resolve_opt_length(style.margin_top.as_ref(), font_size, containing_width);
@@ -431,7 +432,7 @@ impl FormattingContext for BlockFormattingContext {
 
         // Replaced elements fall back to their intrinsic content size plus padding/borders
         if let BoxType::Replaced(replaced_box) = &box_node.box_type {
-            let size = compute_replaced_size(style, replaced_box);
+            let size = compute_replaced_size(style, replaced_box, None);
             let edges = horizontal_padding_and_borders(style, size.width);
             return Ok(size.width + edges);
         }

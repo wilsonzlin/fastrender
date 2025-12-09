@@ -413,7 +413,12 @@ impl InlineFormattingContext {
     ) -> Result<ReplacedItem, LayoutError> {
         let style = &box_node.style;
         let line_height = compute_line_height(style);
-        let size = compute_replaced_size(style, replaced_box);
+        let percentage_size = if percentage_base.is_finite() {
+            Some(crate::geometry::Size::new(percentage_base, f32::NAN))
+        } else {
+            None
+        };
+        let size = compute_replaced_size(style, replaced_box, percentage_size);
         let margin_left = style
             .margin_left
             .as_ref()

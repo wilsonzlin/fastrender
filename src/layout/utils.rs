@@ -3,7 +3,7 @@
 //! Contains common functions used across multiple layout modules.
 
 use crate::geometry::Size;
-use crate::style::values::LengthOrAuto;
+use crate::style::values::{Length, LengthOrAuto};
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::ReplacedBox;
 
@@ -48,7 +48,7 @@ pub fn resolve_offset(value: &LengthOrAuto, percentage_base: f32) -> Option<f32>
 /// - Specified width/height override intrinsic dimensions
 /// - If only one dimension is specified and an aspect ratio is available, the other is derived
 /// - If nothing is specified and no intrinsic data exists, fall back to 300x150
-pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox) -> Size {
+pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, percentage_base: Option<Size>) -> Size {
     const DEFAULT_SIZE: Size = Size {
         width: 300.0,
         height: 150.0,
@@ -63,8 +63,20 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox) -> S
         }
     });
 
-    let mut width = style.width.as_ref().map(|l| l.to_px()).unwrap_or(intrinsic.width);
-    let mut height = style.height.as_ref().map(|l| l.to_px()).unwrap_or(intrinsic.height);
+    let width_base = percentage_base.map(|s| s.width);
+    let height_base = percentage_base.map(|s| s.height);
+    let font_size = style.font_size;
+
+    let mut width = style
+        .width
+        .as_ref()
+        .and_then(|l| resolve_replaced_length(l, width_base, font_size))
+        .unwrap_or(intrinsic.width);
+    let mut height = style
+        .height
+        .as_ref()
+        .and_then(|l| resolve_replaced_length(l, height_base, font_size))
+        .unwrap_or(intrinsic.height);
 
     match (style.width.as_ref(), style.height.as_ref(), intrinsic_ratio) {
         (Some(_), None, Some(ratio)) => {
@@ -84,12 +96,48 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox) -> S
     }
 
     // Apply min/max constraints when present
-    let min_width = style.min_width.as_ref().map(|l| l.to_px()).unwrap_or(0.0);
-    let max_width = style.max_width.as_ref().map(|l| l.to_px()).unwrap_or(f32::INFINITY);
-    let min_height = style.min_height.as_ref().map(|l| l.to_px()).unwrap_or(0.0);
-    let max_height = style.max_height.as_ref().map(|l| l.to_px()).unwrap_or(f32::INFINITY);
+    if let Some(min_w) = style
+        .min_width
+        .as_ref()
+        .and_then(|l| resolve_replaced_length(l, width_base, font_size))
+    {
+        width = width.max(min_w);
+    }
+    if let Some(max_w) = style
+        .max_width
+        .as_ref()
+        .and_then(|l| resolve_replaced_length(l, width_base, font_size))
+    {
+        width = width.min(max_w);
+    }
+    if let Some(min_h) = style
+        .min_height
+        .as_ref()
+        .and_then(|l| resolve_replaced_length(l, height_base, font_size))
+    {
+        height = height.max(min_h);
+    }
+    if let Some(max_h) = style
+        .max_height
+        .as_ref()
+        .and_then(|l| resolve_replaced_length(l, height_base, font_size))
+    {
+        height = height.min(max_h);
+    }
 
-    Size::new(width.clamp(min_width, max_width), height.clamp(min_height, max_height))
+    Size::new(width, height)
+}
+
+fn resolve_replaced_length(len: &Length, percentage_base: Option<f32>, font_size: f32) -> Option<f32> {
+    if len.unit.is_percentage() {
+        percentage_base.map(|b| len.resolve_against(b))
+    } else if len.unit.is_font_relative() {
+        Some(len.resolve_with_font_size(font_size))
+    } else if len.unit.is_absolute() {
+        Some(len.to_px())
+    } else {
+        Some(len.value)
+    }
 }
 
 #[cfg(test)]
@@ -134,7 +182,7 @@ mod tests {
             aspect_ratio: None,
         };
 
-        let size = compute_replaced_size(&style, &replaced);
+        let size = compute_replaced_size(&style, &replaced, None);
         assert_eq!(size.width, 640.0);
         assert_eq!(size.height, 480.0);
     }
@@ -151,8 +199,42 @@ mod tests {
             aspect_ratio: Some(2.0),
         };
 
-        let size = compute_replaced_size(&style, &replaced);
+        let size = compute_replaced_size(&style, &replaced, None);
         assert_eq!(size.width, 200.0);
         assert_eq!(size.height, 100.0);
+    }
+
+    #[test]
+    fn compute_replaced_respects_percentage_when_base_available() {
+        let mut style = ComputedStyle::default();
+        style.width = Some(Length::percent(50.0));
+        style.height = Some(Length::percent(25.0));
+        let replaced = ReplacedBox {
+            replaced_type: crate::tree::box_tree::ReplacedType::Image { src: "img".into() },
+            intrinsic_size: Some(Size::new(200.0, 200.0)),
+            aspect_ratio: None,
+        };
+
+        let size = compute_replaced_size(&style, &replaced, Some(Size::new(400.0, 300.0)));
+        assert!((size.width - 200.0).abs() < 0.01);
+        assert!((size.height - 75.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn compute_replaced_ignores_percentage_without_base() {
+        let mut style = ComputedStyle::default();
+        style.width = Some(Length::percent(50.0));
+        style.height = None;
+
+        let replaced = ReplacedBox {
+            replaced_type: crate::tree::box_tree::ReplacedType::Image { src: "img".into() },
+            intrinsic_size: Some(Size::new(120.0, 80.0)),
+            aspect_ratio: Some(1.5),
+        };
+
+        let size = compute_replaced_size(&style, &replaced, None);
+        // Percentage width cannot resolve, so we fall back to intrinsic and aspect ratio for height
+        assert!((size.width - 120.0).abs() < 0.01);
+        assert!((size.height - 80.0).abs() < 0.01);
     }
 }
