@@ -631,12 +631,13 @@ impl InlineFormattingContext {
             };
             let indent_offset = if idx == 0 { first_line_indent } else { subsequent_line_indent };
             let mut base_align = map_text_align(text_align, direction);
-            if matches!(base_align, TextAlign::Justify) && matches!(text_justify, TextJustify::None) {
+            let resolved_justify = resolve_auto_text_justify(text_justify, &line.items);
+            if matches!(base_align, TextAlign::Justify) && matches!(resolved_justify, TextJustify::None) {
                 base_align = map_text_align(TextAlign::Start, direction);
             }
             let mut effective_align =
                 resolve_text_align_for_line(base_align, text_align_last, direction, is_last_line, is_single_line);
-            if matches!(effective_align, TextAlign::Justify) && matches!(text_justify, TextJustify::None) {
+            if matches!(effective_align, TextAlign::Justify) && matches!(resolved_justify, TextJustify::None) {
                 effective_align = map_text_align(TextAlign::Start, direction);
             }
             let line_fragment = self.create_line_fragment(
@@ -646,7 +647,7 @@ impl InlineFormattingContext {
                 line_box_width,
                 effective_align,
                 direction,
-                text_justify,
+                resolved_justify,
                 indent_offset,
             );
             y += line.height;
@@ -669,7 +670,8 @@ impl InlineFormattingContext {
         indent_offset: f32,
     ) -> FragmentNode {
         let text_align = map_text_align(text_align, direction);
-        let should_justify = matches!(text_align, TextAlign::Justify) && !matches!(text_justify, TextJustify::None);
+        let should_justify =
+            matches!(text_align, TextAlign::Justify) && !matches!(text_justify, TextJustify::None);
         let items: Vec<PositionedItem> = if should_justify {
             self.expand_items_for_justification(&line.items, text_justify)
         } else {
@@ -770,7 +772,23 @@ impl InlineFormattingContext {
         let mut remaining = item.clone();
         let mut consumed = 0usize;
         let break_offsets: Vec<usize> = match mode {
-            TextJustify::InterCharacter | TextJustify::Distribute => item.cluster_byte_offsets().skip(1).collect(),
+            TextJustify::InterCharacter | TextJustify::Distribute => {
+                let mut offsets: Vec<usize> = item.cluster_byte_offsets().skip(1).collect();
+                if offsets.is_empty() {
+                    // Fallback to per-character splitting when shaping did not emit cluster boundaries.
+                    let mut acc = 0usize;
+                    offsets = item
+                        .text
+                        .chars()
+                        .skip(1)
+                        .map(|c| {
+                            acc += c.len_utf8();
+                            acc
+                        })
+                        .collect();
+                }
+                offsets
+            }
             _ => item
                 .break_opportunities
                 .iter()
@@ -1688,6 +1706,29 @@ fn map_text_align(text_align: TextAlign, direction: crate::style::types::Directi
     }
 }
 
+fn resolve_auto_text_justify(mode: TextJustify, items: &[PositionedItem]) -> TextJustify {
+    if !matches!(mode, TextJustify::Auto) {
+        return mode;
+    }
+    if line_contains_cjk(items) {
+        TextJustify::InterCharacter
+    } else {
+        TextJustify::InterWord
+    }
+}
+
+fn line_contains_cjk(items: &[PositionedItem]) -> bool {
+    items.iter().any(|pos| inline_item_has_cjk(&pos.item))
+}
+
+fn inline_item_has_cjk(item: &InlineItem) -> bool {
+    match item {
+        InlineItem::Text(t) => t.text.chars().any(is_cjk_character),
+        InlineItem::InlineBox(b) => b.children.iter().any(inline_item_has_cjk),
+        InlineItem::InlineBlock(_) | InlineItem::Replaced(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1829,6 +1870,80 @@ mod tests {
         assert!(
             max_width >= base_width + 10.0,
             "max-content should include indent; got {max_width}, base {base_width}"
+        );
+    }
+
+    #[test]
+    fn text_justify_auto_uses_inter_character_for_cjk() {
+        let mut root_style = ComputedStyle::default();
+        root_style.text_align = TextAlign::Justify;
+        root_style.text_justify = TextJustify::Auto;
+        root_style.white_space = WhiteSpace::PreWrap;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(text_style), "漢字漢字\n漢".to_string())],
+        );
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let ifc = InlineFormattingContext::new();
+        let items = ifc.collect_inline_items(&root, constraints.width().unwrap(), constraints.height()).unwrap();
+        let strut = ifc.compute_strut_metrics(&root.style);
+        let lines = ifc.build_lines(
+            items,
+            constraints.width().unwrap(),
+            constraints.width().unwrap(),
+            &strut,
+            Some(unicode_bidi::Level::ltr()),
+        );
+        let first = lines.first().expect("first line");
+        let resolved = resolve_auto_text_justify(TextJustify::Auto, &first.items);
+        assert_eq!(resolved, TextJustify::InterCharacter);
+        let expanded = ifc.expand_items_for_justification(&first.items, resolved);
+        assert!(
+            expanded.len() >= 4,
+            "expanded items should split per cluster; got {}",
+            expanded.len()
+        );
+
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert!(
+            fragment.children.len() >= 2,
+            "newline should create multiple lines for justification test"
+        );
+        let first_line = fragment.children.first().expect("first line");
+        let count = first_line.children.len();
+        assert!(
+            count >= 4,
+            "inter-character justify should split CJK into per-cluster items; count={count}"
+        );
+        let a = &first_line.children[0];
+        let b = &first_line.children[1];
+        let gap = b.bounds.x() - (a.bounds.x() + a.bounds.width());
+        assert!(gap > 0.5, "justify should expand gaps between CJK clusters; gap={gap}, count={count}");
+    }
+
+    #[test]
+    fn text_justify_auto_keeps_inter_word_for_latin() {
+        let mut root_style = ComputedStyle::default();
+        root_style.text_align = TextAlign::Justify;
+        root_style.text_justify = TextJustify::Auto;
+        root_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![make_text_box("a b\nc")],
+        );
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        let first_line = fragment.children.first().expect("first line");
+        assert!(
+            first_line.children.len() < 4,
+            "inter-word justify should not split Latin into per-character items"
         );
     }
 

@@ -251,7 +251,10 @@ impl TextItem {
     ) -> Option<(TextItem, TextItem)> {
         const INSERTED_HYPHEN: char = '\u{2010}'; // CSS hyphenation hyphen
 
-        let split_offset = self.cluster_boundary_at_or_before(byte_offset).map(|b| b.byte_offset)?;
+        let split_offset = self
+            .cluster_boundary_at_or_before(byte_offset)
+            .map(|b| b.byte_offset)
+            .unwrap_or(byte_offset);
 
         if split_offset == 0 || split_offset >= self.text.len() {
             return None;
