@@ -78,14 +78,8 @@ impl DisplayListRenderer {
             crate::paint::display_list::GradientSpread::Repeat => SpreadMode::Repeat,
             crate::paint::display_list::GradientSpread::Reflect => SpreadMode::Reflect,
         };
-        let Some(shader) = RadialGradient::new(
-            center,
-            center,
-            item.radius,
-            stops,
-            spread,
-            Transform::identity(),
-        ) else {
+        let Some(shader) = RadialGradient::new(center, center, item.radius, stops, spread, Transform::identity())
+        else {
             return;
         };
 

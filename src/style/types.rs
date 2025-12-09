@@ -432,12 +432,55 @@ impl Default for TextIndent {
 ///
 /// CSS: `text-decoration`
 /// Reference: CSS Text Decoration Module Level 3
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextDecoration {
+    pub lines: TextDecorationLine,
+    pub style: TextDecorationStyle,
+    /// None means currentColor
+    pub color: Option<Rgba>,
+}
+
+impl Default for TextDecoration {
+    fn default() -> Self {
+        Self {
+            lines: TextDecorationLine::NONE,
+            style: TextDecorationStyle::Solid,
+            color: None,
+        }
+    }
+}
+
+/// Individual text-decoration-line flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextDecoration {
-    None,
-    Underline,
-    Overline,
-    LineThrough,
+pub struct TextDecorationLine(pub u8);
+
+impl TextDecorationLine {
+    pub const NONE: Self = Self(0);
+    pub const UNDERLINE: Self = Self(1 << 0);
+    pub const OVERLINE: Self = Self(1 << 1);
+    pub const LINE_THROUGH: Self = Self(1 << 2);
+
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 != 0
+    }
+
+    pub fn insert(&mut self, other: Self) {
+        self.0 |= other.0;
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+/// Stroke style for text decorations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextDecorationStyle {
+    Solid,
+    Double,
+    Dotted,
+    Dashed,
+    Wavy,
 }
 
 /// Text case transformation

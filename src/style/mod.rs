@@ -260,7 +260,7 @@ impl Default for ComputedStyle {
             text_align_last: TextAlignLast::Auto,
             text_justify: TextJustify::Auto,
             text_indent: TextIndent::default(),
-            text_decoration: TextDecoration::None,
+            text_decoration: TextDecoration::default(),
             text_transform: TextTransform::None,
             letter_spacing: 0.0,
             word_spacing: 0.0,

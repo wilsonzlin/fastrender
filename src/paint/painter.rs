@@ -34,7 +34,8 @@ use crate::paint::stacking::creates_stacking_context;
 use crate::style::color::Rgba;
 use crate::style::types::{
     BackgroundAttachment, BackgroundImage, BackgroundPosition, BackgroundRepeatKeyword, BackgroundSize,
-    BackgroundSizeComponent, BackgroundSizeKeyword, BorderStyle as CssBorderStyle, ObjectFit, TextDecoration,
+    BackgroundSizeComponent, BackgroundSizeKeyword, BorderStyle as CssBorderStyle, ObjectFit, TextDecorationLine,
+    TextDecorationStyle,
 };
 use crate::style::types::{FilterColor, FilterFunction, MixBlendMode, Overflow};
 use crate::style::values::{Length, LengthUnit};
@@ -808,7 +809,13 @@ impl Painter {
             }
             BackgroundImage::RepeatingRadialGradient { stops } => {
                 let resolved = normalize_color_stops(stops);
-                self.paint_radial_gradient(origin_rect, clip_rect, clip_mask.as_ref(), &resolved, SpreadMode::Repeat);
+                self.paint_radial_gradient(
+                    origin_rect,
+                    clip_rect,
+                    clip_mask.as_ref(),
+                    &resolved,
+                    SpreadMode::Repeat,
+                );
             }
             BackgroundImage::Url(src) => {
                 let image = match self.image_cache.load(src) {
@@ -892,15 +899,7 @@ impl Painter {
                         if tx >= max_x || ty >= max_y {
                             continue;
                         }
-                        self.paint_background_tile(
-                            &pixmap,
-                            tx,
-                            ty,
-                            tile_w,
-                            tile_h,
-                            clip_rect,
-                            clip_mask.as_ref(),
-                        );
+                        self.paint_background_tile(&pixmap, tx, ty, tile_w, tile_h, clip_rect, clip_mask.as_ref());
                     }
                 }
             }
@@ -934,7 +933,9 @@ impl Painter {
             return;
         };
 
-        let Some(skia_rect) = SkiaRect::from_xywh(paint_rect.x(), paint_rect.y(), paint_rect.width(), paint_rect.height()) else {
+        let Some(skia_rect) =
+            SkiaRect::from_xywh(paint_rect.x(), paint_rect.y(), paint_rect.width(), paint_rect.height())
+        else {
             return;
         };
         let path = PathBuilder::from_rect(skia_rect);
@@ -942,8 +943,13 @@ impl Painter {
         let mut paint = Paint::default();
         paint.shader = shader;
         paint.anti_alias = true;
-        self.pixmap
-            .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), clip_mask);
+        self.pixmap.fill_path(
+            &path,
+            &paint,
+            tiny_skia::FillRule::Winding,
+            Transform::identity(),
+            clip_mask,
+        );
     }
 
     fn paint_radial_gradient(
@@ -967,16 +973,14 @@ impl Painter {
             / 2.0;
 
         let center = tiny_skia::Point::from_xy(cx, cy);
-        let Some(shader) = RadialGradient::new(center, center, radius, skia_stops, spread, Transform::identity()) else {
+        let Some(shader) = RadialGradient::new(center, center, radius, skia_stops, spread, Transform::identity())
+        else {
             return;
         };
 
-        let Some(skia_rect) = SkiaRect::from_xywh(
-            paint_rect.x(),
-            paint_rect.y(),
-            paint_rect.width(),
-            paint_rect.height(),
-        ) else {
+        let Some(skia_rect) =
+            SkiaRect::from_xywh(paint_rect.x(), paint_rect.y(), paint_rect.width(), paint_rect.height())
+        else {
             return;
         };
         let path = PathBuilder::from_rect(skia_rect);
@@ -984,8 +988,13 @@ impl Painter {
         let mut paint = Paint::default();
         paint.shader = shader;
         paint.anti_alias = true;
-        self.pixmap
-            .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), clip_mask);
+        self.pixmap.fill_path(
+            &path,
+            &paint,
+            tiny_skia::FillRule::Winding,
+            Transform::identity(),
+            clip_mask,
+        );
     }
 
     fn paint_background_tile(
@@ -1657,7 +1666,7 @@ impl Painter {
         baseline_y: f32,
         width: f32,
     ) {
-        if style.text_decoration == TextDecoration::None || width <= 0.0 {
+        if style.text_decoration.lines.is_empty() || width <= 0.0 {
             return;
         }
 
@@ -1665,46 +1674,108 @@ impl Painter {
             return;
         };
 
+        let decoration_color = style.text_decoration.color.unwrap_or(style.color);
         let mut paint = Paint::default();
-        paint.set_color(color_to_skia(style.color));
+        paint.set_color(color_to_skia(decoration_color));
         paint.anti_alias = true;
 
-        let draw_line = |pixmap: &mut Pixmap, y_center: f32, thickness: f32, color: &Paint| {
+        let draw_solid_line = |pixmap: &mut Pixmap, center: f32, thickness: f32| {
             if thickness <= 0.0 {
                 return;
             }
-            if let Some(rect) = SkiaRect::from_xywh(x, y_center - thickness * 0.5, width, thickness) {
+            if let Some(rect) = SkiaRect::from_xywh(x, center - thickness * 0.5, width, thickness) {
                 let path = PathBuilder::from_rect(rect);
-                pixmap.fill_path(&path, color, tiny_skia::FillRule::Winding, Transform::identity(), None);
+                pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
             }
         };
 
-        match style.text_decoration {
-            TextDecoration::Underline => {
-                draw_line(
-                    &mut self.pixmap,
-                    baseline_y - metrics.underline_pos,
-                    metrics.underline_thickness,
-                    &paint,
-                );
+        let draw_stroked_line =
+            |pixmap: &mut Pixmap, center: f32, thickness: f32, dash: Option<Vec<f32>>, round: bool| {
+                let mut path = PathBuilder::new();
+                path.move_to(x, center);
+                path.line_to(x + width, center);
+                let Some(path) = path.finish() else { return };
+
+                let mut stroke = Stroke::default();
+                stroke.width = thickness;
+                stroke.line_cap = if round {
+                    tiny_skia::LineCap::Round
+                } else {
+                    tiny_skia::LineCap::Butt
+                };
+                if let Some(arr) = dash {
+                    stroke.dash = tiny_skia::StrokeDash::new(arr, 0.0);
+                }
+
+                pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+            };
+
+        let draw_wavy_line = |pixmap: &mut Pixmap, center: f32, thickness: f32| {
+            if thickness <= 0.0 || width <= 0.0 {
+                return;
             }
-            TextDecoration::Overline => {
-                draw_line(
-                    &mut self.pixmap,
-                    baseline_y - metrics.ascent,
-                    metrics.underline_thickness,
-                    &paint,
-                );
+            let wavelength = (thickness * 4.0).max(6.0);
+            let amplitude = (thickness * 0.75).max(thickness * 0.5);
+
+            let mut path = PathBuilder::new();
+            path.move_to(x, center);
+            let mut cursor = x;
+            let mut up = true;
+            while cursor < x + width {
+                let end = (cursor + wavelength).min(x + width);
+                let mid = cursor + (end - cursor) * 0.5;
+                let control_y = if up { center - amplitude } else { center + amplitude };
+                path.quad_to(mid, control_y, end, center);
+                cursor = end;
+                up = !up;
             }
-            TextDecoration::LineThrough => {
-                draw_line(
-                    &mut self.pixmap,
-                    baseline_y - metrics.strike_pos,
-                    metrics.strike_thickness,
-                    &paint,
-                );
+
+            if let Some(path) = path.finish() {
+                let mut stroke = Stroke::default();
+                stroke.width = thickness.max(0.5);
+                stroke.line_cap = tiny_skia::LineCap::Round;
+                pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
             }
-            TextDecoration::None => {}
+        };
+
+        let painter_style = style.text_decoration.style;
+        let render_line = |pixmap: &mut Pixmap, center: f32, thickness: f32| match painter_style {
+            TextDecorationStyle::Solid => draw_solid_line(pixmap, center, thickness),
+            TextDecorationStyle::Double => {
+                let line_thickness = (thickness * 0.7).max(0.5);
+                let gap = line_thickness.max(thickness * 0.6);
+                draw_solid_line(pixmap, center - (gap * 0.5), line_thickness);
+                draw_solid_line(pixmap, center + (gap * 0.5), line_thickness);
+            }
+            TextDecorationStyle::Dotted => {
+                draw_stroked_line(pixmap, center, thickness, Some(vec![thickness, thickness]), true);
+            }
+            TextDecorationStyle::Dashed => {
+                draw_stroked_line(pixmap, center, thickness, Some(vec![3.0 * thickness, thickness]), false);
+            }
+            TextDecorationStyle::Wavy => draw_wavy_line(pixmap, center, thickness),
+        };
+
+        if style.text_decoration.lines.contains(TextDecorationLine::UNDERLINE) {
+            render_line(
+                &mut self.pixmap,
+                baseline_y - metrics.underline_pos,
+                metrics.underline_thickness,
+            );
+        }
+        if style.text_decoration.lines.contains(TextDecorationLine::OVERLINE) {
+            render_line(
+                &mut self.pixmap,
+                baseline_y - metrics.ascent,
+                metrics.underline_thickness,
+            );
+        }
+        if style.text_decoration.lines.contains(TextDecorationLine::LINE_THROUGH) {
+            render_line(
+                &mut self.pixmap,
+                baseline_y - metrics.strike_pos,
+                metrics.strike_thickness,
+            );
         }
     }
 }
@@ -2711,7 +2782,11 @@ fn resolve_length_for_paint(len: &Length, font_size: f32, percentage_base: f32) 
 fn compute_background_size(style: &ComputedStyle, area_w: f32, area_h: f32, img_w: f32, img_h: f32) -> (f32, f32) {
     let natural_w = if img_w > 0.0 { Some(img_w) } else { None };
     let natural_h = if img_h > 0.0 { Some(img_h) } else { None };
-    let ratio = if img_w > 0.0 && img_h > 0.0 { Some(img_w / img_h) } else { None };
+    let ratio = if img_w > 0.0 && img_h > 0.0 {
+        Some(img_w / img_h)
+    } else {
+        None
+    };
     let font_size = style.font_size;
 
     match style.background_size {
@@ -3151,8 +3226,7 @@ mod tests {
             ],
         });
 
-        let fragment =
-            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
         let tree = FragmentTree::new(fragment);
 
         let pixmap = paint_tree(&tree, 20, 20, Rgba::WHITE).expect("paint");
@@ -3179,8 +3253,7 @@ mod tests {
             ],
         });
 
-        let fragment =
-            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
         let tree = FragmentTree::new(fragment);
         let pixmap = paint_tree(&tree, 20, 20, Rgba::WHITE).expect("paint");
 
@@ -3194,7 +3267,10 @@ mod tests {
         distinct.insert(top);
         distinct.insert(middle);
         distinct.insert(bottom);
-        assert!(distinct.len() >= 2, "expected at least two colors in repeating gradient");
+        assert!(
+            distinct.len() >= 2,
+            "expected at least two colors in repeating gradient"
+        );
     }
 
     #[test]
@@ -3217,17 +3293,18 @@ mod tests {
 
         // Gradient anchors to viewport: samples at successive x positions diverge even though elements have their own origins.
         let style_arc = Arc::new(style);
-        let first =
-            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), vec![], style_arc.clone());
-        let second =
-            FragmentNode::new_block_styled(Rect::from_xywh(1.0, 0.0, 1.0, 1.0), vec![], style_arc.clone());
+        let first = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), vec![], style_arc.clone());
+        let second = FragmentNode::new_block_styled(Rect::from_xywh(1.0, 0.0, 1.0, 1.0), vec![], style_arc.clone());
         let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 4.0, 2.0), vec![first, second]);
         let tree = FragmentTree::new(root);
         let pixmap = paint_tree(&tree, 4, 2, Rgba::WHITE).expect("paint");
 
         let left = color_at(&pixmap, 0, 0);
         let right = color_at(&pixmap, 1, 0);
-        assert!(left.0 > right.0, "fixed attachment should keep gradient anchored to viewport");
+        assert!(
+            left.0 > right.0,
+            "fixed attachment should keep gradient anchored to viewport"
+        );
         assert!(right.2 > left.2);
     }
 
@@ -3263,8 +3340,7 @@ mod tests {
         style.border_bottom_color = Rgba::TRANSPARENT;
         style.border_left_color = Rgba::TRANSPARENT;
 
-        let fragment =
-            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 12.0, 12.0), vec![], Arc::new(style));
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 12.0, 12.0), vec![], Arc::new(style));
         let tree = FragmentTree::new(fragment);
         let pixmap = paint_tree(&tree, 12, 12, Rgba::WHITE).expect("paint");
 
@@ -3444,8 +3520,7 @@ mod tests {
 
     #[test]
     fn background_repeat_space_distributes_evenly() {
-        let positions =
-            tile_positions(BackgroundRepeatKeyword::Space, 0.0, 100.0, 30.0, 0.0, 0.0, 100.0);
+        let positions = tile_positions(BackgroundRepeatKeyword::Space, 0.0, 100.0, 30.0, 0.0, 0.0, 100.0);
         assert_eq!(positions.len(), 3);
         assert!((positions[0] - 0.0).abs() < 1e-4);
         assert!((positions[1] - 35.0).abs() < 1e-3);

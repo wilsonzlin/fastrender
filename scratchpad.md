@@ -25,6 +25,7 @@
 - Background shorthand regression updated to expect authored repeat keywords (e.g. `no-repeat`) rather than default repeat after reset.
 - Background shorthand now handles single-value forms (e.g. `background: red` or `background: none`) while still resetting all other background fields to their initial values.
 - Background initial position now matches the spec default (0% 0% instead of center).
+- Text decoration now matches CSS Text Decoration: line/style/color longhands are parsed, the shorthand resets unspecified parts, currentColor is honored, and painter draws solid/double/dotted/dashed/wavy lines with per-line positions.
 - Stacking-context display list path no longer double-emits descendants: stacking-context roots paint shallowly, child layers inherit the context origin for offsets, and stacking-tree construction keeps only direct children in layers while hoisting nested stacking contexts.
 - Replaced content paints inside the content box: canvas images/SVGs now respect padding/border space during painting, dynamic images convert to premultiplied RGBA instead of BGRA to avoid channel swapping, and a regression covers padding isolation for replaced elements.
 - Overflow clipping now applies in paint: stacking contexts generated for overflow hidden/scroll/auto clip descendants to the padding box with radius-aware masks and a hard pixel clip (prevents filter bleed); backgrounds/borders are left unclipped, and partial-axis overflow (x hidden / y visible) keeps visible axis unmasked. Regression updated accordingly.

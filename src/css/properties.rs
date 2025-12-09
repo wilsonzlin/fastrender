@@ -285,17 +285,9 @@ fn parse_angle(token: &str) -> Option<f32> {
             .ok()
             .map(|r| r.to_degrees())
     } else if token.ends_with("turn") {
-        token[..token.len() - 4]
-            .trim()
-            .parse::<f32>()
-            .ok()
-            .map(|t| t * 360.0)
+        token[..token.len() - 4].trim().parse::<f32>().ok().map(|t| t * 360.0)
     } else if token.ends_with("grad") {
-        token[..token.len() - 4]
-            .trim()
-            .parse::<f32>()
-            .ok()
-            .map(|g| g * 0.9)
+        token[..token.len() - 4].trim().parse::<f32>().ok().map(|g| g * 0.9)
     } else {
         None
     }
@@ -312,7 +304,12 @@ fn parse_color_stop(token: &str) -> Option<crate::css::types::ColorStop> {
     let position = position_part.and_then(parse_stop_position);
 
     Some(crate::css::types::ColorStop {
-        color: Rgba::new((color.r * 255.0) as u8, (color.g * 255.0) as u8, (color.b * 255.0) as u8, color.a as f32),
+        color: Rgba::new(
+            (color.r * 255.0) as u8,
+            (color.g * 255.0) as u8,
+            (color.b * 255.0) as u8,
+            color.a as f32,
+        ),
         position,
     })
 }
@@ -348,7 +345,11 @@ fn split_color_and_position(token: &str) -> (&str, Option<&str>) {
 fn parse_stop_position(token: &str) -> Option<f32> {
     let t = token.trim();
     if t.ends_with('%') {
-        t[..t.len() - 1].trim().parse::<f32>().ok().map(|p| (p / 100.0).clamp(0.0, 1.0))
+        t[..t.len() - 1]
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|p| (p / 100.0).clamp(0.0, 1.0))
     } else if let Some(num) = t.parse::<f32>().ok() {
         if num > 1.0 {
             Some((num / 100.0).clamp(0.0, 1.0))

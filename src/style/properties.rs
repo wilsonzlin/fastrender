@@ -705,16 +705,48 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
-        "text-decoration" => {
-            if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.text_decoration = match kw.as_str() {
-                    "none" => TextDecoration::None,
-                    "underline" => TextDecoration::Underline,
-                    "overline" => TextDecoration::Overline,
-                    "line-through" => TextDecoration::LineThrough,
-                    _ => styles.text_decoration,
-                };
+        "text-decoration-line" => {
+            if let Some(lines) = parse_text_decoration_line(&resolved_value) {
+                styles.text_decoration.lines = lines;
             }
+        }
+        "text-decoration-style" => {
+            if let Some(style) = parse_text_decoration_style(&resolved_value) {
+                styles.text_decoration.style = style;
+            }
+        }
+        "text-decoration-color" => {
+            if let Some(color) = parse_text_decoration_color(&resolved_value) {
+                styles.text_decoration.color = color;
+            }
+        }
+        "text-decoration" => {
+            let tokens: Vec<PropertyValue> = match resolved_value {
+                PropertyValue::Multiple(ref values) => values.clone(),
+                _ => vec![resolved_value.clone()],
+            };
+
+            if tokens.is_empty() {
+                return;
+            }
+
+            // Reset to initial values per shorthand rules.
+            let mut decoration = TextDecoration::default();
+            for token in tokens {
+                if let Some(lines) = parse_text_decoration_line(&token) {
+                    decoration.lines = lines;
+                    continue;
+                }
+                if let Some(style) = parse_text_decoration_style(&token) {
+                    decoration.style = style;
+                    continue;
+                }
+                if let Some(color) = parse_text_decoration_color(&token) {
+                    decoration.color = color;
+                }
+            }
+
+            styles.text_decoration = decoration;
         }
         "text-transform" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
@@ -1217,15 +1249,11 @@ fn parse_background_size(value: &PropertyValue) -> Option<BackgroundSize> {
                 values.iter().filter_map(parse_background_size_component).collect();
             match components.len() {
                 0 => None,
-                1 => Some(BackgroundSize::Explicit(
-                    components[0],
-                    BackgroundSizeComponent::Auto,
-                )),
+                1 => Some(BackgroundSize::Explicit(components[0], BackgroundSizeComponent::Auto)),
                 _ => Some(BackgroundSize::Explicit(components[0], components[1])),
             }
         }
-        _ => parse_background_size_component(value)
-            .map(|c| BackgroundSize::Explicit(c, BackgroundSizeComponent::Auto)),
+        _ => parse_background_size_component(value).map(|c| BackgroundSize::Explicit(c, BackgroundSizeComponent::Auto)),
     }
 }
 
@@ -1832,6 +1860,62 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
     })
 }
 
+fn parse_text_decoration_line(value: &PropertyValue) -> Option<TextDecorationLine> {
+    let components: Vec<&PropertyValue> = match value {
+        PropertyValue::Multiple(values) if !values.is_empty() => values.iter().collect(),
+        _ => vec![value],
+    };
+
+    let mut lines = TextDecorationLine::NONE;
+    let mut saw_none = false;
+
+    for comp in components {
+        if let PropertyValue::Keyword(kw) = comp {
+            match kw.as_str() {
+                "none" => {
+                    saw_none = true;
+                    lines = TextDecorationLine::NONE;
+                    break;
+                }
+                "underline" => lines.insert(TextDecorationLine::UNDERLINE),
+                "overline" => lines.insert(TextDecorationLine::OVERLINE),
+                "line-through" => lines.insert(TextDecorationLine::LINE_THROUGH),
+                _ => {}
+            }
+        }
+    }
+
+    if saw_none {
+        Some(TextDecorationLine::NONE)
+    } else if lines.is_empty() {
+        None
+    } else {
+        Some(lines)
+    }
+}
+
+fn parse_text_decoration_style(value: &PropertyValue) -> Option<TextDecorationStyle> {
+    match value {
+        PropertyValue::Keyword(kw) => match kw.as_str() {
+            "solid" => Some(TextDecorationStyle::Solid),
+            "double" => Some(TextDecorationStyle::Double),
+            "dotted" => Some(TextDecorationStyle::Dotted),
+            "dashed" => Some(TextDecorationStyle::Dashed),
+            "wavy" => Some(TextDecorationStyle::Wavy),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn parse_text_decoration_color(value: &PropertyValue) -> Option<Option<Rgba>> {
+    match value {
+        PropertyValue::Color(c) => Some(Some(*c)),
+        PropertyValue::Keyword(kw) if kw == "currentcolor" => Some(None),
+        _ => None,
+    }
+}
+
 pub fn extract_margin_values(value: &PropertyValue) -> Option<Vec<Option<Length>>> {
     match value {
         PropertyValue::Length(len) => Some(vec![Some(*len)]),
@@ -1954,7 +2038,9 @@ pub fn parse_border_style(kw: &str) -> BorderStyle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::types::{BackgroundRepeatKeyword, PositionComponent, PositionKeyword};
+    use crate::style::types::{
+        BackgroundRepeatKeyword, PositionComponent, PositionKeyword, TextDecorationLine, TextDecorationStyle,
+    };
 
     #[test]
     fn parses_object_fit_keyword() {
@@ -2067,6 +2153,78 @@ mod tests {
     }
 
     #[test]
+    fn parses_text_decoration_longhands() {
+        let mut style = ComputedStyle::default();
+
+        let decl = Declaration {
+            property: "text-decoration-line".to_string(),
+            value: PropertyValue::Multiple(vec![
+                PropertyValue::Keyword("underline".to_string()),
+                PropertyValue::Keyword("overline".to_string()),
+            ]),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(style.text_decoration.lines.contains(TextDecorationLine::UNDERLINE));
+        assert!(style.text_decoration.lines.contains(TextDecorationLine::OVERLINE));
+
+        let decl = Declaration {
+            property: "text-decoration-style".to_string(),
+            value: PropertyValue::Keyword("dashed".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.text_decoration.style, TextDecorationStyle::Dashed);
+
+        let decl = Declaration {
+            property: "text-decoration-color".to_string(),
+            value: PropertyValue::Color(Rgba::BLUE),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.text_decoration.color, Some(Rgba::BLUE));
+    }
+
+    #[test]
+    fn parses_text_decoration_shorthand_and_resets() {
+        let mut style = ComputedStyle::default();
+        style.text_decoration.lines = TextDecorationLine::LINE_THROUGH;
+        style.text_decoration.style = TextDecorationStyle::Double;
+        style.text_decoration.color = Some(Rgba::BLUE);
+
+        let decl = Declaration {
+            property: "text-decoration".to_string(),
+            value: PropertyValue::Multiple(vec![
+                PropertyValue::Keyword("underline".to_string()),
+                PropertyValue::Keyword("dotted".to_string()),
+                PropertyValue::Color(Rgba::RED),
+            ]),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+
+        assert!(style.text_decoration.lines.contains(TextDecorationLine::UNDERLINE));
+        assert!(!style.text_decoration.lines.contains(TextDecorationLine::LINE_THROUGH));
+        assert_eq!(style.text_decoration.style, TextDecorationStyle::Dotted);
+        assert_eq!(style.text_decoration.color, Some(Rgba::RED));
+
+        // currentcolor leaves color unset, shorthand resets missing pieces back to initial
+        let decl = Declaration {
+            property: "text-decoration".to_string(),
+            value: PropertyValue::Multiple(vec![
+                PropertyValue::Keyword("line-through".to_string()),
+                PropertyValue::Keyword("wavy".to_string()),
+                PropertyValue::Keyword("currentcolor".to_string()),
+            ]),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(style.text_decoration.lines.contains(TextDecorationLine::LINE_THROUGH));
+        assert_eq!(style.text_decoration.style, TextDecorationStyle::Wavy);
+        assert_eq!(style.text_decoration.color, None);
+    }
+
+    #[test]
     fn background_shorthand_resets_unspecified_fields() {
         let mut style = ComputedStyle::default();
         style.background_repeat = BackgroundRepeat::repeat_x();
@@ -2081,8 +2239,10 @@ mod tests {
                 offset: Length::px(5.0),
             },
         };
-        style.background_size =
-            BackgroundSize::Explicit(BackgroundSizeComponent::Length(Length::px(10.0)), BackgroundSizeComponent::Auto);
+        style.background_size = BackgroundSize::Explicit(
+            BackgroundSizeComponent::Length(Length::px(10.0)),
+            BackgroundSizeComponent::Auto,
+        );
         style.background_origin = BackgroundBox::ContentBox;
         style.background_clip = BackgroundBox::ContentBox;
 
@@ -2126,8 +2286,10 @@ mod tests {
         style.background_repeat = BackgroundRepeat::repeat_x();
         style.background_origin = BackgroundBox::ContentBox;
         style.background_clip = BackgroundBox::ContentBox;
-        style.background_size =
-            BackgroundSize::Explicit(BackgroundSizeComponent::Length(Length::px(12.0)), BackgroundSizeComponent::Auto);
+        style.background_size = BackgroundSize::Explicit(
+            BackgroundSizeComponent::Length(Length::px(12.0)),
+            BackgroundSizeComponent::Auto,
+        );
 
         let decl = Declaration {
             property: "background".to_string(),
@@ -2218,7 +2380,10 @@ mod tests {
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert_eq!(
             style.background_size,
-            BackgroundSize::Explicit(BackgroundSizeComponent::Length(Length::px(25.0)), BackgroundSizeComponent::Auto)
+            BackgroundSize::Explicit(
+                BackgroundSizeComponent::Length(Length::px(25.0)),
+                BackgroundSizeComponent::Auto
+            )
         );
 
         let decl = Declaration {
@@ -2244,7 +2409,10 @@ mod tests {
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
-        assert_eq!(style.background_size, BackgroundSize::Keyword(BackgroundSizeKeyword::Contain));
+        assert_eq!(
+            style.background_size,
+            BackgroundSize::Keyword(BackgroundSizeKeyword::Contain)
+        );
     }
 
     #[test]
@@ -2373,7 +2541,10 @@ fn parse_background_shorthand(tokens: &[PropertyValue]) -> Option<BackgroundShor
     // Split position/size by `/` if present
     let mut slash_idx = None;
     let mut size_end = tokens.len();
-    if let Some(idx) = tokens.iter().position(|t| matches!(t, PropertyValue::Keyword(k) if k == "/")) {
+    if let Some(idx) = tokens
+        .iter()
+        .position(|t| matches!(t, PropertyValue::Keyword(k) if k == "/"))
+    {
         slash_idx = Some(idx);
         let mut size_tokens: Vec<PropertyValue> = Vec::new();
         let mut cursor = idx + 1;
