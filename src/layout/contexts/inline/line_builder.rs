@@ -1464,103 +1464,103 @@ fn reorder_paragraph(
         return;
     }
 
-        let mut box_counter = 0usize;
-        let mut line_leaves: Vec<Vec<BidiLeaf>> = Vec::with_capacity(lines.len());
-        for line in lines.iter() {
-            let mut leaves = Vec::new();
-            for positioned in &line.items {
-                flatten_positioned_item(positioned, &mut Vec::new(), &mut box_counter, &mut leaves);
-            }
-            line_leaves.push(leaves);
+    let mut box_counter = 0usize;
+    let mut line_leaves: Vec<Vec<BidiLeaf>> = Vec::with_capacity(lines.len());
+    for line in lines.iter() {
+        let mut leaves = Vec::new();
+        for positioned in &line.items {
+            flatten_positioned_item(positioned, &mut Vec::new(), &mut box_counter, &mut leaves);
         }
+        line_leaves.push(leaves);
+    }
 
-        let mut logical_text = String::new();
-        let mut paragraph_leaves: Vec<ParagraphLeaf> = Vec::new();
-        let mut line_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(lines.len());
-        let mut active_stack: Vec<BoxContext> = Vec::new();
-        let mut global_idx = 0usize;
-        let mut control_stack: Vec<char> = Vec::new();
+    let mut logical_text = String::new();
+    let mut paragraph_leaves: Vec<ParagraphLeaf> = Vec::new();
+    let mut line_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(lines.len());
+    let mut active_stack: Vec<BoxContext> = Vec::new();
+    let mut global_idx = 0usize;
+    let mut control_stack: Vec<char> = Vec::new();
 
-        for (line_idx, leaves) in line_leaves.iter().enumerate() {
-            let line_start = logical_text.len();
-            for leaf in leaves {
-                let shared = active_stack
-                    .iter()
-                    .zip(leaf.box_stack.iter())
-                    .take_while(|(a, b)| a.id == b.id)
-                    .count();
+    for (line_idx, leaves) in line_leaves.iter().enumerate() {
+        let line_start = logical_text.len();
+        for leaf in leaves {
+            let shared = active_stack
+                .iter()
+                .zip(leaf.box_stack.iter())
+                .take_while(|(a, b)| a.id == b.id)
+                .count();
 
-                for ctx in active_stack
-                    .iter()
-                    .rev()
-                    .take(active_stack.len().saturating_sub(shared))
-                {
-                    for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
-                        control_stack.pop();
-                        logical_text.push(ch);
-                    }
-                }
-                active_stack.truncate(shared);
-
-                for ctx in leaf.box_stack.iter().skip(shared) {
-                    let (opens, closes) = bidi_controls(ctx.unicode_bidi, ctx.direction);
-                    for ch in opens {
-                        control_stack.push(*closes.last().unwrap_or(&'\u{202c}'));
-                        logical_text.push(ch);
-                    }
-                    active_stack.push(ctx.clone());
-                }
-
-                let (leaf_opens, leaf_closes) = bidi_controls(leaf.item.unicode_bidi(), leaf.item.direction());
-
-                for ch in &leaf_opens {
-                    control_stack.push(*leaf_closes.last().unwrap_or(&'\u{202c}'));
-                    logical_text.push(*ch);
-                }
-
-                let content_start = logical_text.len();
-                match &leaf.item {
-                    InlineItem::Text(t) => logical_text.push_str(&t.text),
-                    InlineItem::Tab(_) => logical_text.push('\t'),
-                    _ => logical_text.push('\u{FFFC}'),
-                }
-                let content_end = logical_text.len();
-
-                for ch in leaf_closes {
+            for ctx in active_stack
+                .iter()
+                .rev()
+                .take(active_stack.len().saturating_sub(shared))
+            {
+                for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
                     control_stack.pop();
                     logical_text.push(ch);
                 }
-
-                if content_start < content_end {
-                    paragraph_leaves.push(ParagraphLeaf {
-                        id: global_idx,
-                        line_index: line_idx,
-                        logical_range: content_start..content_end,
-                        leaf: leaf.clone(),
-                    });
-                    global_idx += 1;
-                }
             }
-            line_ranges.push(line_start..logical_text.len());
-        }
+            active_stack.truncate(shared);
 
-        for ctx in active_stack.iter().rev() {
-            for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
+            for ctx in leaf.box_stack.iter().skip(shared) {
+                let (opens, closes) = bidi_controls(ctx.unicode_bidi, ctx.direction);
+                for ch in opens {
+                    control_stack.push(*closes.last().unwrap_or(&'\u{202c}'));
+                    logical_text.push(ch);
+                }
+                active_stack.push(ctx.clone());
+            }
+
+            let (leaf_opens, leaf_closes) = bidi_controls(leaf.item.unicode_bidi(), leaf.item.direction());
+
+            for ch in &leaf_opens {
+                control_stack.push(*leaf_closes.last().unwrap_or(&'\u{202c}'));
+                logical_text.push(*ch);
+            }
+
+            let content_start = logical_text.len();
+            match &leaf.item {
+                InlineItem::Text(t) => logical_text.push_str(&t.text),
+                InlineItem::Tab(_) => logical_text.push('\t'),
+                _ => logical_text.push('\u{FFFC}'),
+            }
+            let content_end = logical_text.len();
+
+            for ch in leaf_closes {
                 control_stack.pop();
                 logical_text.push(ch);
             }
-        }
 
-        // Close any remaining explicit controls
-        while let Some(close) = control_stack.pop() {
-            logical_text.push(close);
+            if content_start < content_end {
+                paragraph_leaves.push(ParagraphLeaf {
+                    id: global_idx,
+                    line_index: line_idx,
+                    logical_range: content_start..content_end,
+                    leaf: leaf.clone(),
+                });
+                global_idx += 1;
+            }
         }
+        line_ranges.push(line_start..logical_text.len());
+    }
 
-        if logical_text.is_empty() {
-            return;
+    for ctx in active_stack.iter().rev() {
+        for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
+            control_stack.pop();
+            logical_text.push(ch);
         }
+    }
 
-        let bidi = BidiInfo::new(&logical_text, base_level);
+    // Close any remaining explicit controls
+    while let Some(close) = control_stack.pop() {
+        logical_text.push(close);
+    }
+
+    if logical_text.is_empty() {
+        return;
+    }
+
+    let bidi = BidiInfo::new(&logical_text, base_level);
 
     for (line_idx, line_range) in line_ranges.iter().enumerate() {
         if line_range.is_empty() {
@@ -2412,7 +2412,10 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(texts, vec!["L ".to_string(), "א".to_string(), "מ".to_string(), " R".to_string()]);
+        assert_eq!(
+            texts,
+            vec!["L ".to_string(), "א".to_string(), "מ".to_string(), " R".to_string()]
+        );
     }
 
     #[test]
