@@ -3398,6 +3398,27 @@ mod tests {
     }
 
     #[test]
+    fn background_position_alignment_and_offsets_resolve_against_available_space() {
+        let mut style = ComputedStyle::default();
+        style.background_position = BackgroundPosition::Position {
+            x: crate::style::types::BackgroundPositionComponent {
+                alignment: 1.0,
+                offset: Length::px(-10.0),
+            },
+            y: crate::style::types::BackgroundPositionComponent {
+                alignment: 1.0,
+                offset: Length::percent(-20.0),
+            },
+        };
+
+        let (ox, oy) = resolve_background_offset(style.background_position, 100.0, 60.0, 20.0, 10.0, style.font_size);
+        // available_x = 80; 1 * 80 - 10 = 70
+        // available_y = 50; 1 * 50 - 20%*50 = 40
+        assert!((ox - 70.0).abs() < 0.01);
+        assert!((oy - 40.0).abs() < 0.01);
+    }
+
+    #[test]
     fn background_size_single_dimension_auto_uses_intrinsic_ratio() {
         let mut style = ComputedStyle::default();
         style.background_size = BackgroundSize::Explicit(

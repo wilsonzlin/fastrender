@@ -1970,6 +1970,27 @@ mod tests {
     }
 
     #[test]
+    fn parses_background_position_end_offsets() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "background-position".to_string(),
+            value: PropertyValue::Multiple(vec![
+                PropertyValue::Keyword("right".to_string()),
+                PropertyValue::Percentage(10.0),
+                PropertyValue::Keyword("bottom".to_string()),
+                PropertyValue::Length(Length::px(5.0)),
+            ]),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        let BackgroundPosition::Position { x, y } = style.background_position;
+        assert!((x.alignment - 1.0).abs() < 0.01);
+        assert!((y.alignment - 1.0).abs() < 0.01);
+        assert!((x.offset.value + 10.0).abs() < 0.01 && x.offset.unit == LengthUnit::Percent);
+        assert!((y.offset.value + 5.0).abs() < 0.01 && y.offset.unit == LengthUnit::Px);
+    }
+
+    #[test]
     fn parses_background_position_with_offsets_and_axis_defaults() {
         let mut style = ComputedStyle::default();
         let decl = Declaration {
