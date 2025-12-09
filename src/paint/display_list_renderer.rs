@@ -184,9 +184,8 @@ impl DisplayListRenderer {
             DisplayItem::Text(item) => self.render_text(item)?,
             DisplayItem::Image(item) => self.render_image(item)?,
             DisplayItem::BoxShadow(item) => self.render_box_shadow(item),
-            DisplayItem::PushStackingContext(_) | DisplayItem::PopStackingContext => {
-                // TODO: Implement full support for these items (stacking context layers)
-            }
+            DisplayItem::PushStackingContext(_) => self.canvas.save(),
+            DisplayItem::PopStackingContext => self.canvas.restore(),
             DisplayItem::PushClip(clip) => self.push_clip(clip),
             DisplayItem::PopClip => self.pop_clip(),
             DisplayItem::PushOpacity(OpacityItem { opacity }) => {
@@ -451,5 +450,44 @@ mod tests {
         let pixmap = renderer.render(&list).unwrap();
         // Center of the box should have darkened pixels due to shadow.
         assert!(pixel(&pixmap, 3, 3).3 > 200);
+    }
+
+    #[test]
+    fn stacking_context_restores_clip() {
+        let renderer = DisplayListRenderer::new(6, 6, Rgba::WHITE, FontContext::new()).unwrap();
+        let mut list = DisplayList::new();
+        // Outer clip to a 4x4 square.
+        list.push(DisplayItem::PushClip(ClipItem {
+            rect: Rect::from_xywh(1.0, 1.0, 4.0, 4.0),
+            radii: None,
+        }));
+        // Start stacking context and narrow the clip further.
+        list.push(DisplayItem::PushStackingContext(
+            crate::paint::display_list::StackingContextItem {
+                z_index: 0,
+                creates_stacking_context: true,
+                bounds: Rect::from_xywh(0.0, 0.0, 6.0, 6.0),
+            },
+        ));
+        list.push(DisplayItem::PushClip(ClipItem {
+            rect: Rect::from_xywh(2.0, 2.0, 2.0, 2.0),
+            radii: None,
+        }));
+        list.push(DisplayItem::FillRect(FillRectItem {
+            rect: Rect::from_xywh(0.0, 0.0, 6.0, 6.0),
+            color: Rgba::rgb(255, 0, 0),
+        }));
+        list.push(DisplayItem::PopClip);
+        list.push(DisplayItem::PopStackingContext);
+        // After popping stacking context, outer clip should remain.
+        list.push(DisplayItem::FillRect(FillRectItem {
+            rect: Rect::from_xywh(0.0, 0.0, 6.0, 6.0),
+            color: Rgba::rgb(0, 0, 255),
+        }));
+        list.push(DisplayItem::PopClip);
+
+        let pixmap = renderer.render(&list).unwrap();
+        // Pixel inside outer clip but outside inner clip should be blue (second fill) not red.
+        assert_eq!(pixel(&pixmap, 1, 1), (0, 0, 255, 255));
     }
 }
