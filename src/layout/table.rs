@@ -895,12 +895,20 @@ impl TableFormattingContext {
         table_box: &BoxNode,
         structure: &TableStructure,
         constraints: &mut [ColumnConstraints],
+        mode: DistributionMode,
     ) {
         for cell in &structure.cells {
+            if matches!(mode, DistributionMode::Fixed) && cell.row > 0 {
+                // Fixed layout only inspects the first row.
+                continue;
+            }
             let Some(cell_box) = self.get_cell_box(table_box, cell) else {
                 continue;
             };
-            let (min_w, max_w) = self.measure_cell_intrinsic_widths(cell_box);
+            let (min_w, max_w) = match mode {
+                DistributionMode::Fixed => (0.0, 0.0), // content is ignored in fixed layout
+                _ => self.measure_cell_intrinsic_widths(cell_box),
+            };
 
             if cell.colspan == 1 {
                 if let Some(width) = &cell_box.style.width {
@@ -1008,7 +1016,12 @@ impl FormattingContext for TableFormattingContext {
         let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
             .map(|_| ColumnConstraints::new(0.0, 0.0))
             .collect();
-        self.populate_column_constraints(box_node, &structure, &mut column_constraints);
+        let mode = if structure.is_fixed_layout {
+            DistributionMode::Fixed
+        } else {
+            DistributionMode::Auto
+        };
+        self.populate_column_constraints(box_node, &structure, &mut column_constraints, mode);
 
         let spacing = structure.total_horizontal_spacing();
         let available_content = match constraints.available_width {
@@ -1019,11 +1032,6 @@ impl FormattingContext for TableFormattingContext {
             }
         };
 
-        let mode = if structure.is_fixed_layout {
-            DistributionMode::Fixed
-        } else {
-            DistributionMode::Auto
-        };
         let distributor = ColumnDistributor::new(mode).with_min_column_width(0.0);
         let distribution = distributor.distribute(&column_constraints, available_content);
         let mut col_widths = if distribution.widths.len() == structure.column_count {
@@ -1186,7 +1194,12 @@ impl FormattingContext for TableFormattingContext {
         let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
             .map(|_| ColumnConstraints::new(0.0, 0.0))
             .collect();
-        self.populate_column_constraints(box_node, &structure, &mut column_constraints);
+        self.populate_column_constraints(
+            box_node,
+            &structure,
+            &mut column_constraints,
+            DistributionMode::Auto,
+        );
 
         let spacing = structure.total_horizontal_spacing();
         let width = match mode {
@@ -1283,6 +1296,55 @@ mod tests {
 
         let structure = TableStructure::from_box_tree(&table);
         assert!(structure.is_fixed_layout);
+    }
+
+    #[test]
+    fn test_fixed_layout_uses_first_row_only() {
+        // First row specifies widths; second row should not affect fixed layout distribution.
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.table_layout = TableLayout::Fixed;
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell1_style = ComputedStyle::default();
+        cell1_style.display = Display::TableCell;
+        cell1_style.width = Some(Length::percent(50.0));
+        let cell1 = BoxNode::new_block(Arc::new(cell1_style), FormattingContextType::Block, vec![]);
+
+        let cell2_style = ComputedStyle::default();
+        let cell2 = BoxNode::new_block(Arc::new(cell2_style), FormattingContextType::Block, vec![]);
+
+        let first_row = BoxNode::new_block(
+            Arc::new(row_style.clone()),
+            FormattingContextType::Block,
+            vec![cell1, cell2],
+        );
+
+        // Second row with explicit widths should be ignored in fixed layout sizing.
+        let mut second_cell_style = ComputedStyle::default();
+        second_cell_style.display = Display::TableCell;
+        second_cell_style.width = Some(Length::px(400.0));
+        let second_cell = BoxNode::new_block(Arc::new(second_cell_style), FormattingContextType::Block, vec![]);
+        let second_row =
+            BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![second_cell.clone()]);
+
+        let table = BoxNode::new_block(
+            Arc::new(table_style),
+            FormattingContextType::Table,
+            vec![first_row, second_row],
+        );
+
+        let tfc = TableFormattingContext::new();
+        let constraints = LayoutConstraints::definite_width(200.0);
+        let fragment = tfc.layout(&table, &constraints).expect("table layout");
+
+        // Expect first column to take ~50% of available space regardless of second row width.
+        let widths: Vec<f32> = fragment.children.iter().map(|c| c.bounds.width()).collect();
+        assert_eq!(widths.len(), 2);
+        assert!((widths[0] - 100.0).abs() < 0.1);
+        assert!((widths[1] - 100.0).abs() < 0.1);
     }
 
     #[test]
