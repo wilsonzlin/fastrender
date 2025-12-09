@@ -293,6 +293,115 @@ impl TextItem {
         Some((before_item, after_item))
     }
 
+    /// Applies letter- and word-spacing to shaped runs.
+    ///
+    /// Spacing is added after each cluster (except the final cluster).
+    /// Word spacing stacks on top of letter spacing for space-like clusters.
+    pub(crate) fn apply_spacing_to_runs(
+        runs: &mut [ShapedRun],
+        text: &str,
+        letter_spacing: f32,
+        word_spacing: f32,
+    ) {
+        if runs.is_empty() || text.is_empty() {
+            return;
+        }
+        if letter_spacing == 0.0 && word_spacing == 0.0 {
+            return;
+        }
+
+        #[derive(Debug)]
+        struct ClusterRef {
+            run_idx: usize,
+            glyph_end: usize,
+            offset: usize,
+            is_space: bool,
+        }
+
+        let mut clusters: Vec<ClusterRef> = Vec::new();
+
+        for (run_idx, run) in runs.iter().enumerate() {
+            if run.glyphs.is_empty() {
+                continue;
+            }
+
+            let mut idx = 0;
+            while idx < run.glyphs.len() {
+                let cluster_value = run.glyphs[idx].cluster;
+                while idx < run.glyphs.len() && run.glyphs[idx].cluster == cluster_value {
+                    idx += 1;
+                }
+                let glyph_end = idx;
+
+                let offset = run.start.saturating_add(cluster_value as usize);
+                let ch = text.get(offset..).and_then(|s| s.chars().next());
+                let is_space = matches!(ch, Some(' ') | Some('\u{00A0}') | Some('\t'));
+
+                clusters.push(ClusterRef {
+                    run_idx,
+                    glyph_end,
+                    offset,
+                    is_space,
+                });
+            }
+        }
+
+        clusters.sort_by_key(|c| c.offset);
+
+        if clusters.is_empty() {
+            return;
+        }
+
+        let mut run_cluster_extras: Vec<Vec<(usize, f32)>> = vec![Vec::new(); runs.len()];
+
+        for (i, cluster) in clusters.iter().enumerate() {
+            if i == clusters.len() - 1 {
+                break; // No spacing after the last cluster
+            }
+
+            let mut extra = letter_spacing;
+            if cluster.is_space {
+                extra += word_spacing;
+            }
+
+            if extra == 0.0 {
+                continue;
+            }
+
+            let last_glyph_idx = cluster.glyph_end.saturating_sub(1);
+            run_cluster_extras[cluster.run_idx].push((last_glyph_idx, extra));
+        }
+
+        for (run_idx, run) in runs.iter_mut().enumerate() {
+            if run.glyphs.is_empty() {
+                continue;
+            }
+
+            let mut extra_by_glyph = vec![0.0; run.glyphs.len()];
+            for (glyph_idx, extra) in run_cluster_extras
+                .get(run_idx)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[])
+            {
+                if *glyph_idx < extra_by_glyph.len() {
+                    extra_by_glyph[*glyph_idx] += *extra;
+                }
+            }
+
+            let mut cumulative_shift = 0.0;
+            let mut new_advance = 0.0;
+
+            for (idx, glyph) in run.glyphs.iter_mut().enumerate() {
+                glyph.x_offset += cumulative_shift;
+                glyph.x_advance += extra_by_glyph[idx];
+                cumulative_shift += extra_by_glyph[idx];
+                new_advance += glyph.x_advance;
+            }
+
+            run.advance = new_advance;
+        }
+    }
+
     /// Gets the horizontal advance at a given byte offset
     pub fn advance_at_offset(&self, byte_offset: usize) -> f32 {
         if byte_offset == 0 {
@@ -1344,5 +1453,52 @@ mod tests {
         let line = Line::default();
         assert!(line.is_empty());
         assert_eq!(line.width, 0.0);
+    }
+
+    #[test]
+    fn letter_spacing_increases_advance() {
+        let mut style = ComputedStyle::default();
+        let text = "abc";
+        let font_ctx = FontContext::new();
+        let pipeline = ShapingPipeline::new();
+
+        let base_runs = pipeline.shape(text, &style, &font_ctx).expect("shape");
+        let base_width: f32 = base_runs.iter().map(|r| r.advance).sum();
+
+        style.letter_spacing = 2.0;
+        let mut spaced_runs = pipeline.shape(text, &style, &font_ctx).expect("shape");
+        TextItem::apply_spacing_to_runs(&mut spaced_runs, text, style.letter_spacing, style.word_spacing);
+        let spaced_width: f32 = spaced_runs.iter().map(|r| r.advance).sum();
+
+        let expected_extra = style.letter_spacing * (text.chars().count().saturating_sub(1) as f32);
+        assert!((spaced_width - base_width - expected_extra).abs() < 0.01);
+    }
+
+    #[test]
+    fn word_spacing_applies_to_spaces() {
+        let mut style = ComputedStyle::default();
+        style.letter_spacing = 1.0;
+        style.word_spacing = 3.0;
+        let text = "a b";
+        let font_ctx = FontContext::new();
+        let pipeline = ShapingPipeline::new();
+
+        let base_runs = pipeline
+            .shape(text, &ComputedStyle::default(), &font_ctx)
+            .expect("shape");
+        let base_width: f32 = base_runs.iter().map(|r| r.advance).sum();
+
+        let mut spaced_runs = pipeline.shape(text, &style, &font_ctx).expect("shape");
+        TextItem::apply_spacing_to_runs(&mut spaced_runs, text, style.letter_spacing, style.word_spacing);
+        let spaced_width: f32 = spaced_runs.iter().map(|r| r.advance).sum();
+
+        let char_gaps = text.chars().count().saturating_sub(1) as f32;
+        let space_count = text
+            .chars()
+            .filter(|c| matches!(c, ' ' | '\u{00A0}' | '\t'))
+            .count() as f32;
+        let expected_extra = style.letter_spacing * char_gaps + style.word_spacing * space_count;
+
+        assert!((spaced_width - base_width - expected_extra).abs() < 0.01);
     }
 }

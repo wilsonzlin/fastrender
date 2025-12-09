@@ -252,7 +252,7 @@ impl InlineFormattingContext {
         let (hyphen_free, hyphen_breaks) =
             hyphenation_breaks(&normalized_text, style.hyphens, hyphenator.as_ref(), allow_soft_wrap);
 
-        let shaped_runs = match self.pipeline.shape(&hyphen_free, style, &self.font_context) {
+        let mut shaped_runs = match self.pipeline.shape(&hyphen_free, style, &self.font_context) {
             Ok(runs) => runs,
             Err(err) => {
                 if let Some(fallback_font) = self.font_context.get_sans_serif() {
@@ -276,6 +276,13 @@ impl InlineFormattingContext {
                 }
             }
         };
+
+        TextItem::apply_spacing_to_runs(
+            &mut shaped_runs,
+            &hyphen_free,
+            style.letter_spacing,
+            style.word_spacing,
+        );
 
         let metrics = TextItem::metrics_from_runs(&shaped_runs, line_height, style.font_size);
 
