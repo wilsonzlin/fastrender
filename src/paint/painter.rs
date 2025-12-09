@@ -41,9 +41,11 @@ use image::DynamicImage;
 use std::borrow::Cow;
 use std::sync::Arc;
 use tiny_skia::{
-    BlendMode as SkiaBlendMode, FilterQuality, IntSize, Paint, PathBuilder, Pattern, Pixmap, PixmapPaint,
-    PremultipliedColorU8, Rect as SkiaRect, SpreadMode, Stroke, Transform,
+    BlendMode as SkiaBlendMode, FilterQuality, IntSize, Mask, MaskType, Paint, PathBuilder, Pattern, Pixmap,
+    PixmapPaint, PremultipliedColorU8, Rect as SkiaRect, SpreadMode, Stroke, Transform,
 };
+use crate::paint::display_list::BorderRadii;
+use crate::paint::rasterize::fill_rounded_rect;
 
 /// Main painter that rasterizes a FragmentTree to pixels
 pub struct Painter {
@@ -108,6 +110,7 @@ enum DisplayCommand {
         isolated: bool,
         filters: Vec<ResolvedFilter>,
         backdrop_filters: Vec<ResolvedFilter>,
+        radii: BorderRadii,
         commands: Vec<DisplayCommand>,
     },
 }
@@ -404,6 +407,7 @@ impl Painter {
             || has_filters
             || has_backdrop
         {
+            let radii = resolve_border_radii(style_ref, abs_bounds);
             items.push(DisplayCommand::StackingContext {
                 opacity,
                 transform,
@@ -411,6 +415,7 @@ impl Painter {
                 isolated,
                 filters,
                 backdrop_filters,
+                radii,
                 commands: local_commands,
             });
         } else {
@@ -530,6 +535,7 @@ impl Painter {
                 isolated,
                 filters,
                 backdrop_filters,
+                radii,
                 commands,
             } => {
                 if opacity <= 0.0 {
@@ -589,8 +595,12 @@ impl Painter {
                     apply_filters(&mut layer_pixmap, &filters);
                 }
 
+                if !radii.is_zero() {
+                    apply_clip_mask(&mut layer_pixmap, radii);
+                }
+
                 if !backdrop_filters.is_empty() {
-                    apply_backdrop_filters(&mut self.pixmap, &bounds, &backdrop_filters);
+                    apply_backdrop_filters(&mut self.pixmap, &bounds, &backdrop_filters, radii);
                 }
 
                 let mut paint = PixmapPaint::default();
@@ -1450,6 +1460,7 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
                 isolated,
                 filters,
                 backdrop_filters,
+                radii,
                 commands,
             } => DisplayCommand::StackingContext {
                 opacity,
@@ -1458,6 +1469,7 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
                 isolated,
                 filters,
                 backdrop_filters,
+                radii,
                 commands: translate_commands(commands, dx, dy),
             },
         })
@@ -1561,7 +1573,7 @@ fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter]) {
     }
 }
 
-fn apply_backdrop_filters(pixmap: &mut Pixmap, bounds: &Rect, filters: &[ResolvedFilter]) {
+fn apply_backdrop_filters(pixmap: &mut Pixmap, bounds: &Rect, filters: &[ResolvedFilter], radii: BorderRadii) {
     if filters.is_empty() {
         return;
     }
@@ -1609,6 +1621,9 @@ fn apply_backdrop_filters(pixmap: &mut Pixmap, bounds: &Rect, filters: &[Resolve
     }
 
     apply_filters(&mut region, filters);
+    if !radii.is_zero() {
+        apply_clip_mask(&mut region, radii);
+    }
 
     let mut paint = PixmapPaint::default();
     paint.blend_mode = SkiaBlendMode::SourceOver;
@@ -1931,6 +1946,62 @@ fn map_blend_mode(mode: MixBlendMode) -> SkiaBlendMode {
         MixBlendMode::Color => SkiaBlendMode::Color,
         MixBlendMode::Luminosity => SkiaBlendMode::Luminosity,
     }
+}
+
+fn resolve_border_radii(style: Option<&ComputedStyle>, bounds: Rect) -> BorderRadii {
+    let Some(style) = style else { return BorderRadii::ZERO };
+    let w = bounds.width().max(0.0);
+    let h = bounds.height().max(0.0);
+    if w <= 0.0 || h <= 0.0 {
+        return BorderRadii::ZERO;
+    }
+
+    fn resolve_radius(len: &Length, reference: f32, font_size: f32) -> f32 {
+        match len.unit {
+            LengthUnit::Percent => len.resolve_against(reference),
+            LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size),
+            _ if len.unit.is_absolute() => len.to_px(),
+            // Approximate unknown relative units using font size as a base.
+            _ => len.value * font_size,
+        }
+    }
+
+    let radii = BorderRadii {
+        top_left: resolve_radius(&style.border_top_left_radius, w, style.font_size),
+        top_right: resolve_radius(&style.border_top_right_radius, w, style.font_size),
+        bottom_right: resolve_radius(&style.border_bottom_right_radius, w, style.font_size),
+        bottom_left: resolve_radius(&style.border_bottom_left_radius, w, style.font_size),
+    };
+    radii.clamped(w, h)
+}
+
+fn apply_clip_mask(pixmap: &mut Pixmap, radii: BorderRadii) {
+    if radii.is_zero() {
+        return;
+    }
+    let width = pixmap.width();
+    let height = pixmap.height();
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    let mut mask_pixmap = match Pixmap::new(width, height) {
+        Some(p) => p,
+        None => return,
+    };
+    // White mask inside rounded rect (alpha 255).
+    let _ = fill_rounded_rect(
+        &mut mask_pixmap,
+        0.0,
+        0.0,
+        width as f32,
+        height as f32,
+        &radii,
+        Rgba::new(255, 255, 255, 1.0),
+    );
+
+    let mask = Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha);
+    pixmap.apply_mask(&mask);
 }
 
 #[derive(Clone, Copy)]
