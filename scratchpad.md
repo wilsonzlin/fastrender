@@ -50,6 +50,7 @@
 - Hyphenation support added: `hyphens` parsed into computed styles, soft hyphens are removed while preserving their break points, and `hyphens:auto` uses a default English hyphenator to inject additional break opportunities so wrapped words can hyphenate per author intent (`src/style/{types,mod,properties}.rs`, `src/layout/contexts/inline/mod.rs`).
 - Language inheritance from `lang`/`xml:lang` is normalized to lower-case BCP47 strings and passed through to shaping; HarfBuzz buffers now receive the computed language and shaped runs record it for debugging (`src/style/{mod,cascade}.rs`, `src/text/pipeline.rs`).
 - Letter- and word-spacing now affect shaped runs and line metrics: spacing is applied after each cluster (word spacing layered on spaces), advances and glyph offsets updated, and unit tests cover the extra advance contributions (`src/layout/contexts/inline/{mod.rs,line_builder.rs}`).
+- Hyphenation breaks now insert a hyphen glyph at the break point (soft/auto hyphenation), preserving spacing and shaping with the same style; break metadata carries an `adds_hyphen` flag so line breaking can decide when to render the glyph (`src/text/line_break.rs`, `src/layout/contexts/inline/{mod.rs,line_builder.rs}`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).

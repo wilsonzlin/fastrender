@@ -100,6 +100,11 @@ pub struct BreakOpportunity {
 
     /// Type of break at this position.
     pub break_type: BreakType,
+
+    /// Whether a hyphen glyph should be inserted when breaking here.
+    ///
+    /// Used for soft hyphens and automatic hyphenation per CSS `hyphens`.
+    pub adds_hyphen: bool,
 }
 
 impl BreakOpportunity {
@@ -121,9 +126,16 @@ impl BreakOpportunity {
     /// ```
     #[inline]
     pub fn new(byte_offset: usize, break_type: BreakType) -> Self {
+        Self::with_hyphen(byte_offset, break_type, false)
+    }
+
+    /// Create a break opportunity and control hyphen insertion.
+    #[inline]
+    pub fn with_hyphen(byte_offset: usize, break_type: BreakType, adds_hyphen: bool) -> Self {
         Self {
             byte_offset,
             break_type,
+            adds_hyphen,
         }
     }
 
@@ -240,6 +252,7 @@ pub fn find_break_opportunities(text: &str) -> Vec<BreakOpportunity> {
         opportunities.push(BreakOpportunity {
             byte_offset,
             break_type,
+            adds_hyphen: false,
         });
     }
 

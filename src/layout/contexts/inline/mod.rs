@@ -414,7 +414,9 @@ impl InlineFormattingContext {
 
             if let Some(pos) = mandatory_pos {
                 if pos > 0 {
-                    if let Some((before, after)) = remaining.split_at(pos, &self.pipeline, &self.font_context) {
+                    if let Some((before, after)) =
+                        remaining.split_at(pos, false, &self.pipeline, &self.font_context)
+                    {
                         if before.advance > 0.0 {
                             builder.add_item(InlineItem::Text(before));
                         }
@@ -430,12 +432,12 @@ impl InlineFormattingContext {
                 if pos < remaining.text.len() {
                     let skip_bytes = remaining.text[pos..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
                     if pos + skip_bytes < remaining.text.len() {
-                        if let Some((_, after)) =
-                            remaining.split_at(pos + skip_bytes, &self.pipeline, &self.font_context)
-                        {
-                            remaining = after;
-                            continue;
-                        }
+                    if let Some((_, after)) =
+                        remaining.split_at(pos + skip_bytes, false, &self.pipeline, &self.font_context)
+                    {
+                        remaining = after;
+                        continue;
+                    }
                     }
                 }
                 break;
@@ -737,6 +739,8 @@ fn merge_breaks(
         }
         if let BreakType::Mandatory = a.break_type {
             *b = *a;
+        } else {
+            b.adds_hyphen |= a.adds_hyphen;
         }
         true
     });
@@ -820,7 +824,11 @@ fn hyphenation_breaks(
     let mut soft_breaks = Vec::new();
     for ch in text.chars() {
         if ch == '\u{00AD}' {
-            soft_breaks.push(BreakOpportunity::allowed(cleaned.len()));
+            soft_breaks.push(BreakOpportunity::with_hyphen(
+                cleaned.len(),
+                BreakType::Allowed,
+                true,
+            ));
             continue;
         }
         cleaned.push(ch);
@@ -851,7 +859,11 @@ fn hyphenation_breaks(
                         };
                         let word = &cleaned[start..end];
                         for rel in hyph.hyphenate(word) {
-                            auto_breaks.push(BreakOpportunity::allowed(start + rel));
+                            auto_breaks.push(BreakOpportunity::with_hyphen(
+                                start + rel,
+                                BreakType::Allowed,
+                                true,
+                            ));
                         }
                         idx = end_idx;
                     } else {
@@ -869,6 +881,7 @@ fn hyphenation_breaks(
         if a.byte_offset != b.byte_offset {
             return false;
         }
+        b.adds_hyphen |= a.adds_hyphen;
         true
     });
 

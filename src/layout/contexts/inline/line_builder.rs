@@ -236,6 +236,7 @@ impl TextItem {
     pub fn split_at(
         &self,
         byte_offset: usize,
+        insert_hyphen: bool,
         shaper: &ShapingPipeline,
         font_context: &FontContext,
     ) -> Option<(TextItem, TextItem)> {
@@ -248,11 +249,37 @@ impl TextItem {
         // Split the text
         let (before_text, after_text) = self.text.split_at(split_offset);
 
-        let (before_runs, after_runs) = self.split_runs_preserving_shaping(split_offset).or_else(|| {
+        let (mut before_runs, after_runs) = self.split_runs_preserving_shaping(split_offset).or_else(|| {
             let before_runs = shaper.shape(before_text, &self.style, font_context).ok()?;
             let after_runs = shaper.shape(after_text, &self.style, font_context).ok()?;
             Some((before_runs, after_runs))
         })?;
+
+        let mut before_text_owned: Option<String> = None;
+        if insert_hyphen {
+            let hyphen_text = "-";
+            let offset = before_text.len();
+            let mut hyphen_runs = shaper.shape(hyphen_text, &self.style, font_context).ok()?;
+            TextItem::apply_spacing_to_runs(
+                &mut hyphen_runs,
+                hyphen_text,
+                self.style.letter_spacing,
+                self.style.word_spacing,
+            );
+
+            for run in &mut hyphen_runs {
+                run.start += offset;
+                run.end += offset;
+                for glyph in &mut run.glyphs {
+                    glyph.cluster = glyph.cluster.saturating_add(offset as u32);
+                }
+            }
+
+            before_runs.extend(hyphen_runs);
+            let mut owned = before_text.to_string();
+            owned.push_str(hyphen_text);
+            before_text_owned = Some(owned);
+        }
 
         let line_height = self.metrics.line_height;
         let before_metrics = TextItem::metrics_from_runs(&before_runs, line_height, self.font_size);
@@ -268,13 +295,17 @@ impl TextItem {
             .break_opportunities
             .iter()
             .filter(|b| b.byte_offset > split_offset)
-            .map(|b| BreakOpportunity::new(b.byte_offset - split_offset, b.break_type))
+            .map(|b| BreakOpportunity::with_hyphen(
+                b.byte_offset - split_offset,
+                b.break_type,
+                b.adds_hyphen,
+            ))
             .collect();
 
         // Create new items using freshly shaped runs
         let before_item = TextItem::new(
             before_runs,
-            before_text.to_string(),
+            before_text_owned.unwrap_or_else(|| before_text.to_string()),
             before_metrics,
             before_breaks,
             self.style.clone(),
@@ -428,14 +459,14 @@ impl TextItem {
     }
 
     /// Finds the best break point that fits within max_width
-    pub fn find_break_point(&self, max_width: f32) -> Option<usize> {
+    pub fn find_break_point(&self, max_width: f32) -> Option<BreakOpportunity> {
         // Find the last break opportunity that fits
         let mut best_break = None;
 
         for brk in &self.break_opportunities {
             let width_at_break = self.advance_at_offset(brk.byte_offset);
             if width_at_break <= max_width {
-                best_break = Some(brk.byte_offset);
+                best_break = Some(*brk);
             } else {
                 break;
             }
@@ -554,11 +585,12 @@ impl TextItem {
                         if brk.break_type == BreakType::Mandatory {
                             last.break_type = BreakType::Mandatory;
                         }
+                        last.adds_hyphen |= brk.adds_hyphen;
                         continue;
                     }
                 }
 
-                aligned.push(BreakOpportunity::new(offset, brk.break_type));
+                aligned.push(BreakOpportunity::with_hyphen(offset, brk.break_type, brk.adds_hyphen));
             }
         }
 
@@ -977,9 +1009,11 @@ impl LineBuilder {
         if let InlineItem::Text(text_item) = item {
             let remaining_width = (self.available_width - self.current_x).max(0.0);
 
-            if let Some(break_point) = text_item.find_break_point(remaining_width) {
+            if let Some(break_opportunity) = text_item.find_break_point(remaining_width) {
                 // Split at break point
-                if let Some((before, after)) = text_item.split_at(break_point, &self.shaper, &self.font_context) {
+                if let Some((before, after)) =
+                    text_item.split_at(break_opportunity.byte_offset, break_opportunity.adds_hyphen, &self.shaper, &self.font_context)
+                {
                     // Place the part that fits
                     if before.advance > 0.0 {
                         self.place_item(InlineItem::Text(before));
@@ -1500,5 +1534,24 @@ mod tests {
         let expected_extra = style.letter_spacing * char_gaps + style.word_spacing * space_count;
 
         assert!((spaced_width - base_width - expected_extra).abs() < 0.01);
+    }
+
+    #[test]
+    fn split_at_can_insert_hyphen() {
+        let font_ctx = FontContext::new();
+        let pipeline = ShapingPipeline::new();
+        let style = Arc::new(ComputedStyle::default());
+
+        let runs = pipeline.shape("abc", &style, &font_ctx).expect("shape");
+        let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
+        let breaks = vec![BreakOpportunity::with_hyphen(1, BreakType::Allowed, true)];
+        let item = TextItem::new(runs, "abc".to_string(), metrics, breaks, style);
+
+        let (before, after) = item
+            .split_at(1, true, &pipeline, &font_ctx)
+            .expect("split succeeds");
+
+        assert_eq!(before.text, "a-");
+        assert_eq!(after.text, "bc");
     }
 }
