@@ -1817,6 +1817,32 @@ impl FormattingContext for TableFormattingContext {
         let max_height = resolve_opt_length_against(box_node.style.max_height.as_ref(), font_size, containing_height);
         let table_height = specified_height.map(|h| clamp_to_min_max(h, min_height, max_height));
 
+        // Table padding and borders (ignored in collapsed border model per CSS 2.1).
+        let resolve_abs = |l: &crate::style::values::Length| match l.unit {
+            LengthUnit::Percent => 0.0,
+            _ if l.unit.is_absolute() => l.to_px(),
+            _ => l.value,
+        };
+        let (pad_left, pad_right, pad_top, pad_bottom, border_left, border_right, border_top, border_bottom) =
+            if structure.border_collapse == BorderCollapse::Collapse {
+                (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            } else {
+                (
+                    resolve_abs(&box_node.style.padding_left),
+                    resolve_abs(&box_node.style.padding_right),
+                    resolve_abs(&box_node.style.padding_top),
+                    resolve_abs(&box_node.style.padding_bottom),
+                    resolve_abs(&box_node.style.border_left_width),
+                    resolve_abs(&box_node.style.border_right_width),
+                    resolve_abs(&box_node.style.border_top_width),
+                    resolve_abs(&box_node.style.border_bottom_width),
+                )
+            };
+        let padding_h = pad_left + pad_right;
+        let padding_v = pad_top + pad_bottom;
+        let border_h = border_left + border_right;
+        let border_v = border_top + border_bottom;
+
         let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
             .map(|_| ColumnConstraints::new(0.0, 0.0))
             .collect();
@@ -2116,11 +2142,16 @@ impl FormattingContext for TableFormattingContext {
             .map(|segments| segments.iter().map(|b| b.width).fold(0.0, f32::max))
             .collect();
 
+        let content_origin_y = if structure.border_collapse == BorderCollapse::Collapse {
+            0.0
+        } else {
+            border_top + pad_top
+        };
         let mut row_offsets = Vec::with_capacity(structure.row_count);
         let mut y = if structure.border_collapse == BorderCollapse::Collapse {
             0.0
         } else {
-            v_spacing
+            content_origin_y + v_spacing
         };
 
         for (row_idx, row) in row_metrics.iter().enumerate() {
@@ -2135,6 +2166,11 @@ impl FormattingContext for TableFormattingContext {
         }
 
         // Precompute column offsets for positioning
+        let content_origin_x = if structure.border_collapse == BorderCollapse::Collapse {
+            0.0
+        } else {
+            border_left + pad_left
+        };
         let mut col_offsets = Vec::with_capacity(structure.column_count);
         if structure.border_collapse == BorderCollapse::Collapse {
             let mut x = 0.0;
@@ -2144,7 +2180,7 @@ impl FormattingContext for TableFormattingContext {
                 x += col_widths[col_idx];
             }
         } else {
-            let mut x = h_spacing;
+            let mut x = content_origin_x + h_spacing;
             for col_idx in 0..structure.column_count {
                 col_offsets.push(x);
                 x += col_widths[col_idx] + h_spacing;
@@ -2155,14 +2191,15 @@ impl FormattingContext for TableFormattingContext {
         for laid in laid_out_cells {
             let cell = laid.cell;
             // Compute horizontal position
-            let mut x = h_spacing;
-            if structure.border_collapse == BorderCollapse::Collapse {
-                x = col_offsets.get(cell.col).copied().unwrap_or(0.0);
+            let x = if structure.border_collapse == BorderCollapse::Collapse {
+                col_offsets.get(cell.col).copied().unwrap_or(0.0)
             } else {
+                let mut x = content_origin_x + h_spacing;
                 for col_idx in 0..cell.col {
                     x += col_widths[col_idx] + h_spacing;
                 }
-            }
+                x
+            };
 
             let row_start = cell.row;
             let span_end = (cell.row + cell.rowspan).min(row_metrics.len());
@@ -2196,12 +2233,12 @@ impl FormattingContext for TableFormattingContext {
             fragments.push(laid.fragment.translate(Point::new(x, y)));
         }
 
-        let total_width: f32 = if structure.border_collapse == BorderCollapse::Collapse {
+        let content_width: f32 = if structure.border_collapse == BorderCollapse::Collapse {
             col_widths.iter().sum::<f32>() + vertical_line_max.iter().copied().sum::<f32>()
         } else {
             col_widths.iter().sum::<f32>() + spacing
         };
-        let total_height = if structure.row_count > 0 {
+        let content_height = if structure.row_count > 0 {
             if structure.border_collapse == BorderCollapse::Collapse {
                 let mut h = horizontal_line_max.get(0).copied().unwrap_or(0.0);
                 for (idx, row) in row_metrics.iter().enumerate() {
@@ -2215,14 +2252,20 @@ impl FormattingContext for TableFormattingContext {
                     .map(|start| start + row_metrics.last().map(|r| r.height).unwrap_or(0.0))
                     .unwrap_or(0.0)
                     + v_spacing
+                    - content_origin_y
             }
         } else {
             0.0
         };
-        let used_height = if let Some(specified) = table_height {
+        let total_width = if structure.border_collapse == BorderCollapse::Collapse {
+            content_width
+        } else {
+            content_width + padding_h + border_h
+        };
+        let content_used_height = if let Some(specified) = table_height {
             specified
         } else {
-            let mut h = total_height;
+            let mut h = content_height;
             if let Some(max_h) = max_height {
                 h = h.min(max_h);
             }
@@ -2231,7 +2274,12 @@ impl FormattingContext for TableFormattingContext {
             }
             h
         };
-        let table_bounds = Rect::from_xywh(0.0, 0.0, total_width.max(0.0), used_height);
+        let total_height = if structure.border_collapse == BorderCollapse::Collapse {
+            content_used_height
+        } else {
+            content_used_height + padding_v + border_v
+        };
+        let table_bounds = Rect::from_xywh(0.0, 0.0, total_width.max(0.0), total_height);
 
         if structure.border_collapse == BorderCollapse::Collapse {
             let make_border_style = |color: Rgba,
@@ -3191,6 +3239,90 @@ mod tests {
         // Percent rows totalling 120% of the table height should keep their targets even if the table overflows.
         assert!((second_y - first_y - 60.0).abs() < 0.5);
         assert!((fragment.bounds.height() - 100.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn table_padding_offsets_children_and_expands_bounds() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+        table_style.padding_left = Length::px(5.0);
+        table_style.padding_right = Length::px(5.0);
+        table_style.padding_top = Length::px(6.0);
+        table_style.padding_bottom = Length::px(4.0);
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.width = Some(Length::px(10.0));
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut child_style = ComputedStyle::default();
+        child_style.display = Display::Block;
+        child_style.height = Some(Length::px(8.0));
+
+        let cell = BoxNode::new_block(
+            Arc::new(cell_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![])],
+        );
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(&table, &LayoutConstraints::definite(200.0, 200.0))
+            .expect("table layout");
+
+        let child = &fragment.children[0];
+        assert!((child.bounds.x() - 5.0).abs() < 0.1);
+        assert!((child.bounds.y() - 6.0).abs() < 0.1);
+        assert!((fragment.bounds.width() - 20.0).abs() < 0.1); // 10 content + 5+5 padding
+        assert!((fragment.bounds.height() - 18.0).abs() < 0.1); // 8 content + 6+4 padding
+    }
+
+    #[test]
+    fn table_borders_expand_bounds() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+        table_style.border_left_width = Length::px(3.0);
+        table_style.border_right_width = Length::px(2.0);
+        table_style.border_top_width = Length::px(4.0);
+        table_style.border_bottom_width = Length::px(1.0);
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.width = Some(Length::px(10.0));
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut child_style = ComputedStyle::default();
+        child_style.display = Display::Block;
+        child_style.height = Some(Length::px(5.0));
+
+        let cell = BoxNode::new_block(
+            Arc::new(cell_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![])],
+        );
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(&table, &LayoutConstraints::definite(200.0, 200.0))
+            .expect("table layout");
+
+        let child = &fragment.children[0];
+        assert!((child.bounds.x() - 3.0).abs() < 0.1);
+        assert!((child.bounds.y() - 4.0).abs() < 0.1);
+        assert!((fragment.bounds.width() - 15.0).abs() < 0.1); // 10 content + 3 + 2 borders
+        assert!((fragment.bounds.height() - 10.0).abs() < 0.1); // 5 content + 4 + 1 borders
     }
 
     #[test]
