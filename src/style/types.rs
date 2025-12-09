@@ -556,14 +556,26 @@ pub enum BackgroundBox {
     ContentBox,
 }
 
+/// Background position component with alignment (percentage of available space)
+/// and an offset applied after alignment.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BackgroundPositionComponent {
+    /// Alignment fraction in the range [0,1] (e.g., 0 = start, 0.5 = center, 1 = end)
+    pub alignment: f32,
+    /// Offset applied after alignment; percentages resolve against the remaining space.
+    pub offset: Length,
+}
+
 /// Background image positioning
 ///
 /// CSS: `background-position`
 /// Reference: CSS Backgrounds and Borders Module Level 3
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BackgroundPosition {
-    Center,
-    Position(Length, Length),
+    Position {
+        x: BackgroundPositionComponent,
+        y: BackgroundPositionComponent,
+    },
 }
 
 /// Background attachment behavior

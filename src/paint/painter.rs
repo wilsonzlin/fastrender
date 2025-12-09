@@ -2784,20 +2784,16 @@ fn resolve_background_offset(
     tile_h: f32,
     font_size: f32,
 ) -> (f32, f32) {
-    let resolve_axis = |len: Length, area: f32, tile: f32| -> f32 {
-        match len.unit {
-            LengthUnit::Percent => (len.value / 100.0) * (area - tile),
-            LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size),
-            _ if len.unit.is_absolute() => len.to_px(),
-            _ => len.value,
-        }
+    let resolve_axis = |comp: crate::style::types::BackgroundPositionComponent, area: f32, tile: f32| -> f32 {
+        let available = area - tile;
+        let offset = resolve_length_for_paint(&comp.offset, font_size, available);
+        comp.alignment * available + offset
     };
 
     match pos {
-        BackgroundPosition::Center => ((area_w - tile_w) * 0.5, (area_h - tile_h) * 0.5),
-        BackgroundPosition::Position(x_len, y_len) => {
-            let x = resolve_axis(x_len, area_w, tile_w);
-            let y = resolve_axis(y_len, area_h, tile_h);
+        BackgroundPosition::Position { x, y } => {
+            let x = resolve_axis(x, area_w, tile_w);
+            let y = resolve_axis(y, area_h, tile_h);
             (x, y)
         }
     }
