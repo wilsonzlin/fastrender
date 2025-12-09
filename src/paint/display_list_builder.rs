@@ -27,16 +27,22 @@
 //! ```
 
 use crate::geometry::{Point, Rect};
+use crate::image_loader::ImageCache;
+use crate::layout::contexts::inline::baseline::compute_line_height;
+use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::paint::display_list::{
-    ClipItem, DisplayItem, DisplayList, FillRectItem, GlyphInstance, ImageData, ImageItem, OpacityItem, StrokeRectItem,
-    TextItem,
+    ClipItem, DisplayItem, DisplayList, FillRectItem, FontId, GlyphInstance, ImageData, ImageItem, OpacityItem,
+    StrokeRectItem, TextItem,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
+use crate::paint::stacking::StackingContext;
 use crate::style::color::Rgba;
 use crate::style::types::ObjectFit;
+use crate::style::ComputedStyle;
+use crate::text::font_loader::FontContext;
+use crate::text::pipeline::{ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
-use crate::image_loader::ImageCache;
 use image::GenericImageView;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -50,6 +56,8 @@ pub struct DisplayListBuilder {
     list: DisplayList,
     image_cache: Option<ImageCache>,
     viewport: Option<(f32, f32)>,
+    font_ctx: FontContext,
+    shaper: ShapingPipeline,
 }
 
 impl DisplayListBuilder {
@@ -59,6 +67,8 @@ impl DisplayListBuilder {
             list: DisplayList::new(),
             image_cache: None,
             viewport: None,
+            font_ctx: FontContext::new(),
+            shaper: ShapingPipeline::new(),
         }
     }
 
@@ -68,7 +78,15 @@ impl DisplayListBuilder {
             list: DisplayList::new(),
             image_cache: Some(image_cache),
             viewport: None,
+            font_ctx: FontContext::new(),
+            shaper: ShapingPipeline::new(),
         }
+    }
+
+    /// Sets the font context for shaping text into the display list.
+    pub fn with_font_context(mut self, font_ctx: FontContext) -> Self {
+        self.font_ctx = font_ctx;
+        self
     }
 
     /// Sets the viewport size for resolving viewport-relative units (vw/vh) in object-position.
@@ -86,6 +104,12 @@ impl DisplayListBuilder {
     /// Builds a display list from a FragmentTree
     pub fn build_tree(mut self, tree: &FragmentTree) -> DisplayList {
         self.build_fragment(&tree.root, Point::ZERO);
+        self.list
+    }
+
+    /// Builds a display list from a stacking context tree (respecting z-order).
+    pub fn build_from_stacking(mut self, stacking: &StackingContext) -> DisplayList {
+        self.build_stacking_context(stacking, Point::ZERO);
         self.list
     }
 
@@ -152,47 +176,113 @@ impl DisplayListBuilder {
         }
     }
 
+    fn build_stacking_context(&mut self, context: &StackingContext, offset: Point) {
+        let mut children: Vec<&StackingContext> = context.children.iter().collect();
+        children.sort_by(|a, b| a.z_index.cmp(&b.z_index).then_with(|| a.tree_order.cmp(&b.tree_order)));
+
+        let (neg, non_neg): (Vec<_>, Vec<_>) = children.into_iter().partition(|c| c.z_index < 0);
+        let (zero, pos): (Vec<_>, Vec<_>) = non_neg.into_iter().partition(|c| c.z_index == 0);
+
+        for child in neg {
+            self.build_stacking_context(child, offset);
+        }
+
+        self.emit_fragment_list(&context.fragments, offset);
+        self.emit_fragment_list(&context.layer3_blocks, offset);
+        self.emit_fragment_list(&context.layer4_floats, offset);
+        self.emit_fragment_list(&context.layer5_inlines, offset);
+        self.emit_fragment_list(&context.layer6_positioned, offset);
+
+        for child in zero {
+            self.build_stacking_context(child, offset);
+        }
+
+        for child in pos {
+            self.build_stacking_context(child, offset);
+        }
+    }
+
+    fn emit_fragment_list(&mut self, fragments: &[FragmentNode], offset: Point) {
+        for fragment in fragments {
+            self.build_fragment(fragment, offset);
+        }
+    }
+
     /// Emits display items for fragment content
     fn emit_content(&mut self, fragment: &FragmentNode, rect: Rect) {
         match &fragment.content {
-            FragmentContent::Text { text, baseline_offset, .. } => {
-                if !text.is_empty() {
-                    // Create simple glyph instances (one per character)
-                    // In a full implementation, this would come from text shaping
-                    let font_size = 16.0;
-                    let char_width = font_size * 0.6;
-                    let glyphs: Vec<GlyphInstance> = text
-                        .chars()
-                        .enumerate()
-                        .map(|(i, _c)| GlyphInstance {
-                            glyph_id: i as u32,
-                            offset: Point::new(i as f32 * char_width, 0.0),
-                            advance: char_width,
-                        })
-                        .collect();
-
-                    let advance_width = text.len() as f32 * char_width;
-
-                    self.list.push(DisplayItem::Text(TextItem {
-                        origin: Point::new(rect.origin.x, rect.origin.y + baseline_offset),
-                        glyphs,
-                        color: Rgba::BLACK,
-                        font_size,
-                        advance_width,
-                        font_id: None,
-                    }));
+            FragmentContent::Text {
+                text,
+                baseline_offset,
+                shaped,
+                ..
+            } => {
+                if text.is_empty() {
+                    return;
                 }
+
+                let color = fragment.style.as_deref().map(|s| s.color).unwrap_or(Rgba::BLACK);
+                let baseline = rect.origin.y + baseline_offset;
+                let start_x = rect.origin.x;
+
+                if let Some(runs) = shaped {
+                    self.emit_shaped_runs(runs, color, baseline, start_x);
+                    return;
+                }
+
+                if let Some(style) = fragment.style.as_deref() {
+                    if let Ok(mut runs) = self.shaper.shape(text, style, &self.font_ctx) {
+                        InlineTextItem::apply_spacing_to_runs(
+                            &mut runs,
+                            text,
+                            style.letter_spacing,
+                            style.word_spacing,
+                        );
+                        self.emit_shaped_runs(&runs, color, baseline, start_x);
+                        return;
+                    }
+                }
+
+                // Fallback: naive glyphs when shaping fails or no style is present
+                let font_size = fragment.style.as_deref().map(|s| s.font_size).unwrap_or(16.0);
+                let char_width = font_size * 0.6;
+                let glyphs: Vec<GlyphInstance> = text
+                    .chars()
+                    .enumerate()
+                    .map(|(i, _c)| GlyphInstance {
+                        glyph_id: i as u32,
+                        offset: Point::new(i as f32 * char_width, 0.0),
+                        advance: char_width,
+                    })
+                    .collect();
+                let advance_width = text.len() as f32 * char_width;
+
+                self.list.push(DisplayItem::Text(TextItem {
+                    origin: Point::new(start_x, baseline),
+                    glyphs,
+                    color,
+                    font_size,
+                    advance_width,
+                    font_id: None,
+                }));
             }
 
             FragmentContent::Replaced { replaced_type, .. } => {
                 let source = match replaced_type {
-                    ReplacedType::Image { src } => src.as_str(),
+                    ReplacedType::Image { src, .. } => src.as_str(),
                     ReplacedType::Svg { content } => content.as_str(),
                     _ => "",
                 };
-                let image = self
-                    .decode_image(source)
-                    .unwrap_or_else(|| ImageData::new(1, 1, vec![128, 128, 128, 255]));
+                let image = self.decode_image(source);
+                if image.is_none() {
+                    if let ReplacedType::Image { alt: Some(alt), .. } = replaced_type {
+                        if self.emit_alt_text(alt, fragment, rect) {
+                            return;
+                        }
+                    }
+                }
+
+                let image = image.unwrap_or_else(|| ImageData::new(1, 1, vec![128, 128, 128, 255]));
                 let (dest_x, dest_y, dest_w, dest_h) = {
                     let (fit, position, font_size) = if let Some(style) = fragment.style.as_deref() {
                         (style.object_fit, style.object_position, style.font_size)
@@ -213,8 +303,7 @@ impl DisplayListBuilder {
                     .unwrap_or((0.0, 0.0, rect.width(), rect.height()))
                 };
 
-                let dest_rect =
-                    Rect::from_xywh(rect.x() + dest_x, rect.y() + dest_y, dest_w, dest_h);
+                let dest_rect = Rect::from_xywh(rect.x() + dest_x, rect.y() + dest_y, dest_w, dest_h);
                 self.list.push(DisplayItem::Image(ImageItem {
                     dest_rect,
                     image: Arc::new(image),
@@ -273,6 +362,110 @@ impl DisplayListBuilder {
         self.list.push(DisplayItem::PopClip);
     }
 
+    fn emit_shaped_runs(&mut self, runs: &[ShapedRun], color: Rgba, baseline_y: f32, start_x: f32) {
+        let mut pen_x = start_x;
+        for run in runs {
+            let origin_x = if run.direction.is_rtl() {
+                pen_x + run.advance
+            } else {
+                pen_x
+            };
+            let glyphs = self.glyphs_from_run(run, origin_x, baseline_y);
+            let font_id = self.font_id_from_run(run);
+
+            self.list.push(DisplayItem::Text(TextItem {
+                origin: Point::new(origin_x, baseline_y),
+                glyphs,
+                color,
+                font_size: run.font_size,
+                advance_width: run.advance,
+                font_id: Some(font_id),
+            }));
+
+            pen_x += run.advance;
+        }
+    }
+
+    fn glyphs_from_run(&self, run: &ShapedRun, origin_x: f32, baseline_y: f32) -> Vec<GlyphInstance> {
+        let mut glyphs = Vec::with_capacity(run.glyphs.len());
+
+        for glyph in &run.glyphs {
+            let x = match run.direction {
+                crate::text::pipeline::Direction::RightToLeft => origin_x - glyph.x_offset,
+                _ => origin_x + glyph.x_offset,
+            };
+            let y = baseline_y - glyph.y_offset;
+            glyphs.push(GlyphInstance {
+                glyph_id: glyph.glyph_id,
+                offset: Point::new(x - origin_x, y - baseline_y),
+                advance: glyph.x_advance,
+            });
+        }
+
+        glyphs
+    }
+
+    fn font_id_from_run(&self, run: &ShapedRun) -> FontId {
+        FontId {
+            family: run.font.family.clone(),
+            weight: run.font.weight.value(),
+            style: run.font.style,
+            stretch: run.font.stretch,
+        }
+    }
+
+    fn emit_alt_text(&mut self, alt: &str, fragment: &FragmentNode, rect: Rect) -> bool {
+        let text = alt.trim();
+        if text.is_empty() {
+            return false;
+        }
+
+        let Some(style) = fragment.style.as_deref() else {
+            return self.emit_naive_alt(text, rect, None);
+        };
+
+        let mut runs = match self.shaper.shape(text, style, &self.font_ctx) {
+            Ok(r) => r,
+            Err(_) => return self.emit_naive_alt(text, rect, Some(style)),
+        };
+        InlineTextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
+
+        let line_height = compute_line_height(style);
+        let metrics = InlineTextItem::metrics_from_runs(&runs, line_height, style.font_size);
+        let half_leading = ((metrics.line_height - (metrics.ascent + metrics.descent)) / 2.0).max(0.0);
+        let baseline = rect.y() + half_leading + metrics.baseline_offset;
+
+        self.emit_shaped_runs(&runs, style.color, baseline, rect.x());
+        true
+    }
+
+    fn emit_naive_alt(&mut self, text: &str, rect: Rect, style: Option<&ComputedStyle>) -> bool {
+        let font_size = style.map(|s| s.font_size).unwrap_or(16.0);
+        let color = style.map(|s| s.color).unwrap_or(Rgba::BLACK);
+        let char_width = font_size * 0.6;
+        let origin = Point::new(rect.x(), rect.y() + font_size * 0.8);
+        let glyphs: Vec<GlyphInstance> = text
+            .chars()
+            .enumerate()
+            .map(|(i, _)| GlyphInstance {
+                glyph_id: 0,
+                offset: Point::new(i as f32 * char_width, 0.0),
+                advance: char_width,
+            })
+            .collect();
+        let advance_width = text.len() as f32 * char_width;
+
+        self.list.push(DisplayItem::Text(TextItem {
+            origin,
+            glyphs,
+            color,
+            font_size,
+            advance_width,
+            font_id: None,
+        }));
+        true
+    }
+
     fn decode_image(&self, src: &str) -> Option<ImageData> {
         let cache = self.image_cache.as_ref()?;
         let image = match cache.load(src) {
@@ -299,10 +492,11 @@ impl Default for DisplayListBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tree::box_tree::ReplacedType;
     use crate::image_loader::ImageCache;
-    use crate::style::ComputedStyle;
+    use crate::paint::stacking::{StackingContext, StackingContextReason};
     use crate::style::display::Display;
+    use crate::style::ComputedStyle;
+    use crate::tree::box_tree::ReplacedType;
 
     fn create_block_fragment(x: f32, y: f32, width: f32, height: f32) -> FragmentNode {
         FragmentNode::new_block(Rect::from_xywh(x, y, width, height), vec![])
@@ -315,8 +509,15 @@ mod tests {
     fn create_image_fragment(x: f32, y: f32, width: f32, height: f32, src: &str) -> FragmentNode {
         FragmentNode::new_replaced(
             Rect::from_xywh(x, y, width, height),
-            ReplacedType::Image { src: src.to_string() },
+            ReplacedType::Image {
+                src: src.to_string(),
+                alt: None,
+            },
         )
+    }
+
+    fn text_fragment_at(x: f32, label: &str) -> FragmentNode {
+        FragmentNode::new_text(Rect::from_xywh(x, 0.0, 10.0, 10.0), label.to_string(), 12.0)
     }
 
     #[test]
@@ -360,6 +561,33 @@ mod tests {
 
         assert_eq!(list.len(), 1);
         assert!(matches!(list.items()[0], DisplayItem::Image(_)));
+    }
+
+    #[test]
+    fn stacking_context_order_respected() {
+        let mut root = StackingContext::root();
+        root.layer5_inlines.push(text_fragment_at(20.0, "root"));
+
+        let mut neg = StackingContext::with_reason(-1, StackingContextReason::PositionedWithZIndex, 1);
+        neg.layer5_inlines.push(text_fragment_at(0.0, "neg"));
+
+        let mut pos = StackingContext::with_reason(1, StackingContextReason::PositionedWithZIndex, 2);
+        pos.layer5_inlines.push(text_fragment_at(40.0, "pos"));
+
+        root.add_child(neg);
+        root.add_child(pos);
+
+        let list = DisplayListBuilder::new().build_from_stacking(&root);
+        let origins: Vec<f32> = list
+            .items()
+            .iter()
+            .filter_map(|item| match item {
+                DisplayItem::Text(t) => Some(t.origin.x),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(origins, vec![0.0, 20.0, 40.0]);
     }
 
     #[test]
@@ -578,6 +806,7 @@ mod tests {
                 box_id: None,
                 replaced_type: ReplacedType::Image {
                     src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6X1ru4AAAAASUVORK5CYII=".to_string(),
+                    alt: None,
                 },
             },
             children: vec![],
@@ -617,6 +846,7 @@ mod tests {
                 box_id: None,
                 replaced_type: ReplacedType::Image {
                     src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6X1ru4AAAAASUVORK5CYII=".to_string(),
+                    alt: None,
                 },
             },
             children: vec![],
@@ -632,5 +862,34 @@ mod tests {
         };
         // free_x = 100 - 1 = 99; but we align with 10vw (20px), so dest_rect.x should be ~20.
         assert!((img.dest_rect.x() - 20.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn alt_text_emitted_when_image_missing() {
+        let mut style = ComputedStyle::default();
+        style.color = Rgba::BLACK;
+        style.font_size = 12.0;
+
+        let fragment = FragmentNode {
+            bounds: Rect::from_xywh(0.0, 0.0, 50.0, 20.0),
+            content: FragmentContent::Replaced {
+                box_id: None,
+                replaced_type: ReplacedType::Image {
+                    src: String::new(),
+                    alt: Some("alt text".to_string()),
+                },
+            },
+            children: vec![],
+            style: Some(Arc::new(style)),
+        };
+
+        let builder = DisplayListBuilder::new();
+        let list = builder.build(&fragment);
+
+        assert!(!list.is_empty());
+        let DisplayItem::Text(text) = &list.items()[0] else {
+            panic!("Expected text item for alt fallback");
+        };
+        assert!(text.advance_width > 0.0);
     }
 }
