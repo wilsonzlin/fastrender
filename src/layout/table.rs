@@ -133,6 +133,12 @@ pub struct RowInfo {
     /// Specified height (from row element)
     pub specified_height: Option<SpecifiedHeight>,
 
+    /// Author min-height (from CSS)
+    pub author_min_height: Option<SpecifiedHeight>,
+
+    /// Author max-height (from CSS)
+    pub author_max_height: Option<SpecifiedHeight>,
+
     /// Computed minimum height based on cell content
     pub min_height: f32,
 
@@ -149,6 +155,8 @@ impl RowInfo {
         Self {
             index,
             specified_height: None,
+            author_min_height: None,
+            author_max_height: None,
             min_height: 0.0,
             computed_height: 0.0,
             y_position: 0.0,
@@ -184,6 +192,20 @@ fn resolve_row_height(row: &RowInfo, percent_base: Option<f32>) -> Option<f32> {
         Some(SpecifiedHeight::Percent(p)) => percent_base.map(|t| (p / 100.0) * t),
         _ => None,
     }
+}
+
+fn resolve_row_min_max(row: &RowInfo, percent_base: Option<f32>) -> (Option<f32>, Option<f32>) {
+    let min = match row.author_min_height {
+        Some(SpecifiedHeight::Fixed(h)) => Some(h),
+        Some(SpecifiedHeight::Percent(p)) => percent_base.map(|t| (p / 100.0) * t),
+        _ => None,
+    };
+    let max = match row.author_max_height {
+        Some(SpecifiedHeight::Fixed(h)) => Some(h),
+        Some(SpecifiedHeight::Percent(p)) => percent_base.map(|t| (p / 100.0) * t),
+        _ => None,
+    };
+    (min, max)
 }
 
 /// Information about a table cell
@@ -296,6 +318,8 @@ impl TableStructure {
         let mut current_row = 0;
         let mut max_cols = 0;
         let mut row_heights: Vec<Option<SpecifiedHeight>> = Vec::new();
+        let mut row_min_heights: Vec<Option<SpecifiedHeight>> = Vec::new();
+        let mut row_max_heights: Vec<Option<SpecifiedHeight>> = Vec::new();
 
         // Collect all cells first
         let mut cell_data: Vec<(usize, usize, usize, usize, usize)> = Vec::new(); // (row, col, rowspan, colspan, box_idx)
@@ -306,12 +330,15 @@ impl TableStructure {
                     // Process rows within the group
                     for (row_child_idx, row_child) in child.children.iter().enumerate() {
                         if matches!(Self::get_table_element_type(row_child), TableElementType::Row) {
-                            let spec_height = row_child
-                                .style
-                                .height
-                                .as_ref()
-                                .map(|len| Self::length_to_specified_height(len, row_child.style.font_size));
+                            let spec_height =
+                                Self::length_to_specified_height_opt(row_child.style.height.as_ref(), row_child.style.font_size);
+                            let min_h =
+                                Self::length_to_specified_height_opt(row_child.style.min_height.as_ref(), row_child.style.font_size);
+                            let max_h =
+                                Self::length_to_specified_height_opt(row_child.style.max_height.as_ref(), row_child.style.font_size);
                             row_heights.push(spec_height);
+                            row_min_heights.push(min_h);
+                            row_max_heights.push(max_h);
                             let row_cells =
                                 Self::process_row(row_child, current_row, row_child_idx, &mut structure.grid);
                             for cell in row_cells {
@@ -326,12 +353,15 @@ impl TableStructure {
                     }
                 }
                 TableElementType::Row => {
-                    let spec_height = child
-                        .style
-                        .height
-                        .as_ref()
-                        .map(|len| Self::length_to_specified_height(len, child.style.font_size));
+                    let spec_height =
+                        Self::length_to_specified_height_opt(child.style.height.as_ref(), child.style.font_size);
+                    let min_h =
+                        Self::length_to_specified_height_opt(child.style.min_height.as_ref(), child.style.font_size);
+                    let max_h =
+                        Self::length_to_specified_height_opt(child.style.max_height.as_ref(), child.style.font_size);
                     row_heights.push(spec_height);
+                    row_min_heights.push(min_h);
+                    row_max_heights.push(max_h);
                     let row_cells = Self::process_row(child, current_row, child_idx, &mut structure.grid);
                     for cell in row_cells {
                         let col_end = cell.1 + cell.3;
@@ -394,6 +424,8 @@ impl TableStructure {
         for i in 0..structure.row_count {
             let mut row = RowInfo::new(i);
             row.specified_height = row_heights.get(i).cloned().unwrap_or(None);
+            row.author_min_height = row_min_heights.get(i).cloned().unwrap_or(None);
+            row.author_max_height = row_max_heights.get(i).cloned().unwrap_or(None);
             structure.rows.push(row);
         }
 
@@ -540,6 +572,10 @@ impl TableStructure {
             _ if length.unit.is_absolute() => SpecifiedHeight::Fixed(length.to_px()),
             _ => SpecifiedHeight::Auto,
         }
+    }
+
+    fn length_to_specified_height_opt(length: Option<&crate::style::values::Length>, font_size: f32) -> Option<SpecifiedHeight> {
+        length.map(|len| Self::length_to_specified_height(len, font_size))
     }
 }
 
@@ -1915,8 +1951,12 @@ impl FormattingContext for TableFormattingContext {
 
         // Enforce row-specified minimums (length or percentage of table height).
         for (idx, row) in structure.rows.iter().enumerate() {
-            if let Some(min) = resolve_row_height(row, percent_height_base) {
+            let (min_len, max_len) = resolve_row_min_max(row, percent_height_base);
+            if let Some(min) = min_len {
                 row_heights[idx] = row_heights[idx].max(min);
+            }
+            if let Some(max) = max_len {
+                row_heights[idx] = row_heights[idx].min(max);
             }
         }
 
@@ -1957,7 +1997,7 @@ impl FormattingContext for TableFormattingContext {
             row.baseline_bottom = row.baseline_bottom.max(bottom);
         }
 
-        for row in &mut row_metrics {
+        for (idx, row) in row_metrics.iter_mut().enumerate() {
             let baseline_height = row.baseline_height();
             let max_required = row.max_cell_height.max(baseline_height);
             if max_required > row.height {
@@ -1965,6 +2005,13 @@ impl FormattingContext for TableFormattingContext {
             }
             if row.height <= 0.0 {
                 row.height = 1.0;
+            }
+            let (min_h, max_h) = resolve_row_min_max(&structure.rows[idx], percent_height_base);
+            if let Some(min) = min_h {
+                row.height = row.height.max(min);
+            }
+            if let Some(max) = max_h {
+                row.height = row.height.min(max);
             }
         }
 
@@ -2996,6 +3043,8 @@ mod tests {
         let row = RowInfo::new(3);
         assert_eq!(row.index, 3);
         assert!(row.specified_height.is_none());
+        assert!(row.author_min_height.is_none());
+        assert!(row.author_max_height.is_none());
         assert_eq!(row.min_height, 0.0);
         assert_eq!(row.y_position, 0.0);
     }
