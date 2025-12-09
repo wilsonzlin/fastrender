@@ -1919,10 +1919,20 @@ impl FormattingContext for TableFormattingContext {
                     let x = base_x - border.width * 0.5;
                     let row_start = row_line_pos.get(row_idx).copied().unwrap_or(0.0);
                     let row_height = row_metrics[row_idx].height;
-                    let height = row_height
-                        + horizontal_line_max.get(row_idx).copied().unwrap_or(0.0) * 0.5
-                        + horizontal_line_max.get(row_idx + 1).copied().unwrap_or(0.0) * 0.5;
-                    let y = row_start - horizontal_line_max.get(row_idx).copied().unwrap_or(0.0) * 0.5;
+                    let top_adjacent = collapsed_borders
+                        .horizontal
+                        .get(row_idx)
+                        .and_then(|row| row.get(col_idx))
+                        .map(|b| b.width * 0.5)
+                        .unwrap_or(0.0);
+                    let bottom_adjacent = collapsed_borders
+                        .horizontal
+                        .get(row_idx + 1)
+                        .and_then(|row| row.get(col_idx))
+                        .map(|b| b.width * 0.5)
+                        .unwrap_or(0.0);
+                    let height = row_height + top_adjacent + bottom_adjacent;
+                    let y = row_start - top_adjacent;
                     let rect = Rect::from_xywh(x, y, border.width, height);
                     let style = make_border_style(
                         border.color,
@@ -1955,10 +1965,20 @@ impl FormattingContext for TableFormattingContext {
                     let y = base_y - border.width * 0.5;
                     let col_start = column_line_pos.get(col_idx).copied().unwrap_or(0.0);
                     let col_width = col_widths[col_idx];
-                    let width = col_width
-                        + vertical_line_max.get(col_idx).copied().unwrap_or(0.0) * 0.5
-                        + vertical_line_max.get(col_idx + 1).copied().unwrap_or(0.0) * 0.5;
-                    let x = col_start - vertical_line_max.get(col_idx).copied().unwrap_or(0.0) * 0.5;
+                    let left_adjacent = collapsed_borders
+                        .vertical
+                        .get(col_idx)
+                        .and_then(|col| col.get(row_idx))
+                        .map(|b| b.width * 0.5)
+                        .unwrap_or(0.0);
+                    let right_adjacent = collapsed_borders
+                        .vertical
+                        .get(col_idx + 1)
+                        .and_then(|col| col.get(row_idx))
+                        .map(|b| b.width * 0.5)
+                        .unwrap_or(0.0);
+                    let width = col_width + left_adjacent + right_adjacent;
+                    let x = col_start - left_adjacent;
                     let rect = Rect::from_xywh(x, y, width, border.width);
                     let style = make_border_style(
                         border.color,
