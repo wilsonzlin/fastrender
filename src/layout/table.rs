@@ -1785,7 +1785,6 @@ impl FormattingContext for TableFormattingContext {
             .height
             .as_ref()
             .and_then(|len| resolve_length_against(len, font_size, containing_height));
-        let percent_height_base = specified_height;
         let min_height = resolve_opt_length_against(box_node.style.min_height.as_ref(), font_size, containing_height);
         let max_height = resolve_opt_length_against(box_node.style.max_height.as_ref(), font_size, containing_height);
         let mut table_height = specified_height.map(|h| clamp_to_min_max(h, min_height, max_height));
@@ -1904,6 +1903,15 @@ impl FormattingContext for TableFormattingContext {
                 }
             }
         }
+
+        let percent_height_base = table_height.map(|base| {
+            if structure.border_collapse == BorderCollapse::Collapse {
+                base
+            } else {
+                let spacing_total = v_spacing * (structure.row_count as f32 + 1.0);
+                (base - spacing_total).max(0.0)
+            }
+        });
 
         // Enforce row-specified minimums (length or percentage of table height).
         for (idx, row) in structure.rows.iter().enumerate() {
@@ -2857,6 +2865,50 @@ mod tests {
         let first_y = fragment.children[0].bounds.y();
         let second_y = fragment.children[1].bounds.y();
         assert!((second_y - first_y - 30.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn percent_row_heights_account_for_spacing() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.height = Some(Length::px(120.0));
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(10.0);
+
+        let mut row1_style = ComputedStyle::default();
+        row1_style.display = Display::TableRow;
+        row1_style.height = Some(Length::percent(50.0));
+
+        let mut row2_style = ComputedStyle::default();
+        row2_style.display = Display::TableRow;
+        row2_style.height = Some(Length::percent(50.0));
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+
+        let row1 = BoxNode::new_block(
+            Arc::new(row1_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![])],
+        );
+        let row2 = BoxNode::new_block(
+            Arc::new(row2_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![])],
+        );
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row1, row2]);
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(&table, &LayoutConstraints::definite(100.0, 200.0))
+            .expect("table layout");
+
+        // Total spacing = 3 gaps * 10 = 30, so rows share the remaining 90 -> 45 each.
+        assert!((fragment.bounds.height() - 120.0).abs() < 0.1);
+        assert!(fragment.children.len() >= 2);
+        let first_y = fragment.children[0].bounds.y();
+        let second_y = fragment.children[1].bounds.y();
+        assert!((second_y - first_y - 55.0).abs() < 0.1); // 45 height + 10 spacing
     }
 
     #[test]
