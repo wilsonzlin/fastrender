@@ -99,7 +99,7 @@ fn apply_styles_internal(
 
     // Finalize grid placement - resolve named grid lines
     finalize_grid_placement(&mut styles);
-    resolve_match_parent_text_align(&mut styles, parent_styles.direction);
+    resolve_match_parent_text_align(&mut styles, parent_styles);
 
     // Compute pseudo-element styles
     let before_styles =
@@ -176,7 +176,7 @@ fn apply_styles_internal_with_ancestors(
 
     // Finalize grid placement - resolve named grid lines
     finalize_grid_placement(&mut styles);
-    resolve_match_parent_text_align(&mut styles, parent_styles.direction);
+    resolve_match_parent_text_align(&mut styles, parent_styles);
 
     // Compute pseudo-element styles from CSS rules
     let before_styles =
@@ -234,15 +234,38 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.grid_row_names = parent.grid_row_names.clone();
 }
 
-fn resolve_match_parent_text_align(styles: &mut ComputedStyle, parent_direction: crate::style::types::Direction) {
+fn resolve_match_parent_text_align(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     use crate::style::types::TextAlign;
     if !matches!(styles.text_align, TextAlign::MatchParent) {
         return;
     }
-    styles.text_align = if matches!(parent_direction, crate::style::types::Direction::Rtl) {
-        TextAlign::End
-    } else {
-        TextAlign::Start
+    // Behaves like inherit, but start/end become physical based on the parent's direction.
+    let inherited = match parent.text_align {
+        TextAlign::MatchParent => {
+            if matches!(parent.direction, crate::style::types::Direction::Rtl) {
+                TextAlign::End
+            } else {
+                TextAlign::Start
+            }
+        }
+        other => other,
+    };
+    styles.text_align = match inherited {
+        TextAlign::Start => {
+            if matches!(parent.direction, crate::style::types::Direction::Rtl) {
+                TextAlign::Right
+            } else {
+                TextAlign::Left
+            }
+        }
+        TextAlign::End => {
+            if matches!(parent.direction, crate::style::types::Direction::Rtl) {
+                TextAlign::Left
+            } else {
+                TextAlign::Right
+            }
+        }
+        other => other,
     };
 }
 
@@ -282,6 +305,46 @@ mod tests {
             styled.styles.text_align_last,
             crate::style::types::TextAlignLast::Justify
         ));
+    }
+
+    #[test]
+    fn text_align_match_parent_maps_start_end_using_parent_direction() {
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), "direction: rtl; text-align: start;".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "span".to_string(),
+                    attributes: vec![("style".to_string(), "text-align: match-parent;".to_string())],
+                },
+                children: vec![],
+            }],
+        };
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let child = styled.children.first().expect("child");
+        assert!(matches!(child.styles.text_align, crate::style::types::TextAlign::Right));
+    }
+
+    #[test]
+    fn text_align_match_parent_inherits_parent_alignment() {
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), "text-align: center;".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "span".to_string(),
+                    attributes: vec![("style".to_string(), "text-align: match-parent;".to_string())],
+                },
+                children: vec![],
+            }],
+        };
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let child = styled.children.first().expect("child");
+        assert!(matches!(child.styles.text_align, crate::style::types::TextAlign::Center));
     }
 }
 

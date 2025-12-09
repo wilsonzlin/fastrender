@@ -18,6 +18,7 @@
 - `text-align-all` shorthand supported: parsed values map to text-align, reset `text-align-last` to auto for non-justify-all/match-parent cases, and justify-all sets last-line justification.
 - `match-parent` resolution now follows CSS Text: resolves to start/end based on parent direction (not left/right).
 - `text-align` shorthand now resets `text-align-last` to auto (except justify-all → justify), with cascade tests validating reset/justify-all behavior.
+- `match-parent` now inherits parent alignment fully (including non-start/end values) and maps start/end to physical alignment using the parent’s direction; cascade tests cover both inheritance and directional mapping.
 - Collapsed-border conflict resolution now has added regression coverage for style precedence (double vs lower styles) and top-edge bias; CJK auto-justify test explicitly sets `text-align-last: justify` so forced breaks still justify under paragraph-aware last-line handling.
 - Added regression to ensure justify-last fallback for space-less lines; paragraph-aware alignment remains intact.
 - Collapsing border conflict resolution now follows CSS 2.1 ordering (hidden suppression, width before style ranking, cell/row/col/table precedence, and left/top bias honoring `direction`), with new coverage for width-vs-style and LTR/RTL tie cases.
