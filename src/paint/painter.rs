@@ -59,11 +59,6 @@ pub struct Painter {
 }
 
 #[derive(Debug)]
-struct DisplayItem {
-    command: DisplayCommand,
-}
-
-#[derive(Debug)]
 enum DisplayCommand {
     Background { rect: Rect, style: Arc<ComputedStyle> },
     Border { rect: Rect, style: Arc<ComputedStyle> },
@@ -75,6 +70,7 @@ enum DisplayCommand {
         style: Arc<ComputedStyle>,
     },
     Replaced { rect: Rect, replaced_type: ReplacedType, style: Arc<ComputedStyle> },
+    StackingContext { opacity: f32, commands: Vec<DisplayCommand> },
 }
 
 #[derive(Copy, Clone)]
@@ -214,7 +210,7 @@ impl Painter {
         let mut items = Vec::new();
         self.collect_stacking_context(&tree.root, Point::ZERO, None, true, &mut items);
         for item in items {
-            self.execute_command(item.command)?;
+            self.execute_command(item)?;
         }
 
         Ok(self.pixmap)
@@ -243,7 +239,7 @@ impl Painter {
         offset: Point,
         parent_style: Option<&ComputedStyle>,
         is_root_context: bool,
-        items: &mut Vec<DisplayItem>,
+        items: &mut Vec<DisplayCommand>,
     ) {
         let abs_bounds = Rect::from_xywh(
             fragment.bounds.x() + offset.x,
@@ -257,19 +253,23 @@ impl Painter {
             .map(|s| creates_stacking_context(s, parent_style, is_root_context))
             .unwrap_or(is_root_context);
 
+        // Collect commands for this subtree locally so we can wrap the context (opacity, etc.)
+        let mut local_commands = Vec::new();
+
         if !establishes_context {
-            self.enqueue_background_and_borders(fragment, abs_bounds, items);
-            self.enqueue_content(fragment, abs_bounds, items);
+            self.enqueue_background_and_borders(fragment, abs_bounds, &mut local_commands);
+            self.enqueue_content(fragment, abs_bounds, &mut local_commands);
 
             let next_offset = Point::new(abs_bounds.x(), abs_bounds.y());
             for child in &fragment.children {
-                self.collect_stacking_context(child, next_offset, style_ref, false, items);
+                self.collect_stacking_context(child, next_offset, style_ref, false, &mut local_commands);
             }
+            items.extend(local_commands);
             return;
         }
 
         // Stacking context: paint own background/border first
-        self.enqueue_background_and_borders(fragment, abs_bounds, items);
+        self.enqueue_background_and_borders(fragment, abs_bounds, &mut local_commands);
 
         // Partition children into stacking-context buckets and normal content
         let mut negative_contexts = Vec::new();
@@ -298,23 +298,34 @@ impl Painter {
 
         negative_contexts.sort_by(|(z1, i1), (z2, i2)| z1.cmp(z2).then_with(|| i1.cmp(i2)));
         for (_, idx) in negative_contexts {
-            self.collect_stacking_context(&fragment.children[idx], child_offset, style_ref, false, items);
+            self.collect_stacking_context(&fragment.children[idx], child_offset, style_ref, false, &mut local_commands);
         }
 
         // In-flow/non-positioned content for this context
-        self.enqueue_content(fragment, abs_bounds, items);
+        self.enqueue_content(fragment, abs_bounds, &mut local_commands);
         for idx in normal_children {
-            self.collect_stacking_context(&fragment.children[idx], child_offset, style_ref, false, items);
+            self.collect_stacking_context(&fragment.children[idx], child_offset, style_ref, false, &mut local_commands);
         }
 
         zero_contexts.sort_by(|(z1, i1), (z2, i2)| z1.cmp(z2).then_with(|| i1.cmp(i2)));
         for (_, idx) in zero_contexts {
-            self.collect_stacking_context(&fragment.children[idx], child_offset, style_ref, false, items);
+            self.collect_stacking_context(&fragment.children[idx], child_offset, style_ref, false, &mut local_commands);
         }
 
         positive_contexts.sort_by(|(z1, i1), (z2, i2)| z1.cmp(z2).then_with(|| i1.cmp(i2)));
         for (_, idx) in positive_contexts {
-            self.collect_stacking_context(&fragment.children[idx], child_offset, style_ref, false, items);
+            self.collect_stacking_context(&fragment.children[idx], child_offset, style_ref, false, &mut local_commands);
+        }
+
+        // Wrap the stacking context if it applies an effect (opacity); otherwise flatten
+        let opacity = style_ref.map(|s| s.opacity).unwrap_or(1.0).clamp(0.0, 1.0);
+        if opacity < 1.0 {
+            items.push(DisplayCommand::StackingContext {
+                opacity,
+                commands: local_commands,
+            });
+        } else {
+            items.extend(local_commands);
         }
     }
 
@@ -323,17 +334,15 @@ impl Painter {
         &self,
         fragment: &FragmentNode,
         abs_bounds: Rect,
-        items: &mut Vec<DisplayItem>,
+        items: &mut Vec<DisplayCommand>,
     ) {
         let Some(style) = fragment.style.clone() else { return };
 
         let has_background = style.background_color.alpha_u8() > 0 || style.background_image.is_some();
         if has_background {
-            items.push(DisplayItem {
-                command: DisplayCommand::Background {
-                    rect: abs_bounds,
-                    style: style.clone(),
-                },
+            items.push(DisplayCommand::Background {
+                rect: abs_bounds,
+                style: style.clone(),
             });
         }
 
@@ -342,11 +351,9 @@ impl Painter {
             || style.border_bottom_width.to_px() > 0.0
             || style.border_left_width.to_px() > 0.0;
         if has_border {
-            items.push(DisplayItem {
-                command: DisplayCommand::Border {
-                    rect: abs_bounds,
-                    style: style.clone(),
-                },
+            items.push(DisplayCommand::Border {
+                rect: abs_bounds,
+                style: style.clone(),
             });
         }
     }
@@ -356,7 +363,7 @@ impl Painter {
         &self,
         fragment: &FragmentNode,
         abs_bounds: Rect,
-        items: &mut Vec<DisplayItem>,
+        items: &mut Vec<DisplayCommand>,
     ) {
         match &fragment.content {
             FragmentContent::Text {
@@ -366,25 +373,21 @@ impl Painter {
                 ..
             } => {
                 if let Some(style) = fragment.style.clone() {
-                    items.push(DisplayItem {
-                        command: DisplayCommand::Text {
-                            rect: abs_bounds,
-                            baseline_offset: *baseline_offset,
-                            text: text.clone(),
-                            runs: shaped.clone(),
-                            style,
-                        },
+                    items.push(DisplayCommand::Text {
+                        rect: abs_bounds,
+                        baseline_offset: *baseline_offset,
+                        text: text.clone(),
+                        runs: shaped.clone(),
+                        style,
                     });
                 }
             }
             FragmentContent::Replaced { replaced_type, .. } => {
                 if let Some(style) = fragment.style.clone() {
-                    items.push(DisplayItem {
-                        command: DisplayCommand::Replaced {
-                            rect: abs_bounds,
-                            replaced_type: replaced_type.clone(),
-                            style,
-                        },
+                    items.push(DisplayCommand::Replaced {
+                        rect: abs_bounds,
+                        replaced_type: replaced_type.clone(),
+                        style,
                     });
                 }
             }
@@ -421,6 +424,45 @@ impl Painter {
                 style,
             } => {
                 self.paint_replaced(&replaced_type, Some(&style), rect.x(), rect.y(), rect.width(), rect.height());
+            }
+            DisplayCommand::StackingContext { opacity, commands } => {
+                if opacity >= 1.0 {
+                    for cmd in commands {
+                        self.execute_command(cmd)?;
+                    }
+                } else {
+                    let layer = Pixmap::new(self.pixmap.width(), self.pixmap.height()).ok_or_else(|| {
+                        RenderError::InvalidParameters {
+                            message: format!(
+                                "Failed to create stacking context layer {}x{}",
+                                self.pixmap.width(),
+                                self.pixmap.height()
+                            ),
+                        }
+                    })?;
+
+                    let mut painter = Painter {
+                        pixmap: layer,
+                        background: Rgba::new(0, 0, 0, 0.0),
+                        shaper: ShapingPipeline::new(),
+                        font_ctx: self.font_ctx.clone(),
+                        image_cache: self.image_cache.clone(),
+                    };
+                    for cmd in commands {
+                        painter.execute_command(cmd)?;
+                    }
+
+                    let mut paint = PixmapPaint::default();
+                    paint.opacity = opacity;
+                    self.pixmap.draw_pixmap(
+                        0,
+                        0,
+                        painter.pixmap.as_ref(),
+                        &paint,
+                        Transform::identity(),
+                        None,
+                    );
+                }
             }
         }
         Ok(())

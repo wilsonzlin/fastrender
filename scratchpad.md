@@ -66,13 +66,14 @@
 - Collapsed border data now carries per-segment winners (one border resolution per grid line segment), and painting renders each segment with its own style/color/width using boundary-aware positioning based on adjacent perpendicular segment widths so adjoining borders meet cleanly instead of flattening to a uniform line (`src/layout/table.rs`).
 - Collapsed border corners now resolve a winner per grid junction and paint a square join using that style/color/width, reducing double-paint overlaps at intersections (`src/layout/table.rs`).
 - Display-list construction now walks stacking contexts using `paint::stacking::creates_stacking_context`, emitting commands in stacking order (negative/zero/positive contexts) rather than globally sorting by z-index; backgrounds/borders for each context stay ahead of its content and descendants (`src/paint/painter.rs`).
+- Stacking contexts with `opacity < 1` now render into their own layer and composite back into the canvas so opacity applies to the entire subtree instead of per-primitive alpha (`src/paint/painter.rs`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
 - Max-content sizing now honors mandatory breaks but still ignores anonymous inline box generation and percent-driven height constraints.
 - Table layout still partial: border-collapsed corners/segments need better conflict resolution (origin/source-order aware joins), row/col spans not fully honored, percent/fixed widths still simplified vs CSS 2.1, colspans split evenly, rowspan baseline alignment still coarse.
 - Replaced elements still skip backgrounds and non-image types (SVG/iframe/video remain unrendered); object-fit only applies when image decoding succeeds.
-- Painting still bypasses a display list; rendering order/compositing need a pass.
+- Painting lacks transforms/filters/blend/isolation and still doesn't integrate the richer display list module; opacity compositing uses full-canvas layers.
 - Root line strut still provides minimum line-height rather than full descendant baseline synthesis; replaced backgrounds/non-image types remain unpainted.
 
 ## To-do / next steps (spec-oriented)
