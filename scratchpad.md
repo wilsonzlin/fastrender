@@ -101,7 +101,7 @@
 - Background colors and images respect border-radius and `background-clip`: clip radii shrink with border/padding/content edges, fills draw as rounded rects, and image tiling is masked to the clipped rounded box (`src/paint/painter.rs`).
 
 ## Current issues / gaps
-- Bidi: still approximate isolation with control characters rather than explicit isolate/embedding stack; `unicode-bidi: plaintext` still treats the full line as one paragraph.
+- Bidi: still approximate isolation with control characters rather than explicit isolate/embedding stack.
 - Max-content sizing now honors mandatory breaks but still ignores anonymous inline box generation and percent-driven height constraints.
 - Table layout still partial: row/col spans not fully honored (rowspan baselines, percent/fixed widths still simplified vs CSS 2.1), colspan distribution still heuristic.
 - Replaced elements still skip backgrounds and non-image types (SVG/iframe/video remain unrendered); object-fit only applies when image decoding succeeds.
