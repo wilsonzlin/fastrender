@@ -824,6 +824,21 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 styles.transform_origin = origin;
             }
         }
+        "mix-blend-mode" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                if let Some(mode) = parse_mix_blend_mode(kw) {
+                    styles.mix_blend_mode = mode;
+                }
+            }
+        }
+        "isolation" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.isolation = match kw.as_str() {
+                    "isolate" => Isolation::Isolate,
+                    _ => Isolation::Auto,
+                };
+            }
+        }
 
         // Overflow
         "overflow" => {
@@ -1067,6 +1082,28 @@ fn parse_transform_origin(value: &PropertyValue) -> Option<TransformOrigin> {
     let x = x.unwrap_or_else(|| Length::percent(50.0));
     let y = y.unwrap_or_else(|| Length::percent(50.0));
     Some(TransformOrigin { x, y })
+}
+
+fn parse_mix_blend_mode(kw: &str) -> Option<MixBlendMode> {
+    match kw {
+        "normal" => Some(MixBlendMode::Normal),
+        "multiply" => Some(MixBlendMode::Multiply),
+        "screen" => Some(MixBlendMode::Screen),
+        "overlay" => Some(MixBlendMode::Overlay),
+        "darken" => Some(MixBlendMode::Darken),
+        "lighten" => Some(MixBlendMode::Lighten),
+        "color-dodge" => Some(MixBlendMode::ColorDodge),
+        "color-burn" => Some(MixBlendMode::ColorBurn),
+        "hard-light" => Some(MixBlendMode::HardLight),
+        "soft-light" => Some(MixBlendMode::SoftLight),
+        "difference" => Some(MixBlendMode::Difference),
+        "exclusion" => Some(MixBlendMode::Exclusion),
+        "hue" => Some(MixBlendMode::Hue),
+        "saturation" => Some(MixBlendMode::Saturation),
+        "color" => Some(MixBlendMode::Color),
+        "luminosity" => Some(MixBlendMode::Luminosity),
+        _ => None,
+    }
 }
 
 fn parse_background_box(value: &PropertyValue) -> Option<BackgroundBox> {

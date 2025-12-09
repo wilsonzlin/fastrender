@@ -141,6 +141,34 @@ pub struct ObjectPosition {
     pub y: PositionComponent,
 }
 
+/// Mix-blend mode values
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MixBlendMode {
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
+}
+
+/// Isolation for stacking contexts
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Isolation {
+    Auto,
+    Isolate,
+}
+
 /// Transform origin for x/y axes
 ///
 /// CSS: `transform-origin`

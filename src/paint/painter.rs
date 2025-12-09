@@ -24,14 +24,15 @@
 use crate::error::{RenderError, Result};
 use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
+use crate::paint::stacking::creates_stacking_context;
 use crate::style::color::Rgba;
+use crate::style::types::MixBlendMode;
 use crate::style::types::{
     BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderStyle as CssBorderStyle, ObjectFit,
     ObjectPosition, PositionComponent,
 };
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
-use crate::paint::stacking::creates_stacking_context;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::{ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::ReplacedType;
@@ -40,8 +41,8 @@ use image::DynamicImage;
 use std::borrow::Cow;
 use std::sync::Arc;
 use tiny_skia::{
-    FilterQuality, IntSize, Paint, PathBuilder, Pattern, Pixmap, PixmapPaint, Rect as SkiaRect, SpreadMode, Stroke,
-    Transform,
+    BlendMode as SkiaBlendMode, FilterQuality, IntSize, Paint, PathBuilder, Pattern, Pixmap, PixmapPaint,
+    Rect as SkiaRect, SpreadMode, Stroke, Transform,
 };
 
 /// Main painter that rasterizes a FragmentTree to pixels
@@ -60,8 +61,14 @@ pub struct Painter {
 
 #[derive(Debug)]
 enum DisplayCommand {
-    Background { rect: Rect, style: Arc<ComputedStyle> },
-    Border { rect: Rect, style: Arc<ComputedStyle> },
+    Background {
+        rect: Rect,
+        style: Arc<ComputedStyle>,
+    },
+    Border {
+        rect: Rect,
+        style: Arc<ComputedStyle>,
+    },
     Text {
         rect: Rect,
         baseline_offset: f32,
@@ -69,10 +76,15 @@ enum DisplayCommand {
         runs: Option<Vec<ShapedRun>>,
         style: Arc<ComputedStyle>,
     },
-    Replaced { rect: Rect, replaced_type: ReplacedType, style: Arc<ComputedStyle> },
+    Replaced {
+        rect: Rect,
+        replaced_type: ReplacedType,
+        style: Arc<ComputedStyle>,
+    },
     StackingContext {
         opacity: f32,
         transform: Option<Transform>,
+        blend_mode: MixBlendMode,
         commands: Vec<DisplayCommand>,
     },
 }
@@ -302,32 +314,58 @@ impl Painter {
 
         negative_contexts.sort_by(|(z1, i1), (z2, i2)| z1.cmp(z2).then_with(|| i1.cmp(i2)));
         for (_, idx) in negative_contexts {
-            self.collect_stacking_context(&fragment.children[idx], child_offset, style_ref, false, &mut local_commands);
+            self.collect_stacking_context(
+                &fragment.children[idx],
+                child_offset,
+                style_ref,
+                false,
+                &mut local_commands,
+            );
         }
 
         // In-flow/non-positioned content for this context
         self.enqueue_content(fragment, abs_bounds, &mut local_commands);
         for idx in normal_children {
-            self.collect_stacking_context(&fragment.children[idx], child_offset, style_ref, false, &mut local_commands);
+            self.collect_stacking_context(
+                &fragment.children[idx],
+                child_offset,
+                style_ref,
+                false,
+                &mut local_commands,
+            );
         }
 
         zero_contexts.sort_by(|(z1, i1), (z2, i2)| z1.cmp(z2).then_with(|| i1.cmp(i2)));
         for (_, idx) in zero_contexts {
-            self.collect_stacking_context(&fragment.children[idx], child_offset, style_ref, false, &mut local_commands);
+            self.collect_stacking_context(
+                &fragment.children[idx],
+                child_offset,
+                style_ref,
+                false,
+                &mut local_commands,
+            );
         }
 
         positive_contexts.sort_by(|(z1, i1), (z2, i2)| z1.cmp(z2).then_with(|| i1.cmp(i2)));
         for (_, idx) in positive_contexts {
-            self.collect_stacking_context(&fragment.children[idx], child_offset, style_ref, false, &mut local_commands);
+            self.collect_stacking_context(
+                &fragment.children[idx],
+                child_offset,
+                style_ref,
+                false,
+                &mut local_commands,
+            );
         }
 
         // Wrap the stacking context if it applies an effect (opacity/transform); otherwise flatten
         let opacity = style_ref.map(|s| s.opacity).unwrap_or(1.0).clamp(0.0, 1.0);
         let transform = build_transform(style_ref, abs_bounds);
-        if opacity < 1.0 || transform.is_some() {
+        let blend_mode = style_ref.map(|s| s.mix_blend_mode).unwrap_or(MixBlendMode::Normal);
+        if opacity < 1.0 || transform.is_some() || !matches!(blend_mode, MixBlendMode::Normal) {
             items.push(DisplayCommand::StackingContext {
                 opacity,
                 transform,
+                blend_mode,
                 commands: local_commands,
             });
         } else {
@@ -365,12 +403,7 @@ impl Painter {
     }
 
     /// Enqueue paint commands for the fragment's own content (text/replaced).
-    fn enqueue_content(
-        &self,
-        fragment: &FragmentNode,
-        abs_bounds: Rect,
-        items: &mut Vec<DisplayCommand>,
-    ) {
+    fn enqueue_content(&self, fragment: &FragmentNode, abs_bounds: Rect, items: &mut Vec<DisplayCommand>) {
         match &fragment.content {
             FragmentContent::Text {
                 text,
@@ -421,7 +454,14 @@ impl Painter {
                 if let Some(runs) = runs {
                     self.paint_shaped_runs(&runs, rect.x(), rect.y() + baseline_offset, color);
                 } else {
-                    self.paint_text(&text, Some(&style), rect.x(), rect.y() + baseline_offset, style.font_size, color);
+                    self.paint_text(
+                        &text,
+                        Some(&style),
+                        rect.x(),
+                        rect.y() + baseline_offset,
+                        style.font_size,
+                        color,
+                    );
                 }
             }
             DisplayCommand::Replaced {
@@ -429,11 +469,19 @@ impl Painter {
                 replaced_type,
                 style,
             } => {
-                self.paint_replaced(&replaced_type, Some(&style), rect.x(), rect.y(), rect.width(), rect.height());
+                self.paint_replaced(
+                    &replaced_type,
+                    Some(&style),
+                    rect.x(),
+                    rect.y(),
+                    rect.width(),
+                    rect.height(),
+                );
             }
             DisplayCommand::StackingContext {
                 opacity,
                 transform,
+                blend_mode,
                 commands,
             } => {
                 if opacity <= 0.0 {
@@ -474,6 +522,7 @@ impl Painter {
                 paint.opacity = opacity.min(1.0);
                 let mut final_transform = transform.unwrap_or_else(Transform::identity);
                 final_transform = final_transform.pre_concat(Transform::from_translate(offset.x, offset.y));
+                paint.blend_mode = map_blend_mode(blend_mode);
                 self.pixmap
                     .draw_pixmap(0, 0, painter.pixmap.as_ref(), &paint, final_transform, None);
             }
@@ -1214,10 +1263,14 @@ fn build_transform(style: Option<&ComputedStyle>, bounds: Rect) -> Option<Transf
         ts = ts.pre_concat(next);
     }
 
-    // Apply transform relative to the context's origin to approximate transform-origin at the top-left.
-    ts = Transform::from_translate(bounds.x(), bounds.y())
+    let origin_x = resolve_transform_length(&style.transform_origin.x, style.font_size, bounds.width());
+    let origin_y = resolve_transform_length(&style.transform_origin.y, style.font_size, bounds.height());
+    let origin = Point::new(bounds.x() + origin_x, bounds.y() + origin_y);
+
+    // Apply transform around the resolved origin.
+    ts = Transform::from_translate(origin.x, origin.y)
         .pre_concat(ts)
-        .pre_concat(Transform::from_translate(-bounds.x(), -bounds.y()));
+        .pre_concat(Transform::from_translate(-origin.x, -origin.y));
 
     Some(ts)
 }
@@ -1292,14 +1345,37 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
             DisplayCommand::StackingContext {
                 opacity,
                 transform,
+                blend_mode,
                 commands,
             } => DisplayCommand::StackingContext {
                 opacity,
                 transform,
+                blend_mode,
                 commands: translate_commands(commands, dx, dy),
             },
         })
         .collect()
+}
+
+fn map_blend_mode(mode: MixBlendMode) -> SkiaBlendMode {
+    match mode {
+        MixBlendMode::Normal => SkiaBlendMode::SourceOver,
+        MixBlendMode::Multiply => SkiaBlendMode::Multiply,
+        MixBlendMode::Screen => SkiaBlendMode::Screen,
+        MixBlendMode::Overlay => SkiaBlendMode::Overlay,
+        MixBlendMode::Darken => SkiaBlendMode::Darken,
+        MixBlendMode::Lighten => SkiaBlendMode::Lighten,
+        MixBlendMode::ColorDodge => SkiaBlendMode::ColorDodge,
+        MixBlendMode::ColorBurn => SkiaBlendMode::ColorBurn,
+        MixBlendMode::HardLight => SkiaBlendMode::HardLight,
+        MixBlendMode::SoftLight => SkiaBlendMode::SoftLight,
+        MixBlendMode::Difference => SkiaBlendMode::Difference,
+        MixBlendMode::Exclusion => SkiaBlendMode::Exclusion,
+        MixBlendMode::Hue => SkiaBlendMode::Hue,
+        MixBlendMode::Saturation => SkiaBlendMode::Saturation,
+        MixBlendMode::Color => SkiaBlendMode::Color,
+        MixBlendMode::Luminosity => SkiaBlendMode::Luminosity,
+    }
 }
 
 #[derive(Clone, Copy)]

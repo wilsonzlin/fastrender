@@ -29,8 +29,9 @@ use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, BackgroundBox, BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize,
     BorderCollapse, BorderStyle, Direction, FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack,
-    HyphensMode, JustifyContent, LineHeight, ObjectFit, ObjectPosition, Overflow, OverflowWrap, TableLayout, TextAlign,
-    TextDecoration, TextTransform, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
+    HyphensMode, Isolation, JustifyContent, LineHeight, MixBlendMode, ObjectFit, ObjectPosition, Overflow,
+    OverflowWrap, TableLayout, TextAlign, TextDecoration, TextTransform, TransformOrigin, UnicodeBidi, VerticalAlign,
+    WhiteSpace, WordBreak,
 };
 use values::Length;
 
@@ -144,6 +145,8 @@ pub struct ComputedStyle {
     pub background_clip: BackgroundBox,
     pub object_fit: ObjectFit,
     pub object_position: ObjectPosition,
+    pub mix_blend_mode: MixBlendMode,
+    pub isolation: Isolation,
 
     // Visual effects
     pub opacity: f32,
@@ -268,6 +271,8 @@ impl Default for ComputedStyle {
                 x: types::PositionComponent::Keyword(types::PositionKeyword::Center),
                 y: types::PositionComponent::Keyword(types::PositionKeyword::Center),
             },
+            mix_blend_mode: MixBlendMode::Normal,
+            isolation: Isolation::Auto,
 
             opacity: 1.0,
             box_shadow: Vec::new(),

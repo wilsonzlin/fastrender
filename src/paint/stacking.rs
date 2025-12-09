@@ -433,6 +433,14 @@ pub fn creates_stacking_context(style: &ComputedStyle, parent_style: Option<&Com
         return true;
     }
 
+    // 7. Mix-blend-mode or isolation
+    if !matches!(style.mix_blend_mode, crate::style::types::MixBlendMode::Normal) {
+        return true;
+    }
+    if matches!(style.isolation, crate::style::types::Isolation::Isolate) {
+        return true;
+    }
+
     // 7. Overflow hidden/scroll/auto with visible overflow on the other axis
     // This creates a stacking context in some browsers
     // For simplicity, we create stacking context for any non-visible overflow
