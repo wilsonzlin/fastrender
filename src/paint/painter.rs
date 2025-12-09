@@ -512,22 +512,26 @@ impl Painter {
                         color,
                     );
                 }
-                self.paint_text_decoration(&style, runs.as_deref(), rect.x(), rect.y() + baseline_offset, rect.width());
+                self.paint_text_decoration(
+                    &style,
+                    runs.as_deref(),
+                    rect.x(),
+                    rect.y() + baseline_offset,
+                    rect.width(),
+                );
             }
             DisplayCommand::Replaced {
                 rect,
                 replaced_type,
                 style,
-            } => {
-                self.paint_replaced(
-                    &replaced_type,
-                    Some(&style),
-                    rect.x(),
-                    rect.y(),
-                    rect.width(),
-                    rect.height(),
-                );
-            }
+            } => self.paint_replaced(
+                &replaced_type,
+                Some(&style),
+                rect.x(),
+                rect.y(),
+                rect.width(),
+                rect.height(),
+            ),
             DisplayCommand::StackingContext {
                 opacity,
                 transform,
@@ -1158,11 +1162,19 @@ impl Painter {
             return;
         }
 
-        // Try to render actual content for images
-        if let ReplacedType::Image { src } = replaced_type {
-            if self.paint_image_from_src(src, style, x, y, width, height) {
-                return;
+        // Try to render actual content for images and SVG
+        match replaced_type {
+            ReplacedType::Image { src } => {
+                if self.paint_image_from_src(src, style, x, y, width, height) {
+                    return;
+                }
             }
+            ReplacedType::Svg { content } => {
+                if self.paint_svg(content, style, x, y, width, height) {
+                    return;
+                }
+            }
+            _ => {}
         }
 
         // For now, draw a placeholder rectangle
@@ -1245,13 +1257,73 @@ impl Painter {
         true
     }
 
+    fn paint_svg(
+        &mut self,
+        content: &str,
+        style: Option<&ComputedStyle>,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> bool {
+        if content.is_empty() {
+            return false;
+        }
+
+        let image = if content.trim_start().starts_with('<') {
+            match self.image_cache.render_svg(content) {
+                Ok(img) => img,
+                Err(_) => return false,
+            }
+        } else {
+            match self.image_cache.load(content) {
+                Ok(img) => img,
+                Err(_) => return false,
+            }
+        };
+
+        let pixmap = match Self::dynamic_image_to_pixmap(&image) {
+            Some(pixmap) => pixmap,
+            None => return false,
+        };
+
+        if pixmap.width() == 0 || pixmap.height() == 0 {
+            return false;
+        }
+
+        let img_w = pixmap.width() as f32;
+        let img_h = pixmap.height() as f32;
+        let fit = style.map(|s| s.object_fit).unwrap_or(ObjectFit::Fill);
+        let pos = style.map(|s| s.object_position).unwrap_or(default_object_position());
+
+        let (dest_x, dest_y, dest_w, dest_h) = match compute_object_fit(fit, pos, width, height, img_w, img_h) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        let scale_x = dest_w / img_w;
+        let scale_y = dest_h / img_h;
+        if !scale_x.is_finite() || !scale_y.is_finite() {
+            return false;
+        }
+
+        let mut paint = PixmapPaint::default();
+        paint.quality = FilterQuality::Bilinear;
+
+        let transform = Transform::from_row(scale_x, 0.0, 0.0, scale_y, x + dest_x, y + dest_y);
+        self.pixmap.draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);
+        true
+    }
+
     fn decoration_metrics<'a>(
         &self,
         runs: Option<&'a [ShapedRun]>,
         style: &ComputedStyle,
     ) -> Option<DecorationMetrics> {
-        let mut metrics_source = runs
-            .and_then(|rs| rs.iter().find_map(|run| run.font.metrics().ok().map(|m| (m, run.font_size))));
+        let mut metrics_source = runs.and_then(|rs| {
+            rs.iter()
+                .find_map(|run| run.font.metrics().ok().map(|m| (m, run.font_size)))
+        });
 
         if metrics_source.is_none() {
             let italic = matches!(style.font_style, crate::style::types::FontStyle::Italic);
@@ -1349,7 +1421,12 @@ impl Painter {
                 );
             }
             TextDecoration::Overline => {
-                draw_line(&mut self.pixmap, baseline_y - metrics.ascent, metrics.underline_thickness, &paint);
+                draw_line(
+                    &mut self.pixmap,
+                    baseline_y - metrics.ascent,
+                    metrics.underline_thickness,
+                    &paint,
+                );
             }
             TextDecoration::LineThrough => {
                 draw_line(

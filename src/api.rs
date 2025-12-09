@@ -641,24 +641,58 @@ impl FastRender {
     fn resolve_replaced_intrinsic_sizes(&self, node: &mut BoxNode) {
         if let BoxType::Replaced(replaced_box) = &mut node.box_type {
             // Fill missing intrinsic size/aspect ratio for images
-            if let ReplacedType::Image { src } = &replaced_box.replaced_type {
-                let needs_intrinsic = replaced_box.intrinsic_size.is_none();
-                let needs_ratio = replaced_box.aspect_ratio.is_none();
+            match &replaced_box.replaced_type {
+                ReplacedType::Image { src } => {
+                    let needs_intrinsic = replaced_box.intrinsic_size.is_none();
+                    let needs_ratio = replaced_box.aspect_ratio.is_none();
 
-                if (needs_intrinsic || needs_ratio) && !src.is_empty() {
-                    if let Ok(image) = self.image_cache.load(src) {
-                        let (w, h) = image.dimensions();
-                        if w > 0 && h > 0 {
-                            let size = Size::new(w as f32, h as f32);
-                            if needs_intrinsic {
-                                replaced_box.intrinsic_size = Some(size);
-                            }
-                            if needs_ratio {
-                                replaced_box.aspect_ratio = Some(size.width / size.height);
+                    if (needs_intrinsic || needs_ratio) && !src.is_empty() {
+                        if let Ok(image) = self.image_cache.load(src) {
+                            let (w, h) = image.dimensions();
+                            if w > 0 && h > 0 {
+                                let size = Size::new(w as f32, h as f32);
+                                if needs_intrinsic {
+                                    replaced_box.intrinsic_size = Some(size);
+                                }
+                                if needs_ratio {
+                                    replaced_box.aspect_ratio = Some(size.width / size.height);
+                                }
                             }
                         }
                     }
                 }
+                ReplacedType::Svg { content } => {
+                    let needs_intrinsic = replaced_box.intrinsic_size.is_none();
+                    let needs_ratio = replaced_box.aspect_ratio.is_none();
+
+                    if needs_intrinsic || needs_ratio {
+                        // Inline SVG content can be rendered directly; otherwise try to load via URL/data URI.
+                        let image = if content.trim_start().starts_with('<') {
+                            self.image_cache.render_svg(content)
+                        } else if !content.is_empty() {
+                            self.image_cache.load(content)
+                        } else {
+                            Err(crate::error::Error::Image(crate::error::ImageError::LoadFailed {
+                                url: "svg".to_string(),
+                                reason: "empty content".to_string(),
+                            }))
+                        };
+
+                        if let Ok(image) = image {
+                            let (w, h) = image.dimensions();
+                            if w > 0 && h > 0 {
+                                let size = Size::new(w as f32, h as f32);
+                                if needs_intrinsic {
+                                    replaced_box.intrinsic_size = Some(size);
+                                }
+                                if needs_ratio {
+                                    replaced_box.aspect_ratio = Some(size.width / size.height);
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
 
             // If only intrinsic size is present, ensure aspect ratio is recorded
@@ -736,6 +770,8 @@ impl FastRender {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ComputedStyle;
+    use std::sync::Arc;
 
     // =========================================================================
     // Creation Tests (these should always pass)
@@ -812,6 +848,35 @@ mod tests {
         let renderer = FastRender::new().unwrap();
         let _layout_engine = renderer.layout_engine();
         // Just verify we can access it
+    }
+
+    #[test]
+    fn resolve_intrinsic_sizes_handles_inline_svg() {
+        let renderer = FastRender::new().expect("init renderer");
+        let mut node = BoxNode::new_replaced(
+            Arc::new(ComputedStyle::default()),
+            ReplacedType::Svg {
+                content: r#"<svg xmlns='http://www.w3.org/2000/svg' width='20' height='12'></svg>"#.to_string(),
+            },
+            None,
+            None,
+        );
+
+        renderer.resolve_replaced_intrinsic_sizes(&mut node);
+        let replaced = match node.box_type {
+            BoxType::Replaced(ref r) => r,
+            _ => panic!("not replaced"),
+        };
+        assert_eq!(
+            replaced.intrinsic_size,
+            Some(Size::new(20.0, 12.0)),
+            "inline svg should populate intrinsic size"
+        );
+        assert_eq!(
+            replaced.aspect_ratio,
+            Some(20.0 / 12.0),
+            "inline svg should populate aspect ratio"
+        );
     }
 
     // =========================================================================

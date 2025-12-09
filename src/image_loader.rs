@@ -140,6 +140,12 @@ impl ImageCache {
         Ok(img_arc)
     }
 
+    /// Render raw SVG content to an image (uncached).
+    pub fn render_svg(&self, svg_content: &str) -> Result<Arc<DynamicImage>> {
+        let img = self.render_svg_to_image(svg_content)?;
+        Ok(Arc::new(img))
+    }
+
     fn load_from_url(&self, url: &str) -> Result<DynamicImage> {
         // Configure agent with timeout
         let config = ureq::Agent::config_builder()
@@ -228,7 +234,8 @@ impl ImageCache {
         }
     }
 
-    fn render_svg_to_image(&self, svg_content: &str) -> Result<DynamicImage> {
+    /// Renders raw SVG content to a raster image.
+    pub fn render_svg_to_image(&self, svg_content: &str) -> Result<DynamicImage> {
         use resvg::usvg;
 
         // Parse SVG
@@ -275,5 +282,19 @@ impl Clone for ImageCache {
             cache: Arc::clone(&self.cache),
             base_url: self.base_url.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_inline_svg_returns_image() {
+        let cache = ImageCache::new();
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="5"></svg>"#;
+        let image = cache.render_svg_to_image(svg).expect("svg render");
+        assert_eq!(image.width(), 10);
+        assert_eq!(image.height(), 5);
     }
 }
