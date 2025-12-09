@@ -41,6 +41,7 @@
 - CSS `table-layout` is parsed and stored; fixed layout now selects the fixed distribution path in the column distributor (`src/style/{types,mod,properties.rs}`, `src/layout/table.rs`).
 - Fixed table layout now only inspects the first row for column sizing and ignores later rows when collecting constraints, matching CSS 2.1 fixed layout behavior (`src/layout/table.rs`).
 - Explicit table widths (px/%, em/rem) are resolved against the containing block and used as the available table width; column distribution now honors author-specified table widths (`src/layout/table.rs`).
+- Table widths respect `min-width`/`max-width` when clamping explicit/containing widths, and intrinsic width calculation for collapsed borders excludes border widths (padding only) so columns aren’t inflated by collapsed borders (`src/layout/table.rs`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
