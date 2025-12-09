@@ -29,9 +29,9 @@ use position::Position;
 use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundPosition,
-    BackgroundPositionComponent, BackgroundRepeat, BackgroundSize, BackgroundSizeComponent, BorderCollapse,
-    BorderStyle, Direction, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack,
-    HyphensMode, Isolation, JustifyContent, LineHeight, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit,
+    BackgroundPositionComponent, BackgroundRepeat, BackgroundSize, BackgroundSizeComponent, BorderCollapse, BorderStyle,
+    Direction, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack, HyphensMode,
+    Isolation, JustifyContent, LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit,
     ObjectPosition, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration, TextIndent,
     TextJustify, TextTransform, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
 };
@@ -141,6 +141,7 @@ pub struct ComputedStyle {
     pub language: String,
     pub list_style_type: ListStyleType,
     pub list_style_position: ListStylePosition,
+    pub list_style_image: ListStyleImage,
     /// Counter properties (reset/increment/set)
     pub counters: CounterProperties,
 
@@ -278,6 +279,7 @@ impl Default for ComputedStyle {
             language: "en".to_string(),
             list_style_type: ListStyleType::Disc,
             list_style_position: ListStylePosition::Outside,
+            list_style_image: ListStyleImage::None,
             counters: CounterProperties::default(),
 
             color: Rgba::BLACK,

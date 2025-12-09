@@ -10,11 +10,11 @@ use crate::geometry::Size;
 use crate::style::content::CounterStyle;
 use crate::style::counters::{CounterManager, CounterSet};
 use crate::style::display::{Display, FormattingContextType};
-use crate::style::types::{ListStylePosition, ListStyleType};
+use crate::style::types::ListStyleType;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::tree::anonymous::AnonymousBoxCreator;
-use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, ReplacedType};
+use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, MarkerContent, ReplacedBox, ReplacedType};
 use crate::tree::debug::DebugInfo;
 use std::sync::Arc;
 
@@ -683,33 +683,18 @@ impl BoxGenerator {
     /// Prepends a marker box for list items based on list-style-* properties
     fn attach_list_marker(&self, mut list_item: BoxNode, counters: &CounterManager) -> BoxNode {
         let style = list_item.style.clone();
-        let marker_text = marker_text_from_style(&style, counters);
-        if marker_text.is_empty() {
-            return list_item;
+        let marker_content = marker_content_from_style(&style, counters);
+        if let Some(content) = marker_content {
+            let mut marker_style = (*style).clone();
+            marker_style.display = Display::Inline;
+            reset_marker_box_edges(&mut marker_style);
+            marker_style.list_style_type = ListStyleType::None;
+            marker_style.list_style_image = crate::style::types::ListStyleImage::None;
+            marker_style.text_transform = crate::style::types::TextTransform::None;
+
+            let marker_node = BoxNode::new_marker(Arc::new(marker_style), content);
+            list_item.children.insert(0, marker_node);
         }
-
-        let mut marker_style = (*style).clone();
-        marker_style.display = Display::Inline;
-        marker_style.margin_left = None;
-        marker_style.margin_right = Some(crate::style::values::Length::px(8.0));
-        marker_style.padding_left = crate::style::values::Length::px(0.0);
-        marker_style.padding_right = crate::style::values::Length::px(0.0);
-        marker_style.padding_top = crate::style::values::Length::px(0.0);
-        marker_style.padding_bottom = crate::style::values::Length::px(0.0);
-        marker_style.border_top_width = crate::style::values::Length::px(0.0);
-        marker_style.border_right_width = crate::style::values::Length::px(0.0);
-        marker_style.border_bottom_width = crate::style::values::Length::px(0.0);
-        marker_style.border_left_width = crate::style::values::Length::px(0.0);
-        marker_style.list_style_type = ListStyleType::None;
-        marker_style.text_transform = crate::style::types::TextTransform::None;
-
-        // Position inside/outside: both remain inline for now; outside can be spaced a bit more.
-        if style.list_style_position == ListStylePosition::Outside {
-            marker_style.margin_right = Some(crate::style::values::Length::px(12.0));
-        }
-
-        let marker_node = BoxNode::new_marker(Arc::new(marker_style), marker_text);
-        list_item.children.insert(0, marker_node);
         list_item
     }
 }
@@ -892,7 +877,6 @@ impl Default for BoxGenerator {
 // ============================================================================
 
 use crate::style::cascade::StyledNode;
-use crate::tree::box_tree::ReplacedBox;
 
 /// Generates a BoxTree from a StyledNode tree
 ///
@@ -1064,23 +1048,36 @@ fn create_marker_box(styled: &StyledNode, counters: &CounterManager) -> Option<B
     marker_style.display = Display::Inline;
     reset_marker_box_edges(&mut marker_style);
 
-    let text = marker_text_from_style(&marker_style, counters);
-    if text.is_empty() {
-        return None;
-    }
+    let content = marker_content_from_style(&marker_style, counters)?;
 
-    Some(BoxNode::new_marker(Arc::new(marker_style), text))
+    Some(BoxNode::new_marker(Arc::new(marker_style), content))
 }
 
-fn marker_text_from_style(style: &ComputedStyle, counters: &CounterManager) -> String {
+fn marker_content_from_style(style: &ComputedStyle, counters: &CounterManager) -> Option<MarkerContent> {
     if !style.content.is_empty() && style.content != "normal" {
         if style.content == "none" {
-            String::new()
-        } else {
-            style.content.clone()
+            return None;
         }
+        return Some(MarkerContent::Text(style.content.clone()));
+    }
+
+    match &style.list_style_image {
+        crate::style::types::ListStyleImage::Url(url) => {
+            let replaced = ReplacedBox {
+                replaced_type: ReplacedType::Image { src: url.clone(), alt: None },
+                intrinsic_size: None,
+                aspect_ratio: None,
+            };
+            return Some(MarkerContent::Image(replaced));
+        }
+        crate::style::types::ListStyleImage::None => {}
+    }
+
+    let text = list_marker_text(style.list_style_type, counters);
+    if text.is_empty() {
+        None
     } else {
-        list_marker_text(style.list_style_type, counters)
+        Some(MarkerContent::Text(text))
     }
 }
 
@@ -1233,7 +1230,8 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
 mod tests {
     use super::*;
     use crate::geometry::Size;
-    use crate::tree::box_tree::ReplacedType;
+    use crate::tree::box_tree::{MarkerContent, ReplacedType};
+    use crate::style::types::ListStylePosition;
     use crate::{dom, style};
 
     fn default_style() -> Arc<ComputedStyle> {
@@ -2071,12 +2069,20 @@ mod tests {
         let tree = generator.generate(&ul).unwrap();
         let first_li = &tree.root.children[0];
         if let BoxType::Marker(marker_box) = &first_li.children[0].box_type {
-            assert_eq!(marker_box.text, "1 ");
+            if let MarkerContent::Text(text) = &marker_box.content {
+                assert_eq!(text, "1 ");
+            } else {
+                panic!("expected text marker");
+            }
         } else {
             panic!("expected marker text box");
         }
         if let BoxType::Marker(marker_box) = &tree.root.children[1].children[0].box_type {
-            assert_eq!(marker_box.text, "2 ");
+            if let MarkerContent::Text(text) = &marker_box.content {
+                assert_eq!(text, "2 ");
+            } else {
+                panic!("expected text marker");
+            }
         } else {
             panic!("expected marker text box");
         }
@@ -2115,13 +2121,21 @@ mod tests {
         let tree = generator.generate(&list).unwrap();
 
         if let BoxType::Marker(text_box) = &tree.root.children[0].children[0].box_type {
-            assert_eq!(text_box.text, "5 ");
+            if let MarkerContent::Text(text) = &text_box.content {
+                assert_eq!(text, "5 ");
+            } else {
+                panic!("expected text marker");
+            }
         } else {
             panic!("expected first marker text");
         }
 
         if let BoxType::Marker(text_box) = &tree.root.children[1].children[0].box_type {
-            assert_eq!(text_box.text, "7 ");
+            if let MarkerContent::Text(text) = &text_box.content {
+                assert_eq!(text, "7 ");
+            } else {
+                panic!("expected text marker");
+            }
         } else {
             panic!("expected second marker text");
         }
@@ -2154,7 +2168,11 @@ mod tests {
 
         // Outer marker should start at 1
         if let BoxType::Marker(text_box) = &tree.root.children[0].children[0].box_type {
-            assert_eq!(text_box.text, "1 ");
+            if let MarkerContent::Text(text) = &text_box.content {
+                assert_eq!(text, "1 ");
+            } else {
+                panic!("expected text marker");
+            }
         } else {
             panic!("expected outer marker text");
         }
@@ -2165,7 +2183,11 @@ mod tests {
             .find(|child| matches!(child.box_type, BoxType::Block(_)))
             .expect("inner list block");
         if let BoxType::Marker(text_box) = &inner_list_box.children[0].children[0].box_type {
-            assert_eq!(text_box.text, "1 ");
+            if let MarkerContent::Text(text) = &text_box.content {
+                assert_eq!(text, "1 ");
+            } else {
+                panic!("expected text marker");
+            }
         } else {
             panic!("expected inner marker text");
         }
@@ -2189,9 +2211,44 @@ mod tests {
 
         let tree = generator.generate(&ul).unwrap();
         if let BoxType::Marker(marker) = &tree.root.children[0].children[0].box_type {
-            assert_eq!(marker.text, "a ");
+            if let MarkerContent::Text(text) = &marker.content {
+                assert_eq!(text, "a ");
+            } else {
+                panic!("expected text marker");
+            }
         } else {
             panic!("expected marker");
+        }
+    }
+
+    #[test]
+    fn list_style_image_produces_image_marker() {
+        let generator = BoxGenerator::new();
+        let mut li_style = ComputedStyle::default();
+        li_style.display = Display::ListItem;
+        li_style.list_style_image = crate::style::types::ListStyleImage::Url("bullet.png".to_string());
+        let li_style = Arc::new(li_style);
+
+        let li = DOMNode::new_element(
+            "li",
+            li_style.clone(),
+            vec![DOMNode::new_text("item", li_style.clone())],
+        );
+        let ul = DOMNode::new_element("ul", style_with_display(Display::Block), vec![li]);
+
+        let tree = generator.generate(&ul).unwrap();
+        match &tree.root.children[0].children[0].box_type {
+            BoxType::Marker(marker) => match &marker.content {
+                MarkerContent::Image(replaced) => {
+                    if let ReplacedType::Image { src, .. } = &replaced.replaced_type {
+                        assert_eq!(src, "bullet.png");
+                    } else {
+                        panic!("expected image marker type");
+                    }
+                }
+                other => panic!("expected image marker, got {:?}", other),
+            },
+            other => panic!("expected marker, got {:?}", other),
         }
     }
 }

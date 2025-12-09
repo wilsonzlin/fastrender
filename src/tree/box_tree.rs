@@ -69,6 +69,12 @@ pub struct TextBox {
     pub text: String,
 }
 
+#[derive(Debug, Clone)]
+pub enum MarkerContent {
+    Text(String),
+    Image(ReplacedBox),
+}
+
 /// A list marker box
 ///
 /// Generated for list items. Carries marker text but participates as its own
@@ -76,8 +82,8 @@ pub struct TextBox {
 /// outside the principal block).
 #[derive(Debug, Clone)]
 pub struct MarkerBox {
-    /// Marker text content (already formatted per list-style-type)
-    pub text: String,
+    /// Marker payload (text or image)
+    pub content: MarkerContent,
 }
 
 /// A replaced element box
@@ -399,10 +405,10 @@ impl BoxNode {
     }
 
     /// Creates a new list marker box
-    pub fn new_marker(style: Arc<ComputedStyle>, text: String) -> Self {
+    pub fn new_marker(style: Arc<ComputedStyle>, content: MarkerContent) -> Self {
         Self {
             style,
-            box_type: BoxType::Marker(MarkerBox { text }),
+            box_type: BoxType::Marker(MarkerBox { content }),
             children: Vec::new(),
             debug_info: None,
         }
@@ -546,7 +552,10 @@ impl BoxNode {
     pub fn text(&self) -> Option<&str> {
         match &self.box_type {
             BoxType::Text(text_box) => Some(&text_box.text),
-            BoxType::Marker(marker_box) => Some(&marker_box.text),
+            BoxType::Marker(marker_box) => match &marker_box.content {
+                MarkerContent::Text(text) => Some(text.as_str()),
+                _ => None,
+            },
             _ => None,
         }
     }

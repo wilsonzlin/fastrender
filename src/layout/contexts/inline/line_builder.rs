@@ -33,7 +33,7 @@
 
 use super::baseline::{BaselineMetrics, LineBaselineAccumulator, VerticalAlign};
 use crate::geometry::Size;
-use crate::style::types::{Direction, OverflowWrap, UnicodeBidi, WhiteSpace, WordBreak};
+use crate::style::types::{Direction, ListStylePosition, OverflowWrap, UnicodeBidi, WhiteSpace, WordBreak};
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::text::line_break::{BreakOpportunity, BreakType};
@@ -84,7 +84,7 @@ impl InlineItem {
             InlineItem::Tab(t) => t.width(),
             InlineItem::InlineBox(b) => b.width(),
             InlineItem::InlineBlock(b) => b.width,
-            InlineItem::Replaced(r) => r.width,
+            InlineItem::Replaced(r) => r.intrinsic_width(),
         }
     }
 
@@ -934,6 +934,15 @@ pub struct ReplacedItem {
     /// Vertical alignment
     pub vertical_align: VerticalAlign,
 
+    /// Horizontal advance used for layout (may differ for list markers)
+    pub layout_advance: f32,
+
+    /// Paint offset applied at fragment creation (used for outside markers)
+    pub paint_offset: f32,
+
+    /// True if this replaced item represents a list marker
+    pub is_marker: bool,
+
     /// Original replaced type (img, video, etc.)
     pub replaced_type: ReplacedType,
 
@@ -964,6 +973,9 @@ impl ReplacedItem {
             margin_right,
             metrics,
             vertical_align: VerticalAlign::Baseline,
+            layout_advance: size.width + margin_left + margin_right,
+            paint_offset: 0.0,
+            is_marker: false,
             replaced_type,
             direction: style.direction,
             unicode_bidi: style.unicode_bidi,
@@ -977,12 +989,33 @@ impl ReplacedItem {
         self
     }
 
+    /// Marks this replaced item as a list marker and adjusts layout/paint offsets accordingly.
+    pub fn as_marker(mut self, gap: f32, position: ListStylePosition, direction: Direction) -> Self {
+        let paint_advance = self.width + gap;
+        let sign = if direction == Direction::Rtl { 1.0 } else { -1.0 };
+        if matches!(position, ListStylePosition::Outside) {
+            self.layout_advance = 0.0;
+            self.paint_offset = sign * paint_advance;
+        } else {
+            self.layout_advance = paint_advance;
+            self.paint_offset = 0.0;
+        }
+        self.margin_left = 0.0;
+        self.margin_right = 0.0;
+        self.is_marker = true;
+        self
+    }
+
     pub fn total_width(&self) -> f32 {
-        self.margin_left + self.width + self.margin_right
+        self.layout_advance
     }
 
     pub fn intrinsic_width(&self) -> f32 {
-        self.width
+        if self.is_marker {
+            self.layout_advance
+        } else {
+            self.width
+        }
     }
 }
 

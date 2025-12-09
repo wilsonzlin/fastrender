@@ -231,6 +231,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.language = parent.language.clone();
     styles.list_style_type = parent.list_style_type;
     styles.list_style_position = parent.list_style_position;
+    styles.list_style_image = parent.list_style_image.clone();
 
     // Color inherits
     styles.color = parent.color;
@@ -444,6 +445,8 @@ mod tests {
                 padding: 10px;
                 margin-left: 12px;
                 background: blue;
+                text-decoration: underline;
+                text-indent: 40px;
             }
         "#,
         )
@@ -462,6 +465,8 @@ mod tests {
         assert_eq!(marker.background_color, Rgba::TRANSPARENT);
         assert!(matches!(marker.text_transform, crate::style::types::TextTransform::None));
         assert!(marker.text_decoration.lines == crate::style::types::TextDecorationLine::NONE);
+        assert!(matches!(marker.text_align, crate::style::types::TextAlign::Start));
+        assert_eq!(marker.text_indent, crate::style::types::TextIndent::default());
     }
 }
 
@@ -715,6 +720,9 @@ fn reset_marker_box_properties(styles: &mut ComputedStyle) {
     styles.overflow_y = defaults.overflow_y;
     styles.opacity = defaults.opacity;
     styles.text_decoration = defaults.text_decoration.clone();
+    styles.text_align = defaults.text_align;
+    styles.text_align_last = defaults.text_align_last;
+    styles.text_indent = defaults.text_indent.clone();
 
     // Markers should not carry table/layout-specific state
     styles.border_spacing_horizontal = defaults.border_spacing_horizontal;

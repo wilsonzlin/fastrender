@@ -768,6 +768,11 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 styles.list_style_position = p;
             }
         }
+        "list-style-image" => {
+            if let Some(img) = parse_list_style_image(&resolved_value) {
+                styles.list_style_image = img;
+            }
+        }
         "list-style" => {
             let tokens: Vec<PropertyValue> = match resolved_value {
                 PropertyValue::Multiple(ref values) => values.clone(),
@@ -781,6 +786,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
             // Reset to initial values
             let mut list_type = ListStyleType::Disc;
             let mut list_pos = ListStylePosition::Outside;
+            let mut list_image = ListStyleImage::None;
 
             for token in tokens {
                 if let Some(t) = parse_list_style_type(&token) {
@@ -789,11 +795,16 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 }
                 if let Some(p) = parse_list_style_position(&token) {
                     list_pos = p;
+                    continue;
+                }
+                if let Some(img) = parse_list_style_image(&token) {
+                    list_image = img;
                 }
             }
 
             styles.list_style_type = list_type;
             styles.list_style_position = list_pos;
+            styles.list_style_image = list_image;
         }
         "counter-reset" => {
             if let Some(parsed) = parse_counter_property(&resolved_value, CounterPropertyKind::Reset) {
@@ -2026,6 +2037,14 @@ fn parse_list_style_position(value: &PropertyValue) -> Option<ListStylePosition>
     }
 }
 
+fn parse_list_style_image(value: &PropertyValue) -> Option<ListStyleImage> {
+    match value {
+        PropertyValue::Keyword(kw) if kw == "none" => Some(ListStyleImage::None),
+        PropertyValue::Url(url) => Some(ListStyleImage::Url(url.clone())),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy)]
 enum CounterPropertyKind {
     Reset,
@@ -2442,6 +2461,14 @@ mod tests {
         assert_eq!(style.list_style_position, ListStylePosition::Inside);
 
         let decl = Declaration {
+            property: "list-style-image".to_string(),
+            value: PropertyValue::Url("marker.png".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.list_style_image, ListStyleImage::Url("marker.png".to_string()));
+
+        let decl = Declaration {
             property: "list-style".to_string(),
             value: PropertyValue::Multiple(vec![
                 PropertyValue::Keyword("upper-roman".to_string()),
@@ -2452,6 +2479,26 @@ mod tests {
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert_eq!(style.list_style_type, ListStyleType::UpperRoman);
         assert_eq!(style.list_style_position, ListStylePosition::Outside);
+        assert_eq!(style.list_style_image, ListStyleImage::None);
+
+        let decl = Declaration {
+            property: "list-style".to_string(),
+            value: PropertyValue::Url("img.png".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.list_style_image, ListStyleImage::Url("img.png".to_string()));
+        assert_eq!(style.list_style_type, ListStyleType::Disc);
+        assert_eq!(style.list_style_position, ListStylePosition::Outside);
+
+        let decl = Declaration {
+            property: "list-style".to_string(),
+            value: PropertyValue::Keyword("none".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.list_style_type, ListStyleType::None);
+        assert_eq!(style.list_style_image, ListStyleImage::None);
 
         let decl = Declaration {
             property: "list-style-type".to_string(),

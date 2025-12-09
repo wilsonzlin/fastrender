@@ -516,6 +516,13 @@ pub enum ListStylePosition {
     Inside,
 }
 
+/// list-style-image values
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListStyleImage {
+    None,
+    Url(String),
+}
+
 /// Text case transformation
 ///
 /// CSS: `text-transform`

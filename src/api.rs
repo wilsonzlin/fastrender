@@ -70,7 +70,7 @@ use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::ShapingPipeline;
 use crate::tree::box_generation::generate_box_tree;
-use crate::tree::box_tree::{BoxNode, BoxType, ReplacedType};
+use crate::tree::box_tree::{BoxNode, BoxType, MarkerContent, ReplacedBox, ReplacedType};
 use crate::tree::fragment_tree::FragmentTree;
 use image::GenericImageView;
 
@@ -643,91 +643,108 @@ impl FastRender {
 
     /// Populate intrinsic sizes for replaced elements (e.g., images) using the image cache.
     fn resolve_replaced_intrinsic_sizes(&self, node: &mut BoxNode) {
-        if let BoxType::Replaced(replaced_box) = &mut node.box_type {
-            // Fill missing intrinsic size/aspect ratio for images
-            match &mut replaced_box.replaced_type {
-                ReplacedType::Image { src, alt } => {
-                    let needs_intrinsic = replaced_box.intrinsic_size.is_none();
-                    let needs_ratio = replaced_box.aspect_ratio.is_none();
-                    let mut have_resource_dimensions = false;
+        if let BoxType::Marker(marker_box) = &mut node.box_type {
+            if let MarkerContent::Image(replaced) = &mut marker_box.content {
+                self.resolve_intrinsic_for_replaced(replaced, node.style.as_ref(), None);
+            }
+        }
 
-                    if (needs_intrinsic || needs_ratio) && !src.is_empty() {
-                        if let Ok(image) = self.image_cache.load(src) {
-                            let (w, h) = image.dimensions();
-                            if w > 0 && h > 0 {
-                                let size = Size::new(w as f32, h as f32);
-                                if needs_intrinsic {
-                                    replaced_box.intrinsic_size = Some(size);
-                                }
-                                if needs_ratio {
-                                    replaced_box.aspect_ratio = Some(size.width / size.height);
-                                }
-                                have_resource_dimensions = true;
+        if let BoxType::Replaced(replaced_box) = &mut node.box_type {
+            let alt = match &replaced_box.replaced_type {
+                ReplacedType::Image { alt, .. } => alt.clone(),
+                _ => None,
+            };
+            self.resolve_intrinsic_for_replaced(replaced_box, node.style.as_ref(), alt.as_deref());
+        }
+
+        for child in &mut node.children {
+            self.resolve_replaced_intrinsic_sizes(child);
+        }
+    }
+
+    fn resolve_intrinsic_for_replaced(
+        &self,
+        replaced_box: &mut ReplacedBox,
+        style: &ComputedStyle,
+        alt: Option<&str>,
+    ) {
+        match &mut replaced_box.replaced_type {
+            ReplacedType::Image { src, alt: stored_alt } => {
+                let needs_intrinsic = replaced_box.intrinsic_size.is_none();
+                let needs_ratio = replaced_box.aspect_ratio.is_none();
+                let mut have_resource_dimensions = false;
+
+                if (needs_intrinsic || needs_ratio) && !src.is_empty() {
+                    if let Ok(image) = self.image_cache.load(src) {
+                        let (w, h) = image.dimensions();
+                        if w > 0 && h > 0 {
+                            let size = Size::new(w as f32, h as f32);
+                            if needs_intrinsic {
+                                replaced_box.intrinsic_size = Some(size);
                             }
+                            if needs_ratio {
+                                replaced_box.aspect_ratio = Some(size.width / size.height);
+                            }
+                            have_resource_dimensions = true;
                         }
                     }
+                }
 
-                    if !have_resource_dimensions && (needs_intrinsic || needs_ratio) {
-                        if let Some(size) = alt
-                            .as_deref()
-                            .filter(|s| !s.is_empty())
-                            .and_then(|text| self.alt_intrinsic_size(node.style.as_ref(), text))
-                        {
+                if !have_resource_dimensions && (needs_intrinsic || needs_ratio) {
+                    let candidate_alt = alt
+                        .filter(|s| !s.is_empty())
+                        .or_else(|| stored_alt.as_deref().filter(|s| !s.is_empty()));
+                    if let Some(size) = candidate_alt.and_then(|text| self.alt_intrinsic_size(style, text)) {
+                        if needs_intrinsic {
+                            replaced_box.intrinsic_size.get_or_insert(size);
+                        }
+                        if needs_ratio && size.height > 0.0 && replaced_box.aspect_ratio.is_none() {
+                            replaced_box.aspect_ratio = Some(size.width / size.height);
+                        }
+                    }
+                }
+            }
+            ReplacedType::Svg { content } => {
+                let needs_intrinsic = replaced_box.intrinsic_size.is_none();
+                let needs_ratio = replaced_box.aspect_ratio.is_none();
+
+                if needs_intrinsic || needs_ratio {
+                    // Inline SVG content can be rendered directly; otherwise try to load via URL/data URI.
+                    let image = if content.trim_start().starts_with('<') {
+                        self.image_cache.render_svg(content)
+                    } else if !content.is_empty() {
+                        self.image_cache.load(content)
+                    } else {
+                        Err(crate::error::Error::Image(crate::error::ImageError::LoadFailed {
+                            url: "svg".to_string(),
+                            reason: "empty content".to_string(),
+                        }))
+                    };
+
+                    if let Ok(image) = image {
+                        let (w, h) = image.dimensions();
+                        if w > 0 && h > 0 {
+                            let size = Size::new(w as f32, h as f32);
                             if needs_intrinsic {
-                                replaced_box.intrinsic_size.get_or_insert(size);
+                                replaced_box.intrinsic_size = Some(size);
                             }
-                            if needs_ratio && size.height > 0.0 && replaced_box.aspect_ratio.is_none() {
+                            if needs_ratio {
                                 replaced_box.aspect_ratio = Some(size.width / size.height);
                             }
                         }
                     }
                 }
-                ReplacedType::Svg { content } => {
-                    let needs_intrinsic = replaced_box.intrinsic_size.is_none();
-                    let needs_ratio = replaced_box.aspect_ratio.is_none();
-
-                    if needs_intrinsic || needs_ratio {
-                        // Inline SVG content can be rendered directly; otherwise try to load via URL/data URI.
-                        let image = if content.trim_start().starts_with('<') {
-                            self.image_cache.render_svg(content)
-                        } else if !content.is_empty() {
-                            self.image_cache.load(content)
-                        } else {
-                            Err(crate::error::Error::Image(crate::error::ImageError::LoadFailed {
-                                url: "svg".to_string(),
-                                reason: "empty content".to_string(),
-                            }))
-                        };
-
-                        if let Ok(image) = image {
-                            let (w, h) = image.dimensions();
-                            if w > 0 && h > 0 {
-                                let size = Size::new(w as f32, h as f32);
-                                if needs_intrinsic {
-                                    replaced_box.intrinsic_size = Some(size);
-                                }
-                                if needs_ratio {
-                                    replaced_box.aspect_ratio = Some(size.width / size.height);
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => {}
             }
-
-            // If only intrinsic size is present, ensure aspect ratio is recorded
-            if replaced_box.aspect_ratio.is_none() {
-                if let Some(size) = replaced_box.intrinsic_size {
-                    if size.height > 0.0 {
-                        replaced_box.aspect_ratio = Some(size.width / size.height);
-                    }
-                }
-            }
+            _ => {}
         }
 
-        for child in &mut node.children {
-            self.resolve_replaced_intrinsic_sizes(child);
+        // If only intrinsic size is present, ensure aspect ratio is recorded
+        if replaced_box.aspect_ratio.is_none() {
+            if let Some(size) = replaced_box.intrinsic_size {
+                if size.height > 0.0 {
+                    replaced_box.aspect_ratio = Some(size.width / size.height);
+                }
+            }
         }
     }
 

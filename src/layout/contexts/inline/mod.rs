@@ -56,7 +56,7 @@ use crate::text::hyphenation::Hyphenator;
 use crate::text::justify::is_cjk_character;
 use crate::text::line_break::{find_break_opportunities, BreakType};
 use crate::text::pipeline::{ShapedRun, ShapingPipeline};
-use crate::tree::box_tree::{BoxNode, BoxType, ReplacedBox};
+use crate::tree::box_tree::{BoxNode, BoxType, MarkerContent, ReplacedBox};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 use std::sync::Arc;
 
@@ -196,20 +196,39 @@ impl InlineFormattingContext {
                         *pending_space = Some(PendingSpace::new(child.style.clone(), normalized.allow_soft_wrap));
                     }
                 }
-                BoxType::Marker(marker_box) => {
-                    let normalized = NormalizedText {
-                        text: marker_box.text.clone(),
-                        forced_breaks: Vec::new(),
-                        allow_soft_wrap: false,
-                        leading_collapsible: false,
-                        trailing_collapsible: false,
-                    };
-                    let mut produced = self.create_inline_items_from_normalized(child, normalized.clone(), true)?;
-                    items.append(&mut produced);
-                    if normalized.trailing_collapsible {
-                        *pending_space = Some(PendingSpace::new(child.style.clone(), normalized.allow_soft_wrap));
+                BoxType::Marker(marker_box) => match &marker_box.content {
+                    MarkerContent::Text(text) => {
+                        let normalized = NormalizedText {
+                            text: text.clone(),
+                            forced_breaks: Vec::new(),
+                            allow_soft_wrap: false,
+                            leading_collapsible: false,
+                            trailing_collapsible: false,
+                        };
+                        let mut produced = self.create_inline_items_from_normalized(child, normalized.clone(), true)?;
+                        items.append(&mut produced);
+                        if normalized.trailing_collapsible {
+                            *pending_space = Some(PendingSpace::new(child.style.clone(), normalized.allow_soft_wrap));
+                        }
                     }
-                }
+                    MarkerContent::Image(replaced_box) => {
+                        let mut item =
+                            self.create_replaced_item(child, replaced_box, available_width, available_height)?;
+                        let raw_gap = child
+                            .style
+                            .margin_right
+                            .as_ref()
+                            .map(|m| resolve_length_for_width(*m, 0.0))
+                            .unwrap_or(0.0);
+                        let gap = if raw_gap.abs() > f32::EPSILON {
+                            raw_gap
+                        } else {
+                            child.style.font_size * 0.5
+                        };
+                        item = item.as_marker(gap, child.style.list_style_position, child.style.direction);
+                        items.push(InlineItem::Replaced(item));
+                    }
+                },
                 BoxType::Inline(_) => {
                     if child.formatting_context().is_some() {
                         let item = self.layout_inline_block(child, available_width, available_height)?;
@@ -1119,12 +1138,9 @@ impl InlineFormattingContext {
                 fragment
             }
             InlineItem::Replaced(replaced_item) => {
-                let bounds = Rect::from_xywh(
-                    x + replaced_item.margin_left,
-                    y,
-                    replaced_item.width,
-                    replaced_item.height,
-                );
+                let paint_offset = replaced_item.paint_offset;
+                let bounds =
+                    Rect::from_xywh(x + replaced_item.margin_left + paint_offset, y, replaced_item.width, replaced_item.height);
                 FragmentNode::new_with_style(
                     bounds,
                     FragmentContent::Replaced {
@@ -2216,11 +2232,14 @@ fn accumulate_scripts(item: &InlineItem, counts: &mut ScriptCounts) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::Size;
     use crate::layout::formatting_context::IntrinsicSizingMode;
     use crate::style::display::{Display, FormattingContextType};
-    use crate::style::types::{HyphensMode, OverflowWrap, TextTransform, WhiteSpace, WordBreak};
+    use crate::style::types::{HyphensMode, ListStylePosition, OverflowWrap, TextTransform, WhiteSpace, WordBreak};
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
+    use crate::tree::box_tree::ReplacedType;
+    use crate::tree::fragment_tree::FragmentContent;
     use std::sync::Arc;
 
     fn default_style() -> Arc<ComputedStyle> {
@@ -2235,6 +2254,31 @@ mod tests {
 
     fn make_inline_container(children: Vec<BoxNode>) -> BoxNode {
         BoxNode::new_block(default_style(), FormattingContextType::Block, children)
+    }
+
+    fn marker_and_text_positions(fragment: &FragmentNode) -> (Option<f32>, Option<f32>) {
+        let mut marker_x = None;
+        let mut text_x = None;
+        let mut stack = vec![fragment];
+        while let Some(node) = stack.pop() {
+            match node.content {
+                FragmentContent::Replaced { .. } => {
+                    if marker_x.is_none() {
+                        marker_x = Some(node.bounds.x());
+                    }
+                }
+                FragmentContent::Text { .. } => {
+                    if text_x.is_none() {
+                        text_x = Some(node.bounds.x());
+                    }
+                }
+                _ => {}
+            }
+            for child in &node.children {
+                stack.push(child);
+            }
+        }
+        (marker_x, text_x)
     }
 
     #[test]
@@ -2280,6 +2324,68 @@ mod tests {
 
         // Layout should succeed
         assert!(fragment.bounds.width() >= 0.0);
+    }
+
+    #[test]
+    fn marker_image_outside_does_not_shift_content() {
+        let ifc = InlineFormattingContext::new();
+        let mut marker_style = ComputedStyle::default();
+        marker_style.list_style_position = ListStylePosition::Outside;
+        let marker_style = Arc::new(marker_style);
+
+        let marker = BoxNode::new_marker(
+            marker_style.clone(),
+            MarkerContent::Image(ReplacedBox {
+                replaced_type: ReplacedType::Image {
+                    src: String::new(),
+                    alt: None,
+                },
+                intrinsic_size: Some(Size::new(10.0, 10.0)),
+                aspect_ratio: Some(1.0),
+            }),
+        );
+        let text = make_text_box("content");
+        let root = make_inline_container(vec![marker, text]);
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let line = fragment.children.first().expect("line fragment");
+        let (marker_x, text_x) = marker_and_text_positions(line);
+
+        assert!(text_x.unwrap_or(-100.0) >= -0.01 && text_x.unwrap() <= 0.1);
+        assert!(marker_x.unwrap_or(0.0) < -5.0);
+    }
+
+    #[test]
+    fn marker_image_inside_consumes_inline_space() {
+        let ifc = InlineFormattingContext::new();
+        let mut marker_style = ComputedStyle::default();
+        marker_style.list_style_position = ListStylePosition::Inside;
+        let marker_style = Arc::new(marker_style);
+
+        let marker = BoxNode::new_marker(
+            marker_style.clone(),
+            MarkerContent::Image(ReplacedBox {
+                replaced_type: ReplacedType::Image {
+                    src: String::new(),
+                    alt: None,
+                },
+                intrinsic_size: Some(Size::new(10.0, 10.0)),
+                aspect_ratio: Some(1.0),
+            }),
+        );
+        let text = make_text_box("content");
+        let root = make_inline_container(vec![marker, text]);
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let line = fragment.children.first().expect("line fragment");
+        let (marker_x, text_x) = marker_and_text_positions(line);
+
+        assert!(marker_x.unwrap_or(-10.0) >= -0.01);
+        // 10px intrinsic width + 0.5em gap (8px at 16px font size)
+        let x = text_x.expect("text position");
+        assert!(x > 17.0 && x < 19.5, "expected text after marker gap, got {}", x);
     }
 
     #[test]
