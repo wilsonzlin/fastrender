@@ -819,6 +819,11 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 styles.transform = transforms.clone();
             }
         }
+        "transform-origin" => {
+            if let Some(origin) = parse_transform_origin(&resolved_value) {
+                styles.transform_origin = origin;
+            }
+        }
 
         // Overflow
         "overflow" => {
@@ -994,6 +999,74 @@ fn parse_object_position(value: &PropertyValue) -> Option<ObjectPosition> {
     };
 
     Some(ObjectPosition { x, y })
+}
+
+fn parse_transform_origin(value: &PropertyValue) -> Option<TransformOrigin> {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum AxisHint {
+        Horizontal,
+        Vertical,
+        Either,
+    }
+
+    fn keyword_to_length(kw: &str) -> Option<(Length, AxisHint)> {
+        match kw {
+            "left" => Some((Length::percent(0.0), AxisHint::Horizontal)),
+            "right" => Some((Length::percent(100.0), AxisHint::Horizontal)),
+            "top" => Some((Length::percent(0.0), AxisHint::Vertical)),
+            "bottom" => Some((Length::percent(100.0), AxisHint::Vertical)),
+            "center" => Some((Length::percent(50.0), AxisHint::Either)),
+            _ => None,
+        }
+    }
+
+    fn push_component(target_x: &mut Option<Length>, target_y: &mut Option<Length>, component: Length, hint: AxisHint) {
+        match hint {
+            AxisHint::Horizontal => {
+                if target_x.is_none() {
+                    *target_x = Some(component);
+                }
+            }
+            AxisHint::Vertical => {
+                if target_y.is_none() {
+                    *target_y = Some(component);
+                }
+            }
+            AxisHint::Either => {
+                if target_x.is_none() {
+                    *target_x = Some(component);
+                } else if target_y.is_none() {
+                    *target_y = Some(component);
+                }
+            }
+        }
+    }
+
+    let components: Vec<&PropertyValue> = match value {
+        PropertyValue::Multiple(values) if !values.is_empty() => values.iter().collect(),
+        _ => vec![value],
+    };
+
+    let mut x: Option<Length> = None;
+    let mut y: Option<Length> = None;
+
+    for comp in components.into_iter().take(3) {
+        match comp {
+            PropertyValue::Length(len) => push_component(&mut x, &mut y, *len, AxisHint::Either),
+            PropertyValue::Percentage(pct) => push_component(&mut x, &mut y, Length::percent(*pct), AxisHint::Either),
+            PropertyValue::Keyword(kw) => {
+                if let Some((len, hint)) = keyword_to_length(kw) {
+                    push_component(&mut x, &mut y, len, hint);
+                }
+            }
+            PropertyValue::Number(n) if *n == 0.0 => push_component(&mut x, &mut y, Length::px(0.0), AxisHint::Either),
+            _ => {}
+        }
+    }
+
+    let x = x.unwrap_or_else(|| Length::percent(50.0));
+    let y = y.unwrap_or_else(|| Length::percent(50.0));
+    Some(TransformOrigin { x, y })
 }
 
 fn parse_background_box(value: &PropertyValue) -> Option<BackgroundBox> {

@@ -141,6 +141,15 @@ pub struct ObjectPosition {
     pub y: PositionComponent,
 }
 
+/// Transform origin for x/y axes
+///
+/// CSS: `transform-origin`
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransformOrigin {
+    pub x: Length,
+    pub y: Length,
+}
+
 /// Main axis alignment for flex items
 ///
 /// CSS: `justify-content`

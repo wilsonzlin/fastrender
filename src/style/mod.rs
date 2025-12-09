@@ -30,7 +30,7 @@ use types::{
     AlignContent, AlignItems, BackgroundBox, BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize,
     BorderCollapse, BorderStyle, Direction, FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack,
     HyphensMode, JustifyContent, LineHeight, ObjectFit, ObjectPosition, Overflow, OverflowWrap, TableLayout, TextAlign,
-    TextDecoration, TextTransform, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
+    TextDecoration, TextTransform, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
 };
 use values::Length;
 
@@ -150,6 +150,7 @@ pub struct ComputedStyle {
     pub box_shadow: Vec<BoxShadow>,
     pub text_shadow: Vec<TextShadow>,
     pub transform: Vec<Transform>,
+    pub transform_origin: TransformOrigin,
     pub overflow_x: Overflow,
     pub overflow_y: Overflow,
     pub border_spacing_horizontal: Length,
@@ -272,6 +273,10 @@ impl Default for ComputedStyle {
             box_shadow: Vec::new(),
             text_shadow: Vec::new(),
             transform: Vec::new(),
+            transform_origin: TransformOrigin {
+                x: Length::percent(50.0),
+                y: Length::percent(50.0),
+            },
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
             border_spacing_horizontal: Length::px(0.0),
