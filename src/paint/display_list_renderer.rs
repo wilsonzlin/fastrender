@@ -7,14 +7,16 @@
 use crate::error::{RenderError, Result};
 use crate::paint::canvas::Canvas;
 use crate::paint::display_list::{
-    ClipItem, DisplayItem, DisplayList, FillRectItem, FontId, ImageItem, OpacityItem, StrokeRectItem, TextItem,
-    TransformItem,
+    ClipItem, DisplayItem, DisplayList, FillRectItem, FontId, ImageItem, LinearGradientItem, OpacityItem,
+    RadialGradientItem, StrokeRectItem, TextItem, TransformItem,
 };
 use crate::style::color::Rgba;
 use crate::text::font_db::{FontStyle as DbFontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
 use crate::text::shaper::GlyphPosition;
-use tiny_skia::{BlendMode as SkiaBlendMode, Pixmap, Transform};
+use tiny_skia::{
+    GradientStop as SkiaGradientStop, LinearGradient, Pixmap, Point as SkiaPoint, RadialGradient, SpreadMode, Transform,
+};
 
 /// Renders a display list into a pixmap using the provided font context.
 pub struct DisplayListRenderer {
@@ -29,6 +31,92 @@ impl DisplayListRenderer {
             canvas: Canvas::new(width, height, background)?,
             font_ctx,
         })
+    }
+
+    fn render_linear_gradient(&mut self, item: &LinearGradientItem) {
+        let Some(stops) = self.convert_stops(&item.stops) else {
+            return;
+        };
+        let start = SkiaPoint::from_xy(item.rect.x() + item.start.x, item.rect.y() + item.start.y);
+        let end = SkiaPoint::from_xy(item.rect.x() + item.end.x, item.rect.y() + item.end.y);
+        let Some(shader) = LinearGradient::new(start, end, stops, SpreadMode::Pad, Transform::identity()) else {
+            return;
+        };
+
+        let Some(skia_rect) =
+            tiny_skia::Rect::from_xywh(item.rect.x(), item.rect.y(), item.rect.width(), item.rect.height())
+        else {
+            return;
+        };
+
+        let path = tiny_skia::PathBuilder::from_rect(skia_rect);
+
+        let mut paint = tiny_skia::Paint::default();
+        paint.shader = shader;
+        paint.anti_alias = true;
+        paint.blend_mode = self.canvas.blend_mode();
+        let transform = self.canvas.transform();
+        let clip = self.canvas.clip_mask().cloned();
+        self.canvas
+            .pixmap_mut()
+            .fill_path(&path, &paint, tiny_skia::FillRule::Winding, transform, clip.as_ref());
+    }
+
+    fn render_radial_gradient(&mut self, item: &RadialGradientItem) {
+        let Some(stops) = self.convert_stops(&item.stops) else {
+            return;
+        };
+        let center = SkiaPoint::from_xy(item.rect.x() + item.center.x, item.rect.y() + item.center.y);
+        let Some(shader) = RadialGradient::new(
+            center,
+            center,
+            item.radius,
+            stops,
+            SpreadMode::Pad,
+            Transform::identity(),
+        ) else {
+            return;
+        };
+
+        let Some(skia_rect) =
+            tiny_skia::Rect::from_xywh(item.rect.x(), item.rect.y(), item.rect.width(), item.rect.height())
+        else {
+            return;
+        };
+
+        let path = tiny_skia::PathBuilder::from_rect(skia_rect);
+
+        let mut paint = tiny_skia::Paint::default();
+        paint.shader = shader;
+        paint.anti_alias = true;
+        paint.blend_mode = self.canvas.blend_mode();
+        let transform = self.canvas.transform();
+        let clip = self.canvas.clip_mask().cloned();
+        self.canvas
+            .pixmap_mut()
+            .fill_path(&path, &paint, tiny_skia::FillRule::Winding, transform, clip.as_ref());
+    }
+
+    fn convert_stops(
+        &self,
+        stops: &[crate::paint::display_list::GradientStop],
+    ) -> Option<Vec<tiny_skia::GradientStop>> {
+        if stops.is_empty() {
+            return None;
+        }
+        let opacity = self.canvas.opacity().clamp(0.0, 1.0);
+        Some(
+            stops
+                .iter()
+                .map(|s| {
+                    let alpha = (s.color.a * opacity * 255.0).round().clamp(0.0, 255.0) as u8;
+                    SkiaGradientStop::new(
+                        s.position,
+                        tiny_skia::Color::from_rgba8(s.color.r, s.color.g, s.color.b, alpha),
+                    )
+                })
+                .collect(),
+        )
     }
 
     /// Consumes the renderer and returns the painted pixmap.
@@ -49,14 +137,12 @@ impl DisplayListRenderer {
             DisplayItem::StrokeRoundedRect(item) => self
                 .canvas
                 .stroke_rounded_rect(item.rect, item.radii, item.color, item.width),
+            DisplayItem::LinearGradient(item) => self.render_linear_gradient(item),
+            DisplayItem::RadialGradient(item) => self.render_radial_gradient(item),
             DisplayItem::Text(item) => self.render_text(item)?,
             DisplayItem::Image(item) => self.render_image(item)?,
-            DisplayItem::BoxShadow(_)
-            | DisplayItem::LinearGradient(_)
-            | DisplayItem::RadialGradient(_)
-            | DisplayItem::PushStackingContext(_)
-            | DisplayItem::PopStackingContext => {
-                // TODO: Implement full support for these items (stacking context layers, shadows, gradients)
+            DisplayItem::BoxShadow(_) | DisplayItem::PushStackingContext(_) | DisplayItem::PopStackingContext => {
+                // TODO: Implement full support for these items (stacking context layers, shadows)
             }
             DisplayItem::PushClip(clip) => self.push_clip(clip),
             DisplayItem::PopClip => self.pop_clip(),
@@ -127,7 +213,7 @@ impl DisplayListRenderer {
 
         let paint = tiny_skia::PixmapPaint {
             opacity: self.canvas.opacity(),
-            blend_mode: SkiaBlendMode::SourceOver,
+            blend_mode: self.canvas.blend_mode(),
             ..Default::default()
         };
 
@@ -211,8 +297,10 @@ impl DisplayListRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::Rect;
-    use crate::paint::display_list::{DisplayItem, DisplayList, FillRectItem, Transform2D};
+    use crate::geometry::{Point, Rect};
+    use crate::paint::display_list::{
+        DisplayItem, DisplayList, FillRectItem, GradientStop, LinearGradientItem, RadialGradientItem, Transform2D,
+    };
     use crate::style::color::Rgba;
 
     fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
@@ -248,5 +336,58 @@ mod tests {
         let pixmap = renderer.render(&list).unwrap();
         assert_eq!(pixel(&pixmap, 10, 0), (255, 0, 0, 255));
         assert_eq!(pixel(&pixmap, 0, 0), (0, 255, 0, 255));
+    }
+
+    #[test]
+    fn renders_linear_gradient() {
+        let renderer = DisplayListRenderer::new(2, 1, Rgba::WHITE, FontContext::new()).unwrap();
+        let mut list = DisplayList::new();
+        list.push(DisplayItem::LinearGradient(LinearGradientItem {
+            rect: Rect::from_xywh(0.0, 0.0, 2.0, 1.0),
+            start: Point::new(0.0, 0.0),
+            end: Point::new(2.0, 0.0),
+            stops: vec![
+                GradientStop {
+                    position: 0.0,
+                    color: Rgba::rgb(255, 0, 0),
+                },
+                GradientStop {
+                    position: 1.0,
+                    color: Rgba::rgb(0, 0, 255),
+                },
+            ],
+        }));
+
+        let pixmap = renderer.render(&list).unwrap();
+        let first = pixel(&pixmap, 0, 0);
+        let second = pixel(&pixmap, 1, 0);
+        assert!(first.0 > first.2);
+        assert!(second.2 > second.0);
+        assert_eq!(first.3, 255);
+        assert_eq!(second.3, 255);
+    }
+
+    #[test]
+    fn renders_radial_gradient_center_color() {
+        let renderer = DisplayListRenderer::new(3, 3, Rgba::WHITE, FontContext::new()).unwrap();
+        let mut list = DisplayList::new();
+        list.push(DisplayItem::RadialGradient(RadialGradientItem {
+            rect: Rect::from_xywh(0.0, 0.0, 3.0, 3.0),
+            center: Point::new(1.5, 1.5),
+            radius: 2.0,
+            stops: vec![
+                GradientStop {
+                    position: 0.0,
+                    color: Rgba::rgb(0, 255, 0),
+                },
+                GradientStop {
+                    position: 1.0,
+                    color: Rgba::rgb(0, 0, 0),
+                },
+            ],
+        }));
+
+        let pixmap = renderer.render(&list).unwrap();
+        assert_eq!(pixel(&pixmap, 1, 1).1, 255);
     }
 }

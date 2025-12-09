@@ -308,6 +308,12 @@ impl Canvas {
         self.current_state.opacity
     }
 
+    /// Returns the current blend mode.
+    #[inline]
+    pub(crate) fn blend_mode(&self) -> SkiaBlendMode {
+        self.current_state.blend_mode
+    }
+
     /// Sets the current transform
     ///
     /// # Examples
