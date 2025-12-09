@@ -21,9 +21,12 @@
 //! fragment's background, borders, and content. Text is rendered
 //! using the system's default font.
 
+use crate::css::types::ColorStop;
 use crate::error::{RenderError, Result};
 use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
+use crate::layout::contexts::inline::baseline::compute_line_height;
+use crate::layout::contexts::inline::line_builder::TextItem;
 use crate::paint::display_list::BorderRadii;
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::rasterize::fill_rounded_rect;
@@ -44,8 +47,8 @@ use image::DynamicImage;
 use std::borrow::Cow;
 use std::sync::Arc;
 use tiny_skia::{
-    BlendMode as SkiaBlendMode, FilterQuality, IntSize, Mask, MaskType, Paint, PathBuilder, Pattern, Pixmap,
-    PixmapPaint, PremultipliedColorU8, Rect as SkiaRect, SpreadMode, Stroke, Transform,
+    BlendMode as SkiaBlendMode, FilterQuality, IntSize, LinearGradient, Mask, MaskType, Paint, PathBuilder, Pattern,
+    Pixmap, PixmapPaint, PremultipliedColorU8, RadialGradient, Rect as SkiaRect, SpreadMode, Stroke, Transform,
 };
 
 /// Main painter that rasterizes a FragmentTree to pixels
@@ -409,14 +412,18 @@ impl Painter {
             if !clip_x && !clip_y {
                 return None;
             }
-            let rects =
-                background_rects(abs_bounds.x(), abs_bounds.y(), abs_bounds.width(), abs_bounds.height(), style);
+            let rects = background_rects(
+                abs_bounds.x(),
+                abs_bounds.y(),
+                abs_bounds.width(),
+                abs_bounds.height(),
+                style,
+            );
             let clip_rect = rects.padding;
             if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 {
                 return None;
             }
-            let clip_radii =
-                resolve_clip_radii(style, &rects, crate::style::types::BackgroundBox::PaddingBox);
+            let clip_radii = resolve_clip_radii(style, &rects, crate::style::types::BackgroundBox::PaddingBox);
             Some((clip_rect, clip_radii, clip_x, clip_y))
         });
         if opacity < 1.0
@@ -577,8 +584,7 @@ impl Painter {
                     context_rect,
                     transform.as_ref(),
                     clip.as_ref(),
-                )
-                else {
+                ) else {
                     return Ok(());
                 };
 
@@ -598,14 +604,15 @@ impl Painter {
                     context_rect.width(),
                     context_rect.height(),
                 );
-                let (mut unclipped, clipped): (Vec<DisplayCommand>, Vec<DisplayCommand>) = translated
-                    .into_iter()
-                    .partition(|cmd| matches!(cmd,
+                let (mut unclipped, clipped): (Vec<DisplayCommand>, Vec<DisplayCommand>) =
+                    translated.into_iter().partition(|cmd| {
+                        matches!(cmd,
                         DisplayCommand::Background { rect, .. } | DisplayCommand::Border { rect, .. }
                         if (rect.x() - root_rect.x()).abs() < f32::EPSILON
                             && (rect.y() - root_rect.y()).abs() < f32::EPSILON
                             && (rect.width() - root_rect.width()).abs() < f32::EPSILON
-                            && (rect.height() - root_rect.height()).abs() < f32::EPSILON));
+                            && (rect.height() - root_rect.height()).abs() < f32::EPSILON)
+                    });
 
                 let layer = match Pixmap::new(width as u32, height as u32) {
                     Some(p) => p,
@@ -641,13 +648,11 @@ impl Painter {
                     let mut clip_pixmap = clip_painter.pixmap;
                     if let Some((mut clip_rect, mut clip_radii, clip_x, clip_y)) = clip {
                         if !clip_x {
-                            clip_rect =
-                                Rect::from_xywh(offset.x, clip_rect.y(), bounds.width(), clip_rect.height());
+                            clip_rect = Rect::from_xywh(offset.x, clip_rect.y(), bounds.width(), clip_rect.height());
                             clip_radii = BorderRadii::ZERO;
                         }
                         if !clip_y {
-                            clip_rect =
-                                Rect::from_xywh(clip_rect.x(), offset.y, clip_rect.width(), bounds.height());
+                            clip_rect = Rect::from_xywh(clip_rect.x(), offset.y, clip_rect.width(), bounds.height());
                             clip_radii = BorderRadii::ZERO;
                         }
                         let local_clip = Rect::from_xywh(
@@ -731,26 +736,6 @@ impl Painter {
 
     fn paint_background_image(&mut self, rects: &BackgroundRects, style: &ComputedStyle, clip_radii: BorderRadii) {
         let Some(bg) = &style.background_image else { return };
-        let src = match bg {
-            BackgroundImage::Url(u) => u,
-            _ => return, // Gradients not supported yet
-        };
-
-        let image = match self.image_cache.load(src) {
-            Ok(img) => img,
-            Err(_) => return,
-        };
-
-        let pixmap = match Self::dynamic_image_to_pixmap(&image) {
-            Some(p) => p,
-            None => return,
-        };
-        let img_w = pixmap.width() as f32;
-        let img_h = pixmap.height() as f32;
-        if img_w <= 0.0 || img_h <= 0.0 {
-            return;
-        }
-
         let clip_rect = match style.background_clip {
             crate::style::types::BackgroundBox::BorderBox => rects.border,
             crate::style::types::BackgroundBox::PaddingBox => rects.padding,
@@ -775,94 +760,188 @@ impl Painter {
             build_rounded_rect_mask(clip_rect, clip_radii, self.pixmap.width(), self.pixmap.height())
         };
 
-        let (tile_w, tile_h) = compute_background_size(style, origin_rect.width(), origin_rect.height(), img_w, img_h);
-        if tile_w <= 0.0 || tile_h <= 0.0 {
+        match bg {
+            BackgroundImage::LinearGradient { angle, stops } => {
+                let resolved = normalize_color_stops(stops);
+                self.paint_linear_gradient(clip_rect, clip_mask.as_ref(), *angle, &resolved);
+            }
+            BackgroundImage::RadialGradient { stops } => {
+                let resolved = normalize_color_stops(stops);
+                self.paint_radial_gradient(clip_rect, clip_mask.as_ref(), &resolved);
+            }
+            BackgroundImage::Url(src) => {
+                let image = match self.image_cache.load(src) {
+                    Ok(img) => img,
+                    Err(_) => return,
+                };
+
+                let pixmap = match Self::dynamic_image_to_pixmap(&image) {
+                    Some(p) => p,
+                    None => return,
+                };
+                let img_w = pixmap.width() as f32;
+                let img_h = pixmap.height() as f32;
+                if img_w <= 0.0 || img_h <= 0.0 {
+                    return;
+                }
+
+                let (tile_w, tile_h) =
+                    compute_background_size(style, origin_rect.width(), origin_rect.height(), img_w, img_h);
+                if tile_w <= 0.0 || tile_h <= 0.0 {
+                    return;
+                }
+
+                let (offset_x, offset_y) = resolve_background_offset(
+                    style.background_position,
+                    origin_rect.width(),
+                    origin_rect.height(),
+                    tile_w,
+                    tile_h,
+                    style.font_size,
+                );
+
+                let tile_origin_x = origin_rect.x() + offset_x;
+                let tile_origin_y = origin_rect.y() + offset_y;
+                let repeat = style.background_repeat;
+                let repeat_x = matches!(repeat, BackgroundRepeat::Repeat | BackgroundRepeat::RepeatX);
+                let repeat_y = matches!(repeat, BackgroundRepeat::Repeat | BackgroundRepeat::RepeatY);
+
+                let start_x = if repeat_x {
+                    aligned_start(tile_origin_x, tile_w, clip_rect.min_x())
+                } else {
+                    tile_origin_x
+                };
+                let start_y = if repeat_y {
+                    aligned_start(tile_origin_y, tile_h, clip_rect.min_y())
+                } else {
+                    tile_origin_y
+                };
+
+                let max_x = clip_rect.max_x();
+                let max_y = clip_rect.max_y();
+
+                match repeat {
+                    BackgroundRepeat::NoRepeat => {
+                        self.paint_background_tile(
+                            &pixmap,
+                            tile_origin_x,
+                            tile_origin_y,
+                            tile_w,
+                            tile_h,
+                            clip_rect,
+                            clip_mask.as_ref(),
+                        );
+                    }
+                    BackgroundRepeat::RepeatX => {
+                        let mut tx = start_x;
+                        while tx < max_x {
+                            self.paint_background_tile(
+                                &pixmap,
+                                tx,
+                                tile_origin_y,
+                                tile_w,
+                                tile_h,
+                                clip_rect,
+                                clip_mask.as_ref(),
+                            );
+                            tx += tile_w;
+                        }
+                    }
+                    BackgroundRepeat::RepeatY => {
+                        let mut ty = start_y;
+                        while ty < max_y {
+                            self.paint_background_tile(
+                                &pixmap,
+                                tile_origin_x,
+                                ty,
+                                tile_w,
+                                tile_h,
+                                clip_rect,
+                                clip_mask.as_ref(),
+                            );
+                            ty += tile_h;
+                        }
+                    }
+                    BackgroundRepeat::Repeat => {
+                        let mut ty = start_y;
+                        while ty < max_y {
+                            let mut tx = start_x;
+                            while tx < max_x {
+                                self.paint_background_tile(
+                                    &pixmap,
+                                    tx,
+                                    ty,
+                                    tile_w,
+                                    tile_h,
+                                    clip_rect,
+                                    clip_mask.as_ref(),
+                                );
+                                tx += tile_w;
+                            }
+                            ty += tile_h;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn paint_linear_gradient(&mut self, rect: Rect, clip_mask: Option<&Mask>, angle: f32, stops: &[(f32, Rgba)]) {
+        if stops.is_empty() {
             return;
         }
 
-        let (offset_x, offset_y) = resolve_background_offset(
-            style.background_position,
-            origin_rect.width(),
-            origin_rect.height(),
-            tile_w,
-            tile_h,
-            style.font_size,
-        );
+        let skia_stops = gradient_stops(stops);
+        let rad = angle.to_radians();
+        let dx = rad.sin();
+        let dy = -rad.cos(); // CSS 0deg points up
+        let len = 0.5 * (rect.width() * dx.abs() + rect.height() * dy.abs());
+        let cx = rect.x() + rect.width() / 2.0;
+        let cy = rect.y() + rect.height() / 2.0;
 
-        let tile_origin_x = origin_rect.x() + offset_x;
-        let tile_origin_y = origin_rect.y() + offset_y;
-        let repeat = style.background_repeat;
-        let repeat_x = matches!(repeat, BackgroundRepeat::Repeat | BackgroundRepeat::RepeatX);
-        let repeat_y = matches!(repeat, BackgroundRepeat::Repeat | BackgroundRepeat::RepeatY);
-
-        let start_x = if repeat_x {
-            aligned_start(tile_origin_x, tile_w, clip_rect.min_x())
-        } else {
-            tile_origin_x
-        };
-        let start_y = if repeat_y {
-            aligned_start(tile_origin_y, tile_h, clip_rect.min_y())
-        } else {
-            tile_origin_y
+        let start = tiny_skia::Point::from_xy(cx - dx * len, cy - dy * len);
+        let end = tiny_skia::Point::from_xy(cx + dx * len, cy + dy * len);
+        let Some(shader) = LinearGradient::new(start, end, skia_stops, SpreadMode::Pad, Transform::identity()) else {
+            return;
         };
 
-        let max_x = clip_rect.max_x();
-        let max_y = clip_rect.max_y();
+        let Some(skia_rect) = SkiaRect::from_xywh(rect.x(), rect.y(), rect.width(), rect.height()) else {
+            return;
+        };
+        let path = PathBuilder::from_rect(skia_rect);
 
-        match repeat {
-            BackgroundRepeat::NoRepeat => {
-                self.paint_background_tile(
-                    &pixmap,
-                    tile_origin_x,
-                    tile_origin_y,
-                    tile_w,
-                    tile_h,
-                    clip_rect,
-                    clip_mask.as_ref(),
-                );
-            }
-            BackgroundRepeat::RepeatX => {
-                let mut tx = start_x;
-                while tx < max_x {
-                    self.paint_background_tile(
-                        &pixmap,
-                        tx,
-                        tile_origin_y,
-                        tile_w,
-                        tile_h,
-                        clip_rect,
-                        clip_mask.as_ref(),
-                    );
-                    tx += tile_w;
-                }
-            }
-            BackgroundRepeat::RepeatY => {
-                let mut ty = start_y;
-                while ty < max_y {
-                    self.paint_background_tile(
-                        &pixmap,
-                        tile_origin_x,
-                        ty,
-                        tile_w,
-                        tile_h,
-                        clip_rect,
-                        clip_mask.as_ref(),
-                    );
-                    ty += tile_h;
-                }
-            }
-            BackgroundRepeat::Repeat => {
-                let mut ty = start_y;
-                while ty < max_y {
-                    let mut tx = start_x;
-                    while tx < max_x {
-                        self.paint_background_tile(&pixmap, tx, ty, tile_w, tile_h, clip_rect, clip_mask.as_ref());
-                        tx += tile_w;
-                    }
-                    ty += tile_h;
-                }
-            }
+        let mut paint = Paint::default();
+        paint.shader = shader;
+        paint.anti_alias = true;
+        self.pixmap
+            .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), clip_mask);
+    }
+
+    fn paint_radial_gradient(&mut self, rect: Rect, clip_mask: Option<&Mask>, stops: &[(f32, Rgba)]) {
+        if stops.is_empty() {
+            return;
         }
+
+        let skia_stops = gradient_stops(stops);
+        let cx = rect.x() + rect.width() / 2.0;
+        let cy = rect.y() + rect.height() / 2.0;
+        let radius = ((rect.width() * rect.width() + rect.height() * rect.height()) as f32).sqrt() / 2.0;
+
+        let center = tiny_skia::Point::from_xy(cx, cy);
+        let Some(shader) = RadialGradient::new(center, center, radius, skia_stops, SpreadMode::Pad, Transform::identity()) else {
+            return;
+        };
+
+        let Some(skia_rect) = SkiaRect::from_xywh(rect.x(), rect.y(), rect.width(), rect.height()) else {
+            return;
+        };
+        let path = PathBuilder::from_rect(skia_rect);
+
+        let mut paint = Paint::default();
+        paint.shader = shader;
+        paint.anti_alias = true;
+        self.pixmap
+            .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), clip_mask);
     }
 
     fn paint_background_tile(
@@ -1247,7 +1326,7 @@ impl Painter {
 
         // Try to render actual content for images and SVG
         match replaced_type {
-            ReplacedType::Image { src } => {
+            ReplacedType::Image { src, alt } => {
                 if self.paint_image_from_src(
                     src,
                     style,
@@ -1257,6 +1336,11 @@ impl Painter {
                     content_rect.height(),
                 ) {
                     return;
+                }
+                if let (Some(style), Some(alt_text)) = (style, alt.as_deref()) {
+                    if self.paint_alt_text(alt_text, style, content_rect) {
+                        return;
+                    }
                 }
             }
             ReplacedType::Svg { content } => {
@@ -1300,11 +1384,6 @@ impl Painter {
             };
             self.pixmap
                 .stroke_path(&path, &stroke_paint, &stroke, Transform::identity(), None);
-        }
-
-        // Would load and render actual image here for ReplacedType::Image
-        if let ReplacedType::Image { src: _ } = replaced_type {
-            // Placeholder already drawn if image loading failed
         }
     }
 
@@ -1432,6 +1511,31 @@ impl Painter {
 
         let transform = Transform::from_row(scale_x, 0.0, 0.0, scale_y, x + dest_x, y + dest_y);
         self.pixmap.draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);
+        true
+    }
+
+    fn paint_alt_text(&mut self, alt: &str, style: &ComputedStyle, rect: Rect) -> bool {
+        let text = alt.trim();
+        if text.is_empty() {
+            return false;
+        }
+
+        let mut runs = match self.shaper.shape(text, style, &self.font_ctx) {
+            Ok(runs) => runs,
+            Err(_) => return false,
+        };
+        if runs.is_empty() {
+            return false;
+        }
+
+        TextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
+
+        let line_height = compute_line_height(style);
+        let metrics = TextItem::metrics_from_runs(&runs, line_height, style.font_size);
+        let half_leading = ((metrics.line_height - (metrics.ascent + metrics.descent)) / 2.0).max(0.0);
+        let baseline_y = rect.y() + half_leading + metrics.baseline_offset;
+
+        self.paint_shaped_runs(&runs, rect.x(), baseline_y, style.color);
         true
     }
 
@@ -1662,10 +1766,26 @@ fn approx_same_rect(a: Rect, b: Rect) -> bool {
 }
 
 fn clip_to_axes(bounds: Rect, clip: Rect, clip_x: bool, clip_y: bool) -> Rect {
-    let mut min_x = if clip_x { bounds.min_x().max(clip.min_x()) } else { bounds.min_x() };
-    let mut max_x = if clip_x { bounds.max_x().min(clip.max_x()) } else { bounds.max_x() };
-    let mut min_y = if clip_y { bounds.min_y().max(clip.min_y()) } else { bounds.min_y() };
-    let mut max_y = if clip_y { bounds.max_y().min(clip.max_y()) } else { bounds.max_y() };
+    let mut min_x = if clip_x {
+        bounds.min_x().max(clip.min_x())
+    } else {
+        bounds.min_x()
+    };
+    let mut max_x = if clip_x {
+        bounds.max_x().min(clip.max_x())
+    } else {
+        bounds.max_x()
+    };
+    let mut min_y = if clip_y {
+        bounds.min_y().max(clip.min_y())
+    } else {
+        bounds.min_y()
+    };
+    let mut max_y = if clip_y {
+        bounds.max_y().min(clip.max_y())
+    } else {
+        bounds.max_y()
+    };
     if clip_x && max_x < min_x {
         min_x = clip.min_x();
         max_x = clip.min_x();
@@ -1680,7 +1800,8 @@ fn clip_to_axes(bounds: Rect, clip: Rect, clip_x: bool, clip_y: bool) -> Rect {
 fn compute_descendant_bounds(commands: &[DisplayCommand], root_rect: Rect) -> Option<Rect> {
     let mut current: Option<Rect> = None;
     for cmd in commands {
-        if matches!(cmd, DisplayCommand::Background { rect, .. } | DisplayCommand::Border { rect, .. } if approx_same_rect(*rect, root_rect)) {
+        if matches!(cmd, DisplayCommand::Background { rect, .. } | DisplayCommand::Border { rect, .. } if approx_same_rect(*rect, root_rect))
+        {
             continue;
         }
         if let Some(r) = command_bounds(cmd) {
@@ -1743,9 +1864,14 @@ fn command_bounds(cmd: &DisplayCommand) -> Option<Rect> {
             rect,
             transform,
             ..
-        } => {
-            stacking_context_bounds(commands, filters, backdrop_filters, *rect, transform.as_ref(), clip.as_ref())
-        }
+        } => stacking_context_bounds(
+            commands,
+            filters,
+            backdrop_filters,
+            *rect,
+            transform.as_ref(),
+            clip.as_ref(),
+        ),
     }
 }
 
@@ -2584,6 +2710,80 @@ fn resolve_background_offset(
     }
 }
 
+fn normalize_color_stops(stops: &[ColorStop]) -> Vec<(f32, Rgba)> {
+    if stops.is_empty() {
+        return Vec::new();
+    }
+
+    let mut positions: Vec<Option<f32>> = stops.iter().map(|s| s.position).collect();
+    if positions.iter().all(|p| p.is_none()) {
+        if stops.len() == 1 {
+            return vec![(0.0, stops[0].color)];
+        }
+        let denom = (stops.len() - 1) as f32;
+        return stops
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (i as f32 / denom, s.color))
+            .collect();
+    }
+
+    if positions.first().and_then(|p| *p).is_none() {
+        positions[0] = Some(0.0);
+    }
+    if positions.last().and_then(|p| *p).is_none() {
+        if let Some(last) = positions.last_mut() {
+            *last = Some(1.0);
+        }
+    }
+
+    let mut last_known: Option<(usize, f32)> = None;
+    for i in 0..positions.len() {
+        if let Some(pos) = positions[i] {
+            if let Some((start_idx, start_pos)) = last_known {
+                let gap = i.saturating_sub(start_idx + 1);
+                if gap > 0 {
+                    let step = (pos - start_pos) / (gap as f32 + 1.0);
+                    for j in 1..=gap {
+                        positions[start_idx + j] = Some((start_pos + step * j as f32).max(start_pos));
+                    }
+                }
+            } else if i > 0 {
+                let gap = i;
+                let step = pos / gap as f32;
+                for j in 0..i {
+                    positions[j] = Some(step * j as f32);
+                }
+            }
+            last_known = Some((i, pos));
+        }
+    }
+
+    let mut output = Vec::with_capacity(stops.len());
+    let mut prev = 0.0;
+    for (idx, pos_opt) in positions.into_iter().enumerate() {
+        let pos = pos_opt.unwrap_or(prev);
+        let clamped = pos.max(prev).clamp(0.0, 1.0);
+        prev = clamped;
+        output.push((clamped, stops[idx].color));
+    }
+
+    output
+}
+
+fn gradient_stops(stops: &[(f32, Rgba)]) -> Vec<tiny_skia::GradientStop> {
+    stops
+        .iter()
+        .map(|(pos, color)| {
+            let alpha = (color.a * 255.0).round().clamp(0.0, 255.0) as u8;
+            tiny_skia::GradientStop::new(
+                pos.clamp(0.0, 1.0),
+                tiny_skia::Color::from_rgba8(color.r, color.g, color.b, alpha),
+            )
+        })
+        .collect()
+}
+
 fn aligned_start(origin: f32, tile: f32, clip_min: f32) -> f32 {
     if tile == 0.0 {
         return origin;
@@ -2619,9 +2819,9 @@ mod tests {
     use crate::geometry::Rect;
     use crate::image_loader::ImageCache;
     use crate::paint::display_list::BorderRadii;
-    use crate::style::ComputedStyle;
     use crate::style::types::{Isolation, Overflow};
     use crate::style::values::Length;
+    use crate::style::ComputedStyle;
     use crate::text::font_loader::FontContext;
     use crate::Position;
     use std::sync::Arc;
@@ -2718,14 +2918,8 @@ mod tests {
         style.padding_bottom = Length::px(4.0);
         style.background_color = Rgba::BLUE;
 
-        let mut painter = Painter::with_resources(
-            40,
-            40,
-            Rgba::WHITE,
-            FontContext::new(),
-            ImageCache::new(),
-        )
-        .expect("painter");
+        let mut painter =
+            Painter::with_resources(40, 40, Rgba::WHITE, FontContext::new(), ImageCache::new()).expect("painter");
         painter.fill_background();
 
         let box_x = 10.0;
@@ -2754,6 +2948,78 @@ mod tests {
     }
 
     #[test]
+    fn paints_alt_text_when_image_missing() {
+        let mut style = ComputedStyle::default();
+        style.color = Rgba::BLACK;
+
+        let fragment = FragmentNode::new_with_style(
+            Rect::from_xywh(0.0, 0.0, 50.0, 20.0),
+            FragmentContent::Replaced {
+                replaced_type: ReplacedType::Image {
+                    src: String::new(),
+                    alt: Some("alt".to_string()),
+                },
+                box_id: None,
+            },
+            vec![],
+            Arc::new(style),
+        );
+
+        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 60.0, 30.0), vec![fragment]);
+        let tree = FragmentTree::new(root);
+        let pixmap = paint_tree(&tree, 60, 30, Rgba::WHITE).expect("paint alt");
+
+        let center = color_at(&pixmap, 25, 10);
+        assert_ne!(
+            center,
+            (200, 200, 200, 255),
+            "alt text should prevent placeholder rectangles"
+        );
+
+        let mut has_ink = false;
+        for y in 0..pixmap.height() {
+            for x in 0..pixmap.width() {
+                if color_at(&pixmap, x, y) != (255, 255, 255, 255) {
+                    has_ink = true;
+                    break;
+                }
+            }
+            if has_ink {
+                break;
+            }
+        }
+        assert!(has_ink, "alt text should paint glyphs");
+    }
+
+    #[test]
+    fn paints_linear_gradient_background() {
+        let mut style = ComputedStyle::default();
+        style.background_image = Some(BackgroundImage::LinearGradient {
+            angle: 90.0,
+            stops: vec![
+                crate::css::types::ColorStop {
+                    color: Rgba::RED,
+                    position: Some(0.0),
+                },
+                crate::css::types::ColorStop {
+                    color: Rgba::BLUE,
+                    position: Some(1.0),
+                },
+            ],
+        });
+
+        let fragment =
+            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
+        let tree = FragmentTree::new(fragment);
+
+        let pixmap = paint_tree(&tree, 20, 20, Rgba::WHITE).expect("paint");
+        let left = color_at(&pixmap, 2, 10);
+        let right = color_at(&pixmap, 18, 10);
+        assert!(left.0 > right.0, "left should be redder than right");
+        assert!(right.2 > left.2, "right should be bluer than left");
+    }
+
+    #[test]
     fn overflow_hidden_clips_children() {
         let mut parent_style = ComputedStyle::default();
         parent_style.overflow_x = Overflow::Hidden;
@@ -2764,11 +3030,8 @@ mod tests {
 
         let mut child_style = ComputedStyle::default();
         child_style.background_color = Rgba::RED;
-        let child = FragmentNode::new_block_styled(
-            Rect::from_xywh(-5.0, -5.0, 30.0, 40.0),
-            vec![],
-            Arc::new(child_style),
-        );
+        let child =
+            FragmentNode::new_block_styled(Rect::from_xywh(-5.0, -5.0, 30.0, 40.0), vec![], Arc::new(child_style));
         let parent = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![child], parent_style);
         let tree = FragmentTree::new(parent);
 
@@ -2790,11 +3053,8 @@ mod tests {
 
         let mut child_style = ComputedStyle::default();
         child_style.background_color = Rgba::RED;
-        let child = FragmentNode::new_block_styled(
-            Rect::from_xywh(-5.0, -5.0, 30.0, 40.0),
-            vec![],
-            Arc::new(child_style),
-        );
+        let child =
+            FragmentNode::new_block_styled(Rect::from_xywh(-5.0, -5.0, 30.0, 40.0), vec![], Arc::new(child_style));
         let parent = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![child], parent_style);
         let tree = FragmentTree::new(parent);
 
@@ -2834,14 +3094,14 @@ mod tests {
 
         let mut child_style = ComputedStyle::default();
         child_style.background_color = Rgba::RED;
-        child_style.transform =
-            vec![crate::css::types::Transform::Translate(Length::px(60.0), Length::px(0.0))];
+        child_style.transform = vec![crate::css::types::Transform::Translate(
+            Length::px(60.0),
+            Length::px(0.0),
+        )];
         let child_style = Arc::new(child_style);
 
-        let child =
-            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], child_style);
-        let parent =
-            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), vec![child], parent_style);
+        let child = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], child_style);
+        let parent = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), vec![child], parent_style);
         let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 120.0, 40.0), vec![parent]);
         let tree = FragmentTree::new(root);
 
@@ -2860,17 +3120,9 @@ mod tests {
             y: crate::style::types::PositionComponent::Keyword(crate::style::types::PositionKeyword::Center),
         };
 
-        let (offset_x, offset_y, dest_w, dest_h) = compute_object_fit(
-            fit,
-            position,
-            200.0,
-            100.0,
-            100.0,
-            100.0,
-            16.0,
-            Some((200.0, 100.0)),
-        )
-        .expect("fit computed");
+        let (offset_x, offset_y, dest_w, dest_h) =
+            compute_object_fit(fit, position, 200.0, 100.0, 100.0, 100.0, 16.0, Some((200.0, 100.0)))
+                .expect("fit computed");
         assert_eq!(dest_h, 100.0);
         assert_eq!(dest_w, 100.0);
         assert!((offset_x - 50.0).abs() < 0.01);
