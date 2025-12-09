@@ -1808,15 +1808,6 @@ impl FormattingContext for TableFormattingContext {
         let table_width = specified_width
             .or(containing_width)
             .map(|w| clamp_to_min_max(w, min_width, max_width));
-        let specified_height = box_node
-            .style
-            .height
-            .as_ref()
-            .and_then(|len| resolve_length_against(len, font_size, containing_height));
-        let min_height = resolve_opt_length_against(box_node.style.min_height.as_ref(), font_size, containing_height);
-        let max_height = resolve_opt_length_against(box_node.style.max_height.as_ref(), font_size, containing_height);
-        let table_height = specified_height.map(|h| clamp_to_min_max(h, min_height, max_height));
-
         // Table padding and borders (ignored in collapsed border model per CSS 2.1).
         let resolve_abs = |l: &crate::style::values::Length| match l.unit {
             LengthUnit::Percent => 0.0,
@@ -1842,6 +1833,15 @@ impl FormattingContext for TableFormattingContext {
         let padding_v = pad_top + pad_bottom;
         let border_h = border_left + border_right;
         let border_v = border_top + border_bottom;
+
+        let specified_height = box_node
+            .style
+            .height
+            .as_ref()
+            .and_then(|len| resolve_length_against(len, font_size, containing_height));
+        let min_height = resolve_opt_length_against(box_node.style.min_height.as_ref(), font_size, containing_height);
+        let max_height = resolve_opt_length_against(box_node.style.max_height.as_ref(), font_size, containing_height);
+        let table_height = specified_height.map(|h| clamp_to_min_max(h, min_height, max_height));
 
         let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
             .map(|_| ColumnConstraints::new(0.0, 0.0))
@@ -1956,12 +1956,16 @@ impl FormattingContext for TableFormattingContext {
         let content_min_heights = row_heights.clone();
 
         let percent_height_base = table_height.map(|base| {
-            if structure.border_collapse == BorderCollapse::Collapse {
+            let mut content_base = if structure.border_collapse == BorderCollapse::Collapse {
                 base
             } else {
+                (base - padding_v - border_v).max(0.0)
+            };
+            if structure.border_collapse != BorderCollapse::Collapse {
                 let spacing_total = v_spacing * (structure.row_count as f32 + 1.0);
-                (base - spacing_total).max(0.0)
+                content_base = (content_base - spacing_total).max(0.0);
             }
+            content_base
         });
 
         // Enforce row-specified minimums (length or percentage of table height) and percent targets.
@@ -2262,10 +2266,14 @@ impl FormattingContext for TableFormattingContext {
         } else {
             content_width + padding_h + border_h
         };
-        let content_used_height = if let Some(specified) = table_height {
+        let total_height = if let Some(specified) = table_height {
             specified
         } else {
-            let mut h = content_height;
+            let mut h = content_height + if structure.border_collapse == BorderCollapse::Collapse {
+                0.0
+            } else {
+                padding_v + border_v
+            };
             if let Some(max_h) = max_height {
                 h = h.min(max_h);
             }
@@ -2273,11 +2281,6 @@ impl FormattingContext for TableFormattingContext {
                 h = h.max(min_h);
             }
             h
-        };
-        let total_height = if structure.border_collapse == BorderCollapse::Collapse {
-            content_used_height
-        } else {
-            content_used_height + padding_v + border_v
         };
         let table_bounds = Rect::from_xywh(0.0, 0.0, total_width.max(0.0), total_height);
 
