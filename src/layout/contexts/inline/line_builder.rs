@@ -198,6 +198,11 @@ impl TextItem {
         }
     }
 
+    /// Byte offsets for each grapheme cluster boundary within the item.
+    pub fn cluster_byte_offsets(&self) -> impl Iterator<Item = usize> + '_ {
+        self.cluster_advances.iter().map(|c| c.byte_offset)
+    }
+
     /// Derive baseline metrics from shaped runs and CSS line-height
     pub fn metrics_from_runs(runs: &[ShapedRun], line_height: f32, fallback_font_size: f32) -> BaselineMetrics {
         let mut ascent: f32 = 0.0;

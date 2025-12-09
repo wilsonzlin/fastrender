@@ -587,11 +587,39 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         "text-align" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.text_align = match kw.as_str() {
+                    "start" => TextAlign::Start,
+                    "end" => TextAlign::End,
                     "left" => TextAlign::Left,
                     "right" => TextAlign::Right,
                     "center" => TextAlign::Center,
                     "justify" => TextAlign::Justify,
                     _ => styles.text_align,
+                };
+            }
+        }
+        "text-align-last" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.text_align_last = match kw.as_str() {
+                    "auto" => TextAlignLast::Auto,
+                    "start" => TextAlignLast::Start,
+                    "end" => TextAlignLast::End,
+                    "left" => TextAlignLast::Left,
+                    "right" => TextAlignLast::Right,
+                    "center" => TextAlignLast::Center,
+                    "justify" => TextAlignLast::Justify,
+                    _ => styles.text_align_last,
+                };
+            }
+        }
+        "text-justify" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.text_justify = match kw.as_str() {
+                    "auto" => TextJustify::Auto,
+                    "none" => TextJustify::None,
+                    "inter-word" => TextJustify::InterWord,
+                    "inter-character" => TextJustify::InterCharacter,
+                    "distribute" => TextJustify::Distribute,
+                    _ => styles.text_justify,
                 };
             }
         }
@@ -1268,9 +1296,7 @@ fn parse_length_component<'i, 't>(input: &mut Parser<'i, 't>) -> Result<Length, 
     }
 }
 
-fn parse_css_color_value<'i, 't>(
-    input: &mut Parser<'i, 't>,
-) -> Result<FilterColor, cssparser::ParseError<'i, ()>> {
+fn parse_css_color_value<'i, 't>(input: &mut Parser<'i, 't>) -> Result<FilterColor, cssparser::ParseError<'i, ()>> {
     let location = input.current_source_location();
     let token = input.next()?;
     let raw = match token {
@@ -1297,9 +1323,7 @@ fn parse_css_color_value<'i, 't>(
     )))
 }
 
-fn parse_drop_shadow<'i, 't>(
-    input: &mut Parser<'i, 't>,
-) -> Result<FilterFunction, cssparser::ParseError<'i, ()>> {
+fn parse_drop_shadow<'i, 't>(input: &mut Parser<'i, 't>) -> Result<FilterFunction, cssparser::ParseError<'i, ()>> {
     let mut lengths = Vec::new();
     let mut color: Option<FilterColor> = None;
 

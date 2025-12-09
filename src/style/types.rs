@@ -373,10 +373,38 @@ impl VerticalAlign {
 /// Reference: CSS Text Module Level 3
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextAlign {
+    Start,
+    End,
     Left,
     Right,
     Center,
     Justify,
+}
+
+/// CSS `text-align-last`
+///
+/// Reference: CSS Text Level 3
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextAlignLast {
+    Auto,
+    Start,
+    End,
+    Left,
+    Right,
+    Center,
+    Justify,
+}
+
+/// CSS `text-justify`
+///
+/// Reference: CSS Text Level 3
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextJustify {
+    Auto,
+    None,
+    InterWord,
+    InterCharacter,
+    Distribute,
 }
 
 /// Text decoration lines

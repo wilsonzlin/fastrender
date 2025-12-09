@@ -45,18 +45,21 @@ use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::line_builder::InlineBoxItem;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::utils::compute_replaced_size;
-use crate::style::types::{FontStyle, HyphensMode, OverflowWrap, TextAlign, TextTransform, WhiteSpace, WordBreak};
+use crate::style::types::{
+    FontStyle, HyphensMode, OverflowWrap, TextAlign, TextJustify, TextTransform, WhiteSpace, WordBreak,
+};
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::text::hyphenation::Hyphenator;
+use crate::text::justify::is_cjk_character;
 use crate::text::line_break::{find_break_opportunities, BreakType};
 use crate::text::pipeline::ShapingPipeline;
 use crate::tree::box_tree::{BoxNode, BoxType, ReplacedBox};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 
 use baseline::{compute_line_height, BaselineMetrics};
-use line_builder::{InlineBlockItem, InlineItem, Line, LineBuilder, ReplacedItem, TextItem};
+use line_builder::{InlineBlockItem, InlineItem, Line, LineBuilder, PositionedItem, ReplacedItem, TextItem};
 
 /// Inline Formatting Context implementation
 ///
@@ -487,7 +490,13 @@ impl InlineFormattingContext {
                 let has_mandatory = text_item
                     .break_opportunities
                     .iter()
-                    .any(|b| b.break_type == BreakType::Mandatory);
+                    .any(|b| {
+                        if b.break_type != BreakType::Mandatory {
+                            return false;
+                        }
+                        b.byte_offset < text_item.text.len()
+                            || text_item.forced_break_offsets.contains(&b.byte_offset)
+                    });
 
                 if has_mandatory {
                     // Split at mandatory breaks
@@ -542,6 +551,14 @@ impl InlineFormattingContext {
                 .map(|b| b.byte_offset);
 
             if let Some(pos) = mandatory_pos {
+                if pos >= remaining.text.len() {
+                    if remaining.advance > 0.0 {
+                        builder.add_item(InlineItem::Text(remaining));
+                    }
+                    builder.force_break();
+                    break;
+                }
+
                 if pos > 0 {
                     if let Some((before, after)) = remaining.split_at(pos, false, &self.pipeline, &self.font_context) {
                         if before.advance > 0.0 {
@@ -550,6 +567,9 @@ impl InlineFormattingContext {
                         builder.force_break();
                         remaining = after;
                         continue;
+                    }
+                    if remaining.advance > 0.0 {
+                        builder.add_item(InlineItem::Text(remaining));
                     }
                     builder.force_break();
                     break;
@@ -585,6 +605,9 @@ impl InlineFormattingContext {
         start_y: f32,
         available_width: f32,
         text_align: TextAlign,
+        text_align_last: crate::style::types::TextAlignLast,
+        direction: crate::style::types::Direction,
+        text_justify: TextJustify,
     ) -> Vec<FragmentNode> {
         let mut fragments = Vec::new();
         let mut y = start_y;
@@ -592,7 +615,18 @@ impl InlineFormattingContext {
         let total = lines.len();
         for (idx, line) in lines.into_iter().enumerate() {
             let is_last_line = idx + 1 == total;
-            let line_fragment = self.create_line_fragment(&line, y, available_width, text_align, is_last_line);
+            let is_single_line = total == 1;
+            let mut base_align = map_text_align(text_align, direction);
+            if matches!(base_align, TextAlign::Justify) && matches!(text_justify, TextJustify::None) {
+                base_align = map_text_align(TextAlign::Start, direction);
+            }
+            let mut effective_align =
+                resolve_text_align_for_line(base_align, text_align_last, direction, is_last_line, is_single_line);
+            if matches!(effective_align, TextAlign::Justify) && matches!(text_justify, TextJustify::None) {
+                effective_align = map_text_align(TextAlign::Start, direction);
+            }
+            let line_fragment =
+                self.create_line_fragment(&line, y, available_width, effective_align, is_last_line, direction, text_justify);
             y += line.height;
             fragments.push(line_fragment);
         }
@@ -607,42 +641,157 @@ impl InlineFormattingContext {
         y: f32,
         available_width: f32,
         text_align: TextAlign,
-        is_last_line: bool,
+        _is_last_line: bool,
+        direction: crate::style::types::Direction,
+        text_justify: TextJustify,
     ) -> FragmentNode {
+        let text_align = map_text_align(text_align, direction);
+        let should_justify = matches!(text_align, TextAlign::Justify) && !matches!(text_justify, TextJustify::None);
+        let items: Vec<PositionedItem> = if should_justify {
+            self.expand_items_for_justification(&line.items, text_justify)
+        } else {
+            line.items.clone()
+        };
         let mut children = Vec::new();
         let usable_width = if available_width.is_finite() {
             available_width.max(0.0)
         } else {
             line.width
         };
-        let extra_space = (usable_width - line.width).max(0.0);
-        let mut gap_extra = 0.0;
-        let offset = match text_align {
-            TextAlign::Right => extra_space,
-            TextAlign::Center => extra_space * 0.5,
-            TextAlign::Justify if !is_last_line && line.items.len() > 1 => {
-                gap_extra = extra_space / (line.items.len() as f32 - 1.0);
-                0.0
+        let total_width: f32 = items.iter().map(|p| p.item.width()).sum();
+        let extra_space = (usable_width - total_width).max(0.0);
+        let (offset, gap_extra) = match text_align {
+            TextAlign::Right => (extra_space, 0.0),
+            TextAlign::Center => (extra_space * 0.5, 0.0),
+            TextAlign::Justify if should_justify && items.len() > 1 => {
+                let gap_count = Self::count_justifiable_gaps(&items, text_justify);
+                if gap_count > 0 {
+                    (0.0, extra_space / gap_count as f32)
+                } else {
+                    (0.0, 0.0)
+                }
             }
-            _ => 0.0,
+            _ => (0.0, 0.0),
         };
 
         let mut running_offset = offset;
-        let item_count = line.items.len();
-
-        for (i, positioned) in line.items.iter().enumerate() {
+        for (i, positioned) in items.iter().enumerate() {
             let item_y =
                 line.baseline + positioned.baseline_offset - positioned.item.baseline_metrics().baseline_offset;
 
             let fragment = self.create_item_fragment(&positioned.item, positioned.x + running_offset, item_y);
             children.push(fragment);
-            if gap_extra > 0.0 && i + 1 < item_count {
+            if should_justify && gap_extra > 0.0 && Self::is_justifiable_gap(&items, i, text_justify) {
                 running_offset += gap_extra;
             }
         }
 
         let bounds = Rect::from_xywh(0.0, y, usable_width, line.height);
         FragmentNode::new_line(bounds, line.baseline, children)
+    }
+
+    fn is_justifiable_boundary(prev: &InlineItem, next: &InlineItem) -> bool {
+        let prev_last = last_char_of_item(prev);
+        let next_first = first_char_of_item(next);
+        matches!((prev_last, next_first),
+            (Some(p), Some(n)) if is_expandable_space(p) && !is_expandable_space(n))
+    }
+
+    fn count_justifiable_gaps(items: &[PositionedItem], mode: TextJustify) -> usize {
+        if matches!(mode, TextJustify::InterCharacter | TextJustify::Distribute) {
+            return items.len().saturating_sub(1);
+        }
+        items
+            .windows(2)
+            .filter(|pair| {
+                let prev = &pair[0].item;
+                let next = &pair[1].item;
+                Self::is_justifiable_boundary(prev, next)
+            })
+            .count()
+    }
+
+    fn is_justifiable_gap(items: &[PositionedItem], index: usize, mode: TextJustify) -> bool {
+        if index + 1 >= items.len() {
+            return false;
+        }
+        if matches!(mode, TextJustify::InterCharacter | TextJustify::Distribute) {
+            return true;
+        }
+        let prev = &items[index].item;
+        let next = &items[index + 1].item;
+        Self::is_justifiable_boundary(prev, next)
+    }
+
+    fn expand_items_for_justification(&self, items: &[PositionedItem], mode: TextJustify) -> Vec<PositionedItem> {
+        let mut expanded = Vec::new();
+        for positioned in items {
+            match &positioned.item {
+                InlineItem::Text(text) => {
+                    let segments = self.split_text_item_for_justify(text, mode);
+                    let mut local_x = positioned.x;
+                    for segment in segments {
+                        let width = segment.advance;
+                        expanded.push(PositionedItem {
+                            item: InlineItem::Text(segment),
+                            x: local_x,
+                            baseline_offset: positioned.baseline_offset,
+                        });
+                        local_x += width;
+                    }
+                }
+                _ => expanded.push(positioned.clone()),
+            }
+        }
+        expanded
+    }
+
+    fn split_text_item_for_justify(&self, item: &TextItem, mode: TextJustify) -> Vec<TextItem> {
+        let mut segments = Vec::new();
+        let mut remaining = item.clone();
+        let mut consumed = 0usize;
+        let break_offsets: Vec<usize> = match mode {
+            TextJustify::InterCharacter | TextJustify::Distribute => item.cluster_byte_offsets().skip(1).collect(),
+            _ => item
+                .break_opportunities
+                .iter()
+                .filter(|b| matches!(b.break_type, crate::text::line_break::BreakType::Allowed))
+                .filter_map(|b| {
+                    let off = b.byte_offset;
+                    if off == 0 || off >= item.text.len() {
+                        return None;
+                    }
+                    let prev = item.text[..off].chars().rev().next();
+                    let next = item.text[off..].chars().next();
+                    let is_space_boundary = prev.map(is_expandable_space).unwrap_or(false)
+                        && next.map(|c| !is_expandable_space(c)).unwrap_or(false);
+                    let is_cjk_boundary = prev.map(is_cjk_character).unwrap_or(false)
+                        || next.map(is_cjk_character).unwrap_or(false);
+                    if is_space_boundary || is_cjk_boundary {
+                        Some(off)
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        };
+
+        for target in break_offsets {
+            if target <= consumed {
+                continue;
+            }
+            let local = target - consumed;
+            if let Some((before, after)) = remaining.split_at(local, false, &self.pipeline, &self.font_context) {
+                consumed = target;
+                segments.push(before);
+                remaining = after;
+            } else {
+                break;
+            }
+        }
+
+        segments.push(remaining);
+        segments
     }
 
     /// Creates a fragment for an inline item
@@ -1256,7 +1405,15 @@ impl FormattingContext for InlineFormattingContext {
         let max_width: f32 = lines.iter().map(|l| l.width).fold(0.0, f32::max);
 
         // Create fragments
-        let children = self.create_fragments(lines, 0.0, available_width, style.text_align);
+        let children = self.create_fragments(
+            lines,
+            0.0,
+            available_width,
+            style.text_align,
+            style.text_align_last,
+            style.direction,
+            style.text_justify,
+        );
 
         // Create containing fragment
         let bounds = Rect::from_xywh(0.0, 0.0, max_width.min(available_width), total_height);
@@ -1373,6 +1530,76 @@ fn first_char_of_item(item: &InlineItem) -> Option<char> {
         InlineItem::Text(t) => t.text.chars().next(),
         InlineItem::InlineBox(b) => b.children.iter().find_map(first_char_of_item),
         InlineItem::InlineBlock(_) | InlineItem::Replaced(_) => Some(OBJECT_REPLACEMENT),
+    }
+}
+
+fn last_char_of_item(item: &InlineItem) -> Option<char> {
+    const OBJECT_REPLACEMENT: char = '\u{FFFC}';
+    match item {
+        InlineItem::Text(t) => t.text.chars().rev().next(),
+        InlineItem::InlineBox(b) => b.children.iter().rev().find_map(last_char_of_item),
+        InlineItem::InlineBlock(_) | InlineItem::Replaced(_) => Some(OBJECT_REPLACEMENT),
+    }
+}
+
+fn is_expandable_space(ch: char) -> bool {
+    matches!(ch, ' ' | '\t')
+}
+
+fn resolve_text_align_for_line(
+    text_align: TextAlign,
+    text_align_last: crate::style::types::TextAlignLast,
+    direction: crate::style::types::Direction,
+    is_last_line: bool,
+    is_single_line: bool,
+) -> TextAlign {
+    if !is_last_line {
+        return text_align;
+    }
+
+    let mapped_start_end = |align_last: crate::style::types::TextAlignLast| {
+        match align_last {
+            crate::style::types::TextAlignLast::Start => map_text_align(TextAlign::Start, direction),
+            crate::style::types::TextAlignLast::End => map_text_align(TextAlign::End, direction),
+            crate::style::types::TextAlignLast::Left => TextAlign::Left,
+            crate::style::types::TextAlignLast::Right => TextAlign::Right,
+            crate::style::types::TextAlignLast::Center => TextAlign::Center,
+            crate::style::types::TextAlignLast::Justify => TextAlign::Justify,
+            crate::style::types::TextAlignLast::Auto => text_align,
+        }
+    };
+
+    match text_align_last {
+        crate::style::types::TextAlignLast::Auto => {
+            if is_single_line && !matches!(text_align, TextAlign::Justify) {
+                text_align
+            } else if matches!(text_align, TextAlign::Justify) {
+                map_text_align(TextAlign::Start, direction)
+            } else {
+                text_align
+            }
+        }
+        _ => mapped_start_end(text_align_last),
+    }
+}
+
+fn map_text_align(text_align: TextAlign, direction: crate::style::types::Direction) -> TextAlign {
+    match text_align {
+        TextAlign::Start => {
+            if matches!(direction, crate::style::types::Direction::Rtl) {
+                TextAlign::Right
+            } else {
+                TextAlign::Left
+            }
+        }
+        TextAlign::End => {
+            if matches!(direction, crate::style::types::Direction::Rtl) {
+                TextAlign::Left
+            } else {
+                TextAlign::Right
+            }
+        }
+        _ => text_align,
     }
 }
 
@@ -1625,6 +1852,145 @@ mod tests {
             .break_opportunities
             .iter()
             .any(|b| b.byte_offset == 3 && b.break_type == BreakType::Mandatory));
+    }
+
+    #[test]
+    fn text_align_right_offsets_child() {
+        let mut root_style = ComputedStyle::default();
+        root_style.font_size = 16.0;
+        root_style.text_align = TextAlign::Right;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![make_text_box("hi")],
+        );
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        let line = fragment.children.first().expect("line fragment");
+        let child = line.children.first().expect("text fragment");
+
+        assert!(child.bounds.x() > 0.0);
+        let offset = child.bounds.x();
+        let remaining = (line.bounds.width() - child.bounds.width()).abs();
+        assert!((offset - remaining).abs() < 0.5);
+    }
+
+    #[test]
+    fn text_align_center_shifts_child_from_origin() {
+        let mut root_style = ComputedStyle::default();
+        root_style.font_size = 16.0;
+        root_style.text_align = TextAlign::Center;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![make_text_box("hi")],
+        );
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        let line = fragment.children.first().expect("line fragment");
+        let child = line.children.first().expect("text fragment");
+
+        assert!(child.bounds.x() > 0.0);
+        assert!(child.bounds.x() < line.bounds.width() - child.bounds.width());
+    }
+
+    #[test]
+    fn text_align_justify_expands_word_gaps() {
+        let mut root_style = ComputedStyle::default();
+        root_style.font_size = 16.0;
+        root_style.text_align = TextAlign::Justify;
+        let mut text_style = ComputedStyle::default();
+        text_style.font_size = 16.0;
+        text_style.white_space = WhiteSpace::Pre;
+        let word = |text: &str| BoxNode::new_text(Arc::new(text_style.clone()), text.to_string());
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![word("a "), word("b "), word("c")],
+        );
+        let constraints = LayoutConstraints::definite_width(30.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert!(fragment.children.len() >= 2, "justify should create multiple lines");
+        let line = &fragment.children[0];
+        assert!(line.children.len() >= 2, "first line should have two fragments");
+        let a = &line.children[0];
+        let b = &line.children[1];
+
+        let gap = b.bounds.x() - (a.bounds.x() + a.bounds.width());
+        assert!(gap > 3.0, "gap too small for justify: {}", gap);
+    }
+
+    #[test]
+    fn text_align_last_end_forces_last_line_end_when_justify() {
+        let mut root_style = ComputedStyle::default();
+        root_style.font_size = 16.0;
+        root_style.text_align = TextAlign::Justify;
+        root_style.text_align_last = crate::style::types::TextAlignLast::End;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(text_style), "word word\nword".to_string())],
+        );
+        let constraints = LayoutConstraints::definite_width(60.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert!(fragment.children.len() >= 2, "should wrap into multiple lines");
+        let last_line = fragment.children.last().expect("last line");
+        let last_child = last_line.children.first().expect("text fragment");
+        // End alignment in LTR pushes text towards right edge
+        assert!(last_child.bounds.x() > constraints.width().unwrap() * 0.3);
+    }
+
+    #[test]
+    fn text_align_start_respects_direction() {
+        let mut root_style = ComputedStyle::default();
+        root_style.direction = crate::style::types::Direction::Rtl;
+        root_style.text_align = TextAlign::Start;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![make_text_box("hi")],
+        );
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        let line = fragment.children.first().expect("line fragment");
+        let child = line.children.first().expect("text fragment");
+
+        let expected = line.bounds.width() - child.bounds.width();
+        assert!((child.bounds.x() - expected).abs() < 1.0);
+    }
+
+    #[test]
+    fn text_align_last_auto_uses_start_on_final_justify_line() {
+        let mut root_style = ComputedStyle::default();
+        root_style.font_size = 16.0;
+        root_style.text_align = TextAlign::Justify;
+        root_style.text_align_last = crate::style::types::TextAlignLast::Auto;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(text_style), "word word\nword".to_string())],
+        );
+        let constraints = LayoutConstraints::definite_width(60.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        let last_line = fragment.children.last().expect("last line");
+        let child = last_line.children.first().expect("text fragment");
+        assert!(child.bounds.x() < 1.0, "last line should start-align under auto");
     }
 
     #[test]
