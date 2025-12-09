@@ -33,7 +33,7 @@
 
 use super::baseline::{BaselineMetrics, LineBaselineAccumulator, VerticalAlign};
 use crate::geometry::Size;
-use crate::style::types::{Direction, UnicodeBidi, WhiteSpace, WordBreak};
+use crate::style::types::{Direction, OverflowWrap, UnicodeBidi, WhiteSpace, WordBreak};
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::text::line_break::{BreakOpportunity, BreakType};
@@ -518,7 +518,10 @@ impl TextItem {
             return best_break;
         }
 
-        if self.style.word_break == WordBreak::BreakWord {
+        let can_overflow_break_word = self.style.word_break == WordBreak::BreakWord;
+        let can_overflow_break_by_wrap = self.style.overflow_wrap == OverflowWrap::BreakWord;
+
+        if can_overflow_break_word || can_overflow_break_by_wrap {
             // Allow breaking anywhere within the word if nothing else fits
             for (idx, _) in self.text.char_indices().skip(1) {
                 let width_at_break = self.advance_at_offset(idx);

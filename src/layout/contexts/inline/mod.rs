@@ -1179,29 +1179,12 @@ impl InlineFormattingContext {
             return;
         }
 
-        let mut breaks = text_item.break_opportunities.clone();
-        if text_item.style.word_break == WordBreak::BreakWord
-            && !matches!(text_item.style.white_space, WhiteSpace::Nowrap | WhiteSpace::Pre)
-        {
-            breaks.extend(char_boundary_breaks(&text_item.text));
-            breaks.sort_by_key(|b| b.byte_offset);
-            breaks.dedup_by(|a, b| {
-                if a.byte_offset != b.byte_offset {
-                    return false;
-                }
-                if a.break_type == BreakType::Mandatory {
-                    *b = *a;
-                }
-                true
-            });
-        }
-
         let len = text_item.text.len();
         let mut last_break = 0;
         let mut hyphen_width: Option<f32> = None;
         let last_char = text_item.text.chars().last();
 
-        for brk in &breaks {
+        for brk in &text_item.break_opportunities {
             if brk.byte_offset > len {
                 continue;
             }
@@ -1670,11 +1653,8 @@ fn apply_break_properties(
         WordBreak::Normal => {}
     }
 
-    match overflow_wrap {
-        OverflowWrap::Anywhere | OverflowWrap::BreakWord => {
-            result.extend(char_boundary_breaks(text));
-        }
-        OverflowWrap::Normal => {}
+    if matches!(overflow_wrap, OverflowWrap::Anywhere) {
+        result.extend(char_boundary_breaks(text));
     }
 
     result.sort_by_key(|b| b.byte_offset);
@@ -2727,8 +2707,80 @@ mod tests {
         let breaking_min = ifc.calculate_intrinsic_width(&breaking, IntrinsicSizingMode::MinContent);
         let normal_min = ifc.calculate_intrinsic_width(&normal, IntrinsicSizingMode::MinContent);
         assert!(
-            breaking_min < normal_min,
-            "break-word should provide smaller min-content widths"
+            (breaking_min - normal_min).abs() < 0.1,
+            "break-word should not reduce min-content widths; only overflow handling differs"
+        );
+    }
+
+    #[test]
+    fn overflow_wrap_break_word_splits_overflowing_word() {
+        let mut text_style = ComputedStyle::default();
+        text_style.overflow_wrap = OverflowWrap::BreakWord;
+        text_style.white_space = WhiteSpace::Normal;
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "supercalifragilisticexpialidocious".to_string(),
+            )],
+        );
+        let constraints = LayoutConstraints::definite_width(40.0);
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert!(
+            fragment.children.len() > 1,
+            "overflow-wrap: break-word should allow breaking long tokens when they overflow"
+        );
+    }
+
+    #[test]
+    fn overflow_wrap_break_word_respects_nowrap() {
+        let mut text_style = ComputedStyle::default();
+        text_style.overflow_wrap = OverflowWrap::BreakWord;
+        text_style.white_space = WhiteSpace::Nowrap;
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "supercalifragilisticexpialidocious".to_string(),
+            )],
+        );
+        let constraints = LayoutConstraints::definite_width(40.0);
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert_eq!(
+            fragment.children.len(),
+            1,
+            "nowrap should suppress overflow-wrap: break-word emergency breaks"
+        );
+    }
+
+    #[test]
+    fn overflow_wrap_break_word_keeps_min_content_width() {
+        let mut text_style = ComputedStyle::default();
+        text_style.overflow_wrap = OverflowWrap::BreakWord;
+        text_style.white_space = WhiteSpace::Normal;
+        let breaking = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(text_style.clone()), "longtoken".to_string())],
+        );
+        let normal = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(ComputedStyle::default()),
+                "longtoken".to_string(),
+            )],
+        );
+        let ifc = InlineFormattingContext::new();
+        let breaking_min = ifc.calculate_intrinsic_width(&breaking, IntrinsicSizingMode::MinContent);
+        let normal_min = ifc.calculate_intrinsic_width(&normal, IntrinsicSizingMode::MinContent);
+        assert!(
+            (breaking_min - normal_min).abs() < 0.1,
+            "overflow-wrap: break-word should not reduce min-content widths"
         );
     }
 
