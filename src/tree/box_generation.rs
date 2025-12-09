@@ -1202,15 +1202,25 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
 
     let intrinsic_height = styled.node.get_attribute("height").and_then(|h| h.parse::<f32>().ok());
 
-    let intrinsic_size = match (intrinsic_width, intrinsic_height) {
+    let mut intrinsic_size = match (intrinsic_width, intrinsic_height) {
         (Some(w), Some(h)) => Some(Size::new(w, h)),
         _ => None,
     };
 
-    let aspect_ratio = match (intrinsic_width, intrinsic_height) {
+    let mut aspect_ratio = match (intrinsic_width, intrinsic_height) {
         (Some(w), Some(h)) if h > 0.0 => Some(w / h),
         _ => None,
     };
+
+    if intrinsic_size.is_none() && aspect_ratio.is_none() {
+        match replaced_type {
+            ReplacedType::Canvas | ReplacedType::Video { .. } | ReplacedType::Iframe { .. } => {
+                intrinsic_size = Some(Size::new(300.0, 150.0));
+                aspect_ratio = Some(2.0);
+            }
+            _ => {}
+        }
+    }
 
     let replaced_box = ReplacedBox {
         replaced_type,
@@ -1805,6 +1815,44 @@ mod tests {
         assert_eq!(box_tree.count_boxes(), 5);
         assert_eq!(BoxGenerator::find_replaced_boxes(&box_tree.root).len(), 1);
         assert_eq!(BoxGenerator::find_text_boxes(&box_tree.root).len(), 2);
+    }
+
+    fn styled_element(tag: &str) -> StyledNode {
+        StyledNode {
+            node: dom::DomNode {
+                node_type: dom::DomNodeType::Element {
+                    tag_name: tag.to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            },
+            styles: ComputedStyle::default(),
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children: vec![],
+        }
+    }
+
+    #[test]
+    fn replaced_media_defaults_to_300_by_150() {
+        let style = default_style();
+
+        for tag in ["canvas", "video", "iframe"] {
+            let styled = styled_element(tag);
+            let box_node = create_replaced_box_from_styled(&styled, style.clone());
+            match &box_node.box_type {
+                BoxType::Replaced(replaced) => {
+                    assert_eq!(
+                        replaced.intrinsic_size,
+                        Some(Size::new(300.0, 150.0)),
+                        "{tag} should default to 300x150"
+                    );
+                    assert_eq!(replaced.aspect_ratio, Some(2.0), "{tag} should default to 2:1 ratio");
+                }
+                other => panic!("expected replaced box for {tag}, got {:?}", other),
+            }
+        }
     }
 
     // =============================================================================
