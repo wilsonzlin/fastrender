@@ -24,13 +24,15 @@
 use crate::error::{RenderError, Result};
 use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
+use crate::paint::display_list::BorderRadii;
+use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::stacking::creates_stacking_context;
 use crate::style::color::Rgba;
-use crate::style::types::{FilterColor, FilterFunction, MixBlendMode};
 use crate::style::types::{
     BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderStyle as CssBorderStyle, ObjectFit,
-    ObjectPosition, PositionComponent,
+    ObjectPosition, PositionComponent, TextDecoration,
 };
+use crate::style::types::{FilterColor, FilterFunction, MixBlendMode};
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
@@ -44,8 +46,6 @@ use tiny_skia::{
     BlendMode as SkiaBlendMode, FilterQuality, IntSize, Mask, MaskType, Paint, PathBuilder, Pattern, Pixmap,
     PixmapPaint, PremultipliedColorU8, Rect as SkiaRect, SpreadMode, Stroke, Transform,
 };
-use crate::paint::display_list::BorderRadii;
-use crate::paint::rasterize::fill_rounded_rect;
 
 /// Main painter that rasterizes a FragmentTree to pixels
 pub struct Painter {
@@ -500,8 +500,8 @@ impl Painter {
                 style,
             } => {
                 let color = style.color;
-                if let Some(runs) = runs {
-                    self.paint_shaped_runs(&runs, rect.x(), rect.y() + baseline_offset, color);
+                if let Some(ref runs) = runs {
+                    self.paint_shaped_runs(runs, rect.x(), rect.y() + baseline_offset, color);
                 } else {
                     self.paint_text(
                         &text,
@@ -512,6 +512,7 @@ impl Painter {
                         color,
                     );
                 }
+                self.paint_text_decoration(&style, runs.as_deref(), rect.x(), rect.y() + baseline_offset, rect.width());
             }
             DisplayCommand::Replaced {
                 rect,
@@ -693,12 +694,7 @@ impl Painter {
         let clip_mask = if clip_radii.is_zero() {
             None
         } else {
-            build_rounded_rect_mask(
-                clip_rect,
-                clip_radii,
-                self.pixmap.width(),
-                self.pixmap.height(),
-            )
+            build_rounded_rect_mask(clip_rect, clip_radii, self.pixmap.width(), self.pixmap.height())
         };
 
         let (tile_w, tile_h) = compute_background_size(style, origin_rect.width(), origin_rect.height(), img_w, img_h);
@@ -782,15 +778,7 @@ impl Painter {
                 while ty < max_y {
                     let mut tx = start_x;
                     while tx < max_x {
-                        self.paint_background_tile(
-                            &pixmap,
-                            tx,
-                            ty,
-                            tile_w,
-                            tile_h,
-                            clip_rect,
-                            clip_mask.as_ref(),
-                        );
+                        self.paint_background_tile(&pixmap, tx, ty, tile_w, tile_h, clip_rect, clip_mask.as_ref());
                         tx += tile_w;
                     }
                     ty += tile_h;
@@ -1257,6 +1245,48 @@ impl Painter {
         true
     }
 
+    fn decoration_metrics<'a>(
+        &self,
+        runs: Option<&'a [ShapedRun]>,
+        style: &ComputedStyle,
+    ) -> Option<DecorationMetrics> {
+        let mut metrics_source = runs
+            .and_then(|rs| rs.iter().find_map(|run| run.font.metrics().ok().map(|m| (m, run.font_size))));
+
+        if metrics_source.is_none() {
+            let italic = matches!(style.font_style, crate::style::types::FontStyle::Italic);
+            let oblique = matches!(style.font_style, crate::style::types::FontStyle::Oblique);
+            metrics_source = self
+                .font_ctx
+                .get_font(&style.font_family, style.font_weight.to_u16(), italic, oblique)
+                .or_else(|| self.font_ctx.get_sans_serif())
+                .and_then(|font| font.metrics().ok().map(|m| (m, style.font_size)));
+        }
+
+        let (metrics, size) = metrics_source?;
+        let scale = size / (metrics.units_per_em as f32);
+
+        let underline_pos = metrics.underline_position as f32 * scale;
+        let underline_thickness = (metrics.underline_thickness as f32 * scale).max(1.0);
+        let strike_pos = metrics
+            .strikeout_position
+            .map(|p| p as f32 * scale)
+            .unwrap_or_else(|| metrics.ascent as f32 * scale * 0.3);
+        let strike_thickness = metrics
+            .strikeout_thickness
+            .map(|t| t as f32 * scale)
+            .unwrap_or(underline_thickness);
+        let ascent = metrics.ascent as f32 * scale;
+
+        Some(DecorationMetrics {
+            underline_pos,
+            underline_thickness,
+            strike_pos,
+            strike_thickness,
+            ascent,
+        })
+    }
+
     fn dynamic_image_to_pixmap(image: &DynamicImage) -> Option<Pixmap> {
         let rgba = image.to_rgba8();
         let (width, height) = rgba.dimensions();
@@ -1278,6 +1308,74 @@ impl Painter {
         let size = IntSize::from_wh(width, height)?;
         Pixmap::from_vec(data, size)
     }
+
+    fn paint_text_decoration(
+        &mut self,
+        style: &ComputedStyle,
+        runs: Option<&[ShapedRun]>,
+        x: f32,
+        baseline_y: f32,
+        width: f32,
+    ) {
+        if style.text_decoration == TextDecoration::None || width <= 0.0 {
+            return;
+        }
+
+        let Some(metrics) = self.decoration_metrics(runs, style) else {
+            return;
+        };
+
+        let mut paint = Paint::default();
+        paint.set_color(color_to_skia(style.color));
+        paint.anti_alias = true;
+
+        let draw_line = |pixmap: &mut Pixmap, y_center: f32, thickness: f32, color: &Paint| {
+            if thickness <= 0.0 {
+                return;
+            }
+            if let Some(rect) = SkiaRect::from_xywh(x, y_center - thickness * 0.5, width, thickness) {
+                let path = PathBuilder::from_rect(rect);
+                pixmap.fill_path(&path, color, tiny_skia::FillRule::Winding, Transform::identity(), None);
+            }
+        };
+
+        match style.text_decoration {
+            TextDecoration::Underline => {
+                draw_line(
+                    &mut self.pixmap,
+                    baseline_y - metrics.underline_pos,
+                    metrics.underline_thickness,
+                    &paint,
+                );
+            }
+            TextDecoration::Overline => {
+                draw_line(&mut self.pixmap, baseline_y - metrics.ascent, metrics.underline_thickness, &paint);
+            }
+            TextDecoration::LineThrough => {
+                draw_line(
+                    &mut self.pixmap,
+                    baseline_y - metrics.strike_pos,
+                    metrics.strike_thickness,
+                    &paint,
+                );
+            }
+            TextDecoration::None => {}
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DecorationMetrics {
+    underline_pos: f32,
+    underline_thickness: f32,
+    strike_pos: f32,
+    strike_thickness: f32,
+    ascent: f32,
+}
+
+fn color_to_skia(color: Rgba) -> tiny_skia::Color {
+    let alpha = (color.a * 255.0).clamp(0.0, 255.0).round() as u8;
+    tiny_skia::Color::from_rgba8(color.r, color.g, color.b, alpha)
 }
 
 fn default_object_position() -> ObjectPosition {
@@ -1663,7 +1761,14 @@ fn apply_backdrop_filters(pixmap: &mut Pixmap, bounds: &Rect, filters: &[Resolve
 
     let mut paint = PixmapPaint::default();
     paint.blend_mode = SkiaBlendMode::SourceOver;
-    pixmap.draw_pixmap(clamped_x as i32, clamped_y as i32, region.as_ref(), &paint, Transform::identity(), None);
+    pixmap.draw_pixmap(
+        clamped_x as i32,
+        clamped_y as i32,
+        region.as_ref(),
+        &paint,
+        Transform::identity(),
+        None,
+    );
 }
 
 fn apply_color_filter<F>(pixmap: &mut Pixmap, mut f: F)
@@ -1749,11 +1854,14 @@ fn hue_rotate(color: [f32; 3], degrees: f32) -> [f32; 3] {
     let b = color[2];
 
     [
-        r * (0.213 + cos * 0.787 - sin * 0.213) + g * (0.715 - 0.715 * cos - 0.715 * sin)
+        r * (0.213 + cos * 0.787 - sin * 0.213)
+            + g * (0.715 - 0.715 * cos - 0.715 * sin)
             + b * (0.072 - 0.072 * cos + 0.928 * sin),
-        r * (0.213 - 0.213 * cos + 0.143 * sin) + g * (0.715 + 0.285 * cos + 0.140 * sin)
+        r * (0.213 - 0.213 * cos + 0.143 * sin)
+            + g * (0.715 + 0.285 * cos + 0.140 * sin)
             + b * (0.072 - 0.072 * cos - 0.283 * sin),
-        r * (0.213 - 0.213 * cos - 0.787 * sin) + g * (0.715 - 0.715 * cos + 0.715 * sin)
+        r * (0.213 - 0.213 * cos - 0.787 * sin)
+            + g * (0.715 - 0.715 * cos + 0.715 * sin)
             + b * (0.072 + 0.928 * cos + 0.072 * sin),
     ]
 }
@@ -1903,9 +2011,13 @@ fn apply_drop_shadow(pixmap: &mut Pixmap, offset_x: f32, offset_y: f32, blur_rad
             let g = (color.g as f32 / 255.0) * total_alpha;
             let b = (color.b as f32 / 255.0) * total_alpha;
             let a = total_alpha * 255.0;
-            *dst_px =
-                PremultipliedColorU8::from_rgba((r * 255.0).round() as u8, (g * 255.0).round() as u8, (b * 255.0).round() as u8, a.round().clamp(0.0, 255.0) as u8)
-                    .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+            *dst_px = PremultipliedColorU8::from_rgba(
+                (r * 255.0).round() as u8,
+                (g * 255.0).round() as u8,
+                (b * 255.0).round() as u8,
+                a.round().clamp(0.0, 255.0) as u8,
+            )
+            .unwrap_or(PremultipliedColorU8::TRANSPARENT);
         }
     }
 
@@ -1924,7 +2036,14 @@ fn apply_drop_shadow(pixmap: &mut Pixmap, offset_x: f32, offset_y: f32, blur_rad
 
     let mut paint = PixmapPaint::default();
     paint.blend_mode = SkiaBlendMode::SourceOver;
-    result.draw_pixmap(0, 0, shadow.as_ref(), &paint, Transform::from_translate(offset_x, offset_y), None);
+    result.draw_pixmap(
+        0,
+        0,
+        shadow.as_ref(),
+        &paint,
+        Transform::from_translate(offset_x, offset_y),
+        None,
+    );
     result.draw_pixmap(0, 0, source.as_ref(), &paint, Transform::identity(), None);
 
     *pixmap = result;
@@ -2011,7 +2130,11 @@ fn resolve_border_radii(style: Option<&ComputedStyle>, bounds: Rect) -> BorderRa
     radii.clamped(w, h)
 }
 
-fn resolve_clip_radii(style: &ComputedStyle, rects: &BackgroundRects, clip: crate::style::types::BackgroundBox) -> BorderRadii {
+fn resolve_clip_radii(
+    style: &ComputedStyle,
+    rects: &BackgroundRects,
+    clip: crate::style::types::BackgroundBox,
+) -> BorderRadii {
     let base = resolve_border_radii(Some(style), rects.border);
     if base.is_zero() {
         return base;
@@ -2231,6 +2354,7 @@ pub fn paint_tree_with_resources(
 mod tests {
     use super::*;
     use crate::geometry::Rect;
+    use crate::style::ComputedStyle;
 
     fn make_empty_tree() -> FragmentTree {
         let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![]);
@@ -2288,6 +2412,14 @@ mod tests {
         assert_eq!(data[1], 255); // G
         assert_eq!(data[2], 255); // R
         assert_eq!(data[3], 255); // A
+    }
+
+    #[test]
+    fn text_decoration_metrics_available() {
+        let painter = Painter::new(10, 10, Rgba::WHITE).expect("painter");
+        let style = ComputedStyle::default();
+        let metrics = painter.decoration_metrics(None, &style);
+        assert!(metrics.is_some());
     }
 
     #[test]
