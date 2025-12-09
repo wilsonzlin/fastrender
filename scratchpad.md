@@ -19,6 +19,7 @@
 - Added parsing coverage for background-repeat keywords/pairs to ensure style application maps shorthands and pair syntax correctly.
 - `list-style-image` is parsed/inherited, resets via shorthand, and markers now carry either text or image content. Marker boxes load intrinsic sizes through the image cache, and inline layout positions image markers with outside/inside semantics (outside markers paint with negative offsets, inside markers consume a 0.5em gap). Box/debug printers and tests updated accordingly.
 - Inline replaced elements now honor padding/borders in their inline box dimensions: layout accounts for padding/border in advance/width, marker images inherit the larger box, and inline fragment positions respect margins; added regression to guard inline replaced sizing.
+- Bidi reordering now runs at paragraph scope: line builder aggregates paragraph text, feeds paragraph-level BidiInfo into each line, and preserves explicit embeddings across soft wraps. Added regression for unclosed RTL embeddings spanning lines.
 - Background-attachment parsed and respected: scroll/fixed/local stored in computed styles, and painter positions backgrounds relative to the viewport for `fixed` while clipping to the element. Gradients now use the positioning area separately from the paint area. Added regression covering fixed anchoring.
 - `background-attachment: local` now anchors images to the scrollable overflow area (padding box) and treats `background-clip: border-box` like padding-box for scroll containers; clipping radii follow the adjusted box. Regression ensures border areas stay clear while padding paints.
 - Background-size matches the CSS grammar: per-axis components accept length/percent/auto, single values default the second to auto, and cover/contain remain keywords. Painter resolves mixed auto/length pairs using intrinsic size/ratio (falling back to 100% when none) and rounding now checks explicit auto-auto. Parsing and paint regressions added.
@@ -191,7 +192,7 @@
 - Background colors and images respect border-radius and `background-clip`: clip radii shrink with border/padding/content edges, fills draw as rounded rects, and image tiling is masked to the clipped rounded box (`src/paint/painter.rs`).
 
 ## Current issues / gaps
-- Bidi: still relies on injected controls to drive UAX#9 (no dedicated embedding/isolate stack), though stack handling now opens/closes on context transitions.
+- Bidi: still relies on injected controls to drive UAX#9 (no dedicated embedding/isolate stack), though paragraph-level resolution and stack handling now opens/closes on context transitions.
 - Justification lacks script-aware expansion (kashida/justification alternates, punctuation stretching) and `text-justify` is still approximated (auto treated as inter-word; no trim/edge handling).
 - `text-align-last` currently maps start/end via direction; nuanced interaction with `text-justify` and additional values still pending.
 - `text-indent` hanging/each-line semantics are approximate; indentation doesn’t yet handle hanging outdents per spec nuances.
