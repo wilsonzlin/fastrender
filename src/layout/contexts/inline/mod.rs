@@ -1740,6 +1740,13 @@ fn map_text_align(text_align: TextAlign, direction: crate::style::types::Directi
                 TextAlign::Right
             }
         }
+        TextAlign::MatchParent => {
+            if matches!(direction, crate::style::types::Direction::Rtl) {
+                TextAlign::Right
+            } else {
+                TextAlign::Left
+            }
+        }
         _ => text_align,
     }
 }
@@ -2389,6 +2396,28 @@ mod tests {
         let line = fragment.children.first().expect("line fragment");
         let child = line.children.first().expect("text fragment");
 
+        let expected = line.bounds.width() - child.bounds.width();
+        assert!((child.bounds.x() - expected).abs() < 1.0);
+    }
+
+    #[test]
+    fn text_align_match_parent_uses_parent_direction() {
+        let mut root_style = ComputedStyle::default();
+        root_style.direction = crate::style::types::Direction::Rtl;
+        root_style.text_align = TextAlign::MatchParent;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![make_text_box("hi")],
+        );
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        let line = fragment.children.first().expect("line fragment");
+        let child = line.children.first().expect("text fragment");
+
+        // Match-parent should align to the parent's start (right in RTL)
         let expected = line.bounds.width() - child.bounds.width();
         assert!((child.bounds.x() - expected).abs() < 1.0);
     }

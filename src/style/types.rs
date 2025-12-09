@@ -379,6 +379,7 @@ pub enum TextAlign {
     Right,
     Center,
     Justify,
+    MatchParent,
 }
 
 /// CSS `text-align-last`

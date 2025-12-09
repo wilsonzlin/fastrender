@@ -597,6 +597,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                         styles.text_align_last = TextAlignLast::Justify;
                         TextAlign::Justify
                     }
+                    "match-parent" => TextAlign::MatchParent,
                     _ => styles.text_align,
                 };
             }

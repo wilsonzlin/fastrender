@@ -99,6 +99,7 @@ fn apply_styles_internal(
 
     // Finalize grid placement - resolve named grid lines
     finalize_grid_placement(&mut styles);
+    resolve_match_parent_text_align(&mut styles, parent_styles.direction);
 
     // Compute pseudo-element styles
     let before_styles =
@@ -175,6 +176,7 @@ fn apply_styles_internal_with_ancestors(
 
     // Finalize grid placement - resolve named grid lines
     finalize_grid_placement(&mut styles);
+    resolve_match_parent_text_align(&mut styles, parent_styles.direction);
 
     // Compute pseudo-element styles from CSS rules
     let before_styles =
@@ -230,6 +232,18 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     // Grid line names inherit (so children can reference parent's named grid lines)
     styles.grid_column_names = parent.grid_column_names.clone();
     styles.grid_row_names = parent.grid_row_names.clone();
+}
+
+fn resolve_match_parent_text_align(styles: &mut ComputedStyle, parent_direction: crate::style::types::Direction) {
+    use crate::style::types::TextAlign;
+    if !matches!(styles.text_align, TextAlign::MatchParent) {
+        return;
+    }
+    styles.text_align = if matches!(parent_direction, crate::style::types::Direction::Rtl) {
+        TextAlign::Right
+    } else {
+        TextAlign::Left
+    };
 }
 
 fn find_matching_rules(node: &DomNode, rules: &[&StyleRule], ancestors: &[&DomNode]) -> Vec<(u32, Vec<Declaration>)> {
