@@ -1710,22 +1710,50 @@ fn resolve_auto_text_justify(mode: TextJustify, items: &[PositionedItem]) -> Tex
     if !matches!(mode, TextJustify::Auto) {
         return mode;
     }
-    if line_contains_cjk(items) {
+    let counts = count_justify_scripts(items);
+    if counts.total == 0 {
+        return TextJustify::InterWord;
+    }
+    if counts.cjk * 2 >= counts.total {
         TextJustify::InterCharacter
     } else {
         TextJustify::InterWord
     }
 }
 
-fn line_contains_cjk(items: &[PositionedItem]) -> bool {
-    items.iter().any(|pos| inline_item_has_cjk(&pos.item))
+#[derive(Default)]
+struct ScriptCounts {
+    cjk: u32,
+    total: u32,
 }
 
-fn inline_item_has_cjk(item: &InlineItem) -> bool {
+fn count_justify_scripts(items: &[PositionedItem]) -> ScriptCounts {
+    let mut counts = ScriptCounts::default();
+    for pos in items {
+        accumulate_scripts(&pos.item, &mut counts);
+    }
+    counts
+}
+
+fn accumulate_scripts(item: &InlineItem, counts: &mut ScriptCounts) {
     match item {
-        InlineItem::Text(t) => t.text.chars().any(is_cjk_character),
-        InlineItem::InlineBox(b) => b.children.iter().any(inline_item_has_cjk),
-        InlineItem::InlineBlock(_) | InlineItem::Replaced(_) => false,
+        InlineItem::Text(t) => {
+            for ch in t.text.chars() {
+                if ch.is_whitespace() {
+                    continue;
+                }
+                counts.total += 1;
+                if is_cjk_character(ch) {
+                    counts.cjk += 1;
+                }
+            }
+        }
+        InlineItem::InlineBox(b) => {
+            for child in &b.children {
+                accumulate_scripts(child, counts);
+            }
+        }
+        InlineItem::InlineBlock(_) | InlineItem::Replaced(_) => {}
     }
 }
 
@@ -1945,6 +1973,39 @@ mod tests {
             first_line.children.len() < 4,
             "inter-word justify should not split Latin into per-character items"
         );
+    }
+
+    #[test]
+    fn text_justify_auto_prefers_inter_word_when_latin_dominates() {
+        let mut root_style = ComputedStyle::default();
+        root_style.text_align = TextAlign::Justify;
+        root_style.text_justify = TextJustify::Auto;
+        root_style.white_space = WhiteSpace::PreWrap;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "Latin Latin Latin 漢".to_string(),
+            )],
+        );
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let ifc = InlineFormattingContext::new();
+        let items = ifc.collect_inline_items(&root, constraints.width().unwrap(), constraints.height()).unwrap();
+        let strut = ifc.compute_strut_metrics(&root.style);
+        let lines = ifc.build_lines(
+            items,
+            constraints.width().unwrap(),
+            constraints.width().unwrap(),
+            &strut,
+            Some(unicode_bidi::Level::ltr()),
+        );
+        let first = lines.first().expect("first line");
+        let resolved = resolve_auto_text_justify(TextJustify::Auto, &first.items);
+        assert_eq!(resolved, TextJustify::InterWord);
     }
 
     #[test]
