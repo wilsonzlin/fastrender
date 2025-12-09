@@ -14,6 +14,7 @@
 - Over-constraint integration tests now expect min widths to be preserved (no proportional scaling) with explicit overflow reporting; fixed-width overflow test updated accordingly (`tests/table_columns_test.rs`).
 - Inline bidi reordering now uses byte indices (not char counts) when selecting run directions, walks all paragraphs in the line, and has a regression for multi-byte RTL followed by LTR text to prevent incorrect run reversal (`src/layout/contexts/inline/line_builder.rs`).
 - Inline bidi reordering now slices mixed-direction text items into per-run fragments before visual ordering, so RTL/LTR content within a single text node reorders correctly; added regression for a single mixed-direction text run and preserved synthetic test widths without reshaping (`src/layout/contexts/inline/line_builder.rs`).
+- Inline boxes are flattened into bidi leaves so descendants reorder with siblings; inline box edges (padding/border) are reapplied to the first/last visual fragment of each box after reordering to keep backgrounds/borders aligned with visual start/end (`src/layout/contexts/inline/line_builder.rs`).
 - Added rowspan vertical-align regression to ensure spanning cells don't collapse subsequent rows and heights remain positive (`src/layout/table.rs` test).
 - Baseline-aligned rowspans now explicitly reserve baseline space in the first row; added regression to guard the baseline reservation for spanning cells (`src/layout/table.rs`).
 - Collapsed border model now covered by a bounds regression: table fragments include collapsed stroke widths even with empty cells (`src/layout/table.rs` test).
@@ -96,7 +97,7 @@
 - Background colors and images respect border-radius and `background-clip`: clip radii shrink with border/padding/content edges, fills draw as rounded rects, and image tiling is masked to the clipped rounded box (`src/paint/painter.rs`).
 
 ## Current issues / gaps
-- Bidi: inline boxes still reorder as atomic containers; need a bidi-aware flattening that preserves box backgrounds/borders while reordering descendants per UAX#9 instead of using control-character approximation for isolation. `unicode-bidi: plaintext` still treats the full line as one paragraph.
+- Bidi: still approximate isolation with control characters rather than explicit isolate/embedding stack; `unicode-bidi: plaintext` still treats the full line as one paragraph.
 - Max-content sizing now honors mandatory breaks but still ignores anonymous inline box generation and percent-driven height constraints.
 - Table layout still partial: row/col spans not fully honored (rowspan baselines, percent/fixed widths still simplified vs CSS 2.1), colspan distribution still heuristic.
 - Replaced elements still skip backgrounds and non-image types (SVG/iframe/video remain unrendered); object-fit only applies when image decoding succeeds.

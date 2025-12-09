@@ -40,7 +40,7 @@ use crate::text::line_break::{BreakOpportunity, BreakType};
 use crate::text::pipeline::{ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use unicode_bidi::{BidiInfo, Level};
 
@@ -1160,14 +1160,24 @@ impl LineBuilder {
             return;
         }
 
-        // Build the logical text for this line and map byte ranges back to item indices.
-        let mut logical_text = String::new();
-        let mut spans: Vec<(usize, std::ops::Range<usize>)> = Vec::with_capacity(self.current_line.items.len());
-        let original_items = self.current_line.items.clone();
+        // Flatten inline boxes so their children can participate in bidi reordering with siblings.
+        let mut box_counter = 0usize;
+        let mut leaves = Vec::new();
+        for positioned in self.current_line.items.iter() {
+            flatten_positioned_item(positioned, &mut Vec::new(), &mut box_counter, &mut leaves);
+        }
 
-        for (idx, positioned) in original_items.iter().enumerate() {
-            let dir = positioned.item.direction();
-            let ub = positioned.item.unicode_bidi();
+        if leaves.is_empty() {
+            return;
+        }
+
+        // Build the logical text for this line and map byte ranges back to leaf indices.
+        let mut logical_text = String::new();
+        let mut spans: Vec<(usize, std::ops::Range<usize>)> = Vec::with_capacity(leaves.len());
+
+        for (idx, leaf) in leaves.iter().enumerate() {
+            let dir = leaf.item.direction();
+            let ub = leaf.item.unicode_bidi();
             let (open_controls, close_controls) = bidi_controls(ub, dir);
 
             for ch in open_controls {
@@ -1175,7 +1185,10 @@ impl LineBuilder {
             }
 
             let content_start = logical_text.len();
-            self.push_item_content(&positioned.item, &mut logical_text, false);
+            match &leaf.item {
+                InlineItem::Text(t) => logical_text.push_str(&t.text),
+                _ => logical_text.push('\u{FFFC}'),
+            }
             let content_end = logical_text.len();
 
             for ch in close_controls {
@@ -1192,10 +1205,8 @@ impl LineBuilder {
         }
 
         let bidi = BidiInfo::new(&logical_text, self.base_level);
-        let mut reordered: Vec<PositionedItem> = Vec::new();
-        let mut x = 0.0;
-        let mut seen_atomic = HashSet::new();
-
+        let mut visual_fragments: Vec<BidiLeaf> = Vec::new();
+        let mut seen_non_text = HashMap::new();
         for para in &bidi.paragraphs {
             let line_range = para.range.clone();
             if line_range.is_empty() {
@@ -1204,40 +1215,36 @@ impl LineBuilder {
 
             let (reordered_levels, runs) = bidi.visual_runs(para, line_range);
             for run in runs {
-                // Collect the slices of items that fall within this run.
-                let mut run_parts: Vec<PositionedItem> = spans
+                let mut run_parts: Vec<BidiLeaf> = spans
                     .iter()
                     .filter(|(_, range)| range.start < run.end && range.end > run.start)
-                    .flat_map(|(idx, range)| {
-                        let item = &original_items[*idx];
-                        let overlap_start = run.start.max(range.start);
-                        let overlap_end = run.end.min(range.end);
+                    .filter_map(|(idx, range)| {
+                        let leaf = &leaves[*idx];
+                        let overlap_start = run.start.max(range.start) - range.start;
+                        let overlap_end = run.end.min(range.end) - range.start;
 
-                        match &item.item {
+                        match &leaf.item {
                             InlineItem::Text(text_item) => {
-                                let slice_start = overlap_start - range.start;
-                                let slice_end = overlap_end - range.start;
-                                let sliced =
-                                    slice_text_item(text_item, slice_start..slice_end, &self.shaper, &self.font_context)
+                                let sliced = slice_text_item(
+                                    text_item,
+                                    overlap_start..overlap_end,
+                                    &self.shaper,
+                                    &self.font_context,
+                                )
                                 .unwrap_or_else(|| text_item.clone());
 
-                                Some(PositionedItem {
+                                Some(BidiLeaf {
                                     item: InlineItem::Text(sliced),
-                                    x: 0.0,
-                                    baseline_offset: item.baseline_offset,
+                                    baseline_offset: leaf.baseline_offset,
+                                    box_stack: leaf.box_stack.clone(),
                                 })
                             }
                             _ => {
-                                // Atomic items: include them only once.
-                                if seen_atomic.insert(*idx) {
-                                    Some(PositionedItem {
-                                        item: item.item.clone(),
-                                        x: 0.0,
-                                        baseline_offset: item.baseline_offset,
-                                    })
-                                } else {
-                                    None
+                                // Only include each atomic item once.
+                                if seen_non_text.insert(*idx, ()).is_some() {
+                                    return None;
                                 }
+                                Some(leaf.clone())
                             }
                         }
                     })
@@ -1248,46 +1255,57 @@ impl LineBuilder {
                     run_parts.reverse();
                 }
 
-                for mut part in run_parts {
-                    part.x = x;
-                    x += part.item.width();
-                    reordered.push(part);
-                }
+                visual_fragments.extend(run_parts);
             }
+        }
+
+        // Record first/last occurrence of each inline box in visual order.
+        let mut box_positions: HashMap<usize, (usize, usize)> = HashMap::new();
+        for (vis_pos, frag) in visual_fragments.iter().enumerate() {
+            for ctx in &frag.box_stack {
+                box_positions
+                    .entry(ctx.id)
+                    .and_modify(|entry| entry.1 = vis_pos)
+                    .or_insert((vis_pos, vis_pos));
+            }
+        }
+
+        let mut reordered: Vec<PositionedItem> = Vec::new();
+        let mut x = 0.0;
+        for (vis_pos, frag) in visual_fragments.into_iter().enumerate() {
+            let mut item = frag.item;
+
+            for ctx in frag.box_stack.iter().rev() {
+                let (first, last) = box_positions.get(&ctx.id).copied().unwrap_or((vis_pos, vis_pos));
+                let start_edge = if vis_pos == first { ctx.start_edge } else { 0.0 };
+                let end_edge = if vis_pos == last { ctx.end_edge } else { 0.0 };
+
+                let mut inline_box = InlineBoxItem::new(
+                    start_edge,
+                    end_edge,
+                    ctx.content_offset_y,
+                    ctx.metrics,
+                    ctx.style.clone(),
+                    ctx.box_index,
+                    ctx.direction,
+                    ctx.unicode_bidi,
+                );
+                inline_box.vertical_align = ctx.vertical_align;
+                inline_box.add_child(item);
+                item = InlineItem::InlineBox(inline_box);
+            }
+
+            let positioned = PositionedItem {
+                item,
+                x,
+                baseline_offset: frag.baseline_offset,
+            };
+            x += positioned.item.width();
+            reordered.push(positioned);
         }
 
         self.current_line.items = reordered;
         self.current_x = x;
-    }
-
-    fn push_item_content(&self, item: &InlineItem, buffer: &mut String, wrap_item: bool) {
-        let dir = item.direction();
-        let ub = item.unicode_bidi();
-        let (open_controls, close_controls) = if wrap_item {
-            bidi_controls(ub, dir)
-        } else {
-            (Vec::new(), Vec::new())
-        };
-
-        for ch in open_controls {
-            buffer.push(ch);
-        }
-
-        match item {
-            InlineItem::Text(t) => buffer.push_str(&t.text),
-            InlineItem::InlineBox(b) => {
-                for child in &b.children {
-                    self.push_item_content(child, buffer, true);
-                }
-            }
-            InlineItem::InlineBlock(_) | InlineItem::Replaced(_) => {
-                buffer.push('\u{FFFC}');
-            }
-        }
-
-        for ch in close_controls {
-            buffer.push(ch);
-        }
     }
 
     /// Finishes building and returns all lines
@@ -1376,14 +1394,14 @@ fn slice_text_item(
 
     let slice_text = &item.text[range.clone()];
     let mut runs = pipeline.shape(slice_text, &item.style, font_context).ok()?;
-    TextItem::apply_spacing_to_runs(
-        &mut runs,
-        slice_text,
-        item.style.letter_spacing,
-        item.style.word_spacing,
-    );
+        TextItem::apply_spacing_to_runs(
+            &mut runs,
+            slice_text,
+            item.style.letter_spacing,
+            item.style.word_spacing,
+        );
 
-    let metrics = TextItem::metrics_from_runs(&runs, item.metrics.line_height, item.font_size);
+        let metrics = TextItem::metrics_from_runs(&runs, item.metrics.line_height, item.font_size);
     let breaks = item
         .break_opportunities
         .iter()
@@ -1451,6 +1469,70 @@ fn bidi_controls(unicode_bidi: UnicodeBidi, direction: Direction) -> (Vec<char>,
             (open, vec!['\u{202c}', '\u{2069}'])
         }
         UnicodeBidi::Plaintext => (vec!['\u{2068}'], vec!['\u{2069}']),
+    }
+}
+
+#[derive(Clone)]
+struct BoxContext {
+    id: usize,
+    start_edge: f32,
+    end_edge: f32,
+    content_offset_y: f32,
+    metrics: BaselineMetrics,
+    vertical_align: VerticalAlign,
+    box_index: usize,
+    direction: Direction,
+    unicode_bidi: UnicodeBidi,
+    style: Arc<ComputedStyle>,
+}
+
+#[derive(Clone)]
+struct BidiLeaf {
+    item: InlineItem,
+    baseline_offset: f32,
+    box_stack: Vec<BoxContext>,
+}
+
+fn flatten_positioned_item(
+    positioned: &PositionedItem,
+    box_stack: &mut Vec<BoxContext>,
+    box_counter: &mut usize,
+    leaves: &mut Vec<BidiLeaf>,
+) {
+    match &positioned.item {
+        InlineItem::InlineBox(inline_box) => {
+            let id = *box_counter;
+            *box_counter += 1;
+            let ctx = BoxContext {
+                id,
+                start_edge: inline_box.start_edge,
+                end_edge: inline_box.end_edge,
+                content_offset_y: inline_box.content_offset_y,
+                metrics: inline_box.metrics,
+                vertical_align: inline_box.vertical_align,
+                box_index: inline_box.box_index,
+                direction: inline_box.direction,
+                unicode_bidi: inline_box.unicode_bidi,
+                style: inline_box.style.clone(),
+            };
+            box_stack.push(ctx);
+            for child in &inline_box.children {
+                let child_positioned = PositionedItem {
+                    item: child.clone(),
+                    x: positioned.x,
+                    baseline_offset: positioned.baseline_offset,
+                };
+                flatten_positioned_item(&child_positioned, box_stack, box_counter, leaves);
+            }
+            box_stack.pop();
+        }
+        _ => {
+            leaves.push(BidiLeaf {
+                item: positioned.item.clone(),
+                baseline_offset: positioned.baseline_offset,
+                box_stack: box_stack.clone(),
+            });
+        }
     }
 }
 
