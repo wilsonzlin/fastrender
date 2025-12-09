@@ -85,6 +85,7 @@ enum DisplayCommand {
         opacity: f32,
         transform: Option<Transform>,
         blend_mode: MixBlendMode,
+        isolated: bool,
         commands: Vec<DisplayCommand>,
     },
 }
@@ -361,11 +362,15 @@ impl Painter {
         let opacity = style_ref.map(|s| s.opacity).unwrap_or(1.0).clamp(0.0, 1.0);
         let transform = build_transform(style_ref, abs_bounds);
         let blend_mode = style_ref.map(|s| s.mix_blend_mode).unwrap_or(MixBlendMode::Normal);
-        if opacity < 1.0 || transform.is_some() || !matches!(blend_mode, MixBlendMode::Normal) {
+        let isolated = style_ref
+            .map(|s| matches!(s.isolation, crate::style::types::Isolation::Isolate))
+            .unwrap_or(false);
+        if opacity < 1.0 || transform.is_some() || !matches!(blend_mode, MixBlendMode::Normal) || isolated {
             items.push(DisplayCommand::StackingContext {
                 opacity,
                 transform,
                 blend_mode,
+                isolated,
                 commands: local_commands,
             });
         } else {
@@ -482,6 +487,7 @@ impl Painter {
                 opacity,
                 transform,
                 blend_mode,
+                isolated,
                 commands,
             } => {
                 if opacity <= 0.0 {
@@ -522,7 +528,11 @@ impl Painter {
                 paint.opacity = opacity.min(1.0);
                 let mut final_transform = transform.unwrap_or_else(Transform::identity);
                 final_transform = final_transform.pre_concat(Transform::from_translate(offset.x, offset.y));
-                paint.blend_mode = map_blend_mode(blend_mode);
+                paint.blend_mode = if isolated {
+                    SkiaBlendMode::SourceOver
+                } else {
+                    map_blend_mode(blend_mode)
+                };
                 self.pixmap
                     .draw_pixmap(0, 0, painter.pixmap.as_ref(), &paint, final_transform, None);
             }
@@ -1346,11 +1356,13 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
                 opacity,
                 transform,
                 blend_mode,
+                isolated,
                 commands,
             } => DisplayCommand::StackingContext {
                 opacity,
                 transform,
                 blend_mode,
+                isolated,
                 commands: translate_commands(commands, dx, dy),
             },
         })
