@@ -57,6 +57,7 @@
 - Replaced images now honor CSS `object-fit` (fill/contain/cover/none/scale-down) and `object-position` (length/percent/keywords) during painting, centering and scaling content appropriately while keeping layout size unchanged. Added parsing and style defaults plus painter regression test (`src/style/{types,mod,properties.rs}`, `src/paint/painter.rs`).
 - CSS parser now preserves space-separated value lists (e.g., `object-position: left 25%`) as `Multiple` so object-position parsing receives both components (`src/css/properties.rs`).
 - Background positioning now obeys `background-position`, `background-origin`, and `background-clip` with proper percentage semantics (percentages resolve against the positioning area minus image size). Painter tiles images/clips to the selected box (border/padding/content) and centers/offsets from the chosen origin; defaults now match spec (origin padding-box, clip border-box) (`src/style/{types,mod,properties.rs}`, `src/paint/painter.rs`).
+- Inline-level elements now materialize as `InlineBoxItem`s carrying padding/borders, vertical offsets, and styles so backgrounds/borders participate in painting; `vertical-align` from computed styles is resolved (length/percentage) and applied to text, inline boxes, inline-blocks, and replaced elements (`src/layout/contexts/inline/{mod.rs,line_builder.rs}`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
@@ -64,7 +65,7 @@
 - Table layout still partial: collapsed border painting is line-uniform (not per-segment) and styles are rendered as solid fills; row/col spans not fully honored, percent/fixed widths still simplified vs CSS 2.1, colspans split evenly, rowspan baseline alignment still coarse.
 - Replaced elements still skip backgrounds and non-image types (SVG/iframe/video remain unrendered); object-fit only applies when image decoding succeeds.
 - Painting still bypasses a display list; rendering order/compositing need a pass.
-- Inline-blocks/replaced elements still rely on display hints rather than full anonymous inline box generation and lack percent/min-height handling.
+- Inline-level baselines still derive from strut metrics (not descendant baselines), and inline-block/replaced elements still lack percent/min-height handling.
 
 ## To-do / next steps (spec-oriented)
 1. Inline/text:

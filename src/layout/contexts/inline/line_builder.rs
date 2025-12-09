@@ -302,11 +302,7 @@ impl TextItem {
             .break_opportunities
             .iter()
             .filter(|b| b.byte_offset > split_offset)
-            .map(|b| BreakOpportunity::with_hyphen(
-                b.byte_offset - split_offset,
-                b.break_type,
-                b.adds_hyphen,
-            ))
+            .map(|b| BreakOpportunity::with_hyphen(b.byte_offset - split_offset, b.break_type, b.adds_hyphen))
             .collect();
 
         // Create new items using freshly shaped runs
@@ -346,12 +342,7 @@ impl TextItem {
     ///
     /// Spacing is added after each cluster (except the final cluster).
     /// Word spacing stacks on top of letter spacing for space-like clusters.
-    pub(crate) fn apply_spacing_to_runs(
-        runs: &mut [ShapedRun],
-        text: &str,
-        letter_spacing: f32,
-        word_spacing: f32,
-    ) {
+    pub(crate) fn apply_spacing_to_runs(runs: &mut [ShapedRun], text: &str, letter_spacing: f32, word_spacing: f32) {
         if runs.is_empty() || text.is_empty() {
             return;
         }
@@ -427,11 +418,7 @@ impl TextItem {
             }
 
             let mut extra_by_glyph = vec![0.0; run.glyphs.len()];
-            for (glyph_idx, extra) in run_cluster_extras
-                .get(run_idx)
-                .map(|v| v.as_slice())
-                .unwrap_or(&[])
-            {
+            for (glyph_idx, extra) in run_cluster_extras.get(run_idx).map(|v| v.as_slice()).unwrap_or(&[]) {
                 if *glyph_idx < extra_by_glyph.len() {
                     extra_by_glyph[*glyph_idx] += *extra;
                 }
@@ -707,6 +694,9 @@ pub struct InlineBoxItem {
     /// Closing edge width (right border + padding)
     pub end_edge: f32,
 
+    /// Vertical offset applied to children (padding + borders on top)
+    pub content_offset_y: f32,
+
     /// Baseline metrics for this box
     pub metrics: BaselineMetrics,
 
@@ -721,6 +711,9 @@ pub struct InlineBoxItem {
 
     /// unicode-bidi behavior
     pub unicode_bidi: UnicodeBidi,
+
+    /// Style for painting backgrounds/borders
+    pub style: Arc<ComputedStyle>,
 }
 
 impl InlineBoxItem {
@@ -728,7 +721,9 @@ impl InlineBoxItem {
     pub fn new(
         start_edge: f32,
         end_edge: f32,
+        content_offset_y: f32,
         metrics: BaselineMetrics,
+        style: Arc<ComputedStyle>,
         box_index: usize,
         direction: Direction,
         unicode_bidi: UnicodeBidi,
@@ -737,11 +732,13 @@ impl InlineBoxItem {
             children: Vec::new(),
             start_edge,
             end_edge,
+            content_offset_y,
             metrics,
             vertical_align: VerticalAlign::Baseline,
             box_index,
             direction,
             unicode_bidi,
+            style,
         }
     }
 
@@ -1029,9 +1026,12 @@ impl LineBuilder {
 
             if let Some(break_opportunity) = text_item.find_break_point(remaining_width) {
                 // Split at break point
-                if let Some((before, after)) =
-                    text_item.split_at(break_opportunity.byte_offset, break_opportunity.adds_hyphen, &self.shaper, &self.font_context)
-                {
+                if let Some((before, after)) = text_item.split_at(
+                    break_opportunity.byte_offset,
+                    break_opportunity.adds_hyphen,
+                    &self.shaper,
+                    &self.font_context,
+                ) {
                     // Place the part that fits
                     if before.advance > 0.0 {
                         self.place_item(InlineItem::Text(before));
@@ -1546,10 +1546,7 @@ mod tests {
         let spaced_width: f32 = spaced_runs.iter().map(|r| r.advance).sum();
 
         let char_gaps = text.chars().count().saturating_sub(1) as f32;
-        let space_count = text
-            .chars()
-            .filter(|c| matches!(c, ' ' | '\u{00A0}' | '\t'))
-            .count() as f32;
+        let space_count = text.chars().filter(|c| matches!(c, ' ' | '\u{00A0}' | '\t')).count() as f32;
         let expected_extra = style.letter_spacing * char_gaps + style.word_spacing * space_count;
 
         assert!((spaced_width - base_width - expected_extra).abs() < 0.01);
@@ -1566,9 +1563,7 @@ mod tests {
         let breaks = vec![BreakOpportunity::with_hyphen(1, BreakType::Allowed, true)];
         let item = TextItem::new(runs, "abc".to_string(), metrics, breaks, Vec::new(), style);
 
-        let (before, after) = item
-            .split_at(1, true, &pipeline, &font_ctx)
-            .expect("split succeeds");
+        let (before, after) = item.split_at(1, true, &pipeline, &font_ctx).expect("split succeeds");
 
         assert_eq!(before.text, format!("a{}", '\u{2010}'));
         assert_eq!(after.text, "bc");

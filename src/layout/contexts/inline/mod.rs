@@ -42,6 +42,7 @@ pub mod line_builder;
 use crate::geometry::Rect;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
+use crate::layout::contexts::inline::line_builder::InlineBoxItem;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::utils::compute_replaced_size;
 use crate::style::types::{FontStyle, HyphensMode, OverflowWrap, WhiteSpace, WordBreak};
@@ -118,6 +119,40 @@ impl InlineFormattingContext {
         }
     }
 
+    fn convert_vertical_align(
+        &self,
+        align: crate::style::types::VerticalAlign,
+        font_size: f32,
+        line_height: f32,
+    ) -> crate::layout::contexts::inline::baseline::VerticalAlign {
+        use crate::layout::contexts::inline::baseline::VerticalAlign as Align;
+        use crate::style::types::VerticalAlign as StyleAlign;
+
+        match align {
+            StyleAlign::Baseline => Align::Baseline,
+            StyleAlign::Sub => Align::Sub,
+            StyleAlign::Super => Align::Super,
+            StyleAlign::TextTop => Align::TextTop,
+            StyleAlign::TextBottom => Align::TextBottom,
+            StyleAlign::Middle => Align::Middle,
+            StyleAlign::Top => Align::Top,
+            StyleAlign::Bottom => Align::Bottom,
+            StyleAlign::Length(len) => {
+                let px = if len.unit.is_font_relative() {
+                    len.resolve_with_font_size(font_size)
+                } else if len.unit.is_percentage() {
+                    len.resolve_against(line_height)
+                } else if len.unit.is_absolute() {
+                    len.to_px()
+                } else {
+                    len.value
+                };
+                Align::Length(px)
+            }
+            StyleAlign::Percentage(p) => Align::Percentage(p),
+        }
+    }
+
     /// Collects inline items from box node children
     fn collect_inline_items(&self, box_node: &BoxNode, available_width: f32) -> Result<Vec<InlineItem>, LayoutError> {
         let mut items = Vec::new();
@@ -134,9 +169,54 @@ impl InlineFormattingContext {
                         items.push(InlineItem::InlineBlock(item));
                         continue;
                     }
-                    // Recursively collect children
+                    // Regular inline box: wrap children in an inline box item that carries padding/borders
+                    let percentage_base = if available_width.is_finite() {
+                        available_width
+                    } else {
+                        0.0
+                    };
+                    let padding_left = resolve_length_for_width(child.style.padding_left, percentage_base);
+                    let padding_right = resolve_length_for_width(child.style.padding_right, percentage_base);
+                    let padding_top = resolve_length_for_width(child.style.padding_top, percentage_base);
+                    let padding_bottom = resolve_length_for_width(child.style.padding_bottom, percentage_base);
+                    let border_left = resolve_length_for_width(child.style.border_left_width, percentage_base);
+                    let border_right = resolve_length_for_width(child.style.border_right_width, percentage_base);
+                    let border_top = resolve_length_for_width(child.style.border_top_width, percentage_base);
+                    let border_bottom = resolve_length_for_width(child.style.border_bottom_width, percentage_base);
+
+                    let start_edge = padding_left + border_left;
+                    let end_edge = padding_right + border_right;
+                    let content_offset_y = padding_top + border_top;
+
+                    let mut metrics = self.compute_strut_metrics(&child.style);
+                    metrics.baseline_offset += content_offset_y;
+                    metrics.ascent += content_offset_y;
+                    metrics.descent += padding_bottom + border_bottom;
+                    metrics.height += content_offset_y + padding_bottom + border_bottom;
+
+                    let mut inline_box = InlineBoxItem::new(
+                        start_edge,
+                        end_edge,
+                        content_offset_y,
+                        metrics,
+                        child.style.clone(),
+                        0,
+                        child.style.direction,
+                        child.style.unicode_bidi,
+                    );
+                    inline_box.vertical_align = self.convert_vertical_align(
+                        child.style.vertical_align,
+                        child.style.font_size,
+                        metrics.line_height,
+                    );
+
+                    // Recursively collect children and attach
                     let child_items = self.collect_inline_items(child, available_width)?;
-                    items.extend(child_items);
+                    for item in child_items {
+                        inline_box.add_child(item);
+                    }
+
+                    items.push(InlineItem::InlineBox(inline_box));
                 }
                 BoxType::Replaced(replaced_box) => {
                     let item = self.create_replaced_item(child, replaced_box, available_width)?;
@@ -157,6 +237,7 @@ impl InlineFormattingContext {
         })?;
 
         let style = &box_node.style;
+        let line_height = compute_line_height(style);
         let factory = FormattingContextFactory::with_font_context(self.font_context.clone());
         let fc = factory.create(fc_type);
 
@@ -244,13 +325,16 @@ impl InlineFormattingContext {
             .map(|l| resolve_length_for_width(*l, percentage_base))
             .unwrap_or(0.0);
 
+        let va = self.convert_vertical_align(style.vertical_align, style.font_size, line_height);
+
         Ok(InlineBlockItem::new(
             fragment,
             box_node.style.direction,
             box_node.style.unicode_bidi,
             margin_left,
             margin_right,
-        ))
+        )
+        .with_vertical_align(va))
     }
 
     /// Creates a text item from a text box
@@ -290,12 +374,7 @@ impl InlineFormattingContext {
             }
         };
 
-        TextItem::apply_spacing_to_runs(
-            &mut shaped_runs,
-            &hyphen_free,
-            style.letter_spacing,
-            style.word_spacing,
-        );
+        TextItem::apply_spacing_to_runs(&mut shaped_runs, &hyphen_free, style.letter_spacing, style.word_spacing);
 
         let metrics = TextItem::metrics_from_runs(&shaped_runs, line_height, style.font_size);
 
@@ -311,6 +390,8 @@ impl InlineFormattingContext {
             allow_soft_wrap,
         );
 
+        let va = self.convert_vertical_align(style.vertical_align, style.font_size, line_height);
+
         Ok(TextItem::new(
             shaped_runs,
             hyphen_free,
@@ -318,7 +399,8 @@ impl InlineFormattingContext {
             breaks,
             forced_break_offsets,
             box_node.style.clone(),
-        ))
+        )
+        .with_vertical_align(va))
     }
 
     /// Creates a replaced item from a replaced box
@@ -329,6 +411,7 @@ impl InlineFormattingContext {
         percentage_base: f32,
     ) -> Result<ReplacedItem, LayoutError> {
         let style = &box_node.style;
+        let line_height = compute_line_height(style);
         let size = compute_replaced_size(style, replaced_box);
         let margin_left = style
             .margin_left
@@ -341,13 +424,16 @@ impl InlineFormattingContext {
             .map(|l| resolve_length_for_width(*l, percentage_base))
             .unwrap_or(0.0);
 
+        let va = self.convert_vertical_align(style.vertical_align, style.font_size, line_height);
+
         Ok(ReplacedItem::new(
             size,
             replaced_box.replaced_type.clone(),
             box_node.style.clone(),
             margin_left,
             margin_right,
-        ))
+        )
+        .with_vertical_align(va))
     }
 
     /// Builds lines from inline items
@@ -428,9 +514,7 @@ impl InlineFormattingContext {
 
             if let Some(pos) = mandatory_pos {
                 if pos > 0 {
-                    if let Some((before, after)) =
-                        remaining.split_at(pos, false, &self.pipeline, &self.font_context)
-                    {
+                    if let Some((before, after)) = remaining.split_at(pos, false, &self.pipeline, &self.font_context) {
                         if before.advance > 0.0 {
                             builder.add_item(InlineItem::Text(before));
                         }
@@ -446,12 +530,12 @@ impl InlineFormattingContext {
                 if pos < remaining.text.len() {
                     let skip_bytes = remaining.text[pos..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
                     if pos + skip_bytes < remaining.text.len() {
-                    if let Some((_, after)) =
-                        remaining.split_at(pos + skip_bytes, false, &self.pipeline, &self.font_context)
-                    {
-                        remaining = after;
-                        continue;
-                    }
+                        if let Some((_, after)) =
+                            remaining.split_at(pos + skip_bytes, false, &self.pipeline, &self.font_context)
+                        {
+                            remaining = after;
+                            continue;
+                        }
                     }
                 }
                 break;
@@ -510,20 +594,21 @@ impl InlineFormattingContext {
                 )
             }
             InlineItem::InlineBox(box_item) => {
-                // Recursively create children
+                // Recursively create children with horizontal and vertical offsets
                 let mut child_x = x + box_item.start_edge;
+                let child_y = y + box_item.content_offset_y;
                 let children: Vec<_> = box_item
                     .children
                     .iter()
                     .map(|child| {
-                        let fragment = self.create_item_fragment(child, child_x, y);
+                        let fragment = self.create_item_fragment(child, child_x, child_y);
                         child_x += child.width();
                         fragment
                     })
                     .collect();
 
                 let bounds = Rect::from_xywh(x, y, box_item.width(), box_item.metrics.height);
-                FragmentNode::new_inline(bounds, box_item.box_index, children)
+                FragmentNode::new_inline_styled(bounds, box_item.box_index, children, box_item.style.clone())
             }
             InlineItem::InlineBlock(block_item) => {
                 let mut fragment = block_item.fragment.clone();
@@ -678,8 +763,7 @@ impl InlineFormattingContext {
         }
 
         if last_break < len {
-            let trailing =
-                (text_item.advance_at_offset(len) - text_item.advance_at_offset(last_break)).max(0.0);
+            let trailing = (text_item.advance_at_offset(len) - text_item.advance_at_offset(last_break)).max(0.0);
             tracker.add_width(trailing);
         }
     }
@@ -706,8 +790,7 @@ impl InlineFormattingContext {
         }
 
         if last_break < len {
-            let trailing =
-                (text_item.advance_at_offset(len) - text_item.advance_at_offset(last_break)).max(0.0);
+            let trailing = (text_item.advance_at_offset(len) - text_item.advance_at_offset(last_break)).max(0.0);
             tracker.add_width(trailing);
         }
     }
@@ -937,11 +1020,7 @@ fn hyphenation_breaks(
     let mut soft_breaks = Vec::new();
     for ch in text.chars() {
         if ch == '\u{00AD}' {
-            soft_breaks.push(BreakOpportunity::with_hyphen(
-                cleaned.len(),
-                BreakType::Allowed,
-                true,
-            ));
+            soft_breaks.push(BreakOpportunity::with_hyphen(cleaned.len(), BreakType::Allowed, true));
             continue;
         }
         cleaned.push(ch);
@@ -972,11 +1051,7 @@ fn hyphenation_breaks(
                         };
                         let word = &cleaned[start..end];
                         for rel in hyph.hyphenate(word) {
-                            auto_breaks.push(BreakOpportunity::with_hyphen(
-                                start + rel,
-                                BreakType::Allowed,
-                                true,
-                            ));
+                            auto_breaks.push(BreakOpportunity::with_hyphen(start + rel, BreakType::Allowed, true));
                         }
                         idx = end_idx;
                     } else {
@@ -1438,7 +1513,10 @@ mod tests {
             .unwrap();
 
         let expected = hel_width + lo_width;
-        assert!((min_width - expected).abs() < 0.5, "min_width={min_width}, expected={expected}");
+        assert!(
+            (min_width - expected).abs() < 0.5,
+            "min_width={min_width}, expected={expected}"
+        );
     }
 
     #[test]
@@ -1467,7 +1545,10 @@ mod tests {
             .compute_intrinsic_inline_size(&root, IntrinsicSizingMode::MinContent)
             .unwrap();
 
-        assert!((min_width - expected).abs() < 0.25, "min_width={min_width}, expected={expected}");
+        assert!(
+            (min_width - expected).abs() < 0.25,
+            "min_width={min_width}, expected={expected}"
+        );
     }
 
     #[test]
