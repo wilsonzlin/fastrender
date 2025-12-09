@@ -615,10 +615,10 @@ impl InlineFormattingContext {
         let mut fragments = Vec::new();
         let mut y = start_y;
 
-        let total = lines.len();
+        let paragraph_info = compute_paragraph_line_flags(&lines);
+
         for (idx, line) in lines.into_iter().enumerate() {
-            let is_last_line = idx + 1 == total;
-            let is_single_line = total == 1;
+            let (is_last_line, is_single_line) = paragraph_info[idx];
             let line_width = if idx == 0 {
                 first_line_width
             } else {
@@ -1718,6 +1718,25 @@ fn map_text_align(text_align: TextAlign, direction: crate::style::types::Directi
     }
 }
 
+fn compute_paragraph_line_flags(lines: &[Line]) -> Vec<(bool, bool)> {
+    let mut flags = Vec::with_capacity(lines.len());
+    let mut para_start = 0;
+
+    for (idx, line) in lines.iter().enumerate() {
+        let is_para_end = line.ends_with_hard_break || idx + 1 == lines.len();
+        if is_para_end {
+            let para_len = idx - para_start + 1;
+            let is_single = para_len == 1;
+            for line_idx in para_start..=idx {
+                flags.push((line_idx == idx, is_single));
+            }
+            para_start = idx + 1;
+        }
+    }
+
+    flags
+}
+
 fn resolve_auto_text_justify(mode: TextJustify, items: &[PositionedItem]) -> TextJustify {
     if !matches!(mode, TextJustify::Auto) {
         return mode;
@@ -2323,6 +2342,36 @@ mod tests {
         let last_line = fragment.children.last().expect("last line");
         let child = last_line.children.first().expect("text fragment");
         assert!(child.bounds.x() < 1.0, "last line should start-align under auto");
+    }
+
+    #[test]
+    fn text_align_last_applies_to_paragraphs_split_by_hard_break() {
+        let mut root_style = ComputedStyle::default();
+        root_style.font_size = 16.0;
+        root_style.text_align_last = crate::style::types::TextAlignLast::Right;
+        root_style.white_space = WhiteSpace::PreWrap;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(text_style), "one\none".to_string())],
+        );
+        let constraints = LayoutConstraints::definite_width(100.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert_eq!(fragment.children.len(), 2, "two lines expected");
+        let first_x = fragment.children[0].children[0].bounds.x();
+        let second_x = fragment.children[1].children[0].bounds.x();
+        assert!(
+            first_x > 40.0,
+            "first paragraph line should be right-aligned by text-align-last"
+        );
+        assert!(
+            (first_x - second_x).abs() < 1.0,
+            "both paragraphs' last lines should align the same way"
+        );
     }
 
     #[test]
