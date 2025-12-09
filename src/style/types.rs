@@ -407,6 +407,26 @@ pub enum TextJustify {
     Distribute,
 }
 
+/// CSS `text-indent`
+///
+/// Reference: CSS Text Module Level 3
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextIndent {
+    pub length: Length,
+    pub hanging: bool,
+    pub each_line: bool,
+}
+
+impl Default for TextIndent {
+    fn default() -> Self {
+        Self {
+            length: Length::px(0.0),
+            hanging: false,
+            each_line: false,
+        }
+    }
+}
+
 /// Text decoration lines
 ///
 /// CSS: `text-decoration`

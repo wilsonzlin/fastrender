@@ -209,6 +209,9 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.line_height = parent.line_height.clone();
     styles.direction = parent.direction;
     styles.text_align = parent.text_align;
+    styles.text_align_last = parent.text_align_last;
+    styles.text_justify = parent.text_justify;
+    styles.text_indent = parent.text_indent;
     styles.text_transform = parent.text_transform;
     styles.letter_spacing = parent.letter_spacing;
     styles.word_spacing = parent.word_spacing;

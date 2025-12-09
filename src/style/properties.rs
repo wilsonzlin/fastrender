@@ -623,6 +623,39 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "text-indent" => {
+            let mut length = styles.text_indent.length;
+            let mut hanging = false;
+            let mut each_line = false;
+
+            let mut apply_component = |value: &PropertyValue| {
+                match value {
+                    PropertyValue::Length(len) => length = *len,
+                    PropertyValue::Percentage(pct) => length = Length::percent(*pct),
+                    PropertyValue::Keyword(kw) => match kw.as_str() {
+                        "hanging" => hanging = true,
+                        "each-line" => each_line = true,
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            };
+
+            match &resolved_value {
+                PropertyValue::Multiple(values) => {
+                    for v in values {
+                        apply_component(v);
+                    }
+                }
+                other => apply_component(other),
+            }
+
+            styles.text_indent = TextIndent {
+                length,
+                hanging,
+                each_line,
+            };
+        }
         "direction" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.direction = match kw.as_str() {

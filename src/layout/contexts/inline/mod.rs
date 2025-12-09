@@ -44,7 +44,7 @@ use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::line_builder::InlineBoxItem;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::layout::utils::compute_replaced_size;
+use crate::layout::utils::{compute_replaced_size, resolve_length_with_percentage};
 use crate::style::types::{
     FontStyle, HyphensMode, OverflowWrap, TextAlign, TextJustify, TextTransform, WhiteSpace, WordBreak,
 };
@@ -472,12 +472,14 @@ impl InlineFormattingContext {
     fn build_lines(
         &self,
         items: Vec<InlineItem>,
-        available_width: f32,
+        first_line_width: f32,
+        subsequent_line_width: f32,
         strut_metrics: &BaselineMetrics,
         base_level: Option<unicode_bidi::Level>,
     ) -> Vec<Line> {
         let mut builder = LineBuilder::new(
-            available_width,
+            first_line_width,
+            subsequent_line_width,
             *strut_metrics,
             self.pipeline.clone(),
             self.font_context.clone(),
@@ -603,11 +605,14 @@ impl InlineFormattingContext {
         &self,
         lines: Vec<Line>,
         start_y: f32,
-        available_width: f32,
+        first_line_width: f32,
+        subsequent_line_width: f32,
         text_align: TextAlign,
         text_align_last: crate::style::types::TextAlignLast,
         direction: crate::style::types::Direction,
         text_justify: TextJustify,
+        first_line_indent: f32,
+        subsequent_line_indent: f32,
     ) -> Vec<FragmentNode> {
         let mut fragments = Vec::new();
         let mut y = start_y;
@@ -616,6 +621,8 @@ impl InlineFormattingContext {
         for (idx, line) in lines.into_iter().enumerate() {
             let is_last_line = idx + 1 == total;
             let is_single_line = total == 1;
+            let line_width = if idx == 0 { first_line_width } else { subsequent_line_width };
+            let indent_offset = if idx == 0 { first_line_indent } else { subsequent_line_indent };
             let mut base_align = map_text_align(text_align, direction);
             if matches!(base_align, TextAlign::Justify) && matches!(text_justify, TextJustify::None) {
                 base_align = map_text_align(TextAlign::Start, direction);
@@ -625,8 +632,15 @@ impl InlineFormattingContext {
             if matches!(effective_align, TextAlign::Justify) && matches!(text_justify, TextJustify::None) {
                 effective_align = map_text_align(TextAlign::Start, direction);
             }
-            let line_fragment =
-                self.create_line_fragment(&line, y, available_width, effective_align, is_last_line, direction, text_justify);
+            let line_fragment = self.create_line_fragment(
+                &line,
+                y,
+                line_width,
+                effective_align,
+                direction,
+                text_justify,
+                indent_offset,
+            );
             y += line.height;
             fragments.push(line_fragment);
         }
@@ -641,9 +655,9 @@ impl InlineFormattingContext {
         y: f32,
         available_width: f32,
         text_align: TextAlign,
-        _is_last_line: bool,
         direction: crate::style::types::Direction,
         text_justify: TextJustify,
+        indent_offset: f32,
     ) -> FragmentNode {
         let text_align = map_text_align(text_align, direction);
         let should_justify = matches!(text_align, TextAlign::Justify) && !matches!(text_justify, TextJustify::None);
@@ -653,11 +667,7 @@ impl InlineFormattingContext {
             line.items.clone()
         };
         let mut children = Vec::new();
-        let usable_width = if available_width.is_finite() {
-            available_width.max(0.0)
-        } else {
-            line.width
-        };
+        let usable_width = if available_width.is_finite() { available_width.max(0.0) } else { line.width };
         let total_width: f32 = items.iter().map(|p| p.item.width()).sum();
         let extra_space = (usable_width - total_width).max(0.0);
         let (offset, gap_extra) = match text_align {
@@ -674,7 +684,7 @@ impl InlineFormattingContext {
             _ => (0.0, 0.0),
         };
 
-        let mut running_offset = offset;
+        let mut running_offset = indent_offset + offset;
         for (i, positioned) in items.iter().enumerate() {
             let item_y =
                 line.baseline + positioned.baseline_offset - positioned.item.baseline_metrics().baseline_offset;
@@ -1389,6 +1399,29 @@ impl FormattingContext for InlineFormattingContext {
         // Collect inline items
         let items = self.collect_inline_items(box_node, available_width, available_height)?;
 
+        let indent_value = resolve_length_with_percentage(style.text_indent.length, constraints.width(), style.font_size)
+            .unwrap_or(0.0);
+        let indent_applies_first = !style.text_indent.hanging;
+        let indent_applies_subsequent = style.text_indent.each_line || style.text_indent.hanging;
+        let first_line_width = if indent_applies_first {
+            (available_width - indent_value).max(0.0)
+        } else {
+            available_width
+        };
+        let subsequent_line_width = if indent_applies_subsequent {
+            (available_width - indent_value).max(0.0)
+        } else {
+            available_width
+        };
+
+        let mapped_indent = if matches!(style.direction, crate::style::types::Direction::Rtl) {
+            -indent_value
+        } else {
+            indent_value
+        };
+        let first_line_indent_offset = if indent_applies_first { mapped_indent } else { 0.0 };
+        let subsequent_line_indent_offset = if indent_applies_subsequent { mapped_indent } else { 0.0 };
+
         let base_level = match style.unicode_bidi {
             crate::style::types::UnicodeBidi::Plaintext => None,
             _ => match style.direction {
@@ -1398,7 +1431,8 @@ impl FormattingContext for InlineFormattingContext {
         };
 
         // Build lines
-        let lines = self.build_lines(items, available_width, &strut_metrics, base_level);
+        let lines =
+            self.build_lines(items, first_line_width, subsequent_line_width, &strut_metrics, base_level);
 
         // Calculate total height
         let total_height: f32 = lines.iter().map(|l| l.height).sum();
@@ -1408,11 +1442,14 @@ impl FormattingContext for InlineFormattingContext {
         let children = self.create_fragments(
             lines,
             0.0,
-            available_width,
+            first_line_width,
+            subsequent_line_width,
             style.text_align,
             style.text_align_last,
             style.direction,
             style.text_justify,
+            first_line_indent_offset,
+            subsequent_line_indent_offset,
         );
 
         // Create containing fragment
@@ -1608,6 +1645,7 @@ mod tests {
     use super::*;
     use crate::style::display::{Display, FormattingContextType};
     use crate::style::types::{HyphensMode, OverflowWrap, TextTransform, WhiteSpace, WordBreak};
+    use crate::style::values::Length;
     use crate::style::ComputedStyle;
     use std::sync::Arc;
 
@@ -1991,6 +2029,66 @@ mod tests {
         let last_line = fragment.children.last().expect("last line");
         let child = last_line.children.first().expect("text fragment");
         assert!(child.bounds.x() < 1.0, "last line should start-align under auto");
+    }
+
+    #[test]
+    fn text_indent_shifts_first_line_start() {
+        let mut root_style = ComputedStyle::default();
+        root_style.text_indent.length = Length::px(10.0);
+        root_style.font_size = 16.0;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(text_style), "first\nsecond".to_string())],
+        );
+        let constraints = LayoutConstraints::definite_width(80.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert!(
+            fragment.children.len() >= 2,
+            "indent + width should force wrapping into multiple lines"
+        );
+        let first_line = &fragment.children[0];
+        let second_line = &fragment.children[1];
+        let first_child = first_line.children.first().expect("first line text");
+        let second_child = second_line.children.first().expect("second line text");
+        assert!(
+            first_child.bounds.x() > second_child.bounds.x(),
+            "first line should be indented relative to subsequent lines"
+        );
+    }
+
+    #[test]
+    fn text_indent_each_line_applies_to_following_lines() {
+        let mut root_style = ComputedStyle::default();
+        root_style.text_indent.length = Length::px(8.0);
+        root_style.text_indent.each_line = true;
+        root_style.font_size = 16.0;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "line one\nline two".to_string(),
+            )],
+        );
+        let constraints = LayoutConstraints::definite_width(80.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert!(fragment.children.len() >= 2, "should wrap into multiple lines");
+        for line in &fragment.children {
+            let first_child = line.children.first().expect("text fragment");
+            assert!(
+                first_child.bounds.x() >= 7.0,
+                "each-line indent should shift every line start"
+            );
+        }
     }
 
     #[test]

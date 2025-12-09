@@ -28,7 +28,7 @@ use crate::style::color::{Color, Rgba};
 use crate::style::display::Display;
 use crate::style::position::Position;
 use crate::style::values::{Length, LengthOrAuto};
-use crate::style::types::TextAlignLast;
+use crate::style::types::{TextAlignLast, TextIndent, TextJustify};
 
 /// Computed CSS styles for an element
 ///
@@ -236,6 +236,16 @@ pub struct PositionedStyle {
     /// Initial: start
     pub text_align: TextAlign,
     pub text_align_last: TextAlignLast,
+    /// Justification mode
+    ///
+    /// CSS: `text-justify`
+    /// Initial: auto
+    pub text_justify: TextJustify,
+    /// Indentation
+    ///
+    /// CSS: `text-indent`
+    /// Initial: 0
+    pub text_indent: TextIndent,
 
     // ===== FLEXBOX =====
     /// Flex direction
@@ -426,6 +436,8 @@ impl Default for PositionedStyle {
             line_height: LineHeight::Normal,
             text_align: TextAlign::Start,
             text_align_last: TextAlignLast::Auto,
+            text_justify: TextJustify::Auto,
+            text_indent: TextIndent::default(),
 
             // Flexbox defaults
             flex_direction: FlexDirection::Row,

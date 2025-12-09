@@ -975,8 +975,10 @@ impl Default for Line {
 ///
 /// Handles line breaking and item positioning.
 pub struct LineBuilder {
-    /// Available width for lines
-    available_width: f32,
+    /// Available width for the first line
+    first_line_width: f32,
+    /// Available width for subsequent lines
+    subsequent_line_width: f32,
 
     /// Current line being built
     current_line: Line,
@@ -1006,14 +1008,16 @@ pub struct LineBuilder {
 impl LineBuilder {
     /// Creates a new line builder
     pub fn new(
-        available_width: f32,
+        first_line_width: f32,
+        subsequent_line_width: f32,
         strut_metrics: BaselineMetrics,
         shaper: ShapingPipeline,
         font_context: FontContext,
         base_level: Option<Level>,
     ) -> Self {
         Self {
-            available_width,
+            first_line_width,
+            subsequent_line_width,
             current_line: Line::new(),
             current_x: 0.0,
             lines: Vec::new(),
@@ -1025,12 +1029,21 @@ impl LineBuilder {
         }
     }
 
+    fn current_line_width(&self) -> f32 {
+        if self.lines.is_empty() {
+            self.first_line_width
+        } else {
+            self.subsequent_line_width
+        }
+    }
+
     /// Adds an inline item to the builder
     pub fn add_item(&mut self, item: InlineItem) {
         let item_width = item.width();
+        let line_width = self.current_line_width();
 
         // Check if item fits
-        if self.current_x + item_width <= self.available_width || self.current_line.is_empty() {
+        if self.current_x + item_width <= line_width || self.current_line.is_empty() {
             // Item fits (or line is empty, so we must take it)
             self.place_item(item);
         } else if item.is_breakable() {
@@ -1046,7 +1059,7 @@ impl LineBuilder {
     /// Adds a breakable item (text), handling line breaking
     fn add_breakable_item(&mut self, item: InlineItem) {
         if let InlineItem::Text(text_item) = item {
-            let remaining_width = (self.available_width - self.current_x).max(0.0);
+            let remaining_width = (self.current_line_width() - self.current_x).max(0.0);
 
             if let Some(break_opportunity) = text_item.find_break_point(remaining_width) {
                 // Split at break point
@@ -1627,6 +1640,7 @@ mod tests {
         let strut = make_strut_metrics();
         LineBuilder::new(
             width,
+            width,
             strut,
             ShapingPipeline::new(),
             FontContext::new(),
@@ -1636,7 +1650,7 @@ mod tests {
 
     fn make_builder_with_base(width: f32, base: Level) -> LineBuilder {
         let strut = make_strut_metrics();
-        LineBuilder::new(width, strut, ShapingPipeline::new(), FontContext::new(), Some(base))
+        LineBuilder::new(width, width, strut, ShapingPipeline::new(), FontContext::new(), Some(base))
     }
 
     fn make_text_item(text: &str, advance: f32) -> TextItem {
