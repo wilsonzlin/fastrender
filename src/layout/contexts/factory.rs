@@ -27,6 +27,7 @@ use crate::layout::contexts::inline::InlineFormattingContext;
 use crate::layout::formatting_context::{FormattingContext, LayoutError};
 use crate::layout::table::TableFormattingContext;
 use crate::style::display::FormattingContextType;
+use crate::text::font_loader::FontContext;
 use crate::tree::box_tree::BoxNode;
 
 // =============================================================================
@@ -58,14 +59,36 @@ use crate::tree::box_tree::BoxNode;
 ///
 /// # Design Notes
 ///
-/// - Factory is stateless for simplicity
+/// - Carries a shared `FontContext` so all formatting contexts use the same font cache
 /// - Returns `Box<dyn FormattingContext>` for polymorphism
-pub struct FormattingContextFactory;
+#[derive(Clone)]
+pub struct FormattingContextFactory {
+    font_context: FontContext,
+}
+
+impl std::fmt::Debug for FormattingContextFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FormattingContextFactory").finish_non_exhaustive()
+    }
+}
 
 impl FormattingContextFactory {
     /// Creates a new factory
     pub fn new() -> Self {
-        Self
+        Self {
+            font_context: FontContext::new(),
+        }
+    }
+
+    /// Creates a factory wired to a specific font context, allowing layout to share
+    /// font caches with paint and callers.
+    pub fn with_font_context(font_context: FontContext) -> Self {
+        Self { font_context }
+    }
+
+    /// Returns the font context backing formatting context construction.
+    pub fn font_context(&self) -> &FontContext {
+        &self.font_context
     }
 
     /// Creates the appropriate FormattingContext for a box
@@ -115,11 +138,15 @@ impl FormattingContextFactory {
     /// - Reusable (can be used for multiple layouts)
     pub fn create(&self, fc_type: FormattingContextType) -> Box<dyn FormattingContext> {
         match fc_type {
-            FormattingContextType::Block => Box::new(BlockFormattingContext::new()),
-            FormattingContextType::Inline => Box::new(InlineFormattingContext::new()),
+            FormattingContextType::Block => {
+                Box::new(BlockFormattingContext::with_font_context(self.font_context.clone()))
+            }
+            FormattingContextType::Inline => {
+                Box::new(InlineFormattingContext::with_font_context(self.font_context.clone()))
+            }
             FormattingContextType::Flex => Box::new(FlexFormattingContext::new()),
             FormattingContextType::Grid => Box::new(GridFormattingContext::new()),
-            FormattingContextType::Table => Box::new(TableFormattingContext::new()),
+            FormattingContextType::Table => Box::new(TableFormattingContext::with_factory(self.clone())),
         }
     }
 
@@ -188,7 +215,7 @@ mod tests {
     #[test]
     fn test_factory_creation() {
         let _factory = FormattingContextFactory::new();
-        let _default = FormattingContextFactory;
+        let _default = FormattingContextFactory::default();
     }
 
     #[test]

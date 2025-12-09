@@ -44,7 +44,7 @@ use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::utils::compute_replaced_size;
-use crate::style::types::FontStyle;
+use crate::style::types::{FontStyle, WhiteSpace};
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
@@ -136,7 +136,7 @@ impl InlineFormattingContext {
         })?;
 
         let style = &box_node.style;
-        let factory = FormattingContextFactory::new();
+        let factory = FormattingContextFactory::with_font_context(self.font_context.clone());
         let fc = factory.create(fc_type);
 
         let percentage_base = if available_width.is_finite() {
@@ -237,14 +237,16 @@ impl InlineFormattingContext {
         let style = &box_node.style;
         let line_height = compute_line_height(style);
 
-        let shaped_runs = match self.pipeline.shape(text, style, &self.font_context) {
+        let (normalized_text, forced_breaks, allow_soft_wrap) = normalize_text_for_white_space(text, style.white_space);
+
+        let shaped_runs = match self.pipeline.shape(&normalized_text, style, &self.font_context) {
             Ok(runs) => runs,
             Err(err) => {
                 if let Some(fallback_font) = self.font_context.get_sans_serif() {
                     let mut fallback_style = (*style).as_ref().clone();
                     fallback_style.font_family = vec![fallback_font.family.clone()];
                     self.pipeline
-                        .shape(text, &fallback_style, &self.font_context)
+                        .shape(&normalized_text, &fallback_style, &self.font_context)
                         .map_err(|e| {
                             LayoutError::MissingContext(format!(
                                 "Shaping failed (fonts={}): {:?}",
@@ -264,12 +266,13 @@ impl InlineFormattingContext {
 
         let metrics = TextItem::metrics_from_runs(&shaped_runs, line_height, style.font_size);
 
-        // Find break opportunities
-        let breaks = find_break_opportunities(text);
+        // Find break opportunities and filter based on white-space handling
+        let base_breaks = find_break_opportunities(&normalized_text);
+        let breaks = merge_breaks(base_breaks, forced_breaks, allow_soft_wrap);
 
         Ok(TextItem::new(
             shaped_runs,
-            text.to_string(),
+            normalized_text,
             metrics,
             breaks,
             box_node.style.clone(),
@@ -585,6 +588,134 @@ fn horizontal_padding_and_borders(style: &ComputedStyle, percentage_base: f32) -
         + resolve_length_for_width(style.border_right_width, percentage_base)
 }
 
+fn normalize_text_for_white_space(
+    text: &str,
+    white_space: WhiteSpace,
+) -> (String, Vec<crate::text::line_break::BreakOpportunity>, bool) {
+    use crate::text::line_break::BreakOpportunity;
+
+    match white_space {
+        WhiteSpace::Normal | WhiteSpace::Nowrap => {
+            let mut out = String::with_capacity(text.len());
+            let mut in_whitespace = false;
+            let mut seen_content = false;
+
+            for ch in text.chars() {
+                match ch {
+                    ' ' | '\t' | '\n' | '\r' => {
+                        in_whitespace = true;
+                    }
+                    _ => {
+                        if in_whitespace && seen_content {
+                            out.push(' ');
+                        }
+                        in_whitespace = false;
+                        seen_content = true;
+                        out.push(ch);
+                    }
+                }
+            }
+
+            (out, Vec::new(), white_space != WhiteSpace::Nowrap)
+        }
+        WhiteSpace::PreLine => {
+            let mut out = String::with_capacity(text.len());
+            let mut mandatory_breaks = Vec::new();
+            let mut run_has_space = false;
+            let mut run_has_newline = false;
+            let mut seen_content = false;
+
+            for ch in text.chars() {
+                match ch {
+                    ' ' | '\t' => {
+                        run_has_space = true;
+                    }
+                    '\n' | '\r' => {
+                        run_has_newline = true;
+                    }
+                    _ => {
+                        if run_has_newline {
+                            if run_has_space && seen_content {
+                                out.push(' ');
+                            }
+                            mandatory_breaks.push(BreakOpportunity::mandatory(out.len()));
+                        } else if run_has_space && seen_content {
+                            out.push(' ');
+                        }
+                        run_has_space = false;
+                        run_has_newline = false;
+
+                        out.push(ch);
+                        seen_content = true;
+                    }
+                }
+            }
+
+            if run_has_newline {
+                if run_has_space && seen_content {
+                    out.push(' ');
+                }
+                mandatory_breaks.push(BreakOpportunity::mandatory(out.len()));
+            } else if run_has_space && seen_content {
+                out.push(' ');
+            }
+
+            (out, mandatory_breaks, true)
+        }
+        WhiteSpace::Pre | WhiteSpace::PreWrap => {
+            let mut out = String::with_capacity(text.len());
+            let mut mandatory_breaks = Vec::new();
+
+            for ch in text.chars() {
+                match ch {
+                    '\n' | '\r' => {
+                        mandatory_breaks.push(BreakOpportunity::mandatory(out.len()));
+                    }
+                    '\t' => out.push(' '),
+                    _ => out.push(ch),
+                }
+            }
+
+            (out, mandatory_breaks, white_space == WhiteSpace::PreWrap)
+        }
+    }
+}
+
+fn merge_breaks(
+    mut base: Vec<crate::text::line_break::BreakOpportunity>,
+    forced: Vec<crate::text::line_break::BreakOpportunity>,
+    allow_soft_wrap: bool,
+) -> Vec<crate::text::line_break::BreakOpportunity> {
+    use crate::text::line_break::BreakType;
+
+    if !allow_soft_wrap {
+        base.retain(|b| b.break_type == BreakType::Mandatory);
+    }
+
+    base.extend(forced);
+    base.sort_by(|a, b| {
+        a.byte_offset
+            .cmp(&b.byte_offset)
+            .then_with(|| match (a.break_type, b.break_type) {
+                (BreakType::Mandatory, BreakType::Allowed) => std::cmp::Ordering::Less,
+                (BreakType::Allowed, BreakType::Mandatory) => std::cmp::Ordering::Greater,
+                _ => std::cmp::Ordering::Equal,
+            })
+    });
+
+    base.dedup_by(|a, b| {
+        if a.byte_offset != b.byte_offset {
+            return false;
+        }
+        if let BreakType::Mandatory = a.break_type {
+            *b = *a;
+        }
+        true
+    });
+
+    base
+}
+
 impl FormattingContext for InlineFormattingContext {
     fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
         let style = &box_node.style;
@@ -634,6 +765,7 @@ impl Default for InlineFormattingContext {
 mod tests {
     use super::*;
     use crate::style::display::FormattingContextType;
+    use crate::style::types::WhiteSpace;
     use crate::style::ComputedStyle;
     use std::sync::Arc;
 
@@ -812,5 +944,51 @@ mod tests {
 
         let fragment = ifc.layout(&root, &constraints).unwrap();
         assert!(fragment.bounds.width() >= 0.0);
+    }
+
+    #[test]
+    fn white_space_normal_collapses_runs() {
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::Normal;
+
+        let (normalized, forced, allow_soft) = normalize_text_for_white_space("  foo \n\tbar  ", style.white_space);
+        assert_eq!(normalized, "foo bar");
+        assert!(allow_soft);
+        assert!(forced.is_empty());
+    }
+
+    #[test]
+    fn white_space_nowrap_strips_soft_breaks() {
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::Nowrap;
+        let text = "foo bar";
+
+        let ifc = InlineFormattingContext::new();
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+
+        assert!(item.break_opportunities.iter().all(|b| b.break_type == BreakType::Mandatory));
+        assert_eq!(item.text, "foo bar");
+    }
+
+    #[test]
+    fn white_space_pre_preserves_spaces_and_breaks() {
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::Pre;
+        let text = "a  \n b";
+
+        let ifc = InlineFormattingContext::new();
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+
+        assert_eq!(item.text, "a   b");
+        assert!(item
+            .break_opportunities
+            .iter()
+            .all(|b| b.break_type == BreakType::Mandatory));
+        assert!(item
+            .break_opportunities
+            .iter()
+            .any(|b| b.byte_offset == 3 && b.break_type == BreakType::Mandatory));
     }
 }

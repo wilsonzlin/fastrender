@@ -19,6 +19,7 @@ use crate::geometry::Size;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::formatting_context::{IntrinsicSizingMode, LayoutError};
+use crate::text::font_loader::FontContext;
 use crate::tree::box_tree::{BoxNode, BoxTree};
 use crate::tree::fragment_tree::{FragmentNode, FragmentTree};
 
@@ -195,6 +196,9 @@ pub struct LayoutEngine {
     /// Formatting context factory
     factory: FormattingContextFactory,
 
+    /// Shared font context used for all layout text shaping and measurement.
+    font_context: FontContext,
+
     /// Layout cache (placeholder for future optimization)
     _cache: LayoutCache,
 }
@@ -212,9 +216,19 @@ impl LayoutEngine {
     /// let engine = LayoutEngine::new(config);
     /// ```
     pub fn new(config: LayoutConfig) -> Self {
+        Self::with_font_context(config, FontContext::new())
+    }
+
+    /// Creates a layout engine that uses the provided font context for all text measurement.
+    ///
+    /// Sharing the font context with paint keeps font fallback, cache warming, and font loading
+    /// consistent across the pipeline.
+    pub fn with_font_context(config: LayoutConfig, font_context: FontContext) -> Self {
+        let factory = FormattingContextFactory::with_font_context(font_context.clone());
         Self {
             config,
-            factory: FormattingContextFactory::new(),
+            factory,
+            font_context,
             _cache: LayoutCache::new(),
         }
     }
@@ -410,6 +424,11 @@ impl LayoutEngine {
     /// Returns the engine's configuration
     pub fn config(&self) -> &LayoutConfig {
         &self.config
+    }
+
+    /// Returns the font context backing layout text shaping and intrinsic sizing.
+    pub fn font_context(&self) -> &FontContext {
+        &self.font_context
     }
 
     /// Returns statistics about layout operations

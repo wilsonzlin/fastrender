@@ -1349,12 +1349,22 @@ pub fn calculate_row_heights(structure: &mut TableStructure, _available_height: 
 pub struct TableFormattingContext {
     /// Table structure (lazily built during layout)
     structure: Option<TableStructure>,
+    /// Formatting context factory carrying shared font resources for cell layout.
+    factory: FormattingContextFactory,
 }
 
 impl TableFormattingContext {
     /// Creates a new table formatting context
     pub fn new() -> Self {
-        Self { structure: None }
+        Self::with_factory(FormattingContextFactory::new())
+    }
+
+    /// Creates a table formatting context that reuses the provided factory.
+    pub fn with_factory(factory: FormattingContextFactory) -> Self {
+        Self {
+            structure: None,
+            factory,
+        }
     }
 
     /// Gets the table structure, building it if necessary
@@ -1367,7 +1377,7 @@ impl TableFormattingContext {
         let fc_type = cell_box
             .formatting_context()
             .unwrap_or(crate::style::display::FormattingContextType::Block);
-        let fc = FormattingContextFactory::new().create(fc_type);
+        let fc = self.factory.create(fc_type);
 
         let mut min = fc
             .compute_intrinsic_inline_size(cell_box, IntrinsicSizingMode::MinContent)
@@ -1470,7 +1480,7 @@ impl TableFormattingContext {
         cell_width: f32,
         border_collapse: BorderCollapse,
     ) -> Result<FragmentNode, LayoutError> {
-        let bfc = BlockFormattingContext::new();
+        let bfc = BlockFormattingContext::with_font_context(self.factory.font_context().clone());
         let constraints = LayoutConstraints::definite_width(cell_width.max(0.0));
         if matches!(border_collapse, BorderCollapse::Collapse) {
             let mut cloned = cell_box.clone();

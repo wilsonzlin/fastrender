@@ -74,9 +74,13 @@ pub struct BlockFormattingContext {
 impl BlockFormattingContext {
     /// Creates a new BlockFormattingContext
     pub fn new() -> Self {
-        Self {
-            font_context: FontContext::new(),
-        }
+        Self::with_font_context(FontContext::new())
+    }
+
+    /// Creates a BlockFormattingContext backed by a specific font context so text
+    /// measurement shares caches with the caller.
+    pub fn with_font_context(font_context: FontContext) -> Self {
+        Self { font_context }
     }
 
     /// Lays out a single block-level child and returns its fragment
@@ -117,7 +121,7 @@ impl BlockFormattingContext {
         let (child_fragments, content_height) = if let Some(fc_type) = fc_type {
             if fc_type != FormattingContextType::Block {
                 // Child establishes a non-block FC - use the appropriate FC
-                let factory = FormattingContextFactory::new();
+                let factory = FormattingContextFactory::with_font_context(self.font_context.clone());
                 let fc = factory.create(fc_type);
 
                 // Layout using the child's FC
@@ -432,8 +436,8 @@ impl FormattingContext for BlockFormattingContext {
             return Ok(size.width + edges);
         }
 
-        let factory = FormattingContextFactory::new();
-        let inline_fc = InlineFormattingContext::new();
+        let factory = FormattingContextFactory::with_font_context(self.font_context.clone());
+        let inline_fc = InlineFormattingContext::with_font_context(self.font_context.clone());
 
         // Inline formatting context contribution (text and inline-level children)
         let inline_width = inline_fc.compute_intrinsic_inline_size(box_node, mode).unwrap_or(0.0);

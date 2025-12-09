@@ -358,7 +358,7 @@ impl FastRender {
         let font_context = FontContext::new();
         let layout_config =
             LayoutConfig::for_viewport(Size::new(config.default_width as f32, config.default_height as f32));
-        let layout_engine = LayoutEngine::new(layout_config);
+        let layout_engine = LayoutEngine::with_font_context(layout_config, font_context.clone());
         let image_cache = match &config.base_url {
             Some(url) => ImageCache::with_base_url(url.clone()),
             None => ImageCache::new(),
@@ -550,7 +550,7 @@ impl FastRender {
 
         // Update layout engine config for this viewport
         let config = LayoutConfig::for_viewport(Size::new(width as f32, height as f32));
-        self.layout_engine = LayoutEngine::new(config);
+        self.layout_engine = LayoutEngine::with_font_context(config, self.font_context.clone());
 
         // Perform layout
         let fragment_tree = self.layout_engine.layout_tree(&box_tree).map_err(|e| {

@@ -668,7 +668,7 @@ fn test_is_supported_returns_true_for_all_types() {
 
 #[test]
 fn test_default_factory_works() {
-    let factory = FormattingContextFactory;
+    let factory = FormattingContextFactory::default();
 
     for &fc_type in factory.supported_types() {
         let fc = factory.create(fc_type);
