@@ -850,35 +850,6 @@ mod tests {
         // Just verify we can access it
     }
 
-    #[test]
-    fn resolve_intrinsic_sizes_handles_inline_svg() {
-        let renderer = FastRender::new().expect("init renderer");
-        let mut node = BoxNode::new_replaced(
-            Arc::new(ComputedStyle::default()),
-            ReplacedType::Svg {
-                content: r#"<svg xmlns='http://www.w3.org/2000/svg' width='20' height='12'></svg>"#.to_string(),
-            },
-            None,
-            None,
-        );
-
-        renderer.resolve_replaced_intrinsic_sizes(&mut node);
-        let replaced = match node.box_type {
-            BoxType::Replaced(ref r) => r,
-            _ => panic!("not replaced"),
-        };
-        assert_eq!(
-            replaced.intrinsic_size,
-            Some(Size::new(20.0, 12.0)),
-            "inline svg should populate intrinsic size"
-        );
-        assert_eq!(
-            replaced.aspect_ratio,
-            Some(20.0 / 12.0),
-            "inline svg should populate aspect ratio"
-        );
-    }
-
     // =========================================================================
     // Rendering Tests (may fail if pipeline not fully integrated)
     // These are marked with ignore to match the integration_test.rs pattern
@@ -951,5 +922,34 @@ mod tests {
             Rgba::rgb(255, 0, 0), // Red background
         );
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn resolve_intrinsic_sizes_handles_inline_svg() {
+        let renderer = FastRender::new().expect("init renderer");
+        let mut node = BoxNode::new_replaced(
+            Arc::new(ComputedStyle::default()),
+            ReplacedType::Svg {
+                content: r#"<svg xmlns='http://www.w3.org/2000/svg' width='20' height='12'></svg>"#.to_string(),
+            },
+            None,
+            None,
+        );
+
+        renderer.resolve_replaced_intrinsic_sizes(&mut node);
+        let replaced = match node.box_type {
+            BoxType::Replaced(ref r) => r,
+            _ => panic!("not replaced"),
+        };
+        assert_eq!(
+            replaced.intrinsic_size,
+            Some(Size::new(20.0, 12.0)),
+            "inline svg should populate intrinsic size"
+        );
+        assert_eq!(
+            replaced.aspect_ratio,
+            Some(20.0 / 12.0),
+            "inline svg should populate aspect ratio"
+        );
     }
 }

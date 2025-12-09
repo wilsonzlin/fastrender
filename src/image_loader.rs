@@ -117,17 +117,20 @@ impl ImageCache {
         // Load image using resolved URL
         let img = if resolved_url.starts_with("http://") || resolved_url.starts_with("https://") {
             // Fetch from network
-            self.load_from_url(&resolved_url)?
+            let (bytes, content_type) = self.load_from_url(&resolved_url)?;
+            self.decode_image_bytes(&bytes, content_type.as_deref(), None, &resolved_url)?
         } else if resolved_url.starts_with("file://") {
             // Load from file system
             let path = resolved_url.strip_prefix("file://").unwrap();
-            self.load_from_file(path)?
+            let (bytes, ext_hint) = self.load_from_file(path)?;
+            self.decode_image_bytes(&bytes, None, ext_hint.as_deref(), path)?
         } else if resolved_url.starts_with("data:") {
             // Data URL
             self.load_from_data_url(&resolved_url)?
         } else {
             // Assume it's a file path
-            self.load_from_file(&resolved_url)?
+            let (bytes, ext_hint) = self.load_from_file(&resolved_url)?;
+            self.decode_image_bytes(&bytes, None, ext_hint.as_deref(), &resolved_url)?
         };
 
         // Cache it (using original URL as key)
@@ -146,7 +149,7 @@ impl ImageCache {
         Ok(Arc::new(img))
     }
 
-    fn load_from_url(&self, url: &str) -> Result<DynamicImage> {
+    fn load_from_url(&self, url: &str) -> Result<(Vec<u8>, Option<String>)> {
         // Configure agent with timeout
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(std::time::Duration::from_secs(30)))
@@ -166,22 +169,29 @@ impl ImageCache {
             .read_to_vec()
             .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
-        // Decode image
-        image::load_from_memory(&bytes).map_err(|e| {
-            Error::Image(ImageError::DecodeFailed {
-                url: url.to_string(),
-                reason: e.to_string(),
-            })
-        })
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string());
+        Ok((bytes, content_type))
     }
 
-    fn load_from_file(&self, path: &str) -> Result<DynamicImage> {
-        image::open(path).map_err(|e| {
-            Error::Image(ImageError::LoadFailed {
-                url: path.to_string(),
-                reason: e.to_string(),
+    fn load_from_file(&self, path: &str) -> Result<(Vec<u8>, Option<String>)> {
+        std::fs::read(path)
+            .map(|bytes| {
+                let ext = std::path::Path::new(path)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|s| s.to_string());
+                (bytes, ext.map(|e| format!("image/{}", e)))
             })
-        })
+            .map_err(|e| {
+                Error::Image(ImageError::LoadFailed {
+                    url: path.to_string(),
+                    reason: e.to_string(),
+                })
+            })
     }
 
     fn load_from_data_url(&self, data_url: &str) -> Result<DynamicImage> {
@@ -232,6 +242,41 @@ impl ImageCache {
                 reason: "Unsupported data URL format (not base64 or SVG)".to_string(),
             }))
         }
+    }
+
+    fn decode_image_bytes(
+        &self,
+        bytes: &[u8],
+        mime_hint: Option<&str>,
+        extension_hint: Option<&str>,
+        url: &str,
+    ) -> Result<DynamicImage> {
+        let mime_is_svg = mime_hint.map(|m| m.contains("image/svg")).unwrap_or(false);
+        let ext_is_svg = extension_hint.map(|e| e.eq_ignore_ascii_case("svg")).unwrap_or(false);
+
+        let is_svg = mime_is_svg
+            || ext_is_svg
+            || std::str::from_utf8(bytes)
+                .ok()
+                .map(|s| s.trim_start().starts_with("<svg"))
+                .unwrap_or(false);
+
+        if is_svg {
+            let content = std::str::from_utf8(bytes).map_err(|e| {
+                Error::Image(ImageError::DecodeFailed {
+                    url: url.to_string(),
+                    reason: format!("SVG not valid UTF-8: {}", e),
+                })
+            })?;
+            return self.render_svg_to_image(content);
+        }
+
+        image::load_from_memory(bytes).map_err(|e| {
+            Error::Image(ImageError::DecodeFailed {
+                url: url.to_string(),
+                reason: e.to_string(),
+            })
+        })
     }
 
     /// Renders raw SVG content to a raster image.
