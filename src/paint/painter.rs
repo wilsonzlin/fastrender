@@ -488,7 +488,6 @@ impl Painter {
         match command {
             DisplayCommand::Background { rect, style } => {
                 self.paint_background(rect.x(), rect.y(), rect.width(), rect.height(), &style);
-                self.paint_background_image(rect.x(), rect.y(), rect.width(), rect.height(), &style);
             }
             DisplayCommand::Border { rect, style } => {
                 self.paint_borders(rect.x(), rect.y(), rect.width(), rect.height(), &style);
@@ -621,11 +620,6 @@ impl Painter {
 
     /// Paints the background of a fragment
     fn paint_background(&mut self, x: f32, y: f32, width: f32, height: f32, style: &ComputedStyle) {
-        // Skip if background is transparent
-        if style.background_color.alpha_u8() == 0 {
-            return;
-        }
-
         let rects = background_rects(x, y, width, height, style);
         let clip = match style.background_clip {
             crate::style::types::BackgroundBox::BorderBox => rects.border,
@@ -637,23 +631,26 @@ impl Painter {
             return;
         }
 
-        let mut paint = Paint::default();
-        paint.set_color_rgba8(
-            style.background_color.r,
-            style.background_color.g,
-            style.background_color.b,
-            style.background_color.alpha_u8(),
-        );
-        paint.anti_alias = true;
+        let clip_radii = resolve_clip_radii(style, &rects, style.background_clip);
 
-        if let Some(rect) = SkiaRect::from_xywh(clip.x(), clip.y(), clip.width(), clip.height()) {
-            let path = PathBuilder::from_rect(rect);
-            self.pixmap
-                .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+        if style.background_color.alpha_u8() > 0 {
+            let _ = fill_rounded_rect(
+                &mut self.pixmap,
+                clip.x(),
+                clip.y(),
+                clip.width(),
+                clip.height(),
+                &clip_radii,
+                style.background_color,
+            );
+        }
+
+        if style.background_image.is_some() {
+            self.paint_background_image(&rects, style, clip_radii);
         }
     }
 
-    fn paint_background_image(&mut self, x: f32, y: f32, width: f32, height: f32, style: &ComputedStyle) {
+    fn paint_background_image(&mut self, rects: &BackgroundRects, style: &ComputedStyle, clip_radii: BorderRadii) {
         let Some(bg) = &style.background_image else { return };
         let src = match bg {
             BackgroundImage::Url(u) => u,
@@ -675,11 +672,6 @@ impl Painter {
             return;
         }
 
-        if width <= 0.0 || height <= 0.0 {
-            return;
-        }
-
-        let rects = background_rects(x, y, width, height, style);
         let clip_rect = match style.background_clip {
             crate::style::types::BackgroundBox::BorderBox => rects.border,
             crate::style::types::BackgroundBox::PaddingBox => rects.padding,
@@ -697,6 +689,17 @@ impl Painter {
         if origin_rect.width() <= 0.0 || origin_rect.height() <= 0.0 {
             return;
         }
+
+        let clip_mask = if clip_radii.is_zero() {
+            None
+        } else {
+            build_rounded_rect_mask(
+                clip_rect,
+                clip_radii,
+                self.pixmap.width(),
+                self.pixmap.height(),
+            )
+        };
 
         let (tile_w, tile_h) = compute_background_size(style, origin_rect.width(), origin_rect.height(), img_w, img_h);
         if tile_w <= 0.0 || tile_h <= 0.0 {
@@ -734,19 +737,43 @@ impl Painter {
 
         match repeat {
             BackgroundRepeat::NoRepeat => {
-                self.paint_background_tile(&pixmap, tile_origin_x, tile_origin_y, tile_w, tile_h, clip_rect);
+                self.paint_background_tile(
+                    &pixmap,
+                    tile_origin_x,
+                    tile_origin_y,
+                    tile_w,
+                    tile_h,
+                    clip_rect,
+                    clip_mask.as_ref(),
+                );
             }
             BackgroundRepeat::RepeatX => {
                 let mut tx = start_x;
                 while tx < max_x {
-                    self.paint_background_tile(&pixmap, tx, tile_origin_y, tile_w, tile_h, clip_rect);
+                    self.paint_background_tile(
+                        &pixmap,
+                        tx,
+                        tile_origin_y,
+                        tile_w,
+                        tile_h,
+                        clip_rect,
+                        clip_mask.as_ref(),
+                    );
                     tx += tile_w;
                 }
             }
             BackgroundRepeat::RepeatY => {
                 let mut ty = start_y;
                 while ty < max_y {
-                    self.paint_background_tile(&pixmap, tile_origin_x, ty, tile_w, tile_h, clip_rect);
+                    self.paint_background_tile(
+                        &pixmap,
+                        tile_origin_x,
+                        ty,
+                        tile_w,
+                        tile_h,
+                        clip_rect,
+                        clip_mask.as_ref(),
+                    );
                     ty += tile_h;
                 }
             }
@@ -755,7 +782,15 @@ impl Painter {
                 while ty < max_y {
                     let mut tx = start_x;
                     while tx < max_x {
-                        self.paint_background_tile(&pixmap, tx, ty, tile_w, tile_h, clip_rect);
+                        self.paint_background_tile(
+                            &pixmap,
+                            tx,
+                            ty,
+                            tile_w,
+                            tile_h,
+                            clip_rect,
+                            clip_mask.as_ref(),
+                        );
                         tx += tile_w;
                     }
                     ty += tile_h;
@@ -772,6 +807,7 @@ impl Painter {
         tile_w: f32,
         tile_h: f32,
         clip: Rect,
+        mask: Option<&Mask>,
     ) {
         if tile_w <= 0.0 || tile_h <= 0.0 {
             return;
@@ -807,7 +843,7 @@ impl Painter {
             intersection.width(),
             intersection.height(),
         ) {
-            self.pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+            self.pixmap.fill_rect(rect, &paint, Transform::identity(), mask);
         }
     }
 
@@ -1973,6 +2009,69 @@ fn resolve_border_radii(style: Option<&ComputedStyle>, bounds: Rect) -> BorderRa
         bottom_left: resolve_radius(&style.border_bottom_left_radius, w, style.font_size),
     };
     radii.clamped(w, h)
+}
+
+fn resolve_clip_radii(style: &ComputedStyle, rects: &BackgroundRects, clip: crate::style::types::BackgroundBox) -> BorderRadii {
+    let base = resolve_border_radii(Some(style), rects.border);
+    if base.is_zero() {
+        return base;
+    }
+
+    let percentage_base = rects.border.width().max(0.0);
+    let font_size = style.font_size;
+    let border_left = resolve_length_for_paint(&style.border_left_width, font_size, percentage_base);
+    let border_right = resolve_length_for_paint(&style.border_right_width, font_size, percentage_base);
+    let border_top = resolve_length_for_paint(&style.border_top_width, font_size, percentage_base);
+    let border_bottom = resolve_length_for_paint(&style.border_bottom_width, font_size, percentage_base);
+
+    let padding_left = resolve_length_for_paint(&style.padding_left, font_size, percentage_base);
+    let padding_right = resolve_length_for_paint(&style.padding_right, font_size, percentage_base);
+    let padding_top = resolve_length_for_paint(&style.padding_top, font_size, percentage_base);
+    let padding_bottom = resolve_length_for_paint(&style.padding_bottom, font_size, percentage_base);
+
+    match clip {
+        crate::style::types::BackgroundBox::BorderBox => base,
+        crate::style::types::BackgroundBox::PaddingBox => {
+            let shrunk = BorderRadii {
+                top_left: (base.top_left - border_left.max(border_top)).max(0.0),
+                top_right: (base.top_right - border_right.max(border_top)).max(0.0),
+                bottom_right: (base.bottom_right - border_right.max(border_bottom)).max(0.0),
+                bottom_left: (base.bottom_left - border_left.max(border_bottom)).max(0.0),
+            };
+            shrunk.clamped(rects.padding.width(), rects.padding.height())
+        }
+        crate::style::types::BackgroundBox::ContentBox => {
+            let shrink_left = border_left + padding_left;
+            let shrink_right = border_right + padding_right;
+            let shrink_top = border_top + padding_top;
+            let shrink_bottom = border_bottom + padding_bottom;
+            let shrunk = BorderRadii {
+                top_left: (base.top_left - shrink_left.max(shrink_top)).max(0.0),
+                top_right: (base.top_right - shrink_right.max(shrink_top)).max(0.0),
+                bottom_right: (base.bottom_right - shrink_right.max(shrink_bottom)).max(0.0),
+                bottom_left: (base.bottom_left - shrink_left.max(shrink_bottom)).max(0.0),
+            };
+            shrunk.clamped(rects.content.width(), rects.content.height())
+        }
+    }
+}
+
+fn build_rounded_rect_mask(rect: Rect, radii: BorderRadii, canvas_w: u32, canvas_h: u32) -> Option<Mask> {
+    if canvas_w == 0 || canvas_h == 0 || rect.width() <= 0.0 || rect.height() <= 0.0 {
+        return None;
+    }
+
+    let mut mask_pixmap = Pixmap::new(canvas_w, canvas_h)?;
+    let _ = fill_rounded_rect(
+        &mut mask_pixmap,
+        rect.x(),
+        rect.y(),
+        rect.width(),
+        rect.height(),
+        &radii,
+        Rgba::new(255, 255, 255, 1.0),
+    );
+    Some(Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha))
 }
 
 fn apply_clip_mask(pixmap: &mut Pixmap, radii: BorderRadii) {

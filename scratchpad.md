@@ -77,6 +77,7 @@
 - Added filter parsing unit coverage for multi-function lists and drop-shadow defaults (`src/style/properties.rs` tests).
 - CSS `backdrop-filter` is parsed (reusing the filter function set) and forces stacking contexts; painter copies the backdrop within the context bounds, applies the resolved filters (including blur/drop-shadow outsets), and composites it back before drawing the context, so backdrop blur/drop-shadow are visible behind translucent content (`src/style/{types.rs,mod.rs,properties.rs}`, `src/paint/{stacking.rs,painter.rs}`).
 - Filters and backdrop-filters now clip to the element’s border box with resolved border radii: stacking layers and backdrop regions are masked by the computed rounded-rect radii before compositing, preventing glow/blur from bleeding outside rounded corners (`src/paint/painter.rs`).
+- Background colors and images respect border-radius and `background-clip`: clip radii shrink with border/padding/content edges, fills draw as rounded rects, and image tiling is masked to the clipped rounded box (`src/paint/painter.rs`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
