@@ -20,6 +20,7 @@
 - Plaintext on ancestors now triggers first-strong paragraph direction (box stack considered, not just leaves), and isolation regression added for `unicode-bidi:isolate` inline boxes (`src/layout/contexts/inline/line_builder.rs`).
 - Plaintext leaves/ancestors now drop inserted isolation controls and derive the paragraph base level via first-strong analysis of the concatenated logical text before running bidi (so plaintext isn’t skewed by LRI/RLI wrappers); added RTL-first plaintext regression (`src/layout/contexts/inline/line_builder.rs`).
 - Bidi logical-text construction now balances embedding/isolation controls across shared ancestor stacks instead of emitting opens/closes per leaf; contexts are opened/closed only when the stack changes, preventing unbalanced sequences. Added regression for multi-leaf isolate inline boxes (`src/layout/contexts/inline/line_builder.rs`).
+- Inline bidi context management now keeps ancestor isolates/embeddings open across leaves (opens/ closes only on stack transitions) so multi-leaf isolates share one context and neutrals resolve across sibling leaves; added regression covering multi-leaf isolate neutral resolution (`src/layout/contexts/inline/line_builder.rs`).
 - Added rowspan vertical-align regression to ensure spanning cells don't collapse subsequent rows and heights remain positive (`src/layout/table.rs` test).
 - Baseline-aligned rowspans now explicitly reserve baseline space in the first row; added regression to guard the baseline reservation for spanning cells (`src/layout/table.rs`).
 - Collapsed border model now covered by a bounds regression: table fragments include collapsed stroke widths even with empty cells (`src/layout/table.rs` test).
@@ -102,7 +103,7 @@
 - Background colors and images respect border-radius and `background-clip`: clip radii shrink with border/padding/content edges, fills draw as rounded rects, and image tiling is masked to the clipped rounded box (`src/paint/painter.rs`).
 
 ## Current issues / gaps
-- Bidi: still approximate isolation with control characters rather than explicit isolate/embedding stack.
+- Bidi: still relies on injected controls to drive UAX#9 (no dedicated embedding/isolate stack), though stack handling now opens/closes on context transitions.
 - Max-content sizing now honors mandatory breaks but still ignores anonymous inline box generation and percent-driven height constraints.
 - Table layout still partial: row/col spans not fully honored (rowspan baselines, percent/fixed widths still simplified vs CSS 2.1), colspan distribution still heuristic.
 - Replaced elements still skip backgrounds and non-image types (SVG/iframe/video remain unrendered); object-fit only applies when image decoding succeeds.

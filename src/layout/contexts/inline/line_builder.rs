@@ -1182,39 +1182,38 @@ impl LineBuilder {
         // Build the logical text for this line and map byte ranges back to leaf indices.
         let mut logical_text = String::new();
         let mut spans: Vec<(usize, std::ops::Range<usize>)> = Vec::with_capacity(leaves.len());
-        let mut current_stack: Vec<BoxContext> = Vec::new();
+        let mut active_stack: Vec<BoxContext> = Vec::new();
 
         for (idx, leaf) in leaves.iter().enumerate() {
-            let dir = leaf.item.direction();
-            let ub = leaf.item.unicode_bidi();
-            let (open_controls, close_controls) = if has_plaintext {
-                (Vec::new(), Vec::new())
-            } else {
-                bidi_controls_for_stack(&leaf.box_stack, ub, dir)
-            };
-
             if !has_plaintext {
-                // Close contexts not shared with this leaf
-                let shared = current_stack
+                let shared = active_stack
                     .iter()
                     .zip(leaf.box_stack.iter())
                     .take_while(|(a, b)| a.id == b.id)
                     .count();
-                for ctx in current_stack.iter().rev().skip(leaf.box_stack.len().saturating_sub(shared)) {
+
+                for ctx in active_stack.iter().rev().take(active_stack.len().saturating_sub(shared)) {
                     for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
                         logical_text.push(ch);
                     }
                 }
-                // Open new contexts
+                active_stack.truncate(shared);
+
                 for ctx in leaf.box_stack.iter().skip(shared) {
                     for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).0 {
                         logical_text.push(ch);
                     }
+                    active_stack.push(ctx.clone());
                 }
-                current_stack = leaf.box_stack.clone();
             }
 
-            for ch in open_controls {
+            let (leaf_opens, leaf_closes) = if has_plaintext {
+                (Vec::new(), Vec::new())
+            } else {
+                bidi_controls(leaf.item.unicode_bidi(), leaf.item.direction())
+            };
+
+            for ch in leaf_opens {
                 logical_text.push(ch);
             }
 
@@ -1225,7 +1224,7 @@ impl LineBuilder {
             }
             let content_end = logical_text.len();
 
-            for ch in close_controls {
+            for ch in leaf_closes {
                 logical_text.push(ch);
             }
 
@@ -1236,7 +1235,7 @@ impl LineBuilder {
 
         if !has_plaintext {
             // Close any remaining open contexts.
-            for ctx in current_stack.iter().rev() {
+            for ctx in active_stack.iter().rev() {
                 for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
                     logical_text.push(ch);
                 }
@@ -1523,27 +1522,6 @@ fn bidi_controls(unicode_bidi: UnicodeBidi, direction: Direction) -> (Vec<char>,
     }
 }
 
-fn bidi_controls_for_stack(
-    stack: &[BoxContext],
-    leaf_bidi: UnicodeBidi,
-    leaf_dir: Direction,
-) -> (Vec<char>, Vec<char>) {
-    let mut opens = Vec::new();
-    let mut closes = Vec::new();
-
-    for ctx in stack {
-        let (o, c) = bidi_controls(ctx.unicode_bidi, ctx.direction);
-        opens.extend(o);
-        closes.extend(c);
-    }
-
-    let (leaf_opens, leaf_closes) = bidi_controls(leaf_bidi, leaf_dir);
-    opens.extend(leaf_opens);
-    closes.extend(leaf_closes);
-
-    (opens, closes.into_iter().rev().collect())
-}
-
 #[derive(Clone)]
 struct BoxContext {
     id: usize,
@@ -1633,6 +1611,7 @@ mod tests {
     use crate::text::font_loader::FontContext;
     use crate::text::line_break::find_break_opportunities;
     use crate::text::pipeline::ShapingPipeline;
+    use unicode_bidi::BidiInfo;
     use std::sync::Arc;
 
     fn make_strut_metrics() -> BaselineMetrics {
@@ -2001,8 +1980,9 @@ mod tests {
             })
             .collect();
 
-        // Children stay adjacent and isolate prevents surrounding runs from interleaving.
-        assert_eq!(texts, vec!["L ".to_string(), "אב".to_string(), "ג".to_string(), " R".to_string()]);
+        // Children stay adjacent and isolate prevents surrounding runs from interleaving; RTL order places the later
+        // child earlier in visual order.
+        assert_eq!(texts, vec!["L ".to_string(), "ג".to_string(), "אב".to_string(), " R".to_string()]);
     }
 
     #[test]
@@ -2066,6 +2046,99 @@ mod tests {
 
         // Base came from first strong RTL; visual order (left-to-right positions) places the LTR run left.
         assert_eq!(texts, vec!["abc".to_string(), "אבג ".to_string()]);
+    }
+
+    fn reorder_with_controls(text: &str, base: Option<Level>) -> String {
+        let bidi = BidiInfo::new(text, base);
+        let para = &bidi.paragraphs[0];
+        bidi.reorder_line(para, para.range.clone())
+            .chars()
+            .filter(|c| !matches!(
+                c,
+                '\u{202a}' // LRE
+                    | '\u{202b}' // RLE
+                    | '\u{202c}' // PDF
+                    | '\u{202d}' // LRO
+                    | '\u{202e}' // RLO
+                    | '\u{2066}' // LRI
+                    | '\u{2067}' // RLI
+                    | '\u{2068}' // FSI
+                    | '\u{2069}' // PDI
+            ))
+            .collect()
+    }
+
+    fn flatten_text(item: &InlineItem) -> String {
+        match item {
+            InlineItem::Text(t) => t.text.clone(),
+            InlineItem::InlineBox(b) => b.children.iter().map(flatten_text).collect(),
+            InlineItem::InlineBlock(_) | InlineItem::Replaced(_) => String::from("\u{FFFC}"),
+        }
+    }
+
+    #[test]
+    fn bidi_isolate_spans_children_as_single_context() {
+        // Logical text with a single RTL isolate containing both child segments.
+        let expected = reorder_with_controls(
+            &format!("A \u{2067}XY\u{2069} Z"),
+            Some(Level::ltr()),
+        );
+
+        let mut builder = make_builder(200.0);
+        builder.add_item(InlineItem::Text(make_text_item("A ", 20.0)));
+
+        let mut inline_box = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            0,
+            Direction::Rtl,
+            UnicodeBidi::Isolate,
+        );
+        inline_box.add_child(InlineItem::Text(make_text_item("X", 10.0)));
+        inline_box.add_child(InlineItem::Text(make_text_item("Y", 10.0)));
+        builder.add_item(InlineItem::InlineBox(inline_box));
+
+        builder.add_item(InlineItem::Text(make_text_item(" Z", 20.0)));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 1);
+        let actual: String = lines[0].items.iter().map(|p| flatten_text(&p.item)).collect();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn bidi_isolate_resolves_neutrals_across_children() {
+        // Single isolate should resolve neutrals using surrounding strong types inside the isolate.
+        let expected = "A אבX Z".to_string();
+
+        let mut builder = make_builder(200.0);
+        builder.add_item(InlineItem::Text(make_text_item("A ", 20.0)));
+
+        let mut inline_box = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            0,
+            Direction::Rtl,
+            UnicodeBidi::Isolate,
+        );
+        inline_box.add_child(InlineItem::Text(make_text_item("X", 10.0)));
+        inline_box.add_child(InlineItem::Text(make_text_item("אב", 20.0)));
+        builder.add_item(InlineItem::InlineBox(inline_box));
+
+        builder.add_item(InlineItem::Text(make_text_item(" Z", 20.0)));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 1);
+        let actual: String = lines[0].items.iter().map(|p| flatten_text(&p.item)).collect();
+
+        assert_eq!(actual, expected);
     }
 
     #[test]
