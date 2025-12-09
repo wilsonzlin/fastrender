@@ -569,8 +569,14 @@ impl Painter {
                     return Ok(());
                 }
 
-                let Some(bounds) =
-                    stacking_context_bounds(&commands, &filters, &backdrop_filters, context_rect, transform.as_ref())
+                let Some(bounds) = stacking_context_bounds(
+                    &commands,
+                    &filters,
+                    &backdrop_filters,
+                    context_rect,
+                    transform.as_ref(),
+                    clip.as_ref(),
+                )
                 else {
                     return Ok(());
                 };
@@ -1703,14 +1709,61 @@ fn transform_rect(rect: Rect, ts: &Transform) -> Rect {
     Rect::from_xywh(min_x, min_y, max_x - min_x, max_y - min_y)
 }
 
+fn approx_same_rect(a: Rect, b: Rect) -> bool {
+    let eps = 0.001;
+    (a.min_x() - b.min_x()).abs() <= eps
+        && (a.min_y() - b.min_y()).abs() <= eps
+        && (a.width() - b.width()).abs() <= eps
+        && (a.height() - b.height()).abs() <= eps
+}
+
+fn clip_to_axes(bounds: Rect, clip: Rect, clip_x: bool, clip_y: bool) -> Rect {
+    let mut min_x = if clip_x { bounds.min_x().max(clip.min_x()) } else { bounds.min_x() };
+    let mut max_x = if clip_x { bounds.max_x().min(clip.max_x()) } else { bounds.max_x() };
+    let mut min_y = if clip_y { bounds.min_y().max(clip.min_y()) } else { bounds.min_y() };
+    let mut max_y = if clip_y { bounds.max_y().min(clip.max_y()) } else { bounds.max_y() };
+    if clip_x && max_x < min_x {
+        min_x = clip.min_x();
+        max_x = clip.min_x();
+    }
+    if clip_y && max_y < min_y {
+        min_y = clip.min_y();
+        max_y = clip.min_y();
+    }
+    Rect::from_xywh(min_x, min_y, (max_x - min_x).max(0.0), (max_y - min_y).max(0.0))
+}
+
+fn compute_descendant_bounds(commands: &[DisplayCommand], root_rect: Rect) -> Option<Rect> {
+    let mut current: Option<Rect> = None;
+    for cmd in commands {
+        if matches!(cmd, DisplayCommand::Background { rect, .. } | DisplayCommand::Border { rect, .. } if approx_same_rect(*rect, root_rect)) {
+            continue;
+        }
+        if let Some(r) = command_bounds(cmd) {
+            current = Some(match current {
+                Some(acc) => acc.union(r),
+                None => r,
+            });
+        }
+    }
+    current
+}
+
 fn stacking_context_bounds(
     commands: &[DisplayCommand],
     filters: &[ResolvedFilter],
     backdrop_filters: &[ResolvedFilter],
     rect: Rect,
     transform: Option<&Transform>,
+    clip: Option<&(Rect, BorderRadii, bool, bool)>,
 ) -> Option<Rect> {
-    let mut bounds = compute_commands_bounds(commands).unwrap_or(rect);
+    let mut base = rect;
+    if let Some(mut desc) = compute_descendant_bounds(commands, rect) {
+        if let Some((clip_rect, _, clip_x, clip_y)) = clip {
+            desc = clip_to_axes(desc, *clip_rect, *clip_x, *clip_y);
+        }
+        base = base.union(desc);
+    }
     let (l, t, r, b) = filter_outset(filters);
     let (bl, bt, br, bb) = filter_outset(backdrop_filters);
     let total_l = l.max(bl);
@@ -1718,19 +1771,18 @@ fn stacking_context_bounds(
     let total_r = r.max(br);
     let total_b = b.max(bb);
     if total_l > 0.0 || total_t > 0.0 || total_r > 0.0 || total_b > 0.0 {
-        bounds = Rect::from_xywh(
-            bounds.min_x() - total_l,
-            bounds.min_y() - total_t,
-            bounds.width() + total_l + total_r,
-            bounds.height() + total_t + total_b,
+        base = Rect::from_xywh(
+            base.min_x() - total_l,
+            base.min_y() - total_t,
+            base.width() + total_l + total_r,
+            base.height() + total_t + total_b,
         );
     }
-    bounds = bounds.union(rect);
     if let Some(ts) = transform {
-        let transformed = transform_rect(bounds, ts);
-        bounds = bounds.union(transformed);
+        let transformed = transform_rect(base, ts);
+        base = base.union(transformed);
     }
-    Some(bounds)
+    Some(base)
 }
 
 fn command_bounds(cmd: &DisplayCommand) -> Option<Rect> {
@@ -1743,16 +1795,17 @@ fn command_bounds(cmd: &DisplayCommand) -> Option<Rect> {
             commands,
             filters,
             backdrop_filters,
-            clip: _,
+            clip,
             rect,
             transform,
             ..
         } => {
-            stacking_context_bounds(commands, filters, backdrop_filters, *rect, transform.as_ref())
+            stacking_context_bounds(commands, filters, backdrop_filters, *rect, transform.as_ref(), clip.as_ref())
         }
     }
 }
 
+#[allow(dead_code)]
 fn compute_commands_bounds(commands: &[DisplayCommand]) -> Option<Rect> {
     let mut current: Option<Rect> = None;
     for cmd in commands {
@@ -2621,6 +2674,7 @@ mod tests {
     use super::*;
     use crate::geometry::Rect;
     use crate::image_loader::ImageCache;
+    use crate::paint::display_list::BorderRadii;
     use crate::style::ComputedStyle;
     use crate::style::types::{Isolation, Overflow};
     use crate::style::values::Length;
@@ -2805,6 +2859,27 @@ mod tests {
         assert_eq!(color_at(&pixmap, 10, 10), (255, 0, 0, 255));
         assert_eq!(color_at(&pixmap, 10, 25), (255, 255, 255, 255));
         assert_eq!(color_at(&pixmap, 22, 10), (255, 0, 0, 255));
+    }
+
+    #[test]
+    fn overflow_clip_limits_layer_bounds() {
+        let style = Arc::new(ComputedStyle::default());
+        let root_rect = Rect::from_xywh(0.0, 0.0, 20.0, 20.0);
+        let commands = vec![
+            DisplayCommand::Background {
+                rect: root_rect,
+                style: style.clone(),
+            },
+            DisplayCommand::Background {
+                rect: Rect::from_xywh(1000.0, 0.0, 10.0, 10.0),
+                style,
+            },
+        ];
+        let clip = Some((root_rect, BorderRadii::ZERO, true, true));
+        let bounds = stacking_context_bounds(&commands, &[], &[], root_rect, None, clip.as_ref()).expect("bounds");
+        assert!((bounds.width() - 20.0).abs() < 0.01);
+        assert!(bounds.min_x().abs() < 0.01);
+        assert!(bounds.max_x() <= 20.01);
     }
 
     #[test]
