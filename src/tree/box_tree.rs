@@ -69,6 +69,17 @@ pub struct TextBox {
     pub text: String,
 }
 
+/// A list marker box
+///
+/// Generated for list items. Carries marker text but participates as its own
+/// box type so inline/layout can treat markers specially (e.g., position
+/// outside the principal block).
+#[derive(Debug, Clone)]
+pub struct MarkerBox {
+    /// Marker text content (already formatted per list-style-type)
+    pub text: String,
+}
+
 /// A replaced element box
 ///
 /// Replaced elements have intrinsic dimensions provided by external content.
@@ -189,6 +200,9 @@ pub enum BoxType {
     /// Text box (actual text content)
     Text(TextBox),
 
+    /// List marker box
+    Marker(MarkerBox),
+
     /// Replaced element (img, video, canvas, etc.)
     Replaced(ReplacedBox),
 
@@ -216,7 +230,7 @@ impl BoxType {
     /// Returns true if this box type is inline-level
     pub fn is_inline_level(&self) -> bool {
         match self {
-            BoxType::Inline(_) | BoxType::Text(_) => true,
+            BoxType::Inline(_) | BoxType::Text(_) | BoxType::Marker(_) => true,
             BoxType::Anonymous(anon) => matches!(anon.anonymous_type, AnonymousType::Inline),
             _ => false,
         }
@@ -224,7 +238,12 @@ impl BoxType {
 
     /// Returns true if this is a text box
     pub fn is_text(&self) -> bool {
-        matches!(self, BoxType::Text(_))
+        matches!(self, BoxType::Text(_) | BoxType::Marker(_))
+    }
+
+    /// Returns true if this is a list marker box
+    pub fn is_marker(&self) -> bool {
+        matches!(self, BoxType::Marker(_))
     }
 
     /// Returns true if this is a replaced element
@@ -254,6 +273,7 @@ impl fmt::Display for BoxType {
             BoxType::Block(_) => write!(f, "Block"),
             BoxType::Inline(_) => write!(f, "Inline"),
             BoxType::Text(_) => write!(f, "Text"),
+            BoxType::Marker(_) => write!(f, "Marker"),
             BoxType::Replaced(_) => write!(f, "Replaced"),
             BoxType::Anonymous(anon) => match anon.anonymous_type {
                 AnonymousType::Block => write!(f, "AnonymousBlock"),
@@ -373,6 +393,16 @@ impl BoxNode {
         Self {
             style,
             box_type: BoxType::Text(TextBox { text }),
+            children: Vec::new(),
+            debug_info: None,
+        }
+    }
+
+    /// Creates a new list marker box
+    pub fn new_marker(style: Arc<ComputedStyle>, text: String) -> Self {
+        Self {
+            style,
+            box_type: BoxType::Marker(MarkerBox { text }),
             children: Vec::new(),
             debug_info: None,
         }
@@ -516,6 +546,7 @@ impl BoxNode {
     pub fn text(&self) -> Option<&str> {
         match &self.box_type {
             BoxType::Text(text_box) => Some(&text_box.text),
+            BoxType::Marker(marker_box) => Some(&marker_box.text),
             _ => None,
         }
     }

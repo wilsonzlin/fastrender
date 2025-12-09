@@ -706,7 +706,7 @@ impl BoxGenerator {
             marker_style.margin_right = Some(crate::style::values::Length::px(12.0));
         }
 
-        let marker_node = BoxNode::new_text(Arc::new(marker_style), marker_text);
+        let marker_node = BoxNode::new_marker(Arc::new(marker_style), marker_text);
         list_item.children.insert(0, marker_node);
         list_item
     }
@@ -1876,13 +1876,13 @@ mod tests {
 
         let tree = generator.generate(&ul).unwrap();
         let first_li = &tree.root.children[0];
-        if let BoxType::Text(text_box) = &first_li.children[0].box_type {
-            assert_eq!(text_box.text, "1 ");
+        if let BoxType::Marker(marker_box) = &first_li.children[0].box_type {
+            assert_eq!(marker_box.text, "1 ");
         } else {
             panic!("expected marker text box");
         }
-        if let BoxType::Text(text_box) = &tree.root.children[1].children[0].box_type {
-            assert_eq!(text_box.text, "2 ");
+        if let BoxType::Marker(marker_box) = &tree.root.children[1].children[0].box_type {
+            assert_eq!(marker_box.text, "2 ");
         } else {
             panic!("expected marker text box");
         }
@@ -1920,13 +1920,13 @@ mod tests {
         let list = DOMNode::new_element("ol", container_style, vec![first, second]);
         let tree = generator.generate(&list).unwrap();
 
-        if let BoxType::Text(text_box) = &tree.root.children[0].children[0].box_type {
+        if let BoxType::Marker(text_box) = &tree.root.children[0].children[0].box_type {
             assert_eq!(text_box.text, "5 ");
         } else {
             panic!("expected first marker text");
         }
 
-        if let BoxType::Text(text_box) = &tree.root.children[1].children[0].box_type {
+        if let BoxType::Marker(text_box) = &tree.root.children[1].children[0].box_type {
             assert_eq!(text_box.text, "7 ");
         } else {
             panic!("expected second marker text");
@@ -1959,7 +1959,7 @@ mod tests {
         let tree = generator.generate(&outer).unwrap();
 
         // Outer marker should start at 1
-        if let BoxType::Text(text_box) = &tree.root.children[0].children[0].box_type {
+        if let BoxType::Marker(text_box) = &tree.root.children[0].children[0].box_type {
             assert_eq!(text_box.text, "1 ");
         } else {
             panic!("expected outer marker text");
@@ -1970,7 +1970,7 @@ mod tests {
             .iter()
             .find(|child| matches!(child.box_type, BoxType::Block(_)))
             .expect("inner list block");
-        if let BoxType::Text(text_box) = &inner_list_box.children[0].children[0].box_type {
+        if let BoxType::Marker(text_box) = &inner_list_box.children[0].children[0].box_type {
             assert_eq!(text_box.text, "1 ");
         } else {
             panic!("expected inner marker text");

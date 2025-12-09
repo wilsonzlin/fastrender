@@ -328,6 +328,7 @@ impl TreePrinter {
             BoxType::Block(_) => "Block",
             BoxType::Inline(_) => "Inline",
             BoxType::Text(text) => &format!("Text({})", truncate(&text.text, 20)),
+            BoxType::Marker(marker) => &format!("Marker({})", truncate(&marker.text, 20)),
             BoxType::Replaced(_) => "Replaced",
             BoxType::Anonymous(_) => "Anonymous",
         };

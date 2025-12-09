@@ -69,7 +69,7 @@ impl InlineItem {
     /// Returns the width of this item
     pub fn width(&self) -> f32 {
         match self {
-            InlineItem::Text(t) => t.advance,
+            InlineItem::Text(t) => t.advance_for_layout,
             InlineItem::Tab(t) => t.width(),
             InlineItem::InlineBox(b) => b.width(),
             InlineItem::InlineBlock(b) => b.total_width(),
@@ -80,7 +80,7 @@ impl InlineItem {
     /// Returns the intrinsic width excluding margins (border/padding included)
     pub fn intrinsic_width(&self) -> f32 {
         match self {
-            InlineItem::Text(t) => t.advance,
+            InlineItem::Text(t) => t.advance_for_layout,
             InlineItem::Tab(t) => t.width(),
             InlineItem::InlineBox(b) => b.width(),
             InlineItem::InlineBlock(b) => b.width,
@@ -164,6 +164,8 @@ pub struct TextItem {
 
     /// Total horizontal advance
     pub advance: f32,
+    /// Horizontal advance used for layout (may differ for markers)
+    pub advance_for_layout: f32,
 
     /// Baseline metrics
     pub metrics: BaselineMetrics,
@@ -184,6 +186,10 @@ pub struct TextItem {
 
     /// Computed style for this text run
     pub style: Arc<ComputedStyle>,
+    /// Whether this text item is a list marker
+    pub is_marker: bool,
+    /// Additional paint offset applied at fragment creation (used for outside markers)
+    pub paint_offset: f32,
     /// Cumulative advances at cluster boundaries (text order)
     cluster_advances: Vec<ClusterBoundary>,
 }
@@ -216,6 +222,7 @@ impl TextItem {
         Self {
             runs,
             advance,
+            advance_for_layout: advance,
             metrics,
             vertical_align: VerticalAlign::Baseline,
             break_opportunities: aligned_breaks,
@@ -223,6 +230,8 @@ impl TextItem {
             text,
             font_size,
             style,
+            is_marker: false,
+            paint_offset: 0.0,
             cluster_advances,
         }
     }
@@ -371,6 +380,17 @@ impl TextItem {
             self.style.clone(),
         )
         .with_vertical_align(self.vertical_align);
+
+        let mut before_item = before_item;
+        let mut after_item = after_item;
+        if self.is_marker {
+            before_item.is_marker = true;
+            after_item.is_marker = true;
+            before_item.paint_offset = self.paint_offset;
+            after_item.paint_offset = self.paint_offset;
+            before_item.advance_for_layout = self.advance_for_layout.min(before_item.advance);
+            after_item.advance_for_layout = (self.advance_for_layout - before_item.advance_for_layout).max(0.0);
+        }
 
         Some((before_item, after_item))
     }
@@ -1222,8 +1242,8 @@ impl LineBuilder {
                     &self.font_context,
                 ) {
                     // Place the part that fits
-                    if before.advance > 0.0 {
-                        let width = before.advance;
+                    if before.advance_for_layout > 0.0 {
+                        let width = before.advance_for_layout;
                         self.place_item_with_width(InlineItem::Text(before), width);
                     }
 
@@ -1234,12 +1254,11 @@ impl LineBuilder {
                     self.add_item(InlineItem::Text(after));
                 } else {
                     // If splitting fails, fall back to placing the whole item
+                    let width = text_item.advance_for_layout;
                     if self.current_line.is_empty() {
-                        let width = text_item.advance;
                         self.place_item_with_width(InlineItem::Text(text_item), width);
                     } else {
                         self.finish_line();
-                        let width = text_item.advance;
                         self.place_item_with_width(InlineItem::Text(text_item), width);
                     }
                 }
@@ -1247,7 +1266,7 @@ impl LineBuilder {
                 // No break point found within remaining width
                 if self.current_line.is_empty() {
                     // Line is empty, must place item (overflow)
-                    let width = text_item.advance;
+                    let width = text_item.advance_for_layout;
                     self.place_item_with_width(InlineItem::Text(text_item), width);
                 } else {
                     // Start new line and try again
@@ -1604,6 +1623,11 @@ fn slice_text_item(
         return Some(TextItem {
             runs: Vec::new(),
             advance: width,
+            advance_for_layout: if item.is_marker {
+                item.advance_for_layout.min(width)
+            } else {
+                width
+            },
             metrics: item.metrics,
             vertical_align: item.vertical_align,
             break_opportunities: breaks,
@@ -1611,6 +1635,8 @@ fn slice_text_item(
             text: item.text[range.clone()].to_string(),
             font_size: item.font_size,
             style: item.style.clone(),
+            is_marker: item.is_marker,
+            paint_offset: item.paint_offset,
             cluster_advances,
         });
     }
@@ -1639,17 +1665,22 @@ fn slice_text_item(
         .map(|o| o - range.start)
         .collect();
 
-    Some(
-        TextItem::new(
-            runs,
-            slice_text.to_string(),
-            metrics,
-            breaks,
-            forced,
-            item.style.clone(),
-        )
-        .with_vertical_align(item.vertical_align),
+    let mut new_item = TextItem::new(
+        runs,
+        slice_text.to_string(),
+        metrics,
+        breaks,
+        forced,
+        item.style.clone(),
     )
+    .with_vertical_align(item.vertical_align);
+    if item.is_marker {
+        new_item.is_marker = true;
+        new_item.paint_offset = item.paint_offset;
+        new_item.advance_for_layout = item.advance_for_layout.min(new_item.advance);
+    }
+
+    Some(new_item)
 }
 
 fn bidi_controls(unicode_bidi: UnicodeBidi, direction: Direction) -> (Vec<char>, Vec<char>) {
@@ -1842,6 +1873,7 @@ mod tests {
         TextItem {
             runs: Vec::new(),
             advance,
+            advance_for_layout: advance,
             metrics: make_strut_metrics(),
             vertical_align: VerticalAlign::Baseline,
             break_opportunities: find_break_opportunities(text),
@@ -1849,6 +1881,8 @@ mod tests {
             text: text.to_string(),
             font_size: 16.0,
             style: style.clone(),
+            is_marker: false,
+            paint_offset: 0.0,
             cluster_advances,
         }
     }

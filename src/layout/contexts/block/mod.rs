@@ -589,8 +589,11 @@ mod tests {
     use super::*;
     use crate::style::display::Display;
     use crate::style::display::FormattingContextType;
+    use crate::style::types::{ListStylePosition, ListStyleType};
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
+    use crate::tree::box_generation::{BoxGenerator, DOMNode};
+    use crate::tree::fragment_tree::FragmentContent;
     use std::sync::Arc;
 
     fn default_style() -> Arc<ComputedStyle> {
@@ -713,5 +716,72 @@ mod tests {
     fn test_fc_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<BlockFormattingContext>();
+    }
+
+    #[test]
+    fn list_marker_outside_positions_marker_left_of_text() {
+        let generator = BoxGenerator::new();
+
+        let mut li_style = ComputedStyle::default();
+        li_style.display = Display::ListItem;
+        li_style.list_style_position = ListStylePosition::Outside;
+        let li_style = Arc::new(li_style);
+
+        let mut ul_style = ComputedStyle::default();
+        ul_style.display = Display::Block;
+        let ul_style = Arc::new(ul_style);
+
+        let li = DOMNode::new_element(
+            "li",
+            li_style.clone(),
+            vec![DOMNode::new_text("Item", li_style.clone())],
+        );
+        let ul = DOMNode::new_element("ul", ul_style, vec![li]);
+        let box_tree = generator.generate(&ul).unwrap();
+
+        let bfc = BlockFormattingContext::new();
+        let constraints = LayoutConstraints::definite(200.0, 200.0);
+        let fragment = bfc.layout(&box_tree.root, &constraints).unwrap();
+
+        let li_fragment = fragment.children.first().expect("li fragment");
+        fn find_line(fragment: &FragmentNode) -> Option<&FragmentNode> {
+            if matches!(fragment.content, FragmentContent::Line { .. }) {
+                return Some(fragment);
+            }
+            for child in &fragment.children {
+                if let Some(line) = find_line(child) {
+                    return Some(line);
+                }
+            }
+            None
+        }
+
+        let line = find_line(li_fragment).expect("line fragment");
+
+        let marker = line
+            .children
+            .iter()
+            .find(|child| {
+                child
+                    .style
+                    .as_ref()
+                    .map(|s| s.list_style_type == ListStyleType::None)
+                    .unwrap_or(false)
+            })
+            .expect("marker fragment");
+        let text = line
+            .children
+            .iter()
+            .find(|child| {
+                child
+                    .style
+                    .as_ref()
+                    .map(|s| s.list_style_type != ListStyleType::None)
+                    .unwrap_or(false)
+            })
+            .expect("text fragment");
+
+        assert!(marker.bounds.x() < 0.0);
+        assert!(text.bounds.x() >= 0.0);
     }
 }

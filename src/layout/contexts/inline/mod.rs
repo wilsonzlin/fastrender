@@ -46,7 +46,8 @@ use crate::layout::contexts::inline::line_builder::InlineBoxItem;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::utils::{compute_replaced_size, resolve_length_with_percentage};
 use crate::style::types::{
-    FontStyle, HyphensMode, OverflowWrap, TabSize, TextAlign, TextJustify, TextTransform, WhiteSpace, WordBreak,
+    FontStyle, HyphensMode, ListStylePosition, OverflowWrap, TabSize, TextAlign, TextJustify, TextTransform,
+    WhiteSpace, WordBreak,
 };
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
@@ -189,7 +190,18 @@ impl InlineFormattingContext {
                         child.style.white_space,
                     );
 
-                    let mut produced = self.create_inline_items_from_normalized(child, normalized.clone())?;
+                    let mut produced = self.create_inline_items_from_normalized(child, normalized.clone(), false)?;
+                    items.append(&mut produced);
+                    if normalized.trailing_collapsible {
+                        *pending_space = Some(PendingSpace::new(child.style.clone(), normalized.allow_soft_wrap));
+                    }
+                }
+                BoxType::Marker(marker_box) => {
+                    let normalized = normalize_text_for_white_space(
+                        &apply_text_transform(&marker_box.text, child.style.text_transform),
+                        child.style.white_space,
+                    );
+                    let mut produced = self.create_inline_items_from_normalized(child, normalized.clone(), true)?;
                     items.append(&mut produced);
                     if normalized.trailing_collapsible {
                         *pending_space = Some(PendingSpace::new(child.style.clone(), normalized.allow_soft_wrap));
@@ -382,17 +394,23 @@ impl InlineFormattingContext {
 
     /// Creates inline items from a text box, splitting preserved tabs into explicit tab items.
     #[allow(dead_code)]
-    fn create_inline_items_for_text(&self, box_node: &BoxNode, text: &str) -> Result<Vec<InlineItem>, LayoutError> {
+    fn create_inline_items_for_text(
+        &self,
+        box_node: &BoxNode,
+        text: &str,
+        is_marker: bool,
+    ) -> Result<Vec<InlineItem>, LayoutError> {
         let style = &box_node.style;
         let transformed = apply_text_transform(text, style.text_transform);
         let normalized = normalize_text_for_white_space(&transformed, style.white_space);
-        self.create_inline_items_from_normalized(box_node, normalized)
+        self.create_inline_items_from_normalized(box_node, normalized, is_marker)
     }
 
     fn create_inline_items_from_normalized(
         &self,
         box_node: &BoxNode,
         normalized: NormalizedText,
+        is_marker: bool,
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let NormalizedText {
             text: normalized_text,
@@ -410,6 +428,7 @@ impl InlineFormattingContext {
                 &normalized_text,
                 forced_breaks,
                 allow_soft_wrap,
+                is_marker,
             )?;
             return Ok(vec![InlineItem::Text(item)]);
         }
@@ -428,6 +447,7 @@ impl InlineFormattingContext {
                     &normalized_text[segment_start..idx],
                     segment_breaks,
                     allow_soft_wrap,
+                    is_marker,
                 )?;
                 if !item.text.is_empty() {
                     items.push(InlineItem::Text(item));
@@ -445,6 +465,7 @@ impl InlineFormattingContext {
                 &normalized_text[segment_start..],
                 segment_breaks,
                 allow_soft_wrap,
+                is_marker,
             )?;
             if !item.text.is_empty() {
                 items.push(InlineItem::Text(item));
@@ -465,6 +486,7 @@ impl InlineFormattingContext {
             &normalized.text,
             normalized.forced_breaks,
             normalized.allow_soft_wrap,
+            false,
         )
     }
 
@@ -474,6 +496,7 @@ impl InlineFormattingContext {
         normalized_text: &str,
         forced_breaks: Vec<crate::text::line_break::BreakOpportunity>,
         allow_soft_wrap: bool,
+        is_marker: bool,
     ) -> Result<TextItem, LayoutError> {
         let line_height = compute_line_height(style);
         let hyphenator = self.hyphenator_for(&style.language);
@@ -489,19 +512,23 @@ impl InlineFormattingContext {
 
         // Find break opportunities and filter based on white-space handling
         let base_breaks = find_break_opportunities(&hyphen_free);
-        let mut merged = merge_breaks(base_breaks, forced_breaks, allow_soft_wrap);
-        merged.extend(hyphen_breaks);
-        let breaks = apply_break_properties(
-            &hyphen_free,
-            merged,
-            style.word_break,
-            style.overflow_wrap,
-            allow_soft_wrap,
-        );
+        let breaks = if is_marker {
+            Vec::new()
+        } else {
+            let mut merged = merge_breaks(base_breaks, forced_breaks, allow_soft_wrap);
+            merged.extend(hyphen_breaks);
+            apply_break_properties(
+                &hyphen_free,
+                merged,
+                style.word_break,
+                style.overflow_wrap,
+                allow_soft_wrap,
+            )
+        };
 
         let va = self.convert_vertical_align(style.vertical_align, style.font_size, line_height);
 
-        Ok(TextItem::new(
+        let mut item = TextItem::new(
             shaped_runs,
             hyphen_free,
             metrics,
@@ -509,7 +536,18 @@ impl InlineFormattingContext {
             forced_break_offsets,
             style.clone(),
         )
-        .with_vertical_align(va))
+        .with_vertical_align(va);
+
+        if is_marker {
+            let gap = style.font_size * 0.5;
+            if style.list_style_position == ListStylePosition::Outside {
+                item.advance_for_layout = 0.0;
+                item.paint_offset = -(item.advance + gap);
+            }
+            item.is_marker = true;
+        }
+
+        Ok(item)
     }
 
     fn create_collapsed_space_item(
@@ -517,7 +555,7 @@ impl InlineFormattingContext {
         style: &Arc<ComputedStyle>,
         allow_soft_wrap: bool,
     ) -> Result<InlineItem, LayoutError> {
-        let item = self.create_text_item_from_normalized(style, " ", Vec::new(), allow_soft_wrap)?;
+        let item = self.create_text_item_from_normalized(style, " ", Vec::new(), allow_soft_wrap, false)?;
         Ok(InlineItem::Text(item))
     }
 
@@ -1013,7 +1051,8 @@ impl InlineFormattingContext {
     fn create_item_fragment(&self, item: &InlineItem, x: f32, y: f32) -> FragmentNode {
         match item {
             InlineItem::Text(text_item) => {
-                let bounds = Rect::from_xywh(x, y, text_item.advance, text_item.metrics.height);
+                let width = text_item.advance + text_item.paint_offset.abs();
+                let bounds = Rect::from_xywh(x + text_item.paint_offset, y, width, text_item.metrics.height);
                 FragmentNode::new_text_shaped(
                     bounds,
                     text_item.text.clone(),
@@ -2537,7 +2576,7 @@ mod tests {
         style.white_space = WhiteSpace::Pre;
         let node = BoxNode::new_text(Arc::new(style), "a\tb".to_string());
         let ifc = InlineFormattingContext::new();
-        let items = ifc.create_inline_items_for_text(&node, "a\tb").unwrap();
+        let items = ifc.create_inline_items_for_text(&node, "a\tb", false).unwrap();
         assert_eq!(items.len(), 3);
         assert!(matches!(&items[1], InlineItem::Tab(_)));
     }
@@ -2826,7 +2865,7 @@ mod tests {
         let node = BoxNode::new_text(Arc::new(style.clone()), "ab\tc".to_string());
 
         let ifc = InlineFormattingContext::new();
-        let mut items = ifc.create_inline_items_for_text(&node, "ab\tc").unwrap();
+        let mut items = ifc.create_inline_items_for_text(&node, "ab\tc", false).unwrap();
         let strut = ifc.compute_strut_metrics(&node.style);
         let lines = ifc.build_lines(std::mem::take(&mut items), 1000.0, 1000.0, &strut, None);
         let line = &lines[0];

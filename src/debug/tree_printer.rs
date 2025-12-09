@@ -197,6 +197,14 @@ impl EnhancedTreePrinter {
                         self.colorize(&text, colors::GREEN)
                     );
                 }
+                BoxType::Marker(m) => {
+                    let text = truncate(&m.text, 20);
+                    return format!(
+                        "{} Marker: \"{}\"",
+                        self.colorize(&selector, colors::CYAN),
+                        self.colorize(&text, colors::GREEN)
+                    );
+                }
                 BoxType::Replaced(_) => "Replaced",
                 BoxType::Anonymous(_) => "Anonymous",
             };
