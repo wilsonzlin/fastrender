@@ -23,6 +23,7 @@
 - Background-position supports offset keywords per Images 3 syntax: components store alignment + offset, parse four-value forms like `right 10px top 25%` (with end offsets negated), default the missing axis to center, and painter resolves offsets against the available positioning area minus image size. Regression added for offsets/defaults.
 - Background shorthand now resets all background fields to their initial values when set (including `none` and gradient/color shorthands) so stale repeat/position/size/attachment/origin/clip state doesn’t leak across declarations; regression covers reset.
 - Background shorthand regression updated to expect authored repeat keywords (e.g. `no-repeat`) rather than default repeat after reset.
+- Background shorthand now handles single-value forms (e.g. `background: red` or `background: none`) while still resetting all other background fields to their initial values.
 - Background initial position now matches the spec default (0% 0% instead of center).
 - Stacking-context display list path no longer double-emits descendants: stacking-context roots paint shallowly, child layers inherit the context origin for offsets, and stacking-tree construction keeps only direct children in layers while hoisting nested stacking contexts.
 - Replaced content paints inside the content box: canvas images/SVGs now respect padding/border space during painting, dynamic images convert to premultiplied RGBA instead of BGRA to avoid channel swapping, and a regression covers padding isolation for replaced elements.

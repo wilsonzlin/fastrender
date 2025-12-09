@@ -914,57 +914,37 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 styles.background_clip = BackgroundBox::BorderBox;
             };
 
-            match resolved_value {
-                PropertyValue::Multiple(ref parts) => {
-                    reset_background_fields();
-                    if let Some(parsed) = parse_background_shorthand(parts) {
-                        if let Some(color) = parsed.color {
-                            styles.background_color = color;
-                        }
-                        if let Some(image) = parsed.image {
-                            styles.background_image = Some(image);
-                        }
-                        if let Some(rep) = parsed.repeat {
-                            styles.background_repeat = rep;
-                        }
-                        if let Some(pos) = parsed.position {
-                            styles.background_position = pos;
-                        }
-                        if let Some(size) = parsed.size {
-                            styles.background_size = size;
-                        }
-                        if let Some(att) = parsed.attachment {
-                            styles.background_attachment = att;
-                        }
-                        if let Some(origin) = parsed.origin {
-                            styles.background_origin = origin;
-                        }
-                        if let Some(clip) = parsed.clip {
-                            styles.background_clip = clip;
-                        }
+            let tokens: Vec<PropertyValue> = match resolved_value {
+                PropertyValue::Multiple(ref parts) => parts.clone(),
+                _ => vec![resolved_value.clone()],
+            };
+
+            if !tokens.is_empty() {
+                reset_background_fields();
+                if let Some(parsed) = parse_background_shorthand(&tokens) {
+                    if let Some(color) = parsed.color {
+                        styles.background_color = color;
                     }
-                }
-                _ => {
-                    reset_background_fields();
-                    match resolved_value {
-                        PropertyValue::Color(c) => styles.background_color = c,
-                        PropertyValue::Keyword(ref kw) if kw == "none" => {}
-                        PropertyValue::LinearGradient { angle, ref stops } => {
-                            styles.background_image =
-                                Some(BackgroundImage::LinearGradient { angle, stops: stops.clone() });
-                        }
-                        PropertyValue::RadialGradient { ref stops } => {
-                            styles.background_image = Some(BackgroundImage::RadialGradient { stops: stops.clone() });
-                        }
-                        PropertyValue::RepeatingLinearGradient { angle, ref stops } => {
-                            styles.background_image =
-                                Some(BackgroundImage::RepeatingLinearGradient { angle, stops: stops.clone() });
-                        }
-                        PropertyValue::RepeatingRadialGradient { ref stops } => {
-                            styles.background_image =
-                                Some(BackgroundImage::RepeatingRadialGradient { stops: stops.clone() });
-                        }
-                        _ => {}
+                    if let Some(image) = parsed.image {
+                        styles.background_image = Some(image);
+                    }
+                    if let Some(rep) = parsed.repeat {
+                        styles.background_repeat = rep;
+                    }
+                    if let Some(pos) = parsed.position {
+                        styles.background_position = pos;
+                    }
+                    if let Some(size) = parsed.size {
+                        styles.background_size = size;
+                    }
+                    if let Some(att) = parsed.attachment {
+                        styles.background_attachment = att;
+                    }
+                    if let Some(origin) = parsed.origin {
+                        styles.background_origin = origin;
+                    }
+                    if let Some(clip) = parsed.clip {
+                        styles.background_clip = clip;
                     }
                 }
             }
@@ -2138,6 +2118,59 @@ mod tests {
         assert_eq!(style.background_attachment, BackgroundAttachment::Fixed);
         assert_eq!(style.background_origin, BackgroundBox::ContentBox);
         assert_eq!(style.background_clip, BackgroundBox::PaddingBox);
+    }
+
+    #[test]
+    fn background_shorthand_color_only_resets_to_initials() {
+        let mut style = ComputedStyle::default();
+        style.background_repeat = BackgroundRepeat::repeat_x();
+        style.background_origin = BackgroundBox::ContentBox;
+        style.background_clip = BackgroundBox::ContentBox;
+        style.background_size =
+            BackgroundSize::Explicit(BackgroundSizeComponent::Length(Length::px(12.0)), BackgroundSizeComponent::Auto);
+
+        let decl = Declaration {
+            property: "background".to_string(),
+            value: PropertyValue::Color(Rgba::RED),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+
+        assert_eq!(style.background_color, Rgba::RED);
+        assert!(style.background_image.is_none());
+        assert_eq!(style.background_repeat, BackgroundRepeat::repeat());
+        let BackgroundPosition::Position { x, y } = style.background_position;
+        assert!(x.offset.is_zero() && (x.alignment - 0.0).abs() < 0.01);
+        assert!(y.offset.is_zero() && (y.alignment - 0.0).abs() < 0.01);
+        assert_eq!(
+            style.background_size,
+            BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
+        );
+        assert_eq!(style.background_attachment, BackgroundAttachment::Scroll);
+        assert_eq!(style.background_origin, BackgroundBox::PaddingBox);
+        assert_eq!(style.background_clip, BackgroundBox::BorderBox);
+    }
+
+    #[test]
+    fn background_shorthand_none_resets_and_clears_image() {
+        let mut style = ComputedStyle::default();
+        style.background_color = Rgba::RED;
+        style.background_image = Some(BackgroundImage::Url("foo.png".to_string()));
+        style.background_repeat = BackgroundRepeat::repeat_x();
+        style.background_origin = BackgroundBox::ContentBox;
+
+        let decl = Declaration {
+            property: "background".to_string(),
+            value: PropertyValue::Keyword("none".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+
+        assert_eq!(style.background_color, Rgba::TRANSPARENT);
+        assert!(style.background_image.is_none());
+        assert_eq!(style.background_repeat, BackgroundRepeat::repeat());
+        assert_eq!(style.background_origin, BackgroundBox::PaddingBox);
+        assert_eq!(style.background_clip, BackgroundBox::BorderBox);
     }
 
     #[test]
