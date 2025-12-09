@@ -670,6 +670,23 @@ impl InlineFormattingContext {
         } else {
             0.0
         };
+        let padding_left = resolve_length_for_width(style.padding_left, percentage_base);
+        let padding_right = resolve_length_for_width(style.padding_right, percentage_base);
+        let padding_top = resolve_length_for_width(style.padding_top, percentage_base);
+        let padding_bottom = resolve_length_for_width(style.padding_bottom, percentage_base);
+
+        let border_left = resolve_length_for_width(style.border_left_width, percentage_base);
+        let border_right = resolve_length_for_width(style.border_right_width, percentage_base);
+        let border_top = resolve_length_for_width(style.border_top_width, percentage_base);
+        let border_bottom = resolve_length_for_width(style.border_bottom_width, percentage_base);
+
+        let box_width = size.width + padding_left + padding_right + border_left + border_right;
+        let box_height = size.height + padding_top + padding_bottom + border_top + border_bottom;
+        let percentage_base = if available_width.is_finite() {
+            available_width
+        } else {
+            0.0
+        };
         let margin_left = style
             .margin_left
             .as_ref()
@@ -684,7 +701,7 @@ impl InlineFormattingContext {
         let va = self.convert_vertical_align(style.vertical_align, style.font_size, line_height);
 
         Ok(ReplacedItem::new(
-            size,
+            Size::new(box_width, box_height),
             replaced_box.replaced_type.clone(),
             box_node.style.clone(),
             margin_left,
@@ -2386,6 +2403,44 @@ mod tests {
         // 10px intrinsic width + 0.5em gap (8px at 16px font size)
         let x = text_x.expect("text position");
         assert!(x > 17.0 && x < 19.5, "expected text after marker gap, got {}", x);
+    }
+
+    #[test]
+    fn replaced_inline_includes_padding_and_border_in_box() {
+        let ifc = InlineFormattingContext::new();
+        let mut style = ComputedStyle::default();
+        style.padding_left = Length::px(4.0);
+        style.padding_right = Length::px(4.0);
+        style.padding_top = Length::px(2.0);
+        style.padding_bottom = Length::px(2.0);
+        style.border_left_width = Length::px(2.0);
+        style.border_right_width = Length::px(2.0);
+        style.border_top_width = Length::px(1.0);
+        style.border_bottom_width = Length::px(1.0);
+        style.margin_left = Some(Length::px(10.0));
+        style.margin_right = Some(Length::px(6.0));
+        let style = Arc::new(style);
+
+        let replaced = BoxNode::new_replaced(
+            style.clone(),
+            ReplacedType::Image {
+                src: String::new(),
+                alt: None,
+            },
+            Some(Size::new(50.0, 20.0)),
+            Some(50.0 / 20.0),
+        );
+        let root = make_inline_container(vec![replaced]);
+        let constraints = LayoutConstraints::definite_width(300.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let line = fragment.children.first().expect("line");
+        let replaced_frag = line.children.first().expect("replaced fragment");
+
+        // Content 50 + padding 8 + borders 4 = 62
+        assert!((replaced_frag.bounds.width() - 62.0).abs() < 0.01);
+        // margin-left applied to position
+        assert!((replaced_frag.bounds.x() - 10.0).abs() < 0.01);
     }
 
     #[test]
