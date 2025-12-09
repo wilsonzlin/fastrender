@@ -6,6 +6,8 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Replaced content paints inside the content box: canvas images/SVGs now respect padding/border space during painting, dynamic images convert to premultiplied RGBA instead of BGRA to avoid channel swapping, and a regression covers padding isolation for replaced elements.
+- Overflow clipping now applies in paint: stacking contexts generated for overflow hidden/scroll/auto clip their descendants to the padding box with radius-aware masks and a hard pixel clip (prevents filter bleed); backgrounds/borders are left unclipped. Regression updated to cover hidden overflow.
 - Anonymous fixup now splits inline boxes that contain block-level descendants so the blocks participate in the parent's block flow; inline fragments keep their styles, replaced elements with inline display stay inline-level in the fixup checks, and regressions cover inline/block descendants and inline-block immunity.
 - `text-indent` now matches CSS Text semantics: hanging no longer indents the first line (even with `each-line`), subsequent lines shift by the indent, intrinsic inline-size accounting matches the layout behavior, and regressions cover hanging/each-line combinations and hanging intrinsic widths.
 - Negative `text-indent` no longer expands the available line width; line breaking now attempts to split breakable items even on empty lines (choosing the earliest break when none fit), preventing over-wide first items from swallowing following words. Regression added.

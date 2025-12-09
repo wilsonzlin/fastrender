@@ -33,6 +33,7 @@ use crate::style::types::{
     ObjectPosition, PositionComponent, TextDecoration,
 };
 use crate::style::types::{FilterColor, FilterFunction, MixBlendMode};
+use crate::style::types::{Overflow};
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
@@ -104,6 +105,7 @@ enum DisplayCommand {
         style: Arc<ComputedStyle>,
     },
     StackingContext {
+        rect: Rect,
         opacity: f32,
         transform: Option<Transform>,
         blend_mode: MixBlendMode,
@@ -111,6 +113,7 @@ enum DisplayCommand {
         filters: Vec<ResolvedFilter>,
         backdrop_filters: Vec<ResolvedFilter>,
         radii: BorderRadii,
+        clip: Option<(Rect, BorderRadii)>,
         commands: Vec<DisplayCommand>,
     },
 }
@@ -400,15 +403,33 @@ impl Painter {
             .map(|s| resolve_filters(&s.backdrop_filter, s))
             .unwrap_or_default();
         let has_backdrop = !backdrop_filters.is_empty();
+        let clip = style_ref.and_then(|style| {
+            let clips_overflow = matches!(style.overflow_x, Overflow::Hidden | Overflow::Scroll | Overflow::Auto)
+                || matches!(style.overflow_y, Overflow::Hidden | Overflow::Scroll | Overflow::Auto);
+            if !clips_overflow {
+                return None;
+            }
+            let rects =
+                background_rects(abs_bounds.x(), abs_bounds.y(), abs_bounds.width(), abs_bounds.height(), style);
+            let clip_rect = rects.padding;
+            if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 {
+                return None;
+            }
+            let clip_radii =
+                resolve_clip_radii(style, &rects, crate::style::types::BackgroundBox::PaddingBox);
+            Some((clip_rect, clip_radii))
+        });
         if opacity < 1.0
             || transform.is_some()
             || !matches!(blend_mode, MixBlendMode::Normal)
             || isolated
             || has_filters
             || has_backdrop
+            || clip.is_some()
         {
             let radii = resolve_border_radii(style_ref, abs_bounds);
             items.push(DisplayCommand::StackingContext {
+                rect: abs_bounds,
                 opacity,
                 transform,
                 blend_mode,
@@ -416,6 +437,7 @@ impl Painter {
                 filters,
                 backdrop_filters,
                 radii,
+                clip,
                 commands: local_commands,
             });
         } else {
@@ -533,6 +555,7 @@ impl Painter {
                 rect.height(),
             ),
             DisplayCommand::StackingContext {
+                rect: context_rect,
                 opacity,
                 transform,
                 blend_mode,
@@ -540,6 +563,7 @@ impl Painter {
                 filters,
                 backdrop_filters,
                 radii,
+                clip,
                 commands,
             } => {
                 if opacity <= 0.0 {
@@ -579,22 +603,73 @@ impl Painter {
                     return Ok(());
                 }
 
+                let root_rect = Rect::from_xywh(
+                    context_rect.x() - bounds.min_x(),
+                    context_rect.y() - bounds.min_y(),
+                    context_rect.width(),
+                    context_rect.height(),
+                );
+                let (mut unclipped, clipped): (Vec<DisplayCommand>, Vec<DisplayCommand>) = translated
+                    .into_iter()
+                    .partition(|cmd| matches!(cmd,
+                        DisplayCommand::Background { rect, .. } | DisplayCommand::Border { rect, .. }
+                        if (rect.x() - root_rect.x()).abs() < f32::EPSILON
+                            && (rect.y() - root_rect.y()).abs() < f32::EPSILON
+                            && (rect.width() - root_rect.width()).abs() < f32::EPSILON
+                            && (rect.height() - root_rect.height()).abs() < f32::EPSILON));
+
                 let layer = match Pixmap::new(width as u32, height as u32) {
                     Some(p) => p,
                     None => return Ok(()),
                 };
 
-                let mut painter = Painter {
+                let mut base_painter = Painter {
                     pixmap: layer,
                     background: Rgba::new(0, 0, 0, 0.0),
                     shaper: ShapingPipeline::new(),
                     font_ctx: self.font_ctx.clone(),
                     image_cache: self.image_cache.clone(),
                 };
-                for cmd in translated {
-                    painter.execute_command(cmd)?;
+                for cmd in unclipped.drain(..) {
+                    base_painter.execute_command(cmd)?;
                 }
-                let mut layer_pixmap = painter.pixmap;
+
+                if !clipped.is_empty() {
+                    let clip_layer = match Pixmap::new(width as u32, height as u32) {
+                        Some(p) => p,
+                        None => return Ok(()),
+                    };
+                    let mut clip_painter = Painter {
+                        pixmap: clip_layer,
+                        background: Rgba::new(0, 0, 0, 0.0),
+                        shaper: ShapingPipeline::new(),
+                        font_ctx: self.font_ctx.clone(),
+                        image_cache: self.image_cache.clone(),
+                    };
+                    for cmd in clipped {
+                        clip_painter.execute_command(cmd)?;
+                    }
+                    let mut clip_pixmap = clip_painter.pixmap;
+                    if let Some((clip_rect, clip_radii)) = clip {
+                        let local_clip = Rect::from_xywh(
+                            clip_rect.x() - bounds.min_x(),
+                            clip_rect.y() - bounds.min_y(),
+                            clip_rect.width(),
+                            clip_rect.height(),
+                        );
+                        apply_clip_mask_rect(&mut clip_pixmap, local_clip, clip_radii);
+                    }
+                    base_painter.pixmap.draw_pixmap(
+                        0,
+                        0,
+                        clip_pixmap.as_ref(),
+                        &PixmapPaint::default(),
+                        Transform::identity(),
+                        None,
+                    );
+                }
+
+                let mut layer_pixmap = base_painter.pixmap;
                 if !filters.is_empty() {
                     apply_filters(&mut layer_pixmap, &filters);
                 }
@@ -1162,15 +1237,38 @@ impl Painter {
             return;
         }
 
+        let content_rect = if let Some(style) = style {
+            background_rects(x, y, width, height, style).content
+        } else {
+            Rect::from_xywh(x, y, width, height)
+        };
+        if content_rect.width() <= 0.0 || content_rect.height() <= 0.0 {
+            return;
+        }
+
         // Try to render actual content for images and SVG
         match replaced_type {
             ReplacedType::Image { src } => {
-                if self.paint_image_from_src(src, style, x, y, width, height) {
+                if self.paint_image_from_src(
+                    src,
+                    style,
+                    content_rect.x(),
+                    content_rect.y(),
+                    content_rect.width(),
+                    content_rect.height(),
+                ) {
                     return;
                 }
             }
             ReplacedType::Svg { content } => {
-                if self.paint_svg(content, style, x, y, width, height) {
+                if self.paint_svg(
+                    content,
+                    style,
+                    content_rect.x(),
+                    content_rect.y(),
+                    content_rect.width(),
+                    content_rect.height(),
+                ) {
                     return;
                 }
             }
@@ -1182,7 +1280,12 @@ impl Painter {
         paint.set_color_rgba8(200, 200, 200, 255); // Light gray
         paint.anti_alias = true;
 
-        if let Some(rect) = SkiaRect::from_xywh(x, y, width, height) {
+        if let Some(rect) = SkiaRect::from_xywh(
+            content_rect.x(),
+            content_rect.y(),
+            content_rect.width(),
+            content_rect.height(),
+        ) {
             let path = PathBuilder::from_rect(rect);
             self.pixmap
                 .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
@@ -1366,14 +1469,14 @@ impl Painter {
             return None;
         }
 
-        // tiny-skia expects premultiplied BGRA
+        // tiny-skia expects premultiplied RGBA
         let mut data = Vec::with_capacity((width * height * 4) as usize);
         for pixel in rgba.pixels() {
             let [r, g, b, a] = pixel.0;
             let alpha = a as f32 / 255.0;
-            data.push((b as f32 * alpha).round() as u8);
-            data.push((g as f32 * alpha).round() as u8);
             data.push((r as f32 * alpha).round() as u8);
+            data.push((g as f32 * alpha).round() as u8);
+            data.push((b as f32 * alpha).round() as u8);
             data.push(a);
         }
 
@@ -1594,6 +1697,8 @@ fn command_bounds(cmd: &DisplayCommand) -> Option<Rect> {
             commands,
             filters,
             backdrop_filters,
+            clip: _,
+            rect,
             ..
         } => {
             let mut bounds = compute_commands_bounds(commands)?;
@@ -1611,7 +1716,7 @@ fn command_bounds(cmd: &DisplayCommand) -> Option<Rect> {
                     bounds.height() + total_t + total_b,
                 );
             }
-            Some(bounds)
+            Some(bounds.union(*rect))
         }
     }
 }
@@ -1665,6 +1770,7 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
                 style,
             },
             DisplayCommand::StackingContext {
+                rect,
                 opacity,
                 transform,
                 blend_mode,
@@ -1672,8 +1778,10 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
                 filters,
                 backdrop_filters,
                 radii,
+                clip,
                 commands,
             } => DisplayCommand::StackingContext {
+                rect: rect.translate(offset),
                 opacity,
                 transform,
                 blend_mode,
@@ -1681,6 +1789,7 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
                 filters,
                 backdrop_filters,
                 radii,
+                clip: clip.map(|(rect, r)| (rect.translate(offset), r)),
                 commands: translate_commands(commands, dx, dy),
             },
         })
@@ -2303,6 +2412,54 @@ fn apply_clip_mask(pixmap: &mut Pixmap, radii: BorderRadii) {
     pixmap.apply_mask(&mask);
 }
 
+fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
+    if rect.width() <= 0.0 || rect.height() <= 0.0 {
+        return;
+    }
+    let width = pixmap.width();
+    let height = pixmap.height();
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    let mut mask_pixmap = match Pixmap::new(width, height) {
+        Some(p) => p,
+        None => return,
+    };
+    let clamped = radii.clamped(rect.width(), rect.height());
+    let _ = fill_rounded_rect(
+        &mut mask_pixmap,
+        rect.x(),
+        rect.y(),
+        rect.width(),
+        rect.height(),
+        &clamped,
+        Rgba::new(255, 255, 255, 1.0),
+    );
+
+    let mask = Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha);
+    pixmap.apply_mask(&mask);
+
+    // Hard-clip pixels outside the rectangle to avoid filter bleed.
+    let x0 = rect.x().floor().max(0.0) as u32;
+    let y0 = rect.y().floor().max(0.0) as u32;
+    let x1 = (rect.x() + rect.width()).ceil().min(width as f32) as u32;
+    let y1 = (rect.y() + rect.height()).ceil().min(height as f32) as u32;
+    let data = pixmap.data_mut();
+    let stride = (width as usize) * 4;
+    for y in 0..height {
+        for x in 0..width {
+            if x < x0 || x >= x1 || y < y0 || y >= y1 {
+                let idx = (y as usize * stride) + (x as usize * 4);
+                data[idx + 0] = 0;
+                data[idx + 1] = 0;
+                data[idx + 2] = 0;
+                data[idx + 3] = 0;
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct BackgroundRects {
     border: Rect,
@@ -2431,11 +2588,34 @@ pub fn paint_tree_with_resources(
 mod tests {
     use super::*;
     use crate::geometry::Rect;
+    use crate::image_loader::ImageCache;
     use crate::style::ComputedStyle;
+    use crate::style::types::Overflow;
+    use crate::style::values::Length;
+    use crate::text::font_loader::FontContext;
+    use crate::Position;
+    use std::sync::Arc;
 
     fn make_empty_tree() -> FragmentTree {
         let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![]);
         FragmentTree::new(root)
+    }
+
+    fn red_svg() -> String {
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"><rect width=\"1\" height=\"1\" fill=\"red\"/></svg>"
+            .to_string()
+    }
+
+    fn color_at(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
+        let px = pixmap.pixel(x, y).expect("pixel in bounds");
+        let a = px.alpha();
+        if a == 0 {
+            return (0, 0, 0, 0);
+        }
+        let r = ((px.red() as u16 * 255) / a as u16) as u8;
+        let g = ((px.green() as u16 * 255) / a as u16) as u8;
+        let b = ((px.blue() as u16 * 255) / a as u16) as u8;
+        (r, g, b, a)
     }
 
     #[test]
@@ -2483,11 +2663,11 @@ mod tests {
 
         let pixmap = result.unwrap();
         let data = pixmap.data();
-        // tiny-skia uses BGRA premultiplied format
-        // WHITE in BGRA is (255, 255, 255, 255)
-        assert_eq!(data[0], 255); // B
+        // tiny-skia stores premultiplied RGBA bytes
+        // WHITE in RGBA is (255, 255, 255, 255)
+        assert_eq!(data[0], 255); // R
         assert_eq!(data[1], 255); // G
-        assert_eq!(data[2], 255); // R
+        assert_eq!(data[2], 255); // B
         assert_eq!(data[3], 255); // A
     }
 
@@ -2497,6 +2677,74 @@ mod tests {
         let style = ComputedStyle::default();
         let metrics = painter.decoration_metrics(None, &style);
         assert!(metrics.is_some());
+    }
+
+    #[test]
+    fn replaced_content_respects_padding_box() {
+        let mut style = ComputedStyle::default();
+        style.padding_left = Length::px(4.0);
+        style.padding_right = Length::px(4.0);
+        style.padding_top = Length::px(4.0);
+        style.padding_bottom = Length::px(4.0);
+        style.background_color = Rgba::BLUE;
+
+        let mut painter = Painter::with_resources(
+            40,
+            40,
+            Rgba::WHITE,
+            FontContext::new(),
+            ImageCache::new(),
+        )
+        .expect("painter");
+        painter.fill_background();
+
+        let box_x = 10.0;
+        let box_y = 10.0;
+        let box_size = 20.0;
+        let rects = background_rects(box_x, box_y, box_size, box_size, &style);
+        assert!((rects.content.x() - 14.0).abs() < 0.01);
+        assert!((rects.content.y() - 14.0).abs() < 0.01);
+        assert!((rects.content.width() - 12.0).abs() < 0.01);
+        assert!((rects.content.height() - 12.0).abs() < 0.01);
+        painter.paint_background(box_x, box_y, box_size, box_size, &style);
+        painter.paint_replaced(
+            &ReplacedType::Svg { content: red_svg() },
+            Some(&style),
+            box_x,
+            box_y,
+            box_size,
+            box_size,
+        );
+
+        let pixmap = painter.pixmap;
+        assert_eq!(color_at(&pixmap, 11, 11), (0, 0, 255, 255));
+        assert_eq!(color_at(&pixmap, 15, 15), (255, 0, 0, 255));
+        assert_eq!(color_at(&pixmap, 20, 20), (255, 0, 0, 255));
+        assert_eq!(color_at(&pixmap, 27, 27), (0, 0, 255, 255));
+    }
+
+    #[test]
+    fn overflow_hidden_clips_children() {
+        let mut parent_style = ComputedStyle::default();
+        parent_style.overflow_x = Overflow::Hidden;
+        parent_style.overflow_y = Overflow::Hidden;
+        parent_style.position = Position::Relative;
+        parent_style.background_color = Rgba::BLUE;
+        let parent_style = Arc::new(parent_style);
+
+        let mut child_style = ComputedStyle::default();
+        child_style.background_color = Rgba::RED;
+        let child = FragmentNode::new_block_styled(
+            Rect::from_xywh(-5.0, -5.0, 30.0, 30.0),
+            vec![],
+            Arc::new(child_style),
+        );
+        let parent = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![child], parent_style);
+        let tree = FragmentTree::new(parent);
+
+        let pixmap = paint_tree(&tree, 40, 40, Rgba::WHITE).expect("paint");
+        assert_eq!(color_at(&pixmap, 10, 10), (255, 0, 0, 255));
+        assert_eq!(color_at(&pixmap, 22, 2), (255, 255, 255, 255));
     }
 
     #[test]
