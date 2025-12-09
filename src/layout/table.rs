@@ -542,6 +542,25 @@ fn resolve_length_against(
     }
 }
 
+fn resolve_opt_length_against(
+    length: Option<&crate::style::values::Length>,
+    font_size: f32,
+    containing_width: Option<f32>,
+) -> Option<f32> {
+    length.and_then(|l| resolve_length_against(l, font_size, containing_width))
+}
+
+fn clamp_to_min_max(value: f32, min: Option<f32>, max: Option<f32>) -> f32 {
+    let mut v = value;
+    if let Some(min) = min {
+        v = v.max(min);
+    }
+    if let Some(max) = max {
+        v = v.min(max);
+    }
+    v
+}
+
 fn horizontal_padding_and_borders(style: &crate::style::ComputedStyle) -> f32 {
     // Percentages would need containing block; treat them as zero for intrinsic measurement fallback.
     let resolve_abs = |l: &crate::style::values::Length| match l.unit {
@@ -564,6 +583,56 @@ fn horizontal_padding(style: &crate::style::ComputedStyle) -> f32 {
     };
 
     resolve_abs(&style.padding_left) + resolve_abs(&style.padding_right)
+}
+
+/// Resolve the border widths for a table in collapsed border model.
+/// Returns (vertical_lines, horizontal_lines) where each entry is the resolved border width
+/// for that grid line. Lengths: vertical_lines = columns + 1, horizontal_lines = rows + 1.
+fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) -> (Vec<f32>, Vec<f32>) {
+    let mut vertical = vec![0.0f32; structure.column_count + 1];
+    let mut horizontal = vec![0.0f32; structure.row_count + 1];
+
+    // Helper to resolve a border width Length to px
+    let bw = |len: &crate::style::values::Length| {
+        if len.unit.is_absolute() {
+            len.to_px()
+        } else {
+            len.value
+        }
+    };
+
+    // Table outer borders
+    let tstyle = &table_box.style;
+    vertical[0] = vertical[0].max(bw(&tstyle.border_left_width));
+    if let Some(v) = vertical.last_mut() {
+        *v = (*v).max(bw(&tstyle.border_right_width));
+    }
+    horizontal[0] = horizontal[0].max(bw(&tstyle.border_top_width));
+    if let Some(h) = horizontal.last_mut() {
+        *h = (*h).max(bw(&tstyle.border_bottom_width));
+    }
+
+    for cell in &structure.cells {
+        if let Some(cell_box) = TableFormattingContext::new().get_cell_box(table_box, cell) {
+            let style = &cell_box.style;
+            let left = bw(&style.border_left_width);
+            let right = bw(&style.border_right_width);
+            let top = bw(&style.border_top_width);
+            let bottom = bw(&style.border_bottom_width);
+
+            let start_col = cell.col;
+            let end_col = (cell.col + cell.colspan).min(structure.column_count);
+            let start_row = cell.row;
+            let end_row = (cell.row + cell.rowspan).min(structure.row_count);
+
+            vertical[start_col] = vertical[start_col].max(left);
+            vertical[end_col] = vertical[end_col].max(right);
+            horizontal[start_row] = horizontal[start_row].max(top);
+            horizontal[end_row] = horizontal[end_row].max(bottom);
+        }
+    }
+
+    (vertical, horizontal)
 }
 
 fn find_first_baseline(fragment: &FragmentNode, parent_offset: f32) -> Option<f32> {
@@ -989,10 +1058,26 @@ impl TableFormattingContext {
     }
 
     /// Layout a single cell with the given width
-    fn layout_cell(&self, cell_box: &BoxNode, cell_width: f32) -> Result<FragmentNode, LayoutError> {
+    fn layout_cell(
+        &self,
+        cell_box: &BoxNode,
+        cell_width: f32,
+        border_collapse: BorderCollapse,
+    ) -> Result<FragmentNode, LayoutError> {
         let bfc = BlockFormattingContext::new();
         let constraints = LayoutConstraints::definite_width(cell_width.max(0.0));
-        bfc.layout(cell_box, &constraints)
+        if matches!(border_collapse, BorderCollapse::Collapse) {
+            let mut cloned = cell_box.clone();
+            let mut style = (*cell_box.style).clone();
+            style.border_left_width = crate::style::values::Length::px(0.0);
+            style.border_right_width = crate::style::values::Length::px(0.0);
+            style.border_top_width = crate::style::values::Length::px(0.0);
+            style.border_bottom_width = crate::style::values::Length::px(0.0);
+            cloned.style = std::sync::Arc::new(style);
+            bfc.layout(&cloned, &constraints)
+        } else {
+            bfc.layout(cell_box, &constraints)
+        }
     }
 
     /// Gets the box node for a cell
@@ -1048,12 +1133,18 @@ impl FormattingContext for TableFormattingContext {
         };
 
         // Honor explicit table width if present.
-        let table_width = box_node
+        let font_size = box_node.style.font_size;
+        let specified_width = box_node
             .style
             .width
             .as_ref()
-            .and_then(|len| resolve_length_against(len, box_node.style.font_size, containing_width))
-            .or(containing_width);
+            .and_then(|len| resolve_length_against(len, font_size, containing_width));
+        let min_width = resolve_opt_length_against(box_node.style.min_width.as_ref(), font_size, containing_width);
+        let max_width = resolve_opt_length_against(box_node.style.max_width.as_ref(), font_size, containing_width);
+
+        let table_width = specified_width
+            .or(containing_width)
+            .map(|w| clamp_to_min_max(w, min_width, max_width));
 
         let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
             .map(|_| ColumnConstraints::new(0.0, 0.0))
@@ -1109,7 +1200,7 @@ impl FormattingContext for TableFormattingContext {
                 + h_spacing * (cell.colspan.saturating_sub(1) as f32);
 
             if let Some(cell_box) = self.get_cell_box(box_node, cell) {
-                if let Ok(fragment) = self.layout_cell(cell_box, width) {
+                if let Ok(fragment) = self.layout_cell(cell_box, width, structure.border_collapse) {
                     let height = fragment.bounds.height();
                     let baseline = cell_baseline(&fragment);
                     laid_out_cells.push(LaidOutCell {
@@ -1176,23 +1267,61 @@ impl FormattingContext for TableFormattingContext {
         // Compute row offsets
         let mut row_offsets = Vec::with_capacity(structure.row_count);
         let mut y = v_spacing;
-        for row in &row_metrics {
+
+        // Border-collapse adjustments
+        let (vertical_borders, horizontal_borders) = if structure.border_collapse == BorderCollapse::Collapse {
+            compute_collapsed_borders(box_node, &structure)
+        } else {
+            (vec![0.0; structure.column_count + 1], vec![0.0; structure.row_count + 1])
+        };
+
+        for (row_idx, row) in row_metrics.iter().enumerate() {
+            // For collapsed borders, add current horizontal border before row content.
+            if structure.border_collapse == BorderCollapse::Collapse {
+                y += horizontal_borders.get(row_idx).copied().unwrap_or(0.0);
+            }
             row_offsets.push(y);
-            y += row.height + v_spacing;
+            y += row.height;
+            if structure.border_collapse == BorderCollapse::Collapse {
+                y += horizontal_borders.get(row_idx + 1).copied().unwrap_or(0.0);
+            } else {
+                y += v_spacing;
+            }
         }
 
         // Position fragments with vertical alignment within their row block
         for laid in laid_out_cells {
             let cell = laid.cell;
+            // Compute horizontal position
             let mut x = h_spacing;
-            for col_idx in 0..cell.col {
-                x += col_widths[col_idx] + h_spacing;
+            if structure.border_collapse == BorderCollapse::Collapse {
+                x = vertical_borders.get(0).copied().unwrap_or(0.0);
+                for col_idx in 0..cell.col {
+                    x += col_widths[col_idx];
+                    x += vertical_borders.get(col_idx + 1).copied().unwrap_or(0.0);
+                }
+            } else {
+                for col_idx in 0..cell.col {
+                    x += col_widths[col_idx] + h_spacing;
+                }
             }
 
             let row_start = cell.row;
             let span_end = (cell.row + cell.rowspan).min(row_metrics.len());
-            let spanned_height: f32 = row_metrics[row_start..span_end].iter().map(|r| r.height).sum::<f32>()
-                + v_spacing * cell.rowspan.saturating_sub(1) as f32;
+            let spanned_height: f32 = row_metrics[row_start..span_end]
+                .iter()
+                .map(|r| r.height)
+                .sum::<f32>()
+                + if structure.border_collapse == BorderCollapse::Collapse {
+                    // sum interior borders within the span
+                    horizontal_borders
+                        .get(row_start + 1..=span_end.saturating_sub(1))
+                        .unwrap_or(&[])
+                        .iter()
+                        .sum::<f32>()
+                } else {
+                    v_spacing * cell.rowspan.saturating_sub(1) as f32
+                };
 
             let y_offset = match laid.vertical_align {
                 VerticalAlign::Top => 0.0,
@@ -1212,12 +1341,28 @@ impl FormattingContext for TableFormattingContext {
             fragments.push(laid.fragment.translate(Point::new(x, y)));
         }
 
-        let total_width: f32 = col_widths.iter().sum::<f32>() + spacing;
+        let total_width: f32 = if structure.border_collapse == BorderCollapse::Collapse {
+            col_widths.iter().sum::<f32>()
+                + vertical_borders
+                    .iter()
+                    .copied()
+                    .sum::<f32>()
+        } else {
+            col_widths.iter().sum::<f32>() + spacing
+        };
         let total_height = if structure.row_count > 0 {
             row_offsets
                 .last()
-                .map(|start| start + row_metrics.last().map(|r| r.height).unwrap_or(0.0) + v_spacing)
+                .map(|start| start + row_metrics.last().map(|r| r.height).unwrap_or(0.0))
                 .unwrap_or(0.0)
+                + if structure.border_collapse == BorderCollapse::Collapse {
+                    horizontal_borders
+                        .last()
+                        .copied()
+                        .unwrap_or(0.0)
+                } else {
+                    v_spacing
+                }
         } else {
             0.0
         };
@@ -1368,6 +1513,34 @@ mod tests {
         assert_eq!(fragment.children.len(), 2);
         assert!((fragment.children[0].bounds.width() - 150.0).abs() < 0.1);
         assert!((fragment.children[1].bounds.width() - 150.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_table_width_respects_min_max() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.width = Some(Length::px(50.0));
+        table_style.min_width = Some(Length::px(200.0));
+        table_style.max_width = Some(Length::px(250.0));
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        let cell_a = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![]);
+        let cell_b = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell_a, cell_b]);
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let tfc = TableFormattingContext::new();
+        let constraints = LayoutConstraints::definite_width(800.0);
+        let fragment = tfc.layout(&table, &constraints).expect("table layout");
+
+        assert!((fragment.bounds.width() - 200.0).abs() < 0.1);
     }
 
     #[test]
