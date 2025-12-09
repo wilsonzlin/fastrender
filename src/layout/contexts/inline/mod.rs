@@ -641,7 +641,14 @@ impl InlineFormattingContext {
             }
             let mut effective_align =
                 resolve_text_align_for_line(base_align, text_align_last, direction, is_last_line, is_single_line);
-            let has_justify = has_justify_opportunities(&line.items, resolved_justify);
+            let justify_probe_items = if matches!(effective_align, TextAlign::Justify)
+                && !matches!(resolved_justify, TextJustify::None)
+            {
+                self.expand_items_for_justification(&line.items, resolved_justify)
+            } else {
+                line.items.clone()
+            };
+            let has_justify = has_justify_opportunities(&justify_probe_items, resolved_justify);
             if matches!(effective_align, TextAlign::Justify) && matches!(resolved_justify, TextJustify::None) {
                 effective_align = map_text_align(TextAlign::Start, direction);
             } else if matches!(effective_align, TextAlign::Justify) && !has_justify {
@@ -781,7 +788,7 @@ impl InlineFormattingContext {
         let mut segments = Vec::new();
         let mut remaining = item.clone();
         let mut consumed = 0usize;
-        let break_offsets: Vec<usize> = match mode {
+        let mut break_offsets: Vec<usize> = match mode {
             TextJustify::InterCharacter | TextJustify::Distribute => {
                 let mut offsets: Vec<usize> = item.cluster_byte_offsets().skip(1).collect();
                 if offsets.is_empty() {
@@ -822,6 +829,22 @@ impl InlineFormattingContext {
                 })
                 .collect(),
         };
+
+        if break_offsets.is_empty() && matches!(mode, TextJustify::InterWord) {
+            // Fallback: split on explicit spaces when break opportunities didn't flag them.
+            let mut prev_is_space = false;
+            for (idx, ch) in item.text.char_indices() {
+                if idx == 0 {
+                    prev_is_space = is_expandable_space(ch);
+                    continue;
+                }
+                let is_space = is_expandable_space(ch);
+                if prev_is_space && !is_space {
+                    break_offsets.push(idx);
+                }
+                prev_is_space = is_space;
+            }
+        }
 
         for target in break_offsets {
             if target <= consumed {
@@ -2015,7 +2038,7 @@ mod tests {
             FormattingContextType::Block,
             vec![BoxNode::new_text(Arc::new(text_style), "漢字漢字\n漢".to_string())],
         );
-        let constraints = LayoutConstraints::definite_width(200.0);
+        let constraints = LayoutConstraints::definite_width(400.0);
 
         let ifc = InlineFormattingContext::new();
         let items = ifc
@@ -2338,7 +2361,7 @@ mod tests {
             FormattingContextType::Block,
             vec![BoxNode::new_text(Arc::new(text_style), "word word\nword".to_string())],
         );
-        let constraints = LayoutConstraints::definite_width(60.0);
+        let constraints = LayoutConstraints::definite_width(200.0);
 
         let ifc = InlineFormattingContext::new();
         let fragment = ifc.layout(&root, &constraints).expect("layout");
@@ -2390,6 +2413,38 @@ mod tests {
         let last_line = fragment.children.last().expect("last line");
         let child = last_line.children.first().expect("text fragment");
         assert!(child.bounds.x() < 1.0, "last line should start-align under auto");
+    }
+
+    #[test]
+    fn text_align_justify_all_justifies_last_line() {
+        let mut root_style = ComputedStyle::default();
+        root_style.font_size = 16.0;
+        root_style.text_align = TextAlign::Justify;
+        root_style.text_align_last = crate::style::types::TextAlignLast::Justify;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "word word\nword word".to_string(),
+            )],
+        );
+        let constraints = LayoutConstraints::definite_width(60.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        let last_line = fragment.children.last().expect("last line");
+        assert!(last_line.children.len() >= 2);
+        let last_child = last_line.children.last().expect("child");
+        let right_edge = last_child.bounds.x() + last_child.bounds.width();
+        assert!(
+            right_edge > last_line.bounds.width() * 0.8,
+            "justify-all should stretch content toward the end of the line; right_edge={}, line_width={}",
+            right_edge,
+            last_line.bounds.width()
+        );
     }
 
     #[test]

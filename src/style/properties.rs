@@ -593,6 +593,10 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     "right" => TextAlign::Right,
                     "center" => TextAlign::Center,
                     "justify" => TextAlign::Justify,
+                    "justify-all" => {
+                        styles.text_align_last = TextAlignLast::Justify;
+                        TextAlign::Justify
+                    }
                     _ => styles.text_align,
                 };
             }
