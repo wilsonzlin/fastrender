@@ -54,12 +54,13 @@
 - Border painting now respects CSS styles: dotted/dashed use dash patterns (round caps for dotted), double splits into parallel strokes, and inset/outset/groove/ridge apply shaded light/dark variants per edge (`src/paint/painter.rs`).
 - Min-content sizing for inline content now walks the inline stream with shaped cluster advances, respecting hyphen insertion widths and avoiding synthetic end-of-text breaks between adjacent text nodes; forced breaks from normalization are tracked so explicit newlines still split segments. Added unit coverage for hyphen width accounting and cross-node words (`src/layout/contexts/inline/{mod.rs,line_builder.rs}`).
 - Max-content sizing for inline content now measures shaped clusters and only breaks on mandatory breaks (e.g., preserved newlines), so maximum width reflects the longest forced line rather than naive summing; inline boxes include their edges, and atomic inline/replaced boxes contribute without introducing breaks. New test covers preserved-newline behavior (`src/layout/contexts/inline/mod.rs`).
+- Replaced images now honor CSS `object-fit` (fill/contain/cover/none/scale-down) and `object-position` (length/percent/keywords) during painting, centering and scaling content appropriately while keeping layout size unchanged. Added parsing and style defaults plus painter regression test (`src/style/{types,mod,properties.rs}`, `src/paint/painter.rs`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
 - Max-content sizing now honors mandatory breaks but still ignores anonymous inline box generation and percent-driven height constraints.
 - Table layout still partial: collapsed border painting is line-uniform (not per-segment) and styles are rendered as solid fills; row/col spans not fully honored, percent/fixed widths still simplified vs CSS 2.1, colspans split evenly, rowspan baseline alignment still coarse.
-- Replaced elements still ignore object-fit/object-position/backgrounds on the content box; SVG/iframe/video remain unrendered.
+- Replaced elements still skip backgrounds and non-image types (SVG/iframe/video remain unrendered); object-fit only applies when image decoding succeeds.
 - Painting still bypasses a display list; rendering order/compositing need a pass.
 - Inline-blocks/replaced elements still rely on display hints rather than full anonymous inline box generation and lack percent/min-height handling.
 

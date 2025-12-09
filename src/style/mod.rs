@@ -29,8 +29,8 @@ use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse,
     BorderStyle, Direction, FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight, GridTrack, HyphensMode,
-    JustifyContent, LineHeight, Overflow, OverflowWrap, TableLayout, TextAlign, TextDecoration, TextTransform,
-    UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
+    JustifyContent, LineHeight, ObjectFit, ObjectPosition, Overflow, OverflowWrap, TableLayout, TextAlign,
+    TextDecoration, TextTransform, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
 };
 use values::Length;
 
@@ -140,6 +140,8 @@ pub struct ComputedStyle {
     pub background_size: BackgroundSize,
     pub background_position: BackgroundPosition,
     pub background_repeat: BackgroundRepeat,
+    pub object_fit: ObjectFit,
+    pub object_position: ObjectPosition,
 
     // Visual effects
     pub opacity: f32,
@@ -256,6 +258,11 @@ impl Default for ComputedStyle {
             background_size: BackgroundSize::Auto,
             background_position: BackgroundPosition::Center,
             background_repeat: BackgroundRepeat::Repeat,
+            object_fit: ObjectFit::Fill,
+            object_position: ObjectPosition {
+                x: types::PositionComponent::Keyword(types::PositionKeyword::Center),
+                y: types::PositionComponent::Keyword(types::PositionKeyword::Center),
+            },
 
             opacity: 1.0,
             box_shadow: Vec::new(),

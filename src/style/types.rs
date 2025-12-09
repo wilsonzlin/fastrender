@@ -103,6 +103,44 @@ pub enum FlexWrap {
     WrapReverse,
 }
 
+/// How replaced content is resized within its box
+///
+/// CSS: `object-fit`
+/// Reference: CSS Images Module Level 4
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectFit {
+    Fill,
+    Contain,
+    Cover,
+    None,
+    ScaleDown,
+}
+
+/// Logical alignment for object-position
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PositionKeyword {
+    Start,
+    Center,
+    End,
+}
+
+/// Position component for object positioning
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PositionComponent {
+    Keyword(PositionKeyword),
+    Length(Length),
+    Percentage(f32),
+}
+
+/// Object position along x/y
+///
+/// CSS: `object-position`
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ObjectPosition {
+    pub x: PositionComponent,
+    pub y: PositionComponent,
+}
+
 /// Main axis alignment for flex items
 ///
 /// CSS: `justify-content`

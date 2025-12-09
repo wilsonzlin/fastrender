@@ -870,6 +870,18 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 _ => {}
             }
         }
+        "object-fit" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                if let Some(fit) = parse_object_fit(kw) {
+                    styles.object_fit = fit;
+                }
+            }
+        }
+        "object-position" => {
+            if let Some(pos) = parse_object_position(&resolved_value) {
+                styles.object_position = pos;
+            }
+        }
 
         _ => {
             // Ignore unknown properties
@@ -899,6 +911,74 @@ pub fn extract_length_pair(value: &PropertyValue) -> Option<(Length, Length)> {
         }
         _ => None,
     }
+}
+
+fn parse_object_fit(kw: &str) -> Option<ObjectFit> {
+    match kw {
+        "fill" => Some(ObjectFit::Fill),
+        "contain" => Some(ObjectFit::Contain),
+        "cover" => Some(ObjectFit::Cover),
+        "none" => Some(ObjectFit::None),
+        "scale-down" => Some(ObjectFit::ScaleDown),
+        _ => None,
+    }
+}
+
+fn parse_object_position(value: &PropertyValue) -> Option<ObjectPosition> {
+    use crate::style::types::{PositionComponent as PC, PositionKeyword as PK};
+
+    #[derive(Copy, Clone, Eq, PartialEq)]
+    enum Axis {
+        Horizontal,
+        Vertical,
+    }
+
+    fn parse_component(value: &PropertyValue) -> Option<(PC, Option<Axis>)> {
+        match value {
+            PropertyValue::Length(len) => Some((PC::Length(*len), None)),
+            PropertyValue::Percentage(pct) => Some((PC::Percentage(*pct / 100.0), None)),
+            PropertyValue::Keyword(kw) => match kw.as_str() {
+                "left" => Some((PC::Keyword(PK::Start), Some(Axis::Horizontal))),
+                "right" => Some((PC::Keyword(PK::End), Some(Axis::Horizontal))),
+                "center" => Some((PC::Keyword(PK::Center), None)),
+                "top" => Some((PC::Keyword(PK::Start), Some(Axis::Vertical))),
+                "bottom" => Some((PC::Keyword(PK::End), Some(Axis::Vertical))),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    let values: Vec<&PropertyValue> = match value {
+        PropertyValue::Multiple(list) if !list.is_empty() => list.iter().collect(),
+        _ => vec![value],
+    };
+
+    let mut parsed: Vec<(PC, Option<Axis>)> = values.iter().filter_map(|v| parse_component(v)).collect();
+    if parsed.is_empty() {
+        return None;
+    }
+
+    let default = PC::Keyword(PK::Center);
+    if parsed.len() == 1 {
+        let (comp, axis) = parsed.remove(0);
+        let (x, y) = match axis {
+            Some(Axis::Vertical) => (default, comp),
+            _ => (comp, default),
+        };
+        return Some(ObjectPosition { x, y });
+    }
+
+    let (first, first_axis) = parsed.get(0).copied().unwrap_or((default, None));
+    let (second, second_axis) = parsed.get(1).copied().unwrap_or((default, None));
+
+    let (x, y) = match (first_axis, second_axis) {
+        (Some(Axis::Vertical), Some(Axis::Horizontal)) => (second, first),
+        (Some(Axis::Vertical), None) => (second, first),
+        _ => (first, second),
+    };
+
+    Some(ObjectPosition { x, y })
 }
 
 pub fn extract_margin_values(value: &PropertyValue) -> Option<Vec<Option<Length>>> {
@@ -1017,5 +1097,47 @@ pub fn parse_border_style(kw: &str) -> BorderStyle {
         "inset" => BorderStyle::Inset,
         "outset" => BorderStyle::Outset,
         _ => BorderStyle::None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::style::types::{PositionComponent, PositionKeyword};
+
+    #[test]
+    fn parses_object_fit_keyword() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "object-fit".to_string(),
+            value: PropertyValue::Keyword("cover".to_string()),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.object_fit, ObjectFit::Cover);
+    }
+
+    #[test]
+    fn parses_object_position_keywords() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "object-position".to_string(),
+            value: PropertyValue::Multiple(vec![
+                PropertyValue::Keyword("right".to_string()),
+                PropertyValue::Keyword("bottom".to_string()),
+            ]),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(
+            style.object_position.x,
+            PositionComponent::Keyword(PositionKeyword::End)
+        ));
+        assert!(matches!(
+            style.object_position.y,
+            PositionComponent::Keyword(PositionKeyword::End)
+        ));
     }
 }

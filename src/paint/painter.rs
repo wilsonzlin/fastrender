@@ -24,7 +24,7 @@
 use crate::error::{RenderError, Result};
 use crate::image_loader::ImageCache;
 use crate::style::color::Rgba;
-use crate::style::types::BorderStyle as CssBorderStyle;
+use crate::style::types::{BorderStyle as CssBorderStyle, ObjectFit, ObjectPosition, PositionComponent};
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::{ShapedRun, ShapingPipeline};
@@ -230,7 +230,7 @@ impl Painter {
             }
             FragmentContent::Line { .. } => {}
             FragmentContent::Replaced { replaced_type, .. } => {
-                self.paint_replaced(replaced_type, x, y, width, height);
+                self.paint_replaced(replaced_type, style, x, y, width, height);
             }
         }
 
@@ -573,14 +573,22 @@ impl Painter {
     }
 
     /// Paints a replaced element (image, etc.)
-    fn paint_replaced(&mut self, replaced_type: &ReplacedType, x: f32, y: f32, width: f32, height: f32) {
+    fn paint_replaced(
+        &mut self,
+        replaced_type: &ReplacedType,
+        style: Option<&ComputedStyle>,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) {
         if width <= 0.0 || height <= 0.0 {
             return;
         }
 
         // Try to render actual content for images
         if let ReplacedType::Image { src } = replaced_type {
-            if self.paint_image_from_src(src, x, y, width, height) {
+            if self.paint_image_from_src(src, style, x, y, width, height) {
                 return;
             }
         }
@@ -614,7 +622,15 @@ impl Painter {
         }
     }
 
-    fn paint_image_from_src(&mut self, src: &str, x: f32, y: f32, width: f32, height: f32) -> bool {
+    fn paint_image_from_src(
+        &mut self,
+        src: &str,
+        style: Option<&ComputedStyle>,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> bool {
         if src.is_empty() {
             return false;
         }
@@ -633,8 +649,18 @@ impl Painter {
             return false;
         }
 
-        let scale_x = width / pixmap.width() as f32;
-        let scale_y = height / pixmap.height() as f32;
+        let img_w = pixmap.width() as f32;
+        let img_h = pixmap.height() as f32;
+        let fit = style.map(|s| s.object_fit).unwrap_or(ObjectFit::Fill);
+        let pos = style.map(|s| s.object_position).unwrap_or(default_object_position());
+
+        let (dest_x, dest_y, dest_w, dest_h) = match compute_object_fit(fit, pos, width, height, img_w, img_h) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        let scale_x = dest_w / img_w;
+        let scale_y = dest_h / img_h;
         if !scale_x.is_finite() || !scale_y.is_finite() {
             return false;
         }
@@ -642,8 +668,9 @@ impl Painter {
         let mut paint = PixmapPaint::default();
         paint.quality = FilterQuality::Bilinear;
 
-        let transform = Transform::from_row(scale_x, 0.0, 0.0, scale_y, x, y);
-        self.pixmap.draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);
+        let transform = Transform::from_row(scale_x, 0.0, 0.0, scale_y, x + dest_x, y + dest_y);
+        self.pixmap
+            .draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);
         true
     }
 
@@ -668,6 +695,81 @@ impl Painter {
         let size = IntSize::from_wh(width, height)?;
         Pixmap::from_vec(data, size)
     }
+}
+
+fn default_object_position() -> ObjectPosition {
+    use crate::style::types::PositionKeyword::Center;
+    ObjectPosition {
+        x: PositionComponent::Keyword(Center),
+        y: PositionComponent::Keyword(Center),
+    }
+}
+
+fn resolve_object_position(comp: PositionComponent, free: f32) -> f32 {
+    use crate::style::types::PositionKeyword::{Center, End, Start};
+
+    match comp {
+        PositionComponent::Keyword(Start) => 0.0,
+        PositionComponent::Keyword(Center) => free * 0.5,
+        PositionComponent::Keyword(End) => free,
+        PositionComponent::Length(len) => {
+            if len.unit.is_percentage() {
+                len.resolve_against(free)
+            } else if len.unit.is_absolute() {
+                len.to_px()
+            } else {
+                len.value
+            }
+        }
+        PositionComponent::Percentage(pct) => free * pct,
+    }
+}
+
+fn compute_object_fit(
+    fit: ObjectFit,
+    position: ObjectPosition,
+    box_width: f32,
+    box_height: f32,
+    image_width: f32,
+    image_height: f32,
+) -> Option<(f32, f32, f32, f32)> {
+    if box_width <= 0.0 || box_height <= 0.0 || image_width <= 0.0 || image_height <= 0.0 {
+        return None;
+    }
+
+    let scale_x = box_width / image_width;
+    let scale_y = box_height / image_height;
+
+    let scale = match fit {
+        ObjectFit::Fill => (scale_x, scale_y),
+        ObjectFit::Contain => {
+            let s = scale_x.min(scale_y);
+            (s, s)
+        }
+        ObjectFit::Cover => {
+            let s = scale_x.max(scale_y);
+            (s, s)
+        }
+        ObjectFit::None => (1.0, 1.0),
+        ObjectFit::ScaleDown => {
+            if image_width <= box_width && image_height <= box_height {
+                (1.0, 1.0)
+            } else {
+                let s = scale_x.min(scale_y);
+                (s, s)
+            }
+        }
+    };
+
+    let dest_w = image_width * scale.0;
+    let dest_h = image_height * scale.1;
+    let free_x = box_width - dest_w;
+    let free_y = box_height - dest_h;
+
+    let offset_x = resolve_object_position(position.x, free_x);
+    let offset_y = resolve_object_position(position.y, free_y);
+
+    Some((offset_x, offset_y, dest_w, dest_h))
 }
 
 /// Paints a fragment tree to a pixmap
@@ -752,5 +854,21 @@ mod tests {
         assert_eq!(data[1], 255); // G
         assert_eq!(data[2], 255); // R
         assert_eq!(data[3], 255); // A
+    }
+
+    #[test]
+    fn object_fit_contain_centers_image() {
+        let fit = ObjectFit::Contain;
+        let position = ObjectPosition {
+            x: PositionComponent::Keyword(crate::style::types::PositionKeyword::Center),
+            y: PositionComponent::Keyword(crate::style::types::PositionKeyword::Center),
+        };
+
+        let (offset_x, offset_y, dest_w, dest_h) = compute_object_fit(fit, position, 200.0, 100.0, 100.0, 100.0)
+            .expect("fit computed");
+        assert_eq!(dest_h, 100.0);
+        assert_eq!(dest_w, 100.0);
+        assert!((offset_x - 50.0).abs() < 0.01);
+        assert!((offset_y - 0.0).abs() < 0.01);
     }
 }
