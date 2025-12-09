@@ -2422,6 +2422,34 @@ mod tests {
     }
 
     #[test]
+    fn text_align_last_justify_without_spaces_falls_back_to_start() {
+        let mut root_style = ComputedStyle::default();
+        root_style.font_size = 16.0;
+        root_style.text_align_last = crate::style::types::TextAlignLast::Justify;
+        root_style.text_align = TextAlign::Justify;
+        root_style.white_space = WhiteSpace::PreWrap;
+
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(text_style), "word\nword".to_string())],
+        );
+        let constraints = LayoutConstraints::definite_width(120.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert_eq!(fragment.children.len(), 2, "two lines expected");
+        let first_x = fragment.children[0].children[0].bounds.x();
+        let second_x = fragment.children[1].children[0].bounds.x();
+        assert!(
+            first_x < 1.0 && second_x < 1.0,
+            "justify-last with no expansion opportunities should fall back to start alignment"
+        );
+    }
+
+    #[test]
     fn text_indent_shifts_first_line_start() {
         let mut root_style = ComputedStyle::default();
         root_style.text_indent.length = Length::px(10.0);
