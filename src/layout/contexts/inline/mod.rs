@@ -57,6 +57,7 @@ use crate::text::line_break::{find_break_opportunities, BreakType};
 use crate::text::pipeline::{ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::{BoxNode, BoxType, ReplacedBox};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
+use std::sync::Arc;
 
 use baseline::{compute_line_height, BaselineMetrics};
 use line_builder::{InlineBlockItem, InlineItem, Line, LineBuilder, PositionedItem, ReplacedItem, TabItem, TextItem};
@@ -163,13 +164,36 @@ impl InlineFormattingContext {
         available_width: f32,
         available_height: Option<f32>,
     ) -> Result<Vec<InlineItem>, LayoutError> {
+        let mut pending_space: Option<PendingSpace> = None;
+        self.collect_inline_items_internal(box_node, available_width, available_height, &mut pending_space)
+    }
+
+    fn collect_inline_items_internal(
+        &self,
+        box_node: &BoxNode,
+        available_width: f32,
+        available_height: Option<f32>,
+        pending_space: &mut Option<PendingSpace>,
+    ) -> Result<Vec<InlineItem>, LayoutError> {
         let mut items = Vec::new();
 
         for child in &box_node.children {
+            if let Some(space) = pending_space.take() {
+                let space_item = self.create_collapsed_space_item(&space.style, space.allow_soft_wrap)?;
+                items.push(space_item);
+            }
             match &child.box_type {
                 BoxType::Text(text_box) => {
-                    let mut produced = self.create_inline_items_for_text(child, &text_box.text)?;
+                    let normalized = normalize_text_for_white_space(
+                        &apply_text_transform(&text_box.text, child.style.text_transform),
+                        child.style.white_space,
+                    );
+
+                    let mut produced = self.create_inline_items_from_normalized(child, normalized.clone())?;
                     items.append(&mut produced);
+                    if normalized.trailing_collapsible {
+                        *pending_space = Some(PendingSpace::new(child.style.clone(), normalized.allow_soft_wrap));
+                    }
                 }
                 BoxType::Inline(_) => {
                     if child.formatting_context().is_some() {
@@ -197,7 +221,8 @@ impl InlineFormattingContext {
                     let content_offset_y = padding_top + border_top;
 
                     // Recursively collect children first
-                    let child_items = self.collect_inline_items(child, available_width, available_height)?;
+                    let child_items =
+                        self.collect_inline_items_internal(child, available_width, available_height, pending_space)?;
                     let fallback_metrics = self.compute_strut_metrics(&child.style);
                     let metrics = compute_inline_box_metrics(
                         &child_items,
@@ -356,22 +381,36 @@ impl InlineFormattingContext {
     }
 
     /// Creates inline items from a text box, splitting preserved tabs into explicit tab items.
+    #[allow(dead_code)]
     fn create_inline_items_for_text(&self, box_node: &BoxNode, text: &str) -> Result<Vec<InlineItem>, LayoutError> {
         let style = &box_node.style;
         let transformed = apply_text_transform(text, style.text_transform);
+        let normalized = normalize_text_for_white_space(&transformed, style.white_space);
+        self.create_inline_items_from_normalized(box_node, normalized)
+    }
+
+    fn create_inline_items_from_normalized(
+        &self,
+        box_node: &BoxNode,
+        normalized: NormalizedText,
+    ) -> Result<Vec<InlineItem>, LayoutError> {
         let NormalizedText {
             text: normalized_text,
             forced_breaks,
             allow_soft_wrap,
             ..
-        } = normalize_text_for_white_space(&transformed, style.white_space);
+        } = normalized;
 
         if !normalized_text.contains('\t') {
             if normalized_text.is_empty() {
                 return Ok(Vec::new());
             }
-            let item =
-                self.create_text_item_from_normalized(box_node, &normalized_text, forced_breaks, allow_soft_wrap)?;
+            let item = self.create_text_item_from_normalized(
+                &box_node.style,
+                &normalized_text,
+                forced_breaks,
+                allow_soft_wrap,
+            )?;
             return Ok(vec![InlineItem::Text(item)]);
         }
 
@@ -385,7 +424,7 @@ impl InlineFormattingContext {
             if idx > segment_start {
                 let segment_breaks = slice_breaks(&forced_breaks, segment_start, idx);
                 let item = self.create_text_item_from_normalized(
-                    box_node,
+                    &box_node.style,
                     &normalized_text[segment_start..idx],
                     segment_breaks,
                     allow_soft_wrap,
@@ -402,7 +441,7 @@ impl InlineFormattingContext {
         if segment_start < normalized_text.len() {
             let segment_breaks = slice_breaks(&forced_breaks, segment_start, normalized_text.len());
             let item = self.create_text_item_from_normalized(
-                box_node,
+                &box_node.style,
                 &normalized_text[segment_start..],
                 segment_breaks,
                 allow_soft_wrap,
@@ -420,23 +459,22 @@ impl InlineFormattingContext {
     fn create_text_item(&self, box_node: &BoxNode, text: &str) -> Result<TextItem, LayoutError> {
         let style = &box_node.style;
         let transformed = apply_text_transform(text, style.text_transform);
-        let NormalizedText {
-            text: normalized_text,
-            forced_breaks,
-            allow_soft_wrap,
-            ..
-        } = normalize_text_for_white_space(&transformed, style.white_space);
-        self.create_text_item_from_normalized(box_node, &normalized_text, forced_breaks, allow_soft_wrap)
+        let normalized = normalize_text_for_white_space(&transformed, style.white_space);
+        self.create_text_item_from_normalized(
+            &box_node.style,
+            &normalized.text,
+            normalized.forced_breaks,
+            normalized.allow_soft_wrap,
+        )
     }
 
     fn create_text_item_from_normalized(
         &self,
-        box_node: &BoxNode,
+        style: &Arc<ComputedStyle>,
         normalized_text: &str,
         forced_breaks: Vec<crate::text::line_break::BreakOpportunity>,
         allow_soft_wrap: bool,
     ) -> Result<TextItem, LayoutError> {
-        let style = &box_node.style;
         let line_height = compute_line_height(style);
         let hyphenator = self.hyphenator_for(&style.language);
         let (hyphen_free, hyphen_breaks) =
@@ -469,9 +507,18 @@ impl InlineFormattingContext {
             metrics,
             breaks,
             forced_break_offsets,
-            box_node.style.clone(),
+            style.clone(),
         )
         .with_vertical_align(va))
+    }
+
+    fn create_collapsed_space_item(
+        &self,
+        style: &Arc<ComputedStyle>,
+        allow_soft_wrap: bool,
+    ) -> Result<InlineItem, LayoutError> {
+        let item = self.create_text_item_from_normalized(style, " ", Vec::new(), allow_soft_wrap)?;
+        Ok(InlineItem::Text(item))
     }
 
     fn shape_with_fallback(&self, text: &str, style: &ComputedStyle) -> Result<Vec<ShapedRun>, LayoutError> {
@@ -1278,6 +1325,18 @@ struct NormalizedText {
     allow_soft_wrap: bool,
     leading_collapsible: bool,
     trailing_collapsible: bool,
+}
+
+#[derive(Debug, Clone)]
+struct PendingSpace {
+    style: Arc<ComputedStyle>,
+    allow_soft_wrap: bool,
+}
+
+impl PendingSpace {
+    fn new(style: Arc<ComputedStyle>, allow_soft_wrap: bool) -> Self {
+        Self { style, allow_soft_wrap }
+    }
 }
 
 fn normalize_text_for_white_space(text: &str, white_space: WhiteSpace) -> NormalizedText {
@@ -2463,6 +2522,82 @@ mod tests {
         assert_eq!(normalized.forced_breaks.len(), 1);
         assert_eq!(normalized.forced_breaks[0].byte_offset, 1);
         assert!(!normalized.allow_soft_wrap);
+    }
+
+    #[test]
+    fn collapsible_space_survives_across_text_nodes() {
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::Normal;
+        let text_style = Arc::new(style);
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![
+                BoxNode::new_text(text_style.clone(), "Hello ".to_string()),
+                BoxNode::new_text(text_style.clone(), "world".to_string()),
+            ],
+        );
+        let ifc = InlineFormattingContext::new();
+        let items = ifc
+            .collect_inline_items(&root, 800.0, Some(800.0))
+            .expect("collect items");
+        let texts: Vec<String> = items
+            .iter()
+            .filter_map(|item| match item {
+                InlineItem::Text(t) => Some(t.text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, vec!["Hello", " ", "world"]);
+    }
+
+    #[test]
+    fn collapsible_space_survives_across_inline_boxes() {
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::Normal;
+        let text_style = Arc::new(style);
+        let inline = BoxNode::new_inline(
+            text_style.clone(),
+            vec![BoxNode::new_text(text_style.clone(), "world".to_string())],
+        );
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(text_style.clone(), "Hello ".to_string()), inline],
+        );
+        let ifc = InlineFormattingContext::new();
+        let items = ifc
+            .collect_inline_items(&root, 800.0, Some(800.0))
+            .expect("collect items");
+        assert!(
+            items
+                .iter()
+                .any(|item| matches!(item, InlineItem::Text(t) if t.text == " ")),
+            "collapsed space should appear before inline box"
+        );
+    }
+
+    #[test]
+    fn trailing_collapsible_space_is_dropped_at_end() {
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::Normal;
+        let text_style = Arc::new(style);
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(text_style, "Hello ".to_string())],
+        );
+        let ifc = InlineFormattingContext::new();
+        let items = ifc
+            .collect_inline_items(&root, 800.0, Some(800.0))
+            .expect("collect items");
+        assert!(
+            items.iter().all(|item| match item {
+                InlineItem::Text(t) => t.text != " ",
+                _ => true,
+            }),
+            "trailing collapsible whitespace should not emit a space item"
+        );
     }
 
     #[test]
