@@ -720,6 +720,11 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 styles.text_decoration.color = color;
             }
         }
+        "text-decoration-thickness" => {
+            if let Some(thick) = parse_text_decoration_thickness(&resolved_value, parent_font_size, root_font_size) {
+                styles.text_decoration.thickness = thick;
+            }
+        }
         "text-decoration" => {
             let tokens: Vec<PropertyValue> = match resolved_value {
                 PropertyValue::Multiple(ref values) => values.clone(),
@@ -743,6 +748,10 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 }
                 if let Some(color) = parse_text_decoration_color(&token) {
                     decoration.color = color;
+                    continue;
+                }
+                if let Some(thick) = parse_text_decoration_thickness(&token, parent_font_size, root_font_size) {
+                    decoration.thickness = thick;
                 }
             }
 
@@ -1916,6 +1925,23 @@ fn parse_text_decoration_color(value: &PropertyValue) -> Option<Option<Rgba>> {
     }
 }
 
+fn parse_text_decoration_thickness(
+    value: &PropertyValue,
+    _parent_font_size: f32,
+    _root_font_size: f32,
+) -> Option<TextDecorationThickness> {
+    match value {
+        PropertyValue::Keyword(kw) => match kw.as_str() {
+            "auto" => Some(TextDecorationThickness::Auto),
+            "from-font" => Some(TextDecorationThickness::FromFont),
+            _ => None,
+        },
+        PropertyValue::Length(l) => Some(TextDecorationThickness::Length(*l)),
+        PropertyValue::Percentage(p) => Some(TextDecorationThickness::Length(Length::percent(*p))),
+        _ => None,
+    }
+}
+
 pub fn extract_margin_values(value: &PropertyValue) -> Option<Vec<Option<Length>>> {
     match value {
         PropertyValue::Length(len) => Some(vec![Some(*len)]),
@@ -2183,6 +2209,28 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert_eq!(style.text_decoration.color, Some(Rgba::BLUE));
+
+        let decl = Declaration {
+            property: "text-decoration-thickness".to_string(),
+            value: PropertyValue::Length(Length::px(3.0)),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(
+            style.text_decoration.thickness,
+            TextDecorationThickness::Length(l) if (l.to_px() - 3.0).abs() < 0.01
+        ));
+
+        let decl = Declaration {
+            property: "text-decoration-thickness".to_string(),
+            value: PropertyValue::Keyword("from-font".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(
+            style.text_decoration.thickness,
+            TextDecorationThickness::FromFont
+        ));
     }
 
     #[test]
@@ -2191,6 +2239,7 @@ mod tests {
         style.text_decoration.lines = TextDecorationLine::LINE_THROUGH;
         style.text_decoration.style = TextDecorationStyle::Double;
         style.text_decoration.color = Some(Rgba::BLUE);
+        style.text_decoration.thickness = TextDecorationThickness::Length(Length::px(2.0));
 
         let decl = Declaration {
             property: "text-decoration".to_string(),
@@ -2207,6 +2256,10 @@ mod tests {
         assert!(!style.text_decoration.lines.contains(TextDecorationLine::LINE_THROUGH));
         assert_eq!(style.text_decoration.style, TextDecorationStyle::Dotted);
         assert_eq!(style.text_decoration.color, Some(Rgba::RED));
+        assert!(matches!(
+            style.text_decoration.thickness,
+            TextDecorationThickness::Auto
+        ));
 
         // currentcolor leaves color unset, shorthand resets missing pieces back to initial
         let decl = Declaration {
@@ -2222,6 +2275,30 @@ mod tests {
         assert!(style.text_decoration.lines.contains(TextDecorationLine::LINE_THROUGH));
         assert_eq!(style.text_decoration.style, TextDecorationStyle::Wavy);
         assert_eq!(style.text_decoration.color, None);
+        assert!(matches!(
+            style.text_decoration.thickness,
+            TextDecorationThickness::Auto
+        ));
+
+        // thickness in shorthand
+        let decl = Declaration {
+            property: "text-decoration".to_string(),
+            value: PropertyValue::Multiple(vec![
+                PropertyValue::Keyword("overline".to_string()),
+                PropertyValue::Keyword("double".to_string()),
+                PropertyValue::Color(Rgba::GREEN),
+                PropertyValue::Length(Length::px(3.2)),
+            ]),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(style.text_decoration.lines.contains(TextDecorationLine::OVERLINE));
+        assert_eq!(style.text_decoration.style, TextDecorationStyle::Double);
+        assert_eq!(style.text_decoration.color, Some(Rgba::GREEN));
+        assert!(matches!(
+            style.text_decoration.thickness,
+            TextDecorationThickness::Length(l) if (l.to_px() - 3.2).abs() < 0.01
+        ));
     }
 
     #[test]

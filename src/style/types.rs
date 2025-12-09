@@ -438,6 +438,7 @@ pub struct TextDecoration {
     pub style: TextDecorationStyle,
     /// None means currentColor
     pub color: Option<Rgba>,
+    pub thickness: TextDecorationThickness,
 }
 
 impl Default for TextDecoration {
@@ -446,6 +447,7 @@ impl Default for TextDecoration {
             lines: TextDecorationLine::NONE,
             style: TextDecorationStyle::Solid,
             color: None,
+            thickness: TextDecorationThickness::Auto,
         }
     }
 }
@@ -481,6 +483,14 @@ pub enum TextDecorationStyle {
     Dotted,
     Dashed,
     Wavy,
+}
+
+/// Thickness of text decorations
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextDecorationThickness {
+    Auto,
+    FromFont,
+    Length(Length),
 }
 
 /// Text case transformation

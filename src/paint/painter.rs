@@ -35,7 +35,7 @@ use crate::style::color::Rgba;
 use crate::style::types::{
     BackgroundAttachment, BackgroundImage, BackgroundPosition, BackgroundRepeatKeyword, BackgroundSize,
     BackgroundSizeComponent, BackgroundSizeKeyword, BorderStyle as CssBorderStyle, ObjectFit, TextDecorationLine,
-    TextDecorationStyle,
+    TextDecorationStyle, TextDecorationThickness,
 };
 use crate::style::types::{FilterColor, FilterFunction, MixBlendMode, Overflow};
 use crate::style::values::{Length, LengthUnit};
@@ -1738,6 +1738,24 @@ impl Painter {
             }
         };
 
+        let used_thickness = match style.text_decoration.thickness {
+            TextDecorationThickness::Auto => None,
+            TextDecorationThickness::FromFont => None,
+            TextDecorationThickness::Length(l) => {
+                let unit = l.unit;
+                let resolved = if unit == LengthUnit::Percent {
+                    l.resolve_against(style.font_size)
+                } else if unit.is_font_relative() {
+                    l.resolve_with_font_size(style.font_size)
+                } else if unit.is_viewport_relative() {
+                    l.resolve_with_viewport(self.pixmap.width() as f32, self.pixmap.height() as f32)
+                } else {
+                    l.to_px()
+                };
+                Some(resolved)
+            }
+        };
+
         let painter_style = style.text_decoration.style;
         let render_line = |pixmap: &mut Pixmap, center: f32, thickness: f32| match painter_style {
             TextDecorationStyle::Solid => draw_solid_line(pixmap, center, thickness),
@@ -1760,21 +1778,21 @@ impl Painter {
             render_line(
                 &mut self.pixmap,
                 baseline_y - metrics.underline_pos,
-                metrics.underline_thickness,
+                used_thickness.unwrap_or(metrics.underline_thickness),
             );
         }
         if style.text_decoration.lines.contains(TextDecorationLine::OVERLINE) {
             render_line(
                 &mut self.pixmap,
                 baseline_y - metrics.ascent,
-                metrics.underline_thickness,
+                used_thickness.unwrap_or(metrics.underline_thickness),
             );
         }
         if style.text_decoration.lines.contains(TextDecorationLine::LINE_THROUGH) {
             render_line(
                 &mut self.pixmap,
                 baseline_y - metrics.strike_pos,
-                metrics.strike_thickness,
+                used_thickness.unwrap_or(metrics.strike_thickness),
             );
         }
     }
