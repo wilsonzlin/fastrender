@@ -1775,6 +1775,40 @@ mod tests {
     }
 
     #[test]
+    fn parses_background_repeat_keywords_and_pairs() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "background-repeat".to_string(),
+            value: PropertyValue::Keyword("space".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.background_repeat.x, BackgroundRepeatKeyword::Space);
+        assert_eq!(style.background_repeat.y, BackgroundRepeatKeyword::Space);
+
+        let decl = Declaration {
+            property: "background-repeat".to_string(),
+            value: PropertyValue::Keyword("repeat-x".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.background_repeat.x, BackgroundRepeatKeyword::Repeat);
+        assert_eq!(style.background_repeat.y, BackgroundRepeatKeyword::NoRepeat);
+
+        let decl = Declaration {
+            property: "background-repeat".to_string(),
+            value: PropertyValue::Multiple(vec![
+                PropertyValue::Keyword("space".to_string()),
+                PropertyValue::Keyword("round".to_string()),
+            ]),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.background_repeat.x, BackgroundRepeatKeyword::Space);
+        assert_eq!(style.background_repeat.y, BackgroundRepeatKeyword::Round);
+    }
+
+    #[test]
     fn parses_white_space_break_spaces() {
         let mut style = ComputedStyle::default();
         let decl = Declaration {
