@@ -356,7 +356,11 @@ impl BidiAnalysis {
         }
 
         // Run Unicode bidi algorithm
-        let bidi_info = BidiInfo::new(text, Some(base_level));
+        let base_override = match style.unicode_bidi {
+            crate::style::types::UnicodeBidi::Plaintext => None,
+            _ => Some(base_level),
+        };
+        let bidi_info = BidiInfo::new(text, base_override);
 
         // Check if any RTL content exists
         let mut needs_reordering = bidi_info.levels.iter().any(|&level| level.is_rtl());
@@ -365,6 +369,11 @@ impl BidiAnalysis {
         let text = text.to_string();
         let mut levels = bidi_info.levels.clone();
         let char_starts: Vec<usize> = text.char_indices().map(|(idx, _)| idx).collect();
+        let para_level = bidi_info.paragraphs.first().map(|p| p.level).unwrap_or(base_level);
+        let base_level = match style.unicode_bidi {
+            crate::style::types::UnicodeBidi::Plaintext => para_level,
+            _ => base_level,
+        };
 
         // CSS bidi overrides force all characters to the element's direction.
         use crate::style::types::UnicodeBidi;
@@ -1102,6 +1111,26 @@ mod tests {
             assert!(bidi.level_at(byte_idx).is_rtl(), "override should force RTL level");
         }
         assert!(!bidi.needs_reordering(), "override should not request reordering");
+    }
+
+    #[test]
+    fn bidi_plaintext_uses_first_strong_for_base() {
+        let mut style = ComputedStyle::default();
+        style.unicode_bidi = crate::style::types::UnicodeBidi::Plaintext;
+
+        let rtl_text = "שלום abc";
+        let bidi_rtl = BidiAnalysis::analyze(rtl_text, &style);
+        assert!(
+            bidi_rtl.base_level().is_rtl(),
+            "plaintext should pick RTL base from first strong"
+        );
+
+        let ltr_text = "abc שלום";
+        let bidi_ltr = BidiAnalysis::analyze(ltr_text, &style);
+        assert!(
+            bidi_ltr.base_level().is_ltr(),
+            "plaintext should pick LTR base from first strong"
+        );
     }
 
     #[test]
