@@ -7,9 +7,10 @@
 use crate::error::{RenderError, Result};
 use crate::paint::canvas::Canvas;
 use crate::paint::display_list::{
-    ClipItem, DisplayItem, DisplayList, FillRectItem, FontId, ImageItem, LinearGradientItem, OpacityItem,
-    RadialGradientItem, StrokeRectItem, TextItem, TransformItem,
+    BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FontId, ImageItem, LinearGradientItem,
+    OpacityItem, RadialGradientItem, StrokeRectItem, TextItem, TransformItem,
 };
+use crate::paint::rasterize::{render_box_shadow, BoxShadow};
 use crate::style::color::Rgba;
 use crate::text::font_db::{FontStyle as DbFontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
@@ -119,6 +120,47 @@ impl DisplayListRenderer {
         )
     }
 
+    fn render_box_shadow(&mut self, item: &BoxShadowItem) {
+        let mut shadow = BoxShadow {
+            offset_x: item.offset.x,
+            offset_y: item.offset.y,
+            blur_radius: item.blur_radius,
+            spread_radius: item.spread_radius,
+            color: item.color,
+            inset: item.inset,
+        };
+
+        let mut temp = match Pixmap::new(self.canvas.width(), self.canvas.height()) {
+            Some(p) => p,
+            None => return,
+        };
+
+        // Apply current opacity to the shadow when compositing.
+        let opacity = self.canvas.opacity().clamp(0.0, 1.0);
+        shadow.color.a *= opacity;
+
+        let _ = render_box_shadow(
+            &mut temp,
+            item.rect.x(),
+            item.rect.y(),
+            item.rect.width(),
+            item.rect.height(),
+            &item.radii,
+            &shadow,
+        );
+
+        let paint = tiny_skia::PixmapPaint {
+            opacity: 1.0,
+            blend_mode: self.canvas.blend_mode(),
+            ..Default::default()
+        };
+        let clip = self.canvas.clip_mask().cloned();
+        let transform = self.canvas.transform();
+        self.canvas
+            .pixmap_mut()
+            .draw_pixmap(0, 0, temp.as_ref(), &paint, transform, clip.as_ref());
+    }
+
     /// Consumes the renderer and returns the painted pixmap.
     pub fn render(mut self, list: &DisplayList) -> Result<Pixmap> {
         for item in list.items() {
@@ -141,8 +183,9 @@ impl DisplayListRenderer {
             DisplayItem::RadialGradient(item) => self.render_radial_gradient(item),
             DisplayItem::Text(item) => self.render_text(item)?,
             DisplayItem::Image(item) => self.render_image(item)?,
-            DisplayItem::BoxShadow(_) | DisplayItem::PushStackingContext(_) | DisplayItem::PopStackingContext => {
-                // TODO: Implement full support for these items (stacking context layers, shadows)
+            DisplayItem::BoxShadow(item) => self.render_box_shadow(item),
+            DisplayItem::PushStackingContext(_) | DisplayItem::PopStackingContext => {
+                // TODO: Implement full support for these items (stacking context layers)
             }
             DisplayItem::PushClip(clip) => self.push_clip(clip),
             DisplayItem::PopClip => self.pop_clip(),
@@ -389,5 +432,24 @@ mod tests {
 
         let pixmap = renderer.render(&list).unwrap();
         assert_eq!(pixel(&pixmap, 1, 1).1, 255);
+    }
+
+    #[test]
+    fn renders_box_shadow() {
+        let renderer = DisplayListRenderer::new(10, 10, Rgba::WHITE, FontContext::new()).unwrap();
+        let mut list = DisplayList::new();
+        list.push(DisplayItem::BoxShadow(BoxShadowItem {
+            rect: Rect::from_xywh(2.0, 2.0, 4.0, 4.0),
+            radii: crate::paint::display_list::BorderRadii::uniform(0.0),
+            offset: Point::new(0.0, 0.0),
+            blur_radius: 0.0,
+            spread_radius: 0.0,
+            color: Rgba::new(0, 0, 0, 0.5),
+            inset: false,
+        }));
+
+        let pixmap = renderer.render(&list).unwrap();
+        // Center of the box should have darkened pixels due to shadow.
+        assert!(pixel(&pixmap, 3, 3).3 > 200);
     }
 }
