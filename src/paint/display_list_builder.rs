@@ -49,6 +49,7 @@ pub struct DisplayListBuilder {
     /// The display list being built
     list: DisplayList,
     image_cache: Option<ImageCache>,
+    viewport: Option<(f32, f32)>,
 }
 
 impl DisplayListBuilder {
@@ -57,6 +58,7 @@ impl DisplayListBuilder {
         Self {
             list: DisplayList::new(),
             image_cache: None,
+            viewport: None,
         }
     }
 
@@ -65,7 +67,14 @@ impl DisplayListBuilder {
         Self {
             list: DisplayList::new(),
             image_cache: Some(image_cache),
+            viewport: None,
         }
+    }
+
+    /// Sets the viewport size for resolving viewport-relative units (vw/vh) in object-position.
+    pub fn with_viewport_size(mut self, width: f32, height: f32) -> Self {
+        self.viewport = Some((width, height));
+        self
     }
 
     /// Builds a display list from a fragment tree root
@@ -199,7 +208,7 @@ impl DisplayListBuilder {
                         image.width as f32,
                         image.height as f32,
                         font_size,
-                        None,
+                        self.viewport,
                     )
                     .unwrap_or((0.0, 0.0, rect.width(), rect.height()))
                 };
@@ -587,5 +596,41 @@ mod tests {
         assert!((img.dest_rect.height() - 100.0).abs() < 0.1);
         assert!((img.dest_rect.x() - 50.0).abs() < 0.1);
         assert!((img.dest_rect.y() - 0.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn object_position_viewport_units_resolve_in_display_list() {
+        let mut style = ComputedStyle::default();
+        style.object_fit = crate::style::types::ObjectFit::None;
+        // Position 10vw from the left of the box. With 200px viewport width, free space is 50px (100-50).
+        style.object_position = crate::style::types::ObjectPosition {
+            x: crate::style::types::PositionComponent::Length(crate::style::values::Length::new(
+                10.0,
+                crate::style::values::LengthUnit::Vw,
+            )),
+            y: crate::style::types::PositionComponent::Keyword(crate::style::types::PositionKeyword::Start),
+        };
+
+        let fragment = FragmentNode {
+            bounds: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+            content: FragmentContent::Replaced {
+                box_id: None,
+                replaced_type: ReplacedType::Image {
+                    src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6X1ru4AAAAASUVORK5CYII=".to_string(),
+                },
+            },
+            children: vec![],
+            style: Some(Arc::new(style)),
+        };
+
+        let builder = DisplayListBuilder::with_image_cache(ImageCache::new()).with_viewport_size(200.0, 100.0);
+        let list = builder.build(&fragment);
+
+        assert_eq!(list.len(), 1);
+        let DisplayItem::Image(img) = &list.items()[0] else {
+            panic!("Expected image item");
+        };
+        // free_x = 100 - 1 = 99; but we align with 10vw (20px), so dest_rect.x should be ~20.
+        assert!((img.dest_rect.x() - 20.0).abs() < 0.5);
     }
 }

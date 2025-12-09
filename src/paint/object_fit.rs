@@ -191,4 +191,28 @@ mod tests {
         assert!((offset_x - 40.0).abs() < 0.01);
         assert!((offset_y - 0.0).abs() < 0.01);
     }
+
+    #[test]
+    fn viewport_units_resolve_when_available() {
+        use crate::style::values::{Length, LengthUnit};
+        let position = ObjectPosition {
+            x: PositionComponent::Length(Length::new(10.0, LengthUnit::Vw)),
+            y: PositionComponent::Keyword(PositionKeyword::Start),
+        };
+
+        // free_x = 50 (100-50). 10vw with 200px viewport => 20px offset.
+        let (offset_x, offset_y, _, _) = compute_object_fit(
+            ObjectFit::None,
+            position,
+            100.0,
+            50.0,
+            50.0,
+            50.0,
+            16.0,
+            Some((200.0, 100.0)),
+        )
+        .expect("fit computed");
+        assert!((offset_x - 20.0).abs() < 0.01);
+        assert!((offset_y - 0.0).abs() < 0.01);
+    }
 }
