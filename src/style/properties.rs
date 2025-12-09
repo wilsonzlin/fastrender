@@ -670,17 +670,15 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
             let mut hanging = false;
             let mut each_line = false;
 
-            let mut apply_component = |value: &PropertyValue| {
-                match value {
-                    PropertyValue::Length(len) => length = *len,
-                    PropertyValue::Percentage(pct) => length = Length::percent(*pct),
-                    PropertyValue::Keyword(kw) => match kw.as_str() {
-                        "hanging" => hanging = true,
-                        "each-line" => each_line = true,
-                        _ => {}
-                    },
+            let mut apply_component = |value: &PropertyValue| match value {
+                PropertyValue::Length(len) => length = *len,
+                PropertyValue::Percentage(pct) => length = Length::percent(*pct),
+                PropertyValue::Keyword(kw) => match kw.as_str() {
+                    "hanging" => hanging = true,
+                    "each-line" => each_line = true,
                     _ => {}
-                }
+                },
+                _ => {}
             };
 
             match &resolved_value {
@@ -762,6 +760,15 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "tab-size" => match &resolved_value {
+            PropertyValue::Number(n) => {
+                styles.tab_size = TabSize::Number(n.max(0.0));
+            }
+            PropertyValue::Length(len) if !len.value.is_nan() => {
+                styles.tab_size = TabSize::Length(*len);
+            }
+            _ => {}
+        },
         "hyphens" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.hyphens = match kw.as_str() {
@@ -1791,6 +1798,29 @@ mod tests {
         match &style.backdrop_filter[0] {
             FilterFunction::Blur(len) => assert!((len.to_px() - 5.0).abs() < 0.01),
             _ => panic!("expected blur"),
+        }
+    }
+
+    #[test]
+    fn parses_tab_size_number_and_length() {
+        let mut style = ComputedStyle::default();
+        let number_decl = Declaration {
+            property: "tab-size".to_string(),
+            value: PropertyValue::Number(4.0),
+            important: false,
+        };
+        apply_declaration(&mut style, &number_decl, 16.0, 16.0);
+        assert!(matches!(style.tab_size, TabSize::Number(n) if (n - 4.0).abs() < 0.001));
+
+        let length_decl = Declaration {
+            property: "tab-size".to_string(),
+            value: PropertyValue::Length(Length::px(20.0)),
+            important: false,
+        };
+        apply_declaration(&mut style, &length_decl, 16.0, 16.0);
+        match style.tab_size {
+            TabSize::Length(len) => assert!((len.to_px() - 20.0).abs() < 0.001),
+            other => panic!("expected length tab size, got {:?}", other),
         }
     }
 }

@@ -30,8 +30,8 @@ use types::{
     AlignContent, AlignItems, BackgroundBox, BackgroundImage, BackgroundPosition, BackgroundRepeat, BackgroundSize,
     BorderCollapse, BorderStyle, Direction, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontStyle, FontWeight,
     GridTrack, HyphensMode, Isolation, JustifyContent, LineHeight, MixBlendMode, ObjectFit, ObjectPosition, Overflow,
-    OverflowWrap, TableLayout, TextAlign, TextAlignLast, TextDecoration, TextIndent, TextJustify, TextTransform,
-    TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
+    OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration, TextIndent, TextJustify,
+    TextTransform, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
 };
 use values::Length;
 
@@ -130,6 +130,7 @@ pub struct ComputedStyle {
     pub letter_spacing: f32,
     pub word_spacing: f32,
     pub white_space: WhiteSpace,
+    pub tab_size: TabSize,
     pub hyphens: HyphensMode,
     pub word_break: WordBreak,
     pub overflow_wrap: OverflowWrap,
@@ -262,6 +263,7 @@ impl Default for ComputedStyle {
             letter_spacing: 0.0,
             word_spacing: 0.0,
             white_space: WhiteSpace::Normal,
+            tab_size: TabSize::default(),
             hyphens: HyphensMode::Manual,
             word_break: WordBreak::Normal,
             overflow_wrap: OverflowWrap::Normal,

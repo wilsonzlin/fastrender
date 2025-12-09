@@ -465,6 +465,24 @@ pub enum WhiteSpace {
     PreLine,
 }
 
+/// Tab stop sizing
+///
+/// CSS: `tab-size`
+/// Reference: CSS Text Module Level 3
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TabSize {
+    /// Width expressed as a number of space advances
+    Number(f32),
+    /// Explicit length for each tab stop interval
+    Length(Length),
+}
+
+impl Default for TabSize {
+    fn default() -> Self {
+        TabSize::Number(8.0)
+    }
+}
+
 /// CSS `word-break`
 ///
 /// Reference: CSS Text Module Level 3

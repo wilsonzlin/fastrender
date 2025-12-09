@@ -46,7 +46,7 @@ use crate::layout::contexts::inline::line_builder::InlineBoxItem;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::utils::{compute_replaced_size, resolve_length_with_percentage};
 use crate::style::types::{
-    FontStyle, HyphensMode, OverflowWrap, TextAlign, TextJustify, TextTransform, WhiteSpace, WordBreak,
+    FontStyle, HyphensMode, OverflowWrap, TabSize, TextAlign, TextJustify, TextTransform, WhiteSpace, WordBreak,
 };
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
@@ -54,12 +54,12 @@ use crate::text::font_loader::FontContext;
 use crate::text::hyphenation::Hyphenator;
 use crate::text::justify::is_cjk_character;
 use crate::text::line_break::{find_break_opportunities, BreakType};
-use crate::text::pipeline::ShapingPipeline;
+use crate::text::pipeline::{ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::{BoxNode, BoxType, ReplacedBox};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 
 use baseline::{compute_line_height, BaselineMetrics};
-use line_builder::{InlineBlockItem, InlineItem, Line, LineBuilder, PositionedItem, ReplacedItem, TextItem};
+use line_builder::{InlineBlockItem, InlineItem, Line, LineBuilder, PositionedItem, ReplacedItem, TabItem, TextItem};
 
 /// Inline Formatting Context implementation
 ///
@@ -168,8 +168,8 @@ impl InlineFormattingContext {
         for child in &box_node.children {
             match &child.box_type {
                 BoxType::Text(text_box) => {
-                    let item = self.create_text_item(child, &text_box.text)?;
-                    items.push(InlineItem::Text(item));
+                    let mut produced = self.create_inline_items_for_text(child, &text_box.text)?;
+                    items.append(&mut produced);
                 }
                 BoxType::Inline(_) => {
                     if child.formatting_context().is_some() {
@@ -355,45 +355,88 @@ impl InlineFormattingContext {
         .with_vertical_align(va))
     }
 
-    /// Creates a text item from a text box
-    fn create_text_item(&self, box_node: &BoxNode, text: &str) -> Result<TextItem, LayoutError> {
+    /// Creates inline items from a text box, splitting preserved tabs into explicit tab items.
+    fn create_inline_items_for_text(&self, box_node: &BoxNode, text: &str) -> Result<Vec<InlineItem>, LayoutError> {
         let style = &box_node.style;
-        let line_height = compute_line_height(style);
-
         let transformed = apply_text_transform(text, style.text_transform);
         let (normalized_text, forced_breaks, allow_soft_wrap) =
             normalize_text_for_white_space(&transformed, style.white_space);
+
+        if !normalized_text.contains('\t') {
+            if normalized_text.is_empty() {
+                return Ok(Vec::new());
+            }
+            let item =
+                self.create_text_item_from_normalized(box_node, &normalized_text, forced_breaks, allow_soft_wrap)?;
+            return Ok(vec![InlineItem::Text(item)]);
+        }
+
+        let mut items = Vec::new();
+        let mut segment_start = 0;
+
+        for (idx, ch) in normalized_text.char_indices() {
+            if ch != '\t' {
+                continue;
+            }
+            if idx > segment_start {
+                let segment_breaks = slice_breaks(&forced_breaks, segment_start, idx);
+                let item = self.create_text_item_from_normalized(
+                    box_node,
+                    &normalized_text[segment_start..idx],
+                    segment_breaks,
+                    allow_soft_wrap,
+                )?;
+                if !item.text.is_empty() {
+                    items.push(InlineItem::Text(item));
+                }
+            }
+            let tab = self.create_tab_item(box_node)?;
+            items.push(tab);
+            segment_start = idx + ch.len_utf8();
+        }
+
+        if segment_start < normalized_text.len() {
+            let segment_breaks = slice_breaks(&forced_breaks, segment_start, normalized_text.len());
+            let item = self.create_text_item_from_normalized(
+                box_node,
+                &normalized_text[segment_start..],
+                segment_breaks,
+                allow_soft_wrap,
+            )?;
+            if !item.text.is_empty() {
+                items.push(InlineItem::Text(item));
+            }
+        }
+
+        Ok(items)
+    }
+
+    /// Creates a text item from a text box
+    #[allow(dead_code)]
+    fn create_text_item(&self, box_node: &BoxNode, text: &str) -> Result<TextItem, LayoutError> {
+        let style = &box_node.style;
+        let transformed = apply_text_transform(text, style.text_transform);
+        let (normalized_text, forced_breaks, allow_soft_wrap) =
+            normalize_text_for_white_space(&transformed, style.white_space);
+        self.create_text_item_from_normalized(box_node, &normalized_text, forced_breaks, allow_soft_wrap)
+    }
+
+    fn create_text_item_from_normalized(
+        &self,
+        box_node: &BoxNode,
+        normalized_text: &str,
+        forced_breaks: Vec<crate::text::line_break::BreakOpportunity>,
+        allow_soft_wrap: bool,
+    ) -> Result<TextItem, LayoutError> {
+        let style = &box_node.style;
+        let line_height = compute_line_height(style);
         let hyphenator = self.hyphenator_for(&style.language);
         let (hyphen_free, hyphen_breaks) =
-            hyphenation_breaks(&normalized_text, style.hyphens, hyphenator.as_ref(), allow_soft_wrap);
+            hyphenation_breaks(normalized_text, style.hyphens, hyphenator.as_ref(), allow_soft_wrap);
 
         let forced_break_offsets: Vec<usize> = forced_breaks.iter().map(|b| b.byte_offset).collect();
 
-        let mut shaped_runs = match self.pipeline.shape(&hyphen_free, style, &self.font_context) {
-            Ok(runs) => runs,
-            Err(err) => {
-                if let Some(fallback_font) = self.font_context.get_sans_serif() {
-                    let mut fallback_style = (*style).as_ref().clone();
-                    fallback_style.font_family = vec![fallback_font.family.clone()];
-                    self.pipeline
-                        .shape(&hyphen_free, &fallback_style, &self.font_context)
-                        .map_err(|e| {
-                            LayoutError::MissingContext(format!(
-                                "Shaping failed (fonts={}): {:?}",
-                                self.font_context.font_count(),
-                                e
-                            ))
-                        })?
-                } else {
-                    return Err(LayoutError::MissingContext(format!(
-                        "Shaping failed (fonts={}): {:?}",
-                        self.font_context.font_count(),
-                        err
-                    )));
-                }
-            }
-        };
-
+        let mut shaped_runs = self.shape_with_fallback(&hyphen_free, style)?;
         TextItem::apply_spacing_to_runs(&mut shaped_runs, &hyphen_free, style.letter_spacing, style.word_spacing);
 
         let metrics = TextItem::metrics_from_runs(&shaped_runs, line_height, style.font_size);
@@ -421,6 +464,53 @@ impl InlineFormattingContext {
             box_node.style.clone(),
         )
         .with_vertical_align(va))
+    }
+
+    fn shape_with_fallback(&self, text: &str, style: &ComputedStyle) -> Result<Vec<ShapedRun>, LayoutError> {
+        match self.pipeline.shape(text, style, &self.font_context) {
+            Ok(runs) => Ok(runs),
+            Err(err) => {
+                if let Some(fallback_font) = self.font_context.get_sans_serif() {
+                    let mut fallback_style = style.clone();
+                    fallback_style.font_family = vec![fallback_font.family.clone()];
+                    self.pipeline
+                        .shape(text, &fallback_style, &self.font_context)
+                        .map_err(|e| {
+                            LayoutError::MissingContext(format!(
+                                "Shaping failed (fonts={}): {:?}",
+                                self.font_context.font_count(),
+                                e
+                            ))
+                        })
+                } else {
+                    Err(LayoutError::MissingContext(format!(
+                        "Shaping failed (fonts={}): {:?}",
+                        self.font_context.font_count(),
+                        err
+                    )))
+                }
+            }
+        }
+    }
+
+    fn space_advance(&self, style: &ComputedStyle) -> Result<f32, LayoutError> {
+        let mut runs = self.shape_with_fallback(" ", style)?;
+        TextItem::apply_spacing_to_runs(&mut runs, " ", style.letter_spacing, style.word_spacing);
+        Ok(runs.iter().map(|r| r.advance).sum())
+    }
+
+    fn create_tab_item(&self, box_node: &BoxNode) -> Result<InlineItem, LayoutError> {
+        let style = &box_node.style;
+        let metrics = self.compute_strut_metrics(style);
+        let space_advance = self.space_advance(style)?;
+        let tab_interval = match style.tab_size {
+            TabSize::Number(n) => n.max(0.0) * space_advance,
+            TabSize::Length(len) => resolve_length_with_percentage(len, None, style.font_size).unwrap_or(0.0),
+        };
+        let va = self.convert_vertical_align(style.vertical_align, style.font_size, metrics.line_height);
+        Ok(InlineItem::Tab(
+            TabItem::new(style.clone(), metrics, tab_interval).with_vertical_align(va),
+        ))
     }
 
     /// Creates a replaced item from a replaced box
@@ -641,13 +731,12 @@ impl InlineFormattingContext {
             }
             let mut effective_align =
                 resolve_text_align_for_line(base_align, text_align_last, direction, is_last_line, is_single_line);
-            let justify_probe_items = if matches!(effective_align, TextAlign::Justify)
-                && !matches!(resolved_justify, TextJustify::None)
-            {
-                self.expand_items_for_justification(&line.items, resolved_justify)
-            } else {
-                line.items.clone()
-            };
+            let justify_probe_items =
+                if matches!(effective_align, TextAlign::Justify) && !matches!(resolved_justify, TextJustify::None) {
+                    self.expand_items_for_justification(&line.items, resolved_justify)
+                } else {
+                    line.items.clone()
+                };
             let has_justify = has_justify_opportunities(&justify_probe_items, resolved_justify);
             if matches!(effective_align, TextAlign::Justify) && matches!(resolved_justify, TextJustify::None) {
                 effective_align = map_text_align(TextAlign::Start, direction);
@@ -878,6 +967,17 @@ impl InlineFormattingContext {
                     text_item.style.clone(),
                 )
             }
+            InlineItem::Tab(tab_item) => {
+                let metrics = tab_item.metrics();
+                let bounds = Rect::from_xywh(x, y, tab_item.width(), metrics.height);
+                FragmentNode::new_text_shaped(
+                    bounds,
+                    String::new(),
+                    metrics.baseline_offset,
+                    Vec::new(),
+                    tab_item.style().clone(),
+                )
+            }
             InlineItem::InlineBox(box_item) => {
                 // Recursively create children with horizontal and vertical offsets
                 let mut child_x = x + box_item.start_edge;
@@ -964,6 +1064,9 @@ impl InlineFormattingContext {
                     let next_char = next_item.and_then(first_char_of_item);
                     self.measure_text_min_content(text, tracker, next_char);
                 }
+                InlineItem::Tab(_) => {
+                    tracker.break_segment();
+                }
                 InlineItem::InlineBox(inline_box) => {
                     let mut boxed = InlineBoxSegment::new(tracker, inline_box.start_edge, inline_box.end_edge);
                     self.accumulate_min_segments(&inline_box.children, &mut boxed);
@@ -988,6 +1091,9 @@ impl InlineFormattingContext {
             match item {
                 InlineItem::Text(text) => {
                     self.measure_text_max_content(text, tracker);
+                }
+                InlineItem::Tab(tab) => {
+                    tracker.add_width(tab.interval().max(0.0));
                 }
                 InlineItem::InlineBox(inline_box) => {
                     let mut boxed = InlineBoxSegment::new(tracker, inline_box.start_edge, inline_box.end_edge);
@@ -1163,10 +1269,17 @@ fn normalize_text_for_white_space(
             let mut out = String::with_capacity(text.len());
             let mut in_whitespace = false;
             let mut seen_content = false;
+            let mut iter = text.chars().peekable();
 
-            for ch in text.chars() {
+            while let Some(ch) = iter.next() {
                 match ch {
-                    ' ' | '\t' | '\n' | '\r' => {
+                    '\r' => {
+                        if matches!(iter.peek(), Some('\n')) {
+                            iter.next();
+                        }
+                        in_whitespace = true;
+                    }
+                    ' ' | '\t' | '\n' => {
                         in_whitespace = true;
                     }
                     _ => {
@@ -1188,13 +1301,20 @@ fn normalize_text_for_white_space(
             let mut run_has_space = false;
             let mut run_has_newline = false;
             let mut seen_content = false;
+            let mut iter = text.chars().peekable();
 
-            for ch in text.chars() {
+            while let Some(ch) = iter.next() {
                 match ch {
                     ' ' | '\t' => {
                         run_has_space = true;
                     }
-                    '\n' | '\r' => {
+                    '\r' => {
+                        if matches!(iter.peek(), Some('\n')) {
+                            iter.next();
+                        }
+                        run_has_newline = true;
+                    }
+                    '\n' => {
                         run_has_newline = true;
                     }
                     _ => {
@@ -1229,13 +1349,20 @@ fn normalize_text_for_white_space(
         WhiteSpace::Pre | WhiteSpace::PreWrap => {
             let mut out = String::with_capacity(text.len());
             let mut mandatory_breaks = Vec::new();
+            let mut iter = text.chars().peekable();
 
-            for ch in text.chars() {
+            while let Some(ch) = iter.next() {
                 match ch {
-                    '\n' | '\r' => {
+                    '\r' => {
+                        if matches!(iter.peek(), Some('\n')) {
+                            iter.next();
+                        }
                         mandatory_breaks.push(BreakOpportunity::mandatory(out.len()));
                     }
-                    '\t' => out.push(' '),
+                    '\n' => {
+                        mandatory_breaks.push(BreakOpportunity::mandatory(out.len()));
+                    }
+                    '\t' => out.push('\t'),
                     _ => out.push(ch),
                 }
             }
@@ -1243,6 +1370,22 @@ fn normalize_text_for_white_space(
             (out, mandatory_breaks, white_space == WhiteSpace::PreWrap)
         }
     }
+}
+
+fn slice_breaks(
+    breaks: &[crate::text::line_break::BreakOpportunity],
+    start: usize,
+    end: usize,
+) -> Vec<crate::text::line_break::BreakOpportunity> {
+    breaks
+        .iter()
+        .filter(|b| b.byte_offset >= start && b.byte_offset <= end)
+        .map(|b| {
+            let mut adjusted = *b;
+            adjusted.byte_offset -= start;
+            adjusted
+        })
+        .collect()
 }
 
 fn merge_breaks(
@@ -1671,6 +1814,7 @@ fn first_char_of_item(item: &InlineItem) -> Option<char> {
     const OBJECT_REPLACEMENT: char = '\u{FFFC}';
     match item {
         InlineItem::Text(t) => t.text.chars().next(),
+        InlineItem::Tab(_) => Some('\t'),
         InlineItem::InlineBox(b) => b.children.iter().find_map(first_char_of_item),
         InlineItem::InlineBlock(_) | InlineItem::Replaced(_) => Some(OBJECT_REPLACEMENT),
     }
@@ -1680,6 +1824,7 @@ fn last_char_of_item(item: &InlineItem) -> Option<char> {
     const OBJECT_REPLACEMENT: char = '\u{FFFC}';
     match item {
         InlineItem::Text(t) => t.text.chars().rev().next(),
+        InlineItem::Tab(_) => Some('\t'),
         InlineItem::InlineBox(b) => b.children.iter().rev().find_map(last_char_of_item),
         InlineItem::InlineBlock(_) | InlineItem::Replaced(_) => Some(OBJECT_REPLACEMENT),
     }
@@ -1856,6 +2001,7 @@ fn accumulate_scripts(item: &InlineItem, counts: &mut ScriptCounts) {
                 }
             }
         }
+        InlineItem::Tab(_) => {}
         InlineItem::InlineBox(b) => {
             for child in &b.children {
                 accumulate_scripts(child, counts);
@@ -2246,6 +2392,74 @@ mod tests {
     }
 
     #[test]
+    fn white_space_pre_preserves_tabs_as_items() {
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::Pre;
+        let node = BoxNode::new_text(Arc::new(style), "a\tb".to_string());
+        let ifc = InlineFormattingContext::new();
+        let items = ifc.create_inline_items_for_text(&node, "a\tb").unwrap();
+        assert_eq!(items.len(), 3);
+        assert!(matches!(&items[1], InlineItem::Tab(_)));
+    }
+
+    #[test]
+    fn pre_collapses_crlf_to_single_break() {
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::Pre;
+        let (normalized, forced, allow_soft) = normalize_text_for_white_space("a\r\nb", style.white_space);
+        assert_eq!(normalized, "ab");
+        assert_eq!(forced.len(), 1);
+        assert_eq!(forced[0].byte_offset, 1);
+        assert!(!allow_soft);
+    }
+
+    #[test]
+    fn pre_line_treats_crlf_as_single_break() {
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::PreLine;
+        let (normalized, forced, allow_soft) = normalize_text_for_white_space("a\r\n b", style.white_space);
+        assert_eq!(normalized, "a b");
+        assert_eq!(forced.len(), 1);
+        assert_eq!(forced[0].byte_offset, 2);
+        assert!(allow_soft);
+    }
+
+    #[test]
+    fn tabs_advance_to_next_stop() {
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::Pre;
+        style.tab_size = TabSize::Number(4.0);
+        let node = BoxNode::new_text(Arc::new(style.clone()), "ab\tc".to_string());
+
+        let ifc = InlineFormattingContext::new();
+        let mut items = ifc.create_inline_items_for_text(&node, "ab\tc").unwrap();
+        let strut = ifc.compute_strut_metrics(&node.style);
+        let lines = ifc.build_lines(std::mem::take(&mut items), 1000.0, 1000.0, &strut, None);
+        let line = &lines[0];
+        assert_eq!(line.items.len(), 3);
+
+        let interval = match &line.items[1].item {
+            InlineItem::Tab(tab) => tab.interval(),
+            _ => panic!("expected tab item"),
+        };
+        let first_width = line.items[0].item.width();
+        let tab_width = line.items[1].item.width();
+        let expected = if interval > 0.0 {
+            let remainder = first_width.rem_euclid(interval);
+            if remainder == 0.0 {
+                interval
+            } else {
+                interval - remainder
+            }
+        } else {
+            0.0
+        };
+        assert!((tab_width - expected).abs() < 0.05);
+        let following_start = line.items[2].x;
+        assert!((following_start - (first_width + tab_width)).abs() < 0.05);
+    }
+
+    #[test]
     fn white_space_nowrap_strips_soft_breaks() {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::Nowrap;
@@ -2463,7 +2677,10 @@ mod tests {
         let fragment = ifc.layout(&root, &constraints).expect("layout");
         let last_line = fragment.children.last().expect("last line");
         let child = last_line.children.first().expect("text fragment");
-        assert!(child.bounds.x() < 1.0, "text-align-all should reset last-line alignment to auto/start");
+        assert!(
+            child.bounds.x() < 1.0,
+            "text-align-all should reset last-line alignment to auto/start"
+        );
     }
 
     #[test]

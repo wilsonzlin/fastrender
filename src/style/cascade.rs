@@ -218,6 +218,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.letter_spacing = parent.letter_spacing;
     styles.word_spacing = parent.word_spacing;
     styles.white_space = parent.white_space;
+    styles.tab_size = parent.tab_size;
     styles.hyphens = parent.hyphens;
     styles.word_break = parent.word_break;
     styles.overflow_wrap = parent.overflow_wrap;
@@ -289,7 +290,10 @@ mod tests {
     fn text_align_shorthand_resets_text_align_last_to_auto() {
         let dom = element_with_style("text-align-last: right; text-align: center;");
         let styled = apply_styles(&dom, &StyleSheet::new());
-        assert!(matches!(styled.styles.text_align, crate::style::types::TextAlign::Center));
+        assert!(matches!(
+            styled.styles.text_align,
+            crate::style::types::TextAlign::Center
+        ));
         assert!(matches!(
             styled.styles.text_align_last,
             crate::style::types::TextAlignLast::Auto
@@ -300,7 +304,10 @@ mod tests {
     fn text_align_justify_all_sets_last_line_justify() {
         let dom = element_with_style("text-align-last: right; text-align: justify-all;");
         let styled = apply_styles(&dom, &StyleSheet::new());
-        assert!(matches!(styled.styles.text_align, crate::style::types::TextAlign::Justify));
+        assert!(matches!(
+            styled.styles.text_align,
+            crate::style::types::TextAlign::Justify
+        ));
         assert!(matches!(
             styled.styles.text_align_last,
             crate::style::types::TextAlignLast::Justify
@@ -344,7 +351,10 @@ mod tests {
         };
         let styled = apply_styles(&parent, &StyleSheet::new());
         let child = styled.children.first().expect("child");
-        assert!(matches!(child.styles.text_align, crate::style::types::TextAlign::Center));
+        assert!(matches!(
+            child.styles.text_align,
+            crate::style::types::TextAlign::Center
+        ));
     }
 }
 

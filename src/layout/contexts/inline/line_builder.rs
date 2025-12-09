@@ -52,6 +52,9 @@ pub enum InlineItem {
     /// Shaped text ready for layout
     Text(TextItem),
 
+    /// A tab character that expands to the next tab stop
+    Tab(TabItem),
+
     /// An inline box (span, a, em, etc.) with children
     InlineBox(InlineBoxItem),
 
@@ -67,6 +70,7 @@ impl InlineItem {
     pub fn width(&self) -> f32 {
         match self {
             InlineItem::Text(t) => t.advance,
+            InlineItem::Tab(t) => t.width(),
             InlineItem::InlineBox(b) => b.width(),
             InlineItem::InlineBlock(b) => b.total_width(),
             InlineItem::Replaced(r) => r.total_width(),
@@ -77,6 +81,7 @@ impl InlineItem {
     pub fn intrinsic_width(&self) -> f32 {
         match self {
             InlineItem::Text(t) => t.advance,
+            InlineItem::Tab(t) => t.width(),
             InlineItem::InlineBox(b) => b.width(),
             InlineItem::InlineBlock(b) => b.width,
             InlineItem::Replaced(r) => r.width,
@@ -87,6 +92,7 @@ impl InlineItem {
     pub fn baseline_metrics(&self) -> BaselineMetrics {
         match self {
             InlineItem::Text(t) => t.metrics,
+            InlineItem::Tab(t) => t.metrics,
             InlineItem::InlineBox(b) => b.metrics,
             InlineItem::InlineBlock(b) => b.metrics,
             InlineItem::Replaced(r) => r.metrics,
@@ -97,6 +103,7 @@ impl InlineItem {
     pub fn vertical_align(&self) -> VerticalAlign {
         match self {
             InlineItem::Text(t) => t.vertical_align,
+            InlineItem::Tab(t) => t.vertical_align,
             InlineItem::InlineBox(b) => b.vertical_align,
             InlineItem::InlineBlock(b) => b.vertical_align,
             InlineItem::Replaced(r) => r.vertical_align,
@@ -111,6 +118,7 @@ impl InlineItem {
     pub fn direction(&self) -> Direction {
         match self {
             InlineItem::Text(t) => t.style.direction,
+            InlineItem::Tab(t) => t.direction,
             InlineItem::InlineBox(b) => b.direction,
             InlineItem::InlineBlock(b) => b.direction,
             InlineItem::Replaced(r) => r.direction,
@@ -120,9 +128,26 @@ impl InlineItem {
     pub fn unicode_bidi(&self) -> UnicodeBidi {
         match self {
             InlineItem::Text(t) => t.style.unicode_bidi,
+            InlineItem::Tab(t) => t.unicode_bidi,
             InlineItem::InlineBox(b) => b.unicode_bidi,
             InlineItem::InlineBlock(b) => b.unicode_bidi,
             InlineItem::Replaced(r) => r.unicode_bidi,
+        }
+    }
+
+    /// Resolves the width of this item when placed at `start_x`.
+    ///
+    /// Tabs depend on their starting position to find the next tab stop; other items are fixed width.
+    pub fn resolve_width_at(mut self, start_x: f32) -> (Self, f32) {
+        match &mut self {
+            InlineItem::Tab(tab) => {
+                let width = tab.resolve_width(start_x);
+                (self, width)
+            }
+            _ => {
+                let width = self.width();
+                (self, width)
+            }
         }
     }
 }
@@ -918,6 +943,70 @@ impl ReplacedItem {
     }
 }
 
+/// A tab character that expands to the next tab stop.
+#[derive(Debug, Clone)]
+pub struct TabItem {
+    metrics: BaselineMetrics,
+    vertical_align: VerticalAlign,
+    style: Arc<ComputedStyle>,
+    tab_interval: f32,
+    resolved_width: f32,
+    direction: Direction,
+    unicode_bidi: UnicodeBidi,
+}
+
+impl TabItem {
+    pub fn new(style: Arc<ComputedStyle>, metrics: BaselineMetrics, tab_interval: f32) -> Self {
+        let direction = style.direction;
+        let unicode_bidi = style.unicode_bidi;
+        Self {
+            metrics,
+            vertical_align: VerticalAlign::Baseline,
+            style,
+            tab_interval,
+            resolved_width: 0.0,
+            direction,
+            unicode_bidi,
+        }
+    }
+
+    pub fn with_vertical_align(mut self, align: VerticalAlign) -> Self {
+        self.vertical_align = align;
+        self
+    }
+
+    pub fn resolve_width(&mut self, start_x: f32) -> f32 {
+        if !self.tab_interval.is_finite() || self.tab_interval <= 0.0 {
+            self.resolved_width = 0.0;
+            return 0.0;
+        }
+        let remainder = start_x.rem_euclid(self.tab_interval);
+        let width = if remainder == 0.0 {
+            self.tab_interval
+        } else {
+            self.tab_interval - remainder
+        };
+        self.resolved_width = width;
+        width
+    }
+
+    pub fn width(&self) -> f32 {
+        self.resolved_width
+    }
+
+    pub fn interval(&self) -> f32 {
+        self.tab_interval
+    }
+
+    pub fn style(&self) -> Arc<ComputedStyle> {
+        self.style.clone()
+    }
+
+    pub fn metrics(&self) -> BaselineMetrics {
+        self.metrics
+    }
+}
+
 /// A positioned item within a line
 #[derive(Debug, Clone)]
 pub struct PositionedItem {
@@ -1042,13 +1131,13 @@ impl LineBuilder {
 
     /// Adds an inline item to the builder
     pub fn add_item(&mut self, item: InlineItem) {
-        let item_width = item.width();
+        let (item, item_width) = item.resolve_width_at(self.current_x);
         let line_width = self.current_line_width();
 
         // Check if item fits
         if self.current_x + item_width <= line_width {
             // Item fits
-            self.place_item(item);
+            self.place_item_with_width(item, item_width);
         } else if item.is_breakable() {
             // Try to break the item even on an empty line; oversized items should
             // still honor break opportunities instead of overflowing the line.
@@ -1057,10 +1146,11 @@ impl LineBuilder {
             // Item doesn't fit and can't be broken
             if self.current_line.is_empty() {
                 // No break possible; overflow this line
-                self.place_item(item);
+                self.place_item_with_width(item, item_width);
             } else {
                 self.finish_line();
-                self.place_item(item);
+                let (resolved, width) = item.resolve_width_at(self.current_x);
+                self.place_item_with_width(resolved, width);
             }
         }
     }
@@ -1088,7 +1178,8 @@ impl LineBuilder {
                 ) {
                     // Place the part that fits
                     if before.advance > 0.0 {
-                        self.place_item(InlineItem::Text(before));
+                        let width = before.advance;
+                        self.place_item_with_width(InlineItem::Text(before), width);
                     }
 
                     // Start new line for the rest
@@ -1099,17 +1190,20 @@ impl LineBuilder {
                 } else {
                     // If splitting fails, fall back to placing the whole item
                     if self.current_line.is_empty() {
-                        self.place_item(InlineItem::Text(text_item));
+                        let width = text_item.advance;
+                        self.place_item_with_width(InlineItem::Text(text_item), width);
                     } else {
                         self.finish_line();
-                        self.place_item(InlineItem::Text(text_item));
+                        let width = text_item.advance;
+                        self.place_item_with_width(InlineItem::Text(text_item), width);
                     }
                 }
             } else {
                 // No break point found within remaining width
                 if self.current_line.is_empty() {
                     // Line is empty, must place item (overflow)
-                    self.place_item(InlineItem::Text(text_item));
+                    let width = text_item.advance;
+                    self.place_item_with_width(InlineItem::Text(text_item), width);
                 } else {
                     // Start new line and try again
                     self.finish_line();
@@ -1120,7 +1214,7 @@ impl LineBuilder {
     }
 
     /// Places an item on the current line without breaking
-    fn place_item(&mut self, item: InlineItem) {
+    fn place_item_with_width(&mut self, item: InlineItem, item_width: f32) {
         let metrics = item.baseline_metrics();
         let vertical_align = item.vertical_align();
 
@@ -1138,7 +1232,7 @@ impl LineBuilder {
             baseline_offset,
         };
 
-        self.current_x += positioned.item.width();
+        self.current_x += item_width;
         self.current_line.items.push(positioned);
     }
 
@@ -1259,6 +1353,7 @@ impl LineBuilder {
             let content_start = logical_text.len();
             match &leaf.item {
                 InlineItem::Text(t) => logical_text.push_str(&t.text),
+                InlineItem::Tab(_) => logical_text.push('\t'),
                 _ => logical_text.push('\u{FFFC}'),
             }
             let content_end = logical_text.len();
@@ -1586,6 +1681,7 @@ fn determine_plaintext_base_level(leaves: &[BidiLeaf]) -> Option<Level> {
     for leaf in leaves {
         match &leaf.item {
             InlineItem::Text(t) => logical.push_str(&t.text),
+            InlineItem::Tab(_) => logical.push('\t'),
             _ => logical.push('\u{FFFC}'),
         }
     }
@@ -2122,6 +2218,7 @@ mod tests {
     fn flatten_text(item: &InlineItem) -> String {
         match item {
             InlineItem::Text(t) => t.text.clone(),
+            InlineItem::Tab(_) => "\t".to_string(),
             InlineItem::InlineBox(b) => b.children.iter().map(flatten_text).collect(),
             InlineItem::InlineBlock(_) | InlineItem::Replaced(_) => String::from("\u{FFFC}"),
         }
