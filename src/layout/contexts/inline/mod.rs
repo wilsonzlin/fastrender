@@ -45,7 +45,7 @@ use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::line_builder::InlineBoxItem;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::utils::compute_replaced_size;
-use crate::style::types::{FontStyle, HyphensMode, OverflowWrap, TextTransform, WhiteSpace, WordBreak};
+use crate::style::types::{FontStyle, HyphensMode, OverflowWrap, TextAlign, TextTransform, WhiteSpace, WordBreak};
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
@@ -579,12 +579,18 @@ impl InlineFormattingContext {
     }
 
     /// Creates fragments from lines
-    fn create_fragments(&self, lines: Vec<Line>, start_y: f32) -> Vec<FragmentNode> {
+    fn create_fragments(
+        &self,
+        lines: Vec<Line>,
+        start_y: f32,
+        available_width: f32,
+        text_align: TextAlign,
+    ) -> Vec<FragmentNode> {
         let mut fragments = Vec::new();
         let mut y = start_y;
 
         for line in lines {
-            let line_fragment = self.create_line_fragment(&line, y);
+            let line_fragment = self.create_line_fragment(&line, y, available_width, text_align);
             y += line.height;
             fragments.push(line_fragment);
         }
@@ -593,18 +599,36 @@ impl InlineFormattingContext {
     }
 
     /// Creates a line fragment with positioned children
-    fn create_line_fragment(&self, line: &Line, y: f32) -> FragmentNode {
+    fn create_line_fragment(
+        &self,
+        line: &Line,
+        y: f32,
+        available_width: f32,
+        text_align: TextAlign,
+    ) -> FragmentNode {
         let mut children = Vec::new();
+        let usable_width = if available_width.is_finite() {
+            available_width.max(0.0)
+        } else {
+            line.width
+        };
+        let extra_space = (usable_width - line.width).max(0.0);
+        let offset = match text_align {
+            TextAlign::Right => extra_space,
+            TextAlign::Center => extra_space * 0.5,
+            // TODO: implement justify distribution.
+            _ => 0.0,
+        };
 
         for positioned in &line.items {
             let item_y =
                 line.baseline + positioned.baseline_offset - positioned.item.baseline_metrics().baseline_offset;
 
-            let fragment = self.create_item_fragment(&positioned.item, positioned.x, item_y);
+            let fragment = self.create_item_fragment(&positioned.item, positioned.x + offset, item_y);
             children.push(fragment);
         }
 
-        let bounds = Rect::from_xywh(0.0, y, line.width, line.height);
+        let bounds = Rect::from_xywh(0.0, y, (line.width + offset).min(usable_width), line.height);
         FragmentNode::new_line(bounds, line.baseline, children)
     }
 
@@ -1219,7 +1243,7 @@ impl FormattingContext for InlineFormattingContext {
         let max_width: f32 = lines.iter().map(|l| l.width).fold(0.0, f32::max);
 
         // Create fragments
-        let children = self.create_fragments(lines, 0.0);
+        let children = self.create_fragments(lines, 0.0, available_width, style.text_align);
 
         // Create containing fragment
         let bounds = Rect::from_xywh(0.0, 0.0, max_width.min(available_width), total_height);
