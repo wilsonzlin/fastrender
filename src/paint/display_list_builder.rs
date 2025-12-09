@@ -31,7 +31,7 @@ use crate::paint::display_list::{
     ClipItem, DisplayItem, DisplayList, FillRectItem, GlyphInstance, ImageData, ImageItem, OpacityItem, StrokeRectItem,
     TextItem,
 };
-use crate::style::types::{ObjectFit, ObjectPosition, PositionComponent};
+use crate::style::types::{ObjectFit, ObjectPosition, PositionComponent, PositionKeyword};
 use crate::style::color::Rgba;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
@@ -275,18 +275,20 @@ impl DisplayListBuilder {
 
 fn resolve_object_position(comp: PositionComponent, free: f32) -> f32 {
     match comp {
-        PositionComponent::Keyword(crate::style::types::PositionKeyword::Center) => free / 2.0,
-        PositionComponent::Keyword(crate::style::types::PositionKeyword::Start) => 0.0,
-        PositionComponent::Keyword(crate::style::types::PositionKeyword::End) => free,
+        PositionComponent::Keyword(PositionKeyword::Center) => free * 0.5,
+        PositionComponent::Keyword(PositionKeyword::Start) => 0.0,
+        PositionComponent::Keyword(PositionKeyword::End) => free,
         PositionComponent::Length(len) => {
             // Length percentages resolve against the free space.
             if len.unit.is_percentage() {
-                (len.value / 100.0) * free
-            } else {
+                len.resolve_against(free)
+            } else if len.unit.is_absolute() {
                 len.to_px()
+            } else {
+                len.value
             }
         }
-        PositionComponent::Percentage(pct) => free * (pct / 100.0),
+        PositionComponent::Percentage(pct) => free * pct,
     }
 }
 
