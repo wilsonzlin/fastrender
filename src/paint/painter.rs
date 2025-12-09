@@ -56,6 +56,94 @@ enum EdgeOrientation {
     Vertical,
 }
 
+#[derive(Copy, Clone)]
+enum BorderEdge {
+    Top,
+    Right,
+    Bottom,
+    Left,
+}
+
+impl BorderEdge {
+    fn orientation(self) -> EdgeOrientation {
+        match self {
+            BorderEdge::Top | BorderEdge::Bottom => EdgeOrientation::Horizontal,
+            BorderEdge::Left | BorderEdge::Right => EdgeOrientation::Vertical,
+        }
+    }
+
+    /// Returns a pair of parallel paths offset by `offset` from the center line.
+    fn parallel_lines(&self, x1: f32, y1: f32, x2: f32, y2: f32, offset: f32) -> (Option<tiny_skia::Path>, Option<tiny_skia::Path>) {
+        match self.orientation() {
+            EdgeOrientation::Horizontal => {
+                let mut first = PathBuilder::new();
+                first.move_to(x1, y1 - offset);
+                first.line_to(x2, y2 - offset);
+
+                let mut second = PathBuilder::new();
+                second.move_to(x1, y1 + offset);
+                second.line_to(x2, y2 + offset);
+
+                (first.finish(), second.finish())
+            }
+            EdgeOrientation::Vertical => {
+                let mut first = PathBuilder::new();
+                first.move_to(x1 - offset, y1);
+                first.line_to(x2 - offset, y2);
+
+                let mut second = PathBuilder::new();
+                second.move_to(x1 + offset, y1);
+                second.line_to(x2 + offset, y2);
+
+                (first.finish(), second.finish())
+            }
+        }
+    }
+
+    fn groove_ridge_colors(self, base: &Rgba, style: CssBorderStyle) -> (Rgba, Rgba) {
+        let lighten = |c: &Rgba| shade_color(c, 1.25);
+        let darken = |c: &Rgba| shade_color(c, 0.75);
+
+        let (first_light, second_light) = match style {
+            CssBorderStyle::Groove => (false, true),
+            CssBorderStyle::Ridge => (true, false),
+            _ => (false, false),
+        };
+
+        let (first, second) = match self {
+            BorderEdge::Top | BorderEdge::Left => (first_light, second_light),
+            BorderEdge::Right | BorderEdge::Bottom => (!first_light, !second_light),
+        };
+
+        (
+            if first { lighten(base) } else { darken(base) },
+            if second { lighten(base) } else { darken(base) },
+        )
+    }
+
+    fn inset_outset_color(self, base: &Rgba, style: CssBorderStyle) -> Rgba {
+        match style {
+            CssBorderStyle::Inset => match self {
+                BorderEdge::Top | BorderEdge::Left => shade_color(base, 0.75),
+                BorderEdge::Right | BorderEdge::Bottom => shade_color(base, 1.25),
+            },
+            CssBorderStyle::Outset => match self {
+                BorderEdge::Top | BorderEdge::Left => shade_color(base, 1.25),
+                BorderEdge::Right | BorderEdge::Bottom => shade_color(base, 0.75),
+            },
+            _ => *base,
+        }
+    }
+}
+
+fn shade_color(color: &Rgba, factor: f32) -> Rgba {
+    let clamp = |v: f32| v.max(0.0).min(255.0) as u8;
+    let r = clamp(color.r as f32 * factor);
+    let g = clamp(color.g as f32 * factor);
+    let b = clamp(color.b as f32 * factor);
+    Rgba::new(r, g, b, color.a)
+}
+
 impl Painter {
     /// Creates a new painter with the given dimensions
     pub fn new(width: u32, height: u32, background: Rgba) -> Result<Self> {
@@ -190,6 +278,7 @@ impl Painter {
         // Top border
         if top > 0.0 {
             self.paint_border_edge(
+                BorderEdge::Top,
                 x,
                 y + top * 0.5,
                 x + width,
@@ -197,13 +286,13 @@ impl Painter {
                 top,
                 style.border_top_style,
                 &style.border_top_color,
-                EdgeOrientation::Horizontal,
             );
         }
 
         // Right border
         if right > 0.0 {
             self.paint_border_edge(
+                BorderEdge::Right,
                 x + width - right * 0.5,
                 y,
                 x + width - right * 0.5,
@@ -211,13 +300,13 @@ impl Painter {
                 right,
                 style.border_right_style,
                 &style.border_right_color,
-                EdgeOrientation::Vertical,
             );
         }
 
         // Bottom border
         if bottom > 0.0 {
             self.paint_border_edge(
+                BorderEdge::Bottom,
                 x,
                 y + height - bottom * 0.5,
                 x + width,
@@ -225,13 +314,13 @@ impl Painter {
                 bottom,
                 style.border_bottom_style,
                 &style.border_bottom_color,
-                EdgeOrientation::Horizontal,
             );
         }
 
         // Left border
         if left > 0.0 {
             self.paint_border_edge(
+                BorderEdge::Left,
                 x + left * 0.5,
                 y,
                 x + left * 0.5,
@@ -239,13 +328,13 @@ impl Painter {
                 left,
                 style.border_left_style,
                 &style.border_left_color,
-                EdgeOrientation::Vertical,
             );
         }
     }
 
     fn paint_border_edge(
         &mut self,
+        edge: BorderEdge,
         x1: f32,
         y1: f32,
         x2: f32,
@@ -253,7 +342,6 @@ impl Painter {
         width: f32,
         style: CssBorderStyle,
         color: &Rgba,
-        orientation: EdgeOrientation,
     ) {
         if width <= 0.0 || matches!(style, CssBorderStyle::None | CssBorderStyle::Hidden) {
             return;
@@ -265,7 +353,10 @@ impl Painter {
 
         let mut stroke = Stroke::default();
         stroke.width = width;
-        stroke.line_cap = tiny_skia::LineCap::Butt;
+        stroke.line_cap = match style {
+            CssBorderStyle::Dotted => tiny_skia::LineCap::Round,
+            _ => tiny_skia::LineCap::Butt,
+        };
 
         // Dash patterns per CSS styles
         match style {
@@ -291,30 +382,7 @@ impl Painter {
                 let third = width / 3.0;
                 let offset = third + third * 0.5;
 
-                let (outer_path, inner_path) = match orientation {
-                    EdgeOrientation::Horizontal => {
-                        let mut outer_pb = PathBuilder::new();
-                        outer_pb.move_to(x1, y1 - offset);
-                        outer_pb.line_to(x2, y2 - offset);
-
-                        let mut inner_pb = PathBuilder::new();
-                        inner_pb.move_to(x1, y1 + offset);
-                        inner_pb.line_to(x2, y2 + offset);
-
-                        (outer_pb.finish(), inner_pb.finish())
-                    }
-                    EdgeOrientation::Vertical => {
-                        let mut outer_pb = PathBuilder::new();
-                        outer_pb.move_to(x1 - offset, y1);
-                        outer_pb.line_to(x2 - offset, y2);
-
-                        let mut inner_pb = PathBuilder::new();
-                        inner_pb.move_to(x1 + offset, y1);
-                        inner_pb.line_to(x2 + offset, y2);
-
-                        (outer_pb.finish(), inner_pb.finish())
-                    }
-                };
+                let (outer_path, inner_path) = edge.parallel_lines(x1, y1, x2, y2, offset);
 
                 let mut inner_stroke = stroke.clone();
                 inner_stroke.width = third;
@@ -329,8 +397,34 @@ impl Painter {
                         .stroke_path(&inner, &paint, &inner_stroke, Transform::identity(), None);
                 }
             }
-            CssBorderStyle::Groove | CssBorderStyle::Ridge | CssBorderStyle::Inset | CssBorderStyle::Outset => {
-                // TODO: implement light/dark splitting for 3D borders. For now, draw as solid.
+            CssBorderStyle::Groove | CssBorderStyle::Ridge => {
+                let half = width / 2.0;
+                let offset = half * 0.5;
+                let (first_path, second_path) = edge.parallel_lines(x1, y1, x2, y2, offset);
+
+                let mut first_paint = paint.clone();
+                let mut second_paint = paint.clone();
+                let mut first_stroke = stroke.clone();
+                let mut second_stroke = stroke.clone();
+                first_stroke.width = half;
+                second_stroke.width = half;
+
+                let (first_color, second_color) = edge.groove_ridge_colors(color, style);
+                first_paint.set_color_rgba8(first_color.r, first_color.g, first_color.b, first_color.alpha_u8());
+                second_paint.set_color_rgba8(second_color.r, second_color.g, second_color.b, second_color.alpha_u8());
+
+                if let Some(first) = first_path {
+                    self.pixmap
+                        .stroke_path(&first, &first_paint, &first_stroke, Transform::identity(), None);
+                }
+                if let Some(second) = second_path {
+                    self.pixmap
+                        .stroke_path(&second, &second_paint, &second_stroke, Transform::identity(), None);
+                }
+            }
+            CssBorderStyle::Inset | CssBorderStyle::Outset => {
+                let shaded = edge.inset_outset_color(color, style);
+                paint.set_color_rgba8(shaded.r, shaded.g, shaded.b, shaded.alpha_u8());
                 self.pixmap
                     .stroke_path(&base_path, &paint, &stroke, Transform::identity(), None);
             }

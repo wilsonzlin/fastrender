@@ -51,10 +51,12 @@
 - Language inheritance from `lang`/`xml:lang` is normalized to lower-case BCP47 strings and passed through to shaping; HarfBuzz buffers now receive the computed language and shaped runs record it for debugging (`src/style/{mod,cascade}.rs`, `src/text/pipeline.rs`).
 - Letter- and word-spacing now affect shaped runs and line metrics: spacing is applied after each cluster (word spacing layered on spaces), advances and glyph offsets updated, and unit tests cover the extra advance contributions (`src/layout/contexts/inline/{mod.rs,line_builder.rs}`).
 - Hyphenation breaks now insert a hyphen glyph at the break point (soft/auto hyphenation), preserving spacing and shaping with the same style; break metadata carries an `adds_hyphen` flag so line breaking can decide when to render the glyph (`src/text/line_break.rs`, `src/layout/contexts/inline/{mod.rs,line_builder.rs}`).
+- Border painting now respects CSS styles: dotted/dashed use dash patterns (round caps for dotted), double splits into parallel strokes, and inset/outset/groove/ridge apply shaded light/dark variants per edge (`src/paint/painter.rs`).
+- Min-content sizing for inline content now walks the inline stream with shaped cluster advances, respecting hyphen insertion widths and avoiding synthetic end-of-text breaks between adjacent text nodes; forced breaks from normalization are tracked so explicit newlines still split segments. Added unit coverage for hyphen width accounting and cross-node words (`src/layout/contexts/inline/{mod.rs,line_builder.rs}`).
 
 ## Current issues / gaps
 - Bidi: we still approximate isolation with control characters rather than building explicit isolate/embedding stacks from box boundaries; replaced/inline-block items remain modeled as U+FFFC. `unicode-bidi: plaintext` uses first-strong via BidiInfo, but paragraph segmentation is naive (whole line).
-- Min/max content sizing still uses simple break-opportunity offsets rather than cluster-aware shaping widths; no hyphenation support yet in IFC.
+- Max-content sizing still uses coarse sums; min-content now uses shaped cluster metrics but still ignores anonymous inline box generation and percent-driven height constraints.
 - Table layout still partial: collapsed border painting is line-uniform (not per-segment) and styles are rendered as solid fills; row/col spans not fully honored, percent/fixed widths still simplified vs CSS 2.1, colspans split evenly, rowspan baseline alignment still coarse.
 - Replaced elements still ignore object-fit/object-position/backgrounds on the content box; SVG/iframe/video remain unrendered.
 - Painting still bypasses a display list; rendering order/compositing need a pass.

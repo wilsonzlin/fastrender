@@ -144,6 +144,8 @@ pub struct TextItem {
 
     /// Break opportunities within this text
     pub break_opportunities: Vec<BreakOpportunity>,
+    /// Offsets of forced breaks inserted during normalization (e.g., newlines)
+    pub forced_break_offsets: Vec<usize>,
 
     /// Original text for fragment creation
     pub text: String,
@@ -172,6 +174,7 @@ impl TextItem {
         text: String,
         metrics: BaselineMetrics,
         break_opportunities: Vec<BreakOpportunity>,
+        forced_break_offsets: Vec<usize>,
         style: Arc<ComputedStyle>,
     ) -> Self {
         let cluster_advances = Self::compute_cluster_advances(&runs, text.len(), style.font_size);
@@ -187,6 +190,7 @@ impl TextItem {
             metrics,
             vertical_align: VerticalAlign::Baseline,
             break_opportunities: aligned_breaks,
+            forced_break_offsets,
             text,
             font_size,
             style,
@@ -311,6 +315,11 @@ impl TextItem {
             before_text_owned.unwrap_or_else(|| before_text.to_string()),
             before_metrics,
             before_breaks,
+            self.forced_break_offsets
+                .iter()
+                .copied()
+                .filter(|o| *o <= split_offset)
+                .collect(),
             self.style.clone(),
         )
         .with_vertical_align(self.vertical_align);
@@ -320,6 +329,12 @@ impl TextItem {
             after_text.to_string(),
             after_metrics,
             after_breaks,
+            self.forced_break_offsets
+                .iter()
+                .copied()
+                .filter(|o| *o > split_offset)
+                .map(|o| o - split_offset)
+                .collect(),
             self.style.clone(),
         )
         .with_vertical_align(self.vertical_align);
@@ -1336,6 +1351,7 @@ mod tests {
             metrics: make_strut_metrics(),
             vertical_align: VerticalAlign::Baseline,
             break_opportunities: find_break_opportunities(text),
+            forced_break_offsets: Vec::new(),
             text: text.to_string(),
             font_size: 16.0,
             style: style.clone(),
@@ -1548,7 +1564,7 @@ mod tests {
         let runs = pipeline.shape("abc", &style, &font_ctx).expect("shape");
         let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
         let breaks = vec![BreakOpportunity::with_hyphen(1, BreakType::Allowed, true)];
-        let item = TextItem::new(runs, "abc".to_string(), metrics, breaks, style);
+        let item = TextItem::new(runs, "abc".to_string(), metrics, breaks, Vec::new(), style);
 
         let (before, after) = item
             .split_at(1, true, &pipeline, &font_ctx)

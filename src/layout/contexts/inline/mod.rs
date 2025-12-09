@@ -107,6 +107,17 @@ impl InlineFormattingContext {
             .or_else(|| self.default_hyphenator.clone())
     }
 
+    fn hyphen_advance(&self, style: &ComputedStyle) -> f32 {
+        const INSERTED_HYPHEN: &str = "\u{2010}";
+        match self.pipeline.shape(INSERTED_HYPHEN, style, &self.font_context) {
+            Ok(mut runs) => {
+                TextItem::apply_spacing_to_runs(&mut runs, INSERTED_HYPHEN, style.letter_spacing, style.word_spacing);
+                runs.iter().map(|r| r.advance).sum()
+            }
+            Err(_) => style.font_size * 0.5,
+        }
+    }
+
     /// Collects inline items from box node children
     fn collect_inline_items(&self, box_node: &BoxNode, available_width: f32) -> Result<Vec<InlineItem>, LayoutError> {
         let mut items = Vec::new();
@@ -252,6 +263,8 @@ impl InlineFormattingContext {
         let (hyphen_free, hyphen_breaks) =
             hyphenation_breaks(&normalized_text, style.hyphens, hyphenator.as_ref(), allow_soft_wrap);
 
+        let forced_break_offsets: Vec<usize> = forced_breaks.iter().map(|b| b.byte_offset).collect();
+
         let mut shaped_runs = match self.pipeline.shape(&hyphen_free, style, &self.font_context) {
             Ok(runs) => runs,
             Err(err) => {
@@ -303,6 +316,7 @@ impl InlineFormattingContext {
             hyphen_free,
             metrics,
             breaks,
+            forced_break_offsets,
             box_node.style.clone(),
         ))
     }
@@ -544,59 +558,103 @@ impl InlineFormattingContext {
         };
 
         match mode {
-            IntrinsicSizingMode::MinContent => {
-                // Min-content: width of the longest word/atomic inline
-                let mut max_word_width: f32 = 0.0;
+            IntrinsicSizingMode::MinContent => self.min_content_width(&items),
+            IntrinsicSizingMode::MaxContent => items.iter().map(|item| item.intrinsic_width()).sum(),
+        }
+    }
 
-                for item in &items {
-                    match item {
-                        InlineItem::Text(text_item) => {
-                            // Find width of longest word
-                            let word_widths = self.calculate_word_widths(text_item);
-                            max_word_width = max_word_width.max(word_widths.into_iter().fold(0.0f32, |a, b| a.max(b)));
-                        }
-                        InlineItem::Replaced(r) => {
-                            max_word_width = max_word_width.max(r.intrinsic_width());
-                        }
-                        InlineItem::InlineBlock(b) => {
-                            max_word_width = max_word_width.max(b.width);
-                        }
-                        InlineItem::InlineBox(b) => {
-                            max_word_width = max_word_width.max(b.width());
-                        }
-                    }
+    fn min_content_width(&self, items: &[InlineItem]) -> f32 {
+        let mut tracker = SegmentTracker::new();
+        self.accumulate_min_segments(items, &mut tracker);
+        tracker.finish()
+    }
+
+    fn accumulate_min_segments(&self, items: &[InlineItem], tracker: &mut dyn SegmentConsumer) {
+        for (idx, item) in items.iter().enumerate() {
+            let next_item = items.get(idx + 1);
+            match item {
+                InlineItem::Text(text) => {
+                    let next_char = next_item.and_then(first_char_of_item);
+                    self.measure_text_min_content(text, tracker, next_char);
                 }
-
-                max_word_width
-            }
-            IntrinsicSizingMode::MaxContent => {
-                // Max-content: width needed for single line (no wrapping)
-                items.iter().map(|item| item.intrinsic_width()).sum()
+                InlineItem::InlineBox(inline_box) => {
+                    let mut boxed = InlineBoxSegment::new(tracker, inline_box.start_edge, inline_box.end_edge);
+                    self.accumulate_min_segments(&inline_box.children, &mut boxed);
+                    boxed.finish();
+                }
+                InlineItem::InlineBlock(block) => {
+                    tracker.break_segment();
+                    tracker.add_width(block.total_width());
+                    tracker.break_segment();
+                }
+                InlineItem::Replaced(replaced) => {
+                    tracker.break_segment();
+                    tracker.add_width(replaced.total_width());
+                    tracker.break_segment();
+                }
             }
         }
     }
 
-    /// Calculates widths of individual words in text
-    fn calculate_word_widths(&self, text_item: &TextItem) -> Vec<f32> {
-        let mut widths = Vec::new();
-        let mut word_start = 0;
-        let text = &text_item.text;
+    fn measure_text_min_content(
+        &self,
+        text_item: &TextItem,
+        tracker: &mut dyn SegmentConsumer,
+        next_char: Option<char>,
+    ) {
+        if text_item.text.is_empty() {
+            return;
+        }
+
+        let len = text_item.text.len();
+        let mut last_break = 0;
+        let mut hyphen_width: Option<f32> = None;
+        let last_char = text_item.text.chars().last();
 
         for brk in &text_item.break_opportunities {
-            if brk.byte_offset > word_start {
-                let word_width = text_item.advance_at_offset(brk.byte_offset) - text_item.advance_at_offset(word_start);
-                widths.push(word_width.max(0.0));
+            if brk.byte_offset > len {
+                continue;
             }
-            word_start = brk.byte_offset;
+
+            let is_forced = text_item
+                .forced_break_offsets
+                .iter()
+                .any(|offset| *offset == brk.byte_offset);
+            if brk.byte_offset == len
+                && brk.break_type == BreakType::Allowed
+                && !brk.adds_hyphen
+                && !is_forced
+                && !allows_boundary_break(last_char, next_char)
+            {
+                continue;
+            }
+            if brk.byte_offset == len
+                && brk.break_type == BreakType::Mandatory
+                && !brk.adds_hyphen
+                && !is_forced
+                && !allows_boundary_break(last_char, next_char)
+            {
+                continue;
+            }
+
+            let mut segment_width =
+                (text_item.advance_at_offset(brk.byte_offset) - text_item.advance_at_offset(last_break)).max(0.0);
+
+            if brk.adds_hyphen {
+                let h = hyphen_width.get_or_insert_with(|| self.hyphen_advance(&text_item.style));
+                segment_width += *h;
+            }
+
+            tracker.add_width(segment_width);
+            tracker.break_segment();
+            last_break = brk.byte_offset;
         }
 
-        // Handle remaining text after last break
-        if word_start < text.len() {
-            let word_width = text_item.advance_at_offset(text.len()) - text_item.advance_at_offset(word_start);
-            widths.push(word_width.max(0.0));
+        if last_break < len {
+            let trailing =
+                (text_item.advance_at_offset(len) - text_item.advance_at_offset(last_break)).max(0.0);
+            tracker.add_width(trailing);
         }
-
-        widths
     }
 }
 
@@ -933,11 +991,113 @@ impl Default for InlineFormattingContext {
     }
 }
 
+trait SegmentConsumer {
+    fn add_width(&mut self, width: f32);
+    fn break_segment(&mut self);
+}
+
+struct SegmentTracker {
+    current: f32,
+    max: f32,
+}
+
+impl SegmentTracker {
+    fn new() -> Self {
+        Self { current: 0.0, max: 0.0 }
+    }
+
+    fn finish(mut self) -> f32 {
+        self.max = self.max.max(self.current);
+        self.max
+    }
+}
+
+impl SegmentConsumer for SegmentTracker {
+    fn add_width(&mut self, width: f32) {
+        self.current += width;
+    }
+
+    fn break_segment(&mut self) {
+        self.max = self.max.max(self.current);
+        self.current = 0.0;
+    }
+}
+
+struct InlineBoxSegment<'a> {
+    inner: &'a mut dyn SegmentConsumer,
+    start_edge: f32,
+    end_edge: f32,
+    started: bool,
+}
+
+impl<'a> InlineBoxSegment<'a> {
+    fn new(inner: &'a mut dyn SegmentConsumer, start_edge: f32, end_edge: f32) -> Self {
+        Self {
+            inner,
+            start_edge,
+            end_edge,
+            started: false,
+        }
+    }
+
+    fn ensure_started(&mut self) {
+        if !self.started {
+            self.inner.add_width(self.start_edge);
+            self.started = true;
+        }
+    }
+
+    fn finish(mut self) {
+        self.ensure_started();
+        self.inner.add_width(self.end_edge);
+    }
+}
+
+impl<'a> SegmentConsumer for InlineBoxSegment<'a> {
+    fn add_width(&mut self, width: f32) {
+        self.ensure_started();
+        self.inner.add_width(width);
+    }
+
+    fn break_segment(&mut self) {
+        self.ensure_started();
+        self.inner.add_width(self.end_edge);
+        self.inner.break_segment();
+        self.inner.add_width(self.start_edge);
+    }
+}
+
+fn allows_boundary_break(prev: Option<char>, next: Option<char>) -> bool {
+    const OBJECT_REPLACEMENT: char = '\u{FFFC}';
+    let (Some(a), Some(b)) = (prev, next) else {
+        return true;
+    };
+    let mut probe = String::new();
+    probe.push(a);
+    probe.push(b);
+    find_break_opportunities(&probe)
+        .iter()
+        .any(|b| {
+            b.byte_offset == a.len_utf8() && matches!(b.break_type, BreakType::Allowed | BreakType::Mandatory)
+        })
+        // Treat object replacement as breakable to avoid fusing text across replaced items.
+        || matches!(a, OBJECT_REPLACEMENT) || matches!(b, OBJECT_REPLACEMENT)
+}
+
+fn first_char_of_item(item: &InlineItem) -> Option<char> {
+    const OBJECT_REPLACEMENT: char = '\u{FFFC}';
+    match item {
+        InlineItem::Text(t) => t.text.chars().next(),
+        InlineItem::InlineBox(b) => b.children.iter().find_map(first_char_of_item),
+        InlineItem::InlineBlock(_) | InlineItem::Replaced(_) => Some(OBJECT_REPLACEMENT),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::style::display::FormattingContextType;
-    use crate::style::types::{OverflowWrap, WhiteSpace, WordBreak};
+    use crate::style::types::{HyphensMode, OverflowWrap, WhiteSpace, WordBreak};
     use crate::style::ComputedStyle;
     use std::sync::Arc;
 
@@ -1207,5 +1367,51 @@ mod tests {
             .break_opportunities
             .iter()
             .any(|b| b.byte_offset > 0 && b.byte_offset < text.len()));
+    }
+
+    #[test]
+    fn min_content_treats_adjacent_text_as_single_word() {
+        let ifc = InlineFormattingContext::new();
+        let hel = make_text_box("Hel");
+        let lo = make_text_box("lo");
+        let hel_width = ifc.create_text_item(&hel, "Hel").unwrap().advance;
+        let lo_width = ifc.create_text_item(&lo, "lo").unwrap().advance;
+
+        let root = make_inline_container(vec![hel, lo]);
+        let min_width = ifc
+            .compute_intrinsic_inline_size(&root, IntrinsicSizingMode::MinContent)
+            .unwrap();
+
+        let expected = hel_width + lo_width;
+        assert!((min_width - expected).abs() < 0.5, "min_width={min_width}, expected={expected}");
+    }
+
+    #[test]
+    fn min_content_accounts_for_hyphen_width() {
+        let ifc = InlineFormattingContext::new();
+        let mut style = ComputedStyle::default();
+        style.hyphens = HyphensMode::Auto;
+        let text = "hy\u{00AD}phen";
+
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+        let hyphen_break = item
+            .break_opportunities
+            .iter()
+            .find(|b| b.adds_hyphen)
+            .copied()
+            .expect("expected hyphen break");
+
+        let before = item.advance_at_offset(hyphen_break.byte_offset);
+        let after = (item.advance - before).max(0.0);
+        let hyphen_width = ifc.hyphen_advance(&item.style);
+        let expected = (before + hyphen_width).max(after);
+
+        let root = make_inline_container(vec![node]);
+        let min_width = ifc
+            .compute_intrinsic_inline_size(&root, IntrinsicSizingMode::MinContent)
+            .unwrap();
+
+        assert!((min_width - expected).abs() < 0.25, "min_width={min_width}, expected={expected}");
     }
 }
