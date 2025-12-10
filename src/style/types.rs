@@ -359,11 +359,29 @@ impl FontWeight {
 ///
 /// CSS: `font-style`
 /// Reference: CSS Fonts Module Level 3
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FontStyle {
     Normal,
     Italic,
-    Oblique,
+    /// Oblique may carry an optional angle (deg)
+    Oblique(Option<f32>),
+}
+
+impl FontStyle {
+    pub fn is_italic(self) -> bool {
+        matches!(self, FontStyle::Italic)
+    }
+
+    pub fn is_oblique(self) -> bool {
+        matches!(self, FontStyle::Oblique(_))
+    }
+
+    pub fn oblique_angle(self) -> Option<f32> {
+        match self {
+            FontStyle::Oblique(angle) => angle,
+            _ => None,
+        }
+    }
 }
 
 /// Font stretch

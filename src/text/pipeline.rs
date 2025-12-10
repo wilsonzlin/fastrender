@@ -610,7 +610,7 @@ fn get_font_for_run(run: &ItemizedRun, style: &ComputedStyle, font_context: &Fon
     let font_style = match style.font_style {
         CssFontStyle::Normal => FontStyle::Normal,
         CssFontStyle::Italic => FontStyle::Italic,
-        CssFontStyle::Oblique => FontStyle::Oblique,
+        CssFontStyle::Oblique(_) => FontStyle::Oblique,
     };
     let font_stretch = FontStretch::from_percentage(style.font_stretch.to_percentage());
 

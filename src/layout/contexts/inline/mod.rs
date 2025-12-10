@@ -755,7 +755,7 @@ impl InlineFormattingContext {
         let line_height = compute_line_height(style);
         let font_size = style.font_size;
         let italic = matches!(style.font_style, FontStyle::Italic);
-        let oblique = matches!(style.font_style, FontStyle::Oblique);
+        let oblique = matches!(style.font_style, FontStyle::Oblique(_));
         let stretch = crate::text::font_db::FontStretch::from_percentage(style.font_stretch.to_percentage());
 
         if let Some(font) = self

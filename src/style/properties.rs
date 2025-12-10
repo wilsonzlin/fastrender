@@ -560,12 +560,9 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         },
         "font-style" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.font_style = match kw.as_str() {
-                    "normal" => FontStyle::Normal,
-                    "italic" => FontStyle::Italic,
-                    "oblique" => FontStyle::Oblique,
-                    _ => styles.font_style,
-                };
+                if let Some(fs) = parse_font_style_keyword(kw) {
+                    styles.font_style = fs;
+                }
             }
         }
         "font-stretch" => match &resolved_value {
@@ -1571,6 +1568,48 @@ fn parse_number_or_percentage<'i, 't>(input: &mut Parser<'i, 't>) -> Result<f32,
     }
 }
 
+fn parse_angle_token(token: &Token) -> Option<f32> {
+    match token {
+        Token::Dimension { value, ref unit, .. } => match unit.as_ref() {
+            "deg" => Some(*value),
+            "grad" => Some(*value * 0.9),
+            "turn" => Some(*value * 360.0),
+            "rad" => Some(*value * (180.0 / std::f32::consts::PI)),
+            _ => None,
+        },
+        Token::Number { value, .. } if *value == 0.0 => Some(0.0),
+        _ => None,
+    }
+}
+
+fn parse_font_style_keyword(raw: &str) -> Option<FontStyle> {
+    let lower = raw.trim().to_ascii_lowercase();
+    if lower == "normal" {
+        return Some(FontStyle::Normal);
+    }
+    if lower == "italic" {
+        return Some(FontStyle::Italic);
+    }
+    if lower.starts_with("oblique") {
+        let angle_part = lower.trim_start_matches("oblique").trim();
+        if angle_part.is_empty() {
+            return Some(FontStyle::Oblique(None));
+        }
+        // Attempt to parse angle; fall back to plain oblique if invalid.
+        if let Some(angle) = parse_angle_from_str(angle_part) {
+            return Some(FontStyle::Oblique(Some(angle)));
+        }
+        return Some(FontStyle::Oblique(None));
+    }
+    None
+}
+
+fn parse_angle_from_str(s: &str) -> Option<f32> {
+    let mut input = ParserInput::new(s.trim());
+    let mut parser = Parser::new(&mut input);
+    parse_angle_degrees(&mut parser).ok()
+}
+
 fn parse_font_stretch_keyword(kw: &str) -> Option<FontStretch> {
     match kw {
         "ultra-condensed" => Some(FontStretch::UltraCondensed),
@@ -1660,7 +1699,15 @@ fn parse_font_shorthand(
                             }
                         }
                         "italic" => font_style = Some(FontStyle::Italic),
-                        "oblique" => font_style = Some(FontStyle::Oblique),
+                        "oblique" => {
+                            font_style = Some(FontStyle::Oblique(None));
+                            if let Ok(Some(angle)) = parser.try_parse(|p| {
+                                let t = p.next()?;
+                                Ok::<_, cssparser::ParseError<()>>(parse_angle_token(&t))
+                            }) {
+                                font_style = Some(FontStyle::Oblique(Some(angle)));
+                            }
+                        }
                         "bold" => font_weight = Some(FontWeight::Bold),
                         "bolder" => font_weight = Some(FontWeight::Bolder),
                         "lighter" => font_weight = Some(FontWeight::Lighter),

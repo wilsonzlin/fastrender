@@ -86,7 +86,7 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
             }
             "i" | "em" => {
                 // Italic text - using Oblique since we may not have true italics
-                styles.font_style = crate::style::FontStyle::Oblique;
+                styles.font_style = crate::style::FontStyle::Oblique(None);
             }
             _ => {}
         }

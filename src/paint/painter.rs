@@ -1649,7 +1649,7 @@ impl Painter {
 
         if metrics_source.is_none() {
             let italic = matches!(style.font_style, crate::style::types::FontStyle::Italic);
-            let oblique = matches!(style.font_style, crate::style::types::FontStyle::Oblique);
+            let oblique = matches!(style.font_style, crate::style::types::FontStyle::Oblique(_));
             let stretch =
                 crate::text::font_db::FontStretch::from_percentage(style.font_stretch.to_percentage());
             metrics_source = self
