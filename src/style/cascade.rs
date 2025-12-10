@@ -102,6 +102,7 @@ fn apply_styles_internal(
     // Finalize grid placement - resolve named grid lines
     finalize_grid_placement(&mut styles);
     resolve_match_parent_text_align(&mut styles, parent_styles);
+    resolve_relative_font_weight(&mut styles, parent_styles);
 
     // Compute pseudo-element styles
     let before_styles =
@@ -181,6 +182,7 @@ fn apply_styles_internal_with_ancestors(
     // Finalize grid placement - resolve named grid lines
     finalize_grid_placement(&mut styles);
     resolve_match_parent_text_align(&mut styles, parent_styles);
+    resolve_relative_font_weight(&mut styles, parent_styles);
 
     // Compute pseudo-element styles from CSS rules
     let before_styles =
@@ -298,6 +300,24 @@ mod tests {
             },
             children: vec![],
         }
+    }
+
+    fn child_font_weight(parent_style: &str, child_style: &str) -> u16 {
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), parent_style.to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "span".to_string(),
+                    attributes: vec![("style".to_string(), child_style.to_string())],
+                },
+                children: vec![],
+            }],
+        };
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        styled.children.first().expect("child").styles.font_weight.to_u16()
     }
 
     #[test]
@@ -471,6 +491,31 @@ mod tests {
         assert!(matches!(marker.text_align, crate::style::types::TextAlign::Start));
         assert_eq!(marker.text_indent, crate::style::types::TextIndent::default());
     }
+
+    #[test]
+    fn font_weight_relative_keywords_follow_css_fonts_table() {
+        assert_eq!(child_font_weight("font-weight: 50;", "font-weight: bolder;"), 400);
+        assert_eq!(child_font_weight("font-weight: 50;", "font-weight: lighter;"), 50);
+
+        assert_eq!(child_font_weight("font-weight: 500;", "font-weight: bolder;"), 700);
+        assert_eq!(child_font_weight("font-weight: 500;", "font-weight: lighter;"), 100);
+
+        assert_eq!(child_font_weight("font-weight: 650;", "font-weight: bolder;"), 900);
+        assert_eq!(child_font_weight("font-weight: 650;", "font-weight: lighter;"), 400);
+
+        assert_eq!(child_font_weight("font-weight: 800;", "font-weight: bolder;"), 900);
+        assert_eq!(child_font_weight("font-weight: 800;", "font-weight: lighter;"), 700);
+
+        assert_eq!(child_font_weight("font-weight: 950;", "font-weight: bolder;"), 950);
+        assert_eq!(child_font_weight("font-weight: 950;", "font-weight: lighter;"), 700);
+    }
+
+    #[test]
+    fn out_of_range_font_weight_is_ignored() {
+        let dom = element_with_style("font-weight: 1200;");
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.font_weight.to_u16(), 400);
+    }
 }
 
 fn find_matching_rules(node: &DomNode, rules: &[&StyleRule], ancestors: &[&DomNode]) -> Vec<(u32, Vec<Declaration>)> {
@@ -550,14 +595,11 @@ fn find_pseudo_element_rules(
         for selector in rule.selectors.slice().iter() {
             // Only consider selectors with the matching pseudo-element
             if let Some(selector_pseudo) = selector.pseudo_element() {
-                if selector_pseudo == pseudo {
-                    // Check if the element part matches
-                    if matches_selector(selector, 0, None, &element_ref, &mut context) {
-                        matched = true;
-                        let spec = selector.specificity();
-                        if spec > max_specificity {
-                            max_specificity = spec;
-                        }
+                if selector_pseudo == pseudo && matches_selector(selector, 0, None, &element_ref, &mut context) {
+                    matched = true;
+                    let spec = selector.specificity();
+                    if spec > max_specificity {
+                        max_specificity = spec;
                     }
                 }
             }
@@ -572,6 +614,11 @@ fn find_pseudo_element_rules(
     matches.sort_by_key(|(spec, _)| *spec);
 
     matches
+}
+
+fn resolve_relative_font_weight(styles: &mut ComputedStyle, parent: &ComputedStyle) {
+    let parent_weight = parent.font_weight.to_u16();
+    styles.font_weight = styles.font_weight.resolve_relative(parent_weight);
 }
 
 /// Build an ElementRef with ancestor context
@@ -616,6 +663,7 @@ fn compute_pseudo_element_styles(
             apply_declaration(&mut styles, &decl, parent_styles.font_size, root_font_size);
         }
     }
+    resolve_relative_font_weight(&mut styles, parent_styles);
 
     // Check if content property generates content
     // Per CSS spec, ::before/::after only generate boxes if content is not 'none' or 'normal'
@@ -648,6 +696,7 @@ fn compute_marker_styles(
             apply_declaration(&mut styles, &decl, parent_styles.font_size, root_font_size);
         }
     }
+    resolve_relative_font_weight(&mut styles, parent_styles);
 
     reset_marker_box_properties(&mut styles);
     styles.display = Display::Inline;

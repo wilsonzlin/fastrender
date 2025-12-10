@@ -288,14 +288,69 @@ pub enum FontWeight {
 }
 
 impl FontWeight {
-    /// Converts font weight to numeric u16 value (100-900)
+    /// Clamp a numeric weight to the CSS valid range (1-1000)
+    fn clamp(weight: u16) -> u16 {
+        weight.clamp(1, 1000)
+    }
+
+    /// Resolve the `bolder` keyword relative to a parent weight using the CSS Fonts Level 4 table.
+    ///
+    /// See: https://www.w3.org/TR/css-fonts-4/#relative-weights
+    fn relative_bolder(parent_weight: u16) -> u16 {
+        let w = Self::clamp(parent_weight);
+        if w < 100 {
+            400
+        } else if w < 350 {
+            400
+        } else if w < 550 {
+            700
+        } else if w < 750 {
+            900
+        } else if w < 900 {
+            900
+        } else {
+            w
+        }
+    }
+
+    /// Resolve the `lighter` keyword relative to a parent weight using the CSS Fonts Level 4 table.
+    ///
+    /// See: https://www.w3.org/TR/css-fonts-4/#relative-weights
+    fn relative_lighter(parent_weight: u16) -> u16 {
+        let w = Self::clamp(parent_weight);
+        if w < 100 {
+            w
+        } else if w < 350 {
+            100
+        } else if w < 550 {
+            100
+        } else if w < 750 {
+            400
+        } else if w < 900 {
+            700
+        } else {
+            700
+        }
+    }
+
+    /// Resolve relative keywords (bolder/lighter) against the parent weight and clamp numeric values.
+    pub(crate) fn resolve_relative(self, parent_weight: u16) -> Self {
+        match self {
+            FontWeight::Bolder => FontWeight::Number(Self::relative_bolder(parent_weight)),
+            FontWeight::Lighter => FontWeight::Number(Self::relative_lighter(parent_weight)),
+            FontWeight::Number(n) => FontWeight::Number(Self::clamp(n)),
+            other => other,
+        }
+    }
+
+    /// Converts font weight to numeric u16 value (1-1000)
     pub fn to_u16(self) -> u16 {
         match self {
             FontWeight::Normal => 400,
             FontWeight::Bold => 700,
-            FontWeight::Bolder => 700,  // Simplified - should be relative to parent
-            FontWeight::Lighter => 300, // Simplified - should be relative to parent
-            FontWeight::Number(n) => n,
+            FontWeight::Bolder => Self::relative_bolder(400),
+            FontWeight::Lighter => Self::relative_lighter(400),
+            FontWeight::Number(n) => Self::clamp(n),
         }
     }
 }

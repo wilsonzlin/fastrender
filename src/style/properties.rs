@@ -497,6 +497,19 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         }
 
         // Typography
+        "font" => {
+            if let PropertyValue::Keyword(raw) = &resolved_value {
+                if let Some((font_style, font_weight, font_size, line_height, families)) =
+                    parse_font_shorthand(raw, parent_font_size, root_font_size)
+                {
+                    styles.font_style = font_style;
+                    styles.font_weight = font_weight;
+                    styles.font_size = font_size;
+                    styles.line_height = line_height;
+                    styles.font_family = families;
+                }
+            }
+        }
         "font-family" => {
             if let PropertyValue::FontFamily(families) = &resolved_value {
                 styles.font_family = families.clone();
@@ -522,13 +535,15 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 styles.font_weight = match kw.as_str() {
                     "normal" => FontWeight::Normal,
                     "bold" => FontWeight::Bold,
-                    "lighter" => FontWeight::Number(300),
-                    "bolder" => FontWeight::Number(700),
+                    "lighter" => FontWeight::Lighter,
+                    "bolder" => FontWeight::Bolder,
                     _ => styles.font_weight,
                 };
             }
             PropertyValue::Number(n) => {
-                styles.font_weight = FontWeight::Number(*n as u16);
+                if (1.0..=1000.0).contains(n) {
+                    styles.font_weight = FontWeight::Number((*n as u16).clamp(1, 1000));
+                }
             }
             _ => {}
         },
@@ -551,6 +566,9 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
             }
             PropertyValue::Length(len) => {
                 styles.line_height = LineHeight::Length(*len);
+            }
+            PropertyValue::Percentage(pct) => {
+                styles.line_height = LineHeight::Number(*pct / 100.0);
             }
             _ => {}
         },
@@ -1528,6 +1546,249 @@ fn parse_number_or_percentage<'i, 't>(input: &mut Parser<'i, 't>) -> Result<f32,
         Token::Number { value, .. } => Ok(*value),
         Token::Percentage { unit_value, .. } => Ok(*unit_value),
         _ => Err(location.new_custom_error(())),
+    }
+}
+
+fn parse_font_shorthand(
+    value: &str,
+    parent_font_size: f32,
+    root_font_size: f32,
+) -> Option<(FontStyle, FontWeight, f32, LineHeight, Vec<String>)> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // `inherit` leaves inherited values in place (styles are inherited before declarations apply)
+    if trimmed.eq_ignore_ascii_case("inherit") {
+        return None;
+    }
+
+    // `initial`/`revert` -> reset to initial font values
+    if trimmed.eq_ignore_ascii_case("initial") || trimmed.eq_ignore_ascii_case("revert") {
+        let defaults = ComputedStyle::default();
+        return Some((
+            defaults.font_style,
+            defaults.font_weight,
+            defaults.font_size,
+            defaults.line_height.clone(),
+            defaults.font_family.clone(),
+        ));
+    }
+
+    let mut input = ParserInput::new(trimmed);
+    let mut parser = Parser::new(&mut input);
+
+    enum Phase {
+        PreSize,
+        AfterSize,
+        AfterSlash,
+    }
+
+    let mut phase = Phase::PreSize;
+    let mut font_style: Option<FontStyle> = None;
+    let mut font_weight: Option<FontWeight> = None;
+    let mut font_size: Option<f32> = None;
+    let mut line_height: Option<LineHeight> = None;
+    let mut families: Vec<String> = Vec::new();
+    let mut current_family: Vec<String> = Vec::new();
+
+    while let Ok(token) = parser.next() {
+        match phase {
+            Phase::PreSize => {
+                if matches!(token, Token::Delim('/')) {
+                    return None; // slash before size is invalid
+                }
+
+                if font_size.is_none() {
+                    if let Some(sz) = parse_font_size_token(&token, parent_font_size, root_font_size) {
+                        font_size = Some(sz);
+                        phase = Phase::AfterSize;
+                        continue;
+                    }
+                }
+
+                if let Token::Ident(ref ident) = token {
+                    let ident = ident.as_ref();
+                    match ident {
+                        "normal" => {
+                            if font_style.is_none() {
+                                font_style = Some(FontStyle::Normal);
+                            } else if font_weight.is_none() {
+                                font_weight = Some(FontWeight::Normal);
+                            }
+                        }
+                        "italic" => font_style = Some(FontStyle::Italic),
+                        "oblique" => font_style = Some(FontStyle::Oblique),
+                        "bold" => font_weight = Some(FontWeight::Bold),
+                        "bolder" => font_weight = Some(FontWeight::Bolder),
+                        "lighter" => font_weight = Some(FontWeight::Lighter),
+                        _ => {}
+                    }
+                } else if let Token::Number { value, .. } = token {
+                    if font_weight.is_none() && *value >= 1.0 && *value <= 1000.0 {
+                        font_weight = Some(FontWeight::Number((*value as u16).clamp(1, 1000)));
+                    }
+                } else if let Token::Dimension { ref unit, .. } = token {
+                    // Oblique angles are allowed; ignore them for now.
+                    let u = unit.as_ref();
+                    if matches!(u, "deg" | "grad" | "rad" | "turn") {
+                        continue;
+                    }
+                }
+            }
+            Phase::AfterSlash => {
+                if let Some(parsed) = parse_line_height_token(&token) {
+                    line_height = Some(parsed);
+                    phase = Phase::AfterSize;
+                } else {
+                    return None;
+                }
+            }
+            Phase::AfterSize => match token {
+                Token::Delim('/') => {
+                    if line_height.is_some() {
+                        return None; // multiple slashes not allowed
+                    }
+                    phase = Phase::AfterSlash;
+                }
+                Token::Comma => {
+                    if !current_family.is_empty() {
+                        families.push(current_family.join(" "));
+                        current_family.clear();
+                    }
+                }
+                Token::QuotedString(ref s) => {
+                    if !current_family.is_empty() {
+                        families.push(current_family.join(" "));
+                        current_family.clear();
+                    }
+                    families.push(s.as_ref().to_string());
+                }
+                Token::Ident(ref ident) => {
+                    current_family.push(ident.as_ref().to_string());
+                }
+                _ => {}
+            },
+        }
+    }
+
+    if matches!(phase, Phase::AfterSlash) && line_height.is_none() {
+        return None;
+    }
+
+    if !current_family.is_empty() {
+        families.push(current_family.join(" "));
+    }
+
+    if font_size.is_none() || families.is_empty() {
+        return None;
+    }
+
+    Some((
+        font_style.unwrap_or(FontStyle::Normal),
+        font_weight.unwrap_or(FontWeight::Normal),
+        font_size.unwrap_or(parent_font_size),
+        line_height.unwrap_or(LineHeight::Normal),
+        families,
+    ))
+}
+
+fn parse_font_size_token(token: &Token, parent_font_size: f32, root_font_size: f32) -> Option<f32> {
+    if let Token::Ident(ref ident) = token {
+        if let Some(size) = parse_font_size_keyword(ident.as_ref(), parent_font_size) {
+            return Some(size);
+        }
+    }
+
+    if let Some(len) = length_from_token(token) {
+        return resolve_font_size_length(len, parent_font_size, root_font_size);
+    }
+
+    None
+}
+
+fn parse_line_height_token(token: &Token) -> Option<LineHeight> {
+    match token {
+        Token::Ident(ref ident) if ident.as_ref().eq_ignore_ascii_case("normal") => Some(LineHeight::Normal),
+        Token::Number { value, .. } => Some(LineHeight::Number(*value)),
+        Token::Percentage { unit_value, .. } => Some(LineHeight::Number(*unit_value)),
+        _ => length_from_token(token).map(LineHeight::Length),
+    }
+}
+
+fn parse_font_size_keyword(keyword: &str, parent_font_size: f32) -> Option<f32> {
+    let scale: f32 = 1.2;
+    let medium = 16.0;
+
+    match keyword {
+        "xx-small" => Some(medium / scale.powi(3)),
+        "x-small" => Some(medium / scale.powi(2)),
+        "small" => Some(medium / scale),
+        "medium" => Some(medium),
+        "large" => Some(medium * scale),
+        "x-large" => Some(medium * scale.powi(2)),
+        "xx-large" => Some(medium * scale.powi(3)),
+        "xxx-large" => Some(medium * scale.powi(4)),
+        "larger" => Some(parent_font_size * scale),
+        "smaller" => Some(parent_font_size / scale),
+        _ => None,
+    }
+}
+
+fn resolve_font_size_length(len: Length, parent_font_size: f32, root_font_size: f32) -> Option<f32> {
+    if len.unit.is_absolute() {
+        return Some(len.to_px());
+    }
+    if len.unit == LengthUnit::Em {
+        return Some(len.value * parent_font_size);
+    }
+    if len.unit == LengthUnit::Rem {
+        return Some(len.value * root_font_size);
+    }
+    if len.unit == LengthUnit::Percent {
+        return Some((len.value / 100.0) * parent_font_size);
+    }
+    if matches!(len.unit, LengthUnit::Vw | LengthUnit::Vh | LengthUnit::Vmin | LengthUnit::Vmax) {
+        // Viewport units for font-size resolve to pixels directly
+        return Some(len.to_px());
+    }
+    None
+}
+
+fn length_from_token(token: &Token) -> Option<Length> {
+    match token {
+        Token::Dimension { value, ref unit, .. } => match unit.as_ref() {
+            "px" => Some(Length::px(*value)),
+            "em" => Some(Length::em(*value)),
+            "rem" => Some(Length::rem(*value)),
+            "pt" => Some(Length::pt(*value)),
+            "pc" => Some(Length::pc(*value)),
+            "in" => Some(Length::inches(*value)),
+            "cm" => Some(Length::cm(*value)),
+            "mm" => Some(Length::mm(*value)),
+            "vh" => Some(Length {
+                value: *value,
+                unit: LengthUnit::Vh,
+            }),
+            "vw" => Some(Length {
+                value: *value,
+                unit: LengthUnit::Vw,
+            }),
+            "vmin" => Some(Length {
+                value: *value,
+                unit: LengthUnit::Vmin,
+            }),
+            "vmax" => Some(Length {
+                value: *value,
+                unit: LengthUnit::Vmax,
+            }),
+            "%" => Some(Length::percent(*value)),
+            _ => None,
+        },
+        Token::Percentage { unit_value, .. } => Some(Length::percent(*unit_value * 100.0)),
+        Token::Number { value, .. } if *value == 0.0 => Some(Length::px(0.0)),
+        _ => None,
     }
 }
 
@@ -2857,6 +3118,70 @@ mod tests {
             TabSize::Length(len) => assert!((len.to_px() - 20.0).abs() < 0.001),
             other => panic!("expected length tab size, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn parses_font_shorthand_with_style_weight_size_line_height_and_family() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font".to_string(),
+            value: PropertyValue::Keyword("italic 700 20px/30px \"Fira Sans\", serif".to_string()),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_style, FontStyle::Italic));
+        assert!(matches!(style.font_weight, FontWeight::Number(700)));
+        assert!((style.font_size - 20.0).abs() < 0.01);
+        match style.line_height {
+            LineHeight::Length(len) => assert!((len.to_px() - 30.0).abs() < 0.01),
+            _ => panic!("expected length line-height"),
+        }
+        assert_eq!(style.font_family, vec!["Fira Sans".to_string(), "serif".to_string()]);
+    }
+
+    #[test]
+    fn parses_font_shorthand_with_relative_size_and_percentage_line_height() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font".to_string(),
+            value: PropertyValue::Keyword("bold larger/125% serif".to_string()),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, 20.0, 16.0);
+        assert!(matches!(style.font_weight, FontWeight::Bold));
+        assert!((style.font_size - 24.0).abs() < 0.01);
+        assert!(matches!(style.line_height, LineHeight::Number(n) if (n - 1.25).abs() < 0.001));
+        assert_eq!(style.font_family, vec!["serif".to_string()]);
+    }
+
+    #[test]
+    fn font_shorthand_without_family_is_ignored() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font".to_string(),
+            value: PropertyValue::Keyword("italic 16px".to_string()),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        // Defaults stay intact because the shorthand is invalid.
+        assert!(matches!(style.font_style, FontStyle::Normal));
+        assert!((style.font_size - 16.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn line_height_percentage_is_resolved_to_number() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "line-height".to_string(),
+            value: PropertyValue::Percentage(150.0),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.line_height, LineHeight::Number(n) if (n - 1.5).abs() < 0.001));
     }
 }
 #[derive(Default)]
