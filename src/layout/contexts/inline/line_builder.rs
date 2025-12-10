@@ -1494,7 +1494,8 @@ fn reorder_paragraph(
             if opens.is_empty() {
                 return (0, Vec::new());
             }
-            let added = opens.len();
+            // UAX#9 counts explicit depth per embedding/isolate context, not per control codepoint.
+            let added = 1usize;
             if *depth + added > max_depth {
                 return (0, Vec::new());
             }
