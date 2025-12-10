@@ -104,9 +104,6 @@ fn apply_styles_internal(
     resolve_match_parent_text_align(&mut styles, parent_styles);
     resolve_relative_font_weight(&mut styles, parent_styles);
     propagate_text_decorations(&mut styles, parent_styles);
-    if styles.outline_color_from_current {
-        styles.outline_color = styles.color;
-    }
 
     // Compute pseudo-element styles
     let before_styles =

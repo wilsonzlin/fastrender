@@ -517,7 +517,8 @@ impl Painter {
             });
         }
 
-        if style.outline_style != CssBorderStyle::None && style.outline_width.to_px() > 0.0 {
+        let outline_style = style.outline_style.to_border_style();
+        if outline_style != CssBorderStyle::None && outline_style != CssBorderStyle::Hidden && style.outline_width.to_px() > 0.0 {
             let ow = style.outline_width.to_px();
             let expand = style.outline_offset.to_px() + ow * 0.5;
             let outline_rect = Rect::from_xywh(
@@ -1179,12 +1180,28 @@ impl Painter {
         style: CssBorderStyle,
         color: &Rgba,
     ) {
+        self.paint_border_edge_with_mode(edge, x1, y1, x2, y2, width, style, color, SkiaBlendMode::SourceOver);
+    }
+
+    fn paint_border_edge_with_mode(
+        &mut self,
+        edge: BorderEdge,
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        width: f32,
+        style: CssBorderStyle,
+        color: &Rgba,
+        blend_mode: SkiaBlendMode,
+    ) {
         if width <= 0.0 || matches!(style, CssBorderStyle::None | CssBorderStyle::Hidden) {
             return;
         }
 
         let mut paint = Paint::default();
         paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
+        paint.blend_mode = blend_mode;
         paint.anti_alias = true;
 
         let mut stroke = Stroke::default();
@@ -1273,7 +1290,8 @@ impl Painter {
 
     fn paint_outline(&mut self, x: f32, y: f32, width: f32, height: f32, style: &ComputedStyle) {
         let ow = style.outline_width.to_px();
-        if ow <= 0.0 || matches!(style.outline_style, CssBorderStyle::None | CssBorderStyle::Hidden) {
+        let outline_style = style.outline_style.to_border_style();
+        if ow <= 0.0 || matches!(outline_style, CssBorderStyle::None | CssBorderStyle::Hidden) {
             return;
         }
         let offset = style.outline_offset.to_px();
@@ -1282,47 +1300,56 @@ impl Painter {
         let outer_y = y - expand;
         let outer_w = width + 2.0 * expand;
         let outer_h = height + 2.0 * expand;
-        let color = style.outline_color;
+        let (color, invert) = style.outline_color.resolve(style.color);
+        let blend_mode = if invert {
+            SkiaBlendMode::Difference
+        } else {
+            SkiaBlendMode::SourceOver
+        };
 
-        self.paint_border_edge(
+        self.paint_border_edge_with_mode(
             BorderEdge::Top,
             outer_x,
             outer_y + ow * 0.5,
             outer_x + outer_w,
             outer_y + ow * 0.5,
             ow,
-            style.outline_style,
+            outline_style,
             &color,
+            blend_mode,
         );
-        self.paint_border_edge(
+        self.paint_border_edge_with_mode(
             BorderEdge::Bottom,
             outer_x,
             outer_y + outer_h - ow * 0.5,
             outer_x + outer_w,
             outer_y + outer_h - ow * 0.5,
             ow,
-            style.outline_style,
+            outline_style,
             &color,
+            blend_mode,
         );
-        self.paint_border_edge(
+        self.paint_border_edge_with_mode(
             BorderEdge::Left,
             outer_x + ow * 0.5,
             outer_y,
             outer_x + ow * 0.5,
             outer_y + outer_h,
             ow,
-            style.outline_style,
+            outline_style,
             &color,
+            blend_mode,
         );
-        self.paint_border_edge(
+        self.paint_border_edge_with_mode(
             BorderEdge::Right,
             outer_x + outer_w - ow * 0.5,
             outer_y,
             outer_x + outer_w - ow * 0.5,
             outer_y + outer_h,
             ow,
-            style.outline_style,
+            outline_style,
             &color,
+            blend_mode,
         );
     }
 
@@ -3442,7 +3469,7 @@ mod tests {
     use crate::geometry::Rect;
     use crate::image_loader::ImageCache;
     use crate::paint::display_list::BorderRadii;
-    use crate::style::types::{BackgroundAttachment, Isolation, Overflow};
+    use crate::style::types::{BackgroundAttachment, Isolation, OutlineColor, OutlineStyle, Overflow};
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
     use crate::text::font_loader::FontContext;
@@ -4171,10 +4198,9 @@ mod tests {
     fn outline_draws_outside_box() {
         let mut style = ComputedStyle::default();
         style.background_color = Rgba::BLUE;
-        style.outline_style = CssBorderStyle::Solid;
+        style.outline_style = OutlineStyle::Solid;
         style.outline_width = Length::px(4.0);
-        style.outline_color = Rgba::RED;
-        style.outline_color_from_current = false;
+        style.outline_color = OutlineColor::Color(Rgba::RED);
         style.outline_offset = Length::px(2.0);
         let fragment =
             FragmentNode::new_block_styled(Rect::from_xywh(4.0, 4.0, 10.0, 10.0), vec![], Arc::new(style));

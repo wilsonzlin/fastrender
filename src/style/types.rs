@@ -99,6 +99,68 @@ pub enum BorderStyle {
     Outset,
 }
 
+/// Outline line style
+///
+/// CSS: `outline-style`
+/// Reference: CSS Basic User Interface Level 4 (outline)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutlineStyle {
+    None,
+    Hidden,
+    Solid,
+    Dashed,
+    Dotted,
+    Double,
+    Groove,
+    Ridge,
+    Inset,
+    Outset,
+    Auto,
+}
+
+impl OutlineStyle {
+    /// Returns true if the outline would paint (non-none/hidden)
+    pub fn paints(self) -> bool {
+        !matches!(self, OutlineStyle::None | OutlineStyle::Hidden)
+    }
+
+    /// Converts to the closest border style for painting
+    pub fn to_border_style(self) -> BorderStyle {
+        match self {
+            OutlineStyle::None => BorderStyle::None,
+            OutlineStyle::Hidden => BorderStyle::Hidden,
+            OutlineStyle::Solid => BorderStyle::Solid,
+            OutlineStyle::Dashed => BorderStyle::Dashed,
+            OutlineStyle::Dotted => BorderStyle::Dotted,
+            OutlineStyle::Double => BorderStyle::Double,
+            OutlineStyle::Groove => BorderStyle::Groove,
+            OutlineStyle::Ridge => BorderStyle::Ridge,
+            OutlineStyle::Inset => BorderStyle::Inset,
+            OutlineStyle::Outset => BorderStyle::Outset,
+            OutlineStyle::Auto => BorderStyle::Solid,
+        }
+    }
+}
+
+/// Outline color value (can reference currentColor or invert)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OutlineColor {
+    CurrentColor,
+    Color(crate::style::color::Rgba),
+    Invert,
+}
+
+impl OutlineColor {
+    /// Resolves the outline color to an RGBA and whether it should invert destination pixels.
+    pub fn resolve(self, current_color: crate::style::color::Rgba) -> (crate::style::color::Rgba, bool) {
+        match self {
+            OutlineColor::CurrentColor => (current_color, false),
+            OutlineColor::Color(c) => (c, false),
+            OutlineColor::Invert => (crate::style::color::Rgba::WHITE, true),
+        }
+    }
+}
+
 /// Flex container main axis direction
 ///
 /// CSS: `flex-direction`

@@ -95,21 +95,23 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 styles.z_index = n as i32;
             }
         }
-        "outline-color" => {
-            match &resolved_value {
-                PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentcolor") => {
-                    styles.outline_color_from_current = true;
-                }
-                PropertyValue::Color(c) => {
-                    styles.outline_color = *c;
-                    styles.outline_color_from_current = false;
-                }
-                _ => {}
+        "outline-color" => match &resolved_value {
+            PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentcolor") => {
+                styles.outline_color = OutlineColor::CurrentColor;
             }
-        }
+            PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("invert") => {
+                styles.outline_color = OutlineColor::Invert;
+            }
+            PropertyValue::Color(c) => {
+                styles.outline_color = OutlineColor::Color(*c);
+            }
+            _ => {}
+        },
         "outline-style" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.outline_style = parse_border_style(kw);
+                if let Some(style) = parse_outline_style(kw) {
+                    styles.outline_style = style;
+                }
             }
         }
         "outline-width" => {
@@ -2923,6 +2925,23 @@ pub fn parse_border_style(kw: &str) -> BorderStyle {
     }
 }
 
+fn parse_outline_style(kw: &str) -> Option<OutlineStyle> {
+    match kw {
+        "none" => Some(OutlineStyle::None),
+        "hidden" => Some(OutlineStyle::Hidden),
+        "solid" => Some(OutlineStyle::Solid),
+        "dashed" => Some(OutlineStyle::Dashed),
+        "dotted" => Some(OutlineStyle::Dotted),
+        "double" => Some(OutlineStyle::Double),
+        "groove" => Some(OutlineStyle::Groove),
+        "ridge" => Some(OutlineStyle::Ridge),
+        "inset" => Some(OutlineStyle::Inset),
+        "outset" => Some(OutlineStyle::Outset),
+        "auto" => Some(OutlineStyle::Auto),
+        _ => None,
+    }
+}
+
 fn parse_outline_width(value: &PropertyValue) -> Option<Length> {
     match value {
         PropertyValue::Length(l) if l.value >= 0.0 => Some(*l),
@@ -2944,9 +2963,8 @@ fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
     styles.outline_style = defaults.outline_style;
     styles.outline_width = defaults.outline_width;
     styles.outline_color = defaults.outline_color;
-    styles.outline_color_from_current = defaults.outline_color_from_current;
 
-    let mut color = None;
+    let mut color: Option<OutlineColor> = None;
     let mut style = None;
     let mut width = None;
 
@@ -2958,16 +2976,16 @@ fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
     for token in tokens {
         match token {
             PropertyValue::Color(c) => {
-                color = Some(c);
+                color = Some(OutlineColor::Color(c));
             }
             PropertyValue::Keyword(ref kw) if kw.eq_ignore_ascii_case("currentcolor") => {
-                color = None;
-                styles.outline_color_from_current = true;
+                color = Some(OutlineColor::CurrentColor);
+            }
+            PropertyValue::Keyword(ref kw) if kw.eq_ignore_ascii_case("invert") => {
+                color = Some(OutlineColor::Invert);
             }
             PropertyValue::Keyword(ref kw) => {
-                // Try style then width keywords
-                let parsed_style = parse_border_style(kw);
-                if !matches!(parsed_style, BorderStyle::None) || kw == "none" || kw == "hidden" {
+                if let Some(parsed_style) = parse_outline_style(kw) {
                     style = Some(parsed_style);
                     continue;
                 }
@@ -2989,7 +3007,6 @@ fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
 
     if let Some(c) = color {
         styles.outline_color = c;
-        styles.outline_color_from_current = false;
     }
     if let Some(s) = style {
         styles.outline_style = s;
@@ -3003,7 +3020,7 @@ fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
 mod tests {
     use super::*;
     use crate::style::types::{
-        BackgroundRepeatKeyword, BorderStyle, FontStretch, FontVariant, ListStylePosition, ListStyleType,
+        BackgroundRepeatKeyword, FontStretch, FontVariant, ListStylePosition, ListStyleType, OutlineColor, OutlineStyle,
         PositionComponent, PositionKeyword, TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
     };
 
@@ -3046,10 +3063,9 @@ mod tests {
     #[test]
     fn outline_shorthand_resets_missing_parts() {
         let mut style = ComputedStyle::default();
-        style.outline_style = BorderStyle::Solid;
+        style.outline_style = OutlineStyle::Solid;
         style.outline_width = Length::px(8.0);
-        style.outline_color = Rgba::GREEN;
-        style.outline_color_from_current = false;
+        style.outline_color = OutlineColor::Color(Rgba::GREEN);
 
         apply_declaration(
             &mut style,
@@ -3062,18 +3078,16 @@ mod tests {
             16.0,
         );
 
-        assert_eq!(style.outline_style, BorderStyle::None);
+        assert_eq!(style.outline_style, OutlineStyle::None);
         assert_eq!(style.outline_width, Length::px(3.0)); // medium
-        assert_eq!(style.outline_color, Rgba::RED);
-        assert!(!style.outline_color_from_current);
+        assert_eq!(style.outline_color, OutlineColor::Color(Rgba::RED));
     }
 
     #[test]
     fn outline_shorthand_defaults_color_to_currentcolor() {
         let mut style = ComputedStyle::default();
         style.color = Rgba::BLUE;
-        style.outline_color = Rgba::GREEN;
-        style.outline_color_from_current = false;
+        style.outline_color = OutlineColor::Color(Rgba::GREEN);
 
         apply_declaration(
             &mut style,
@@ -3089,10 +3103,10 @@ mod tests {
             16.0,
         );
 
-        assert_eq!(style.outline_style, BorderStyle::Solid);
+        assert_eq!(style.outline_style, OutlineStyle::Solid);
         assert_eq!(style.outline_width, Length::px(1.0));
-        assert!(style.outline_color_from_current);
-        // color resolves to currentColor during cascade when requested
+        assert_eq!(style.outline_color, OutlineColor::Invert);
+        // currentColor resolution happens at paint time; initial value is invert per spec
     }
 
     #[test]

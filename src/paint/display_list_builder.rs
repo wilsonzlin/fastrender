@@ -417,7 +417,8 @@ impl DisplayListBuilder {
 
     fn emit_outline(&mut self, rect: Rect, style: &ComputedStyle) {
         let ow = style.outline_width.to_px();
-        if ow <= 0.0 || matches!(style.outline_style, crate::style::types::BorderStyle::None | crate::style::types::BorderStyle::Hidden) {
+        let outline_style = style.outline_style.to_border_style();
+        if ow <= 0.0 || matches!(outline_style, crate::style::types::BorderStyle::None | crate::style::types::BorderStyle::Hidden) {
             return;
         }
         let offset = style.outline_offset.to_px();
@@ -428,7 +429,8 @@ impl DisplayListBuilder {
             rect.width() + 2.0 * expand,
             rect.height() + 2.0 * expand,
         );
-        self.emit_border(outline_rect, ow, style.outline_color);
+        let (color, _) = style.outline_color.resolve(style.color);
+        self.emit_border(outline_rect, ow, color);
     }
 
     /// Begins an opacity layer
@@ -902,9 +904,9 @@ mod tests {
     #[test]
     fn outline_emits_stroke_rect() {
         let mut style = ComputedStyle::default();
-        style.outline_style = crate::style::types::BorderStyle::Solid;
+        style.outline_style = crate::style::types::OutlineStyle::Solid;
         style.outline_width = Length::px(2.0);
-        style.outline_color = Rgba::RED;
+        style.outline_color = crate::style::types::OutlineColor::Color(Rgba::RED);
         let fragment = FragmentNode::new_block_styled(
             Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
             vec![],
