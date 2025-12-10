@@ -224,7 +224,10 @@ impl LayoutEngine {
     /// Sharing the font context with paint keeps font fallback, cache warming, and font loading
     /// consistent across the pipeline.
     pub fn with_font_context(config: LayoutConfig, font_context: FontContext) -> Self {
-        let factory = FormattingContextFactory::with_font_context(font_context.clone());
+        let factory = FormattingContextFactory::with_font_context_and_viewport(
+            font_context.clone(),
+            config.initial_containing_block,
+        );
         Self {
             config,
             factory,

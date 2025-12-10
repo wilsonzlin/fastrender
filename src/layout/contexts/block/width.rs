@@ -119,19 +119,25 @@ impl MarginValue {
 /// # Returns
 ///
 /// A `ComputedBlockWidth` containing all resolved horizontal dimensions.
-pub fn compute_block_width(style: &ComputedStyle, containing_width: f32) -> ComputedBlockWidth {
+pub fn compute_block_width(
+    style: &ComputedStyle,
+    containing_width: f32,
+    viewport: crate::geometry::Size,
+) -> ComputedBlockWidth {
     // Resolve padding (percentages relative to containing width)
     let padding_left = resolve_length(
         style.padding_left,
         containing_width,
         style.font_size,
         style.root_font_size,
+        viewport,
     );
     let padding_right = resolve_length(
         style.padding_right,
         containing_width,
         style.font_size,
         style.root_font_size,
+        viewport,
     );
 
     // Border widths
@@ -140,12 +146,14 @@ pub fn compute_block_width(style: &ComputedStyle, containing_width: f32) -> Comp
         containing_width,
         style.font_size,
         style.root_font_size,
+        viewport,
     );
     let border_right = resolve_length(
         style.border_right_width,
         containing_width,
         style.font_size,
         style.root_font_size,
+        viewport,
     );
     let horizontal_edges = padding_left + padding_right + border_left + border_right;
 
@@ -156,6 +164,7 @@ pub fn compute_block_width(style: &ComputedStyle, containing_width: f32) -> Comp
             containing_width,
             style.font_size,
             style.root_font_size,
+            viewport,
         )),
         None => MarginValue::Auto,
     };
@@ -165,6 +174,7 @@ pub fn compute_block_width(style: &ComputedStyle, containing_width: f32) -> Comp
             containing_width,
             style.font_size,
             style.root_font_size,
+            viewport,
         )),
         None => MarginValue::Auto,
     };
@@ -173,7 +183,7 @@ pub fn compute_block_width(style: &ComputedStyle, containing_width: f32) -> Comp
     let width_value = style
         .width
         .as_ref()
-        .map(|len| resolve_length(*len, containing_width, style.font_size, style.root_font_size))
+        .map(|len| resolve_length(*len, containing_width, style.font_size, style.root_font_size, viewport))
         .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing));
 
     // Compute the resolved values using the constraint equation
@@ -207,6 +217,7 @@ pub fn compute_block_width_with_auto_margins(
     containing_width: f32,
     margin_left_is_auto: bool,
     margin_right_is_auto: bool,
+    viewport: crate::geometry::Size,
 ) -> ComputedBlockWidth {
     // Resolve padding
     let padding_left = resolve_length(
@@ -214,12 +225,14 @@ pub fn compute_block_width_with_auto_margins(
         containing_width,
         style.font_size,
         style.root_font_size,
+        viewport,
     );
     let padding_right = resolve_length(
         style.padding_right,
         containing_width,
         style.font_size,
         style.root_font_size,
+        viewport,
     );
 
     // Border widths
@@ -228,12 +241,14 @@ pub fn compute_block_width_with_auto_margins(
         containing_width,
         style.font_size,
         style.root_font_size,
+        viewport,
     );
     let border_right = resolve_length(
         style.border_right_width,
         containing_width,
         style.font_size,
         style.root_font_size,
+        viewport,
     );
     let horizontal_edges = padding_left + padding_right + border_left + border_right;
 
@@ -245,7 +260,7 @@ pub fn compute_block_width_with_auto_margins(
             style
                 .margin_left
                 .as_ref()
-                .map(|l| resolve_length(*l, containing_width, style.font_size, style.root_font_size))
+                .map(|l| resolve_length(*l, containing_width, style.font_size, style.root_font_size, viewport))
                 .unwrap_or(0.0),
         )
     };
@@ -257,7 +272,7 @@ pub fn compute_block_width_with_auto_margins(
             style
                 .margin_right
                 .as_ref()
-                .map(|l| resolve_length(*l, containing_width, style.font_size, style.root_font_size))
+                .map(|l| resolve_length(*l, containing_width, style.font_size, style.root_font_size, viewport))
                 .unwrap_or(0.0),
         )
     };
@@ -266,7 +281,7 @@ pub fn compute_block_width_with_auto_margins(
     let width_value = style
         .width
         .as_ref()
-        .map(|len| resolve_length(*len, containing_width, style.font_size, style.root_font_size))
+        .map(|len| resolve_length(*len, containing_width, style.font_size, style.root_font_size, viewport))
         .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing));
 
     // Compute the resolved values
@@ -352,19 +367,19 @@ fn resolve_constraint(
 }
 
 /// Resolves a Length value to pixels using the element and root font sizes for font-relative units.
-fn resolve_length(length: Length, containing_width: f32, font_size: f32, root_font_size: f32) -> f32 {
+fn resolve_length(
+    length: Length,
+    containing_width: f32,
+    font_size: f32,
+    root_font_size: f32,
+    viewport: crate::geometry::Size,
+) -> f32 {
     if length.unit.is_percentage() {
         length.resolve_against(containing_width)
     } else if length.unit.is_absolute() {
         length.to_px()
     } else if length.unit.is_viewport_relative() {
-        match length.unit {
-            LengthUnit::Vw => (length.value / 100.0) * containing_width,
-            LengthUnit::Vh => (length.value / 100.0) * containing_width,
-            LengthUnit::Vmin => (length.value / 100.0) * containing_width,
-            LengthUnit::Vmax => (length.value / 100.0) * containing_width,
-            _ => length.value,
-        }
+        length.resolve_with_viewport(viewport.width, viewport.height)
     } else {
         match length.unit {
             LengthUnit::Em => length.value * font_size,
@@ -379,10 +394,15 @@ fn resolve_length(length: Length, containing_width: f32, font_size: f32, root_fo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::Size;
     use crate::style::types::BoxSizing;
 
     fn default_style() -> ComputedStyle {
         ComputedStyle::default()
+    }
+
+    fn viewport() -> Size {
+        Size::new(800.0, 600.0)
     }
 
     // ComputedBlockWidth tests
@@ -436,20 +456,20 @@ mod tests {
         style.padding_left = Length::em(1.5);
         style.padding_right = Length::rem(1.0);
 
-        let width = compute_block_width(&style, 200.0);
+        let width = compute_block_width(&style, 200.0, viewport());
         assert!((width.padding_left - 15.0).abs() < f32::EPSILON);
         assert!((width.padding_right - 12.0).abs() < f32::EPSILON);
     }
 
     #[test]
-    fn resolves_viewport_units_against_containing_width() {
+    fn resolves_viewport_units_against_viewport() {
         let mut style = default_style();
         style.padding_left = Length::new(10.0, LengthUnit::Vw);
         style.padding_right = Length::new(5.0, LengthUnit::Vmin);
 
-        let width = compute_block_width(&style, 200.0);
-        assert!((width.padding_left - 20.0).abs() < f32::EPSILON);
-        assert!((width.padding_right - 10.0).abs() < f32::EPSILON);
+        let width = compute_block_width(&style, 200.0, viewport());
+        assert!((width.padding_left - 80.0).abs() < f32::EPSILON);
+        assert!((width.padding_right - 30.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -470,7 +490,7 @@ mod tests {
     #[test]
     fn test_width_auto_fills_container() {
         let style = default_style();
-        let result = compute_block_width(&style, 800.0);
+        let result = compute_block_width(&style, 800.0, viewport());
         // width: auto, margins: 0, borders/padding: 0
         // Result should fill the container
         assert_eq!(result.content_width, 800.0);
@@ -481,7 +501,7 @@ mod tests {
         let mut style = default_style();
         style.width = Some(Length::px(400.0));
 
-        let result = compute_block_width_with_auto_margins(&style, 800.0, true, true);
+        let result = compute_block_width_with_auto_margins(&style, 800.0, true, true, viewport());
 
         // width: 400px with auto margins should center
         assert_eq!(result.content_width, 400.0);
@@ -495,7 +515,7 @@ mod tests {
         style.width = Some(Length::px(400.0));
         style.margin_right = Some(Length::px(100.0));
 
-        let result = compute_block_width_with_auto_margins(&style, 800.0, true, false);
+        let result = compute_block_width_with_auto_margins(&style, 800.0, true, false, viewport());
 
         // width: 400px, margin-right: 100px, margin-left: auto
         // margin-left should get the remainder: 800 - 400 - 100 = 300
@@ -510,7 +530,7 @@ mod tests {
         style.width = Some(Length::px(400.0));
         style.margin_left = Some(Length::px(100.0));
 
-        let result = compute_block_width_with_auto_margins(&style, 800.0, false, true);
+        let result = compute_block_width_with_auto_margins(&style, 800.0, false, true, viewport());
 
         // width: 400px, margin-left: 100px, margin-right: auto
         // margin-right should get the remainder: 800 - 400 - 100 = 300
@@ -526,7 +546,7 @@ mod tests {
         style.margin_left = Some(Length::px(100.0));
         style.margin_right = Some(Length::px(100.0));
 
-        let result = compute_block_width(&style, 800.0);
+        let result = compute_block_width(&style, 800.0, viewport());
 
         // Over-constrained: width: 400px, margins: 100px each
         // Total would be 600px in 800px container
@@ -542,7 +562,7 @@ mod tests {
         style.margin_left = Some(Length::px(50.0));
         style.margin_right = Some(Length::px(50.0));
 
-        let result = compute_block_width(&style, 800.0);
+        let result = compute_block_width(&style, 800.0, viewport());
 
         // width: auto, margins: 50px each
         // width should be 800 - 50 - 50 = 700
@@ -555,7 +575,7 @@ mod tests {
     fn test_width_auto_margins_become_zero() {
         let style = default_style();
 
-        let result = compute_block_width_with_auto_margins(&style, 800.0, true, true);
+        let result = compute_block_width_with_auto_margins(&style, 800.0, true, true, viewport());
 
         // width: auto, both margins auto
         // auto margins should become 0, width fills container
@@ -570,7 +590,7 @@ mod tests {
         style.padding_left = Length::px(20.0);
         style.padding_right = Length::px(20.0);
 
-        let result = compute_block_width(&style, 800.0);
+        let result = compute_block_width(&style, 800.0, viewport());
 
         // width: auto, padding: 20px each side
         // content width should be 800 - 40 = 760
@@ -585,7 +605,7 @@ mod tests {
         style.border_left_width = Length::px(5.0);
         style.border_right_width = Length::px(5.0);
 
-        let result = compute_block_width(&style, 800.0);
+        let result = compute_block_width(&style, 800.0, viewport());
 
         // width: auto, border: 5px each side
         // content width should be 800 - 10 = 790
@@ -604,7 +624,7 @@ mod tests {
         style.border_left_width = Length::px(5.0);
         style.border_right_width = Length::px(5.0);
 
-        let result = compute_block_width(&style, 400.0);
+        let result = compute_block_width(&style, 400.0, viewport());
 
         assert_eq!(result.content_width, 170.0);
         assert_eq!(result.border_box_width(), 200.0);
@@ -615,7 +635,7 @@ mod tests {
         let mut style = default_style();
         style.width = Some(Length::percent(50.0));
 
-        let result = compute_block_width(&style, 800.0);
+        let result = compute_block_width(&style, 800.0, viewport());
 
         // width: 50%
         // content width should be 400
@@ -629,7 +649,7 @@ mod tests {
         style.padding_left = Length::px(500.0);
         style.padding_right = Length::px(500.0);
 
-        let result = compute_block_width(&style, 800.0);
+        let result = compute_block_width(&style, 800.0, viewport());
 
         // Absurd padding that would make content negative
         // Content width should stay at the specified value (100)

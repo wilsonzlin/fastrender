@@ -36,7 +36,9 @@ use crate::layout::contexts::table::column_distribution::{
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::color::Rgba;
 use crate::style::display::Display;
-use crate::style::types::{BorderCollapse, BorderStyle, CaptionSide, Direction, EmptyCells, TableLayout, VerticalAlign};
+use crate::style::types::{
+    BorderCollapse, BorderStyle, CaptionSide, Direction, EmptyCells, TableLayout, VerticalAlign,
+};
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::{BoxNode, BoxType, MarkerContent};
@@ -1911,7 +1913,10 @@ impl TableFormattingContext {
             cloned.style = std::sync::Arc::new(style);
         }
 
-        let bfc = BlockFormattingContext::with_font_context(self.factory.font_context().clone());
+        let bfc = BlockFormattingContext::with_font_context_and_viewport(
+            self.factory.font_context().clone(),
+            self.factory.viewport_size(),
+        );
         let constraints = LayoutConstraints::definite_width(cell_width.max(0.0));
         if matches!(border_collapse, BorderCollapse::Collapse) {
             let mut style = (*cloned.style).clone();
@@ -2566,27 +2571,16 @@ impl FormattingContext for TableFormattingContext {
             }
             let style = strip_borders(&style);
             let mut x = if structure.border_collapse == BorderCollapse::Collapse {
-                col_offsets
-                    .get(start)
-                    .copied()
-                    .unwrap_or(0.0)
-                    - vertical_line_max.get(start).copied().unwrap_or(0.0)
+                col_offsets.get(start).copied().unwrap_or(0.0) - vertical_line_max.get(start).copied().unwrap_or(0.0)
             } else {
-                (col_offsets.get(start).copied().unwrap_or(content_origin_x) - h_spacing * 0.5)
-                    .max(content_origin_x)
+                (col_offsets.get(start).copied().unwrap_or(content_origin_x) - h_spacing * 0.5).max(content_origin_x)
             };
             let mut right = if structure.border_collapse == BorderCollapse::Collapse {
-                let base = col_offsets
-                    .get(end.saturating_sub(1))
-                    .copied()
-                    .unwrap_or(x)
+                let base = col_offsets.get(end.saturating_sub(1)).copied().unwrap_or(x)
                     + col_widths.get(end.saturating_sub(1)).copied().unwrap_or(0.0);
                 base + vertical_line_max.get(end).copied().unwrap_or(0.0)
             } else {
-                let base = col_offsets
-                    .get(end.saturating_sub(1))
-                    .copied()
-                    .unwrap_or(x)
+                let base = col_offsets.get(end.saturating_sub(1)).copied().unwrap_or(x)
                     + col_widths.get(end.saturating_sub(1)).copied().unwrap_or(0.0);
                 base + h_spacing * 0.5
             };
@@ -2659,10 +2653,7 @@ impl FormattingContext for TableFormattingContext {
             let bottom = if end < row_offsets.len() {
                 row_offsets[end]
             } else {
-                row_offsets
-                    .last()
-                    .copied()
-                    .unwrap_or(top)
+                row_offsets.last().copied().unwrap_or(top)
                     + row_metrics.last().map(|r| r.height).unwrap_or(0.0)
                     + if structure.border_collapse != BorderCollapse::Collapse {
                         v_spacing
@@ -2998,7 +2989,11 @@ impl FormattingContext for TableFormattingContext {
             Ok((frag.translate(Point::new(0.0, y)), frag.bounds.height()))
         };
 
-        for caption in captions.iter().copied().filter(|c| matches!(c.style.caption_side, CaptionSide::Top)) {
+        for caption in captions
+            .iter()
+            .copied()
+            .filter(|c| matches!(c.style.caption_side, CaptionSide::Top))
+        {
             let (frag, h) = layout_caption(caption, offset_y)?;
             offset_y += h;
             wrapper_children.push(frag);
@@ -3474,7 +3469,10 @@ mod tests {
 
         assert_eq!(borders.vertical.len(), 3);
         let middle = &borders.vertical[1][0];
-        assert!((middle.width - 2.0).abs() < f32::EPSILON, "hidden empty cell should not contribute");
+        assert!(
+            (middle.width - 2.0).abs() < f32::EPSILON,
+            "hidden empty cell should not contribute"
+        );
     }
 
     fn find_cell_fragment<'a>(fragment: &'a FragmentNode) -> Option<&'a FragmentNode> {
@@ -3562,18 +3560,18 @@ mod tests {
         child_style.height = Some(Length::px(10.0));
         let child = BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![]);
 
-        let cell1 = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![child.clone()]);
+        let cell1 = BoxNode::new_block(
+            Arc::new(cell_style.clone()),
+            FormattingContextType::Block,
+            vec![child.clone()],
+        );
         let cell2 = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![child]);
         let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell1, cell2]);
 
         let col = BoxNode::new_block(Arc::new(col_style), FormattingContextType::Block, vec![]);
         let colgroup = BoxNode::new_block(Arc::new(colgroup_style), FormattingContextType::Block, vec![col]);
 
-        let table = BoxNode::new_block(
-            Arc::new(table_style),
-            FormattingContextType::Table,
-            vec![colgroup, row],
-        );
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![colgroup, row]);
 
         let fc = TableFormattingContext::with_factory(FormattingContextFactory::new());
         let fragment = fc
@@ -3672,7 +3670,10 @@ mod tests {
         assert_eq!(constraints.len(), 1);
         let col = &constraints[0];
         // 50 content + 10+10 padding
-        assert!((col.min_width - 70.0).abs() < 0.5, "min width should include padding only once");
+        assert!(
+            (col.min_width - 70.0).abs() < 0.5,
+            "min width should include padding only once"
+        );
     }
 
     #[test]
@@ -4811,11 +4812,7 @@ mod tests {
             FormattingContextType::Block,
             vec![BoxNode::new_text(make_style(Display::Inline), "data".to_string())],
         );
-        let row = BoxNode::new_block(
-            make_style(Display::TableRow),
-            FormattingContextType::Block,
-            vec![cell],
-        );
+        let row = BoxNode::new_block(make_style(Display::TableRow), FormattingContextType::Block, vec![cell]);
         let tbody = BoxNode::new_block(
             make_style(Display::TableRowGroup),
             FormattingContextType::Block,
@@ -4847,9 +4844,7 @@ mod tests {
         assert!((caption_frag.bounds.width() - table_frag.bounds.width()).abs() < 0.01);
         assert!(caption_frag.bounds.y() <= 0.0 + 1e-3);
         assert!((table_frag.bounds.y() - caption_frag.bounds.height()).abs() < 0.2);
-        assert!(
-            (fragment.bounds.height() - (caption_frag.bounds.height() + table_frag.bounds.height())).abs() < 0.2
-        );
+        assert!((fragment.bounds.height() - (caption_frag.bounds.height() + table_frag.bounds.height())).abs() < 0.2);
     }
 
     #[test]
@@ -4863,11 +4858,7 @@ mod tests {
             FormattingContextType::Block,
             vec![BoxNode::new_text(make_style(Display::Inline), "data".to_string())],
         );
-        let row = BoxNode::new_block(
-            make_style(Display::TableRow),
-            FormattingContextType::Block,
-            vec![cell],
-        );
+        let row = BoxNode::new_block(make_style(Display::TableRow), FormattingContextType::Block, vec![cell]);
         let tbody = BoxNode::new_block(
             make_style(Display::TableRowGroup),
             FormattingContextType::Block,
@@ -4896,9 +4887,7 @@ mod tests {
         let table_frag = &fragment.children[0];
         let caption_frag = &fragment.children[1];
         assert!(caption_frag.bounds.y() >= table_frag.bounds.height() - 0.2);
-        assert!(
-            (fragment.bounds.height() - (caption_frag.bounds.height() + table_frag.bounds.height())).abs() < 0.2
-        );
+        assert!((fragment.bounds.height() - (caption_frag.bounds.height() + table_frag.bounds.height())).abs() < 0.2);
     }
 
     #[test]

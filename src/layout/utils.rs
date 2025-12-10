@@ -14,29 +14,14 @@ use crate::tree::box_tree::ReplacedBox;
 pub fn resolve_length_with_percentage(
     length: Length,
     percentage_base: Option<f32>,
+    viewport: Size,
     font_size: f32,
     root_font_size: f32,
 ) -> Option<f32> {
     if length.unit.is_percentage() {
         percentage_base.map(|b| length.resolve_against(b))
     } else if length.unit.is_viewport_relative() {
-        let vw = percentage_base;
-        let vh = percentage_base;
-        match length.unit {
-            LengthUnit::Vw => vw.map(|w| (length.value / 100.0) * w),
-            LengthUnit::Vh => vh.map(|h| (length.value / 100.0) * h),
-            LengthUnit::Vmin => match (vw, vh) {
-                (Some(w), Some(h)) => Some((length.value / 100.0) * w.min(h)),
-                (Some(w), None) | (None, Some(w)) => Some((length.value / 100.0) * w),
-                _ => None,
-            },
-            LengthUnit::Vmax => match (vw, vh) {
-                (Some(w), Some(h)) => Some((length.value / 100.0) * w.max(h)),
-                (Some(w), None) | (None, Some(w)) => Some((length.value / 100.0) * w),
-                _ => None,
-            },
-            _ => None,
-        }
+        Some(length.resolve_with_viewport(viewport.width, viewport.height))
     } else if length.unit.is_font_relative() {
         Some(resolve_font_relative(length, font_size, root_font_size))
     } else if length.unit.is_absolute() {
@@ -102,7 +87,12 @@ pub fn border_size_from_box_sizing(value: f32, edges: f32, box_sizing: BoxSizing
 /// - Specified width/height override intrinsic dimensions
 /// - If only one dimension is specified and an aspect ratio is available, the other is derived
 /// - If nothing is specified and no intrinsic data exists, fall back to 300x150
-pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, percentage_base: Option<Size>) -> Size {
+pub fn compute_replaced_size(
+    style: &ComputedStyle,
+    replaced: &ReplacedBox,
+    percentage_base: Option<Size>,
+    viewport: Size,
+) -> Size {
     const DEFAULT_SIZE: Size = Size {
         width: 300.0,
         height: 150.0,
@@ -123,9 +113,9 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
     let root_font_size = style.root_font_size;
 
     let resolve_for_width =
-        |len: Length| resolve_replaced_length(&len, width_base, font_size, root_font_size).unwrap_or(0.0);
+        |len: Length| resolve_replaced_length(&len, width_base, viewport, font_size, root_font_size).unwrap_or(0.0);
     let resolve_for_height =
-        |len: Length| resolve_replaced_length(&len, height_base, font_size, root_font_size).unwrap_or(0.0);
+        |len: Length| resolve_replaced_length(&len, height_base, viewport, font_size, root_font_size).unwrap_or(0.0);
 
     let horizontal_edges = resolve_for_width(style.padding_left)
         + resolve_for_width(style.padding_right)
@@ -139,13 +129,13 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
     let mut width = style
         .width
         .as_ref()
-        .and_then(|l| resolve_replaced_length(l, width_base, font_size, root_font_size))
+        .and_then(|l| resolve_replaced_length(l, width_base, viewport, font_size, root_font_size))
         .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
         .unwrap_or(intrinsic.width);
     let mut height = style
         .height
         .as_ref()
-        .and_then(|l| resolve_replaced_length(l, height_base, font_size, root_font_size))
+        .and_then(|l| resolve_replaced_length(l, height_base, viewport, font_size, root_font_size))
         .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
         .unwrap_or(intrinsic.height);
 
@@ -170,7 +160,7 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
     if let Some(min_w) = style
         .min_width
         .as_ref()
-        .and_then(|l| resolve_replaced_length(l, width_base, font_size, root_font_size))
+        .and_then(|l| resolve_replaced_length(l, width_base, viewport, font_size, root_font_size))
         .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
     {
         width = width.max(min_w);
@@ -178,7 +168,7 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
     if let Some(max_w) = style
         .max_width
         .as_ref()
-        .and_then(|l| resolve_replaced_length(l, width_base, font_size, root_font_size))
+        .and_then(|l| resolve_replaced_length(l, width_base, viewport, font_size, root_font_size))
         .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
     {
         width = width.min(max_w);
@@ -186,7 +176,7 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
     if let Some(min_h) = style
         .min_height
         .as_ref()
-        .and_then(|l| resolve_replaced_length(l, height_base, font_size, root_font_size))
+        .and_then(|l| resolve_replaced_length(l, height_base, viewport, font_size, root_font_size))
         .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
     {
         height = height.max(min_h);
@@ -194,7 +184,7 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
     if let Some(max_h) = style
         .max_height
         .as_ref()
-        .and_then(|l| resolve_replaced_length(l, height_base, font_size, root_font_size))
+        .and_then(|l| resolve_replaced_length(l, height_base, viewport, font_size, root_font_size))
         .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
     {
         height = height.min(max_h);
@@ -206,13 +196,14 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
 fn resolve_replaced_length(
     len: &Length,
     percentage_base: Option<f32>,
+    viewport: Size,
     font_size: f32,
     root_font_size: f32,
 ) -> Option<f32> {
     if len.unit.is_percentage() {
         percentage_base.map(|b| len.resolve_against(b))
     } else if len.unit.is_viewport_relative() {
-        percentage_base.map(|base| (len.value / 100.0) * base)
+        Some(len.resolve_with_viewport(viewport.width, viewport.height))
     } else if len.unit.is_font_relative() {
         Some(resolve_font_relative(*len, font_size, root_font_size))
     } else if len.unit.is_absolute() {
@@ -278,7 +269,7 @@ mod tests {
             aspect_ratio: None,
         };
 
-        let size = compute_replaced_size(&style, &replaced, None);
+        let size = compute_replaced_size(&style, &replaced, None, Size::new(800.0, 600.0));
         assert_eq!(size.width, 640.0);
         assert_eq!(size.height, 480.0);
     }
@@ -298,7 +289,7 @@ mod tests {
             aspect_ratio: Some(2.0),
         };
 
-        let size = compute_replaced_size(&style, &replaced, None);
+        let size = compute_replaced_size(&style, &replaced, None, Size::new(800.0, 600.0));
         assert_eq!(size.width, 200.0);
         assert_eq!(size.height, 100.0);
     }
@@ -317,7 +308,12 @@ mod tests {
             aspect_ratio: None,
         };
 
-        let size = compute_replaced_size(&style, &replaced, Some(Size::new(400.0, 300.0)));
+        let size = compute_replaced_size(
+            &style,
+            &replaced,
+            Some(Size::new(400.0, 300.0)),
+            Size::new(800.0, 600.0),
+        );
         assert!((size.width - 200.0).abs() < 0.01);
         assert!((size.height - 75.0).abs() < 0.01);
     }
@@ -337,7 +333,7 @@ mod tests {
             aspect_ratio: Some(1.5),
         };
 
-        let size = compute_replaced_size(&style, &replaced, None);
+        let size = compute_replaced_size(&style, &replaced, None, Size::new(800.0, 600.0));
         // Percentage width cannot resolve, so we fall back to intrinsic and aspect ratio for height
         assert!((size.width - 120.0).abs() < 0.01);
         assert!((size.height - 80.0).abs() < 0.01);
@@ -362,7 +358,7 @@ mod tests {
             aspect_ratio: Some(2.0),
         };
 
-        let size = compute_replaced_size(&style, &replaced, None);
+        let size = compute_replaced_size(&style, &replaced, None, Size::new(800.0, 600.0));
         assert!((size.width - 90.0).abs() < 0.01);
     }
 }

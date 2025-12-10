@@ -64,6 +64,7 @@ use crate::tree::box_tree::BoxNode;
 #[derive(Clone)]
 pub struct FormattingContextFactory {
     font_context: FontContext,
+    viewport_size: crate::geometry::Size,
 }
 
 impl std::fmt::Debug for FormattingContextFactory {
@@ -77,18 +78,36 @@ impl FormattingContextFactory {
     pub fn new() -> Self {
         Self {
             font_context: FontContext::new(),
+            viewport_size: crate::geometry::Size::new(800.0, 600.0),
         }
     }
 
     /// Creates a factory wired to a specific font context, allowing layout to share
     /// font caches with paint and callers.
     pub fn with_font_context(font_context: FontContext) -> Self {
-        Self { font_context }
+        Self {
+            font_context,
+            viewport_size: crate::geometry::Size::new(800.0, 600.0),
+        }
+    }
+
+    /// Creates a factory wired to a specific font context and viewport size, allowing layout to share
+    /// both font caches and viewport-dependent resolution with callers.
+    pub fn with_font_context_and_viewport(font_context: FontContext, viewport_size: crate::geometry::Size) -> Self {
+        Self {
+            font_context,
+            viewport_size,
+        }
     }
 
     /// Returns the font context backing formatting context construction.
     pub fn font_context(&self) -> &FontContext {
         &self.font_context
+    }
+
+    /// Returns the viewport size used for viewport-relative length resolution.
+    pub fn viewport_size(&self) -> crate::geometry::Size {
+        self.viewport_size
     }
 
     /// Creates the appropriate FormattingContext for a box
@@ -138,12 +157,14 @@ impl FormattingContextFactory {
     /// - Reusable (can be used for multiple layouts)
     pub fn create(&self, fc_type: FormattingContextType) -> Box<dyn FormattingContext> {
         match fc_type {
-            FormattingContextType::Block => {
-                Box::new(BlockFormattingContext::with_font_context(self.font_context.clone()))
-            }
-            FormattingContextType::Inline => {
-                Box::new(InlineFormattingContext::with_font_context(self.font_context.clone()))
-            }
+            FormattingContextType::Block => Box::new(BlockFormattingContext::with_font_context_and_viewport(
+                self.font_context.clone(),
+                self.viewport_size,
+            )),
+            FormattingContextType::Inline => Box::new(InlineFormattingContext::with_font_context_and_viewport(
+                self.font_context.clone(),
+                self.viewport_size,
+            )),
             FormattingContextType::Flex => Box::new(FlexFormattingContext::new()),
             FormattingContextType::Grid => Box::new(GridFormattingContext::new()),
             FormattingContextType::Table => Box::new(TableFormattingContext::with_factory(self.clone())),
