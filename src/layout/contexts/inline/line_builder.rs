@@ -1858,18 +1858,6 @@ fn bidi_controls(unicode_bidi: UnicodeBidi, direction: Direction) -> (Vec<char>,
     }
 }
 
-fn bidi_controls_limited(
-    unicode_bidi: UnicodeBidi,
-    direction: Direction,
-    current_depth: usize,
-    max_depth: usize,
-) -> (Vec<char>, Vec<char>) {
-    if current_depth >= max_depth {
-        return (Vec::new(), Vec::new());
-    }
-    bidi_controls(unicode_bidi, direction)
-}
-
 #[derive(Clone)]
 struct BoxContext {
     id: usize,
