@@ -993,12 +993,13 @@ impl ReplacedItem {
     pub fn as_marker(mut self, gap: f32, position: ListStylePosition, direction: Direction) -> Self {
         let extent = self.width + gap;
         let sign = if direction == Direction::Rtl { 1.0 } else { -1.0 };
-        self.layout_advance = extent;
-        self.paint_offset = if matches!(position, ListStylePosition::Outside) {
-            sign * extent
+        if matches!(position, ListStylePosition::Outside) {
+            self.layout_advance = 0.0;
+            self.paint_offset = sign * extent;
         } else {
-            0.0
-        };
+            self.layout_advance = extent;
+            self.paint_offset = 0.0;
+        }
         self.margin_left = 0.0;
         self.margin_right = 0.0;
         self.is_marker = true;

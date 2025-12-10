@@ -265,7 +265,7 @@
 - Background colors and images respect border-radius and `background-clip`: clip radii shrink with border/padding/content edges, fills draw as rounded rects, and image tiling is masked to the clipped rounded box (`src/paint/painter.rs`).
 - `text-align-last: auto` now matches CSS Text: single-line justify paragraphs still justify (using the computed `text-align`), while multi-line paragraphs fall back to start alignment on the last line; added regression to lock the single-line justify behavior (`src/layout/contexts/inline/mod.rs`).
 - `text-indent` keyword semantics refined: `each-line` now forces indentation on the first line even when `hanging` is present, hanging applies to subsequent lines as before, and regressions cover hanging + each-line behavior and intrinsic sizing with a hanging indent across lines (`src/layout/contexts/inline/mod.rs`).
-- List markers reserve the correct inline advance even when `list-style-position: outside`: markers now contribute their width plus the marker gap to line layout while painting outside the content box, preventing text from overlapping markers; inside markers keep the gap in their advance. Added regression to lock outside marker spacing (`src/layout/contexts/inline/{mod.rs,line_builder.rs}`).
+- List markers respect `list-style-position`: outside markers no longer shift inline layout (painted outside with a gap), inside markers reserve their width+gap in layout. Regression updated to reflect outside marker positioning (`src/layout/contexts/inline/{mod.rs,line_builder.rs}`).
 
 ## Current issues / gaps
 - Bidi: still relies on injected controls instead of a dedicated embedding/isolate stack; nested isolates/overrides need validation against UAX#9 beyond the FSI/PDI wrapping.
