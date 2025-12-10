@@ -786,6 +786,7 @@ pub enum TextDecorationStyle {
 pub enum TextDecorationSkipInk {
     Auto,
     None,
+    All,
 }
 
 /// Resolved text-decoration to apply after propagation.

@@ -2658,6 +2658,7 @@ fn parse_text_decoration_skip_ink(value: &PropertyValue) -> Option<TextDecoratio
         return match kw.as_str() {
             "auto" => Some(TextDecorationSkipInk::Auto),
             "none" => Some(TextDecorationSkipInk::None),
+            "all" => Some(TextDecorationSkipInk::All),
             _ => None,
         };
     }
