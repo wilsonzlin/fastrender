@@ -1564,10 +1564,7 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
             let span_start = cell.row;
             let span_end = (cell.row + cell.rowspan).min(structure.row_count);
 
-            let current_height: f32 = structure.rows[span_start..span_end]
-                .iter()
-                .map(row_floor)
-                .sum();
+            let current_height: f32 = structure.rows[span_start..span_end].iter().map(row_floor).sum();
 
             let spacing = structure.border_spacing.1 * (cell.rowspan - 1) as f32;
 
@@ -4366,13 +4363,25 @@ mod tests {
         span_child_style.height = Some(Length::px(100.0));
 
         let tall_child = BoxNode::new_block(Arc::new(tall_child_style), FormattingContextType::Block, vec![]);
-        let cell_a = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![tall_child]);
+        let cell_a = BoxNode::new_block(
+            Arc::new(cell_style.clone()),
+            FormattingContextType::Block,
+            vec![tall_child],
+        );
 
         let span_child = BoxNode::new_block(Arc::new(span_child_style), FormattingContextType::Block, vec![]);
-        let span_cell = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![span_child])
-            .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(1, 2));
+        let span_cell = BoxNode::new_block(
+            Arc::new(cell_style.clone()),
+            FormattingContextType::Block,
+            vec![span_child],
+        )
+        .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(1, 2));
 
-        let row0 = BoxNode::new_block(Arc::new(row_style.clone()), FormattingContextType::Block, vec![cell_a, span_cell]);
+        let row0 = BoxNode::new_block(
+            Arc::new(row_style.clone()),
+            FormattingContextType::Block,
+            vec![cell_a, span_cell],
+        );
 
         let row1_cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
         let row1 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![row1_cell]);

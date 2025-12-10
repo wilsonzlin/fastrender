@@ -53,13 +53,13 @@ use crate::style::types::{
     FontVariantCaps, FontVariantPosition, NumericFigure, NumericFraction, NumericSpacing,
 };
 use crate::style::ComputedStyle;
+use crate::text::font_db::font_has_feature;
 use crate::text::font_db::{FontStretch, FontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
-use crate::text::font_db::font_has_feature;
 use rustybuzz::{Direction as HbDirection, Face, Feature, Language as HbLanguage, UnicodeBuffer};
-use ttf_parser::Tag;
 use std::str::FromStr;
 use std::sync::Arc;
+use ttf_parser::Tag;
 use unicode_bidi::{BidiInfo, Level};
 
 // ============================================================================
@@ -803,12 +803,9 @@ fn get_font_for_run(run: &ItemizedRun, style: &ComputedStyle, font_context: &Fon
     let font_stretch = FontStretch::from_percentage(style.font_stretch.to_percentage());
 
     // Try the font family list first
-    if let Some(font) = font_context.get_font_full(
-        &style.font_family,
-        style.font_weight.to_u16(),
-        font_style,
-        font_stretch,
-    ) {
+    if let Some(font) =
+        font_context.get_font_full(&style.font_family, style.font_weight.to_u16(), font_style, font_stretch)
+    {
         // Verify the font has glyphs for at least the first character
         if let Some(ch) = run.text.chars().next() {
             if let Ok(face) = font.as_ttf_face() {
@@ -829,12 +826,9 @@ fn get_font_for_run(run: &ItemizedRun, style: &ComputedStyle, font_context: &Fon
         _ => vec!["sans-serif".to_string()],
     };
 
-    if let Some(font) = font_context.get_font_full(
-        &generic_families,
-        style.font_weight.to_u16(),
-        font_style,
-        font_stretch,
-    ) {
+    if let Some(font) =
+        font_context.get_font_full(&generic_families, style.font_weight.to_u16(), font_style, font_stretch)
+    {
         return Ok(font);
     }
 
@@ -1039,7 +1033,10 @@ impl ShapingPipeline {
         }
 
         if matches!(style.font_variant, FontVariant::SmallCaps)
-            || matches!(style.font_variant_caps, FontVariantCaps::SmallCaps | FontVariantCaps::AllSmallCaps)
+            || matches!(
+                style.font_variant_caps,
+                FontVariantCaps::SmallCaps | FontVariantCaps::AllSmallCaps
+            )
         {
             if !has_native_small_caps(style, font_context) {
                 return self.shape_small_caps(text, style, font_context);
@@ -1553,7 +1550,10 @@ mod tests {
             historical: false,
             contextual: false,
         };
-        style.font_feature_settings = vec![FontFeatureSetting { tag: *b"liga", value: 1 }];
+        style.font_feature_settings = vec![FontFeatureSetting {
+            tag: *b"liga",
+            value: 1,
+        }];
 
         let feats = collect_opentype_features(&style);
         let mut seen: std::collections::HashMap<[u8; 4], u32> = std::collections::HashMap::new();

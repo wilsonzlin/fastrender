@@ -60,8 +60,8 @@ use crate::tree::box_tree::{BoxNode, BoxType, MarkerContent, ReplacedBox};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 use std::sync::Arc;
 
-use baseline::{compute_line_height_with_metrics, BaselineMetrics};
 use crate::text::font_db::ScaledMetrics;
+use baseline::{compute_line_height_with_metrics, BaselineMetrics};
 use line_builder::{InlineBlockItem, InlineItem, Line, LineBuilder, PositionedItem, ReplacedItem, TabItem, TextItem};
 
 /// Inline Formatting Context implementation

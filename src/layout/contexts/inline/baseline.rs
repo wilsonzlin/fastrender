@@ -359,7 +359,10 @@ pub fn compute_line_height(style: &ComputedStyle) -> f32 {
 }
 
 /// Computes line height, optionally using scaled font metrics when available.
-pub fn compute_line_height_with_metrics(style: &ComputedStyle, metrics: Option<&crate::text::font_db::ScaledMetrics>) -> f32 {
+pub fn compute_line_height_with_metrics(
+    style: &ComputedStyle,
+    metrics: Option<&crate::text::font_db::ScaledMetrics>,
+) -> f32 {
     use crate::style::types::LineHeight;
 
     let font_size = style.font_size;

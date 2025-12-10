@@ -655,8 +655,9 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                             }
                             continue;
                         }
-                        if let Some(inner) =
-                            token.strip_prefix("character-variant(").and_then(|s| s.strip_suffix(')'))
+                        if let Some(inner) = token
+                            .strip_prefix("character-variant(")
+                            .and_then(|s| s.strip_suffix(')'))
                         {
                             for part in inner
                                 .split(|c: char| c == ',' || c.is_whitespace())
@@ -756,12 +757,14 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 if tokens.len() == 1 {
                     match tokens[0] {
                         "normal" => styles.font_variant_ligatures = FontVariantLigatures::default(),
-                        "none" => styles.font_variant_ligatures = FontVariantLigatures {
-                            common: false,
-                            discretionary: false,
-                            historical: false,
-                            contextual: false,
-                        },
+                        "none" => {
+                            styles.font_variant_ligatures = FontVariantLigatures {
+                                common: false,
+                                discretionary: false,
+                                historical: false,
+                                contextual: false,
+                            }
+                        }
                         _ => {}
                     }
                 } else if !tokens.is_empty() {
@@ -1872,7 +1875,15 @@ fn parse_font_shorthand(
     value: &str,
     parent_font_size: f32,
     root_font_size: f32,
-) -> Option<(FontStyle, FontWeight, FontVariant, FontStretch, f32, LineHeight, Vec<String>)> {
+) -> Option<(
+    FontStyle,
+    FontWeight,
+    FontVariant,
+    FontStretch,
+    f32,
+    LineHeight,
+    Vec<String>,
+)> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return None;
@@ -2100,7 +2111,10 @@ fn resolve_font_size_length(len: Length, parent_font_size: f32, root_font_size: 
     if len.unit == LengthUnit::Percent {
         return Some((len.value / 100.0) * parent_font_size);
     }
-    if matches!(len.unit, LengthUnit::Vw | LengthUnit::Vh | LengthUnit::Vmin | LengthUnit::Vmax) {
+    if matches!(
+        len.unit,
+        LengthUnit::Vw | LengthUnit::Vh | LengthUnit::Vmin | LengthUnit::Vmax
+    ) {
         // Viewport units for font-size resolve to pixels directly
         return Some(len.to_px());
     }
@@ -3483,7 +3497,10 @@ mod tests {
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert!(matches!(style.font_style, FontStyle::Italic));
         assert!(matches!(style.font_weight, FontWeight::Number(700)));
-        assert!(matches!(style.font_stretch, FontStretch::Normal | FontStretch::Percentage(_)));
+        assert!(matches!(
+            style.font_stretch,
+            FontStretch::Normal | FontStretch::Percentage(_)
+        ));
         assert!((style.font_size - 20.0).abs() < 0.01);
         match style.line_height {
             LineHeight::Length(len) => assert!((len.to_px() - 30.0).abs() < 0.01),
@@ -3672,8 +3689,14 @@ mod tests {
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
-        assert!(matches!(style.font_variant_east_asian.variant, Some(EastAsianVariant::Jis90)));
-        assert!(matches!(style.font_variant_east_asian.width, Some(EastAsianWidth::ProportionalWidth)));
+        assert!(matches!(
+            style.font_variant_east_asian.variant,
+            Some(EastAsianVariant::Jis90)
+        ));
+        assert!(matches!(
+            style.font_variant_east_asian.width,
+            Some(EastAsianWidth::ProportionalWidth)
+        ));
         assert!(style.font_variant_east_asian.ruby);
 
         let decl = Declaration {
@@ -3692,7 +3715,9 @@ mod tests {
         let mut style = ComputedStyle::default();
         let decl = Declaration {
             property: "font-variant-numeric".to_string(),
-            value: PropertyValue::Keyword("oldstyle-nums tabular-nums stacked-fractions ordinal slashed-zero".to_string()),
+            value: PropertyValue::Keyword(
+                "oldstyle-nums tabular-nums stacked-fractions ordinal slashed-zero".to_string(),
+            ),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -3937,10 +3962,7 @@ fn parse_feature_setting<'i, 't>(
     parser.skip_whitespace();
     let value = if let Ok(num) = parser.try_parse(|p| p.expect_number()) {
         num.max(0.0) as u32
-    } else if let Ok(ident) = parser.try_parse(|p| {
-        p.expect_ident()
-            .map(|ident| ident.as_ref().to_ascii_lowercase())
-    }) {
+    } else if let Ok(ident) = parser.try_parse(|p| p.expect_ident().map(|ident| ident.as_ref().to_ascii_lowercase())) {
         match ident.as_str() {
             "on" => 1,
             "off" => 0,

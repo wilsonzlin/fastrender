@@ -40,8 +40,8 @@ use crate::style::types::{
 use crate::style::types::{FilterColor, FilterFunction, MixBlendMode, Overflow};
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
-use crate::text::font_loader::FontContext;
 use crate::text::font_db::{FontStretch, FontStyle, ScaledMetrics};
+use crate::text::font_loader::FontContext;
 use crate::text::pipeline::{ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
@@ -85,6 +85,44 @@ enum ResolvedFilter {
         spread: f32,
         color: Rgba,
     },
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedTextShadow {
+    offset_x: f32,
+    offset_y: f32,
+    blur_radius: f32,
+    color: Rgba,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PathBounds {
+    min_x: f32,
+    min_y: f32,
+    max_x: f32,
+    max_y: f32,
+}
+
+impl PathBounds {
+    fn new() -> Self {
+        Self {
+            min_x: f32::INFINITY,
+            min_y: f32::INFINITY,
+            max_x: f32::NEG_INFINITY,
+            max_y: f32::NEG_INFINITY,
+        }
+    }
+
+    fn include(&mut self, rect: &tiny_skia::Rect) {
+        self.min_x = self.min_x.min(rect.left());
+        self.min_y = self.min_y.min(rect.top());
+        self.max_x = self.max_x.max(rect.right());
+        self.max_y = self.max_y.max(rect.bottom());
+    }
+
+    fn is_valid(&self) -> bool {
+        self.min_x.is_finite() && self.min_y.is_finite() && self.max_x.is_finite() && self.max_y.is_finite()
+    }
 }
 
 #[derive(Debug)]
@@ -555,7 +593,7 @@ impl Painter {
             } => {
                 let color = style.color;
                 if let Some(ref runs) = runs {
-                    self.paint_shaped_runs(runs, rect.x(), rect.y() + baseline_offset, color);
+                    self.paint_shaped_runs(runs, rect.x(), rect.y() + baseline_offset, color, Some(&style));
                 } else {
                     self.paint_text(
                         &text,
@@ -1271,10 +1309,17 @@ impl Painter {
             Err(_) => return,
         };
 
-        self.paint_shaped_runs(&shaped_runs, x, baseline_y, color);
+        self.paint_shaped_runs(&shaped_runs, x, baseline_y, color, style);
     }
 
-    fn paint_shaped_runs(&mut self, runs: &[ShapedRun], origin_x: f32, baseline_y: f32, color: Rgba) {
+    fn paint_shaped_runs(
+        &mut self,
+        runs: &[ShapedRun],
+        origin_x: f32,
+        baseline_y: f32,
+        color: Rgba,
+        style: Option<&ComputedStyle>,
+    ) {
         let mut pen_x = origin_x;
 
         for run in runs {
@@ -1283,16 +1328,19 @@ impl Painter {
             } else {
                 pen_x
             };
-            self.paint_shaped_run(run, run_origin, baseline_y, color);
+            self.paint_shaped_run(run, run_origin, baseline_y, color, style);
             pen_x += run.advance;
         }
     }
 
-    fn paint_shaped_run(&mut self, run: &ShapedRun, origin_x: f32, baseline_y: f32, color: Rgba) {
-        let mut paint = Paint::default();
-        paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
-        paint.anti_alias = true;
-
+    fn paint_shaped_run(
+        &mut self,
+        run: &ShapedRun,
+        origin_x: f32,
+        baseline_y: f32,
+        color: Rgba,
+        style: Option<&ComputedStyle>,
+    ) {
         // ttf_parser face
         let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
             Ok(f) => f,
@@ -1300,6 +1348,9 @@ impl Painter {
         };
         let units_per_em = face.units_per_em() as f32;
         let scale = run.font_size / units_per_em;
+
+        let mut glyph_paths = Vec::with_capacity(run.glyphs.len());
+        let mut bounds = PathBounds::new();
 
         for glyph in &run.glyphs {
             let glyph_x = match run.direction {
@@ -1311,9 +1362,31 @@ impl Painter {
             let glyph_id: u16 = glyph.glyph_id as u16;
 
             if let Some(path) = Self::build_glyph_path(&face, glyph_id, glyph_x, glyph_y, scale) {
-                self.pixmap
-                    .fill_path(&path, &paint, tiny_skia::FillRule::EvenOdd, Transform::identity(), None);
+                bounds.include(&path.bounds());
+                glyph_paths.push(path);
             }
+        }
+
+        if glyph_paths.is_empty() || !bounds.is_valid() {
+            return;
+        }
+
+        if let Some(style) = style {
+            if !style.text_shadow.is_empty() {
+                let shadows = resolve_text_shadows(style);
+                if !shadows.is_empty() {
+                    self.paint_text_shadows(&glyph_paths, &bounds, &shadows);
+                }
+            }
+        }
+
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
+        paint.anti_alias = true;
+
+        for path in &glyph_paths {
+            self.pixmap
+                .fill_path(path, &paint, tiny_skia::FillRule::EvenOdd, Transform::identity(), None);
         }
     }
 
@@ -1376,6 +1449,59 @@ impl Painter {
 
         face.outline_glyph(ttf_parser::GlyphId(glyph_id), &mut converter)?;
         converter.builder.finish()
+    }
+
+    fn paint_text_shadows(&mut self, paths: &[tiny_skia::Path], bounds: &PathBounds, shadows: &[ResolvedTextShadow]) {
+        for shadow in shadows {
+            let blur_margin = (shadow.blur_radius.abs() * 3.0).ceil();
+            let shadow_min_x = bounds.min_x + shadow.offset_x - blur_margin;
+            let shadow_max_x = bounds.max_x + shadow.offset_x + blur_margin;
+            let shadow_min_y = bounds.min_y + shadow.offset_y - blur_margin;
+            let shadow_max_y = bounds.max_y + shadow.offset_y + blur_margin;
+
+            let shadow_width = (shadow_max_x - shadow_min_x).ceil().max(0.0) as u32;
+            let shadow_height = (shadow_max_y - shadow_min_y).ceil().max(0.0) as u32;
+            if shadow_width == 0 || shadow_height == 0 {
+                continue;
+            }
+
+            let Some(mut shadow_pixmap) = Pixmap::new(shadow_width, shadow_height) else {
+                continue;
+            };
+
+            let mut paint = Paint::default();
+            paint.set_color_rgba8(shadow.color.r, shadow.color.g, shadow.color.b, shadow.color.alpha_u8());
+            paint.anti_alias = true;
+
+            let translate_x = -bounds.min_x + blur_margin;
+            let translate_y = -bounds.min_y + blur_margin;
+            let transform = Transform::from_translate(translate_x, translate_y);
+            for path in paths {
+                shadow_pixmap.fill_path(path, &paint, tiny_skia::FillRule::EvenOdd, transform, None);
+            }
+
+            if shadow.blur_radius > 0.0 {
+                apply_gaussian_blur(&mut shadow_pixmap, shadow.blur_radius);
+            }
+
+            let dest_x = shadow_min_x.floor() as i32;
+            let dest_y = shadow_min_y.floor() as i32;
+            let frac_x = shadow_min_x - dest_x as f32;
+            let frac_y = shadow_min_y - dest_y as f32;
+            let pixmap_paint = PixmapPaint {
+                opacity: 1.0,
+                blend_mode: SkiaBlendMode::SourceOver,
+                ..Default::default()
+            };
+            self.pixmap.draw_pixmap(
+                dest_x,
+                dest_y,
+                shadow_pixmap.as_ref(),
+                &pixmap_paint,
+                Transform::from_translate(frac_x, frac_y),
+                None,
+            );
+        }
     }
 
     /// Paints a replaced element (image, etc.)
@@ -1658,7 +1784,7 @@ impl Painter {
         let half_leading = ((metrics.line_height - (metrics.ascent + metrics.descent)) / 2.0).max(0.0);
         let baseline_y = rect.y() + half_leading + metrics.baseline_offset;
 
-        self.paint_shaped_runs(&runs, rect.x(), baseline_y, style.color);
+        self.paint_shaped_runs(&runs, rect.x(), baseline_y, style.color, Some(style));
         true
     }
 
@@ -1675,8 +1801,7 @@ impl Painter {
         if metrics_source.is_none() {
             let italic = matches!(style.font_style, crate::style::types::FontStyle::Italic);
             let oblique = matches!(style.font_style, crate::style::types::FontStyle::Oblique(_));
-            let stretch =
-                crate::text::font_db::FontStretch::from_percentage(style.font_stretch.to_percentage());
+            let stretch = crate::text::font_db::FontStretch::from_percentage(style.font_stretch.to_percentage());
             metrics_source = self
                 .font_ctx
                 .get_font_full(
@@ -2431,6 +2556,28 @@ fn invert(color: [f32; 3], amount: f32) -> [f32; 3] {
     ]
 }
 
+fn resolve_text_shadows(style: &ComputedStyle) -> Vec<ResolvedTextShadow> {
+    style
+        .text_shadow
+        .iter()
+        .map(|shadow| ResolvedTextShadow {
+            offset_x: resolve_shadow_length(&shadow.offset_x, style.font_size),
+            offset_y: resolve_shadow_length(&shadow.offset_y, style.font_size),
+            blur_radius: resolve_shadow_length(&shadow.blur_radius, style.font_size).max(0.0),
+            color: shadow.color,
+        })
+        .collect()
+}
+
+fn resolve_shadow_length(len: &Length, font_size: f32) -> f32 {
+    match len.unit {
+        LengthUnit::Percent => len.resolve_against(font_size),
+        LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size),
+        _ if len.unit.is_absolute() => len.to_px(),
+        _ => len.value * font_size,
+    }
+}
+
 fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
     let radius = (sigma.abs() * 3.0).ceil() as usize;
     if radius == 0 {
@@ -3135,6 +3282,7 @@ pub fn paint_tree_with_resources(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::css::types::TextShadow;
     use crate::geometry::Rect;
     use crate::image_loader::ImageCache;
     use crate::paint::display_list::BorderRadii;
@@ -3165,6 +3313,34 @@ mod tests {
         let g = ((px.green() as u16 * 255) / a as u16) as u8;
         let b = ((px.blue() as u16 * 255) / a as u16) as u8;
         (r, g, b, a)
+    }
+
+    fn bounding_box_for_color(
+        pixmap: &Pixmap,
+        predicate: impl Fn((u8, u8, u8, u8)) -> bool,
+    ) -> Option<(u32, u32, u32, u32)> {
+        let mut min_x = u32::MAX;
+        let mut min_y = u32::MAX;
+        let mut max_x = 0u32;
+        let mut max_y = 0u32;
+
+        for y in 0..pixmap.height() {
+            for x in 0..pixmap.width() {
+                let color = color_at(pixmap, x, y);
+                if predicate(color) {
+                    min_x = min_x.min(x);
+                    min_y = min_y.min(y);
+                    max_x = max_x.max(x);
+                    max_y = max_y.max(y);
+                }
+            }
+        }
+
+        if min_x == u32::MAX {
+            None
+        } else {
+            Some((min_x, min_y, max_x, max_y))
+        }
     }
 
     #[test]
@@ -3226,6 +3402,41 @@ mod tests {
         let style = ComputedStyle::default();
         let metrics = painter.decoration_metrics(None, &style);
         assert!(metrics.is_some());
+    }
+
+    #[test]
+    fn text_shadow_offsets_are_painted() {
+        let mut style = ComputedStyle::default();
+        style.color = Rgba::BLACK;
+        style.font_size = 16.0;
+        style.text_shadow = vec![TextShadow {
+            offset_x: Length::px(4.0),
+            offset_y: Length::px(0.0),
+            blur_radius: Length::px(0.0),
+            color: Rgba::from_rgba8(255, 0, 0, 255),
+        }];
+        let style = Arc::new(style);
+
+        let fragment =
+            FragmentNode::new_text_styled(Rect::from_xywh(10.0, 10.0, 80.0, 30.0), "Hi".to_string(), 16.0, style);
+        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 120.0, 60.0), vec![fragment]);
+        let tree = FragmentTree::new(root);
+
+        let pixmap = paint_tree(&tree, 120, 60, Rgba::WHITE).expect("paint");
+
+        let black_bbox =
+            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32).expect("black text");
+        let red_bbox =
+            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80).expect("shadow");
+
+        assert!(
+            red_bbox.0 > black_bbox.0 + 2,
+            "shadow should be offset to the right of the glyphs"
+        );
+        assert!(
+            red_bbox.1.abs_diff(black_bbox.1) <= 2,
+            "shadow should align vertically when no y offset is set"
+        );
     }
 
     #[test]
