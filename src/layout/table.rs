@@ -396,6 +396,7 @@ impl TableStructure {
         for (child_idx, child) in table_box.children.iter().enumerate() {
             match Self::get_table_element_type(child) {
                 TableElementType::RowGroup | TableElementType::HeaderGroup | TableElementType::FooterGroup => {
+                    let group_visibility = child.style.visibility;
                     // Process rows within the group
                     for (row_child_idx, row_child) in child.children.iter().enumerate() {
                         if matches!(Self::get_table_element_type(row_child), TableElementType::Row) {
@@ -411,7 +412,12 @@ impl TableStructure {
                                 row_child.style.max_height.as_ref(),
                                 row_child.style.font_size,
                             );
-                            row_visibilities.push(row_child.style.visibility);
+                            let row_visibility = if matches!(group_visibility, Visibility::Collapse) {
+                                Visibility::Collapse
+                            } else {
+                                row_child.style.visibility
+                            };
+                            row_visibilities.push(row_visibility);
                             row_heights.push(spec_height);
                             row_min_heights.push(min_h);
                             row_max_heights.push(max_h);
@@ -475,12 +481,17 @@ impl TableStructure {
                     col_cursor += 1;
                 }
                 TableElementType::ColumnGroup => {
+                    let group_visibility = child.style.visibility;
                     // Apply group width to contained columns (or next column if none)
                     if !child.children.is_empty() {
                         for group_child in &child.children {
                             if Self::get_table_element_type(group_child) == TableElementType::Column {
                                 if let Some(col) = structure.columns.get_mut(col_cursor) {
-                                    col.visibility = group_child.style.visibility;
+                                    col.visibility = if matches!(group_visibility, Visibility::Collapse) {
+                                        Visibility::Collapse
+                                    } else {
+                                        group_child.style.visibility
+                                    };
                                     if let Some(width) = &group_child.style.width {
                                         col.specified_width = Some(Self::length_to_specified_width(width));
                                     }
@@ -4632,6 +4643,74 @@ mod tests {
         assert_eq!(structure.row_count, 1);
         assert_eq!(structure.column_count, 1);
         assert_eq!(structure.cells.len(), 1);
+    }
+
+    #[test]
+    fn row_group_visibility_collapse_removes_rows_and_cells() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut collapsed_group_style = ComputedStyle::default();
+        collapsed_group_style.display = Display::TableRowGroup;
+        collapsed_group_style.visibility = Visibility::Collapse;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+        let row_group = BoxNode::new_block(Arc::new(collapsed_group_style), FormattingContextType::Block, vec![row]);
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row_group]);
+        let structure = TableStructure::from_box_tree(&table);
+
+        assert_eq!(structure.row_count, 0);
+        assert!(structure.cells.is_empty());
+    }
+
+    #[test]
+    fn column_group_visibility_collapse_removes_columns() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut col_style = ComputedStyle::default();
+        col_style.display = Display::TableColumn;
+
+        let mut collapsed_col_group_style = ComputedStyle::default();
+        collapsed_col_group_style.display = Display::TableColumnGroup;
+        collapsed_col_group_style.visibility = Visibility::Collapse;
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]).with_debug_info(
+            DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(2, 1),
+        );
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+
+        let table = BoxNode::new_block(
+            Arc::new(table_style),
+            FormattingContextType::Table,
+            vec![
+                BoxNode::new_block(Arc::new(col_style.clone()), FormattingContextType::Block, vec![]),
+                BoxNode::new_block(Arc::new(collapsed_col_group_style), FormattingContextType::Block, vec![]),
+                row,
+            ],
+        );
+
+        let structure = TableStructure::from_box_tree(&table);
+        assert_eq!(structure.column_count, 1);
+        assert_eq!(structure.cells.len(), 1);
+        let cell_info = &structure.cells[0];
+        assert_eq!(cell_info.colspan, 1);
+        assert_eq!(cell_info.col, 0);
     }
 
     #[test]
