@@ -1466,11 +1466,18 @@ fn reorder_paragraph(
     }
 
     let mut box_counter = 0usize;
+    let mut has_plaintext = false;
     let mut line_leaves: Vec<Vec<BidiLeaf>> = Vec::with_capacity(lines.len());
     for line in lines.iter() {
         let mut leaves = Vec::new();
         for positioned in &line.items {
-            flatten_positioned_item(positioned, &mut Vec::new(), &mut box_counter, &mut leaves);
+            flatten_positioned_item(
+                positioned,
+                &mut Vec::new(),
+                &mut box_counter,
+                &mut leaves,
+                &mut has_plaintext,
+            );
         }
         line_leaves.push(leaves);
     }
@@ -1582,7 +1589,8 @@ fn reorder_paragraph(
         return;
     }
 
-    let bidi = BidiInfo::new(&logical_text, base_level);
+    let effective_base = if has_plaintext { None } else { base_level };
+    let bidi = BidiInfo::new(&logical_text, effective_base);
 
     for (line_idx, line_range) in line_ranges.iter().enumerate() {
         if line_range.is_empty() {
@@ -1893,6 +1901,7 @@ fn flatten_positioned_item(
     box_stack: &mut Vec<BoxContext>,
     box_counter: &mut usize,
     leaves: &mut Vec<BidiLeaf>,
+    has_plaintext: &mut bool,
 ) {
     match &positioned.item {
         InlineItem::InlineBox(inline_box) => {
@@ -1910,6 +1919,9 @@ fn flatten_positioned_item(
                 unicode_bidi: inline_box.unicode_bidi,
                 style: inline_box.style.clone(),
             };
+            if inline_box.unicode_bidi == UnicodeBidi::Plaintext {
+                *has_plaintext = true;
+            }
             box_stack.push(ctx);
             for child in &inline_box.children {
                 let child_positioned = PositionedItem {
@@ -1917,11 +1929,22 @@ fn flatten_positioned_item(
                     x: positioned.x,
                     baseline_offset: positioned.baseline_offset,
                 };
-                flatten_positioned_item(&child_positioned, box_stack, box_counter, leaves);
+                flatten_positioned_item(
+                    &child_positioned,
+                    box_stack,
+                    box_counter,
+                    leaves,
+                    has_plaintext,
+                );
             }
             box_stack.pop();
         }
         _ => {
+            if positioned.item.unicode_bidi() == UnicodeBidi::Plaintext
+                || box_stack.iter().any(|ctx| ctx.unicode_bidi == UnicodeBidi::Plaintext)
+            {
+                *has_plaintext = true;
+            }
             leaves.push(BidiLeaf {
                 item: positioned.item.clone(),
                 baseline_offset: positioned.baseline_offset,
@@ -2584,6 +2607,45 @@ mod tests {
 
         // Base came from first strong RTL; visual order (left-to-right positions) places the LTR run left.
         assert_eq!(texts, vec!["abc".to_string(), "אבג ".to_string()]);
+    }
+
+    #[test]
+    fn bidi_plaintext_paragraph_base_only_when_present() {
+        // First paragraph uses plaintext and should pick first-strong (LTR) despite RTL base.
+        let mut builder = make_builder_with_base(200.0, Level::rtl());
+        builder.add_item(InlineItem::Text(make_text_item_with_bidi(
+            "abc אבג",
+            70.0,
+            UnicodeBidi::Plaintext,
+        )));
+        builder.force_break();
+
+        // Second paragraph has no plaintext and keeps the RTL base.
+        builder.add_item(InlineItem::Text(make_text_item("abc ", 30.0)));
+        builder.add_item(InlineItem::Text(make_text_item("אבג", 30.0)));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 2);
+
+        let para1: Vec<String> = lines[0]
+            .items
+            .iter()
+            .map(|p| match &p.item {
+                InlineItem::Text(t) => t.text.clone(),
+                _ => String::new(),
+            })
+            .collect();
+        assert_eq!(para1, vec!["abc ".to_string(), "אבג".to_string()]);
+
+        let para2: Vec<String> = lines[1]
+            .items
+            .iter()
+            .map(|p| match &p.item {
+                InlineItem::Text(t) => t.text.clone(),
+                _ => String::new(),
+            })
+            .collect();
+        assert_eq!(para2, vec!["אבג".to_string(), " ".to_string(), "abc".to_string()]);
     }
 
     fn reorder_with_controls(text: &str, base: Option<Level>) -> String {
