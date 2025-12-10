@@ -2372,10 +2372,12 @@ fn resolve_text_align_for_line(
 
     match text_align_last {
         crate::style::types::TextAlignLast::Auto => {
-            if is_single_line && !matches!(text_align, TextAlign::Justify) {
-                text_align
-            } else if matches!(text_align, TextAlign::Justify) {
-                map_text_align(TextAlign::Start, direction)
+            if matches!(text_align, TextAlign::Justify) {
+                if is_single_line {
+                    text_align
+                } else {
+                    map_text_align(TextAlign::Start, direction)
+                }
             } else {
                 text_align
             }
@@ -3674,6 +3676,39 @@ mod tests {
         let last_line = fragment.children.last().expect("last line");
         let child = last_line.children.first().expect("text fragment");
         assert!(child.bounds.x() < 1.0, "last line should start-align under auto");
+    }
+
+    #[test]
+    fn text_align_last_auto_justifies_single_line_when_align_is_justify() {
+        let mut root_style = ComputedStyle::default();
+        root_style.font_size = 16.0;
+        root_style.text_align = TextAlign::Justify;
+        root_style.text_align_last = crate::style::types::TextAlignLast::Auto;
+
+        let text_style = Arc::new(ComputedStyle::default());
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![
+                BoxNode::new_text(text_style.clone(), "word ".to_string()),
+                BoxNode::new_text(text_style.clone(), "word".to_string()),
+            ],
+        );
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert_eq!(fragment.children.len(), 1, "single-line paragraph expected");
+        let line = fragment.children.first().unwrap();
+        assert!(line.children.len() >= 2, "justification should keep multiple fragments");
+        let last_child = line.children.last().unwrap();
+        let right_edge = last_child.bounds.x() + last_child.bounds.width();
+        assert!(
+            right_edge > constraints.width().unwrap() * 0.8,
+            "single-line auto+justify should still justify; right_edge={}, width={}",
+            right_edge,
+            constraints.width().unwrap()
+        );
     }
 
     #[test]

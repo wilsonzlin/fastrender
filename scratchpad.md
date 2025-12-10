@@ -263,6 +263,7 @@
 - CSS `backdrop-filter` is parsed (reusing the filter function set) and forces stacking contexts; painter copies the backdrop within the context bounds, applies the resolved filters (including blur/drop-shadow outsets), and composites it back before drawing the context, so backdrop blur/drop-shadow are visible behind translucent content (`src/style/{types.rs,mod.rs,properties.rs}`, `src/paint/{stacking.rs,painter.rs}`).
 - Filters and backdrop-filters now clip to the element’s border box with resolved border radii: stacking layers and backdrop regions are masked by the computed rounded-rect radii before compositing, preventing glow/blur from bleeding outside rounded corners (`src/paint/painter.rs`).
 - Background colors and images respect border-radius and `background-clip`: clip radii shrink with border/padding/content edges, fills draw as rounded rects, and image tiling is masked to the clipped rounded box (`src/paint/painter.rs`).
+- `text-align-last: auto` now matches CSS Text: single-line justify paragraphs still justify (using the computed `text-align`), while multi-line paragraphs fall back to start alignment on the last line; added regression to lock the single-line justify behavior (`src/layout/contexts/inline/mod.rs`).
 
 ## Current issues / gaps
 - Bidi: still relies on injected controls instead of a dedicated embedding/isolate stack; nested isolates/overrides need validation against UAX#9 beyond the FSI/PDI wrapping.
