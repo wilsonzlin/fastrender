@@ -36,8 +36,8 @@ use crate::paint::text_shadow::{resolve_text_shadows, PathBounds, ResolvedTextSh
 use crate::style::color::Rgba;
 use crate::style::types::{
     BackgroundAttachment, BackgroundImage, BackgroundPosition, BackgroundRepeatKeyword, BackgroundSize,
-    BackgroundSizeComponent, BackgroundSizeKeyword, BorderStyle as CssBorderStyle, ObjectFit, TextDecorationLine,
-    TextDecorationStyle, TextDecorationThickness,
+    BackgroundSizeComponent, BackgroundSizeKeyword, BorderStyle as CssBorderStyle, ImageRendering, ObjectFit,
+    TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
 };
 use crate::style::display::Display;
 use crate::style::position::Position;
@@ -279,6 +279,13 @@ impl Painter {
             .or_else(|| self.font_ctx.get_sans_serif())
             .and_then(|font| font.metrics().ok())
             .map(|m| m.scale(style.font_size))
+    }
+
+    fn filter_quality_for_image(style: Option<&ComputedStyle>) -> FilterQuality {
+        match style.map(|s| s.image_rendering) {
+            Some(ImageRendering::CrispEdges) | Some(ImageRendering::Pixelated) => FilterQuality::Nearest,
+            _ => FilterQuality::Bilinear,
+        }
     }
 
     /// Creates a new painter with the given dimensions
@@ -1093,13 +1100,23 @@ impl Painter {
 
                 let max_x = clip_rect.max_x();
                 let max_y = clip_rect.max_y();
+                let quality = Self::filter_quality_for_image(Some(style));
 
                 for ty in positions_y.iter().copied() {
                     for tx in positions_x.iter().copied() {
                         if tx >= max_x || ty >= max_y {
                             continue;
                         }
-                        self.paint_background_tile(&pixmap, tx, ty, tile_w, tile_h, clip_rect, clip_mask.as_ref());
+                        self.paint_background_tile(
+                            &pixmap,
+                            tx,
+                            ty,
+                            tile_w,
+                            tile_h,
+                            clip_rect,
+                            clip_mask.as_ref(),
+                            quality,
+                        );
                     }
                 }
             }
@@ -1206,6 +1223,7 @@ impl Painter {
         tile_h: f32,
         clip: Rect,
         mask: Option<&Mask>,
+        quality: FilterQuality,
     ) {
         if tile_w <= 0.0 || tile_h <= 0.0 {
             return;
@@ -1229,7 +1247,7 @@ impl Painter {
         paint.shader = Pattern::new(
             pixmap.as_ref(),
             SpreadMode::Pad,
-            FilterQuality::Bilinear,
+            quality,
             1.0,
             Transform::from_row(scale_x, 0.0, 0.0, scale_y, tile_x, tile_y),
         );
@@ -1881,7 +1899,7 @@ impl Painter {
         }
 
         let mut paint = PixmapPaint::default();
-        paint.quality = FilterQuality::Bilinear;
+        paint.quality = Self::filter_quality_for_image(style);
 
         let transform = Transform::from_row(scale_x, 0.0, 0.0, scale_y, x + dest_x, y + dest_y);
         self.pixmap.draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);
@@ -1948,7 +1966,7 @@ impl Painter {
         }
 
         let mut paint = PixmapPaint::default();
-        paint.quality = FilterQuality::Bilinear;
+        paint.quality = Self::filter_quality_for_image(style);
 
         let transform = Transform::from_row(scale_x, 0.0, 0.0, scale_y, x + dest_x, y + dest_y);
         self.pixmap.draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);

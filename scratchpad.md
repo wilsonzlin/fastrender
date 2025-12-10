@@ -6,6 +6,8 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Grid template names no longer inherit: cascade keeps `grid-template-*` line names/maps local to the grid container instead of copying them to descendants, and a regression test locks the non-inheritance so children reset to the initial empty templates.
+- CSS `image-rendering` is parsed/stored (auto/smooth/crisp-edges/pixelated plus legacy aliases), stays non-inherited, and painter now maps it to filter quality: pixelated/crisp-edges use nearest-neighbor while auto/smooth stick with bilinear for replaced elements and background images.
 - Grid track parsing now supports `minmax()`, `min-content`/`max-content`, `fit-content()`, percentages, and integer `repeat()` patterns with inline line names; grid track sizing maps the new variants through to Taffy and parsing tests cover the expanded syntax.
 - Gap parsing now honors the spec shorthand: `gap` accepts one or two <length-percentage> values (including percentages and `normal`), splits into row/column gaps, and unit tests cover mixed px/% plus `row-gap`/`column-gap` semantics.
 - Grid auto-repeat syntax (`repeat(auto-fit|auto-fill, ...)`) is parsed into dedicated GridTrack variants and converted to Taffy repeat components with auto-fit/auto-fill counts so layout can expand tracks to available space; placement-name maps stay empty to avoid invalid line resolution, and parsing tests cover auto-fit/fill detection.

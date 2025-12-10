@@ -1778,6 +1778,13 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 _ => {}
             }
         }
+        "image-rendering" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                if let Some(rendering) = parse_image_rendering(kw) {
+                    styles.image_rendering = rendering;
+                }
+            }
+        }
         "object-fit" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 if let Some(fit) = parse_object_fit(kw) {
@@ -1915,6 +1922,19 @@ fn parse_object_fit(kw: &str) -> Option<ObjectFit> {
         "cover" => Some(ObjectFit::Cover),
         "none" => Some(ObjectFit::None),
         "scale-down" => Some(ObjectFit::ScaleDown),
+        _ => None,
+    }
+}
+
+fn parse_image_rendering(kw: &str) -> Option<ImageRendering> {
+    match kw {
+        "auto" => Some(ImageRendering::Auto),
+        "smooth" | "high-quality" | "optimizequality" => Some(ImageRendering::Smooth),
+        "crisp-edges" | "crispedges" | "optimize-contrast" | "optimizecontrast" => {
+            Some(ImageRendering::CrispEdges)
+        }
+        "pixelated" => Some(ImageRendering::Pixelated),
+        "optimizespeed" => Some(ImageRendering::CrispEdges),
         _ => None,
     }
 }
@@ -3682,10 +3702,10 @@ fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
 mod tests {
     use super::*;
     use crate::style::types::{
-        BackgroundRepeatKeyword, BoxSizing, FontStretch, FontVariant, GridAutoFlow, GridTrack, ListStylePosition,
-        ListStyleType, OutlineColor, OutlineStyle, PositionComponent, PositionKeyword, TextDecorationLine,
-        TextDecorationStyle,
-        TextDecorationThickness, TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
+        BackgroundRepeatKeyword, BoxSizing, FontStretch, FontVariant, GridAutoFlow, GridTrack, ImageRendering,
+        ListStylePosition, ListStyleType, OutlineColor, OutlineStyle, PositionComponent, PositionKeyword,
+        TextDecorationLine, TextDecorationStyle, TextDecorationThickness, TextEmphasisFill, TextEmphasisPosition,
+        TextEmphasisShape, TextEmphasisStyle,
     };
 
     #[test]
@@ -3699,6 +3719,34 @@ mod tests {
 
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert_eq!(style.object_fit, ObjectFit::Cover);
+    }
+
+    #[test]
+    fn parses_image_rendering_keywords() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "image-rendering".to_string(),
+                value: PropertyValue::Keyword("pixelated".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.image_rendering, ImageRendering::Pixelated);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "image-rendering".to_string(),
+                value: PropertyValue::Keyword("crisp-edges".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.image_rendering, ImageRendering::CrispEdges);
     }
 
     #[test]

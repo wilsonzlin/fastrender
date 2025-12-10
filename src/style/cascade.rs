@@ -302,10 +302,6 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
 
     // CSS Custom Properties inherit
     styles.custom_properties = parent.custom_properties.clone();
-
-    // Grid line names inherit (so children can reference parent's named grid lines)
-    styles.grid_column_names = parent.grid_column_names.clone();
-    styles.grid_row_names = parent.grid_row_names.clone();
 }
 
 fn resolve_match_parent_text_align(styles: &mut ComputedStyle, parent: &ComputedStyle) {
@@ -520,6 +516,76 @@ mod tests {
         let styled = apply_styles(&parent, &StyleSheet::new());
         let child_styles = &styled.children[0].styles;
         assert_eq!(child_styles.line_break, LineBreak::Anywhere);
+    }
+
+    #[test]
+    fn grid_templates_do_not_inherit() {
+        let child = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![(
+                    "style".to_string(),
+                    "display: grid; \
+                     grid-template-columns: [a] 50px [b] 1fr [c]; \
+                     grid-template-rows: [top] 10px [middle] auto [bottom]; \
+                     grid-template-areas: \"hero sidebar\" \"footer footer\";"
+                        .to_string(),
+                )],
+            },
+            children: vec![child],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let parent_styles = &styled.styles;
+        assert_eq!(parent_styles.grid_template_columns.len(), 2);
+        assert_eq!(parent_styles.grid_column_line_names.len(), 3);
+        assert_eq!(parent_styles.grid_template_rows.len(), 2);
+        assert_eq!(parent_styles.grid_row_line_names.len(), 3);
+        assert_eq!(parent_styles.grid_template_areas.len(), 2);
+
+        let child_styles = &styled.children[0].styles;
+        assert!(child_styles.grid_template_columns.is_empty());
+        assert!(child_styles.grid_template_rows.is_empty());
+        assert!(child_styles.grid_template_areas.is_empty());
+        assert!(child_styles.grid_column_line_names.is_empty());
+        assert!(child_styles.grid_row_line_names.is_empty());
+        assert!(child_styles.grid_column_names.is_empty());
+        assert!(child_styles.grid_row_names.is_empty());
+    }
+
+    #[test]
+    fn image_rendering_does_not_inherit() {
+        let child = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "span".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), "image-rendering: pixelated;".to_string())],
+            },
+            children: vec![child],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        assert!(matches!(
+            styled.styles.image_rendering,
+            crate::style::types::ImageRendering::Pixelated
+        ));
+        assert!(matches!(
+            styled.children[0].styles.image_rendering,
+            crate::style::types::ImageRendering::Auto
+        ));
     }
 
     #[test]

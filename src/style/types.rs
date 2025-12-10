@@ -208,6 +208,17 @@ pub enum ObjectFit {
     ScaleDown,
 }
 
+/// Image scaling quality hint
+///
+/// CSS: `image-rendering`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageRendering {
+    Auto,
+    Smooth,
+    CrispEdges,
+    Pixelated,
+}
+
 /// Logical alignment for object-position
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PositionKeyword {
