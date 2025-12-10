@@ -1540,8 +1540,20 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
     }
 
     // Phase 3: Apply specified/percentage heights when an available height is known.
-    let spacing = structure.border_spacing.1;
-    let content_available = available_height.map(|h| (h - spacing * (structure.row_count as f32 + 1.0)).max(0.0));
+    let spacing = if structure.border_collapse == BorderCollapse::Collapse {
+        0.0
+    } else {
+        structure.border_spacing.1
+    };
+    let content_available = available_height.map(|h| {
+        (h - spacing
+            * (if spacing > 0.0 {
+                structure.row_count as f32 + 1.0
+            } else {
+                0.0
+            }))
+        .max(0.0)
+    });
 
     let mut fixed_sum = 0.0;
     let mut percent_rows = Vec::new();
@@ -4059,6 +4071,23 @@ mod tests {
 
         assert!((structure.rows[0].computed_height - 100.0).abs() < 0.01);
         assert!((structure.rows[1].computed_height - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn calculate_row_heights_respects_collapse_spacing() {
+        let mut structure = TableStructure::new();
+        structure.row_count = 2;
+        structure.rows = vec![RowInfo::new(0), RowInfo::new(1)];
+        structure.border_spacing = (5.0, 5.0);
+        structure.border_collapse = BorderCollapse::Collapse;
+
+        calculate_row_heights(&mut structure, Some(100.0));
+
+        // In collapsed mode, spacing is ignored for row positioning and distribution.
+        assert!((structure.rows[0].computed_height - 50.0).abs() < 0.01);
+        assert!((structure.rows[1].computed_height - 50.0).abs() < 0.01);
+        assert!((structure.rows[0].y_position - 0.0).abs() < 0.01);
+        assert!((structure.rows[1].y_position - 50.0).abs() < 0.01);
     }
 
     #[test]
