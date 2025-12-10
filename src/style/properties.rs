@@ -85,6 +85,15 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 }
             }
         }
+        "box-sizing" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                match kw.as_str() {
+                    _ if kw.eq_ignore_ascii_case("content-box") => styles.box_sizing = BoxSizing::ContentBox,
+                    _ if kw.eq_ignore_ascii_case("border-box") => styles.box_sizing = BoxSizing::BorderBox,
+                    _ => {}
+                }
+            }
+        }
 
         "top" => styles.top = extract_length(&resolved_value),
         "right" => styles.right = extract_length(&resolved_value),
@@ -3020,8 +3029,9 @@ fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
 mod tests {
     use super::*;
     use crate::style::types::{
-        BackgroundRepeatKeyword, FontStretch, FontVariant, ListStylePosition, ListStyleType, OutlineColor, OutlineStyle,
-        PositionComponent, PositionKeyword, TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
+        BackgroundRepeatKeyword, BoxSizing, FontStretch, FontVariant, ListStylePosition, ListStyleType, OutlineColor,
+        OutlineStyle, PositionComponent, PositionKeyword, TextDecorationLine, TextDecorationStyle,
+        TextDecorationThickness,
     };
 
     #[test]
@@ -3058,6 +3068,23 @@ mod tests {
             style.object_position.y,
             PositionComponent::Keyword(PositionKeyword::End)
         ));
+    }
+
+    #[test]
+    fn parses_box_sizing_keyword() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "box-sizing".to_string(),
+                value: PropertyValue::Keyword("border-box".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+
+        assert!(matches!(style.box_sizing, BoxSizing::BorderBox));
     }
 
     #[test]

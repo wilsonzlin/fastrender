@@ -44,6 +44,16 @@ pub enum Overflow {
     Auto,
 }
 
+/// Determines which box the width/height properties apply to.
+///
+/// CSS: `box-sizing`
+/// Reference: CSS Box Sizing Module Level 3
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoxSizing {
+    ContentBox,
+    BorderBox,
+}
+
 /// Border collapsing model for tables
 ///
 /// CSS 2.1 §17.6.1: initial value is `separate`

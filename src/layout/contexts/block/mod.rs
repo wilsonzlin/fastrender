@@ -32,7 +32,9 @@ use crate::layout::contexts::block::width::MarginValue;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::InlineFormattingContext;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::layout::utils::{compute_replaced_size, resolve_length_with_percentage};
+use crate::layout::utils::{
+    border_size_from_box_sizing, compute_replaced_size, content_size_from_box_sizing, resolve_length_with_percentage,
+};
 use crate::style::display::FormattingContextType;
 use crate::style::position::Position;
 use crate::style::values::Length;
@@ -232,6 +234,7 @@ impl BlockFormattingContext {
         // Use the resolved replaced width when computing horizontal metrics
         let mut width_style = (*style).as_ref().clone();
         width_style.width = Some(Length::px(used_size.width));
+        width_style.box_sizing = crate::style::types::BoxSizing::ContentBox;
         let computed_width = compute_block_width(&width_style, containing_width);
 
         let box_width = computed_width.border_box_width();
@@ -387,16 +390,22 @@ impl FormattingContext for BlockFormattingContext {
         let containing_width = constraints.width().unwrap_or(0.0);
         let containing_height = constraints.height();
         let mut computed_width = compute_block_width(style, containing_width);
+        let horizontal_edges = computed_width.border_left
+            + computed_width.padding_left
+            + computed_width.padding_right
+            + computed_width.border_right;
 
         let min_width = style
             .min_width
             .as_ref()
             .map(|l| resolve_length_for_width(*l, containing_width))
+            .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
             .unwrap_or(0.0);
         let max_width = style
             .max_width
             .as_ref()
             .map(|l| resolve_length_for_width(*l, containing_width))
+            .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
             .unwrap_or(f32::INFINITY);
 
         let clamped_content_width = computed_width.content_width.clamp(min_width, max_width);
@@ -415,12 +424,19 @@ impl FormattingContext for BlockFormattingContext {
             computed_width.margin_right = margin_right;
         }
 
+        let border_top = resolve_length_for_width(style.border_top_width, containing_width);
+        let border_bottom = resolve_length_for_width(style.border_bottom_width, containing_width);
+        let padding_top = resolve_length_for_width(style.padding_top, containing_width);
+        let padding_bottom = resolve_length_for_width(style.padding_bottom, containing_width);
+        let vertical_edges = border_top + padding_top + padding_bottom + border_bottom;
+
         let resolved_height = style
             .height
             .as_ref()
-            .and_then(|h| resolve_length_with_percentage(*h, containing_height, style.font_size));
+            .and_then(|h| resolve_length_with_percentage(*h, containing_height, style.font_size))
+            .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing));
         let child_height_space = resolved_height
-            .map(AvailableSpace::Definite)
+            .map(|h| AvailableSpace::Definite(h.max(0.0)))
             .unwrap_or(AvailableSpace::Indefinite);
 
         let child_constraints = LayoutConstraints::new(
@@ -430,20 +446,17 @@ impl FormattingContext for BlockFormattingContext {
 
         let (child_fragments, content_height) = self.layout_children(box_node, &child_constraints)?;
 
-        let border_top = resolve_length_for_width(style.border_top_width, containing_width);
-        let border_bottom = resolve_length_for_width(style.border_bottom_width, containing_width);
-        let padding_top = resolve_length_for_width(style.padding_top, containing_width);
-        let padding_bottom = resolve_length_for_width(style.padding_bottom, containing_width);
-
         let min_height = style
             .min_height
             .as_ref()
             .and_then(|l| resolve_length_with_percentage(*l, containing_height, style.font_size))
+            .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
             .unwrap_or(0.0);
         let max_height = style
             .max_height
             .as_ref()
             .and_then(|l| resolve_length_with_percentage(*l, containing_height, style.font_size))
+            .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
             .unwrap_or(f32::INFINITY);
 
         let height = resolved_height.unwrap_or(content_height).clamp(min_height, max_height);
@@ -463,11 +476,12 @@ impl FormattingContext for BlockFormattingContext {
     fn compute_intrinsic_inline_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
         let style = &box_node.style;
         // Honor specified widths that resolve without a containing block
+        let edges = horizontal_padding_and_borders(style, 0.0);
         if let Some(specified) = style.width.as_ref() {
             let resolved = resolve_length_for_width(*specified, 0.0);
             // Ignore auto/relative cases that resolve to 0.0
             if resolved > 0.0 {
-                return Ok(resolved);
+                return Ok(border_size_from_box_sizing(resolved, edges, style.box_sizing));
             }
         }
 
@@ -499,7 +513,6 @@ impl FormattingContext for BlockFormattingContext {
         let content_width = inline_width.max(block_child_width);
 
         // Add this box's own padding and borders
-        let edges = horizontal_padding_and_borders(style, 0.0);
         let mut width = content_width + edges;
 
         // Apply min/max constraints when present
@@ -507,11 +520,13 @@ impl FormattingContext for BlockFormattingContext {
             .min_width
             .as_ref()
             .map(|l| resolve_length_for_width(*l, 0.0))
+            .map(|w| border_size_from_box_sizing(w, edges, style.box_sizing))
             .unwrap_or(0.0);
         let max_width = style
             .max_width
             .as_ref()
             .map(|l| resolve_length_for_width(*l, 0.0))
+            .map(|w| border_size_from_box_sizing(w, edges, style.box_sizing))
             .unwrap_or(f32::INFINITY);
         width = width.clamp(min_width, max_width);
 

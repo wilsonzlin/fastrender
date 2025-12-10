@@ -49,7 +49,7 @@
 
 use crate::geometry::{Point, Rect, Size};
 use crate::layout::formatting_context::LayoutError;
-use crate::layout::utils::resolve_offset;
+use crate::layout::utils::{content_size_from_box_sizing, resolve_offset};
 use crate::style::computed::PositionedStyle;
 use crate::style::position::Position;
 use crate::tree::fragment_tree::FragmentNode;
@@ -223,7 +223,6 @@ impl AbsoluteLayout {
     ) -> Result<(f32, f32, f32, f32), LayoutError> {
         let left = resolve_offset(&style.left, cb_width);
         let right = resolve_offset(&style.right, cb_width);
-        let specified_width = style.width.resolve_against(cb_width);
 
         // Get padding and border (never auto)
         let padding_left = style.padding.left;
@@ -231,6 +230,11 @@ impl AbsoluteLayout {
         let border_left = style.border_width.left;
         let border_right = style.border_width.right;
         let total_horizontal_spacing = padding_left + padding_right + border_left + border_right;
+
+        let specified_width = style
+            .width
+            .resolve_against(cb_width)
+            .map(|w| content_size_from_box_sizing(w, total_horizontal_spacing, style.box_sizing));
 
         // Default margin values
         let margin_left = style.margin.left;
@@ -304,7 +308,6 @@ impl AbsoluteLayout {
     ) -> Result<(f32, f32, f32, f32), LayoutError> {
         let top = resolve_offset(&style.top, cb_height);
         let bottom = resolve_offset(&style.bottom, cb_height);
-        let specified_height = style.height.resolve_against(cb_height);
 
         // Get padding and border
         let padding_top = style.padding.top;
@@ -315,6 +318,11 @@ impl AbsoluteLayout {
 
         let margin_top = style.margin.top;
         let margin_bottom = style.margin.bottom;
+
+        let specified_height = style
+            .height
+            .resolve_against(cb_height)
+            .map(|h| content_size_from_box_sizing(h, total_vertical_spacing, style.box_sizing));
 
         match (top, specified_height, bottom) {
             // All three specified (overconstrained) - ignore bottom

@@ -3,6 +3,7 @@
 //! Contains common functions used across multiple layout modules.
 
 use crate::geometry::Size;
+use crate::style::types::BoxSizing;
 use crate::style::values::{Length, LengthOrAuto};
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::ReplacedBox;
@@ -58,6 +59,22 @@ pub fn resolve_offset(value: &LengthOrAuto, percentage_base: f32) -> Option<f32>
     }
 }
 
+/// Converts a specified box dimension into a content-box dimension based on box-sizing.
+pub fn content_size_from_box_sizing(value: f32, edges: f32, box_sizing: BoxSizing) -> f32 {
+    match box_sizing {
+        BoxSizing::ContentBox => value,
+        BoxSizing::BorderBox => (value - edges).max(0.0),
+    }
+}
+
+/// Converts a specified box dimension into a border-box dimension based on box-sizing.
+pub fn border_size_from_box_sizing(value: f32, edges: f32, box_sizing: BoxSizing) -> f32 {
+    match box_sizing {
+        BoxSizing::ContentBox => value + edges,
+        BoxSizing::BorderBox => value,
+    }
+}
+
 /// Computes the used size of a replaced element based on style and intrinsic data.
 ///
 /// Implements a simplified form of CSS 2.1 §10.3.2/§10.6.2:
@@ -83,15 +100,29 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
     let height_base = percentage_base.and_then(|s| s.height.is_finite().then_some(s.height));
     let font_size = style.font_size;
 
+    let resolve_for_width = |len: Length| resolve_replaced_length(&len, width_base, font_size).unwrap_or(0.0);
+    let resolve_for_height = |len: Length| resolve_replaced_length(&len, height_base, font_size).unwrap_or(0.0);
+
+    let horizontal_edges = resolve_for_width(style.padding_left)
+        + resolve_for_width(style.padding_right)
+        + resolve_for_width(style.border_left_width)
+        + resolve_for_width(style.border_right_width);
+    let vertical_edges = resolve_for_height(style.padding_top)
+        + resolve_for_height(style.padding_bottom)
+        + resolve_for_height(style.border_top_width)
+        + resolve_for_height(style.border_bottom_width);
+
     let mut width = style
         .width
         .as_ref()
         .and_then(|l| resolve_replaced_length(l, width_base, font_size))
+        .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
         .unwrap_or(intrinsic.width);
     let mut height = style
         .height
         .as_ref()
         .and_then(|l| resolve_replaced_length(l, height_base, font_size))
+        .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
         .unwrap_or(intrinsic.height);
 
     match (style.width.as_ref(), style.height.as_ref(), intrinsic_ratio) {
@@ -116,6 +147,7 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
         .min_width
         .as_ref()
         .and_then(|l| resolve_replaced_length(l, width_base, font_size))
+        .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
     {
         width = width.max(min_w);
     }
@@ -123,6 +155,7 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
         .max_width
         .as_ref()
         .and_then(|l| resolve_replaced_length(l, width_base, font_size))
+        .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
     {
         width = width.min(max_w);
     }
@@ -130,6 +163,7 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
         .min_height
         .as_ref()
         .and_then(|l| resolve_replaced_length(l, height_base, font_size))
+        .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
     {
         height = height.max(min_h);
     }
@@ -137,6 +171,7 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
         .max_height
         .as_ref()
         .and_then(|l| resolve_replaced_length(l, height_base, font_size))
+        .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
     {
         height = height.min(max_h);
     }
@@ -159,6 +194,7 @@ fn resolve_replaced_length(len: &Length, percentage_base: Option<f32>, font_size
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::types::BoxSizing;
     use crate::style::values::{Length, LengthUnit};
     use crate::style::ComputedStyle;
     use crate::tree::box_tree::ReplacedBox;
@@ -264,5 +300,28 @@ mod tests {
         // Percentage width cannot resolve, so we fall back to intrinsic and aspect ratio for height
         assert!((size.width - 120.0).abs() < 0.01);
         assert!((size.height - 80.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn compute_replaced_applies_border_box_box_sizing() {
+        let mut style = ComputedStyle::default();
+        style.box_sizing = BoxSizing::BorderBox;
+        style.width = Some(Length::px(120.0));
+        style.padding_left = Length::px(10.0);
+        style.padding_right = Length::px(10.0);
+        style.border_left_width = Length::px(5.0);
+        style.border_right_width = Length::px(5.0);
+
+        let replaced = ReplacedBox {
+            replaced_type: crate::tree::box_tree::ReplacedType::Image {
+                src: "img".into(),
+                alt: None,
+            },
+            intrinsic_size: Some(Size::new(300.0, 150.0)),
+            aspect_ratio: Some(2.0),
+        };
+
+        let size = compute_replaced_size(&style, &replaced, None);
+        assert!((size.width - 90.0).abs() < 0.01);
     }
 }

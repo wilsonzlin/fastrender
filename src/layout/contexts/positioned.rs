@@ -41,7 +41,7 @@
 
 use crate::geometry::{Point, Rect, Size};
 use crate::layout::formatting_context::LayoutError;
-use crate::layout::utils::resolve_offset;
+use crate::layout::utils::{content_size_from_box_sizing, resolve_offset};
 use crate::style::computed::PositionedStyle;
 use crate::style::position::Position;
 use crate::tree::fragment_tree::FragmentNode;
@@ -321,9 +321,6 @@ impl PositionedLayout {
         let left = resolve_offset(&style.left, cb_width);
         let right = resolve_offset(&style.right, cb_width);
 
-        // Get width value (may be auto)
-        let specified_width = style.width.resolve_against(cb_width);
-
         // Get margin values (auto margins = 0 for absolute positioning unless overconstrained)
         let margin_left = style.margin.left;
         let margin_right = style.margin.right;
@@ -335,6 +332,12 @@ impl PositionedLayout {
         let border_right = style.border_width.right;
 
         let total_horizontal = padding_left + padding_right + border_left + border_right;
+
+        // Get width value (may be auto)
+        let specified_width = style
+            .width
+            .resolve_against(cb_width)
+            .map(|w| content_size_from_box_sizing(w, total_horizontal, style.box_sizing));
 
         match (left, specified_width, right) {
             // Case 1: All three specified (overconstrained) - ignore right for LTR
@@ -400,9 +403,6 @@ impl PositionedLayout {
         let top = resolve_offset(&style.top, cb_height);
         let bottom = resolve_offset(&style.bottom, cb_height);
 
-        // Get height value (may be auto)
-        let specified_height = style.height.resolve_against(cb_height);
-
         // Get margin values
         let margin_top = style.margin.top;
         let margin_bottom = style.margin.bottom;
@@ -414,6 +414,12 @@ impl PositionedLayout {
         let border_bottom = style.border_width.bottom;
 
         let total_vertical = padding_top + padding_bottom + border_top + border_bottom;
+
+        // Get height value (may be auto)
+        let specified_height = style
+            .height
+            .resolve_against(cb_height)
+            .map(|h| content_size_from_box_sizing(h, total_vertical, style.box_sizing));
 
         match (top, specified_height, bottom) {
             // All three specified (overconstrained) - ignore bottom

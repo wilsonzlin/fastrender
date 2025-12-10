@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundPosition,
     BackgroundPositionComponent, BackgroundRepeat, BackgroundSize, BackgroundSizeComponent, BorderCollapse, BorderStyle,
-    CaptionSide, Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting,
+    BoxSizing, CaptionSide, Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting,
     FontKerning, FontStretch, FontStyle, FontVariant, FontVariantAlternates, FontVariantCaps, FontVariantEastAsian,
     FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontWeight, GridTrack, HyphensMode, Isolation,
     JustifyContent, LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
@@ -59,6 +59,7 @@ pub struct ComputedStyle {
     pub outline_style: OutlineStyle,
     pub outline_width: Length,
     pub outline_offset: Length,
+    pub box_sizing: BoxSizing,
 
     // Box model
     pub width: Option<Length>,
@@ -226,6 +227,7 @@ impl Default for ComputedStyle {
             outline_style: OutlineStyle::None,
             outline_width: Length::px(3.0),
             outline_offset: Length::px(0.0),
+            box_sizing: BoxSizing::ContentBox,
 
             width: None,
             height: None,

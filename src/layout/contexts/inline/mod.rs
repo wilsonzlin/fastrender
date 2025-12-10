@@ -44,7 +44,7 @@ use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::line_builder::InlineBoxItem;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::layout::utils::{compute_replaced_size, resolve_length_with_percentage};
+use crate::layout::utils::{border_size_from_box_sizing, compute_replaced_size, resolve_length_with_percentage};
 use crate::style::types::{
     FontStyle, HyphensMode, ListStylePosition, OverflowWrap, TabSize, TextAlign, TextJustify, TextTransform,
     WhiteSpace, WordBreak,
@@ -353,23 +353,25 @@ impl InlineFormattingContext {
         let specified_width = style
             .width
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, percentage_base));
+            .map(|l| resolve_length_for_width(*l, percentage_base))
+            .map(|w| border_size_from_box_sizing(w, horizontal_edges, style.box_sizing));
 
         let min_width = style
             .min_width
             .as_ref()
             .map(|l| resolve_length_for_width(*l, percentage_base))
+            .map(|w| border_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
             .unwrap_or(0.0);
         let max_width = style
             .max_width
             .as_ref()
             .map(|l| resolve_length_for_width(*l, percentage_base))
+            .map(|w| border_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
             .unwrap_or(f32::INFINITY);
 
         let constraint_width = if let Some(content_width) = specified_width {
             // Honor specified width; use containing block width for layout to avoid over-constraining margins.
-            let border_box_width = content_width + horizontal_edges;
-            let used = border_box_width.clamp(min_width, max_width);
+            let used = content_width.clamp(min_width, max_width);
             if available_for_box.is_finite() {
                 available_for_box
             } else {

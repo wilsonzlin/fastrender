@@ -27,7 +27,7 @@ use crate::geometry::EdgeOffsets;
 use crate::style::color::{Color, Rgba};
 use crate::style::display::Display;
 use crate::style::position::Position;
-use crate::style::types::{FontStretch, TextAlignLast, TextIndent, TextJustify};
+use crate::style::types::{BoxSizing, FontStretch, TextAlignLast, TextIndent, TextJustify};
 use crate::style::values::{Length, LengthOrAuto};
 
 /// Computed CSS styles for an element
@@ -87,6 +87,11 @@ pub struct PositionedStyle {
     /// CSS: `max-width`
     /// Initial: none (represented as f32::INFINITY)
     pub max_width: Length,
+    /// Whether width/height apply to content-box or border-box
+    ///
+    /// CSS: `box-sizing`
+    /// Initial: content-box
+    pub box_sizing: BoxSizing,
 
     /// Minimum height
     ///
@@ -410,6 +415,7 @@ impl Default for PositionedStyle {
             height: LengthOrAuto::Auto,
             min_width: Length::px(0.0),
             max_width: Length::px(f32::INFINITY),
+            box_sizing: BoxSizing::ContentBox,
             min_height: Length::px(0.0),
             max_height: Length::px(f32::INFINITY),
             margin: EdgeOffsets::ZERO,

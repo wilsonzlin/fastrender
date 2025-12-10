@@ -28,6 +28,7 @@
 //!
 //! Reference: <https://www.w3.org/TR/CSS21/visudet.html#Computing_widths_and_margins>
 
+use crate::layout::utils::content_size_from_box_sizing;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 
@@ -126,6 +127,7 @@ pub fn compute_block_width(style: &ComputedStyle, containing_width: f32) -> Comp
     // Border widths
     let border_left = resolve_length(style.border_left_width, containing_width);
     let border_right = resolve_length(style.border_right_width, containing_width);
+    let horizontal_edges = padding_left + padding_right + border_left + border_right;
 
     // Resolve margins (may be auto - represented by None)
     let margin_left = match &style.margin_left {
@@ -138,7 +140,11 @@ pub fn compute_block_width(style: &ComputedStyle, containing_width: f32) -> Comp
     };
 
     // Resolve width (may be auto - represented by None)
-    let width_value = style.width.as_ref().map(|len| len.resolve_against(containing_width));
+    let width_value = style
+        .width
+        .as_ref()
+        .map(|len| len.resolve_against(containing_width))
+        .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing));
 
     // Compute the resolved values using the constraint equation
     let (final_margin_left, final_width, final_margin_right) = resolve_constraint(
@@ -179,6 +185,7 @@ pub fn compute_block_width_with_auto_margins(
     // Border widths
     let border_left = resolve_length(style.border_left_width, containing_width);
     let border_right = resolve_length(style.border_right_width, containing_width);
+    let horizontal_edges = padding_left + padding_right + border_left + border_right;
 
     // Resolve margins with explicit auto flags
     let margin_left = if margin_left_is_auto {
@@ -206,7 +213,11 @@ pub fn compute_block_width_with_auto_margins(
     };
 
     // Resolve width
-    let width_value = style.width.as_ref().map(|len| len.resolve_against(containing_width));
+    let width_value = style
+        .width
+        .as_ref()
+        .map(|len| len.resolve_against(containing_width))
+        .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing));
 
     // Compute the resolved values
     let (final_margin_left, final_width, final_margin_right) = resolve_constraint(
@@ -298,6 +309,7 @@ fn resolve_length(length: Length, containing_width: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::types::BoxSizing;
 
     fn default_style() -> ComputedStyle {
         ComputedStyle::default()
@@ -486,6 +498,22 @@ mod tests {
         assert_eq!(result.content_width, 790.0);
         assert_eq!(result.border_left, 5.0);
         assert_eq!(result.border_right, 5.0);
+    }
+
+    #[test]
+    fn width_property_includes_padding_and_border_when_border_box() {
+        let mut style = default_style();
+        style.box_sizing = BoxSizing::BorderBox;
+        style.width = Some(Length::px(200.0));
+        style.padding_left = Length::px(10.0);
+        style.padding_right = Length::px(10.0);
+        style.border_left_width = Length::px(5.0);
+        style.border_right_width = Length::px(5.0);
+
+        let result = compute_block_width(&style, 400.0);
+
+        assert_eq!(result.content_width, 170.0);
+        assert_eq!(result.border_box_width(), 200.0);
     }
 
     #[test]
