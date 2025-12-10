@@ -1597,6 +1597,18 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "writing-mode" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.writing_mode = match kw.as_str() {
+                    "horizontal-tb" => WritingMode::HorizontalTb,
+                    "vertical-rl" => WritingMode::VerticalRl,
+                    "vertical-lr" => WritingMode::VerticalLr,
+                    "sideways-rl" => WritingMode::SidewaysRl,
+                    "sideways-lr" => WritingMode::SidewaysLr,
+                    _ => styles.writing_mode,
+                };
+            }
+        }
 
         // Color
         "color" => {
@@ -3899,7 +3911,7 @@ mod tests {
     use super::*;
     use crate::style::types::{
         AlignContent, AlignItems, AspectRatio, BackgroundRepeatKeyword, BoxSizing, FontStretch, FontVariant,
-        GridAutoFlow, GridTrack, ImageRendering, JustifyContent,
+        GridAutoFlow, GridTrack, ImageRendering, JustifyContent, WritingMode,
         ListStylePosition, ListStyleType, OutlineColor, OutlineStyle, PositionComponent, PositionKeyword,
         TextDecorationLine, TextDecorationStyle, TextDecorationThickness, TextEmphasisFill, TextEmphasisPosition,
         TextEmphasisShape, TextEmphasisStyle,
@@ -4092,6 +4104,34 @@ mod tests {
         );
         assert_eq!(style.align_content, AlignContent::SpaceBetween);
         assert_eq!(style.justify_content, JustifyContent::Center);
+    }
+
+    #[test]
+    fn parses_writing_mode_keywords() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "writing-mode".to_string(),
+                value: PropertyValue::Keyword("vertical-rl".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.writing_mode, WritingMode::VerticalRl);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "writing-mode".to_string(),
+                value: PropertyValue::Keyword("sideways-lr".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.writing_mode, WritingMode::SidewaysLr);
     }
 
     #[test]

@@ -40,7 +40,7 @@ use types::{
     ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign,
     TextAlignLast, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent,
     TextJustify, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TransformOrigin, UnicodeBidi, VerticalAlign,
-    WhiteSpace, WordBreak,
+    WhiteSpace, WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -185,6 +185,7 @@ pub struct ComputedStyle {
     pub text_emphasis_color: Option<Rgba>,
     pub text_emphasis_position: TextEmphasisPosition,
     pub text_transform: TextTransform,
+    pub writing_mode: WritingMode,
     pub letter_spacing: f32,
     pub word_spacing: f32,
     pub white_space: WhiteSpace,
@@ -367,6 +368,7 @@ impl Default for ComputedStyle {
             text_emphasis_color: None,
             text_emphasis_position: TextEmphasisPosition::default(),
             text_transform: TextTransform::default(),
+            writing_mode: WritingMode::HorizontalTb,
             letter_spacing: 0.0,
             word_spacing: 0.0,
             white_space: WhiteSpace::Normal,

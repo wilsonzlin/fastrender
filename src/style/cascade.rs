@@ -281,6 +281,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.text_emphasis_color = parent.text_emphasis_color;
     styles.text_emphasis_position = parent.text_emphasis_position;
     styles.text_transform = parent.text_transform;
+    styles.writing_mode = parent.writing_mode;
     styles.letter_spacing = parent.letter_spacing;
     styles.word_spacing = parent.word_spacing;
     styles.justify_items = parent.justify_items;

@@ -251,6 +251,18 @@ pub struct ObjectPosition {
     pub y: PositionComponent,
 }
 
+/// Writing mode for block/inline axis orientation
+///
+/// CSS: `writing-mode`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WritingMode {
+    HorizontalTb,
+    VerticalRl,
+    VerticalLr,
+    SidewaysRl,
+    SidewaysLr,
+}
+
 /// Mix-blend mode values
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MixBlendMode {
