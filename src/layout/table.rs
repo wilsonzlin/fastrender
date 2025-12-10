@@ -1972,18 +1972,6 @@ impl TableFormattingContext {
         }
     }
 
-    /// If the sum of percentage column widths exceeds 100%, normalize them proportionally.
-    fn normalize_column_percentages(&self, constraints: &mut [ColumnConstraints]) {
-        let total_pct: f32 = constraints.iter().filter_map(|c| c.percentage).sum();
-        if total_pct > 100.0 && total_pct.is_finite() && total_pct > 0.0 {
-            for col in constraints.iter_mut() {
-                if let Some(pct) = col.percentage {
-                    col.set_percentage(pct * 100.0 / total_pct);
-                }
-            }
-        }
-    }
-
     /// Gets the table structure, building it if necessary
     pub fn structure(&self) -> Option<&TableStructure> {
         self.structure.as_ref()
@@ -2332,7 +2320,6 @@ impl FormattingContext for TableFormattingContext {
 
         self.populate_column_constraints(box_node, &structure, &mut column_constraints, mode, percent_base);
         self.normalize_percentage_constraints(&mut column_constraints, table_width, &constraints.available_width);
-        self.normalize_column_percentages(&mut column_constraints);
 
         let min_content_sum: f32 = column_constraints.iter().map(|c| c.min_width).sum();
         let max_content_sum: f32 = column_constraints.iter().map(|c| c.max_width).sum();
@@ -5458,13 +5445,11 @@ mod tests {
             ColumnConstraints::percentage(50.0, 0.0, 100.0),
         ];
         let tfc = TableFormattingContext::new();
-        tfc.normalize_column_percentages(&mut constraints);
+        // Percentages should remain authored even when over 100%.
+        tfc.normalize_percentage_constraints(&mut constraints, Some(200.0), &AvailableSpace::Definite(200.0));
 
         let sum: f32 = constraints.iter().filter_map(|c| c.percentage).sum();
-        assert!((sum - 100.0).abs() < 0.01);
-        // Normalized proportionally.
-        assert!((constraints[0].percentage.unwrap() - 58.333).abs() < 0.5);
-        assert!((constraints[1].percentage.unwrap() - 41.666).abs() < 0.5);
+        assert!((sum - 120.0).abs() < 0.01);
     }
 
     #[test]
