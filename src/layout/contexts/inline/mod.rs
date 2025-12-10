@@ -1728,16 +1728,15 @@ fn normalize_text_for_white_space(text: &str, white_space: WhiteSpace) -> Normal
 
             if run_has_newline {
                 mandatory_breaks.push(BreakOpportunity::mandatory(out.len()));
-            } else if run_has_space && seen_content {
-                out.push(' ');
             }
+            let trailing_collapsible = run_has_space && !run_has_newline && seen_content;
 
             NormalizedText {
                 text: out,
                 forced_breaks: mandatory_breaks,
                 allow_soft_wrap: true,
                 leading_collapsible,
-                trailing_collapsible: false,
+                trailing_collapsible,
             }
         }
         WhiteSpace::Pre | WhiteSpace::PreWrap => {
@@ -3459,6 +3458,29 @@ mod tests {
                 _ => true,
             }),
             "trailing collapsible whitespace should not emit a space item"
+        );
+    }
+
+    #[test]
+    fn pre_line_trailing_space_is_collapsible() {
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::PreLine;
+        let text_style = Arc::new(style);
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(text_style, "Hello ".to_string())],
+        );
+        let ifc = InlineFormattingContext::new();
+        let items = ifc
+            .collect_inline_items(&root, 800.0, Some(800.0))
+            .expect("collect items");
+        assert!(
+            items.iter().all(|item| match item {
+                InlineItem::Text(t) => t.text != " ",
+                _ => true,
+            }),
+            "pre-line trailing whitespace should collapse instead of emitting a space item"
         );
     }
 
