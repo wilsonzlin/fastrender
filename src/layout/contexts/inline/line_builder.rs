@@ -1149,6 +1149,12 @@ pub struct Line {
     /// Width of the line box (same as available width for now)
     pub box_width: f32,
 
+    /// Horizontal offset of the line box start (used when floats shorten and shift the line)
+    pub left_offset: f32,
+
+    /// Vertical offset of the line box top within the inline formatting context
+    pub y_offset: f32,
+
     /// Total width used by items
     pub width: f32,
 
@@ -1170,6 +1176,8 @@ impl Line {
             resolved_direction: Direction::Ltr,
             available_width: 0.0,
             box_width: 0.0,
+            left_offset: 0.0,
+            y_offset: 0.0,
             width: 0.0,
             height: 0.0,
             baseline: 0.0,
@@ -1197,12 +1205,18 @@ pub struct LineBuilder<'a> {
     first_line_width: f32,
     /// Available width for subsequent lines
     subsequent_line_width: f32,
+    /// Positive indentation to subtract from the first line width (e.g., text-indent)
+    first_line_indent_cut: f32,
+    /// Positive indentation to subtract from subsequent line widths
+    subsequent_line_indent_cut: f32,
     /// Float-aware line width provider
     float_integration: Option<InlineFloatIntegration<'a>>,
     /// Current line space when floats are present
     current_line_space: Option<crate::layout::inline::float_integration::LineSpace>,
     /// Accumulated y offset for lines when floats shorten width
     current_y: f32,
+    /// Absolute y offset of this inline formatting context within the containing block
+    float_base_y: f32,
 
     /// Current line being built
     current_line: Line,
@@ -1239,6 +1253,9 @@ impl<'a> LineBuilder<'a> {
         font_context: FontContext,
         base_level: Option<Level>,
         float_integration: Option<InlineFloatIntegration<'a>>,
+        float_base_y: f32,
+        first_line_indent_cut: f32,
+        subsequent_line_indent_cut: f32,
     ) -> Self {
         let initial_direction = if let Some(level) = base_level {
             if level.is_rtl() {
@@ -1255,6 +1272,7 @@ impl<'a> LineBuilder<'a> {
             float_integration,
             current_line_space: None,
             current_y: 0.0,
+            float_base_y,
             current_line: Line {
                 resolved_direction: initial_direction,
                 ..Line::new()
@@ -1266,19 +1284,25 @@ impl<'a> LineBuilder<'a> {
             shaper,
             font_context,
             base_level,
+            first_line_indent_cut,
+            subsequent_line_indent_cut,
         };
 
         if let Some(integration) = builder.float_integration.as_ref() {
             let space = integration.find_line_space(
-                builder.current_y,
+                builder.float_base_y + builder.current_y,
                 LineSpaceOptions::default().line_height(builder.strut_metrics.line_height),
             );
             builder.current_line_space = Some(space);
-            builder.current_line.available_width = space.width;
+            let width = (space.width - builder.first_line_indent_cut).max(0.0);
+            builder.current_line.available_width = width;
             builder.current_line.box_width = space.width;
+            builder.current_line.left_offset = space.left_edge;
+            builder.current_y = (space.y - builder.float_base_y).max(0.0);
         } else {
             builder.current_line.available_width = first_line_width;
             builder.current_line.box_width = first_line_width;
+            builder.current_line.left_offset = 0.0;
         }
 
         builder
@@ -1286,7 +1310,12 @@ impl<'a> LineBuilder<'a> {
 
     fn current_line_width(&self) -> f32 {
         if let Some(space) = self.current_line_space {
-            return space.width;
+            let cut = if self.lines.is_empty() {
+                self.first_line_indent_cut
+            } else {
+                self.subsequent_line_indent_cut
+            };
+            return (space.width - cut).max(0.0);
         }
         if self.lines.is_empty() {
             self.first_line_width
@@ -1422,9 +1451,17 @@ impl<'a> LineBuilder<'a> {
             self.current_line.width = self.current_x;
             self.current_line.height = self.baseline_acc.line_height();
             self.current_line.baseline = self.baseline_acc.baseline_position();
+            self.current_line.y_offset = self.current_y;
             let line_width = self.current_line_width();
             self.current_line.available_width = line_width;
-            self.current_line.box_width = line_width;
+            if self.current_line_space.is_some() {
+                self.current_line.box_width = self
+                    .current_line_space
+                    .map(|space| space.width)
+                    .unwrap_or(line_width);
+            } else {
+                self.current_line.box_width = line_width;
+            }
 
             // Adjust Y positions for top/bottom aligned items
             for positioned in &mut self.current_line.items {
@@ -1468,12 +1505,20 @@ impl<'a> LineBuilder<'a> {
 
         if let Some(integration) = self.float_integration.as_ref() {
             let space = integration.find_line_space(
-                self.current_y,
+                self.float_base_y + self.current_y,
                 LineSpaceOptions::default().line_height(self.strut_metrics.line_height),
             );
             self.current_line_space = Some(space);
-            self.current_line.available_width = space.width;
+            let cut = if self.lines.is_empty() {
+                self.first_line_indent_cut
+            } else {
+                self.subsequent_line_indent_cut
+            };
+            let width = (space.width - cut).max(0.0);
+            self.current_line.available_width = width;
             self.current_line.box_width = space.width;
+            self.current_line.left_offset = space.left_edge;
+            self.current_y = self.current_y.max((space.y - self.float_base_y).max(0.0));
         } else {
             self.current_line_space = None;
             let w = if self.lines.is_empty() {
@@ -1483,6 +1528,7 @@ impl<'a> LineBuilder<'a> {
             };
             self.current_line.available_width = w;
             self.current_line.box_width = w;
+            self.current_line.left_offset = 0.0;
         }
     }
 
@@ -2062,6 +2108,9 @@ mod tests {
             FontContext::new(),
             Some(Level::ltr()),
             None,
+            0.0,
+            0.0,
+            0.0,
         )
     }
 
@@ -2075,6 +2124,9 @@ mod tests {
             FontContext::new(),
             Some(base),
             None,
+            0.0,
+            0.0,
+            0.0,
         )
     }
 

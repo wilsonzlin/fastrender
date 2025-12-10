@@ -846,6 +846,9 @@ impl InlineFormattingContext {
         strut_metrics: &BaselineMetrics,
         base_level: Option<unicode_bidi::Level>,
         float_ctx: Option<&'a FloatContext>,
+        float_base_y: f32,
+        first_line_indent_cut: f32,
+        subsequent_line_indent_cut: f32,
     ) -> Vec<Line> {
         let float_integration = float_ctx.map(InlineFloatIntegration::new);
         let mut builder: LineBuilder<'a> = LineBuilder::new(
@@ -856,6 +859,9 @@ impl InlineFormattingContext {
             self.font_context.clone(),
             base_level,
             float_integration,
+            float_base_y,
+            first_line_indent_cut,
+            subsequent_line_indent_cut,
         );
 
         for item in items {
@@ -996,11 +1002,11 @@ impl InlineFormattingContext {
         subsequent_line_indent: f32,
     ) -> Vec<FragmentNode> {
         let mut fragments = Vec::new();
-        let mut y = start_y;
 
         let paragraph_info = compute_paragraph_line_flags(&lines);
 
         for (idx, line) in lines.into_iter().enumerate() {
+            let line_y = start_y + line.y_offset;
             let line_direction = line.resolved_direction;
             let (is_last_line, is_single_line) = paragraph_info[idx];
             let line_width = if line.available_width > 0.0 {
@@ -1051,7 +1057,7 @@ impl InlineFormattingContext {
             }
             let line_fragment = self.create_line_fragment(
                 &line,
-                y,
+                line_y,
                 line_width,
                 line_box_width,
                 effective_align,
@@ -1059,7 +1065,6 @@ impl InlineFormattingContext {
                 resolved_justify,
                 indent_offset,
             );
-            y += line.height;
             fragments.push(line_fragment);
         }
 
@@ -1109,9 +1114,9 @@ impl InlineFormattingContext {
 
         let rtl = matches!(direction, crate::style::types::Direction::Rtl);
         let mut cursor = if rtl {
-            indent_offset + lead + total_width
+            line.left_offset + indent_offset + lead + total_width
         } else {
-            indent_offset + lead
+            line.left_offset + indent_offset + lead
         };
 
         for (i, positioned) in items.iter().enumerate() {
@@ -1136,7 +1141,7 @@ impl InlineFormattingContext {
             }
         }
 
-        let bounds = Rect::from_xywh(0.0, y, line_box_width, line.height);
+        let bounds = Rect::from_xywh(line.left_offset, y, line_box_width, line.height);
         FragmentNode::new_line(bounds, line.baseline, children)
     }
 
@@ -2402,7 +2407,7 @@ fn hyphenation_breaks(
 
 impl FormattingContext for InlineFormattingContext {
     fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
-        self.layout_with_floats(box_node, constraints, None)
+        self.layout_with_floats(box_node, constraints, None, 0.0)
     }
 
     fn compute_intrinsic_inline_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
@@ -2416,6 +2421,7 @@ impl InlineFormattingContext {
         box_node: &BoxNode,
         constraints: &LayoutConstraints,
         float_ctx: Option<&FloatContext>,
+        float_base_y: f32,
     ) -> Result<FragmentNode, LayoutError> {
         let style = &box_node.style;
         let available_width = constraints.width().unwrap_or(f32::MAX);
@@ -2454,6 +2460,12 @@ impl InlineFormattingContext {
         } else {
             available_width
         };
+        let first_line_indent_cut = if indent_applies_first { indent_positive } else { 0.0 };
+        let subsequent_line_indent_cut = if indent_applies_subsequent {
+            indent_positive
+        } else {
+            0.0
+        };
 
         let base_level = match style.unicode_bidi {
             crate::style::types::UnicodeBidi::Plaintext => None,
@@ -2471,16 +2483,22 @@ impl InlineFormattingContext {
             &strut_metrics,
             base_level,
             float_ctx,
+            float_base_y,
+            first_line_indent_cut,
+            subsequent_line_indent_cut,
         );
 
         // Calculate total height
-        let total_height: f32 = lines.iter().map(|l| l.height).sum();
+        let total_height: f32 = lines
+            .iter()
+            .map(|l| l.y_offset + l.height)
+            .fold(0.0, f32::max);
         let max_width: f32 = if available_width.is_finite() {
             available_width
         } else {
             lines
                 .iter()
-                .map(|l| l.box_width.max(l.width + indent_value.abs()))
+                .map(|l| (l.left_offset + l.box_width).max(l.left_offset + l.width + indent_value.abs()))
                 .fold(0.0, f32::max)
         };
 
@@ -3164,6 +3182,9 @@ mod tests {
             &strut,
             Some(unicode_bidi::Level::ltr()),
             None,
+            0.0,
+            0.0,
+            0.0,
         );
         let first = lines.first().expect("first line");
         let resolved = resolve_auto_text_justify(TextJustify::Auto, &first.items);
@@ -3247,6 +3268,9 @@ mod tests {
             &strut,
             Some(unicode_bidi::Level::ltr()),
             None,
+            0.0,
+            0.0,
+            0.0,
         );
         let first = lines.first().expect("first line");
         let resolved = resolve_auto_text_justify(TextJustify::Auto, &first.items);
@@ -3841,7 +3865,8 @@ mod tests {
         let ifc = InlineFormattingContext::new();
         let mut items = ifc.create_inline_items_for_text(&node, "ab\tc", false).unwrap();
         let strut = ifc.compute_strut_metrics(&node.style);
-        let lines = ifc.build_lines(std::mem::take(&mut items), 1000.0, 1000.0, &strut, None, None);
+        let lines =
+            ifc.build_lines(std::mem::take(&mut items), 1000.0, 1000.0, &strut, None, None, 0.0, 0.0, 0.0);
         let line = &lines[0];
         assert_eq!(line.items.len(), 3);
 

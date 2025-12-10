@@ -423,8 +423,12 @@ impl BlockFormattingContext {
                 InlineFormattingContext::with_font_context_and_viewport(self.font_context.clone(), self.viewport_size);
             let inline_constraints =
                 LayoutConstraints::new(AvailableSpace::Definite(containing_width), available_height);
-            let mut inline_fragment =
-                inline_fc.layout_with_floats(&inline_container, &inline_constraints, Some(float_ctx_ref))?;
+            let mut inline_fragment = inline_fc.layout_with_floats(
+                &inline_container,
+                &inline_constraints,
+                Some(float_ctx_ref),
+                *current_y,
+            )?;
 
             inline_fragment.bounds = Rect::from_xywh(
                 0.0,
@@ -1284,8 +1288,9 @@ mod tests {
             line.bounds.width()
         );
         assert!(
-            line.bounds.x() >= 0.0,
-            "line should still be positioned relative to content box"
+            line.bounds.x() >= 79.9,
+            "line should start after the float; got x={}",
+            line.bounds.x()
         );
     }
 
