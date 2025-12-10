@@ -229,6 +229,10 @@ impl DisplayListBuilder {
         if should_clip {
             self.list.push(DisplayItem::PopClip);
         }
+
+        if let Some(style) = fragment.style.as_deref() {
+            self.emit_outline(absolute_rect, style);
+        }
     }
 
     fn build_stacking_context(&mut self, context: &StackingContext, offset: Point) {
@@ -926,6 +930,26 @@ mod tests {
         assert!(
             list.items().iter().any(|item| matches!(item, DisplayItem::StrokeRect(_))),
             "outline should emit stroke rect"
+        );
+    }
+
+    #[test]
+    fn outline_emits_even_when_clipped() {
+        let mut style = ComputedStyle::default();
+        style.outline_style = crate::style::types::OutlineStyle::Solid;
+        style.outline_width = Length::px(2.0);
+        style.outline_color = crate::style::types::OutlineColor::Color(Rgba::RED);
+        let fragment = FragmentNode::new_block_styled(
+            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+            vec![],
+            Arc::new(style),
+        );
+        let clips = vec![None].into_iter().collect();
+        let builder = DisplayListBuilder::new();
+        let list = builder.build_with_clips(&fragment, &clips);
+        assert!(
+            list.items().iter().any(|item| matches!(item, DisplayItem::StrokeRect(_))),
+            "outline should be emitted even when fragment is clipped"
         );
     }
 

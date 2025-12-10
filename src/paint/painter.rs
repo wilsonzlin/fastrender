@@ -661,13 +661,15 @@ impl Painter {
                     context_rect.height(),
                 );
                 let (mut unclipped, clipped): (Vec<DisplayCommand>, Vec<DisplayCommand>) =
-                    translated.into_iter().partition(|cmd| {
-                        matches!(cmd,
-                        DisplayCommand::Background { rect, .. } | DisplayCommand::Border { rect, .. }
-                        if (rect.x() - root_rect.x()).abs() < f32::EPSILON
-                            && (rect.y() - root_rect.y()).abs() < f32::EPSILON
-                            && (rect.width() - root_rect.width()).abs() < f32::EPSILON
-                            && (rect.height() - root_rect.height()).abs() < f32::EPSILON)
+                    translated.into_iter().partition(|cmd| match cmd {
+                        DisplayCommand::Outline { .. } => true,
+                        DisplayCommand::Background { rect, .. } | DisplayCommand::Border { rect, .. } => {
+                            (rect.x() - root_rect.x()).abs() < f32::EPSILON
+                                && (rect.y() - root_rect.y()).abs() < f32::EPSILON
+                                && (rect.width() - root_rect.width()).abs() < f32::EPSILON
+                                && (rect.height() - root_rect.height()).abs() < f32::EPSILON
+                        }
+                        _ => false,
                     });
 
                 let layer = match Pixmap::new(width as u32, height as u32) {
@@ -2418,38 +2420,6 @@ fn approx_same_rect(a: Rect, b: Rect) -> bool {
         && (a.height() - b.height()).abs() <= eps
 }
 
-fn clip_to_axes(bounds: Rect, clip: Rect, clip_x: bool, clip_y: bool) -> Rect {
-    let mut min_x = if clip_x {
-        bounds.min_x().max(clip.min_x())
-    } else {
-        bounds.min_x()
-    };
-    let mut max_x = if clip_x {
-        bounds.max_x().min(clip.max_x())
-    } else {
-        bounds.max_x()
-    };
-    let mut min_y = if clip_y {
-        bounds.min_y().max(clip.min_y())
-    } else {
-        bounds.min_y()
-    };
-    let mut max_y = if clip_y {
-        bounds.max_y().min(clip.max_y())
-    } else {
-        bounds.max_y()
-    };
-    if clip_x && max_x < min_x {
-        min_x = clip.min_x();
-        max_x = clip.min_x();
-    }
-    if clip_y && max_y < min_y {
-        min_y = clip.min_y();
-        max_y = clip.min_y();
-    }
-    Rect::from_xywh(min_x, min_y, (max_x - min_x).max(0.0), (max_y - min_y).max(0.0))
-}
-
 fn compute_descendant_bounds(commands: &[DisplayCommand], root_rect: Rect) -> Option<Rect> {
     let mut current: Option<Rect> = None;
     for cmd in commands {
@@ -2473,13 +2443,10 @@ fn stacking_context_bounds(
     backdrop_filters: &[ResolvedFilter],
     rect: Rect,
     transform: Option<&Transform>,
-    clip: Option<&(Rect, BorderRadii, bool, bool)>,
+    _clip: Option<&(Rect, BorderRadii, bool, bool)>,
 ) -> Option<Rect> {
     let mut base = rect;
-    if let Some(mut desc) = compute_descendant_bounds(commands, rect) {
-        if let Some((clip_rect, _, clip_x, clip_y)) = clip {
-            desc = clip_to_axes(desc, *clip_rect, *clip_x, *clip_y);
-        }
+    if let Some(desc) = compute_descendant_bounds(commands, rect) {
         base = base.union(desc);
     }
     let (l, t, r, b) = filter_outset(filters);
@@ -4074,9 +4041,9 @@ mod tests {
         ];
         let clip = Some((root_rect, BorderRadii::ZERO, true, true));
         let bounds = stacking_context_bounds(&commands, &[], &[], root_rect, None, clip.as_ref()).expect("bounds");
-        assert!((bounds.width() - 20.0).abs() < 0.01);
+        assert!((bounds.width() - 1010.0).abs() < 0.01);
         assert!(bounds.min_x().abs() < 0.01);
-        assert!(bounds.max_x() <= 20.01);
+        assert!((bounds.max_x() - 1010.0).abs() < 0.01);
     }
 
     #[test]
@@ -4219,6 +4186,24 @@ mod tests {
         }
         assert!(found_outline, "outline stroke should paint outside the box");
         assert_eq!(color_at(&pixmap, 0, 0), (255, 255, 255, 255));
+    }
+
+    #[test]
+    fn outline_not_clipped_by_overflow_hidden() {
+        let mut style = ComputedStyle::default();
+        style.background_color = Rgba::WHITE;
+        style.outline_style = OutlineStyle::Solid;
+        style.outline_width = Length::px(4.0);
+        style.outline_color = OutlineColor::Color(Rgba::RED);
+        style.overflow_x = Overflow::Hidden;
+        style.overflow_y = Overflow::Hidden;
+        let fragment =
+            FragmentNode::new_block_styled(Rect::from_xywh(10.0, 10.0, 10.0, 10.0), vec![], Arc::new(style));
+        let tree = FragmentTree::new(fragment);
+
+        let pixmap = paint_tree(&tree, 40, 40, Rgba::WHITE).expect("paint");
+        // Outline should extend beyond the 10..20 box even though overflow is hidden.
+        assert_eq!(color_at(&pixmap, 8, 15), (255, 0, 0, 255));
     }
 
     #[test]
