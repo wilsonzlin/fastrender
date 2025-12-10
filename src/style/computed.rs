@@ -235,6 +235,8 @@ pub struct PositionedStyle {
     /// CSS: `font-stretch`
     /// Initial: normal (100%)
     pub font_stretch: super::types::FontStretch,
+    /// Preferred aspect ratio (non-replaced elements)
+    pub aspect_ratio: super::types::AspectRatio,
     /// Font size adjust
     ///
     /// CSS: `font-size-adjust`
@@ -454,6 +456,7 @@ impl Default for PositionedStyle {
             font_weight: 400, // normal
             font_style: FontStyle::Normal,
             font_stretch: FontStretch::Normal,
+            aspect_ratio: super::types::AspectRatio::Auto,
             font_size_adjust: FontSizeAdjust::None,
             line_height: LineHeight::Normal,
             text_align: TextAlign::Start,
@@ -642,6 +645,11 @@ impl PositionedStyleBuilder {
         self
     }
 
+    pub fn aspect_ratio(mut self, ratio: super::types::AspectRatio) -> Self {
+        self.style.aspect_ratio = ratio;
+        self
+    }
+
     pub fn width(mut self, width: LengthOrAuto) -> Self {
         self.style.width = width;
         self
@@ -681,6 +689,7 @@ impl Default for PositionedStyleBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::AspectRatio;
 
     #[test]
     fn test_default_values() {
@@ -702,6 +711,7 @@ mod tests {
         assert_eq!(style.root_font_size, 16.0);
         assert_eq!(style.font_weight, 400);
         assert!(matches!(style.font_size_adjust, FontSizeAdjust::None));
+        assert!(matches!(style.aspect_ratio, AspectRatio::Auto));
     }
 
     #[test]
