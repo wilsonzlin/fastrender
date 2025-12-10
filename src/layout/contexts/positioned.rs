@@ -41,9 +41,10 @@
 
 use crate::geometry::{Point, Rect, Size};
 use crate::layout::formatting_context::LayoutError;
-use crate::layout::utils::{content_size_from_box_sizing, resolve_offset};
+use crate::layout::utils::{content_size_from_box_sizing, resolve_offset_for_positioned};
 use crate::style::computed::PositionedStyle;
 use crate::style::position::Position;
+use crate::text::font_loader::FontContext;
 use crate::tree::fragment_tree::FragmentNode;
 
 /// Represents a containing block for positioned elements
@@ -152,39 +153,19 @@ impl StickyConstraints {
     }
 
     /// Creates sticky constraints from computed style
-    pub fn from_style(style: &PositionedStyle, containing_block: &ContainingBlock) -> Self {
-        let font_size = style.font_size;
-        let root_font_size = style.root_font_size;
+    pub fn from_style(style: &PositionedStyle, containing_block: &ContainingBlock, font_context: &FontContext) -> Self {
         let viewport = containing_block.viewport_size();
         Self {
-            top: resolve_offset(
-                &style.top,
-                containing_block.height(),
-                viewport,
-                font_size,
-                root_font_size,
-            ),
-            right: resolve_offset(
-                &style.right,
-                containing_block.width(),
-                viewport,
-                font_size,
-                root_font_size,
-            ),
-            bottom: resolve_offset(
+            top: resolve_offset_for_positioned(&style.top, containing_block.height(), viewport, style, font_context),
+            right: resolve_offset_for_positioned(&style.right, containing_block.width(), viewport, style, font_context),
+            bottom: resolve_offset_for_positioned(
                 &style.bottom,
                 containing_block.height(),
                 viewport,
-                font_size,
-                root_font_size,
+                style,
+                font_context,
             ),
-            left: resolve_offset(
-                &style.left,
-                containing_block.width(),
-                viewport,
-                font_size,
-                root_font_size,
-            ),
+            left: resolve_offset_for_positioned(&style.left, containing_block.width(), viewport, style, font_context),
         }
     }
 
@@ -207,13 +188,23 @@ impl StickyConstraints {
 /// # Thread Safety
 ///
 /// PositionedLayout is stateless and can be shared across threads.
-#[derive(Debug, Clone, Default)]
-pub struct PositionedLayout;
+#[derive(Clone)]
+pub struct PositionedLayout {
+    font_context: FontContext,
+}
+
+impl Default for PositionedLayout {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl PositionedLayout {
     /// Creates a new positioned layout handler
-    pub const fn new() -> Self {
-        Self
+    pub fn new() -> Self {
+        Self {
+            font_context: FontContext::new(),
+        }
     }
 
     /// Applies relative positioning to a fragment
@@ -286,23 +277,25 @@ impl PositionedLayout {
     fn compute_relative_offset(&self, style: &PositionedStyle, containing_block: &ContainingBlock) -> Point {
         let mut offset_x = 0.0;
         let mut offset_y = 0.0;
-        let font_size = style.font_size;
-        let root_font_size = style.root_font_size;
         let cb_width = containing_block.width();
         let cb_height = containing_block.height();
         let viewport = containing_block.viewport_size();
 
         // Vertical offset: top takes precedence over bottom
-        if let Some(top) = resolve_offset(&style.top, cb_height, viewport, font_size, root_font_size) {
+        if let Some(top) = resolve_offset_for_positioned(&style.top, cb_height, viewport, style, &self.font_context) {
             offset_y = top;
-        } else if let Some(bottom) = resolve_offset(&style.bottom, cb_height, viewport, font_size, root_font_size) {
+        } else if let Some(bottom) =
+            resolve_offset_for_positioned(&style.bottom, cb_height, viewport, style, &self.font_context)
+        {
             offset_y = -bottom;
         }
 
         // Horizontal offset: left takes precedence over right (LTR)
-        if let Some(left) = resolve_offset(&style.left, cb_width, viewport, font_size, root_font_size) {
+        if let Some(left) = resolve_offset_for_positioned(&style.left, cb_width, viewport, style, &self.font_context) {
             offset_x = left;
-        } else if let Some(right) = resolve_offset(&style.right, cb_width, viewport, font_size, root_font_size) {
+        } else if let Some(right) =
+            resolve_offset_for_positioned(&style.right, cb_width, viewport, style, &self.font_context)
+        {
             offset_x = -right;
         }
 
@@ -362,8 +355,8 @@ impl PositionedLayout {
         viewport: Size,
         intrinsic_width: f32,
     ) -> Result<(f32, f32), LayoutError> {
-        let left = resolve_offset(&style.left, cb_width, viewport, style.font_size, style.root_font_size);
-        let right = resolve_offset(&style.right, cb_width, viewport, style.font_size, style.root_font_size);
+        let left = resolve_offset_for_positioned(&style.left, cb_width, viewport, style, &self.font_context);
+        let right = resolve_offset_for_positioned(&style.right, cb_width, viewport, style, &self.font_context);
 
         // Get margin values (auto margins = 0 for absolute positioning unless overconstrained)
         let margin_left = style.margin.left;
@@ -445,14 +438,8 @@ impl PositionedLayout {
         viewport: Size,
         intrinsic_height: f32,
     ) -> Result<(f32, f32), LayoutError> {
-        let top = resolve_offset(&style.top, cb_height, viewport, style.font_size, style.root_font_size);
-        let bottom = resolve_offset(
-            &style.bottom,
-            cb_height,
-            viewport,
-            style.font_size,
-            style.root_font_size,
-        );
+        let top = resolve_offset_for_positioned(&style.top, cb_height, viewport, style, &self.font_context);
+        let bottom = resolve_offset_for_positioned(&style.bottom, cb_height, viewport, style, &self.font_context);
 
         // Get margin values
         let margin_top = style.margin.top;
@@ -595,7 +582,7 @@ impl PositionedLayout {
             return StickyConstraints::none();
         }
 
-        StickyConstraints::from_style(style, containing_block)
+        StickyConstraints::from_style(style, containing_block, &self.font_context)
     }
 
     /// Checks if an element creates a stacking context
@@ -636,7 +623,9 @@ mod tests {
     use crate::geometry::EdgeOffsets;
     use crate::style::computed::PositionedStyle;
 
+    use crate::layout::utils::resolve_offset;
     use crate::style::values::LengthOrAuto;
+    use crate::text::font_loader::FontContext;
 
     fn default_style() -> PositionedStyle {
         let mut style = PositionedStyle::default();
@@ -688,7 +677,7 @@ mod tests {
         style.left = LengthOrAuto::percent(5.0);
 
         let cb = create_containing_block(800.0, 600.0);
-        let constraints = StickyConstraints::from_style(&style, &cb);
+        let constraints = StickyConstraints::from_style(&style, &cb, &FontContext::new());
 
         assert_eq!(constraints.top, Some(10.0));
         assert_eq!(constraints.left, Some(40.0)); // 5% of 800

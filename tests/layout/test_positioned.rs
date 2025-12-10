@@ -9,6 +9,7 @@
 //! - CSS Position Module Level 3: Sticky positioning
 
 use fastrender::geometry::{EdgeOffsets, Point, Rect, Size};
+use fastrender::text::font_loader::FontContext;
 use fastrender::FragmentNode;
 use fastrender::{ContainingBlock, PositionedLayout, StickyConstraints};
 use fastrender::{LengthOrAuto, Position, PositionedStyle};
@@ -96,7 +97,7 @@ fn test_sticky_constraints_from_style_with_values() {
     style.left = LengthOrAuto::px(5.0);
 
     let cb = create_containing_block(800.0, 600.0);
-    let constraints = StickyConstraints::from_style(&style, &cb);
+    let constraints = StickyConstraints::from_style(&style, &cb, &FontContext::new());
 
     assert_eq!(constraints.top, Some(10.0));
     assert_eq!(constraints.right, Some(80.0)); // 10% of 800
