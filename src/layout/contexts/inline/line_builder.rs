@@ -1460,6 +1460,7 @@ fn reorder_paragraph(
     shaper: &ShapingPipeline,
     font_context: &FontContext,
 ) {
+    let max_depth = unicode_bidi::level::MAX_EXPLICIT_DEPTH as usize;
     if lines.is_empty() {
         return;
     }
@@ -1507,14 +1508,20 @@ fn reorder_paragraph(
 
             // Open new contexts
             for ctx in leaf.box_stack.iter().skip(shared) {
-                let (opens, closes) = bidi_controls(ctx.unicode_bidi, ctx.direction);
+                let (opens, closes) =
+                    bidi_controls_limited(ctx.unicode_bidi, ctx.direction, active_stack.len(), max_depth);
                 logical_text.extend(opens);
                 context_closers.push(closes);
                 active_stack.push(ctx.clone());
             }
 
             // Leaf-local controls
-            let (leaf_opens, leaf_closes) = bidi_controls(leaf.item.unicode_bidi(), leaf.item.direction());
+            let (leaf_opens, leaf_closes) = bidi_controls_limited(
+                leaf.item.unicode_bidi(),
+                leaf.item.direction(),
+                active_stack.len(),
+                max_depth,
+            );
             logical_text.extend(leaf_opens.iter());
 
             let content_start = logical_text.len();
@@ -1836,6 +1843,18 @@ fn bidi_controls(unicode_bidi: UnicodeBidi, direction: Direction) -> (Vec<char>,
     }
 }
 
+fn bidi_controls_limited(
+    unicode_bidi: UnicodeBidi,
+    direction: Direction,
+    current_depth: usize,
+    max_depth: usize,
+) -> (Vec<char>, Vec<char>) {
+    if current_depth >= max_depth {
+        return (Vec::new(), Vec::new());
+    }
+    bidi_controls(unicode_bidi, direction)
+}
+
 #[derive(Clone)]
 struct BoxContext {
     id: usize,
@@ -1917,7 +1936,7 @@ mod tests {
     use crate::text::line_break::find_break_opportunities;
     use crate::text::pipeline::ShapingPipeline;
     use std::sync::Arc;
-    use unicode_bidi::BidiInfo;
+    use unicode_bidi::{level, BidiInfo};
 
     fn make_strut_metrics() -> BaselineMetrics {
         BaselineMetrics::new(12.0, 16.0, 12.0, 4.0)
@@ -2305,6 +2324,49 @@ mod tests {
             texts,
             vec!["L ".to_string(), "ג".to_string(), "אב".to_string(), " R".to_string()]
         );
+    }
+
+    #[test]
+    fn excessive_embedding_depth_is_clamped() {
+        // Build a deeply nested set of inline boxes that exceed unicode_bidi's max depth.
+        let mut inner = InlineItem::Text(make_text_item("abc", 30.0));
+        for idx in 0..(level::MAX_EXPLICIT_DEPTH as usize + 8) {
+            let mut box_item = InlineBoxItem::new(
+                0.0,
+                0.0,
+                0.0,
+                make_strut_metrics(),
+                Arc::new(ComputedStyle::default()),
+                idx,
+                Direction::Ltr,
+                UnicodeBidi::Embed,
+            );
+            box_item.add_child(inner);
+            inner = InlineItem::InlineBox(box_item);
+        }
+
+        let positioned = PositionedItem {
+            item: inner,
+            x: 0.0,
+            baseline_offset: 0.0,
+        };
+        let mut line = Line::new();
+        line.items.push(positioned);
+        let mut lines = vec![line];
+
+        reorder_paragraph(
+            &mut lines,
+            Some(Level::ltr()),
+            &ShapingPipeline::new(),
+            &FontContext::new(),
+        );
+
+        assert!(
+            !lines[0].items.is_empty(),
+            "reordering should still produce items even when depth exceeds the limit"
+        );
+        let width: f32 = lines[0].items.iter().map(|p| p.item.width()).sum();
+        assert!(width > 0.0, "items should keep their width after reordering");
     }
 
     #[test]
