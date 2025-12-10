@@ -27,10 +27,12 @@ use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem;
+use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::display_list::BorderRadii;
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::stacking::creates_stacking_context;
+use crate::paint::text_shadow::{resolve_text_shadows, PathBounds, ResolvedTextShadow};
 use crate::style::color::Rgba;
 use crate::style::types::{
     BackgroundAttachment, BackgroundImage, BackgroundPosition, BackgroundRepeatKeyword, BackgroundSize,
@@ -85,44 +87,6 @@ enum ResolvedFilter {
         spread: f32,
         color: Rgba,
     },
-}
-
-#[derive(Debug, Clone)]
-struct ResolvedTextShadow {
-    offset_x: f32,
-    offset_y: f32,
-    blur_radius: f32,
-    color: Rgba,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct PathBounds {
-    min_x: f32,
-    min_y: f32,
-    max_x: f32,
-    max_y: f32,
-}
-
-impl PathBounds {
-    fn new() -> Self {
-        Self {
-            min_x: f32::INFINITY,
-            min_y: f32::INFINITY,
-            max_x: f32::NEG_INFINITY,
-            max_y: f32::NEG_INFINITY,
-        }
-    }
-
-    fn include(&mut self, rect: &tiny_skia::Rect) {
-        self.min_x = self.min_x.min(rect.left());
-        self.min_y = self.min_y.min(rect.top());
-        self.max_x = self.max_x.max(rect.right());
-        self.max_y = self.max_y.max(rect.bottom());
-    }
-
-    fn is_valid(&self) -> bool {
-        self.min_x.is_finite() && self.min_y.is_finite() && self.max_x.is_finite() && self.max_y.is_finite()
-    }
 }
 
 #[derive(Debug)]
@@ -2554,140 +2518,6 @@ fn invert(color: [f32; 3], amount: f32) -> [f32; 3] {
         color[1] + (1.0 - color[1] - color[1]) * amount,
         color[2] + (1.0 - color[2] - color[2]) * amount,
     ]
-}
-
-fn resolve_text_shadows(style: &ComputedStyle) -> Vec<ResolvedTextShadow> {
-    style
-        .text_shadow
-        .iter()
-        .map(|shadow| ResolvedTextShadow {
-            offset_x: resolve_shadow_length(&shadow.offset_x, style.font_size),
-            offset_y: resolve_shadow_length(&shadow.offset_y, style.font_size),
-            blur_radius: resolve_shadow_length(&shadow.blur_radius, style.font_size).max(0.0),
-            color: shadow.color,
-        })
-        .collect()
-}
-
-fn resolve_shadow_length(len: &Length, font_size: f32) -> f32 {
-    match len.unit {
-        LengthUnit::Percent => len.resolve_against(font_size),
-        LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size),
-        _ if len.unit.is_absolute() => len.to_px(),
-        _ => len.value * font_size,
-    }
-}
-
-fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
-    let radius = (sigma.abs() * 3.0).ceil() as usize;
-    if radius == 0 {
-        return;
-    }
-
-    let (kernel, radius) = gaussian_kernel(sigma);
-    if kernel.is_empty() {
-        return;
-    }
-
-    let width = pixmap.width() as usize;
-    let height = pixmap.height() as usize;
-    let src: Vec<[f32; 4]> = pixmap
-        .pixels()
-        .iter()
-        .map(|p| {
-            [
-                p.red() as f32 / 255.0,
-                p.green() as f32 / 255.0,
-                p.blue() as f32 / 255.0,
-                p.alpha() as f32 / 255.0,
-            ]
-        })
-        .collect();
-
-    let mut temp = vec![[0.0; 4]; src.len()];
-    let mut dst = vec![[0.0; 4]; src.len()];
-
-    // Horizontal pass
-    for y in 0..height {
-        for x in 0..width {
-            let mut accum = [0.0; 4];
-            let mut weight_sum = 0.0;
-            for (i, weight) in kernel.iter().enumerate() {
-                let offset = i as isize - radius as isize;
-                let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
-                let sample = src[y * width + cx];
-                accum[0] += sample[0] * weight;
-                accum[1] += sample[1] * weight;
-                accum[2] += sample[2] * weight;
-                accum[3] += sample[3] * weight;
-                weight_sum += weight;
-            }
-            let idx = y * width + x;
-            temp[idx] = [
-                accum[0] / weight_sum,
-                accum[1] / weight_sum,
-                accum[2] / weight_sum,
-                accum[3] / weight_sum,
-            ];
-        }
-    }
-
-    // Vertical pass
-    for y in 0..height {
-        for x in 0..width {
-            let mut accum = [0.0; 4];
-            let mut weight_sum = 0.0;
-            for (i, weight) in kernel.iter().enumerate() {
-                let offset = i as isize - radius as isize;
-                let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
-                let sample = temp[cy * width + x];
-                accum[0] += sample[0] * weight;
-                accum[1] += sample[1] * weight;
-                accum[2] += sample[2] * weight;
-                accum[3] += sample[3] * weight;
-                weight_sum += weight;
-            }
-            let idx = y * width + x;
-            dst[idx] = [
-                accum[0] / weight_sum,
-                accum[1] / weight_sum,
-                accum[2] / weight_sum,
-                accum[3] / weight_sum,
-            ];
-        }
-    }
-
-    for (i, pixel) in pixmap.pixels_mut().iter_mut().enumerate() {
-        let a = (dst[i][3] * 255.0).round().clamp(0.0, 255.0);
-        let r = (dst[i][0] * 255.0).round().clamp(0.0, a) as u8;
-        let g = (dst[i][1] * 255.0).round().clamp(0.0, a) as u8;
-        let b = (dst[i][2] * 255.0).round().clamp(0.0, a) as u8;
-        *pixel = PremultipliedColorU8::from_rgba(r, g, b, a as u8).unwrap_or(PremultipliedColorU8::TRANSPARENT);
-    }
-}
-
-fn gaussian_kernel(sigma: f32) -> (Vec<f32>, usize) {
-    let sigma = sigma.abs();
-    if sigma <= 0.0 {
-        return (Vec::new(), 0);
-    }
-    let radius = (sigma * 3.0).ceil() as usize;
-    if radius == 0 {
-        return (vec![1.0], 0);
-    }
-    let two_sigma_sq = 2.0 * sigma * sigma;
-    let mut kernel = Vec::with_capacity(radius * 2 + 1);
-    for i in 0..=radius * 2 {
-        let x = i as f32 - radius as f32;
-        kernel.push((-x * x / two_sigma_sq).exp());
-    }
-    let sum: f32 = kernel.iter().sum();
-    if sum > 0.0 {
-        for k in kernel.iter_mut() {
-            *k /= sum;
-        }
-    }
-    (kernel, radius)
 }
 
 fn apply_drop_shadow(pixmap: &mut Pixmap, offset_x: f32, offset_y: f32, blur_radius: f32, spread: f32, color: Rgba) {

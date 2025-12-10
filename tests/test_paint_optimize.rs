@@ -37,6 +37,7 @@ fn make_text(x: f32, y: f32, color: Rgba) -> DisplayItem {
         origin: Point::new(x, y),
         glyphs: vec![],
         color,
+        shadows: Vec::new(),
         font_size: 16.0,
         advance_width: 100.0,
         font_id: None,

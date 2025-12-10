@@ -32,10 +32,11 @@ use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::paint::display_list::{
     ClipItem, DisplayItem, DisplayList, FillRectItem, FontId, GlyphInstance, ImageData, ImageItem, OpacityItem,
-    StrokeRectItem, TextItem,
+    StrokeRectItem, TextItem, TextShadowItem,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
+use crate::paint::text_shadow::resolve_text_shadows;
 use crate::style::color::Rgba;
 use crate::style::types::ObjectFit;
 use crate::style::ComputedStyle;
@@ -276,11 +277,12 @@ impl DisplayListBuilder {
                 }
 
                 let color = fragment.style.as_deref().map(|s| s.color).unwrap_or(Rgba::BLACK);
+                let shadows = Self::text_shadows_from_style(fragment.style.as_deref());
                 let baseline = rect.origin.y + baseline_offset;
                 let start_x = rect.origin.x;
 
                 if let Some(runs) = shaped {
-                    self.emit_shaped_runs(runs, color, baseline, start_x);
+                    self.emit_shaped_runs(runs, color, baseline, start_x, &shadows);
                     return;
                 }
 
@@ -292,7 +294,7 @@ impl DisplayListBuilder {
                             style.letter_spacing,
                             style.word_spacing,
                         );
-                        self.emit_shaped_runs(&runs, color, baseline, start_x);
+                        self.emit_shaped_runs(&runs, color, baseline, start_x, &shadows);
                         return;
                     }
                 }
@@ -315,6 +317,7 @@ impl DisplayListBuilder {
                     origin: Point::new(start_x, baseline),
                     glyphs,
                     color,
+                    shadows,
                     font_size,
                     advance_width,
                     font_id: None,
@@ -419,7 +422,14 @@ impl DisplayListBuilder {
         self.list.push(DisplayItem::PopClip);
     }
 
-    fn emit_shaped_runs(&mut self, runs: &[ShapedRun], color: Rgba, baseline_y: f32, start_x: f32) {
+    fn emit_shaped_runs(
+        &mut self,
+        runs: &[ShapedRun],
+        color: Rgba,
+        baseline_y: f32,
+        start_x: f32,
+        shadows: &[TextShadowItem],
+    ) {
         let mut pen_x = start_x;
         for run in runs {
             let origin_x = if run.direction.is_rtl() {
@@ -434,6 +444,7 @@ impl DisplayListBuilder {
                 origin: Point::new(origin_x, baseline_y),
                 glyphs,
                 color,
+                shadows: shadows.to_vec(),
                 font_size: run.font_size,
                 advance_width: run.advance,
                 font_id: Some(font_id),
@@ -471,6 +482,21 @@ impl DisplayListBuilder {
         }
     }
 
+    fn text_shadows_from_style(style: Option<&ComputedStyle>) -> Vec<TextShadowItem> {
+        style
+            .map(|s| {
+                resolve_text_shadows(s)
+                    .into_iter()
+                    .map(|shadow| TextShadowItem {
+                        offset: Point::new(shadow.offset_x, shadow.offset_y),
+                        blur_radius: shadow.blur_radius,
+                        color: shadow.color,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn emit_alt_text(&mut self, alt: &str, fragment: &FragmentNode, rect: Rect) -> bool {
         let text = alt.trim();
         if text.is_empty() {
@@ -493,13 +519,15 @@ impl DisplayListBuilder {
         let half_leading = ((metrics.line_height - (metrics.ascent + metrics.descent)) / 2.0).max(0.0);
         let baseline = rect.y() + half_leading + metrics.baseline_offset;
 
-        self.emit_shaped_runs(&runs, style.color, baseline, rect.x());
+        let shadows = Self::text_shadows_from_style(Some(style));
+        self.emit_shaped_runs(&runs, style.color, baseline, rect.x(), &shadows);
         true
     }
 
     fn emit_naive_alt(&mut self, text: &str, rect: Rect, style: Option<&ComputedStyle>) -> bool {
         let font_size = style.map(|s| s.font_size).unwrap_or(16.0);
         let color = style.map(|s| s.color).unwrap_or(Rgba::BLACK);
+        let shadows = Self::text_shadows_from_style(style);
         let char_width = font_size * 0.6;
         let origin = Point::new(rect.x(), rect.y() + font_size * 0.8);
         let glyphs: Vec<GlyphInstance> = text
@@ -517,6 +545,7 @@ impl DisplayListBuilder {
             origin,
             glyphs,
             color,
+            shadows,
             font_size,
             advance_width,
             font_id: None,

@@ -372,6 +372,9 @@ pub struct TextItem {
     /// Text color
     pub color: Rgba,
 
+    /// Shadows to paint before the fill
+    pub shadows: Vec<TextShadowItem>,
+
     /// Font size in pixels
     pub font_size: f32,
 
@@ -393,6 +396,14 @@ pub struct GlyphInstance {
 
     /// Advance width to next glyph
     pub advance: f32,
+}
+
+/// A resolved text shadow ready for painting
+#[derive(Debug, Clone)]
+pub struct TextShadowItem {
+    pub offset: Point,
+    pub blur_radius: f32,
+    pub color: Rgba,
 }
 
 /// Font identifier for looking up font data

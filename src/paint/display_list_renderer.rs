@@ -5,18 +5,21 @@
 //! paint-time contract while still reusing the shared `FontContext`.
 
 use crate::error::{RenderError, Result};
+use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::canvas::Canvas;
 use crate::paint::display_list::{
     BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FontId, ImageItem, LinearGradientItem,
     OpacityItem, RadialGradientItem, StrokeRectItem, TextItem, TransformItem,
 };
 use crate::paint::rasterize::{render_box_shadow, BoxShadow};
+use crate::paint::text_shadow::PathBounds;
 use crate::style::color::Rgba;
 use crate::text::font_db::{FontStretch, FontStyle as DbFontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
 use crate::text::shaper::GlyphPosition;
 use tiny_skia::{
-    GradientStop as SkiaGradientStop, LinearGradient, Pixmap, Point as SkiaPoint, RadialGradient, SpreadMode, Transform,
+    GradientStop as SkiaGradientStop, LinearGradient, PathBuilder, Pixmap, Point as SkiaPoint, RadialGradient,
+    SpreadMode, Transform,
 };
 
 /// Renders a display list into a pixmap using the provided font context.
@@ -224,6 +227,21 @@ impl DisplayListRenderer {
             .into());
         };
 
+        let face = match font.as_ttf_face() {
+            Ok(f) => f,
+            Err(_) => {
+                return Err(RenderError::RasterizationFailed {
+                    reason: "Unable to parse font face for text shadows".into(),
+                }
+                .into())
+            }
+        };
+
+        let (paths, bounds) = self.glyph_paths(&face, item);
+        if !item.shadows.is_empty() && !paths.is_empty() && bounds.is_valid() {
+            self.render_text_shadows(&paths, &bounds, item);
+        }
+
         let glyphs: Vec<GlyphPosition> = item
             .glyphs
             .iter()
@@ -240,6 +258,148 @@ impl DisplayListRenderer {
         self.canvas
             .draw_text(item.origin, &glyphs, &font, item.font_size, item.color);
         Ok(())
+    }
+
+    fn glyph_paths(&self, face: &ttf_parser::Face<'_>, item: &TextItem) -> (Vec<tiny_skia::Path>, PathBounds) {
+        let units_per_em = face.units_per_em() as f32;
+        let scale = item.font_size / units_per_em;
+        let mut paths = Vec::with_capacity(item.glyphs.len());
+        let mut bounds = PathBounds::new();
+
+        for glyph in &item.glyphs {
+            let x = item.origin.x + glyph.offset.x;
+            let y = item.origin.y + glyph.offset.y;
+            if let Some(path) = Self::build_glyph_path(face, glyph.glyph_id as u16, x, y, scale) {
+                bounds.include(&path.bounds());
+                paths.push(path);
+            }
+        }
+
+        (paths, bounds)
+    }
+
+    fn build_glyph_path(
+        face: &ttf_parser::Face<'_>,
+        glyph_id: u16,
+        x: f32,
+        baseline_y: f32,
+        scale: f32,
+    ) -> Option<tiny_skia::Path> {
+        use ttf_parser::OutlineBuilder;
+
+        struct PathConverter {
+            builder: PathBuilder,
+            scale: f32,
+            x: f32,
+            y: f32,
+        }
+
+        impl OutlineBuilder for PathConverter {
+            fn move_to(&mut self, px: f32, py: f32) {
+                self.builder.move_to(self.x + px * self.scale, self.y - py * self.scale);
+            }
+
+            fn line_to(&mut self, px: f32, py: f32) {
+                self.builder.line_to(self.x + px * self.scale, self.y - py * self.scale);
+            }
+
+            fn quad_to(&mut self, x1: f32, y1: f32, px: f32, py: f32) {
+                self.builder.quad_to(
+                    self.x + x1 * self.scale,
+                    self.y - y1 * self.scale,
+                    self.x + px * self.scale,
+                    self.y - py * self.scale,
+                );
+            }
+
+            fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, px: f32, py: f32) {
+                self.builder.cubic_to(
+                    self.x + x1 * self.scale,
+                    self.y - y1 * self.scale,
+                    self.x + x2 * self.scale,
+                    self.y - y2 * self.scale,
+                    self.x + px * self.scale,
+                    self.y - py * self.scale,
+                );
+            }
+
+            fn close(&mut self) {
+                self.builder.close();
+            }
+        }
+
+        let mut converter = PathConverter {
+            builder: PathBuilder::new(),
+            scale,
+            x,
+            y: baseline_y,
+        };
+
+        face.outline_glyph(ttf_parser::GlyphId(glyph_id), &mut converter)?;
+        converter.builder.finish()
+    }
+
+    fn render_text_shadows(&mut self, paths: &[tiny_skia::Path], bounds: &PathBounds, item: &TextItem) {
+        let opacity = self.canvas.opacity().clamp(0.0, 1.0);
+        for shadow in &item.shadows {
+            let blur_margin = (shadow.blur_radius.abs() * 3.0).ceil();
+            let shadow_min_x = bounds.min_x + shadow.offset.x - blur_margin;
+            let shadow_max_x = bounds.max_x + shadow.offset.x + blur_margin;
+            let shadow_min_y = bounds.min_y + shadow.offset.y - blur_margin;
+            let shadow_max_y = bounds.max_y + shadow.offset.y + blur_margin;
+
+            let shadow_width = (shadow_max_x - shadow_min_x).ceil().max(0.0) as u32;
+            let shadow_height = (shadow_max_y - shadow_min_y).ceil().max(0.0) as u32;
+            if shadow_width == 0 || shadow_height == 0 {
+                continue;
+            }
+
+            let Some(mut shadow_pixmap) = Pixmap::new(shadow_width, shadow_height) else {
+                continue;
+            };
+
+            let mut paint = tiny_skia::Paint::default();
+            let alpha = (shadow.color.a * opacity).clamp(0.0, 1.0);
+            paint.set_color_rgba8(
+                shadow.color.r,
+                shadow.color.g,
+                shadow.color.b,
+                (alpha * 255.0).round().clamp(0.0, 255.0) as u8,
+            );
+            paint.anti_alias = true;
+
+            let translate_x = -bounds.min_x + blur_margin;
+            let translate_y = -bounds.min_y + blur_margin;
+            let transform = Transform::from_translate(translate_x, translate_y);
+            for path in paths {
+                shadow_pixmap.fill_path(path, &paint, tiny_skia::FillRule::EvenOdd, transform, None);
+            }
+
+            if shadow.blur_radius > 0.0 {
+                apply_gaussian_blur(&mut shadow_pixmap, shadow.blur_radius);
+            }
+
+            let dest_x = shadow_min_x.floor() as i32;
+            let dest_y = shadow_min_y.floor() as i32;
+            let frac_x = shadow_min_x - dest_x as f32;
+            let frac_y = shadow_min_y - dest_y as f32;
+            let mut pixmap_paint = tiny_skia::PixmapPaint {
+                opacity: 1.0,
+                blend_mode: self.canvas.blend_mode(),
+                ..Default::default()
+            };
+            pixmap_paint.opacity = opacity;
+            let clip = self.canvas.clip_mask().cloned();
+            let transform = Transform::from_translate(frac_x, frac_y).post_concat(self.canvas.transform());
+            self.canvas.pixmap_mut().draw_pixmap(
+                dest_x,
+                dest_y,
+                shadow_pixmap.as_ref(),
+                &pixmap_paint,
+                transform,
+                clip.as_ref(),
+            );
+        }
     }
 
     fn render_image(&mut self, item: &ImageItem) -> Result<()> {
@@ -358,8 +518,8 @@ mod tests {
     use super::*;
     use crate::geometry::{Point, Rect};
     use crate::paint::display_list::{
-        BoxShadowItem, DisplayItem, DisplayList, FillRectItem, GradientSpread, GradientStop, LinearGradientItem,
-        RadialGradientItem, Transform2D,
+        BoxShadowItem, DisplayItem, DisplayList, FillRectItem, GlyphInstance, GradientSpread, GradientStop,
+        LinearGradientItem, RadialGradientItem, TextItem, TextShadowItem, Transform2D,
     };
     use crate::style::color::Rgba;
 
@@ -367,6 +527,33 @@ mod tests {
         let idx = ((y * pixmap.width() + x) * 4) as usize;
         let data = pixmap.data();
         (data[idx], data[idx + 1], data[idx + 2], data[idx + 3])
+    }
+
+    fn bounding_box_for_color(
+        pixmap: &Pixmap,
+        predicate: impl Fn((u8, u8, u8, u8)) -> bool,
+    ) -> Option<(u32, u32, u32, u32)> {
+        let mut min_x = u32::MAX;
+        let mut min_y = u32::MAX;
+        let mut max_x = 0u32;
+        let mut max_y = 0u32;
+
+        for y in 0..pixmap.height() {
+            for x in 0..pixmap.width() {
+                if predicate(pixel(pixmap, x, y)) {
+                    min_x = min_x.min(x);
+                    min_y = min_y.min(y);
+                    max_x = max_x.max(x);
+                    max_y = max_y.max(y);
+                }
+            }
+        }
+
+        if min_x == u32::MAX {
+            None
+        } else {
+            Some((min_x, min_y, max_x, max_y))
+        }
     }
 
     #[test]
@@ -498,6 +685,58 @@ mod tests {
         let pixmap = renderer.render(&list).unwrap();
         // Center of the box should have darkened pixels due to shadow.
         assert!(pixel(&pixmap, 3, 3).3 > 200);
+    }
+
+    #[test]
+    fn renders_text_shadows() {
+        let font_ctx = FontContext::new();
+        let Some(font) = font_ctx.get_sans_serif() else {
+            return;
+        };
+        let Ok(face) = font.as_ttf_face() else {
+            return;
+        };
+        let Some(glyph_id) = face.glyph_index('H') else {
+            return;
+        };
+
+        let mut list = DisplayList::new();
+        list.push(DisplayItem::Text(TextItem {
+            origin: Point::new(10.0, 24.0),
+            glyphs: vec![GlyphInstance {
+                glyph_id: glyph_id.0 as u32,
+                offset: Point::new(0.0, 0.0),
+                advance: 14.0,
+            }],
+            color: Rgba::BLACK,
+            shadows: vec![TextShadowItem {
+                offset: Point::new(4.0, 0.0),
+                blur_radius: 0.0,
+                color: Rgba::from_rgba8(255, 0, 0, 255),
+            }],
+            font_size: 20.0,
+            advance_width: 14.0,
+            font_id: Some(FontId {
+                family: font.family.clone(),
+                weight: font.weight.value(),
+                style: font.style,
+                stretch: font.stretch,
+            }),
+        }));
+
+        let renderer = DisplayListRenderer::new(80, 40, Rgba::WHITE, font_ctx).expect("renderer");
+        let pixmap = renderer.render(&list).expect("rendered");
+
+        let black_bbox =
+            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32).expect("text pixels");
+        let red_bbox =
+            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80).expect("shadow");
+
+        assert!(red_bbox.0 > black_bbox.0 + 1, "shadow should be offset to the right");
+        assert!(
+            red_bbox.1.abs_diff(black_bbox.1) <= 2,
+            "shadow should align vertically when y-offset is zero"
+        );
     }
 
     #[test]

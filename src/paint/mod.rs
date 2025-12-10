@@ -90,6 +90,7 @@
 //! // ... iterate display list and draw to canvas
 //! ```
 
+pub mod blur;
 pub mod canvas;
 pub mod display_list;
 pub mod display_list_builder;
@@ -100,3 +101,4 @@ pub mod painter;
 pub mod rasterize;
 pub mod stacking;
 pub mod text_rasterize;
+pub mod text_shadow;
