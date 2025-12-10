@@ -2254,21 +2254,21 @@ impl FormattingContext for TableFormattingContext {
         let outer_border_top = resolve_abs(&box_node.style.border_top_width);
         let outer_border_bottom = resolve_abs(&box_node.style.border_bottom_width);
         let outer_border_v = outer_border_top + outer_border_bottom;
-        let (pad_left, pad_right, pad_top, pad_bottom, border_left, border_right, border_top, border_bottom) =
-            if structure.border_collapse == BorderCollapse::Collapse {
-                (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-            } else {
-                (
-                    resolve_abs(&box_node.style.padding_left),
-                    resolve_abs(&box_node.style.padding_right),
-                    resolve_abs(&box_node.style.padding_top),
-                    resolve_abs(&box_node.style.padding_bottom),
-                    resolve_abs(&box_node.style.border_left_width),
-                    resolve_abs(&box_node.style.border_right_width),
-                    resolve_abs(&box_node.style.border_top_width),
-                    resolve_abs(&box_node.style.border_bottom_width),
-                )
-            };
+        let pad_left = resolve_abs(&box_node.style.padding_left);
+        let pad_right = resolve_abs(&box_node.style.padding_right);
+        let pad_top = resolve_abs(&box_node.style.padding_top);
+        let pad_bottom = resolve_abs(&box_node.style.padding_bottom);
+        let (border_left, border_right, border_top, border_bottom) = if structure.border_collapse == BorderCollapse::Collapse
+        {
+            (0.0, 0.0, 0.0, 0.0)
+        } else {
+            (
+                resolve_abs(&box_node.style.border_left_width),
+                resolve_abs(&box_node.style.border_right_width),
+                resolve_abs(&box_node.style.border_top_width),
+                resolve_abs(&box_node.style.border_bottom_width),
+            )
+        };
         let padding_h = pad_left + pad_right;
         let padding_v = pad_top + pad_bottom;
         let border_h = border_left + border_right;
@@ -2307,10 +2307,10 @@ impl FormattingContext for TableFormattingContext {
             DistributionMode::Auto
         };
         let spacing = structure.total_horizontal_spacing();
-        let edge_consumption = if structure.border_collapse == BorderCollapse::Collapse {
+        let edge_consumption = padding_h + if structure.border_collapse == BorderCollapse::Collapse {
             0.0
         } else {
-            padding_h + border_h
+            border_h
         };
         let percent_base = match (table_width, constraints.available_width) {
             (Some(w), _) => Some((w - spacing - edge_consumption).max(0.0)),
@@ -2426,7 +2426,7 @@ impl FormattingContext for TableFormattingContext {
 
         let percent_height_base = table_height.map(|base| {
             let mut content_base = if structure.border_collapse == BorderCollapse::Collapse {
-                (base - outer_border_v).max(0.0)
+                (base - padding_v - outer_border_v).max(0.0)
             } else {
                 (base - padding_v - border_v).max(0.0)
             };
@@ -2505,7 +2505,7 @@ impl FormattingContext for TableFormattingContext {
 
         let percent_height_base = table_height.map(|base| {
             let mut content_base = if structure.border_collapse == BorderCollapse::Collapse {
-                (base - outer_border_v).max(0.0)
+                (base - padding_v - outer_border_v).max(0.0)
             } else {
                 (base - padding_v - border_v).max(0.0)
             };
@@ -2718,13 +2718,13 @@ impl FormattingContext for TableFormattingContext {
             .collect();
 
         let content_origin_y = if structure.border_collapse == BorderCollapse::Collapse {
-            0.0
+            pad_top
         } else {
             border_top + pad_top
         };
         let mut row_offsets = Vec::with_capacity(structure.row_count);
         let mut y = if structure.border_collapse == BorderCollapse::Collapse {
-            0.0
+            content_origin_y
         } else {
             content_origin_y + v_spacing
         };
@@ -2742,13 +2742,13 @@ impl FormattingContext for TableFormattingContext {
 
         // Precompute column offsets for positioning
         let content_origin_x = if structure.border_collapse == BorderCollapse::Collapse {
-            0.0
+            pad_left
         } else {
             border_left + pad_left
         };
         let mut col_offsets = Vec::with_capacity(structure.column_count);
         if structure.border_collapse == BorderCollapse::Collapse {
-            let mut x = 0.0;
+            let mut x = content_origin_x;
             for col_idx in 0..structure.column_count {
                 x += vertical_line_max.get(col_idx).copied().unwrap_or(0.0);
                 col_offsets.push(x);
@@ -3010,7 +3010,7 @@ impl FormattingContext for TableFormattingContext {
         }
 
         let total_width = if structure.border_collapse == BorderCollapse::Collapse {
-            content_width
+            content_width + padding_h
         } else {
             content_width + padding_h + border_h
         };
@@ -3019,7 +3019,7 @@ impl FormattingContext for TableFormattingContext {
         } else {
             let mut h = content_height
                 + if structure.border_collapse == BorderCollapse::Collapse {
-                    0.0
+                    padding_v
                 } else {
                     padding_v + border_v
                 };
