@@ -20,7 +20,7 @@ use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::style::color::Rgba;
 use fastrender::tree::fragment_tree::{FragmentNode, FragmentTree};
 use fastrender::{
-    build_stacking_tree, BorderRadii, ClipItem, DisplayItem, DisplayList, DisplayListOptimizer, FillRectItem,
+    build_stacking_tree, BlendMode, BorderRadii, ClipItem, DisplayItem, DisplayList, DisplayListOptimizer, FillRectItem,
     FillRoundedRectItem, OpacityItem, OptimizationConfig, StrokeRectItem,
 };
 
@@ -122,6 +122,7 @@ fn create_complex_display_list(item_count: usize) -> DisplayList {
                     rect: Rect::from_xywh(230.0, y, 100.0, 25.0),
                     color: Rgba::new(50, 50, 50, 1.0),
                     width: 2.0,
+                    blend_mode: BlendMode::Normal,
                 }));
             }
             3 => {
@@ -430,6 +431,7 @@ fn bench_display_item_creation(c: &mut Criterion) {
                 rect: Rect::from_xywh(black_box(10.0), black_box(20.0), black_box(100.0), black_box(50.0)),
                 color: Rgba::new(black_box(50), black_box(50), black_box(50), black_box(1.0)),
                 width: black_box(2.0),
+                blend_mode: BlendMode::Normal,
             })
         })
     });

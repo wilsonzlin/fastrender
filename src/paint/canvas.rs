@@ -89,12 +89,17 @@ impl CanvasState {
 
     /// Creates a paint with the current state applied
     fn create_paint(&self, color: Rgba) -> Paint<'static> {
+        self.create_paint_with_blend(color, self.blend_mode)
+    }
+
+    /// Creates a paint with an explicit blend mode override
+    fn create_paint_with_blend(&self, color: Rgba, blend_mode: SkiaBlendMode) -> Paint<'static> {
         let mut paint = Paint::default();
         // Apply opacity to alpha (color.a is already 0.0-1.0)
         let alpha = color.a * self.opacity;
         paint.set_color_rgba8(color.r, color.g, color.b, (alpha * 255.0) as u8);
         paint.anti_alias = true;
-        paint.blend_mode = self.blend_mode;
+        paint.blend_mode = blend_mode;
         paint
     }
 }
@@ -459,6 +464,31 @@ impl Canvas {
         if let Some(skia_rect) = self.to_skia_rect(rect) {
             let path = PathBuilder::from_rect(skia_rect);
             let paint = self.current_state.create_paint(color);
+            let stroke = Stroke {
+                width,
+                ..Default::default()
+            };
+            self.pixmap.stroke_path(
+                &path,
+                &paint,
+                &stroke,
+                self.current_state.transform,
+                self.current_state.clip_mask.as_ref(),
+            );
+        }
+    }
+
+    /// Draws a stroked rectangle outline using an explicit blend mode override.
+    pub fn stroke_rect_with_blend(&mut self, rect: Rect, color: Rgba, width: f32, blend_mode: BlendMode) {
+        if color.a == 0.0 && self.current_state.opacity == 0.0 {
+            return;
+        }
+
+        if let Some(skia_rect) = self.to_skia_rect(rect) {
+            let path = PathBuilder::from_rect(skia_rect);
+            let paint = self
+                .current_state
+                .create_paint_with_blend(color, blend_mode.to_skia());
             let stroke = Stroke {
                 width,
                 ..Default::default()

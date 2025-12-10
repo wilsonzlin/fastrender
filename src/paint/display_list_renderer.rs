@@ -179,8 +179,8 @@ impl DisplayListRenderer {
     fn render_item(&mut self, item: &DisplayItem) -> Result<()> {
         match item {
             DisplayItem::FillRect(FillRectItem { rect, color }) => self.canvas.draw_rect(*rect, *color),
-            DisplayItem::StrokeRect(StrokeRectItem { rect, color, width }) => {
-                self.canvas.stroke_rect(*rect, *color, *width)
+            DisplayItem::StrokeRect(StrokeRectItem { rect, color, width, blend_mode }) => {
+                self.canvas.stroke_rect_with_blend(*rect, *color, *width, *blend_mode)
             }
             DisplayItem::FillRoundedRect(item) => self.canvas.draw_rounded_rect(item.rect, item.radii, item.color),
             DisplayItem::StrokeRoundedRect(item) => self

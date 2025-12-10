@@ -31,8 +31,8 @@ use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::paint::display_list::{
-    ClipItem, DisplayItem, DisplayList, FillRectItem, FontId, GlyphInstance, ImageData, ImageItem, OpacityItem,
-    StrokeRectItem, TextItem, TextShadowItem,
+    BlendMode, ClipItem, DisplayItem, DisplayList, FillRectItem, FontId, GlyphInstance, ImageData, ImageItem,
+    OpacityItem, StrokeRectItem, TextItem, TextShadowItem,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
@@ -411,7 +411,7 @@ impl DisplayListBuilder {
     pub fn emit_border(&mut self, rect: Rect, width: f32, color: Rgba) {
         if width > 0.0 && !color.is_transparent() {
             self.list
-                .push(DisplayItem::StrokeRect(StrokeRectItem { rect, color, width }));
+                .push(DisplayItem::StrokeRect(StrokeRectItem { rect, color, width, blend_mode: BlendMode::Normal }));
         }
     }
 
@@ -429,8 +429,16 @@ impl DisplayListBuilder {
             rect.width() + 2.0 * expand,
             rect.height() + 2.0 * expand,
         );
-        let (color, _) = style.outline_color.resolve(style.color);
-        self.emit_border(outline_rect, ow, color);
+        let (color, invert) = style.outline_color.resolve(style.color);
+        let blend_mode = if invert { BlendMode::Difference } else { BlendMode::Normal };
+        if ow > 0.0 && !color.is_transparent() {
+            self.list.push(DisplayItem::StrokeRect(StrokeRectItem {
+                rect: outline_rect,
+                color,
+                width: ow,
+                blend_mode,
+            }));
+        }
     }
 
     /// Begins an opacity layer

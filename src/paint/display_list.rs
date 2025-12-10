@@ -191,6 +191,9 @@ pub struct StrokeRectItem {
 
     /// Stroke width in pixels
     pub width: f32,
+
+    /// Blend mode for the stroke (defaults to normal)
+    pub blend_mode: BlendMode,
 }
 
 /// Fill a rounded rectangle

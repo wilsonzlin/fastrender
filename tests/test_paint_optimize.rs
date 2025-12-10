@@ -29,6 +29,7 @@ fn make_stroke_rect(x: f32, y: f32, w: f32, h: f32, color: Rgba, width: f32) -> 
         rect: Rect::from_xywh(x, y, w, h),
         color,
         width,
+        blend_mode: BlendMode::Normal,
     })
 }
 

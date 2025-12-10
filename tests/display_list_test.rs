@@ -85,6 +85,7 @@ fn test_stroke_rect_item() {
         rect: Rect::from_xywh(0.0, 0.0, 200.0, 100.0),
         color: Rgba::BLUE,
         width: 2.0,
+        blend_mode: BlendMode::Normal,
     }));
 
     assert_eq!(list.len(), 1);
@@ -605,12 +606,14 @@ fn test_optimize_removes_transparent_strokes() {
         rect: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
         color: Rgba::BLACK,
         width: 1.0,
+        blend_mode: BlendMode::Normal,
     }));
 
     list.push(DisplayItem::StrokeRect(StrokeRectItem {
         rect: Rect::from_xywh(50.0, 50.0, 100.0, 100.0),
         color: Rgba::TRANSPARENT,
         width: 2.0,
+        blend_mode: BlendMode::Normal,
     }));
 
     list.optimize();
