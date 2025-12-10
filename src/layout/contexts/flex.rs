@@ -28,7 +28,9 @@ use crate::geometry::{Point, Rect, Size};
 use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutConstraints};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::display::Display;
-use crate::style::types::{AlignContent, AlignItems, BoxSizing, FlexBasis, FlexDirection, FlexWrap, JustifyContent};
+use crate::style::types::{
+    AlignContent, AlignItems, AspectRatio, BoxSizing, FlexBasis, FlexDirection, FlexWrap, JustifyContent,
+};
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::BoxNode;
@@ -260,6 +262,7 @@ impl FlexFormattingContext {
                 top: self.length_to_taffy_lp(&style.border_top_width, style),
                 bottom: self.length_to_taffy_lp(&style.border_bottom_width, style),
             },
+            aspect_ratio: self.aspect_ratio_to_taffy(style.aspect_ratio),
 
             ..Default::default()
         }
@@ -522,6 +525,13 @@ impl FlexFormattingContext {
             None => LengthPercentageAuto::auto(),
         }
     }
+
+    fn aspect_ratio_to_taffy(&self, aspect_ratio: AspectRatio) -> Option<f32> {
+        match aspect_ratio {
+            AspectRatio::Auto => None,
+            AspectRatio::Ratio(ratio) => Some(ratio),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -529,6 +539,7 @@ mod tests {
     use super::*;
     use crate::style::display::Display;
     use crate::style::display::FormattingContextType;
+    use crate::style::types::{AlignItems, AspectRatio};
     use std::sync::Arc;
 
     fn create_flex_style() -> Arc<ComputedStyle> {
@@ -736,6 +747,58 @@ mod tests {
         assert_eq!(fragment.children[0].bounds.y(), 25.0); // (100 - 50) / 2
         assert_eq!(fragment.children[1].bounds.y(), 0.0); // Tallest, at top
         assert_eq!(fragment.children[2].bounds.y(), 13.0); // (100 - 74) / 2 = 13
+    }
+
+    #[test]
+    fn flex_item_aspect_ratio_sets_width_from_height() {
+        let fc = FlexFormattingContext::new();
+
+        let mut container_style = ComputedStyle::default();
+        container_style.display = Display::Flex;
+        container_style.align_items = AlignItems::FlexStart;
+
+        let mut item_style = ComputedStyle::default();
+        item_style.height = Some(Length::px(40.0));
+        item_style.aspect_ratio = AspectRatio::Ratio(2.0);
+        let item = BoxNode::new_block(Arc::new(item_style), FormattingContextType::Block, vec![]);
+
+        let container = BoxNode::new_block(
+            Arc::new(container_style),
+            FormattingContextType::Flex,
+            vec![item],
+        );
+
+        let constraints = LayoutConstraints::definite(200.0, 200.0);
+        let fragment = fc.layout(&container, &constraints).unwrap();
+
+        assert_eq!(fragment.children[0].bounds.width(), 80.0);
+        assert_eq!(fragment.children[0].bounds.height(), 40.0);
+    }
+
+    #[test]
+    fn flex_item_aspect_ratio_sets_height_from_width() {
+        let fc = FlexFormattingContext::new();
+
+        let mut container_style = ComputedStyle::default();
+        container_style.display = Display::Flex;
+        container_style.align_items = AlignItems::FlexStart;
+
+        let mut item_style = ComputedStyle::default();
+        item_style.width = Some(Length::px(120.0));
+        item_style.aspect_ratio = AspectRatio::Ratio(3.0);
+        let item = BoxNode::new_block(Arc::new(item_style), FormattingContextType::Block, vec![]);
+
+        let container = BoxNode::new_block(
+            Arc::new(container_style),
+            FormattingContextType::Flex,
+            vec![item],
+        );
+
+        let constraints = LayoutConstraints::definite(300.0, 200.0);
+        let fragment = fc.layout(&container, &constraints).unwrap();
+
+        assert_eq!(fragment.children[0].bounds.width(), 120.0);
+        assert_eq!(fragment.children[0].bounds.height(), 40.0);
     }
 
     #[test]

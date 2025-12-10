@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Flex/grid formatting contexts now pass computed `aspect-ratio` through to Taffy (via the `aspect_ratio` field) and grid containers forward `align-items`, so flex/grid items derive missing dimensions from authored ratios. Added regressions for flex (width↔height) and grid items (height from width and width from height) to lock the behavior.
 - Grid template names no longer inherit: cascade keeps `grid-template-*` line names/maps local to the grid container instead of copying them to descendants, and a regression test locks the non-inheritance so children reset to the initial empty templates.
 - CSS `image-rendering` is parsed/stored (auto/smooth/crisp-edges/pixelated plus legacy aliases), stays non-inherited, and painter now maps it to filter quality: pixelated/crisp-edges use nearest-neighbor while auto/smooth stick with bilinear for replaced elements and background images.
 - Grid track parsing now supports `minmax()`, `min-content`/`max-content`, `fit-content()`, percentages, and integer `repeat()` patterns with inline line names; grid track sizing maps the new variants through to Taffy and parsing tests cover the expanded syntax.

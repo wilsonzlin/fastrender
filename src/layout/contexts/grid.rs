@@ -43,7 +43,7 @@ use crate::geometry::Rect;
 use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutConstraints};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::display::Display as CssDisplay;
-use crate::style::types::{AlignContent, BoxSizing, GridAutoFlow, GridTrack};
+use crate::style::types::{AlignContent, AlignItems, AspectRatio, BoxSizing, GridAutoFlow, GridTrack};
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::style::grid::validate_area_rectangles;
@@ -189,6 +189,8 @@ impl GridFormattingContext {
             top: self.convert_length_to_lp(&style.border_top_width, style),
             bottom: self.convert_length_to_lp(&style.border_bottom_width, style),
         };
+        taffy_style.aspect_ratio = self.convert_aspect_ratio(style.aspect_ratio);
+        taffy_style.align_items = Some(self.convert_align_items(&style.align_items));
 
         // Grid container properties
         if is_grid {
@@ -509,6 +511,23 @@ impl GridFormattingContext {
         }
     }
 
+    fn convert_align_items(&self, align: &AlignItems) -> taffy::style::AlignItems {
+        match align {
+            AlignItems::FlexStart => taffy::style::AlignItems::FlexStart,
+            AlignItems::FlexEnd => taffy::style::AlignItems::FlexEnd,
+            AlignItems::Center => taffy::style::AlignItems::Center,
+            AlignItems::Baseline => taffy::style::AlignItems::Baseline,
+            AlignItems::Stretch => taffy::style::AlignItems::Stretch,
+        }
+    }
+
+    fn convert_aspect_ratio(&self, aspect_ratio: AspectRatio) -> Option<f32> {
+        match aspect_ratio {
+            AspectRatio::Auto => None,
+            AspectRatio::Ratio(ratio) => Some(ratio),
+        }
+    }
+
     /// Converts Taffy layout results to FragmentNode tree
     fn convert_to_fragments(
         taffy: &TaffyTree<()>,
@@ -696,7 +715,7 @@ impl FormattingContext for GridFormattingContext {
 mod tests {
     use super::*;
     use crate::style::display::FormattingContextType;
-    use crate::style::types::GridTrack;
+    use crate::style::types::{AlignItems, AspectRatio, GridTrack};
     use std::sync::Arc;
 
     fn make_grid_style() -> Arc<ComputedStyle> {
@@ -975,6 +994,52 @@ mod tests {
         let fragment = fc.layout(&grid, &constraints).unwrap();
 
         assert_eq!(fragment.children.len(), 1);
+    }
+
+    #[test]
+    fn grid_item_aspect_ratio_sets_height_from_width() {
+        let fc = GridFormattingContext::new();
+
+        let mut grid_style = ComputedStyle::default();
+        grid_style.display = CssDisplay::Grid;
+        grid_style.align_items = AlignItems::FlexStart;
+        grid_style.grid_template_columns = vec![GridTrack::Length(Length::px(200.0))];
+        let grid_style = Arc::new(grid_style);
+
+        let mut item_style = ComputedStyle::default();
+        item_style.width = Some(Length::px(80.0));
+        item_style.aspect_ratio = AspectRatio::Ratio(2.0);
+        let item = BoxNode::new_block(Arc::new(item_style), FormattingContextType::Block, vec![]);
+
+        let grid = BoxNode::new_block(grid_style, FormattingContextType::Grid, vec![item]);
+        let constraints = LayoutConstraints::definite(400.0, 200.0);
+        let fragment = fc.layout(&grid, &constraints).unwrap();
+
+        assert_eq!(fragment.children[0].bounds.width(), 80.0);
+        assert_eq!(fragment.children[0].bounds.height(), 40.0);
+    }
+
+    #[test]
+    fn grid_item_aspect_ratio_sets_width_from_height() {
+        let fc = GridFormattingContext::new();
+
+        let mut grid_style = ComputedStyle::default();
+        grid_style.display = CssDisplay::Grid;
+        grid_style.align_items = AlignItems::FlexStart;
+        grid_style.grid_template_rows = vec![GridTrack::Length(Length::px(60.0))];
+        let grid_style = Arc::new(grid_style);
+
+        let mut item_style = ComputedStyle::default();
+        item_style.height = Some(Length::px(60.0));
+        item_style.aspect_ratio = AspectRatio::Ratio(1.5);
+        let item = BoxNode::new_block(Arc::new(item_style), FormattingContextType::Block, vec![]);
+
+        let grid = BoxNode::new_block(grid_style, FormattingContextType::Grid, vec![item]);
+        let constraints = LayoutConstraints::definite(400.0, 200.0);
+        let fragment = fc.layout(&grid, &constraints).unwrap();
+
+        assert_eq!(fragment.children[0].bounds.height(), 60.0);
+        assert_eq!(fragment.children[0].bounds.width(), 90.0);
     }
 
     // Test 15: Grid with nested grid
