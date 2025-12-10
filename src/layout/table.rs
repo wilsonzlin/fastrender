@@ -1539,9 +1539,26 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
 
             if cell.min_height > current_height + spacing {
                 let extra = cell.min_height - current_height - spacing;
-                let per_row = extra / cell.rowspan as f32;
-                for r in span_start..span_end {
-                    structure.rows[r].min_height += per_row;
+                let auto_rows: Vec<usize> = (span_start..span_end)
+                    .filter(|idx| {
+                        matches!(
+                            structure.rows[*idx].specified_height,
+                            Some(SpecifiedHeight::Auto) | None
+                        )
+                    })
+                    .collect();
+                let targets: Vec<usize> = if auto_rows.is_empty() {
+                    (span_start..span_end).collect()
+                } else {
+                    auto_rows
+                };
+                let share = if targets.is_empty() {
+                    0.0
+                } else {
+                    extra / targets.len() as f32
+                };
+                for r in targets {
+                    structure.rows[r].min_height += share;
                 }
             }
         }
@@ -2029,12 +2046,14 @@ impl FormattingContext for TableFormattingContext {
         // Compute row heights, accounting for rowspans and vertical spacing.
         let mut row_heights = vec![0.0f32; structure.row_count];
 
-        // Baseline-aligned spanning cells require at least their baseline offset in the first row.
+        // Baseline-aligned, single-row cells reserve baseline space in their own row.
         for laid in &laid_out_cells {
-            if laid.vertical_align.is_baseline_relative() {
-                if let Some(baseline) = laid.baseline {
-                    row_heights[laid.cell.row] = row_heights[laid.cell.row].max(baseline);
-                }
+            if laid.cell.rowspan > 1 || !laid.vertical_align.is_baseline_relative() {
+                continue;
+            }
+            if let Some(baseline) = laid.baseline {
+                let clamped = baseline.min(laid.height);
+                row_heights[laid.cell.row] = row_heights[laid.cell.row].max(clamped);
             }
         }
 
@@ -2048,19 +2067,26 @@ impl FormattingContext for TableFormattingContext {
                 let current: f32 = row_heights[span_start..span_end].iter().sum();
                 if laid.height > current + spacing_total {
                     let extra = laid.height - current - spacing_total;
-                    let weights: Vec<f32> = row_heights[span_start..span_end]
-                        .iter()
-                        .map(|h| if *h <= 0.0 { 1.0 } else { *h })
+                    let auto_rows: Vec<usize> = (span_start..span_end)
+                        .filter(|idx| {
+                            matches!(
+                                structure.rows[*idx].specified_height,
+                                Some(SpecifiedHeight::Auto) | None
+                            )
+                        })
                         .collect();
-                    let total_weight: f32 = weights.iter().sum();
-                    let total_weight = if total_weight <= 0.0 {
-                        (span_end - span_start) as f32
+                    let targets: Vec<usize> = if auto_rows.is_empty() {
+                        (span_start..span_end).collect()
                     } else {
-                        total_weight
+                        auto_rows
                     };
-                    for (idx, row) in row_heights[span_start..span_end].iter_mut().enumerate() {
-                        let weight = weights.get(idx).copied().unwrap_or(1.0);
-                        *row += extra * (weight / total_weight);
+                    if !targets.is_empty() {
+                        let per_row = extra / targets.len() as f32;
+                        for idx in targets {
+                            if let Some(row) = row_heights.get_mut(idx) {
+                                *row += per_row;
+                            }
+                        }
                     }
                 }
             }
@@ -2152,6 +2178,15 @@ impl FormattingContext for TableFormattingContext {
 
         let mut row_metrics: Vec<RowMetrics> = row_heights.iter().map(|h| RowMetrics::new(*h)).collect();
 
+        let clamp_baseline = |laid: &LaidOutCell, row_height: f32| -> f32 {
+            let baseline = laid.baseline.unwrap_or(laid.height);
+            if row_height.is_finite() && row_height > 0.0 {
+                baseline.min(row_height)
+            } else {
+                baseline
+            }
+        };
+
         for laid in &laid_out_cells {
             let row = &mut row_metrics[laid.cell.row];
             let row_height = row_heights.get(laid.cell.row).copied().unwrap_or(row.height);
@@ -2163,7 +2198,7 @@ impl FormattingContext for TableFormattingContext {
             row.max_cell_height = row.max_cell_height.max(contribution);
 
             if laid.vertical_align.is_baseline_relative() {
-                let baseline = laid.baseline.unwrap_or(laid.height);
+                let baseline = clamp_baseline(laid, row_height);
                 let top = baseline.min(row_height);
                 let bottom = (row_height - top).max(0.0);
                 row.has_baseline = true;
@@ -2179,7 +2214,7 @@ impl FormattingContext for TableFormattingContext {
             }
             let row = &mut row_metrics[laid.cell.row];
             let row_height = row_heights.get(laid.cell.row).copied().unwrap_or(row.height);
-            let baseline = laid.baseline.unwrap_or(laid.height);
+            let baseline = clamp_baseline(laid, row_height);
             let top = baseline.min(row_height);
             let bottom = (row_height - top).max(0.0);
             row.has_baseline = true;
@@ -2338,7 +2373,7 @@ impl FormattingContext for TableFormattingContext {
                 VerticalAlign::Bottom => (spanned_height - laid.height).max(0.0),
                 VerticalAlign::Middle => ((spanned_height - laid.height) / 2.0).max(0.0),
                 _ => {
-                    let baseline = laid.baseline.unwrap_or(laid.height);
+                    let baseline = clamp_baseline(&laid, row_metrics.get(row_start).map(|r| r.height).unwrap_or(0.0));
                     let row_base = row_metrics
                         .get(row_start)
                         .map(|r| if r.has_baseline { r.baseline_top } else { r.height })
@@ -2658,6 +2693,20 @@ mod tests {
             None,
             vec![content.to_string()],
         ))
+    }
+
+    fn collect_table_cell_tops(fragment: &FragmentNode, tops: &mut Vec<f32>) {
+        if fragment
+            .style
+            .as_ref()
+            .map(|s| matches!(s.display, Display::TableCell))
+            .unwrap_or(false)
+        {
+            tops.push(fragment.bounds.y());
+        }
+        for child in &fragment.children {
+            collect_table_cell_tops(child, tops);
+        }
     }
 
     fn create_table_row(cells: Vec<BoxNode>) -> BoxNode {
@@ -4183,6 +4232,66 @@ mod tests {
         // After baseline reservation, row 0 should carry baseline metrics and a non-zero height.
         assert!(structure.rows[0].computed_height >= 1.0);
         assert!(structure.rows[0].min_height >= 0.0);
+    }
+
+    #[test]
+    fn rowspan_height_is_shared_across_rows() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+
+        let mut tall_child_style = ComputedStyle::default();
+        tall_child_style.display = Display::Block;
+        tall_child_style.height = Some(Length::px(40.0));
+
+        let mut span_child_style = ComputedStyle::default();
+        span_child_style.display = Display::Block;
+        span_child_style.height = Some(Length::px(100.0));
+
+        let tall_child = BoxNode::new_block(Arc::new(tall_child_style), FormattingContextType::Block, vec![]);
+        let cell_a = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![tall_child]);
+
+        let span_child = BoxNode::new_block(Arc::new(span_child_style), FormattingContextType::Block, vec![]);
+        let span_cell = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![span_child])
+            .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(1, 2));
+
+        let row0 = BoxNode::new_block(Arc::new(row_style.clone()), FormattingContextType::Block, vec![cell_a, span_cell]);
+
+        let row1_cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row1 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![row1_cell]);
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row0, row1]);
+
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(&table, &LayoutConstraints::definite_width(200.0))
+            .expect("table layout");
+
+        let mut tops = Vec::new();
+        collect_table_cell_tops(&fragment, &mut tops);
+        tops.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let row0_y = tops.first().copied().unwrap_or(0.0);
+        let row1_y = tops.last().copied().unwrap_or(0.0);
+        assert!(row1_y > row0_y, "row starts should ascend: {:?}", tops);
+
+        let row0_height = row1_y - row0_y;
+        let total_height = fragment.bounds.height();
+        let row1_height = total_height - row1_y;
+
+        assert!(
+            row0_height > 50.0 && row0_height < 120.0,
+            "row 0 height should carry part of the spanning cell but not all of it: {row0_height}"
+        );
+        assert!(
+            row1_height > 15.0,
+            "row 1 should retain a meaningful share of the spanning cell: {row1_height}"
+        );
     }
 
     #[test]

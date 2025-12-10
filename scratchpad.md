@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Rowspan height distribution now allocates spanning overflow to auto rows first (falling back to even splits), keeping fixed/percent rows stable; baseline reservation for spanning cells is clamped to the first row’s share to avoid monopolizing height, and a regression asserts rowspans leave later rows with real height in the full layout pipeline.
 - Inline RTL placement now positions visual fragments from the right edge using the resolved paragraph direction, so start/end alignment and indentation respect RTL flow; added regression for multi-fragment RTL lines.
 - Replaced media without explicit dimensions now pick HTML default intrinsics (300×150, 2:1 ratio) for canvas/video/iframe so layout has a definite size when authors omit width/height; generation tests cover the defaults.
 - Embed/object replaced elements now use dedicated types, preserve src/data, and also default to 300×150 with 2:1 aspect ratio when no intrinsic dimensions are provided.
