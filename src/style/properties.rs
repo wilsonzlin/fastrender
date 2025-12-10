@@ -1264,6 +1264,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     "uppercase" => TextTransform::Uppercase,
                     "lowercase" => TextTransform::Lowercase,
                     "capitalize" => TextTransform::Capitalize,
+                    "full-width" => TextTransform::FullWidth,
                     _ => styles.text_transform,
                 };
             }

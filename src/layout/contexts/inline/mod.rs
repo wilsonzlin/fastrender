@@ -194,7 +194,7 @@ impl InlineFormattingContext {
             match &child.box_type {
                 BoxType::Text(text_box) => {
                     let normalized = normalize_text_for_white_space(
-                        &apply_text_transform(&text_box.text, child.style.text_transform),
+                        &apply_text_transform(&text_box.text, child.style.text_transform, child.style.white_space),
                         child.style.white_space,
                     );
 
@@ -547,7 +547,7 @@ impl InlineFormattingContext {
         is_marker: bool,
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let style = &box_node.style;
-        let transformed = apply_text_transform(text, style.text_transform);
+        let transformed = apply_text_transform(text, style.text_transform, style.white_space);
         let normalized = normalize_text_for_white_space(&transformed, style.white_space);
         self.create_inline_items_from_normalized(box_node, normalized, is_marker)
     }
@@ -625,7 +625,7 @@ impl InlineFormattingContext {
     #[allow(dead_code)]
     fn create_text_item(&self, box_node: &BoxNode, text: &str) -> Result<TextItem, LayoutError> {
         let style = &box_node.style;
-        let transformed = apply_text_transform(text, style.text_transform);
+        let transformed = apply_text_transform(text, style.text_transform, style.white_space);
         let normalized = normalize_text_for_white_space(&transformed, style.white_space);
         self.create_text_item_from_normalized(
             &box_node.style,
@@ -1941,7 +1941,7 @@ fn merge_breaks(
     base
 }
 
-fn apply_text_transform(text: &str, transform: TextTransform) -> String {
+fn apply_text_transform(text: &str, transform: TextTransform, white_space: WhiteSpace) -> String {
     match transform {
         TextTransform::None => text.to_string(),
         TextTransform::Uppercase => {
@@ -1982,7 +1982,260 @@ fn apply_text_transform(text: &str, transform: TextTransform) -> String {
             }
             out
         }
+        TextTransform::FullWidth => {
+            let preserve_spaces = matches!(white_space, WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::BreakSpaces);
+            let mut out = String::with_capacity(text.len());
+            for ch in text.chars() {
+                if ch == ' ' && !preserve_spaces {
+                    out.push(ch);
+                    continue;
+                }
+                if let Some(mapped) = map_to_full_width(ch) {
+                    out.push(mapped);
+                } else {
+                    out.push(ch);
+                }
+            }
+            out
+        }
     }
+}
+
+fn map_to_full_width(ch: char) -> Option<char> {
+    const FULL_WIDTH_TABLE: &[(u32, u32)] = &[
+        (0x0020, 0x3000),
+        (0x0021, 0xFF01),
+        (0x0022, 0xFF02),
+        (0x0023, 0xFF03),
+        (0x0024, 0xFF04),
+        (0x0025, 0xFF05),
+        (0x0026, 0xFF06),
+        (0x0027, 0xFF07),
+        (0x0028, 0xFF08),
+        (0x0029, 0xFF09),
+        (0x002A, 0xFF0A),
+        (0x002B, 0xFF0B),
+        (0x002C, 0xFF0C),
+        (0x002D, 0xFF0D),
+        (0x002E, 0xFF0E),
+        (0x002F, 0xFF0F),
+        (0x0030, 0xFF10),
+        (0x0031, 0xFF11),
+        (0x0032, 0xFF12),
+        (0x0033, 0xFF13),
+        (0x0034, 0xFF14),
+        (0x0035, 0xFF15),
+        (0x0036, 0xFF16),
+        (0x0037, 0xFF17),
+        (0x0038, 0xFF18),
+        (0x0039, 0xFF19),
+        (0x003A, 0xFF1A),
+        (0x003B, 0xFF1B),
+        (0x003C, 0xFF1C),
+        (0x003D, 0xFF1D),
+        (0x003E, 0xFF1E),
+        (0x003F, 0xFF1F),
+        (0x0040, 0xFF20),
+        (0x0041, 0xFF21),
+        (0x0042, 0xFF22),
+        (0x0043, 0xFF23),
+        (0x0044, 0xFF24),
+        (0x0045, 0xFF25),
+        (0x0046, 0xFF26),
+        (0x0047, 0xFF27),
+        (0x0048, 0xFF28),
+        (0x0049, 0xFF29),
+        (0x004A, 0xFF2A),
+        (0x004B, 0xFF2B),
+        (0x004C, 0xFF2C),
+        (0x004D, 0xFF2D),
+        (0x004E, 0xFF2E),
+        (0x004F, 0xFF2F),
+        (0x0050, 0xFF30),
+        (0x0051, 0xFF31),
+        (0x0052, 0xFF32),
+        (0x0053, 0xFF33),
+        (0x0054, 0xFF34),
+        (0x0055, 0xFF35),
+        (0x0056, 0xFF36),
+        (0x0057, 0xFF37),
+        (0x0058, 0xFF38),
+        (0x0059, 0xFF39),
+        (0x005A, 0xFF3A),
+        (0x005B, 0xFF3B),
+        (0x005C, 0xFF3C),
+        (0x005D, 0xFF3D),
+        (0x005E, 0xFF3E),
+        (0x005F, 0xFF3F),
+        (0x0060, 0xFF40),
+        (0x0061, 0xFF41),
+        (0x0062, 0xFF42),
+        (0x0063, 0xFF43),
+        (0x0064, 0xFF44),
+        (0x0065, 0xFF45),
+        (0x0066, 0xFF46),
+        (0x0067, 0xFF47),
+        (0x0068, 0xFF48),
+        (0x0069, 0xFF49),
+        (0x006A, 0xFF4A),
+        (0x006B, 0xFF4B),
+        (0x006C, 0xFF4C),
+        (0x006D, 0xFF4D),
+        (0x006E, 0xFF4E),
+        (0x006F, 0xFF4F),
+        (0x0070, 0xFF50),
+        (0x0071, 0xFF51),
+        (0x0072, 0xFF52),
+        (0x0073, 0xFF53),
+        (0x0074, 0xFF54),
+        (0x0075, 0xFF55),
+        (0x0076, 0xFF56),
+        (0x0077, 0xFF57),
+        (0x0078, 0xFF58),
+        (0x0079, 0xFF59),
+        (0x007A, 0xFF5A),
+        (0x007B, 0xFF5B),
+        (0x007C, 0xFF5C),
+        (0x007D, 0xFF5D),
+        (0x007E, 0xFF5E),
+        (0x00A2, 0xFFE0),
+        (0x00A3, 0xFFE1),
+        (0x00A5, 0xFFE5),
+        (0x00A6, 0xFFE4),
+        (0x00AC, 0xFFE2),
+        (0x00AF, 0xFFE3),
+        (0x20A9, 0xFFE6),
+        (0x2985, 0xFF5F),
+        (0x2986, 0xFF60),
+        (0xFF61, 0x3002),
+        (0xFF62, 0x300C),
+        (0xFF63, 0x300D),
+        (0xFF64, 0x3001),
+        (0xFF65, 0x30FB),
+        (0xFF66, 0x30F2),
+        (0xFF67, 0x30A1),
+        (0xFF68, 0x30A3),
+        (0xFF69, 0x30A5),
+        (0xFF6A, 0x30A7),
+        (0xFF6B, 0x30A9),
+        (0xFF6C, 0x30E3),
+        (0xFF6D, 0x30E5),
+        (0xFF6E, 0x30E7),
+        (0xFF6F, 0x30C3),
+        (0xFF70, 0x30FC),
+        (0xFF71, 0x30A2),
+        (0xFF72, 0x30A4),
+        (0xFF73, 0x30A6),
+        (0xFF74, 0x30A8),
+        (0xFF75, 0x30AA),
+        (0xFF76, 0x30AB),
+        (0xFF77, 0x30AD),
+        (0xFF78, 0x30AF),
+        (0xFF79, 0x30B1),
+        (0xFF7A, 0x30B3),
+        (0xFF7B, 0x30B5),
+        (0xFF7C, 0x30B7),
+        (0xFF7D, 0x30B9),
+        (0xFF7E, 0x30BB),
+        (0xFF7F, 0x30BD),
+        (0xFF80, 0x30BF),
+        (0xFF81, 0x30C1),
+        (0xFF82, 0x30C4),
+        (0xFF83, 0x30C6),
+        (0xFF84, 0x30C8),
+        (0xFF85, 0x30CA),
+        (0xFF86, 0x30CB),
+        (0xFF87, 0x30CC),
+        (0xFF88, 0x30CD),
+        (0xFF89, 0x30CE),
+        (0xFF8A, 0x30CF),
+        (0xFF8B, 0x30D2),
+        (0xFF8C, 0x30D5),
+        (0xFF8D, 0x30D8),
+        (0xFF8E, 0x30DB),
+        (0xFF8F, 0x30DE),
+        (0xFF90, 0x30DF),
+        (0xFF91, 0x30E0),
+        (0xFF92, 0x30E1),
+        (0xFF93, 0x30E2),
+        (0xFF94, 0x30E4),
+        (0xFF95, 0x30E6),
+        (0xFF96, 0x30E8),
+        (0xFF97, 0x30E9),
+        (0xFF98, 0x30EA),
+        (0xFF99, 0x30EB),
+        (0xFF9A, 0x30EC),
+        (0xFF9B, 0x30ED),
+        (0xFF9C, 0x30EF),
+        (0xFF9D, 0x30F3),
+        (0xFF9E, 0x3099),
+        (0xFF9F, 0x309A),
+        (0xFFA0, 0x3164),
+        (0xFFA1, 0x3131),
+        (0xFFA2, 0x3132),
+        (0xFFA3, 0x3133),
+        (0xFFA4, 0x3134),
+        (0xFFA5, 0x3135),
+        (0xFFA6, 0x3136),
+        (0xFFA7, 0x3137),
+        (0xFFA8, 0x3138),
+        (0xFFA9, 0x3139),
+        (0xFFAA, 0x313A),
+        (0xFFAB, 0x313B),
+        (0xFFAC, 0x313C),
+        (0xFFAD, 0x313D),
+        (0xFFAE, 0x313E),
+        (0xFFAF, 0x313F),
+        (0xFFB0, 0x3140),
+        (0xFFB1, 0x3141),
+        (0xFFB2, 0x3142),
+        (0xFFB3, 0x3143),
+        (0xFFB4, 0x3144),
+        (0xFFB5, 0x3145),
+        (0xFFB6, 0x3146),
+        (0xFFB7, 0x3147),
+        (0xFFB8, 0x3148),
+        (0xFFB9, 0x3149),
+        (0xFFBA, 0x314A),
+        (0xFFBB, 0x314B),
+        (0xFFBC, 0x314C),
+        (0xFFBD, 0x314D),
+        (0xFFBE, 0x314E),
+        (0xFFC2, 0x314F),
+        (0xFFC3, 0x3150),
+        (0xFFC4, 0x3151),
+        (0xFFC5, 0x3152),
+        (0xFFC6, 0x3153),
+        (0xFFC7, 0x3154),
+        (0xFFCA, 0x3155),
+        (0xFFCB, 0x3156),
+        (0xFFCC, 0x3157),
+        (0xFFCD, 0x3158),
+        (0xFFCE, 0x3159),
+        (0xFFCF, 0x315A),
+        (0xFFD2, 0x315B),
+        (0xFFD3, 0x315C),
+        (0xFFD4, 0x315D),
+        (0xFFD5, 0x315E),
+        (0xFFD6, 0x315F),
+        (0xFFD7, 0x3160),
+        (0xFFDA, 0x3161),
+        (0xFFDB, 0x3162),
+        (0xFFDC, 0x3163),
+        (0xFFE8, 0x2502),
+        (0xFFE9, 0x2190),
+        (0xFFEA, 0x2191),
+        (0xFFEB, 0x2192),
+        (0xFFEC, 0x2193),
+        (0xFFED, 0x25A0),
+        (0xFFEE, 0x25CB),
+    ];
+
+    let code = ch as u32;
+    FULL_WIDTH_TABLE
+        .binary_search_by_key(&code, |(src, _)| *src)
+        .ok()
+        .and_then(|idx| char::from_u32(FULL_WIDTH_TABLE[idx].1))
 }
 
 fn char_boundary_breaks(text: &str) -> Vec<crate::text::line_break::BreakOpportunity> {
@@ -3993,6 +4246,47 @@ mod tests {
         let item = ifc.create_text_item(&node, text).unwrap();
 
         assert_eq!(item.text, "Foo Bar");
+    }
+
+    #[test]
+    fn text_transform_full_width_widens_ascii_but_keeps_collapsed_space_narrow() {
+        let mut style = ComputedStyle::default();
+        style.text_transform = TextTransform::FullWidth;
+        style.white_space = WhiteSpace::Normal;
+        let text = "a b";
+
+        let ifc = InlineFormattingContext::new();
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+
+        assert_eq!(item.text, "\u{FF41}\u{0020}\u{FF42}");
+    }
+
+    #[test]
+    fn text_transform_full_width_converts_preserved_space_to_ideographic() {
+        let mut style = ComputedStyle::default();
+        style.text_transform = TextTransform::FullWidth;
+        style.white_space = WhiteSpace::Pre;
+        let text = "a b";
+
+        let ifc = InlineFormattingContext::new();
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+
+        assert_eq!(item.text, "\u{FF41}\u{3000}\u{FF42}");
+    }
+
+    #[test]
+    fn text_transform_full_width_maps_halfwidth_katakana() {
+        let mut style = ComputedStyle::default();
+        style.text_transform = TextTransform::FullWidth;
+        let text = "\u{FF76}\u{FF9E}"; // halfwidth GA
+
+        let ifc = InlineFormattingContext::new();
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+
+        assert_eq!(item.text, "\u{30AB}\u{3099}");
     }
 
     #[test]

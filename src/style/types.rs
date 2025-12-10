@@ -1026,6 +1026,7 @@ pub enum TextTransform {
     Uppercase,
     Lowercase,
     Capitalize,
+    FullWidth,
 }
 
 /// White space handling mode
