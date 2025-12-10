@@ -36,7 +36,7 @@ use crate::layout::contexts::table::column_distribution::{
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::color::Rgba;
 use crate::style::display::Display;
-use crate::style::types::{BorderCollapse, BorderStyle, Direction, TableLayout, VerticalAlign};
+use crate::style::types::{BorderCollapse, BorderStyle, CaptionSide, Direction, TableLayout, VerticalAlign};
 use crate::style::values::{Length, LengthUnit};
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
@@ -1884,16 +1884,11 @@ impl FormattingContext for TableFormattingContext {
     /// Performs full table layout following CSS table algorithms (auto layout)
     fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
         let structure = TableStructure::from_box_tree(box_node);
-
-        if structure.column_count == 0 || structure.row_count == 0 {
-            let bounds = Rect::from_xywh(0.0, 0.0, 0.0, 0.0);
-            return Ok(FragmentNode::new_with_style(
-                bounds,
-                FragmentContent::Block { box_id: None },
-                vec![],
-                box_node.style.clone(),
-            ));
-        }
+        let captions: Vec<&BoxNode> = box_node
+            .children
+            .iter()
+            .filter(|child| matches!(child.style.display, Display::TableCaption))
+            .collect();
 
         let containing_width = match constraints.available_width {
             AvailableSpace::Definite(w) => Some(w),
@@ -1951,6 +1946,21 @@ impl FormattingContext for TableFormattingContext {
         let min_height = resolve_opt_length_against(box_node.style.min_height.as_ref(), font_size, containing_height);
         let max_height = resolve_opt_length_against(box_node.style.max_height.as_ref(), font_size, containing_height);
         let table_height = specified_height.map(|h| clamp_to_min_max(h, min_height, max_height));
+
+        if (structure.column_count == 0 || structure.row_count == 0) && captions.is_empty() {
+            let bounds = Rect::from_xywh(
+                0.0,
+                0.0,
+                specified_width.or(containing_width).unwrap_or(0.0),
+                table_height.unwrap_or(0.0),
+            );
+            return Ok(FragmentNode::new_with_style(
+                bounds,
+                FragmentContent::Block { box_id: None },
+                vec![],
+                box_node.style.clone(),
+            ));
+        }
 
         let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
             .map(|_| ColumnConstraints::new(0.0, 0.0))
@@ -2668,19 +2678,98 @@ impl FormattingContext for TableFormattingContext {
             }
         }
 
-        let mut fragment_style = (*box_node.style).clone();
+        let mut table_style = (*box_node.style).clone();
         if structure.border_collapse == BorderCollapse::Collapse {
-            fragment_style.border_top_width = crate::style::values::Length::px(0.0);
-            fragment_style.border_right_width = crate::style::values::Length::px(0.0);
-            fragment_style.border_bottom_width = crate::style::values::Length::px(0.0);
-            fragment_style.border_left_width = crate::style::values::Length::px(0.0);
+            table_style.border_top_width = crate::style::values::Length::px(0.0);
+            table_style.border_right_width = crate::style::values::Length::px(0.0);
+            table_style.border_bottom_width = crate::style::values::Length::px(0.0);
+            table_style.border_left_width = crate::style::values::Length::px(0.0);
+        }
+        if captions.is_empty() {
+            return Ok(FragmentNode::new_with_style(
+                table_bounds,
+                FragmentContent::Block { box_id: None },
+                fragments,
+                Arc::new(table_style),
+            ));
         }
 
-        Ok(FragmentNode::new_with_style(
+        // Only the table box itself should render backgrounds/borders. Element-level visual
+        // effects (opacity/filters/transforms) apply to the wrapper that contains captions.
+        table_style.transform.clear();
+        table_style.filter.clear();
+        table_style.backdrop_filter.clear();
+        table_style.opacity = 1.0;
+        table_style.mix_blend_mode = crate::style::types::MixBlendMode::Normal;
+        table_style.isolation = crate::style::types::Isolation::Auto;
+
+        let table_fragment = FragmentNode::new_with_style(
             table_bounds,
             FragmentContent::Block { box_id: None },
             fragments,
-            Arc::new(fragment_style),
+            Arc::new(table_style),
+        );
+
+        // Layout captions relative to the table's width.
+        let mut wrapper_children = Vec::new();
+        let mut offset_y = 0.0;
+
+        let layout_caption = |caption: &BoxNode, y: f32| -> Result<(FragmentNode, f32), LayoutError> {
+            let fc_type = caption
+                .formatting_context()
+                .unwrap_or(crate::style::display::FormattingContextType::Block);
+            let fc = self.factory.create(fc_type);
+            let mut frag = fc.layout(
+                caption,
+                &LayoutConstraints::new(
+                    AvailableSpace::Definite(table_bounds.width()),
+                    constraints.available_height,
+                ),
+            )?;
+            frag.bounds = Rect::from_xywh(0.0, 0.0, table_bounds.width(), frag.bounds.height());
+            Ok((frag.translate(Point::new(0.0, y)), frag.bounds.height()))
+        };
+
+        for caption in captions.iter().copied().filter(|c| matches!(c.style.caption_side, CaptionSide::Top)) {
+            let (frag, h) = layout_caption(caption, offset_y)?;
+            offset_y += h;
+            wrapper_children.push(frag);
+        }
+
+        let table_translated = table_fragment.translate(Point::new(0.0, offset_y));
+        offset_y += table_translated.bounds.height();
+        wrapper_children.push(table_translated);
+
+        for caption in captions
+            .iter()
+            .copied()
+            .filter(|c| matches!(c.style.caption_side, CaptionSide::Bottom))
+        {
+            let (frag, h) = layout_caption(caption, offset_y)?;
+            offset_y += h;
+            wrapper_children.push(frag);
+        }
+
+        let mut wrapper_style = (*box_node.style).clone();
+        // Keep transforms/opacity/filters on the wrapper so they apply to both caption and table,
+        // but avoid painting an extra background/border around the combined area.
+        wrapper_style.background_color = crate::style::color::Rgba::TRANSPARENT;
+        wrapper_style.background_image = None;
+        wrapper_style.border_top_width = crate::style::values::Length::px(0.0);
+        wrapper_style.border_right_width = crate::style::values::Length::px(0.0);
+        wrapper_style.border_bottom_width = crate::style::values::Length::px(0.0);
+        wrapper_style.border_left_width = crate::style::values::Length::px(0.0);
+        wrapper_style.border_top_style = BorderStyle::None;
+        wrapper_style.border_right_style = BorderStyle::None;
+        wrapper_style.border_bottom_style = BorderStyle::None;
+        wrapper_style.border_left_style = BorderStyle::None;
+        wrapper_style.box_shadow.clear();
+
+        Ok(FragmentNode::new_with_style(
+            Rect::from_xywh(0.0, 0.0, table_bounds.width(), offset_y),
+            FragmentContent::Block { box_id: None },
+            wrapper_children,
+            Arc::new(wrapper_style),
         ))
     }
 
@@ -2733,7 +2822,7 @@ mod tests {
     use crate::style::color::Rgba;
     use crate::style::display::Display;
     use crate::style::display::FormattingContextType;
-    use crate::style::types::{BorderCollapse, BorderStyle, Direction, TableLayout, VerticalAlign};
+    use crate::style::types::{BorderCollapse, BorderStyle, CaptionSide, Direction, TableLayout, VerticalAlign};
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
     use crate::tree::debug::DebugInfo;
@@ -4209,6 +4298,109 @@ mod tests {
         let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 10.0, 20.0), vec![]);
         let baseline = cell_baseline(&fragment).expect("baseline");
         assert!((baseline - 20.0).abs() < 0.01);
+    }
+
+    fn make_style(display: Display) -> Arc<ComputedStyle> {
+        let mut style = ComputedStyle::default();
+        style.display = display;
+        Arc::new(style)
+    }
+
+    #[test]
+    fn caption_default_positions_above_table() {
+        let cell = BoxNode::new_block(
+            make_style(Display::TableCell),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(make_style(Display::Inline), "data".to_string())],
+        );
+        let row = BoxNode::new_block(
+            make_style(Display::TableRow),
+            FormattingContextType::Block,
+            vec![cell],
+        );
+        let tbody = BoxNode::new_block(
+            make_style(Display::TableRowGroup),
+            FormattingContextType::Block,
+            vec![row],
+        );
+        let caption = BoxNode::new_block(
+            make_style(Display::TableCaption),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(make_style(Display::Inline), "caption".to_string())],
+        );
+        let table = BoxNode::new_block(
+            make_style(Display::Table),
+            FormattingContextType::Table,
+            vec![caption, tbody],
+        );
+
+        let fc = TableFormattingContext::with_factory(FormattingContextFactory::new());
+        let fragment = fc
+            .layout(
+                &table,
+                &LayoutConstraints::new(AvailableSpace::Definite(200.0), AvailableSpace::Indefinite),
+            )
+            .expect("layout");
+
+        assert_eq!(fragment.children.len(), 2, "wrapper should contain caption and table");
+        let caption_frag = &fragment.children[0];
+        let table_frag = &fragment.children[1];
+        assert!((fragment.bounds.width() - table_frag.bounds.width()).abs() < 0.01);
+        assert!((caption_frag.bounds.width() - table_frag.bounds.width()).abs() < 0.01);
+        assert!(caption_frag.bounds.y() <= 0.0 + 1e-3);
+        assert!((table_frag.bounds.y() - caption_frag.bounds.height()).abs() < 0.2);
+        assert!(
+            (fragment.bounds.height() - (caption_frag.bounds.height() + table_frag.bounds.height())).abs() < 0.2
+        );
+    }
+
+    #[test]
+    fn caption_side_bottom_positions_after_table() {
+        let mut caption_style = ComputedStyle::default();
+        caption_style.display = Display::TableCaption;
+        caption_style.caption_side = CaptionSide::Bottom;
+
+        let cell = BoxNode::new_block(
+            make_style(Display::TableCell),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(make_style(Display::Inline), "data".to_string())],
+        );
+        let row = BoxNode::new_block(
+            make_style(Display::TableRow),
+            FormattingContextType::Block,
+            vec![cell],
+        );
+        let tbody = BoxNode::new_block(
+            make_style(Display::TableRowGroup),
+            FormattingContextType::Block,
+            vec![row],
+        );
+        let caption = BoxNode::new_block(
+            Arc::new(caption_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(make_style(Display::Inline), "caption".to_string())],
+        );
+        let table = BoxNode::new_block(
+            make_style(Display::Table),
+            FormattingContextType::Table,
+            vec![tbody, caption],
+        );
+
+        let fc = TableFormattingContext::with_factory(FormattingContextFactory::new());
+        let fragment = fc
+            .layout(
+                &table,
+                &LayoutConstraints::new(AvailableSpace::Definite(200.0), AvailableSpace::Indefinite),
+            )
+            .expect("layout");
+
+        assert_eq!(fragment.children.len(), 2, "wrapper should contain table then caption");
+        let table_frag = &fragment.children[0];
+        let caption_frag = &fragment.children[1];
+        assert!(caption_frag.bounds.y() >= table_frag.bounds.height() - 0.2);
+        assert!(
+            (fragment.bounds.height() - (caption_frag.bounds.height() + table_frag.bounds.height())).abs() < 0.2
+        );
     }
 
     #[test]

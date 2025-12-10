@@ -846,6 +846,15 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "caption-side" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.caption_side = match kw.as_str() {
+                    "top" => CaptionSide::Top,
+                    "bottom" => CaptionSide::Bottom,
+                    _ => styles.caption_side,
+                };
+            }
+        }
         "vertical-align" => match &resolved_value {
             PropertyValue::Keyword(kw) => {
                 styles.vertical_align = match kw.as_str() {

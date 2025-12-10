@@ -53,6 +53,15 @@ pub enum BorderCollapse {
     Collapse,
 }
 
+/// Caption placement relative to the table box.
+///
+/// CSS 2.1 §17.4: initial value is `top`, applies to table captions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptionSide {
+    Top,
+    Bottom,
+}
+
 /// Table layout algorithm selection
 ///
 /// CSS: `table-layout`

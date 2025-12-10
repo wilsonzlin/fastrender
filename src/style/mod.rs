@@ -30,8 +30,8 @@ use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundPosition,
     BackgroundPositionComponent, BackgroundRepeat, BackgroundSize, BackgroundSizeComponent, BorderCollapse,
-    BorderStyle, Direction, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting, FontKerning,
-    FontStretch, FontStyle, FontVariant, FontVariantAlternates, FontVariantCaps, FontVariantEastAsian,
+    BorderStyle, CaptionSide, Direction, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting,
+    FontKerning, FontStretch, FontStyle, FontVariant, FontVariantAlternates, FontVariantCaps, FontVariantEastAsian,
     FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontWeight, GridTrack, HyphensMode, Isolation,
     JustifyContent, LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit,
     ObjectPosition, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration,
@@ -195,6 +195,7 @@ pub struct ComputedStyle {
     pub border_spacing_vertical: Length,
     pub border_collapse: BorderCollapse,
     pub table_layout: TableLayout,
+    pub caption_side: CaptionSide,
 
     // CSS Custom Properties (variables)
     pub custom_properties: HashMap<String, String>,
@@ -357,6 +358,7 @@ impl Default for ComputedStyle {
             border_spacing_vertical: Length::px(0.0),
             border_collapse: BorderCollapse::Separate,
             table_layout: TableLayout::Auto,
+            caption_side: CaptionSide::Top,
 
             custom_properties: HashMap::new(),
 
