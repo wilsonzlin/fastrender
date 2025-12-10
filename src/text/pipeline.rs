@@ -55,6 +55,7 @@ use crate::style::types::{
 use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStretch, FontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
+use crate::text::font_db::font_has_feature;
 use rustybuzz::{Direction as HbDirection, Face, Feature, Language as HbLanguage, UnicodeBuffer};
 use ttf_parser::Tag;
 use std::str::FromStr;
@@ -73,6 +74,26 @@ pub enum Direction {
     LeftToRight,
     /// Right-to-left text (Arabic, Hebrew)
     RightToLeft,
+}
+
+fn has_native_small_caps(style: &ComputedStyle, font_context: &FontContext) -> bool {
+    let needs_c2sc = matches!(style.font_variant_caps, FontVariantCaps::AllSmallCaps);
+    if let Some(font) = font_context.get_font_full(
+        &style.font_family,
+        style.font_weight.to_u16(),
+        match style.font_style {
+            CssFontStyle::Normal => FontStyle::Normal,
+            CssFontStyle::Italic => FontStyle::Italic,
+            CssFontStyle::Oblique(_) => FontStyle::Oblique,
+        },
+        FontStretch::from_percentage(style.font_stretch.to_percentage()),
+    ) {
+        let has_smcp = font_has_feature(&font, *b"smcp");
+        let has_c2sc = !needs_c2sc || font_has_feature(&font, *b"c2sc");
+        return has_smcp && has_c2sc;
+    }
+
+    false
 }
 
 impl Direction {
@@ -973,7 +994,9 @@ impl ShapingPipeline {
         if matches!(style.font_variant, FontVariant::SmallCaps)
             || matches!(style.font_variant_caps, FontVariantCaps::SmallCaps | FontVariantCaps::AllSmallCaps)
         {
-            return self.shape_small_caps(text, style, font_context);
+            if !has_native_small_caps(style, font_context) {
+                return self.shape_small_caps(text, style, font_context);
+            }
         }
 
         // Step 1: Bidi analysis

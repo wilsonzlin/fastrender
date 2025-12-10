@@ -320,6 +320,16 @@ impl LoadedFont {
     }
 }
 
+/// Returns true if the font advertises an OpenType GSUB feature with the given tag.
+pub fn font_has_feature(font: &LoadedFont, tag: [u8; 4]) -> bool {
+    if let Ok(face) = ttf_parser::Face::parse(&font.data, font.index) {
+        if let Some(gsub) = face.tables().gsub {
+            return gsub.features.index(ttf_parser::Tag::from_bytes(&tag)).is_some();
+        }
+    }
+    false
+}
+
 /// Generic font families as defined by CSS
 ///
 /// These are abstract font families that map to actual system fonts.
