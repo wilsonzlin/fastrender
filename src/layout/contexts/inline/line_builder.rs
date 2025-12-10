@@ -1475,55 +1475,71 @@ fn reorder_paragraph(
         line_leaves.push(leaves);
     }
 
+    #[derive(Clone)]
+    struct ActiveCtx {
+        id: usize,
+        closers: Vec<char>,
+        depth_added: usize,
+    }
+
     let mut logical_text = String::new();
     let mut paragraph_leaves: Vec<ParagraphLeaf> = Vec::new();
     let mut line_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(lines.len());
-    let mut active_stack: Vec<BoxContext> = Vec::new();
-    let mut context_closers: Vec<Option<Vec<char>>> = Vec::new();
+    let mut active_stack: Vec<ActiveCtx> = Vec::new();
+    let mut current_depth: usize = 0;
     let mut global_idx = 0usize;
 
     for (line_idx, leaves) in line_leaves.iter().enumerate() {
         let line_start = logical_text.len();
         for leaf in leaves {
+            // Find common prefix with previous stack
             let shared = active_stack
                 .iter()
                 .zip(leaf.box_stack.iter())
                 .take_while(|(a, b)| a.id == b.id)
                 .count();
 
-            // Close contexts no longer shared
+            // Close contexts that are no longer shared
             for _ in 0..active_stack.len().saturating_sub(shared) {
-                active_stack.pop();
-                if let Some(Some(close_seq)) = context_closers.pop() {
-                    for ch in close_seq {
+                if let Some(ctx) = active_stack.pop() {
+                    for ch in ctx.closers {
                         logical_text.push(ch);
                     }
-                } else {
-                    context_closers.pop();
+                    current_depth = current_depth.saturating_sub(ctx.depth_added);
                 }
             }
 
             // Open new contexts
             for ctx in leaf.box_stack.iter().skip(shared) {
                 let (opens, closes) =
-                    bidi_controls_limited(ctx.unicode_bidi, ctx.direction, active_stack.len(), max_depth);
-                if opens.is_empty() && closes.is_empty() {
+                    bidi_controls(ctx.unicode_bidi, ctx.direction);
+                if current_depth >= max_depth {
+                    active_stack.push(ActiveCtx {
+                        id: ctx.id,
+                        closers: Vec::new(),
+                        depth_added: 0,
+                    });
                     continue;
                 }
-                logical_text.extend(opens);
-                context_closers.push(if closes.is_empty() { None } else { Some(closes) });
-                active_stack.push(ctx.clone());
+                if !opens.is_empty() {
+                    logical_text.extend(opens.iter());
+                }
+                let closer_vec = if closes.is_empty() { Vec::new() } else { closes };
+                active_stack.push(ActiveCtx {
+                    id: ctx.id,
+                    closers: closer_vec,
+                    depth_added: 1,
+                });
+                current_depth += 1;
             }
 
             // Leaf-local controls
-            let (leaf_opens, leaf_closes) = bidi_controls_limited(
-                leaf.item.unicode_bidi(),
-                leaf.item.direction(),
-                active_stack.len(),
-                max_depth,
-            );
-            if !leaf_opens.is_empty() || !leaf_closes.is_empty() {
+            let (leaf_opens, leaf_closes) = bidi_controls(leaf.item.unicode_bidi(), leaf.item.direction());
+            let mut leaf_depth_added = 0usize;
+            if !leaf_opens.is_empty() && current_depth < max_depth {
                 logical_text.extend(leaf_opens.iter());
+                leaf_depth_added = 1;
+                current_depth += 1;
             }
 
             let content_start = logical_text.len();
@@ -1534,10 +1550,11 @@ fn reorder_paragraph(
             }
             let content_end = logical_text.len();
 
-            if !leaf_closes.is_empty() {
+            if leaf_depth_added > 0 {
                 for ch in leaf_closes {
                     logical_text.push(ch);
                 }
+                current_depth = current_depth.saturating_sub(leaf_depth_added);
             }
 
             if content_start < content_end {
@@ -1554,13 +1571,10 @@ fn reorder_paragraph(
     }
 
     // Close any remaining contexts
-    while let Some(opt_closer) = context_closers.pop() {
-        if let Some(close_seq) = opt_closer {
-            for ch in close_seq {
-                logical_text.push(ch);
-            }
+    while let Some(ctx) = active_stack.pop() {
+        for ch in ctx.closers {
+            logical_text.push(ch);
         }
-        active_stack.pop();
     }
 
     if logical_text.is_empty() {
