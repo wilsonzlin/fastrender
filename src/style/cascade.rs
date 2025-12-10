@@ -352,6 +352,7 @@ mod tests {
     use crate::dom::DomNodeType;
     use crate::style::color::Rgba;
     use crate::style::display::Display;
+    use crate::style::float::Float;
     use crate::style::types::{
         LineBreak, ListStylePosition, ListStyleType, TextDecorationLine, TextUnderlineOffset, TextUnderlinePosition,
     };
@@ -726,6 +727,9 @@ mod tests {
         assert!(marker.text_decoration.lines == crate::style::types::TextDecorationLine::NONE);
         assert!(matches!(marker.text_align, crate::style::types::TextAlign::Start));
         assert_eq!(marker.text_indent, crate::style::types::TextIndent::default());
+        assert!(matches!(marker.float, Float::None));
+        assert!(marker.transform.is_empty());
+        assert_eq!(marker.opacity, 1.0);
     }
 
     #[test]
@@ -947,7 +951,9 @@ fn compute_marker_styles(
 
     for (_specificity, declarations) in matching_rules {
         for decl in declarations {
-            apply_declaration(&mut styles, &decl, parent_styles.font_size, root_font_size);
+            if marker_allows_property(&decl.property) {
+                apply_declaration(&mut styles, &decl, parent_styles.font_size, root_font_size);
+            }
         }
     }
     resolve_relative_font_weight(&mut styles, parent_styles);
@@ -1044,4 +1050,51 @@ fn reset_marker_box_properties(styles: &mut ComputedStyle) {
     styles.border_spacing_vertical = defaults.border_spacing_vertical;
     styles.border_collapse = defaults.border_collapse;
     styles.table_layout = defaults.table_layout;
+}
+
+fn marker_allows_property(property: &str) -> bool {
+    let p = property.to_ascii_lowercase();
+
+    if p.starts_with("font-") {
+        return true;
+    }
+
+    matches!(
+        p.as_str(),
+        "color"
+            | "content"
+            | "direction"
+            | "unicode-bidi"
+            | "white-space"
+            | "line-height"
+            | "letter-spacing"
+            | "word-spacing"
+            | "text-transform"
+            | "text-decoration"
+            | "text-decoration-line"
+            | "text-decoration-style"
+            | "text-decoration-color"
+            | "text-decoration-thickness"
+            | "text-decoration-skip-ink"
+            | "text-underline-position"
+            | "text-underline-offset"
+            | "text-emphasis"
+            | "text-emphasis-style"
+            | "text-emphasis-color"
+            | "text-emphasis-position"
+            | "text-shadow"
+            | "list-style-type"
+            | "list-style-image"
+            | "font"
+            | "font-size"
+            | "font-style"
+            | "font-weight"
+            | "font-stretch"
+            | "font-size-adjust"
+            | "font-variant"
+            | "font-feature-settings"
+            | "font-kerning"
+            | "font-synthesis"
+            | "line-break"
+    )
 }
