@@ -3892,6 +3892,45 @@ mod tests {
     }
 
     #[test]
+    fn inline_lines_carry_float_left_offset() {
+        let mut float_ctx = crate::layout::float_context::FloatContext::new(200.0);
+        float_ctx.add_float_at(crate::layout::float_context::FloatSide::Left, 0.0, 0.0, 80.0, 20.0);
+
+        let ifc = InlineFormattingContext::new();
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::Pre;
+        let text = BoxNode::new_text(Arc::new(text_style.clone()), "content".to_string());
+        let container = BoxNode::new_inline(Arc::new(text_style), vec![text]);
+        let strut = ifc.compute_strut_metrics(&container.style);
+        let items = ifc
+            .collect_inline_items(&container, 200.0, Some(200.0))
+            .expect("collect items");
+        let lines = ifc.build_lines(
+            items,
+            200.0,
+            200.0,
+            &strut,
+            Some(unicode_bidi::Level::ltr()),
+            Some(&float_ctx),
+            0.0,
+            0.0,
+            0.0,
+        );
+
+        let first = lines.first().expect("line");
+        assert!(
+            first.left_offset >= 79.9,
+            "line should start after float; got {}",
+            first.left_offset
+        );
+        assert!(
+            first.available_width <= 120.1,
+            "available width should be shortened by float; got {}",
+            first.available_width
+        );
+    }
+
+    #[test]
     fn white_space_nowrap_strips_soft_breaks() {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::Nowrap;
