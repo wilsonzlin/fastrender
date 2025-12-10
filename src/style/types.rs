@@ -886,6 +886,7 @@ pub struct ResolvedTextDecoration {
     pub decoration: TextDecoration,
     pub skip_ink: TextDecorationSkipInk,
     pub underline_offset: TextUnderlineOffset,
+    pub underline_position: TextUnderlinePosition,
 }
 
 /// Thickness of text decorations
@@ -906,6 +907,82 @@ pub enum TextUnderlineOffset {
 impl Default for TextUnderlineOffset {
     fn default() -> Self {
         TextUnderlineOffset::Auto
+    }
+}
+
+/// Placement of underlines relative to the text and inline axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextUnderlinePosition {
+    Auto,
+    FromFont,
+    Under,
+    Left,
+    Right,
+    UnderLeft,
+    UnderRight,
+}
+
+impl Default for TextUnderlinePosition {
+    fn default() -> Self {
+        TextUnderlinePosition::Auto
+    }
+}
+
+/// Fill mode for emphasis marks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextEmphasisFill {
+    Filled,
+    Open,
+}
+
+/// Shape of emphasis marks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextEmphasisShape {
+    Dot,
+    Circle,
+    DoubleCircle,
+    Triangle,
+    Sesame,
+}
+
+/// Emphasis style (mark or custom string).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextEmphasisStyle {
+    None,
+    Mark {
+        fill: TextEmphasisFill,
+        shape: TextEmphasisShape,
+    },
+    String(String),
+}
+
+impl Default for TextEmphasisStyle {
+    fn default() -> Self {
+        TextEmphasisStyle::None
+    }
+}
+
+impl TextEmphasisStyle {
+    pub fn is_none(&self) -> bool {
+        matches!(self, TextEmphasisStyle::None)
+    }
+}
+
+/// Placement of emphasis marks relative to text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextEmphasisPosition {
+    Auto,
+    Over,
+    Under,
+    OverLeft,
+    OverRight,
+    UnderLeft,
+    UnderRight,
+}
+
+impl Default for TextEmphasisPosition {
+    fn default() -> Self {
+        TextEmphasisPosition::Auto
     }
 }
 

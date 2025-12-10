@@ -1127,6 +1127,40 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 styles.text_underline_offset = offset;
             }
         }
+        "text-underline-position" => {
+            if let Some(pos) = parse_text_underline_position(&resolved_value) {
+                styles.text_underline_position = pos;
+            }
+        }
+        "text-emphasis-style" => {
+            if let Some(emph) = parse_text_emphasis_style(&resolved_value) {
+                styles.text_emphasis_style = emph;
+            }
+        }
+        "text-emphasis-color" => {
+            if let Some(color) = parse_text_emphasis_color(&resolved_value) {
+                styles.text_emphasis_color = color;
+            }
+        }
+        "text-emphasis-position" => {
+            if let Some(pos) = parse_text_emphasis_position(&resolved_value) {
+                styles.text_emphasis_position = pos;
+            }
+        }
+        "text-emphasis" => {
+            if let Some((style_val, color_val)) = parse_text_emphasis_shorthand(&resolved_value) {
+                if let Some(emph_style) = style_val {
+                    styles.text_emphasis_style = emph_style;
+                } else {
+                    styles.text_emphasis_style = TextEmphasisStyle::None;
+                }
+                if let Some(color) = color_val {
+                    styles.text_emphasis_color = color;
+                } else {
+                    styles.text_emphasis_color = None;
+                }
+            }
+        }
         "text-decoration" => {
             let tokens: Vec<PropertyValue> = match resolved_value {
                 PropertyValue::Multiple(ref values) => values.clone(),
@@ -2746,6 +2780,270 @@ fn parse_text_underline_offset(value: &PropertyValue) -> Option<TextUnderlineOff
     }
 }
 
+fn parse_text_underline_position(value: &PropertyValue) -> Option<TextUnderlinePosition> {
+    enum Side {
+        Left,
+        Right,
+    }
+
+    let mut under = false;
+    let mut side: Option<Side> = None;
+    let mut from_font = false;
+    let mut auto = false;
+
+    let mut handle_keyword = |kw: &str| -> Option<()> {
+        match kw {
+            "auto" => {
+                if auto || from_font || under || side.is_some() {
+                    return None;
+                }
+                auto = true;
+            }
+            "from-font" => {
+                if auto || from_font || under || side.is_some() {
+                    return None;
+                }
+                from_font = true;
+            }
+            "under" => {
+                if auto || from_font || under {
+                    return None;
+                }
+                under = true;
+            }
+            "left" => {
+                if auto || from_font || side.is_some() {
+                    return None;
+                }
+                side = Some(Side::Left);
+            }
+            "right" => {
+                if auto || from_font || side.is_some() {
+                    return None;
+                }
+                side = Some(Side::Right);
+            }
+            _ => return None,
+        }
+        Some(())
+    };
+
+    let keywords: Vec<String> = match value {
+        PropertyValue::Multiple(values) => {
+            let mut kws = Vec::new();
+            for v in values {
+                if let PropertyValue::Keyword(kw) = v {
+                    kws.extend(kw.split_whitespace().map(|s| s.to_string()));
+                } else {
+                    return None;
+                }
+            }
+            kws
+        }
+        PropertyValue::Keyword(kw) => kw.split_whitespace().map(|s| s.to_string()).collect(),
+        _ => return None,
+    };
+
+    if keywords.is_empty() {
+        return None;
+    }
+
+    for kw in keywords {
+        handle_keyword(&kw)?;
+    }
+
+    if auto {
+        Some(TextUnderlinePosition::Auto)
+    } else if from_font {
+        Some(TextUnderlinePosition::FromFont)
+    } else {
+        match (under, side) {
+            (true, Some(Side::Left)) => Some(TextUnderlinePosition::UnderLeft),
+            (true, Some(Side::Right)) => Some(TextUnderlinePosition::UnderRight),
+            (true, None) => Some(TextUnderlinePosition::Under),
+            (false, Some(Side::Left)) => Some(TextUnderlinePosition::Left),
+            (false, Some(Side::Right)) => Some(TextUnderlinePosition::Right),
+            (false, None) => None,
+        }
+    }
+}
+
+fn parse_text_emphasis_style(value: &PropertyValue) -> Option<TextEmphasisStyle> {
+    fn parse_keywords(values: &[&str]) -> Option<TextEmphasisStyle> {
+        let mut fill = TextEmphasisFill::Filled;
+        let mut shape: Option<TextEmphasisShape> = None;
+
+        for kw in values {
+            match *kw {
+                "filled" => fill = TextEmphasisFill::Filled,
+                "open" => fill = TextEmphasisFill::Open,
+                "dot" => shape = Some(TextEmphasisShape::Dot),
+                "circle" => shape = Some(TextEmphasisShape::Circle),
+                "double-circle" => shape = Some(TextEmphasisShape::DoubleCircle),
+                "triangle" => shape = Some(TextEmphasisShape::Triangle),
+                "sesame" => shape = Some(TextEmphasisShape::Sesame),
+                "none" => return Some(TextEmphasisStyle::None),
+                _ => return None,
+            }
+        }
+
+        shape.map(|s| TextEmphasisStyle::Mark { fill, shape: s })
+    }
+
+    match value {
+        PropertyValue::Keyword(kw) => {
+            let parts: Vec<&str> = kw.split_whitespace().collect();
+            parse_keywords(&parts)
+        }
+        PropertyValue::Multiple(values) => {
+            let mut parts = Vec::new();
+            for v in values {
+                match v {
+                    PropertyValue::Keyword(kw) => {
+                        parts.extend(kw.split_whitespace());
+                    }
+                    PropertyValue::String(s) if !s.is_empty() => {
+                        return Some(TextEmphasisStyle::String(s.clone()));
+                    }
+                    _ => return None,
+                }
+            }
+            parse_keywords(&parts)
+        }
+        PropertyValue::String(s) if !s.is_empty() => Some(TextEmphasisStyle::String(s.clone())),
+        _ => None,
+    }
+}
+
+fn parse_text_emphasis_color(value: &PropertyValue) -> Option<Option<Rgba>> {
+    match value {
+        PropertyValue::Color(c) => Some(Some(*c)),
+        PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentcolor") => Some(None),
+        PropertyValue::Keyword(kw) => match crate::style::color::Color::parse(kw) {
+            Ok(crate::style::color::Color::Rgba(c)) => Some(Some(c)),
+            Ok(crate::style::color::Color::CurrentColor) => Some(None),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn parse_text_emphasis_position(value: &PropertyValue) -> Option<TextEmphasisPosition> {
+    #[derive(Default)]
+    struct PositionParse {
+        over_under: Option<bool>, // true over, false under
+        side: Option<bool>,       // true right, false left
+    }
+
+    let mut state = PositionParse::default();
+
+    let handle_kw = |kw: &str, state: &mut PositionParse| -> bool {
+        match kw {
+            "over" => {
+                if state.over_under.is_some() {
+                    return false;
+                }
+                state.over_under = Some(true);
+            }
+            "under" => {
+                if state.over_under.is_some() {
+                    return false;
+                }
+                state.over_under = Some(false);
+            }
+            "left" => {
+                if state.side.is_some() {
+                    return false;
+                }
+                state.side = Some(false);
+            }
+            "right" => {
+                if state.side.is_some() {
+                    return false;
+                }
+                state.side = Some(true);
+            }
+            "auto" => {
+                if state.over_under.is_some() || state.side.is_some() {
+                    return false;
+                }
+                return true;
+            }
+            _ => return false,
+        }
+        true
+    };
+
+    let keywords: Vec<String> = match value {
+        PropertyValue::Multiple(values) => {
+            let mut kws = Vec::new();
+            for v in values {
+                if let PropertyValue::Keyword(kw) = v {
+                    kws.extend(kw.split_whitespace().map(|s| s.to_string()));
+                } else {
+                    return None;
+                }
+            }
+            kws
+        }
+        PropertyValue::Keyword(kw) => kw.split_whitespace().map(|s| s.to_string()).collect(),
+        _ => return None,
+    };
+
+    if keywords.is_empty() {
+        return None;
+    }
+
+    for kw in &keywords {
+        if !handle_kw(kw, &mut state) {
+            return None;
+        }
+    }
+
+    match (state.over_under, state.side) {
+        (None, None) => Some(TextEmphasisPosition::Auto),
+        (Some(true), None) => Some(TextEmphasisPosition::Over),
+        (Some(false), None) => Some(TextEmphasisPosition::Under),
+        (Some(true), Some(false)) => Some(TextEmphasisPosition::OverLeft),
+        (Some(true), Some(true)) => Some(TextEmphasisPosition::OverRight),
+        (Some(false), Some(false)) => Some(TextEmphasisPosition::UnderLeft),
+        (Some(false), Some(true)) => Some(TextEmphasisPosition::UnderRight),
+        (None, Some(false)) => Some(TextEmphasisPosition::OverLeft),
+        (None, Some(true)) => Some(TextEmphasisPosition::OverRight),
+    }
+}
+
+fn parse_text_emphasis_shorthand(value: &PropertyValue) -> Option<(Option<TextEmphasisStyle>, Option<Option<Rgba>>)> {
+    let values: Vec<&PropertyValue> = match value {
+        PropertyValue::Multiple(vals) => vals.iter().collect(),
+        other => vec![other],
+    };
+
+    if values.is_empty() {
+        return None;
+    }
+
+    let mut style: Option<TextEmphasisStyle> = None;
+    let mut color: Option<Option<Rgba>> = None;
+
+    for v in values {
+        if color.is_none() {
+            if let Some(c) = parse_text_emphasis_color(v) {
+                color = Some(c);
+                continue;
+            }
+        }
+        if style.is_none() {
+            if let Some(s) = parse_text_emphasis_style(v) {
+                style = Some(s);
+                continue;
+            }
+        }
+    }
+
+    Some((style, color))
+}
+
 fn parse_text_decoration_thickness(
     value: &PropertyValue,
     _parent_font_size: f32,
@@ -3072,7 +3370,7 @@ mod tests {
     use crate::style::types::{
         BackgroundRepeatKeyword, BoxSizing, FontStretch, FontVariant, ListStylePosition, ListStyleType, OutlineColor,
         OutlineStyle, PositionComponent, PositionKeyword, TextDecorationLine, TextDecorationStyle,
-        TextDecorationThickness,
+        TextDecorationThickness, TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
     };
 
     #[test]
@@ -3340,6 +3638,108 @@ mod tests {
             style.text_decoration.thickness,
             TextDecorationThickness::FromFont
         ));
+
+        let decl = Declaration {
+            property: "text-underline-position".to_string(),
+            value: PropertyValue::Keyword("under".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.text_underline_position, TextUnderlinePosition::Under));
+
+        let decl = Declaration {
+            property: "text-underline-position".to_string(),
+            value: PropertyValue::Multiple(vec![
+                PropertyValue::Keyword("left".to_string()),
+                PropertyValue::Keyword("under".to_string()),
+            ]),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(
+            style.text_underline_position,
+            TextUnderlinePosition::UnderLeft
+        ));
+    }
+
+    #[test]
+    fn parses_text_emphasis_properties() {
+        let mut style = ComputedStyle::default();
+
+        let decl = Declaration {
+            property: "text-emphasis-style".to_string(),
+            value: PropertyValue::Multiple(vec![
+                PropertyValue::Keyword("open".to_string()),
+                PropertyValue::Keyword("sesame".to_string()),
+            ]),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(
+            style.text_emphasis_style,
+            TextEmphasisStyle::Mark {
+                fill: TextEmphasisFill::Open,
+                shape: TextEmphasisShape::Sesame
+            }
+        ));
+
+        let decl = Declaration {
+            property: "text-emphasis-color".to_string(),
+            value: PropertyValue::Color(Rgba::RED),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.text_emphasis_color, Some(Rgba::RED));
+
+        let decl = Declaration {
+            property: "text-emphasis-position".to_string(),
+            value: PropertyValue::Multiple(vec![
+                PropertyValue::Keyword("under".to_string()),
+                PropertyValue::Keyword("right".to_string()),
+            ]),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.text_emphasis_position, TextEmphasisPosition::UnderRight));
+
+        let decl = Declaration {
+            property: "text-emphasis".to_string(),
+            value: PropertyValue::Multiple(vec![
+                PropertyValue::Keyword("circle".to_string()),
+                PropertyValue::Color(Rgba::BLUE),
+            ]),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(
+            style.text_emphasis_style,
+            TextEmphasisStyle::Mark {
+                fill: TextEmphasisFill::Filled,
+                shape: TextEmphasisShape::Circle
+            }
+        ));
+        assert_eq!(style.text_emphasis_color, Some(Rgba::BLUE));
+    }
+
+    #[test]
+    fn text_underline_position_rejects_invalid_combinations() {
+        let mut style = ComputedStyle::default();
+        style.text_underline_position = TextUnderlinePosition::Under;
+
+        let decl = Declaration {
+            property: "text-underline-position".to_string(),
+            value: PropertyValue::Multiple(vec![
+                PropertyValue::Keyword("auto".to_string()),
+                PropertyValue::Keyword("under".to_string()),
+            ]),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+
+        assert!(
+            matches!(style.text_underline_position, TextUnderlinePosition::Under),
+            "invalid keyword combinations should be ignored without changing the computed value"
+        );
     }
 
     #[test]

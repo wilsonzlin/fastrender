@@ -22,21 +22,22 @@ pub mod variables;
 
 // Internal imports used by ComputedStyle
 use crate::css::types::{BoxShadow, TextShadow, Transform};
+use crate::style::computed::Visibility;
 use color::Rgba;
 use counters::CounterProperties;
 use display::Display;
 use position::Position;
-use crate::style::computed::Visibility;
 use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundPosition,
-    BackgroundPositionComponent, BackgroundRepeat, BackgroundSize, BackgroundSizeComponent, BorderCollapse, BorderStyle,
-    BoxSizing, CaptionSide, Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting,
-    FontKerning, FontStretch, FontStyle, FontVariant, FontVariantAlternates, FontVariantCaps, FontVariantEastAsian,
-    FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontWeight, GridTrack, HyphensMode, Isolation,
-    JustifyContent, LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
-    OutlineColor, OutlineStyle, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration,
-    TextDecorationSkipInk, TextIndent, TextJustify, TextTransform, TextUnderlineOffset, TransformOrigin, UnicodeBidi,
+    BackgroundPositionComponent, BackgroundRepeat, BackgroundSize, BackgroundSizeComponent, BorderCollapse,
+    BorderStyle, BoxSizing, CaptionSide, Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap,
+    FontFeatureSetting, FontKerning, FontStretch, FontStyle, FontVariant, FontVariantAlternates, FontVariantCaps,
+    FontVariantEastAsian, FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontWeight, GridTrack,
+    HyphensMode, Isolation, JustifyContent, LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode,
+    ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign,
+    TextAlignLast, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent,
+    TextJustify, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TransformOrigin, UnicodeBidi,
     VerticalAlign, WhiteSpace, WordBreak,
 };
 use values::Length;
@@ -154,6 +155,11 @@ pub struct ComputedStyle {
     pub applied_text_decorations: Vec<types::ResolvedTextDecoration>,
     pub text_decoration_skip_ink: TextDecorationSkipInk,
     pub text_underline_offset: TextUnderlineOffset,
+    pub text_underline_position: TextUnderlinePosition,
+    pub text_emphasis_style: TextEmphasisStyle,
+    /// None means currentColor.
+    pub text_emphasis_color: Option<Rgba>,
+    pub text_emphasis_position: TextEmphasisPosition,
     pub text_transform: TextTransform,
     pub letter_spacing: f32,
     pub word_spacing: f32,
@@ -315,6 +321,10 @@ impl Default for ComputedStyle {
             applied_text_decorations: Vec::new(),
             text_decoration_skip_ink: TextDecorationSkipInk::Auto,
             text_underline_offset: TextUnderlineOffset::default(),
+            text_underline_position: TextUnderlinePosition::default(),
+            text_emphasis_style: TextEmphasisStyle::default(),
+            text_emphasis_color: None,
+            text_emphasis_position: TextEmphasisPosition::default(),
             text_transform: TextTransform::None,
             letter_spacing: 0.0,
             word_spacing: 0.0,

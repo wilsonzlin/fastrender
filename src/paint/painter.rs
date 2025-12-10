@@ -594,25 +594,17 @@ impl Painter {
                 style,
             } => {
                 let color = style.color;
-                if let Some(ref runs) = runs {
-                    self.paint_shaped_runs(runs, rect.x(), rect.y() + baseline_offset, color, Some(&style));
+                let shaped_runs = runs
+                    .clone()
+                    .or_else(|| self.shaper.shape(&text, &style, &self.font_ctx).ok());
+                let baseline_y = rect.y() + baseline_offset;
+                if let Some(ref shaped) = shaped_runs {
+                    self.paint_shaped_runs(shaped, rect.x(), baseline_y, color, Some(&style));
                 } else {
-                    self.paint_text(
-                        &text,
-                        Some(&style),
-                        rect.x(),
-                        rect.y() + baseline_offset,
-                        style.font_size,
-                        color,
-                    );
+                    self.paint_text(&text, Some(&style), rect.x(), baseline_y, style.font_size, color);
                 }
-                self.paint_text_decoration(
-                    &style,
-                    runs.as_deref(),
-                    rect.x(),
-                    rect.y() + baseline_offset,
-                    rect.width(),
-                );
+                self.paint_text_decoration(&style, shaped_runs.as_deref(), rect.x(), baseline_y, rect.width());
+                self.paint_text_emphasis(&style, shaped_runs.as_deref(), rect.x(), baseline_y);
             }
             DisplayCommand::Replaced {
                 rect,
@@ -1910,6 +1902,7 @@ impl Painter {
 
         let underline_pos = metrics.underline_position as f32 * scale;
         let underline_thickness = (metrics.underline_thickness as f32 * scale).max(1.0);
+        let descent = (metrics.descent as f32 * scale).abs();
         let strike_pos = metrics
             .strikeout_position
             .map(|p| p as f32 * scale)
@@ -1926,6 +1919,7 @@ impl Painter {
             strike_pos,
             strike_thickness,
             ascent,
+            descent,
         })
     }
 
@@ -1957,8 +1951,26 @@ impl Painter {
         }
     }
 
-    fn underline_position(&self, metrics: &DecorationMetrics, offset: f32) -> f32 {
-        metrics.underline_position_with_offset(offset)
+    fn underline_position(
+        &self,
+        metrics: &DecorationMetrics,
+        position: crate::style::types::TextUnderlinePosition,
+        offset: f32,
+        thickness: f32,
+    ) -> f32 {
+        let under_base = -metrics.descent - thickness * 0.5;
+        let base =
+            match position {
+                crate::style::types::TextUnderlinePosition::Auto
+                | crate::style::types::TextUnderlinePosition::FromFont => metrics.underline_pos,
+                crate::style::types::TextUnderlinePosition::Under
+                | crate::style::types::TextUnderlinePosition::UnderLeft
+                | crate::style::types::TextUnderlinePosition::UnderRight => metrics.underline_pos.min(under_base),
+                crate::style::types::TextUnderlinePosition::Left
+                | crate::style::types::TextUnderlinePosition::Right => metrics.underline_pos,
+            };
+
+        metrics.underline_position_with_offset(base, offset)
     }
 
     fn dynamic_image_to_pixmap(image: &DynamicImage) -> Option<Pixmap> {
@@ -2073,6 +2085,7 @@ impl Painter {
                 decoration: style.text_decoration.clone(),
                 skip_ink: style.text_decoration_skip_ink,
                 underline_offset: style.text_underline_offset,
+                underline_position: style.text_underline_position,
             }])
         };
 
@@ -2174,9 +2187,10 @@ impl Painter {
 
             let underline_offset = self.resolve_underline_offset_value(deco.underline_offset, style);
             if deco.decoration.lines.contains(TextDecorationLine::UNDERLINE) {
-                let adjusted_pos = self.underline_position(&metrics, underline_offset);
-                let center = baseline_y - adjusted_pos;
                 let thickness = used_thickness.unwrap_or(metrics.underline_thickness);
+                let adjusted_pos =
+                    self.underline_position(&metrics, deco.underline_position, underline_offset, thickness);
+                let center = baseline_y - adjusted_pos;
                 if matches!(
                     deco.skip_ink,
                     crate::style::types::TextDecorationSkipInk::Auto | crate::style::types::TextDecorationSkipInk::All
@@ -2239,6 +2253,294 @@ impl Painter {
         }
         segments
     }
+
+    fn paint_text_emphasis(
+        &mut self,
+        style: &ComputedStyle,
+        runs: Option<&[ShapedRun]>,
+        origin_x: f32,
+        baseline_y: f32,
+    ) {
+        let runs = match runs {
+            Some(r) => r,
+            None => return,
+        };
+        if style.text_emphasis_style.is_none() {
+            return;
+        }
+
+        let Some(metrics) = self.decoration_metrics(Some(runs), style) else {
+            return;
+        };
+
+        let resolved_position = match style.text_emphasis_position {
+            crate::style::types::TextEmphasisPosition::Auto => crate::style::types::TextEmphasisPosition::Over,
+            other => other,
+        };
+        let emphasis_color = style.text_emphasis_color.unwrap_or(style.color);
+        let mark_size = (style.font_size * 0.5).max(1.0);
+        let gap = mark_size * 0.3;
+
+        let center_y = match resolved_position {
+            crate::style::types::TextEmphasisPosition::Over
+            | crate::style::types::TextEmphasisPosition::OverLeft
+            | crate::style::types::TextEmphasisPosition::OverRight => {
+                baseline_y - metrics.ascent - gap - mark_size * 0.5
+            }
+            crate::style::types::TextEmphasisPosition::Under
+            | crate::style::types::TextEmphasisPosition::UnderLeft
+            | crate::style::types::TextEmphasisPosition::UnderRight => {
+                baseline_y + metrics.descent + gap + mark_size * 0.5
+            }
+            crate::style::types::TextEmphasisPosition::Auto => baseline_y - metrics.ascent - gap - mark_size * 0.5,
+        };
+
+        // Precompute mark painter for string emphasis.
+        let mut string_mark: Option<(Vec<tiny_skia::Path>, f32, f32)> = None;
+        if let crate::style::types::TextEmphasisStyle::String(ref s) = style.text_emphasis_style {
+            if !s.is_empty() {
+                let mut mark_style = style.clone();
+                mark_style.font_size = style.font_size * 0.5;
+                let Ok(mark_runs) = self.shaper.shape(s, &mark_style, &self.font_ctx) else {
+                    return;
+                };
+                let mark_width: f32 = mark_runs.iter().map(|r| r.advance).sum();
+                let mark_metrics = crate::layout::contexts::inline::line_builder::TextItem::metrics_from_runs(
+                    &mark_runs,
+                    mark_style.font_size,
+                    mark_style.font_size,
+                );
+                let mut paths = Vec::new();
+                let mut pen_x = 0.0;
+                for run in &mark_runs {
+                    let run_origin = if run.direction.is_rtl() {
+                        pen_x + run.advance
+                    } else {
+                        pen_x
+                    };
+                    let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+                        Ok(f) => f,
+                        Err(_) => continue,
+                    };
+                    let units_per_em = face.units_per_em() as f32;
+                    let scale = run.font_size / units_per_em;
+                    for glyph in &run.glyphs {
+                        let glyph_x = match run.direction {
+                            crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset,
+                            _ => run_origin + glyph.x_offset,
+                        };
+                        let glyph_y = mark_metrics.baseline_offset;
+                        if let Some(path) =
+                            Self::build_glyph_path(&face, glyph.glyph_id as u16, glyph_x, glyph_y, scale)
+                        {
+                            paths.push(path);
+                        }
+                    }
+                    pen_x += run.advance;
+                }
+                if !paths.is_empty() {
+                    string_mark = Some((paths, mark_width, mark_metrics.ascent + mark_metrics.descent));
+                }
+            }
+        }
+
+        let mut pen_x = origin_x;
+        for run in runs {
+            let run_origin = if run.direction.is_rtl() {
+                pen_x + run.advance
+            } else {
+                pen_x
+            };
+
+            let mut seen_clusters = std::collections::HashSet::new();
+            for glyph in &run.glyphs {
+                if !seen_clusters.insert(glyph.cluster) {
+                    continue;
+                }
+                let text_byte = glyph.cluster as usize;
+                if text_byte < run.text.len() {
+                    if let Some(ch) = run.text[text_byte..].chars().next() {
+                        if ch.is_whitespace() || ch.is_control() {
+                            continue;
+                        }
+                    }
+                }
+                let mark_center_x = match run.direction {
+                    crate::text::pipeline::Direction::RightToLeft => {
+                        run_origin - (glyph.x_offset + glyph.x_advance * 0.5)
+                    }
+                    _ => run_origin + glyph.x_offset + glyph.x_advance * 0.5,
+                };
+
+                match style.text_emphasis_style {
+                    crate::style::types::TextEmphasisStyle::Mark { fill, shape } => {
+                        self.draw_emphasis_mark(
+                            mark_center_x,
+                            center_y,
+                            mark_size,
+                            fill,
+                            shape,
+                            emphasis_color,
+                            resolved_position,
+                        );
+                    }
+                    crate::style::types::TextEmphasisStyle::String(_) => {
+                        if let Some((ref paths, width, height)) = string_mark {
+                            let mut paint = Paint::default();
+                            paint.anti_alias = true;
+                            paint.set_color(color_to_skia(emphasis_color));
+
+                            let offset_x = mark_center_x - width * 0.5;
+                            let offset_y = center_y - height * 0.5;
+                            for path in paths {
+                                let translated = path.clone().transform(Transform::from_translate(offset_x, offset_y));
+                                if let Some(p) = translated {
+                                    self.pixmap.fill_path(
+                                        &p,
+                                        &paint,
+                                        tiny_skia::FillRule::EvenOdd,
+                                        Transform::identity(),
+                                        None,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    crate::style::types::TextEmphasisStyle::None => {}
+                }
+            }
+
+            pen_x += run.advance;
+        }
+    }
+
+    fn draw_emphasis_mark(
+        &mut self,
+        center_x: f32,
+        center_y: f32,
+        size: f32,
+        fill: crate::style::types::TextEmphasisFill,
+        shape: crate::style::types::TextEmphasisShape,
+        color: Rgba,
+        position: crate::style::types::TextEmphasisPosition,
+    ) {
+        let mut paint = Paint::default();
+        paint.anti_alias = true;
+        paint.set_color(color_to_skia(color));
+
+        match shape {
+            crate::style::types::TextEmphasisShape::Dot => {
+                let radius = size * 0.5;
+                if let Some(path) = PathBuilder::from_circle(center_x, center_y, radius) {
+                    match fill {
+                        crate::style::types::TextEmphasisFill::Filled => self.pixmap.fill_path(
+                            &path,
+                            &paint,
+                            tiny_skia::FillRule::EvenOdd,
+                            Transform::identity(),
+                            None,
+                        ),
+                        crate::style::types::TextEmphasisFill::Open => {
+                            let mut stroke = Stroke::default();
+                            stroke.width = (size * 0.18).max(0.5);
+                            self.pixmap
+                                .stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+                        }
+                    }
+                }
+            }
+            crate::style::types::TextEmphasisShape::Circle => {
+                let radius = size * 0.5;
+                if let Some(path) = PathBuilder::from_circle(center_x, center_y, radius) {
+                    match fill {
+                        crate::style::types::TextEmphasisFill::Filled => self.pixmap.fill_path(
+                            &path,
+                            &paint,
+                            tiny_skia::FillRule::EvenOdd,
+                            Transform::identity(),
+                            None,
+                        ),
+                        crate::style::types::TextEmphasisFill::Open => {
+                            let mut stroke = Stroke::default();
+                            stroke.width = (size * 0.18).max(0.5);
+                            self.pixmap
+                                .stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+                        }
+                    }
+                }
+            }
+            crate::style::types::TextEmphasisShape::DoubleCircle => {
+                let mut stroke = Stroke::default();
+                stroke.width = (size * 0.14).max(0.5);
+                let radii = [size * 0.5, size * 0.33];
+                for radius in radii {
+                    if let Some(path) = PathBuilder::from_circle(center_x, center_y, radius) {
+                        self.pixmap
+                            .stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+                    }
+                }
+            }
+            crate::style::types::TextEmphasisShape::Triangle => {
+                let half = size * 0.5;
+                let height = size * 0.9;
+                let direction = matches!(
+                    position,
+                    crate::style::types::TextEmphasisPosition::Over
+                        | crate::style::types::TextEmphasisPosition::OverLeft
+                        | crate::style::types::TextEmphasisPosition::OverRight
+                );
+                let apex_y = if direction {
+                    center_y - height * 0.5
+                } else {
+                    center_y + height * 0.5
+                };
+                let base_y = if direction {
+                    center_y + height * 0.5
+                } else {
+                    center_y - height * 0.5
+                };
+                let mut builder = PathBuilder::new();
+                builder.move_to(center_x, apex_y);
+                builder.line_to(center_x - half, base_y);
+                builder.line_to(center_x + half, base_y);
+                builder.close();
+                if let Some(path) = builder.finish() {
+                    match fill {
+                        crate::style::types::TextEmphasisFill::Filled => {
+                            self.pixmap.fill_path(
+                                &path,
+                                &paint,
+                                tiny_skia::FillRule::EvenOdd,
+                                Transform::identity(),
+                                None,
+                            );
+                        }
+                        crate::style::types::TextEmphasisFill::Open => {
+                            let mut stroke = Stroke::default();
+                            stroke.width = (size * 0.18).max(0.5);
+                            self.pixmap
+                                .stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+                        }
+                    }
+                }
+            }
+            crate::style::types::TextEmphasisShape::Sesame => {
+                let len = size * 0.75;
+                let angle = 20.0_f32.to_radians();
+                let dx = (angle.cos() * len * 0.5, angle.sin() * len * 0.5);
+                let mut builder = PathBuilder::new();
+                builder.move_to(center_x - dx.0, center_y - dx.1);
+                builder.line_to(center_x + dx.0, center_y + dx.1);
+                if let Some(path) = builder.finish() {
+                    let mut stroke = Stroke::default();
+                    stroke.width = (size * 0.2).max(0.6);
+                    stroke.line_cap = tiny_skia::LineCap::Round;
+                    self.pixmap
+                        .stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2248,12 +2550,13 @@ struct DecorationMetrics {
     strike_pos: f32,
     strike_thickness: f32,
     ascent: f32,
+    descent: f32,
 }
 
 impl DecorationMetrics {
-    fn underline_position_with_offset(&self, offset: f32) -> f32 {
-        let direction = if self.underline_pos >= 0.0 { 1.0 } else { -1.0 };
-        self.underline_pos + offset * direction
+    fn underline_position_with_offset(&self, base: f32, offset: f32) -> f32 {
+        let direction = if base >= 0.0 { 1.0 } else { -1.0 };
+        base + offset * direction
     }
 }
 
@@ -3653,10 +3956,21 @@ mod tests {
         let runs = painter.shaper.shape("Hi", &style, &painter.font_ctx).expect("shape");
         let metrics = painter.decoration_metrics(Some(&runs), &style).expect("metrics");
         let baseline = 20.0;
-        let base_center = baseline - painter.underline_position(&metrics, 0.0);
+        let thickness = match style.text_decoration.thickness {
+            crate::style::types::TextDecorationThickness::Length(l) => l.to_px(),
+            _ => metrics.underline_thickness,
+        };
+        let base_center =
+            baseline - painter.underline_position(&metrics, style.text_underline_position, 0.0, thickness);
 
         style.text_underline_offset = crate::style::types::TextUnderlineOffset::Length(Length::px(4.0));
-        let shifted_center = baseline - painter.underline_position(&metrics, painter.resolve_underline_offset(&style));
+        let shifted_center = baseline
+            - painter.underline_position(
+                &metrics,
+                style.text_underline_position,
+                painter.resolve_underline_offset(&style),
+                thickness,
+            );
 
         assert!(
             shifted_center > base_center,
@@ -3665,6 +3979,38 @@ mod tests {
         assert!(
             (shifted_center - base_center - 4.0).abs() < 0.5,
             "underline offset should roughly follow the authored length"
+        );
+    }
+
+    #[test]
+    fn underline_position_under_moves_line_downward() {
+        let mut style = ComputedStyle::default();
+        style.text_decoration.lines = crate::style::types::TextDecorationLine::UNDERLINE;
+        style.text_decoration.color = Some(Rgba::BLACK);
+        style.font_size = 20.0;
+
+        let painter = Painter::new(20, 20, Rgba::WHITE).expect("painter");
+        let runs = painter.shaper.shape("Hg", &style, &painter.font_ctx).expect("shape");
+        let metrics = painter.decoration_metrics(Some(&runs), &style).expect("metrics");
+        let thickness = match style.text_decoration.thickness {
+            crate::style::types::TextDecorationThickness::Length(l) => l.to_px(),
+            _ => metrics.underline_thickness,
+        };
+        let baseline = 20.0;
+
+        let auto_center =
+            baseline - painter.underline_position(&metrics, style.text_underline_position, 0.0, thickness);
+        style.text_underline_position = crate::style::types::TextUnderlinePosition::Under;
+        let under_center =
+            baseline - painter.underline_position(&metrics, style.text_underline_position, 0.0, thickness);
+
+        assert!(
+            under_center > auto_center,
+            "requesting under position should place the underline below the auto position"
+        );
+        assert!(
+            under_center - auto_center > 0.5,
+            "under position should move the line a noticeable distance below the baseline"
         );
     }
 
@@ -3722,11 +4068,17 @@ mod tests {
         let line_start = 10.0;
         let line_width: f32 = runs.iter().map(|r| r.advance).sum();
         let baseline = 50.0;
-        let center = baseline - painter.underline_position(&metrics, painter.resolve_underline_offset(&style));
         let thickness = match style.text_decoration.thickness {
             crate::style::types::TextDecorationThickness::Length(l) => l.to_px(),
             _ => metrics.underline_thickness,
         };
+        let center = baseline
+            - painter.underline_position(
+                &metrics,
+                style.text_underline_position,
+                painter.resolve_underline_offset(&style),
+                thickness,
+            );
         let exclusions = collect_underline_exclusions(
             &runs,
             line_start,
@@ -3781,6 +4133,40 @@ mod tests {
         assert!(
             auto_px.0 < 80 && auto_px.1 < 80 && auto_px.2 < 80,
             "skip-ink should leave the descender covered by the text color instead of the decoration color"
+        );
+    }
+
+    #[test]
+    fn paints_text_emphasis_marks_above_text() {
+        let mut style = ComputedStyle::default();
+        style.color = Rgba::BLACK;
+        style.font_size = 24.0;
+        style.text_emphasis_style = crate::style::types::TextEmphasisStyle::Mark {
+            fill: crate::style::types::TextEmphasisFill::Filled,
+            shape: crate::style::types::TextEmphasisShape::Circle,
+        };
+        style.text_emphasis_color = Some(Rgba::from_rgba8(255, 0, 0, 255));
+        let style = Arc::new(style);
+
+        let painter = Painter::new(80, 60, Rgba::WHITE).expect("painter");
+        let runs = painter.shaper.shape("A", &style, &painter.font_ctx).expect("shape");
+        let width: f32 = runs.iter().map(|r| r.advance).sum();
+        let baseline = 32.0;
+        let rect = Rect::from_xywh(10.0, 8.0, width + 2.0, 40.0);
+        let fragment = FragmentNode::new_text_shaped(rect, "A".to_string(), baseline - rect.y(), runs, style);
+        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 80.0, 60.0), vec![fragment]);
+        let tree = FragmentTree::new(root);
+
+        let pixmap = paint_tree(&tree, 80, 60, Rgba::WHITE).expect("paint");
+
+        let black_bbox =
+            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32).expect("text");
+        let red_bbox = bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80)
+            .expect("emphasis mark");
+
+        assert!(
+            red_bbox.1 < black_bbox.1,
+            "emphasis mark should appear above the glyphs when positioned over the text"
         );
     }
 

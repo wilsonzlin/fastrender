@@ -235,6 +235,11 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.text_justify = parent.text_justify;
     styles.text_indent = parent.text_indent;
     styles.text_decoration_skip_ink = parent.text_decoration_skip_ink;
+    styles.text_underline_offset = parent.text_underline_offset;
+    styles.text_underline_position = parent.text_underline_position;
+    styles.text_emphasis_style = parent.text_emphasis_style.clone();
+    styles.text_emphasis_color = parent.text_emphasis_color;
+    styles.text_emphasis_position = parent.text_emphasis_position;
     styles.text_transform = parent.text_transform;
     styles.letter_spacing = parent.letter_spacing;
     styles.word_spacing = parent.word_spacing;
@@ -306,7 +311,9 @@ mod tests {
     use crate::dom::DomNodeType;
     use crate::style::color::Rgba;
     use crate::style::display::Display;
-    use crate::style::types::{ListStylePosition, ListStyleType, TextDecorationLine};
+    use crate::style::types::{
+        ListStylePosition, ListStyleType, TextDecorationLine, TextUnderlineOffset, TextUnderlinePosition,
+    };
 
     fn element_with_style(style: &str) -> DomNode {
         DomNode {
@@ -374,6 +381,81 @@ mod tests {
             .decoration
             .lines
             .contains(TextDecorationLine::UNDERLINE));
+    }
+
+    #[test]
+    fn underline_offset_and_position_inherit() {
+        let child = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "span".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![(
+                    "style".to_string(),
+                    "text-underline-offset: 2px; text-underline-position: under right;".to_string(),
+                )],
+            },
+            children: vec![child],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        assert!(
+            matches!(styled.styles.text_underline_position, TextUnderlinePosition::UnderRight),
+            "parent got {:?}",
+            styled.styles.text_underline_position
+        );
+        let child_styles = &styled.children[0].styles;
+        match child_styles.text_underline_offset {
+            TextUnderlineOffset::Length(l) => assert!((l.to_px() - 2.0).abs() < 0.01),
+            other => panic!("expected underline offset to inherit, got {:?}", other),
+        }
+        assert!(
+            matches!(child_styles.text_underline_position, TextUnderlinePosition::UnderRight),
+            "got {:?}",
+            child_styles.text_underline_position
+        );
+    }
+
+    #[test]
+    fn text_emphasis_inherits() {
+        let child = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "span".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![(
+                    "style".to_string(),
+                    "text-emphasis-style: open dot; text-emphasis-color: red; text-emphasis-position: under left;"
+                        .to_string(),
+                )],
+            },
+            children: vec![child],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let child_styles = &styled.children[0].styles;
+        assert!(matches!(
+            child_styles.text_emphasis_style,
+            crate::style::types::TextEmphasisStyle::Mark {
+                fill: crate::style::types::TextEmphasisFill::Open,
+                shape: crate::style::types::TextEmphasisShape::Dot
+            }
+        ));
+        assert_eq!(child_styles.text_emphasis_color, Some(Rgba::RED));
+        assert!(matches!(
+            child_styles.text_emphasis_position,
+            crate::style::types::TextEmphasisPosition::UnderLeft
+        ));
     }
 
     #[test]
@@ -727,6 +809,7 @@ fn propagate_text_decorations(styles: &mut ComputedStyle, parent: &ComputedStyle
                 decoration: styles.text_decoration.clone(),
                 skip_ink: styles.text_decoration_skip_ink,
                 underline_offset: styles.text_underline_offset,
+                underline_position: styles.text_underline_position,
             });
     }
 }
@@ -888,6 +971,10 @@ fn reset_marker_box_properties(styles: &mut ComputedStyle) {
     styles.applied_text_decorations = defaults.applied_text_decorations.clone();
     styles.text_decoration_skip_ink = defaults.text_decoration_skip_ink;
     styles.text_underline_offset = defaults.text_underline_offset;
+    styles.text_underline_position = defaults.text_underline_position;
+    styles.text_emphasis_style = defaults.text_emphasis_style.clone();
+    styles.text_emphasis_color = defaults.text_emphasis_color;
+    styles.text_emphasis_position = defaults.text_emphasis_position;
     styles.text_align = defaults.text_align;
     styles.text_align_last = defaults.text_align_last;
     styles.text_indent = defaults.text_indent.clone();
