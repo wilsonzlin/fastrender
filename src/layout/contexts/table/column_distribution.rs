@@ -862,6 +862,23 @@ pub fn distribute_spanning_cell_width(
     }
 }
 
+/// Assign a percentage width to a spanning cell by splitting it across columns.
+///
+/// Each column receives an equal share of the percentage value; fixed widths remain untouched.
+pub fn distribute_spanning_percentage(columns: &mut [ColumnConstraints], start_col: usize, end_col: usize, pct: f32) {
+    if start_col >= end_col || end_col > columns.len() {
+        return;
+    }
+    let span = (end_col - start_col) as f32;
+    if span <= 0.0 {
+        return;
+    }
+    let share = (pct / span).clamp(0.0, 100.0);
+    for col in &mut columns[start_col..end_col] {
+        col.set_percentage(share);
+    }
+}
+
 /// Compute column constraints from cell widths
 ///
 /// Takes a 2D grid of cell (min, max) widths and computes the constraints
@@ -1444,6 +1461,17 @@ mod tests {
         // Fixed column stays at its authored width; flexible column absorbs the remainder.
         assert_eq!(columns[0].min_width, 100.0);
         assert!(columns[1].min_width > 100.0);
+    }
+
+    #[test]
+    fn spanning_percentage_splits_across_columns() {
+        let mut columns = vec![ColumnConstraints::new(0.0, 100.0), ColumnConstraints::new(0.0, 100.0)];
+        distribute_spanning_percentage(&mut columns, 0, 2, 50.0);
+
+        assert_eq!(columns[0].percentage, Some(25.0));
+        assert_eq!(columns[1].percentage, Some(25.0));
+        assert!(!columns[0].is_flexible);
+        assert!(!columns[1].is_flexible);
     }
 
     // ========== Compute Column Constraints Tests ==========

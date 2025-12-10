@@ -31,7 +31,8 @@ use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
 use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::table::column_distribution::{
-    distribute_spanning_cell_width, ColumnConstraints, ColumnDistributor, DistributionMode,
+    distribute_spanning_cell_width, distribute_spanning_percentage, ColumnConstraints, ColumnDistributor,
+    DistributionMode,
 };
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::color::Rgba;
@@ -2059,6 +2060,12 @@ impl TableFormattingContext {
             } else {
                 let start = cell.col;
                 let end = (cell.col + cell.colspan).min(constraints.len());
+                if let Some(width) = &cell_box.style.width {
+                    if let LengthUnit::Percent = width.unit {
+                        // Split percentage across spanned columns so the span consumes its share of the table width.
+                        distribute_spanning_percentage(constraints, start, end, width.value);
+                    }
+                }
                 let target_min = specified_width.map(|w| min_w.max(w)).unwrap_or(min_w);
                 let target_max = specified_width.map(|w| max_w.max(w)).unwrap_or(max_w);
                 distribute_spanning_cell_width(constraints, start, end, target_min, target_max);
