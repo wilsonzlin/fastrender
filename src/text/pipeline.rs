@@ -994,6 +994,8 @@ pub struct ShapedRun {
     pub synthetic_bold: f32,
     /// Synthetic oblique shear factor (tan(angle); 0 = none).
     pub synthetic_oblique: f32,
+    /// Whether this run should be painted rotated 90deg counterclockwise (vertical sideways text).
+    pub rotated_90_ccw: bool,
 }
 
 impl ShapedRun {
@@ -1082,6 +1084,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
         language,
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
+        rotated_90_ccw: false,
     })
 }
 
@@ -1179,7 +1182,12 @@ impl ShapingPipeline {
         // Step 4: Shape each run
         let mut shaped_runs = Vec::with_capacity(font_runs.len());
         for run in &font_runs {
-            let shaped = shape_font_run(run)?;
+            let mut shaped = shape_font_run(run)?;
+            if matches!(style.writing_mode, crate::style::types::WritingMode::VerticalRl | crate::style::types::WritingMode::VerticalLr)
+                && matches!(style.text_orientation, crate::style::types::TextOrientation::Sideways | crate::style::types::TextOrientation::SidewaysRight)
+            {
+                shaped.rotated_90_ccw = true;
+            }
             shaped_runs.push(shaped);
         }
 
@@ -1739,6 +1747,16 @@ mod tests {
         let shaped = ShapingPipeline::new().shape("Abc", &style, &ctx).unwrap();
         assert_eq!(shaped.len(), 1, "synthetic small-caps should not split runs");
         assert!(shaped.iter().all(|r| (r.font_size - 18.0).abs() < 0.1));
+    }
+
+    #[test]
+    fn vertical_sideways_text_marks_runs_rotated() {
+        let mut style = ComputedStyle::default();
+        style.writing_mode = crate::style::types::WritingMode::VerticalRl;
+        style.text_orientation = crate::style::types::TextOrientation::Sideways;
+        let ctx = FontContext::new();
+        let shaped = ShapingPipeline::new().shape("Abc", &style, &ctx).unwrap();
+        assert!(shaped.iter().all(|r| r.rotated_90_ccw));
     }
 
     #[test]

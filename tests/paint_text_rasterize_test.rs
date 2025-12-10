@@ -331,6 +331,7 @@ fn test_render_shaped_run() {
         language: None,
         synthetic_bold: 0.0,
         synthetic_oblique: 0.0,
+        rotated_90_ccw: false,
     };
 
     let mut pixmap = create_test_pixmap(150, 100);
@@ -383,6 +384,7 @@ fn test_render_multiple_runs() {
             language: None,
             synthetic_bold: 0.0,
             synthetic_oblique: 0.0,
+            rotated_90_ccw: false,
         }
     };
 

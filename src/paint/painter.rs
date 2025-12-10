@@ -1608,6 +1608,51 @@ impl Painter {
             return;
         }
 
+        // Rotate sideways runs for vertical text-orientation.
+        if run.rotated_90_ccw {
+            let angle = -90.0_f32.to_radians();
+            let (sin, cos) = angle.sin_cos();
+            let tx = origin_x - origin_x * cos + baseline_y * sin;
+            let ty = baseline_y - origin_x * sin - baseline_y * cos;
+            let rotate = tiny_skia::Transform::from_row(cos, sin, -sin, cos, tx, ty);
+
+            let mut rotated_paths = Vec::with_capacity(glyph_paths.len());
+            let mut rotated_bounds = PathBounds::new();
+            for path in glyph_paths.drain(..) {
+                if let Some(rotated) = path.clone().transform(rotate) {
+                    let rect = path.bounds();
+                    let corners = [
+                        (rect.left(), rect.top()),
+                        (rect.right(), rect.top()),
+                        (rect.right(), rect.bottom()),
+                        (rect.left(), rect.bottom()),
+                    ];
+                    let mut min_x = f32::INFINITY;
+                    let mut min_y = f32::INFINITY;
+                    let mut max_x = f32::NEG_INFINITY;
+                    let mut max_y = f32::NEG_INFINITY;
+                    for (x, y) in corners {
+                        let mapped_x = x * cos + y * -sin + tx;
+                        let mapped_y = x * sin + y * cos + ty;
+                        min_x = min_x.min(mapped_x);
+                        min_y = min_y.min(mapped_y);
+                        max_x = max_x.max(mapped_x);
+                        max_y = max_y.max(mapped_y);
+                    }
+                    if let Some(mapped) = tiny_skia::Rect::from_ltrb(min_x, min_y, max_x, max_y) {
+                        rotated_bounds.include(&mapped);
+                    }
+                    rotated_paths.push(rotated);
+                }
+            }
+            if rotated_bounds.is_valid() && !rotated_paths.is_empty() {
+                glyph_paths = rotated_paths;
+                bounds = rotated_bounds;
+            } else {
+                glyph_paths = rotated_paths;
+            }
+        }
+
         if let Some(style) = style {
             if !style.text_shadow.is_empty() {
                 let shadows = resolve_text_shadows(style);
