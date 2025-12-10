@@ -31,8 +31,8 @@ use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::paint::display_list::{
-    BlendMode, ClipItem, DisplayItem, DisplayList, EmphasisMark, EmphasisText, TextEmphasis, FillRectItem, FontId,
-    GlyphInstance, ImageData, ImageItem, OpacityItem, StrokeRectItem, TextItem, TextShadowItem,
+    BlendMode, ClipItem, DisplayItem, DisplayList, EmphasisMark, EmphasisText, FillRectItem, FontId, GlyphInstance,
+    ImageData, ImageItem, OpacityItem, StrokeRectItem, TextEmphasis, TextItem, TextShadowItem,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
@@ -351,42 +351,44 @@ impl DisplayListBuilder {
                     ReplacedType::Iframe { src } | ReplacedType::Video { src } => src.as_str(),
                     _ => "",
                 };
-                let image = self.decode_image(source);
-                if image.is_none() {
-                    if let ReplacedType::Image { alt: Some(alt), .. } = replaced_type {
-                        if self.emit_alt_text(alt, fragment, rect) {
-                            return;
-                        }
+
+                if let Some(image) = self.decode_image(source) {
+                    let (dest_x, dest_y, dest_w, dest_h) = {
+                        let (fit, position, font_size) = if let Some(style) = fragment.style.as_deref() {
+                            (style.object_fit, style.object_position, style.font_size)
+                        } else {
+                            (ObjectFit::Fill, default_object_position(), 16.0)
+                        };
+
+                        compute_object_fit(
+                            fit,
+                            position,
+                            rect.width(),
+                            rect.height(),
+                            image.width as f32,
+                            image.height as f32,
+                            font_size,
+                            self.viewport,
+                        )
+                        .unwrap_or((0.0, 0.0, rect.width(), rect.height()))
+                    };
+
+                    let dest_rect = Rect::from_xywh(rect.x() + dest_x, rect.y() + dest_y, dest_w, dest_h);
+                    self.list.push(DisplayItem::Image(ImageItem {
+                        dest_rect,
+                        image: Arc::new(image),
+                        src_rect: None,
+                    }));
+                    return;
+                }
+
+                if let ReplacedType::Image { alt: Some(alt), .. } = replaced_type {
+                    if self.emit_alt_text(alt, fragment, rect) {
+                        return;
                     }
                 }
 
-                let image = image.unwrap_or_else(|| ImageData::new(1, 1, vec![128, 128, 128, 255]));
-                let (dest_x, dest_y, dest_w, dest_h) = {
-                    let (fit, position, font_size) = if let Some(style) = fragment.style.as_deref() {
-                        (style.object_fit, style.object_position, style.font_size)
-                    } else {
-                        (ObjectFit::Fill, default_object_position(), 16.0)
-                    };
-
-                    compute_object_fit(
-                        fit,
-                        position,
-                        rect.width(),
-                        rect.height(),
-                        image.width as f32,
-                        image.height as f32,
-                        font_size,
-                        self.viewport,
-                    )
-                    .unwrap_or((0.0, 0.0, rect.width(), rect.height()))
-                };
-
-                let dest_rect = Rect::from_xywh(rect.x() + dest_x, rect.y() + dest_y, dest_w, dest_h);
-                self.list.push(DisplayItem::Image(ImageItem {
-                    dest_rect,
-                    image: Arc::new(image),
-                    src_rect: None,
-                }));
+                self.emit_replaced_placeholder(replaced_type, fragment, rect);
             }
 
             // Block, Inline, Line, other replaced types - no direct content
@@ -558,12 +560,12 @@ impl DisplayListBuilder {
             other => other,
         };
         let center_y = match resolved_position {
-            TextEmphasisPosition::Over
-            | TextEmphasisPosition::OverLeft
-            | TextEmphasisPosition::OverRight => baseline_y - ascent - gap - mark_size * 0.5,
-            TextEmphasisPosition::Under
-            | TextEmphasisPosition::UnderLeft
-            | TextEmphasisPosition::UnderRight => baseline_y + descent + gap + mark_size * 0.5,
+            TextEmphasisPosition::Over | TextEmphasisPosition::OverLeft | TextEmphasisPosition::OverRight => {
+                baseline_y - ascent - gap - mark_size * 0.5
+            }
+            TextEmphasisPosition::Under | TextEmphasisPosition::UnderLeft | TextEmphasisPosition::UnderRight => {
+                baseline_y + descent + gap + mark_size * 0.5
+            }
             TextEmphasisPosition::Auto => baseline_y - ascent - gap - mark_size * 0.5,
         };
 
@@ -587,9 +589,7 @@ impl DisplayListBuilder {
                 }
             }
             let center_x = match run.direction {
-                crate::text::pipeline::Direction::RightToLeft => {
-                    run_origin - (glyph.x_offset + glyph.x_advance * 0.5)
-                }
+                crate::text::pipeline::Direction::RightToLeft => run_origin - (glyph.x_offset + glyph.x_advance * 0.5),
                 _ => run_origin + glyph.x_offset + glyph.x_advance * 0.5,
             };
             marks.push(EmphasisMark {
@@ -622,11 +622,7 @@ impl DisplayListBuilder {
                             descent = mark_style.font_size * 0.2;
                         }
                         for r in mark_runs {
-                            let mark_origin = if r.direction.is_rtl() {
-                                width + r.advance
-                            } else {
-                                width
-                            };
+                            let mark_origin = if r.direction.is_rtl() { width + r.advance } else { width };
                             for g in r.glyphs {
                                 let x = match r.direction {
                                     crate::text::pipeline::Direction::RightToLeft => mark_origin - g.x_offset,
@@ -690,19 +686,68 @@ impl DisplayListBuilder {
             .unwrap_or_default()
     }
 
+    fn emit_replaced_placeholder(&mut self, replaced_type: &ReplacedType, fragment: &FragmentNode, rect: Rect) {
+        let placeholder_color = Rgba::rgb(200, 200, 200);
+        self.list.push(DisplayItem::FillRect(FillRectItem {
+            rect,
+            color: placeholder_color,
+        }));
+
+        let stroke_color = Rgba::rgb(150, 150, 150);
+        self.list.push(DisplayItem::StrokeRect(StrokeRectItem {
+            rect,
+            color: stroke_color,
+            width: 1.0,
+            blend_mode: BlendMode::Normal,
+        }));
+
+        let label = match replaced_type {
+            ReplacedType::Video { .. } => Some("video"),
+            ReplacedType::Iframe { .. } => Some("iframe"),
+            ReplacedType::Canvas => Some("canvas"),
+            ReplacedType::Embed { .. } => Some("embed"),
+            ReplacedType::Object { .. } => Some("object"),
+            _ => None,
+        };
+
+        if let Some(label_text) = label {
+            let label_style = fragment.style.as_deref().map(|style| {
+                let mut clone = style.clone();
+                clone.color = Rgba::rgb(120, 120, 120);
+                clone
+            });
+            let inset = 2.0;
+            let label_rect = Rect::from_xywh(
+                rect.x() + inset,
+                rect.y() + inset,
+                (rect.width() - inset * 2.0).max(0.0),
+                (rect.height() - inset * 2.0).max(0.0),
+            );
+            let label_style_ref = label_style
+                .as_ref()
+                .map(|s| s as &ComputedStyle)
+                .or_else(|| fragment.style.as_deref());
+            let _ = self.emit_text_with_style(label_text, label_style_ref, label_rect);
+        }
+    }
+
     fn emit_alt_text(&mut self, alt: &str, fragment: &FragmentNode, rect: Rect) -> bool {
-        let text = alt.trim();
+        self.emit_text_with_style(alt, fragment.style.as_deref(), rect)
+    }
+
+    fn emit_text_with_style(&mut self, text: &str, style: Option<&ComputedStyle>, rect: Rect) -> bool {
+        let text = text.trim();
         if text.is_empty() {
             return false;
         }
 
-        let Some(style) = fragment.style.as_deref() else {
-            return self.emit_naive_alt(text, rect, None);
+        let Some(style) = style else {
+            return self.emit_naive_text(text, rect, None);
         };
 
         let mut runs = match self.shaper.shape(text, style, &self.font_ctx) {
             Ok(r) => r,
-            Err(_) => return self.emit_naive_alt(text, rect, Some(style)),
+            Err(_) => return self.emit_naive_text(text, rect, Some(style)),
         };
         InlineTextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
 
@@ -717,7 +762,7 @@ impl DisplayListBuilder {
         true
     }
 
-    fn emit_naive_alt(&mut self, text: &str, rect: Rect, style: Option<&ComputedStyle>) -> bool {
+    fn emit_naive_text(&mut self, text: &str, rect: Rect, style: Option<&ComputedStyle>) -> bool {
         let font_size = style.map(|s| s.font_size).unwrap_or(16.0);
         let color = style.map(|s| s.color).unwrap_or(Rgba::BLACK);
         let shadows = Self::text_shadows_from_style(style);
@@ -837,8 +882,14 @@ mod tests {
 
     #[test]
     fn test_builder_image_fragment() {
-        let fragment = create_image_fragment(0.0, 0.0, 100.0, 100.0, "test.png");
-        let builder = DisplayListBuilder::new();
+        let fragment = create_image_fragment(
+            0.0,
+            0.0,
+            100.0,
+            100.0,
+            "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E",
+        );
+        let builder = DisplayListBuilder::with_image_cache(ImageCache::new());
         let list = builder.build(&fragment);
 
         assert_eq!(list.len(), 1);
@@ -1120,12 +1171,18 @@ mod tests {
     fn test_complex_tree() {
         let text1 = create_text_fragment(0.0, 0.0, 100.0, 20.0, "Line1");
         let text2 = create_text_fragment(0.0, 20.0, 100.0, 20.0, "Line2");
-        let image = create_image_fragment(0.0, 40.0, 50.0, 50.0, "icon.png");
+        let image = create_image_fragment(
+            0.0,
+            40.0,
+            50.0,
+            50.0,
+            "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E",
+        );
 
         let inner = FragmentNode::new_block(Rect::from_xywh(10.0, 10.0, 120.0, 100.0), vec![text1, text2, image]);
         let outer = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 200.0, 200.0), vec![inner]);
 
-        let builder = DisplayListBuilder::new();
+        let builder = DisplayListBuilder::with_image_cache(ImageCache::new());
         let list = builder.build(&outer);
 
         assert_eq!(list.len(), 3);
@@ -1206,7 +1263,7 @@ mod tests {
             content: FragmentContent::Replaced {
                 box_id: None,
                 replaced_type: ReplacedType::Image {
-                    src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6X1ru4AAAAASUVORK5CYII=".to_string(),
+                    src: "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E".to_string(),
                     alt: None,
                 },
             },
@@ -1246,7 +1303,7 @@ mod tests {
             content: FragmentContent::Replaced {
                 box_id: None,
                 replaced_type: ReplacedType::Image {
-                    src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6X1ru4AAAAASUVORK5CYII=".to_string(),
+                    src: "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E".to_string(),
                     alt: None,
                 },
             },
@@ -1292,5 +1349,37 @@ mod tests {
             panic!("Expected text item for alt fallback");
         };
         assert!(text.advance_width > 0.0);
+    }
+
+    #[test]
+    fn missing_image_without_alt_emits_placeholder() {
+        let fragment = FragmentNode::new_replaced(
+            Rect::from_xywh(0.0, 0.0, 40.0, 20.0),
+            ReplacedType::Image {
+                src: String::new(),
+                alt: None,
+            },
+        );
+        let builder = DisplayListBuilder::new();
+        let list = builder.build(&fragment);
+
+        assert_eq!(list.len(), 2, "expected fill + stroke placeholder items");
+        assert!(matches!(list.items()[0], DisplayItem::FillRect(_)));
+        assert!(matches!(list.items()[1], DisplayItem::StrokeRect(_)));
+    }
+
+    #[test]
+    fn non_image_replaced_uses_labeled_placeholder() {
+        let fragment = FragmentNode::new_replaced(
+            Rect::from_xywh(0.0, 0.0, 40.0, 20.0),
+            ReplacedType::Video { src: String::new() },
+        );
+        let builder = DisplayListBuilder::new();
+        let list = builder.build(&fragment);
+
+        assert_eq!(list.len(), 3, "fill, stroke, and label text expected");
+        assert!(matches!(list.items()[0], DisplayItem::FillRect(_)));
+        assert!(matches!(list.items()[1], DisplayItem::StrokeRect(_)));
+        assert!(matches!(list.items()[2], DisplayItem::Text(_)));
     }
 }

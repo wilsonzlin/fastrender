@@ -1674,33 +1674,7 @@ impl Painter {
             _ => {}
         }
 
-        // For now, draw a placeholder rectangle
-        let mut paint = Paint::default();
-        paint.set_color_rgba8(200, 200, 200, 255); // Light gray
-        paint.anti_alias = true;
-
-        if let Some(rect) = SkiaRect::from_xywh(
-            content_rect.x(),
-            content_rect.y(),
-            content_rect.width(),
-            content_rect.height(),
-        ) {
-            let path = PathBuilder::from_rect(rect);
-            self.pixmap
-                .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
-
-            // Draw border
-            let mut stroke_paint = Paint::default();
-            stroke_paint.set_color_rgba8(150, 150, 150, 255);
-            stroke_paint.anti_alias = true;
-
-            let stroke = tiny_skia::Stroke {
-                width: 1.0,
-                ..Default::default()
-            };
-            self.pixmap
-                .stroke_path(&path, &stroke_paint, &stroke, Transform::identity(), None);
-        }
+        self.paint_replaced_placeholder(replaced_type, style, content_rect);
     }
 
     fn paint_image_from_src(
@@ -1837,6 +1811,54 @@ impl Painter {
         let transform = Transform::from_row(scale_x, 0.0, 0.0, scale_y, x + dest_x, y + dest_y);
         self.pixmap.draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);
         true
+    }
+
+    fn paint_replaced_placeholder(&mut self, replaced_type: &ReplacedType, style: Option<&ComputedStyle>, rect: Rect) {
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(200, 200, 200, 255); // Light gray
+        paint.anti_alias = true;
+
+        if let Some(sk_rect) = SkiaRect::from_xywh(rect.x(), rect.y(), rect.width(), rect.height()) {
+            let path = PathBuilder::from_rect(sk_rect);
+            self.pixmap
+                .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+
+            // Border around the placeholder
+            let mut stroke_paint = Paint::default();
+            stroke_paint.set_color_rgba8(150, 150, 150, 255);
+            stroke_paint.anti_alias = true;
+
+            let stroke = tiny_skia::Stroke {
+                width: 1.0,
+                ..Default::default()
+            };
+            self.pixmap
+                .stroke_path(&path, &stroke_paint, &stroke, Transform::identity(), None);
+        }
+
+        // Optional label to hint the missing resource type
+        let label = match replaced_type {
+            ReplacedType::Video { .. } => Some("video"),
+            ReplacedType::Iframe { .. } => Some("iframe"),
+            ReplacedType::Canvas => Some("canvas"),
+            ReplacedType::Embed { .. } => Some("embed"),
+            ReplacedType::Object { .. } => Some("object"),
+            _ => None,
+        };
+
+        if let (Some(style), Some(label_text)) = (style, label) {
+            let mut label_style = style.clone();
+            label_style.color = Rgba::rgb(120, 120, 120);
+            // Use a small inset to avoid clipping against the placeholder edges
+            let inset = 2.0;
+            let label_rect = Rect::from_xywh(
+                rect.x() + inset,
+                rect.y() + inset,
+                (rect.width() - 2.0 * inset).max(0.0),
+                (rect.height() - 2.0 * inset).max(0.0),
+            );
+            let _ = self.paint_alt_text(label_text, &label_style, label_rect);
+        }
     }
 
     fn paint_alt_text(&mut self, alt: &str, style: &ComputedStyle, rect: Rect) -> bool {

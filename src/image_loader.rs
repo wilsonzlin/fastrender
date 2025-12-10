@@ -342,4 +342,14 @@ mod tests {
         assert_eq!(image.width(), 10);
         assert_eq!(image.height(), 5);
     }
+
+    #[test]
+    fn load_svg_data_url() {
+        let cache = ImageCache::new();
+        let data_url =
+            "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E";
+        let image = cache.load(data_url).expect("decode data URL");
+        assert_eq!(image.width(), 1);
+        assert_eq!(image.height(), 1);
+    }
 }
