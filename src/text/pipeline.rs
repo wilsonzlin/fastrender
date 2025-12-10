@@ -1038,7 +1038,7 @@ impl ShapingPipeline {
                 FontVariantCaps::SmallCaps | FontVariantCaps::AllSmallCaps
             )
         {
-            if !has_native_small_caps(style, font_context) {
+            if !has_native_small_caps(style, font_context) && style.font_synthesis.small_caps {
                 return self.shape_small_caps(text, style, font_context);
             }
         }
@@ -1539,6 +1539,18 @@ mod tests {
         let shaped = ShapingPipeline::new().shape("Abc", &style, &ctx).unwrap();
         assert!(shaped.iter().any(|r| (r.font_size - 16.0).abs() < 0.1));
         assert!(shaped.iter().any(|r| (r.font_size - 20.0).abs() < 0.1));
+    }
+
+    #[test]
+    fn font_synthesis_none_disables_synthetic_small_caps() {
+        let mut style = ComputedStyle::default();
+        style.font_variant_caps = FontVariantCaps::SmallCaps;
+        style.font_size = 18.0;
+        style.font_synthesis.small_caps = false;
+        let ctx = FontContext::new();
+        let shaped = ShapingPipeline::new().shape("Abc", &style, &ctx).unwrap();
+        assert_eq!(shaped.len(), 1, "synthetic small-caps should not split runs");
+        assert!(shaped.iter().all(|r| (r.font_size - 18.0).abs() < 0.1));
     }
 
     #[test]

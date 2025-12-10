@@ -641,6 +641,24 @@ pub enum FontVariantPosition {
     Super,
 }
 
+/// Controls which font properties may be synthetically generated (`font-synthesis`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FontSynthesis {
+    pub weight: bool,
+    pub style: bool,
+    pub small_caps: bool,
+}
+
+impl Default for FontSynthesis {
+    fn default() -> Self {
+        Self {
+            weight: true,
+            style: true,
+            small_caps: true,
+        }
+    }
+}
+
 /// Kerning control (`font-kerning`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontKerning {

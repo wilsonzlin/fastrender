@@ -596,6 +596,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     styles.font_variant_numeric = FontVariantNumeric::default();
                     styles.font_variant_east_asian = FontVariantEastAsian::default();
                     styles.font_variant_position = FontVariantPosition::Normal;
+                    styles.font_synthesis = FontSynthesis::default();
                     styles.font_kerning = FontKerning::Auto;
                     styles.font_feature_settings.clear();
                     styles.font_style = font_style;
@@ -909,6 +910,33 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     "none" => FontKerning::None,
                     _ => styles.font_kerning,
                 };
+            }
+        }
+        "font-synthesis" => {
+            if let PropertyValue::Keyword(raw) = &resolved_value {
+                let tokens: Vec<&str> = raw.split_whitespace().collect();
+                if tokens.len() == 1 && tokens[0] == "none" {
+                    styles.font_synthesis = FontSynthesis {
+                        weight: false,
+                        style: false,
+                        small_caps: false,
+                    };
+                } else if !tokens.is_empty() {
+                    let mut synth = FontSynthesis {
+                        weight: false,
+                        style: false,
+                        small_caps: false,
+                    };
+                    for tok in tokens {
+                        match tok {
+                            "weight" => synth.weight = true,
+                            "style" => synth.style = true,
+                            "small-caps" => synth.small_caps = true,
+                            _ => {}
+                        }
+                    }
+                    styles.font_synthesis = synth;
+                }
             }
         }
         "line-height" => match &resolved_value {
@@ -4502,6 +4530,30 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert!(matches!(style.font_variant_position, FontVariantPosition::Normal));
+    }
+
+    #[test]
+    fn parses_font_synthesis() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font-synthesis".to_string(),
+            value: PropertyValue::Keyword("weight style".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(style.font_synthesis.weight);
+        assert!(style.font_synthesis.style);
+        assert!(!style.font_synthesis.small_caps);
+
+        let decl = Declaration {
+            property: "font-synthesis".to_string(),
+            value: PropertyValue::Keyword("none".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(!style.font_synthesis.weight);
+        assert!(!style.font_synthesis.style);
+        assert!(!style.font_synthesis.small_caps);
     }
 
     #[test]
