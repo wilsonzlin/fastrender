@@ -513,7 +513,29 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         "grid-template-areas" => match &resolved_value {
             PropertyValue::Keyword(kw) | PropertyValue::String(kw) => {
                 if let Some(areas) = parse_grid_template_areas(kw) {
+                    let row_count = areas.len();
+                    let col_count = areas.first().map(|r| r.len()).unwrap_or(0);
+                    if col_count == 0 {
+                        return;
+                    }
+
+                    // CSS requires area matrices to align with explicit track counts if specified.
+                    if (!styles.grid_template_columns.is_empty() && styles.grid_template_columns.len() != col_count)
+                        || (!styles.grid_template_rows.is_empty() && styles.grid_template_rows.len() != row_count)
+                    {
+                        return;
+                    }
+
                     styles.grid_template_areas = areas;
+
+                    if styles.grid_template_columns.is_empty() {
+                        styles.grid_template_columns = vec![GridTrack::Auto; col_count];
+                        styles.grid_column_line_names = vec![Vec::new(); col_count + 1];
+                    }
+                    if styles.grid_template_rows.is_empty() {
+                        styles.grid_template_rows = vec![GridTrack::Auto; row_count];
+                        styles.grid_row_line_names = vec![Vec::new(); row_count + 1];
+                    }
                 }
             }
             _ => {}

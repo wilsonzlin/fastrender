@@ -708,4 +708,30 @@ mod tests {
         // Non-rectangular area usage of "a"
         assert!(parse_grid_template_areas("\"a b\" \"a a\"").is_none());
     }
+
+    #[test]
+    fn grid_template_areas_populates_tracks_when_empty() {
+        let mut styles = ComputedStyle::default();
+        let value = PropertyValue::Keyword("\"a b\" \"a b\"".into());
+        match &value {
+            PropertyValue::Keyword(kw) | PropertyValue::String(kw) => {
+                if let Some(areas) = parse_grid_template_areas(kw) {
+                    let row_count = areas.len();
+                    let col_count = areas.first().map(|r| r.len()).unwrap_or(0);
+                    if col_count != 0 {
+                        styles.grid_template_areas = areas;
+                        if styles.grid_template_columns.is_empty() {
+                            styles.grid_template_columns = vec![GridTrack::Auto; col_count];
+                        }
+                        if styles.grid_template_rows.is_empty() {
+                            styles.grid_template_rows = vec![GridTrack::Auto; row_count];
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        assert_eq!(styles.grid_template_columns.len(), 2);
+        assert_eq!(styles.grid_template_rows.len(), 2);
+    }
 }
