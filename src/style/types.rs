@@ -361,6 +361,7 @@ pub enum AlignContent {
     FlexEnd,
     Center,
     SpaceBetween,
+    SpaceEvenly,
     SpaceAround,
     Stretch,
 }

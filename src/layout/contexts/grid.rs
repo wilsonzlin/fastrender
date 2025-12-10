@@ -511,6 +511,7 @@ impl GridFormattingContext {
             AlignContent::Center => TaffyAlignContent::Center,
             AlignContent::Stretch => TaffyAlignContent::Stretch,
             AlignContent::SpaceBetween => TaffyAlignContent::SpaceBetween,
+            AlignContent::SpaceEvenly => TaffyAlignContent::SpaceEvenly,
             AlignContent::SpaceAround => TaffyAlignContent::SpaceAround,
         }
     }

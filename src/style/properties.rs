@@ -474,6 +474,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     "flex-end" | "end" => AlignContent::FlexEnd,
                     "center" => AlignContent::Center,
                     "space-between" => AlignContent::SpaceBetween,
+                    "space-evenly" => AlignContent::SpaceEvenly,
                     "space-around" => AlignContent::SpaceAround,
                     "stretch" => AlignContent::Stretch,
                     _ => styles.align_content,
@@ -499,6 +500,24 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     _ => parse_align_keyword(kw),
                 }
                 .or(styles.justify_self);
+            }
+        }
+        "place-items" => {
+            if let Some((align, justify)) = parse_place_pair(&resolved_value) {
+                styles.align_items = align;
+                styles.justify_items = justify;
+            }
+        }
+        "place-self" => {
+            if let Some((align, justify)) = parse_place_pair(&resolved_value) {
+                styles.align_self = Some(align);
+                styles.justify_self = Some(justify);
+            }
+        }
+        "place-content" => {
+            if let Some((align, justify)) = parse_place_content_pair(&resolved_value) {
+                styles.align_content = align;
+                styles.justify_content = justify;
             }
         }
         "flex-grow" => {
@@ -1933,6 +1952,83 @@ fn parse_align_keyword(kw: &str) -> Option<AlignItems> {
         "right" => Some(AlignItems::End),
         _ => None,
     }
+}
+
+fn parse_place_pair(value: &PropertyValue) -> Option<(AlignItems, AlignItems)> {
+    let tokens: Vec<String> = match value {
+        PropertyValue::Multiple(values) => values
+            .iter()
+            .filter_map(|v| match v {
+                PropertyValue::Keyword(k) => Some(k.clone()),
+                _ => None,
+            })
+            .collect(),
+        PropertyValue::Keyword(kw) => kw.split_whitespace().map(|s| s.to_string()).collect(),
+        _ => Vec::new(),
+    };
+    if tokens.is_empty() {
+        return None;
+    }
+    if tokens.len() == 1 {
+        if let Some(val) = parse_align_keyword(&tokens[0]) {
+            return Some((val, val));
+        }
+        return None;
+    }
+    let first = parse_align_keyword(&tokens[0])?;
+    let second = parse_align_keyword(&tokens[1])?;
+    Some((first, second))
+}
+
+fn parse_place_content_pair(value: &PropertyValue) -> Option<(AlignContent, JustifyContent)> {
+    fn to_align_content(kw: &str) -> Option<AlignContent> {
+        match kw {
+            "start" | "flex-start" => Some(AlignContent::FlexStart),
+            "end" | "flex-end" => Some(AlignContent::FlexEnd),
+            "center" => Some(AlignContent::Center),
+            "stretch" | "normal" => Some(AlignContent::Stretch),
+            "space-between" => Some(AlignContent::SpaceBetween),
+            "space-around" => Some(AlignContent::SpaceAround),
+            "space-evenly" => Some(AlignContent::SpaceEvenly),
+            _ => None,
+        }
+    }
+
+    fn to_justify_content(kw: &str) -> Option<JustifyContent> {
+        match kw {
+            "flex-start" | "start" => Some(JustifyContent::FlexStart),
+            "flex-end" | "end" => Some(JustifyContent::FlexEnd),
+            "center" => Some(JustifyContent::Center),
+            "space-between" => Some(JustifyContent::SpaceBetween),
+            "space-around" => Some(JustifyContent::SpaceAround),
+            "space-evenly" => Some(JustifyContent::SpaceEvenly),
+            _ => None,
+        }
+    }
+
+    let tokens: Vec<String> = match value {
+        PropertyValue::Multiple(values) => values
+            .iter()
+            .filter_map(|v| match v {
+                PropertyValue::Keyword(k) => Some(k.clone()),
+                _ => None,
+            })
+            .collect(),
+        PropertyValue::Keyword(kw) => kw.split_whitespace().map(|s| s.to_string()).collect(),
+        _ => Vec::new(),
+    };
+    if tokens.is_empty() {
+        return None;
+    }
+    if tokens.len() == 1 {
+        if let (Some(a), Some(j)) = (to_align_content(&tokens[0]), to_justify_content(&tokens[0])) {
+            return Some((a, j));
+        }
+        return None;
+    }
+    let first = to_align_content(&tokens[0])?;
+    let second = to_justify_content(&tokens[1])?;
+    Some((first, second))
 }
 
 fn parse_spacing_value(
@@ -3802,8 +3898,8 @@ fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
 mod tests {
     use super::*;
     use crate::style::types::{
-        AlignItems, AspectRatio, BackgroundRepeatKeyword, BoxSizing, FontStretch, FontVariant, GridAutoFlow, GridTrack,
-        ImageRendering,
+        AlignContent, AlignItems, AspectRatio, BackgroundRepeatKeyword, BoxSizing, FontStretch, FontVariant,
+        GridAutoFlow, GridTrack, ImageRendering, JustifyContent,
         ListStylePosition, ListStyleType, OutlineColor, OutlineStyle, PositionComponent, PositionKeyword,
         TextDecorationLine, TextDecorationStyle, TextDecorationThickness, TextEmphasisFill, TextEmphasisPosition,
         TextEmphasisShape, TextEmphasisStyle,
@@ -3952,6 +4048,50 @@ mod tests {
             16.0,
         );
         assert_eq!(style.justify_self, Some(AlignItems::Center));
+    }
+
+    #[test]
+    fn parses_place_shorthands() {
+        let mut style = ComputedStyle::default();
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "place-items".to_string(),
+                value: PropertyValue::Keyword("center stretch".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.align_items, AlignItems::Center);
+        assert_eq!(style.justify_items, AlignItems::Stretch);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "place-self".to_string(),
+                value: PropertyValue::Keyword("end start".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.align_self, Some(AlignItems::End));
+        assert_eq!(style.justify_self, Some(AlignItems::Start));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "place-content".to_string(),
+                value: PropertyValue::Keyword("space-between center".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.align_content, AlignContent::SpaceBetween);
+        assert_eq!(style.justify_content, JustifyContent::Center);
     }
 
     #[test]

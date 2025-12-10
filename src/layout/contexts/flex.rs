@@ -415,6 +415,7 @@ impl FlexFormattingContext {
             AlignContent::FlexEnd => taffy::style::AlignContent::FlexEnd,
             AlignContent::Center => taffy::style::AlignContent::Center,
             AlignContent::SpaceBetween => taffy::style::AlignContent::SpaceBetween,
+            AlignContent::SpaceEvenly => taffy::style::AlignContent::SpaceEvenly,
             AlignContent::SpaceAround => taffy::style::AlignContent::SpaceAround,
             AlignContent::Stretch => taffy::style::AlignContent::Stretch,
         })
