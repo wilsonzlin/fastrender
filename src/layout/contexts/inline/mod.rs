@@ -2271,7 +2271,11 @@ fn apply_break_properties(
         WordBreak::BreakAll => {
             result.extend(char_boundary_breaks(text));
         }
-        WordBreak::BreakWord => {}
+        WordBreak::BreakWord => {
+            // CSS Text Level 4: break-word behaves like overflow-wrap:anywhere in addition
+            // to word-break: normal, so add break opportunities at every character boundary.
+            result.extend(char_boundary_breaks(text));
+        }
         WordBreak::KeepAll => {
             result.retain(|brk| {
                 if brk.break_type == BreakType::Mandatory {
@@ -3582,8 +3586,8 @@ mod tests {
         let breaking_min = ifc.calculate_intrinsic_width(&breaking, IntrinsicSizingMode::MinContent);
         let normal_min = ifc.calculate_intrinsic_width(&normal, IntrinsicSizingMode::MinContent);
         assert!(
-            (breaking_min - normal_min).abs() < 0.1,
-            "break-word should not reduce min-content widths; only overflow handling differs"
+            breaking_min < normal_min * 0.75,
+            "break-word should add anywhere-style break opportunities and shrink min-content width"
         );
     }
 
