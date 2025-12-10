@@ -2420,6 +2420,22 @@ fn approx_same_rect(a: Rect, b: Rect) -> bool {
         && (a.height() - b.height()).abs() <= eps
 }
 
+fn clip_rect_axes(mut bounds: Rect, clip: Rect, clip_x: bool, clip_y: bool) -> Rect {
+    if clip_x {
+        let min_x = bounds.min_x().max(clip.min_x());
+        let max_x = bounds.max_x().min(clip.max_x());
+        bounds.origin.x = min_x;
+        bounds.size.width = (max_x - min_x).max(0.0);
+    }
+    if clip_y {
+        let min_y = bounds.min_y().max(clip.min_y());
+        let max_y = bounds.max_y().min(clip.max_y());
+        bounds.origin.y = min_y;
+        bounds.size.height = (max_y - min_y).max(0.0);
+    }
+    bounds
+}
+
 fn compute_descendant_bounds(commands: &[DisplayCommand], root_rect: Rect) -> Option<Rect> {
     let mut current: Option<Rect> = None;
     for cmd in commands {
@@ -2443,11 +2459,16 @@ fn stacking_context_bounds(
     backdrop_filters: &[ResolvedFilter],
     rect: Rect,
     transform: Option<&Transform>,
-    _clip: Option<&(Rect, BorderRadii, bool, bool)>,
+    clip: Option<&(Rect, BorderRadii, bool, bool)>,
 ) -> Option<Rect> {
     let mut base = rect;
     if let Some(desc) = compute_descendant_bounds(commands, rect) {
-        base = base.union(desc);
+        let clipped = if let Some((clip_rect, _, clip_x, clip_y)) = clip {
+            clip_non_outline(commands, desc, *clip_rect, *clip_x, *clip_y)
+        } else {
+            desc
+        };
+        base = base.union(clipped);
     }
     let (l, t, r, b) = filter_outset(filters);
     let (bl, bt, br, bb) = filter_outset(backdrop_filters);
@@ -2508,6 +2529,23 @@ fn compute_commands_bounds(commands: &[DisplayCommand]) -> Option<Rect> {
         }
     }
     current
+}
+
+fn clip_non_outline(commands: &[DisplayCommand], mut bounds: Rect, clip_rect: Rect, clip_x: bool, clip_y: bool) -> Rect {
+    let mut current: Option<Rect> = None;
+    for cmd in commands {
+        if matches!(cmd, DisplayCommand::Outline { .. }) {
+            continue;
+        }
+        if let Some(r) = command_bounds(cmd) {
+            let clipped = clip_rect_axes(r, clip_rect, clip_x, clip_y);
+            current = Some(current.map(|c| c.union(clipped)).unwrap_or(clipped));
+        }
+    }
+    if let Some(c) = current {
+        bounds = bounds.union(c);
+    }
+    bounds
 }
 
 fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<DisplayCommand> {
