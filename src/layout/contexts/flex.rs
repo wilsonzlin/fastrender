@@ -28,7 +28,7 @@ use crate::geometry::{Point, Rect, Size};
 use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutConstraints};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::display::Display;
-use crate::style::types::{AlignContent, AlignItems, FlexBasis, FlexDirection, FlexWrap, JustifyContent};
+use crate::style::types::{AlignContent, AlignItems, BoxSizing, FlexBasis, FlexDirection, FlexWrap, JustifyContent};
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::BoxNode;
@@ -36,6 +36,12 @@ use crate::tree::fragment_tree::FragmentNode;
 
 use taffy::prelude::*;
 use taffy::TaffyTree;
+
+#[derive(Clone, Copy)]
+enum Axis {
+    Horizontal,
+    Vertical,
+}
 
 /// Flexbox Formatting Context
 ///
@@ -223,12 +229,12 @@ impl FlexFormattingContext {
             // to fill the available space (block-level behavior)
             size: self.compute_size(style, is_root),
             min_size: taffy::geometry::Size {
-                width: self.length_option_to_dimension(style.min_width.as_ref()),
-                height: self.length_option_to_dimension(style.min_height.as_ref()),
+                width: self.length_option_to_dimension_box_sizing(style.min_width.as_ref(), style, Axis::Horizontal),
+                height: self.length_option_to_dimension_box_sizing(style.min_height.as_ref(), style, Axis::Vertical),
             },
             max_size: taffy::geometry::Size {
-                width: self.length_option_to_dimension(style.max_width.as_ref()),
-                height: self.length_option_to_dimension(style.max_height.as_ref()),
+                width: self.length_option_to_dimension_box_sizing(style.max_width.as_ref(), style, Axis::Horizontal),
+                height: self.length_option_to_dimension_box_sizing(style.max_height.as_ref(), style, Axis::Vertical),
             },
 
             // Spacing
@@ -261,7 +267,7 @@ impl FlexFormattingContext {
     /// available space (simulating block-level behavior).
     fn compute_size(&self, style: &ComputedStyle, is_root: bool) -> taffy::geometry::Size<Dimension> {
         let width = match style.width.as_ref() {
-            Some(len) => self.length_to_dimension(len),
+            Some(len) => self.dimension_for_box_sizing(len, style, Axis::Horizontal),
             None if is_root => {
                 // Root flex container without explicit width: expand to fill
                 // available space (100% of containing block)
@@ -271,7 +277,7 @@ impl FlexFormattingContext {
         };
 
         let height = match style.height.as_ref() {
-            Some(len) => self.length_to_dimension(len),
+            Some(len) => self.dimension_for_box_sizing(len, style, Axis::Vertical),
             None => Dimension::auto(), // Height always auto unless specified
         };
 
@@ -405,6 +411,47 @@ impl FlexFormattingContext {
         }
     }
 
+    fn horizontal_edges_px(&self, style: &ComputedStyle) -> Option<f32> {
+        let left = self.length_to_px_if_absolute(&style.padding_left)?;
+        let right = self.length_to_px_if_absolute(&style.padding_right)?;
+        let bl = self.length_to_px_if_absolute(&style.border_left_width)?;
+        let br = self.length_to_px_if_absolute(&style.border_right_width)?;
+        Some(left + right + bl + br)
+    }
+
+    fn vertical_edges_px(&self, style: &ComputedStyle) -> Option<f32> {
+        let top = self.length_to_px_if_absolute(&style.padding_top)?;
+        let bottom = self.length_to_px_if_absolute(&style.padding_bottom)?;
+        let bt = self.length_to_px_if_absolute(&style.border_top_width)?;
+        let bb = self.length_to_px_if_absolute(&style.border_bottom_width)?;
+        Some(top + bottom + bt + bb)
+    }
+
+    fn length_to_px_if_absolute(&self, len: &Length) -> Option<f32> {
+        match len.unit {
+            LengthUnit::Px => Some(len.to_px()),
+            LengthUnit::Pt | LengthUnit::In | LengthUnit::Cm | LengthUnit::Mm | LengthUnit::Pc => Some(len.to_px()),
+            LengthUnit::Rem | LengthUnit::Em => Some(len.value * 16.0),
+            _ => None, // Percent/viewport/calc-like not representable here
+        }
+    }
+
+    fn dimension_for_box_sizing(&self, len: &Length, style: &ComputedStyle, axis: Axis) -> Dimension {
+        if style.box_sizing == BoxSizing::BorderBox {
+            let edges = match axis {
+                Axis::Horizontal => self.horizontal_edges_px(style),
+                Axis::Vertical => self.vertical_edges_px(style),
+            };
+            if let Some(edges) = edges {
+                if !len.unit.is_percentage() {
+                    let content = (self.length_to_px_if_absolute(len).unwrap_or(len.to_px()) - edges).max(0.0);
+                    return Dimension::length(content);
+                }
+            }
+        }
+        self.length_to_dimension(len)
+    }
+
     fn length_to_dimension(&self, len: &Length) -> Dimension {
         match len.unit {
             LengthUnit::Px => Dimension::length(len.to_px()),
@@ -423,6 +470,19 @@ impl FlexFormattingContext {
         }
     }
 
+    fn length_option_to_dimension_box_sizing(
+        &self,
+        len: Option<&Length>,
+        style: &ComputedStyle,
+        axis: Axis,
+    ) -> Dimension {
+        match len {
+            Some(l) => self.dimension_for_box_sizing(l, style, axis),
+            None => Dimension::auto(),
+        }
+    }
+
+    #[allow(dead_code)]
     fn length_option_to_dimension(&self, len: Option<&Length>) -> Dimension {
         match len {
             Some(l) => self.length_to_dimension(l),

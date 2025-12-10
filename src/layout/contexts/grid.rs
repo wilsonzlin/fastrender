@@ -42,11 +42,17 @@ use crate::geometry::Rect;
 use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutConstraints};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::display::Display as CssDisplay;
-use crate::style::types::{AlignContent, GridTrack};
+use crate::style::types::{AlignContent, BoxSizing, GridTrack};
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
+
+#[derive(Clone, Copy)]
+enum Axis {
+    Horizontal,
+    Vertical,
+}
 
 /// Grid Formatting Context
 ///
@@ -136,18 +142,18 @@ impl GridFormattingContext {
 
         // Size
         taffy_style.size = taffy::geometry::Size {
-            width: self.convert_opt_length_to_dimension(&style.width),
-            height: self.convert_opt_length_to_dimension(&style.height),
+            width: self.convert_opt_length_to_dimension_box_sizing(&style.width, style, Axis::Horizontal),
+            height: self.convert_opt_length_to_dimension_box_sizing(&style.height, style, Axis::Vertical),
         };
 
         // Min/Max size
         taffy_style.min_size = taffy::geometry::Size {
-            width: self.convert_opt_length_to_dimension(&style.min_width),
-            height: self.convert_opt_length_to_dimension(&style.min_height),
+            width: self.convert_opt_length_to_dimension_box_sizing(&style.min_width, style, Axis::Horizontal),
+            height: self.convert_opt_length_to_dimension_box_sizing(&style.min_height, style, Axis::Vertical),
         };
         taffy_style.max_size = taffy::geometry::Size {
-            width: self.convert_opt_length_to_dimension(&style.max_width),
-            height: self.convert_opt_length_to_dimension(&style.max_height),
+            width: self.convert_opt_length_to_dimension_box_sizing(&style.max_width, style, Axis::Horizontal),
+            height: self.convert_opt_length_to_dimension_box_sizing(&style.max_height, style, Axis::Vertical),
         };
 
         // Margin
@@ -198,10 +204,15 @@ impl GridFormattingContext {
     }
 
     /// Converts Option<Length> to Taffy Dimension
-    fn convert_opt_length_to_dimension(&self, length: &Option<Length>) -> Dimension {
+    fn convert_opt_length_to_dimension_box_sizing(
+        &self,
+        length: &Option<Length>,
+        style: &ComputedStyle,
+        axis: Axis,
+    ) -> Dimension {
         match length {
             None => Dimension::auto(),
-            Some(len) => self.convert_length_to_dimension(len),
+            Some(len) => self.dimension_for_box_sizing(len, style, axis),
         }
     }
 
@@ -232,6 +243,46 @@ impl GridFormattingContext {
         match length.unit {
             LengthUnit::Percent => LengthPercentage::percent(length.value / 100.0),
             _ => LengthPercentage::length(length.to_px()),
+        }
+    }
+
+    fn dimension_for_box_sizing(&self, len: &Length, style: &ComputedStyle, axis: Axis) -> Dimension {
+        if style.box_sizing == BoxSizing::BorderBox {
+            if let Some(edges) = self.edges_px(style, axis) {
+                if !len.unit.is_percentage() {
+                    let content = (self.length_to_px_if_absolute(len).unwrap_or(len.to_px()) - edges).max(0.0);
+                    return Dimension::length(content);
+                }
+            }
+        }
+        self.convert_length_to_dimension(len)
+    }
+
+    fn edges_px(&self, style: &ComputedStyle, axis: Axis) -> Option<f32> {
+        match axis {
+            Axis::Horizontal => {
+                let p1 = self.length_to_px_if_absolute(&style.padding_left)?;
+                let p2 = self.length_to_px_if_absolute(&style.padding_right)?;
+                let b1 = self.length_to_px_if_absolute(&style.border_left_width)?;
+                let b2 = self.length_to_px_if_absolute(&style.border_right_width)?;
+                Some(p1 + p2 + b1 + b2)
+            }
+            Axis::Vertical => {
+                let p1 = self.length_to_px_if_absolute(&style.padding_top)?;
+                let p2 = self.length_to_px_if_absolute(&style.padding_bottom)?;
+                let b1 = self.length_to_px_if_absolute(&style.border_top_width)?;
+                let b2 = self.length_to_px_if_absolute(&style.border_bottom_width)?;
+                Some(p1 + p2 + b1 + b2)
+            }
+        }
+    }
+
+    fn length_to_px_if_absolute(&self, len: &Length) -> Option<f32> {
+        use crate::style::values::LengthUnit::*;
+        match len.unit {
+            Px | Pt | In | Cm | Mm | Pc => Some(len.to_px()),
+            Em | Rem => Some(len.value * 16.0),
+            _ => None,
         }
     }
 
