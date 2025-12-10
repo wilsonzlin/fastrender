@@ -940,7 +940,7 @@ mod tests {
         fn styled_fragment(x: f32, label: &str, z: i32) -> FragmentNode {
             let mut style = ComputedStyle::default();
             style.position = Position::Relative;
-            style.z_index = z;
+            style.z_index = Some(z);
             FragmentNode::new_inline_styled(
                 Rect::from_xywh(x, 0.0, 10.0, 10.0),
                 0,

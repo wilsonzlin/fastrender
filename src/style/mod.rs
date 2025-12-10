@@ -57,7 +57,8 @@ pub struct ComputedStyle {
     pub left: Option<Length>,
     pub float: Float,
     pub clear: Clear,
-    pub z_index: i32,
+    /// Stacking order for positioned elements (`auto` = None)
+    pub z_index: Option<i32>,
     pub visibility: Visibility,
     pub outline_color: OutlineColor,
     pub outline_style: OutlineStyle,
@@ -237,7 +238,7 @@ impl Default for ComputedStyle {
             left: None,
             float: Float::None,
             clear: Clear::None,
-            z_index: 0,
+            z_index: None,
             visibility: Visibility::Visible,
             outline_color: OutlineColor::Invert,
             outline_style: OutlineStyle::None,

@@ -384,7 +384,7 @@ impl Painter {
             for (idx, child) in fragment.children.iter().enumerate() {
                 if let Some(style) = child.style.as_deref() {
                     if creates_stacking_context(style, style_ref, false) {
-                        let z = style.z_index;
+                        let z = style.z_index.unwrap_or(0);
                         if z < 0 {
                             negative_contexts.push((z, idx));
                         } else if z == 0 {
@@ -462,7 +462,7 @@ impl Painter {
         for (idx, child) in fragment.children.iter().enumerate() {
             if let Some(style) = child.style.as_deref() {
                 if creates_stacking_context(style, style_ref, false) {
-                    let z = style.z_index;
+                    let z = style.z_index.unwrap_or(0);
                     if z < 0 {
                         negative_contexts.push((z, idx));
                     } else if z == 0 {

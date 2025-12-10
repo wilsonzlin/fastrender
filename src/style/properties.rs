@@ -153,8 +153,10 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         "bottom" => styles.bottom = extract_length(&resolved_value),
         "left" => styles.left = extract_length(&resolved_value),
         "z-index" => {
-            if let PropertyValue::Number(n) = resolved_value {
-                styles.z_index = n as i32;
+            match resolved_value {
+                PropertyValue::Number(n) => styles.z_index = Some(n as i32),
+                PropertyValue::Keyword(ref kw) if kw.eq_ignore_ascii_case("auto") => styles.z_index = None,
+                _ => {}
             }
         }
         "outline-color" => match &resolved_value {

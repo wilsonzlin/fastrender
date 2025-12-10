@@ -76,7 +76,7 @@ fn test_sticky_positioning_creates_stacking_context() {
 fn test_positioned_with_z_index_creates_stacking_context() {
     let mut style = ComputedStyle::default();
     style.position = Position::Relative;
-    style.z_index = 10;
+    style.z_index = Some(10);
     assert!(creates_stacking_context(&style, None, false));
     assert_eq!(
         get_stacking_context_reason(&style, None, false),
@@ -84,16 +84,14 @@ fn test_positioned_with_z_index_creates_stacking_context() {
     );
 }
 
-// Test: Positioned element with z-index: 0 doesn't create stacking context
-// (z-index: 0 is like z-index: auto for this purpose)
+// Test: Positioned element with z-index: 0 does create stacking context when specified
 
 #[test]
-fn test_positioned_with_zero_z_index_no_stacking_context() {
+fn test_positioned_with_zero_z_index_creates_stacking_context() {
     let mut style = ComputedStyle::default();
     style.position = Position::Relative;
-    style.z_index = 0;
-    // z-index: 0 (default) doesn't create stacking context
-    assert!(!creates_stacking_context(&style, None, false));
+    style.z_index = Some(0);
+    assert!(creates_stacking_context(&style, None, false));
 }
 
 // Test: Opacity < 1 creates stacking context
@@ -135,7 +133,7 @@ fn test_flex_item_with_z_index_creates_stacking_context() {
     parent_style.display = Display::Flex;
 
     let mut child_style = ComputedStyle::default();
-    child_style.z_index = 5;
+    child_style.z_index = Some(5);
 
     assert!(creates_stacking_context(&child_style, Some(&parent_style), false));
     assert_eq!(
@@ -152,7 +150,7 @@ fn test_grid_item_with_z_index_creates_stacking_context() {
     parent_style.display = Display::Grid;
 
     let mut child_style = ComputedStyle::default();
-    child_style.z_index = 5;
+    child_style.z_index = Some(5);
 
     assert!(creates_stacking_context(&child_style, Some(&parent_style), false));
     assert_eq!(
@@ -598,7 +596,7 @@ fn test_inline_flex_item_with_z_index() {
     parent_style.display = Display::InlineFlex;
 
     let mut child_style = ComputedStyle::default();
-    child_style.z_index = 2;
+    child_style.z_index = Some(2);
 
     assert!(creates_stacking_context(&child_style, Some(&parent_style), false));
 }
@@ -611,7 +609,7 @@ fn test_inline_grid_item_with_z_index() {
     parent_style.display = Display::InlineGrid;
 
     let mut child_style = ComputedStyle::default();
-    child_style.z_index = 2;
+    child_style.z_index = Some(2);
 
     assert!(creates_stacking_context(&child_style, Some(&parent_style), false));
 }
@@ -622,7 +620,7 @@ fn test_inline_grid_item_with_z_index() {
 fn test_absolute_with_z_index() {
     let mut style = ComputedStyle::default();
     style.position = Position::Absolute;
-    style.z_index = 100;
+    style.z_index = Some(100);
 
     assert!(creates_stacking_context(&style, None, false));
     assert_eq!(
@@ -637,7 +635,7 @@ fn test_absolute_with_z_index() {
 fn test_negative_z_index() {
     let mut style = ComputedStyle::default();
     style.position = Position::Relative;
-    style.z_index = -5;
+    style.z_index = Some(-5);
 
     assert!(creates_stacking_context(&style, None, false));
     assert_eq!(

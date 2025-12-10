@@ -407,9 +407,7 @@ pub fn creates_stacking_context(style: &ComputedStyle, parent_style: Option<&Com
     }
 
     // 2. Positioned element with z-index != auto
-    // Note: In ComputedStyle, z_index is i32 with default 0
-    // We need to check if it was explicitly set (non-zero implies explicit)
-    if is_positioned(style) && style.z_index != 0 {
+    if is_positioned(style) && style.z_index.is_some() {
         return true;
     }
 
@@ -474,7 +472,7 @@ pub fn creates_stacking_context(style: &ComputedStyle, parent_style: Option<&Com
             parent.display,
             Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
         );
-        if parent_is_flex_or_grid && style.z_index != 0 {
+        if parent_is_flex_or_grid && style.z_index.is_some() {
             return true;
         }
     }
@@ -508,7 +506,7 @@ pub fn get_stacking_context_reason(
         return Some(StackingContextReason::Root);
     }
 
-    if is_positioned(style) && style.z_index != 0 {
+    if is_positioned(style) && style.z_index.is_some() {
         return Some(StackingContextReason::PositionedWithZIndex);
     }
 
@@ -552,10 +550,10 @@ pub fn get_stacking_context_reason(
         let parent_is_flex = matches!(parent.display, Display::Flex | Display::InlineFlex);
         let parent_is_grid = matches!(parent.display, Display::Grid | Display::InlineGrid);
 
-        if parent_is_flex && style.z_index != 0 {
+        if parent_is_flex && style.z_index.is_some() {
             return Some(StackingContextReason::FlexItemWithZIndex);
         }
-        if parent_is_grid && style.z_index != 0 {
+        if parent_is_grid && style.z_index.is_some() {
             return Some(StackingContextReason::GridItemWithZIndex);
         }
     }
@@ -658,7 +656,7 @@ fn build_stacking_tree_internal(
 
     if creates_context {
         // Create a new stacking context
-        let z_index = style.map_or(0, |s| s.z_index);
+        let z_index = style.and_then(|s| s.z_index).unwrap_or(0);
         let reason = style
             .and_then(|s| get_stacking_context_reason(s, parent_style, is_root))
             .unwrap_or(StackingContextReason::Root);
@@ -799,7 +797,7 @@ where
     };
 
     if creates_context {
-        let z_index = style.map_or(0, |s| s.z_index);
+        let z_index = style.and_then(|s| s.z_index).unwrap_or(0);
         let reason = style
             .and_then(|s| get_stacking_context_reason(s, parent_style, is_root))
             .unwrap_or(StackingContextReason::Root);
@@ -1039,7 +1037,7 @@ mod tests {
     fn test_creates_stacking_context_positioned_with_z_index() {
         let mut style = ComputedStyle::default();
         style.position = Position::Relative;
-        style.z_index = 1;
+        style.z_index = Some(1);
         assert!(creates_stacking_context(&style, None, false));
     }
 
@@ -1047,8 +1045,8 @@ mod tests {
     fn test_creates_stacking_context_positioned_with_zero_z_index() {
         let mut style = ComputedStyle::default();
         style.position = Position::Relative;
-        style.z_index = 0; // z-index: 0 doesn't create stacking context in this impl
-        assert!(!creates_stacking_context(&style, None, false));
+        style.z_index = Some(0); // explicit zero still creates stacking context
+        assert!(creates_stacking_context(&style, None, false));
     }
 
     #[test]
@@ -1092,7 +1090,7 @@ mod tests {
         parent_style.display = Display::Flex;
 
         let mut child_style = ComputedStyle::default();
-        child_style.z_index = 1;
+        child_style.z_index = Some(1);
 
         assert!(creates_stacking_context(&child_style, Some(&parent_style), false));
     }
@@ -1103,7 +1101,7 @@ mod tests {
         parent_style.display = Display::Grid;
 
         let mut child_style = ComputedStyle::default();
-        child_style.z_index = 1;
+        child_style.z_index = Some(1);
 
         assert!(creates_stacking_context(&child_style, Some(&parent_style), false));
     }
@@ -1402,7 +1400,7 @@ mod tests {
     fn test_get_stacking_context_reason_positioned_with_z_index() {
         let mut style = ComputedStyle::default();
         style.position = Position::Relative;
-        style.z_index = 5;
+        style.z_index = Some(5);
         let reason = get_stacking_context_reason(&style, None, false);
         assert_eq!(reason, Some(StackingContextReason::PositionedWithZIndex));
     }
