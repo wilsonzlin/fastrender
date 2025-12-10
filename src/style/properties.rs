@@ -503,6 +503,8 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     parse_font_shorthand(raw, parent_font_size, root_font_size)
                 {
                     styles.font_variant_ligatures = FontVariantLigatures::default();
+                    styles.font_variant_numeric = FontVariantNumeric::default();
+                    styles.font_kerning = FontKerning::Auto;
                     styles.font_feature_settings.clear();
                     styles.font_style = font_style;
                     styles.font_weight = font_weight;
@@ -577,6 +579,30 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "font-variant-numeric" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                let tokens: Vec<&str> = kw.split_whitespace().collect();
+                if tokens.len() == 1 && tokens[0] == "normal" {
+                    styles.font_variant_numeric = FontVariantNumeric::default();
+                } else if !tokens.is_empty() {
+                    let mut numeric = FontVariantNumeric::default();
+                    for tok in tokens {
+                        match tok {
+                            "lining-nums" => numeric.figure = NumericFigure::Lining,
+                            "oldstyle-nums" => numeric.figure = NumericFigure::Oldstyle,
+                            "proportional-nums" => numeric.spacing = NumericSpacing::Proportional,
+                            "tabular-nums" => numeric.spacing = NumericSpacing::Tabular,
+                            "diagonal-fractions" => numeric.fraction = NumericFraction::Diagonal,
+                            "stacked-fractions" => numeric.fraction = NumericFraction::Stacked,
+                            "ordinal" => numeric.ordinal = true,
+                            "slashed-zero" => numeric.slashed_zero = true,
+                            _ => {}
+                        }
+                    }
+                    styles.font_variant_numeric = numeric;
+                }
+            }
+        }
         "font-variant-ligatures" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 let tokens: Vec<&str> = kw.split_whitespace().collect();
@@ -636,6 +662,16 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
             }
             _ => {}
         },
+        "font-kerning" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.font_kerning = match kw.as_str() {
+                    "auto" => FontKerning::Auto,
+                    "normal" => FontKerning::Normal,
+                    "none" => FontKerning::None,
+                    _ => styles.font_kerning,
+                };
+            }
+        }
         "line-height" => match &resolved_value {
             PropertyValue::Keyword(kw) if kw == "normal" => {
                 styles.line_height = LineHeight::Normal;
@@ -3438,6 +3474,54 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert!(matches!(style.font_variant, FontVariant::SmallCaps));
+    }
+
+    #[test]
+    fn parses_font_variant_numeric_longhand() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font-variant-numeric".to_string(),
+            value: PropertyValue::Keyword("oldstyle-nums tabular-nums stacked-fractions ordinal slashed-zero".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_variant_numeric.figure, NumericFigure::Oldstyle));
+        assert!(matches!(style.font_variant_numeric.spacing, NumericSpacing::Tabular));
+        assert!(matches!(style.font_variant_numeric.fraction, NumericFraction::Stacked));
+        assert!(style.font_variant_numeric.ordinal);
+        assert!(style.font_variant_numeric.slashed_zero);
+
+        let decl = Declaration {
+            property: "font-variant-numeric".to_string(),
+            value: PropertyValue::Keyword("normal".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_variant_numeric.figure, NumericFigure::Normal));
+        assert!(matches!(style.font_variant_numeric.spacing, NumericSpacing::Normal));
+        assert!(matches!(style.font_variant_numeric.fraction, NumericFraction::Normal));
+        assert!(!style.font_variant_numeric.ordinal);
+        assert!(!style.font_variant_numeric.slashed_zero);
+    }
+
+    #[test]
+    fn parses_font_kerning() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font-kerning".to_string(),
+            value: PropertyValue::Keyword("none".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_kerning, FontKerning::None));
+
+        let decl = Declaration {
+            property: "font-kerning".to_string(),
+            value: PropertyValue::Keyword("normal".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_kerning, FontKerning::Normal));
     }
 }
 #[derive(Default)]

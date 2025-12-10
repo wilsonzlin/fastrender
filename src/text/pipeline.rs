@@ -48,7 +48,10 @@
 //! - rustybuzz documentation: <https://docs.rs/rustybuzz/>
 
 use crate::error::{Result, TextError};
-use crate::style::types::{Direction as CssDirection, FontStyle as CssFontStyle, FontVariant};
+use crate::style::types::{
+    Direction as CssDirection, FontKerning, FontStyle as CssFontStyle, FontVariant, NumericFigure, NumericFraction,
+    NumericSpacing,
+};
 use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStretch, FontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
@@ -584,6 +587,7 @@ pub struct FontRun {
 fn collect_opentype_features(style: &ComputedStyle) -> Vec<Feature> {
     let mut features = Vec::new();
     let lig = style.font_variant_ligatures;
+    let numeric = &style.font_variant_numeric;
 
     let mut push_toggle = |tag: [u8; 4], enabled: bool| {
         features.push(Feature {
@@ -600,6 +604,35 @@ fn collect_opentype_features(style: &ComputedStyle) -> Vec<Feature> {
     push_toggle(*b"dlig", lig.discretionary);
     push_toggle(*b"hlig", lig.historical);
     push_toggle(*b"calt", lig.contextual);
+
+    // font-variant-numeric mappings
+    match numeric.figure {
+        NumericFigure::Lining => push_toggle(*b"lnum", true),
+        NumericFigure::Oldstyle => push_toggle(*b"onum", true),
+        NumericFigure::Normal => {}
+    }
+    match numeric.spacing {
+        NumericSpacing::Proportional => push_toggle(*b"pnum", true),
+        NumericSpacing::Tabular => push_toggle(*b"tnum", true),
+        NumericSpacing::Normal => {}
+    }
+    match numeric.fraction {
+        NumericFraction::Diagonal => push_toggle(*b"frac", true),
+        NumericFraction::Stacked => push_toggle(*b"afrc", true),
+        NumericFraction::Normal => {}
+    }
+    if numeric.ordinal {
+        push_toggle(*b"ordn", true);
+    }
+    if numeric.slashed_zero {
+        push_toggle(*b"zero", true);
+    }
+
+    match style.font_kerning {
+        FontKerning::Auto => {}
+        FontKerning::Normal => push_toggle(*b"kern", true),
+        FontKerning::None => push_toggle(*b"kern", false),
+    }
 
     // Low-level font-feature-settings override defaults and prior toggles.
     for setting in &style.font_feature_settings {
@@ -1128,7 +1161,9 @@ impl ClusterMap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::types::{FontFeatureSetting, FontVariantLigatures};
+    use crate::style::types::{
+        FontFeatureSetting, FontKerning, FontVariantLigatures, NumericFigure, NumericFraction, NumericSpacing,
+    };
 
     #[test]
     fn test_direction_from_level() {
@@ -1408,5 +1443,28 @@ mod tests {
         assert_eq!(seen.get(b"clig"), Some(&0));
         assert_eq!(seen.get(b"dlig"), Some(&1));
         assert_eq!(seen.get(b"calt"), Some(&0));
+    }
+
+    #[test]
+    fn collect_features_includes_numeric_variants_and_kerning() {
+        let mut style = ComputedStyle::default();
+        style.font_variant_numeric.figure = NumericFigure::Oldstyle;
+        style.font_variant_numeric.spacing = NumericSpacing::Tabular;
+        style.font_variant_numeric.fraction = NumericFraction::Stacked;
+        style.font_variant_numeric.ordinal = true;
+        style.font_variant_numeric.slashed_zero = true;
+        style.font_kerning = FontKerning::None;
+
+        let feats = collect_opentype_features(&style);
+        let mut seen: std::collections::HashMap<[u8; 4], u32> = std::collections::HashMap::new();
+        for f in feats {
+            seen.insert(f.tag.to_bytes(), f.value);
+        }
+        assert_eq!(seen.get(b"onum"), Some(&1));
+        assert_eq!(seen.get(b"tnum"), Some(&1));
+        assert_eq!(seen.get(b"afrc"), Some(&1));
+        assert_eq!(seen.get(b"ordn"), Some(&1));
+        assert_eq!(seen.get(b"zero"), Some(&1));
+        assert_eq!(seen.get(b"kern"), Some(&0));
     }
 }

@@ -393,6 +393,49 @@ pub enum FontVariant {
     SmallCaps,
 }
 
+/// Numeric variants (`font-variant-numeric`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumericFigure {
+    Normal,
+    Lining,
+    Oldstyle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumericSpacing {
+    Normal,
+    Proportional,
+    Tabular,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumericFraction {
+    Normal,
+    Diagonal,
+    Stacked,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FontVariantNumeric {
+    pub figure: NumericFigure,
+    pub spacing: NumericSpacing,
+    pub fraction: NumericFraction,
+    pub ordinal: bool,
+    pub slashed_zero: bool,
+}
+
+impl Default for FontVariantNumeric {
+    fn default() -> Self {
+        Self {
+            figure: NumericFigure::Normal,
+            spacing: NumericSpacing::Normal,
+            fraction: NumericFraction::Normal,
+            ordinal: false,
+            slashed_zero: false,
+        }
+    }
+}
+
 /// Font ligature controls (font-variant-ligatures)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FontVariantLigatures {
@@ -419,6 +462,20 @@ impl Default for FontVariantLigatures {
 pub struct FontFeatureSetting {
     pub tag: [u8; 4],
     pub value: u32,
+}
+
+/// Kerning control (`font-kerning`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontKerning {
+    Auto,
+    Normal,
+    None,
+}
+
+impl Default for FontKerning {
+    fn default() -> Self {
+        FontKerning::Auto
+    }
 }
 
 /// Font stretch
