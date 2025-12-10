@@ -10,6 +10,7 @@ use crate::css::types::{Declaration, PropertyValue};
 use crate::style::color::Rgba;
 use crate::style::counters::CounterSet;
 use crate::style::display::Display;
+use crate::style::float::{Clear, Float};
 use crate::style::grid::parse_grid_tracks_with_names;
 use crate::style::position::Position;
 use crate::style::types::*;
@@ -74,6 +75,20 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     "collapse" => crate::style::computed::Visibility::Collapse,
                     _ => styles.visibility,
                 };
+            }
+        }
+        "float" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                if let Ok(value) = Float::parse(kw) {
+                    styles.float = value;
+                }
+            }
+        }
+        "clear" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                if let Ok(value) = Clear::parse(kw) {
+                    styles.clear = value;
+                }
             }
         }
         "overflow" => {
@@ -4701,6 +4716,35 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert!(matches!(style.font_kerning, FontKerning::Normal));
+    }
+
+    #[test]
+    fn parses_float_and_clear() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "float".to_string(),
+            value: PropertyValue::Keyword("left".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.float, crate::style::float::Float::Left));
+
+        let decl = Declaration {
+            property: "clear".to_string(),
+            value: PropertyValue::Keyword("both".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.clear, crate::style::float::Clear::Both));
+
+        let decl = Declaration {
+            property: "float".to_string(),
+            value: PropertyValue::Keyword("invalid".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        // Invalid value leaves previous value unchanged
+        assert!(matches!(style.float, crate::style::float::Float::Left));
     }
 }
 #[derive(Default)]

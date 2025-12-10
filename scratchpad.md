@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Added `float`/`clear` to computed styles with parsing and regression coverage, so float metadata now flows through style resolution in preparation for a full float layout implementation.
 - Inline intrinsic sizing in block formatting contexts now splits inline runs around intervening block-level children; min/max-content widths take the widest run rather than concatenating text across forced breaks, aligning shrink-to-fit math with anonymous block box generation.
 - `visibility: collapse` now prunes table rows/columns from TableStructure, keeps source indices for mapping, trims spans, drops collapsed cells, and maps row/column backgrounds/borders using source→visible lookup; regressions cover collapsed rows and columns. Row/column group collapse is propagated to child tracks so entire groups vanish from layout and painting.
 - Table column distributor leaves authored percentages intact even when they exceed available width, reporting over-constraints and honoring per-column mins/maxes; new regressions cover over-budget percentage pairs and min clamping under overflow.

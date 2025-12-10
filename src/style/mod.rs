@@ -23,6 +23,7 @@ pub mod variables;
 // Internal imports used by ComputedStyle
 use crate::css::types::{BoxShadow, TextShadow, Transform};
 use crate::style::computed::Visibility;
+use crate::style::float::{Clear, Float};
 use color::Rgba;
 use counters::CounterProperties;
 use display::Display;
@@ -54,6 +55,8 @@ pub struct ComputedStyle {
     pub right: Option<Length>,
     pub bottom: Option<Length>,
     pub left: Option<Length>,
+    pub float: Float,
+    pub clear: Clear,
     pub z_index: i32,
     pub visibility: Visibility,
     pub outline_color: OutlineColor,
@@ -232,6 +235,8 @@ impl Default for ComputedStyle {
             right: None,
             bottom: None,
             left: None,
+            float: Float::None,
+            clear: Clear::None,
             z_index: 0,
             visibility: Visibility::Visible,
             outline_color: OutlineColor::Invert,
