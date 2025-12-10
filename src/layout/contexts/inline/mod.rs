@@ -1477,7 +1477,8 @@ impl InlineFormattingContext {
 
     /// Calculates intrinsic width for inline content
     fn calculate_intrinsic_width(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> f32 {
-        let items = match self.collect_inline_items(box_node, f32::INFINITY, None) {
+        let base_direction = resolve_base_direction_for_box(box_node);
+        let items = match self.collect_inline_items_with_base(box_node, f32::INFINITY, None, base_direction) {
             Ok(items) => items,
             Err(_) => return 0.0,
         };
