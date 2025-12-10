@@ -697,10 +697,7 @@ mod tests {
         assert!(marker.padding_right.is_zero());
         assert!(marker.margin_left.unwrap().is_zero());
         assert_eq!(marker.background_color, Rgba::TRANSPARENT);
-        assert!(matches!(
-            marker.text_transform,
-            crate::style::types::TextTransform::None
-        ));
+        assert_eq!(marker.text_transform, crate::style::types::TextTransform::none());
         assert!(marker.text_decoration.lines == crate::style::types::TextDecorationLine::NONE);
         assert!(matches!(marker.text_align, crate::style::types::TextAlign::Start));
         assert_eq!(marker.text_indent, crate::style::types::TextIndent::default());
@@ -933,7 +930,7 @@ fn compute_marker_styles(
 
     reset_marker_box_properties(&mut styles);
     styles.display = Display::Inline;
-    styles.text_transform = crate::style::types::TextTransform::None;
+    styles.text_transform = crate::style::types::TextTransform::none();
     Some(styles)
 }
 

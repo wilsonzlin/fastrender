@@ -328,7 +328,7 @@ impl Default for ComputedStyle {
             text_emphasis_style: TextEmphasisStyle::default(),
             text_emphasis_color: None,
             text_emphasis_position: TextEmphasisPosition::default(),
-            text_transform: TextTransform::None,
+            text_transform: TextTransform::default(),
             letter_spacing: 0.0,
             word_spacing: 0.0,
             white_space: WhiteSpace::Normal,

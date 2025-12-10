@@ -10,7 +10,7 @@ use crate::geometry::Size;
 use crate::style::content::CounterStyle;
 use crate::style::counters::{CounterManager, CounterSet};
 use crate::style::display::{Display, FormattingContextType};
-use crate::style::types::ListStyleType;
+use crate::style::types::{CaseTransform, ListStyleType, TextTransform};
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::tree::anonymous::AnonymousBoxCreator;
@@ -690,7 +690,7 @@ impl BoxGenerator {
             reset_marker_box_edges(&mut marker_style);
             marker_style.list_style_type = ListStyleType::None;
             marker_style.list_style_image = crate::style::types::ListStyleImage::None;
-            marker_style.text_transform = crate::style::types::TextTransform::None;
+            marker_style.text_transform = TextTransform::none();
 
             let marker_node = BoxNode::new_marker(Arc::new(marker_style), content);
             list_item.children.insert(0, marker_node);
@@ -2257,7 +2257,7 @@ mod tests {
         let mut li_style = ComputedStyle::default();
         li_style.display = Display::ListItem;
         li_style.list_style_type = ListStyleType::LowerAlpha;
-        li_style.text_transform = crate::style::types::TextTransform::Uppercase;
+        li_style.text_transform = TextTransform::with_case(CaseTransform::Uppercase);
         let li_style = Arc::new(li_style);
 
         let li = DOMNode::new_element(

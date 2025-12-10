@@ -1258,15 +1258,8 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
             }
         }
         "text-transform" => {
-            if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.text_transform = match kw.as_str() {
-                    "none" => TextTransform::None,
-                    "uppercase" => TextTransform::Uppercase,
-                    "lowercase" => TextTransform::Lowercase,
-                    "capitalize" => TextTransform::Capitalize,
-                    "full-width" => TextTransform::FullWidth,
-                    _ => styles.text_transform,
-                };
+            if let Some(parsed) = parse_text_transform(&resolved_value) {
+                styles.text_transform = parsed;
             }
         }
         "letter-spacing" => {
@@ -3060,6 +3053,72 @@ fn parse_text_decoration_skip_ink(value: &PropertyValue) -> Option<TextDecoratio
         };
     }
     None
+}
+
+fn parse_text_transform(value: &PropertyValue) -> Option<TextTransform> {
+    use crate::style::types::CaseTransform;
+
+    let mut case = CaseTransform::None;
+    let mut full_width = false;
+    let mut full_size_kana = false;
+
+    let mut apply_keyword = |kw: &str| -> Option<()> {
+        match kw {
+            "none" => {
+                // none must be the only keyword present
+                case = CaseTransform::None;
+                full_width = false;
+                full_size_kana = false;
+            }
+            "uppercase" => {
+                if !matches!(case, CaseTransform::None | CaseTransform::Uppercase) {
+                    return None;
+                }
+                case = CaseTransform::Uppercase;
+            }
+            "lowercase" => {
+                if !matches!(case, CaseTransform::None | CaseTransform::Lowercase) {
+                    return None;
+                }
+                case = CaseTransform::Lowercase;
+            }
+            "capitalize" => {
+                if !matches!(case, CaseTransform::None | CaseTransform::Capitalize) {
+                    return None;
+                }
+                case = CaseTransform::Capitalize;
+            }
+            "full-width" => full_width = true,
+            "full-size-kana" => full_size_kana = true,
+            _ => return None,
+        }
+        Some(())
+    };
+
+    match value {
+        PropertyValue::Keyword(kw) => apply_keyword(kw)?,
+        PropertyValue::Multiple(list) if !list.is_empty() => {
+            // 'none' cannot be combined with other keywords
+            let has_none = list.iter().any(|v| matches!(v, PropertyValue::Keyword(k) if k == "none"));
+            if has_none && list.len() > 1 {
+                return None;
+            }
+            for part in list {
+                if let PropertyValue::Keyword(kw) = part {
+                    apply_keyword(kw)?;
+                } else {
+                    return None;
+                }
+            }
+        }
+        _ => return None,
+    }
+
+    Some(TextTransform {
+        case,
+        full_width,
+        full_size_kana,
+    })
 }
 
 fn parse_list_style_type(value: &PropertyValue) -> Option<ListStyleType> {

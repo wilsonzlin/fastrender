@@ -1942,9 +1942,11 @@ fn merge_breaks(
 }
 
 fn apply_text_transform(text: &str, transform: TextTransform, white_space: WhiteSpace) -> String {
-    match transform {
-        TextTransform::None => text.to_string(),
-        TextTransform::Uppercase => {
+    use crate::style::types::CaseTransform;
+
+    let mut out = match transform.case {
+        CaseTransform::None => text.to_string(),
+        CaseTransform::Uppercase => {
             let mut out = String::with_capacity(text.len());
             for ch in text.chars() {
                 for up in ch.to_uppercase() {
@@ -1953,7 +1955,7 @@ fn apply_text_transform(text: &str, transform: TextTransform, white_space: White
             }
             out
         }
-        TextTransform::Lowercase => {
+        CaseTransform::Lowercase => {
             let mut out = String::with_capacity(text.len());
             for ch in text.chars() {
                 for low in ch.to_lowercase() {
@@ -1962,7 +1964,7 @@ fn apply_text_transform(text: &str, transform: TextTransform, white_space: White
             }
             out
         }
-        TextTransform::Capitalize => {
+        CaseTransform::Capitalize => {
             let mut out = String::with_capacity(text.len());
             let mut start_of_word = true;
             for ch in text.chars() {
@@ -1982,23 +1984,19 @@ fn apply_text_transform(text: &str, transform: TextTransform, white_space: White
             }
             out
         }
-        TextTransform::FullWidth => {
-            let preserve_spaces = matches!(white_space, WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::BreakSpaces);
-            let mut out = String::with_capacity(text.len());
-            for ch in text.chars() {
-                if ch == ' ' && !preserve_spaces {
-                    out.push(ch);
-                    continue;
-                }
-                if let Some(mapped) = map_to_full_width(ch) {
-                    out.push(mapped);
-                } else {
-                    out.push(ch);
-                }
-            }
-            out
-        }
+    };
+
+    if transform.full_width {
+        let preserve_spaces =
+            matches!(white_space, WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::BreakSpaces);
+        out = apply_full_width(&out, preserve_spaces);
     }
+
+    if transform.full_size_kana {
+        out = apply_full_size_kana(&out);
+    }
+
+    out
 }
 
 fn map_to_full_width(ch: char) -> Option<char> {
@@ -2236,6 +2234,96 @@ fn map_to_full_width(ch: char) -> Option<char> {
         .binary_search_by_key(&code, |(src, _)| *src)
         .ok()
         .and_then(|idx| char::from_u32(FULL_WIDTH_TABLE[idx].1))
+}
+
+fn apply_full_width(text: &str, preserve_spaces: bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch == ' ' && !preserve_spaces {
+            out.push(ch);
+            continue;
+        }
+        if let Some(mapped) = map_to_full_width(ch) {
+            out.push(mapped);
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn apply_full_size_kana(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if let Some(mapped) = map_small_kana(ch) {
+            out.push(mapped);
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn map_small_kana(ch: char) -> Option<char> {
+    match ch {
+        // Hiragana
+        '\u{3041}' => Some('\u{3042}'), // ぁ -> あ
+        '\u{3043}' => Some('\u{3044}'), // ぃ -> い
+        '\u{3045}' => Some('\u{3046}'), // ぅ -> う
+        '\u{3047}' => Some('\u{3048}'), // ぇ -> え
+        '\u{3049}' => Some('\u{304A}'), // ぉ -> お
+        '\u{3063}' => Some('\u{3064}'), // っ -> つ
+        '\u{3083}' => Some('\u{3084}'), // ゃ -> や
+        '\u{3085}' => Some('\u{3086}'), // ゅ -> ゆ
+        '\u{3087}' => Some('\u{3088}'), // ょ -> よ
+        '\u{308E}' => Some('\u{308F}'), // ゎ -> わ
+        '\u{3095}' => Some('\u{304B}'), // ゕ -> か
+        '\u{3096}' => Some('\u{3051}'), // ゖ -> け
+
+        // Katakana (full-width)
+        '\u{30A1}' => Some('\u{30A2}'), // ァ -> ア
+        '\u{30A3}' => Some('\u{30A4}'), // ィ -> イ
+        '\u{30A5}' => Some('\u{30A6}'), // ゥ -> ウ
+        '\u{30A7}' => Some('\u{30A8}'), // ェ -> エ
+        '\u{30A9}' => Some('\u{30AA}'), // ォ -> オ
+        '\u{30C3}' => Some('\u{30C4}'), // ッ -> ツ
+        '\u{30E3}' => Some('\u{30E4}'), // ャ -> ヤ
+        '\u{30E5}' => Some('\u{30E6}'), // ュ -> ユ
+        '\u{30E7}' => Some('\u{30E8}'), // ョ -> ヨ
+        '\u{30EE}' => Some('\u{30EF}'), // ヮ -> ワ
+        '\u{30F5}' => Some('\u{30AB}'), // ヵ -> カ
+        '\u{30F6}' => Some('\u{30B1}'), // ヶ -> ケ
+
+        // Halfwidth small Katakana
+        '\u{FF67}' => Some('\u{30A2}'), // ｧ -> ア
+        '\u{FF68}' => Some('\u{30A4}'), // ｨ -> イ
+        '\u{FF69}' => Some('\u{30A6}'), // ｩ -> ウ
+        '\u{FF6A}' => Some('\u{30A8}'), // ｪ -> エ
+        '\u{FF6B}' => Some('\u{30AA}'), // ｫ -> オ
+        '\u{FF6C}' => Some('\u{30E4}'), // ｬ -> ヤ
+        '\u{FF6D}' => Some('\u{30E6}'), // ｭ -> ユ
+        '\u{FF6E}' => Some('\u{30E8}'), // ｮ -> ヨ
+        '\u{FF6F}' => Some('\u{30C4}'), // ｯ -> ツ
+
+        // Katakana phonetic extensions (Ainu small letters)
+        '\u{31F0}' => Some('\u{30AF}'), // ㇰ -> ク
+        '\u{31F1}' => Some('\u{30B7}'), // ㇱ -> シ
+        '\u{31F2}' => Some('\u{30B9}'), // ㇲ -> ス
+        '\u{31F3}' => Some('\u{30C8}'), // ㇳ -> ト
+        '\u{31F4}' => Some('\u{30CC}'), // ㇴ -> ヌ
+        '\u{31F5}' => Some('\u{30CF}'), // ㇵ -> ハ
+        '\u{31F6}' => Some('\u{30D2}'), // ㇶ -> ヒ
+        '\u{31F7}' => Some('\u{30D5}'), // ㇷ -> フ
+        '\u{31F8}' => Some('\u{30D8}'), // ㇸ -> ヘ
+        '\u{31F9}' => Some('\u{30DB}'), // ㇹ -> ホ
+        '\u{31FA}' => Some('\u{30E0}'), // ㇺ -> ム
+        '\u{31FB}' => Some('\u{30E9}'), // ㇻ -> ラ
+        '\u{31FC}' => Some('\u{30EA}'), // ㇼ -> リ
+        '\u{31FD}' => Some('\u{30EB}'), // ㇽ -> ル
+        '\u{31FE}' => Some('\u{30EC}'), // ㇾ -> レ
+        '\u{31FF}' => Some('\u{30ED}'), // ㇿ -> ロ
+        _ => None,
+    }
 }
 
 fn char_boundary_breaks(text: &str) -> Vec<crate::text::line_break::BreakOpportunity> {
@@ -2823,7 +2911,9 @@ mod tests {
     use crate::geometry::Size;
     use crate::layout::formatting_context::IntrinsicSizingMode;
     use crate::style::display::{Display, FormattingContextType};
-    use crate::style::types::{HyphensMode, ListStylePosition, OverflowWrap, TextTransform, WhiteSpace, WordBreak};
+    use crate::style::types::{
+        CaseTransform, HyphensMode, ListStylePosition, OverflowWrap, TextTransform, WhiteSpace, WordBreak,
+    };
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
     use crate::tree::box_tree::ReplacedType;
@@ -4225,7 +4315,7 @@ mod tests {
     #[test]
     fn text_transform_uppercase_applies_before_layout() {
         let mut style = ComputedStyle::default();
-        style.text_transform = TextTransform::Uppercase;
+        style.text_transform = TextTransform::with_case(CaseTransform::Uppercase);
         let text = "Hello World";
 
         let ifc = InlineFormattingContext::new();
@@ -4238,7 +4328,7 @@ mod tests {
     #[test]
     fn text_transform_capitalize_only_leading_letters() {
         let mut style = ComputedStyle::default();
-        style.text_transform = TextTransform::Capitalize;
+        style.text_transform = TextTransform::with_case(CaseTransform::Capitalize);
         let text = "foo bar";
 
         let ifc = InlineFormattingContext::new();
@@ -4251,7 +4341,7 @@ mod tests {
     #[test]
     fn text_transform_full_width_widens_ascii_but_keeps_collapsed_space_narrow() {
         let mut style = ComputedStyle::default();
-        style.text_transform = TextTransform::FullWidth;
+        style.text_transform = TextTransform::full_width();
         style.white_space = WhiteSpace::Normal;
         let text = "a b";
 
@@ -4265,7 +4355,7 @@ mod tests {
     #[test]
     fn text_transform_full_width_converts_preserved_space_to_ideographic() {
         let mut style = ComputedStyle::default();
-        style.text_transform = TextTransform::FullWidth;
+        style.text_transform = TextTransform::full_width();
         style.white_space = WhiteSpace::Pre;
         let text = "a b";
 
@@ -4279,7 +4369,7 @@ mod tests {
     #[test]
     fn text_transform_full_width_maps_halfwidth_katakana() {
         let mut style = ComputedStyle::default();
-        style.text_transform = TextTransform::FullWidth;
+        style.text_transform = TextTransform::full_width();
         let text = "\u{FF76}\u{FF9E}"; // halfwidth GA
 
         let ifc = InlineFormattingContext::new();
@@ -4287,6 +4377,38 @@ mod tests {
         let item = ifc.create_text_item(&node, text).unwrap();
 
         assert_eq!(item.text, "\u{30AB}\u{3099}");
+    }
+
+    #[test]
+    fn text_transform_full_size_kana_expands_small_forms() {
+        let mut style = ComputedStyle::default();
+        style.text_transform = TextTransform {
+            full_size_kana: true,
+            ..TextTransform::default()
+        };
+        let text = "\u{3041}\u{30A1}\u{FF67}\u{31F0}"; // small hiragana a, small katakana a, halfwidth small a, small ku
+
+        let ifc = InlineFormattingContext::new();
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+
+        assert_eq!(item.text, "\u{3042}\u{30A2}\u{30A2}\u{30AF}");
+    }
+
+    #[test]
+    fn text_transform_full_width_then_full_size_kana_respects_ordering() {
+        let mut transform = TextTransform::full_width();
+        transform.full_size_kana = true;
+        let mut style = ComputedStyle::default();
+        style.text_transform = transform;
+        let text = "\u{FF67}"; // halfwidth small a
+
+        let ifc = InlineFormattingContext::new();
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+
+        // full-width maps to ァ, then full-size-kana maps to ア
+        assert_eq!(item.text, "\u{30A2}");
     }
 
     #[test]

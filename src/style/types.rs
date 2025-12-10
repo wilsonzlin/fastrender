@@ -1021,12 +1021,57 @@ pub enum ListStyleImage {
 /// CSS: `text-transform`
 /// Reference: CSS Text Module Level 3
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextTransform {
+pub enum CaseTransform {
     None,
     Uppercase,
     Lowercase,
     Capitalize,
-    FullWidth,
+}
+
+/// Combination of text transformation effects
+///
+/// The grammar allows one case transform and optional width/kana transforms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextTransform {
+    pub case: CaseTransform,
+    pub full_width: bool,
+    pub full_size_kana: bool,
+}
+
+impl Default for TextTransform {
+    fn default() -> Self {
+        Self {
+            case: CaseTransform::None,
+            full_width: false,
+            full_size_kana: false,
+        }
+    }
+}
+
+impl TextTransform {
+    pub const fn none() -> Self {
+        Self {
+            case: CaseTransform::None,
+            full_width: false,
+            full_size_kana: false,
+        }
+    }
+
+    pub const fn with_case(case: CaseTransform) -> Self {
+        Self {
+            case,
+            full_width: false,
+            full_size_kana: false,
+        }
+    }
+
+    pub const fn full_width() -> Self {
+        Self {
+            case: CaseTransform::None,
+            full_width: true,
+            full_size_kana: false,
+        }
+    }
 }
 
 /// White space handling mode
