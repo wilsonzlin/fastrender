@@ -1137,6 +1137,16 @@ impl ShapingPipeline {
     ///
     /// Returns an error if font matching or shaping fails.
     pub fn shape(&self, text: &str, style: &ComputedStyle, font_context: &FontContext) -> Result<Vec<ShapedRun>> {
+        self.shape_core(text, style, font_context, None)
+    }
+
+    fn shape_core(
+        &self,
+        text: &str,
+        style: &ComputedStyle,
+        font_context: &FontContext,
+        base_direction: Option<Direction>,
+    ) -> Result<Vec<ShapedRun>> {
         // Handle empty text
         if text.is_empty() {
             return Ok(Vec::new());
@@ -1149,12 +1159,16 @@ impl ShapingPipeline {
             )
         {
             if !has_native_small_caps(style, font_context) && style.font_synthesis.small_caps {
-                return self.shape_small_caps(text, style, font_context);
+                return self.shape_small_caps(text, style, font_context, base_direction);
             }
         }
 
         // Step 1: Bidi analysis
-        let bidi = BidiAnalysis::analyze(text, style);
+        let bidi = if let Some(dir) = base_direction {
+            BidiAnalysis::analyze_with_base(text, style, dir)
+        } else {
+            BidiAnalysis::analyze(text, style)
+        };
 
         // Step 2: Script itemization
         let itemized_runs = itemize_text(text, &bidi);
@@ -1187,44 +1201,7 @@ impl ShapingPipeline {
         font_context: &FontContext,
         base_direction: Direction,
     ) -> Result<Vec<ShapedRun>> {
-        // Handle empty text
-        if text.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        if matches!(style.font_variant, FontVariant::SmallCaps)
-            || matches!(
-                style.font_variant_caps,
-                FontVariantCaps::SmallCaps | FontVariantCaps::AllSmallCaps
-            )
-        {
-            if !has_native_small_caps(style, font_context) && style.font_synthesis.small_caps {
-                return self.shape_small_caps(text, style, font_context);
-            }
-        }
-
-        // Step 1: Bidi analysis with explicit base direction
-        let bidi = BidiAnalysis::analyze_with_base(text, style, base_direction);
-
-        // Step 2: Script itemization
-        let itemized_runs = itemize_text(text, &bidi);
-
-        // Step 3: Font matching
-        let font_runs = assign_fonts(&itemized_runs, style, font_context)?;
-
-        // Step 4: Shape each run
-        let mut shaped_runs = Vec::with_capacity(font_runs.len());
-        for run in &font_runs {
-            let shaped = shape_font_run(run)?;
-            shaped_runs.push(shaped);
-        }
-
-        // Step 5: Reorder for bidi if needed
-        if bidi.needs_reordering() {
-            reorder_runs(&mut shaped_runs);
-        }
-
-        Ok(shaped_runs)
+        self.shape_core(text, style, font_context, Some(base_direction))
     }
 
     /// Measures the total advance width of shaped text.
@@ -1240,6 +1217,7 @@ impl ShapingPipeline {
         text: &str,
         style: &ComputedStyle,
         font_context: &FontContext,
+        base_direction: Option<Direction>,
     ) -> Result<Vec<ShapedRun>> {
         const SMALL_CAPS_SCALE: f32 = 0.8;
 
@@ -1261,6 +1239,7 @@ impl ShapingPipeline {
                         style,
                         font_context,
                         SMALL_CAPS_SCALE,
+                        base_direction,
                     )?;
                     buffer.clear();
                     segment_start = idx;
@@ -1288,6 +1267,7 @@ impl ShapingPipeline {
                 style,
                 font_context,
                 SMALL_CAPS_SCALE,
+                base_direction,
             )?;
         }
 
@@ -1303,6 +1283,7 @@ impl ShapingPipeline {
         style: &ComputedStyle,
         font_context: &FontContext,
         scale: f32,
+        base_direction: Option<Direction>,
     ) -> Result<()> {
         let mut seg_style = style.clone();
         seg_style.font_variant = FontVariant::Normal;
@@ -1310,7 +1291,7 @@ impl ShapingPipeline {
         if is_small {
             seg_style.font_size *= scale;
         }
-        let mut shaped = self.shape(segment_text, &seg_style, font_context)?;
+        let mut shaped = self.shape_core(segment_text, &seg_style, font_context, base_direction)?;
         for run in &mut shaped {
             run.start += base_offset;
             run.end += base_offset;
