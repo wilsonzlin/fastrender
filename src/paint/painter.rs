@@ -1808,8 +1808,17 @@ impl Painter {
         })
     }
 
+    #[allow(dead_code)]
     fn resolve_underline_offset(&self, style: &ComputedStyle) -> f32 {
-        match style.text_underline_offset {
+        self.resolve_underline_offset_value(style.text_underline_offset, style)
+    }
+
+    fn resolve_underline_offset_value(
+        &self,
+        offset: crate::style::types::TextUnderlineOffset,
+        style: &ComputedStyle,
+    ) -> f32 {
+        match offset {
             crate::style::types::TextUnderlineOffset::Auto => 0.0,
             crate::style::types::TextUnderlineOffset::Length(l) => {
                 if l.unit == LengthUnit::Percent {
@@ -1861,7 +1870,8 @@ impl Painter {
         baseline_y: f32,
         width: f32,
     ) {
-        if style.text_decoration.lines.is_empty() || width <= 0.0 {
+        let has_any_decoration = !style.applied_text_decorations.is_empty() || !style.text_decoration.lines.is_empty();
+        if !has_any_decoration || width <= 0.0 {
             return;
         }
 
@@ -1869,22 +1879,19 @@ impl Painter {
             return;
         };
 
-        let decoration_color = style.text_decoration.color.unwrap_or(style.color);
-        let mut paint = Paint::default();
-        paint.set_color(color_to_skia(decoration_color));
-        paint.anti_alias = true;
-
-        let draw_solid_line = |pixmap: &mut Pixmap, start: f32, len: f32, center: f32, thickness: f32| {
-            if thickness <= 0.0 {
-                return;
-            }
-            if let Some(rect) = SkiaRect::from_xywh(start, center - thickness * 0.5, len, thickness) {
-                let path = PathBuilder::from_rect(rect);
-                pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
-            }
-        };
+        let draw_solid_line =
+            |pixmap: &mut Pixmap, paint: &Paint, start: f32, len: f32, center: f32, thickness: f32| {
+                if thickness <= 0.0 {
+                    return;
+                }
+                if let Some(rect) = SkiaRect::from_xywh(start, center - thickness * 0.5, len, thickness) {
+                    let path = PathBuilder::from_rect(rect);
+                    pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+                }
+            };
 
         let draw_stroked_line = |pixmap: &mut Pixmap,
+                                 paint: &Paint,
                                  start: f32,
                                  len: f32,
                                  center: f32,
@@ -1910,7 +1917,7 @@ impl Painter {
             pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
         };
 
-        let draw_wavy_line = |pixmap: &mut Pixmap, start: f32, len: f32, center: f32, thickness: f32| {
+        let draw_wavy_line = |pixmap: &mut Pixmap, paint: &Paint, start: f32, len: f32, center: f32, thickness: f32| {
             if thickness <= 0.0 || len <= 0.0 {
                 return;
             }
@@ -1938,72 +1945,55 @@ impl Painter {
             }
         };
 
-        let used_thickness = match style.text_decoration.thickness {
-            TextDecorationThickness::Auto => None,
-            TextDecorationThickness::FromFont => None,
-            TextDecorationThickness::Length(l) => {
-                let unit = l.unit;
-                let resolved = if unit == LengthUnit::Percent {
-                    l.resolve_against(style.font_size)
-                } else if unit.is_font_relative() {
-                    l.resolve_with_font_size(style.font_size)
-                } else if unit.is_viewport_relative() {
-                    l.resolve_with_viewport(self.pixmap.width() as f32, self.pixmap.height() as f32)
-                } else {
-                    l.to_px()
-                };
-                Some(resolved)
-            }
+        let decorations = if !style.applied_text_decorations.is_empty() {
+            Cow::Borrowed(style.applied_text_decorations.as_slice())
+        } else {
+            Cow::Owned(vec![crate::style::types::ResolvedTextDecoration {
+                decoration: style.text_decoration.clone(),
+                skip_ink: style.text_decoration_skip_ink,
+                underline_offset: style.text_underline_offset,
+            }])
         };
 
-        let painter_style = style.text_decoration.style;
-        let render_line = |pixmap: &mut Pixmap, center: f32, thickness: f32| match painter_style {
-            TextDecorationStyle::Solid => draw_solid_line(pixmap, x, width, center, thickness),
-            TextDecorationStyle::Double => {
-                let line_thickness = (thickness * 0.7).max(0.5);
-                let gap = line_thickness.max(thickness * 0.6);
-                draw_solid_line(pixmap, x, width, center - (gap * 0.5), line_thickness);
-                draw_solid_line(pixmap, x, width, center + (gap * 0.5), line_thickness);
-            }
-            TextDecorationStyle::Dotted => {
-                draw_stroked_line(
-                    pixmap,
-                    x,
-                    width,
-                    center,
-                    thickness,
-                    Some(vec![thickness, thickness]),
-                    true,
-                );
-            }
-            TextDecorationStyle::Dashed => {
-                draw_stroked_line(
-                    pixmap,
-                    x,
-                    width,
-                    center,
-                    thickness,
-                    Some(vec![3.0 * thickness, thickness]),
-                    false,
-                );
-            }
-            TextDecorationStyle::Wavy => draw_wavy_line(pixmap, x, width, center, thickness),
-        };
+        for deco in decorations.iter() {
+            let mut paint = Paint::default();
+            paint.anti_alias = true;
+            let decoration_color = deco.decoration.color.unwrap_or(style.color);
+            paint.set_color(color_to_skia(decoration_color));
 
-        let render_line_segment =
-            |pixmap: &mut Pixmap, start: f32, len: f32, center: f32, thickness: f32| match painter_style {
-                TextDecorationStyle::Solid => draw_solid_line(pixmap, start, len, center, thickness),
+            let used_thickness = match deco.decoration.thickness {
+                TextDecorationThickness::Auto => None,
+                TextDecorationThickness::FromFont => None,
+                TextDecorationThickness::Length(l) => {
+                    let unit = l.unit;
+                    let resolved = if unit == LengthUnit::Percent {
+                        l.resolve_against(style.font_size)
+                    } else if unit.is_font_relative() {
+                        l.resolve_with_font_size(style.font_size)
+                    } else if unit.is_viewport_relative() {
+                        l.resolve_with_viewport(self.pixmap.width() as f32, self.pixmap.height() as f32)
+                    } else {
+                        l.to_px()
+                    };
+                    Some(resolved)
+                }
+            };
+
+            let painter_style = deco.decoration.style;
+            let render_line = |pixmap: &mut Pixmap, center: f32, thickness: f32| match painter_style {
+                TextDecorationStyle::Solid => draw_solid_line(pixmap, &paint, x, width, center, thickness),
                 TextDecorationStyle::Double => {
                     let line_thickness = (thickness * 0.7).max(0.5);
                     let gap = line_thickness.max(thickness * 0.6);
-                    draw_solid_line(pixmap, start, len, center - (gap * 0.5), line_thickness);
-                    draw_solid_line(pixmap, start, len, center + (gap * 0.5), line_thickness);
+                    draw_solid_line(pixmap, &paint, x, width, center - (gap * 0.5), line_thickness);
+                    draw_solid_line(pixmap, &paint, x, width, center + (gap * 0.5), line_thickness);
                 }
                 TextDecorationStyle::Dotted => {
                     draw_stroked_line(
                         pixmap,
-                        start,
-                        len,
+                        &paint,
+                        x,
+                        width,
                         center,
                         thickness,
                         Some(vec![thickness, thickness]),
@@ -2013,52 +2003,90 @@ impl Painter {
                 TextDecorationStyle::Dashed => {
                     draw_stroked_line(
                         pixmap,
-                        start,
-                        len,
+                        &paint,
+                        x,
+                        width,
                         center,
                         thickness,
                         Some(vec![3.0 * thickness, thickness]),
                         false,
                     );
                 }
-                TextDecorationStyle::Wavy => draw_wavy_line(pixmap, start, len, center, thickness),
+                TextDecorationStyle::Wavy => draw_wavy_line(pixmap, &paint, x, width, center, thickness),
             };
 
-        let underline_offset = self.resolve_underline_offset(style);
-        if style.text_decoration.lines.contains(TextDecorationLine::UNDERLINE) {
-            let adjusted_pos = self.underline_position(&metrics, underline_offset);
-            let center = baseline_y - adjusted_pos;
-            let thickness = used_thickness.unwrap_or(metrics.underline_thickness);
-            if style.text_decoration_skip_ink == crate::style::types::TextDecorationSkipInk::Auto {
-                if let Some(runs) = runs {
-                    let segments = self.build_underline_segments(runs, x, width, center, thickness, baseline_y);
-                    for (seg_start, seg_end) in segments {
-                        let seg_width = seg_end - seg_start;
-                        if seg_width <= 0.0 {
-                            continue;
+            let render_line_segment =
+                |pixmap: &mut Pixmap, start: f32, len: f32, center: f32, thickness: f32| match painter_style {
+                    TextDecorationStyle::Solid => draw_solid_line(pixmap, &paint, start, len, center, thickness),
+                    TextDecorationStyle::Double => {
+                        let line_thickness = (thickness * 0.7).max(0.5);
+                        let gap = line_thickness.max(thickness * 0.6);
+                        draw_solid_line(pixmap, &paint, start, len, center - (gap * 0.5), line_thickness);
+                        draw_solid_line(pixmap, &paint, start, len, center + (gap * 0.5), line_thickness);
+                    }
+                    TextDecorationStyle::Dotted => {
+                        draw_stroked_line(
+                            pixmap,
+                            &paint,
+                            start,
+                            len,
+                            center,
+                            thickness,
+                            Some(vec![thickness, thickness]),
+                            true,
+                        );
+                    }
+                    TextDecorationStyle::Dashed => {
+                        draw_stroked_line(
+                            pixmap,
+                            &paint,
+                            start,
+                            len,
+                            center,
+                            thickness,
+                            Some(vec![3.0 * thickness, thickness]),
+                            false,
+                        );
+                    }
+                    TextDecorationStyle::Wavy => draw_wavy_line(pixmap, &paint, start, len, center, thickness),
+                };
+
+            let underline_offset = self.resolve_underline_offset_value(deco.underline_offset, style);
+            if deco.decoration.lines.contains(TextDecorationLine::UNDERLINE) {
+                let adjusted_pos = self.underline_position(&metrics, underline_offset);
+                let center = baseline_y - adjusted_pos;
+                let thickness = used_thickness.unwrap_or(metrics.underline_thickness);
+                if deco.skip_ink == crate::style::types::TextDecorationSkipInk::Auto {
+                    if let Some(runs) = runs {
+                        let segments = self.build_underline_segments(runs, x, width, center, thickness, baseline_y);
+                        for (seg_start, seg_end) in segments {
+                            let seg_width = seg_end - seg_start;
+                            if seg_width <= 0.0 {
+                                continue;
+                            }
+                            render_line_segment(&mut self.pixmap, seg_start, seg_width, center, thickness);
                         }
-                        render_line_segment(&mut self.pixmap, seg_start, seg_width, center, thickness);
+                    } else {
+                        render_line(&mut self.pixmap, center, thickness);
                     }
                 } else {
                     render_line(&mut self.pixmap, center, thickness);
                 }
-            } else {
-                render_line(&mut self.pixmap, center, thickness);
             }
-        }
-        if style.text_decoration.lines.contains(TextDecorationLine::OVERLINE) {
-            render_line(
-                &mut self.pixmap,
-                baseline_y - metrics.ascent,
-                used_thickness.unwrap_or(metrics.underline_thickness),
-            );
-        }
-        if style.text_decoration.lines.contains(TextDecorationLine::LINE_THROUGH) {
-            render_line(
-                &mut self.pixmap,
-                baseline_y - metrics.strike_pos,
-                used_thickness.unwrap_or(metrics.strike_thickness),
-            );
+            if deco.decoration.lines.contains(TextDecorationLine::OVERLINE) {
+                render_line(
+                    &mut self.pixmap,
+                    baseline_y - metrics.ascent,
+                    used_thickness.unwrap_or(metrics.underline_thickness),
+                );
+            }
+            if deco.decoration.lines.contains(TextDecorationLine::LINE_THROUGH) {
+                render_line(
+                    &mut self.pixmap,
+                    baseline_y - metrics.strike_pos,
+                    used_thickness.unwrap_or(metrics.strike_thickness),
+                );
+            }
         }
     }
 

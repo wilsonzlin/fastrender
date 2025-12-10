@@ -788,6 +788,14 @@ pub enum TextDecorationSkipInk {
     None,
 }
 
+/// Resolved text-decoration to apply after propagation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedTextDecoration {
+    pub decoration: TextDecoration,
+    pub skip_ink: TextDecorationSkipInk,
+    pub underline_offset: TextUnderlineOffset,
+}
+
 /// Thickness of text decorations
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TextDecorationThickness {

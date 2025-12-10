@@ -141,6 +141,10 @@ pub struct ComputedStyle {
     pub text_justify: TextJustify,
     pub text_indent: TextIndent,
     pub text_decoration: TextDecoration,
+    /// Whether a text-decoration line declaration was authored (shorthand or longhand).
+    pub text_decoration_line_specified: bool,
+    /// Propagated decorations from ancestors and this element.
+    pub applied_text_decorations: Vec<types::ResolvedTextDecoration>,
     pub text_decoration_skip_ink: TextDecorationSkipInk,
     pub text_underline_offset: TextUnderlineOffset,
     pub text_transform: TextTransform,
@@ -292,6 +296,8 @@ impl Default for ComputedStyle {
             text_justify: TextJustify::Auto,
             text_indent: TextIndent::default(),
             text_decoration: TextDecoration::default(),
+            text_decoration_line_specified: false,
+            applied_text_decorations: Vec::new(),
             text_decoration_skip_ink: TextDecorationSkipInk::Auto,
             text_underline_offset: TextUnderlineOffset::default(),
             text_transform: TextTransform::None,

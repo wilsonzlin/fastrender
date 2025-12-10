@@ -7,6 +7,7 @@
 
 ## Recent changes (this branch)
 - `text-decoration-skip-ink` now parses to computed styles, inherits, and painter builds underline segments by subtracting glyph bounding boxes from the decoration band so descenders stay unpainted; regression compares decoration vs text color to ensure skip-ink gaps, and underline offset test warning cleared.
+- Text decorations now propagate per spec instead of being confined to the element that declares them: cascade accumulates ancestor decorations unless an explicit `text-decoration: none` clears them, descendants can add additional lines, and the painter renders all propagated decorations with their own style/color/thickness/offset/skip-ink settings. Added cascade regressions for propagation, suppression, and additive decoration.
 - `font-variant-alternates` now parses/inherits (historical-forms, stylistic/ styleset/ character-variant sets, swash, ornaments, annotation), resets via `font` shorthand, and maps to OpenType features (`hist`, `ssXX`, `cvXX`, `swsh`, `ornm`) during feature collection; regression added for alternates emission.
 - Small-caps shaping now prefers native OpenType features when available (`smcp`/`c2sc` via font_db::font_has_feature), synthesizing only when the chosen face lacks them (covers all-small-caps too).
 - `font-variant-east-asian` now parses/inherits (jis78/83/90/04, simplified/traditional, proportional/full-width, ruby), maps to OpenType toggles (`jp78/jp83/jp90/jp04/smpl/trad/fwid/pwid/ruby`), and resets via `font` shorthand alongside ligatures/numeric/kerning/feature overrides.

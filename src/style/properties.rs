@@ -991,6 +991,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         }
         "text-decoration-line" => {
             if let Some(lines) = parse_text_decoration_line(&resolved_value) {
+                styles.text_decoration_line_specified = true;
                 styles.text_decoration.lines = lines;
             }
         }
@@ -1031,6 +1032,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
 
             // Reset to initial values per shorthand rules.
             let mut decoration = TextDecoration::default();
+            styles.text_decoration_line_specified = true;
             for token in tokens {
                 if let Some(lines) = parse_text_decoration_line(&token) {
                     decoration.lines = lines;

@@ -103,6 +103,7 @@ fn apply_styles_internal(
     finalize_grid_placement(&mut styles);
     resolve_match_parent_text_align(&mut styles, parent_styles);
     resolve_relative_font_weight(&mut styles, parent_styles);
+    propagate_text_decorations(&mut styles, parent_styles);
 
     // Compute pseudo-element styles
     let before_styles =
@@ -183,6 +184,7 @@ fn apply_styles_internal_with_ancestors(
     finalize_grid_placement(&mut styles);
     resolve_match_parent_text_align(&mut styles, parent_styles);
     resolve_relative_font_weight(&mut styles, parent_styles);
+    propagate_text_decorations(&mut styles, parent_styles);
 
     // Compute pseudo-element styles from CSS rules
     let before_styles =
@@ -301,7 +303,7 @@ mod tests {
     use crate::dom::DomNodeType;
     use crate::style::color::Rgba;
     use crate::style::display::Display;
-    use crate::style::types::{ListStylePosition, ListStyleType};
+    use crate::style::types::{ListStylePosition, ListStyleType, TextDecorationLine};
 
     fn element_with_style(style: &str) -> DomNode {
         DomNode {
@@ -343,6 +345,84 @@ mod tests {
             styled.styles.text_align_last,
             crate::style::types::TextAlignLast::Auto
         ));
+    }
+
+    #[test]
+    fn text_decoration_propagates_to_descendants() {
+        let child = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "span".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), "text-decoration: underline;".to_string())],
+            },
+            children: vec![child],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let child_styles = &styled.children[0].styles;
+        assert_eq!(child_styles.applied_text_decorations.len(), 1);
+        assert!(child_styles.applied_text_decorations[0]
+            .decoration
+            .lines
+            .contains(TextDecorationLine::UNDERLINE));
+    }
+
+    #[test]
+    fn text_decoration_none_breaks_propagation() {
+        let child = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "span".to_string(),
+                attributes: vec![("style".to_string(), "text-decoration: none;".to_string())],
+            },
+            children: vec![],
+        };
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), "text-decoration: underline;".to_string())],
+            },
+            children: vec![child],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let child_styles = &styled.children[0].styles;
+        assert!(child_styles.applied_text_decorations.is_empty());
+    }
+
+    #[test]
+    fn text_decoration_adds_to_parent_decoration() {
+        let child = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "span".to_string(),
+                attributes: vec![("style".to_string(), "text-decoration: overline;".to_string())],
+            },
+            children: vec![],
+        };
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), "text-decoration: underline;".to_string())],
+            },
+            children: vec![child],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let child_styles = &styled.children[0].styles;
+        assert_eq!(child_styles.applied_text_decorations.len(), 2);
+        assert!(child_styles.applied_text_decorations[0]
+            .decoration
+            .lines
+            .contains(TextDecorationLine::UNDERLINE));
+        assert!(child_styles.applied_text_decorations[1]
+            .decoration
+            .lines
+            .contains(TextDecorationLine::OVERLINE));
     }
 
     #[test]
@@ -632,6 +712,22 @@ fn resolve_relative_font_weight(styles: &mut ComputedStyle, parent: &ComputedSty
     styles.font_weight = styles.font_weight.resolve_relative(parent_weight);
 }
 
+fn propagate_text_decorations(styles: &mut ComputedStyle, parent: &ComputedStyle) {
+    styles.applied_text_decorations = parent.applied_text_decorations.clone();
+    if styles.text_decoration_line_specified && styles.text_decoration.lines.is_empty() {
+        styles.applied_text_decorations.clear();
+    }
+    if !styles.text_decoration.lines.is_empty() {
+        styles
+            .applied_text_decorations
+            .push(crate::style::types::ResolvedTextDecoration {
+                decoration: styles.text_decoration.clone(),
+                skip_ink: styles.text_decoration_skip_ink,
+                underline_offset: styles.text_underline_offset,
+            });
+    }
+}
+
 /// Build an ElementRef with ancestor context
 fn build_element_ref_chain<'a>(node: &'a DomNode, ancestors: &'a [&'a DomNode]) -> ElementRef<'a> {
     if ancestors.is_empty() {
@@ -675,6 +771,7 @@ fn compute_pseudo_element_styles(
         }
     }
     resolve_relative_font_weight(&mut styles, parent_styles);
+    propagate_text_decorations(&mut styles, parent_styles);
 
     // Check if content property generates content
     // Per CSS spec, ::before/::after only generate boxes if content is not 'none' or 'normal'
@@ -708,6 +805,7 @@ fn compute_marker_styles(
         }
     }
     resolve_relative_font_weight(&mut styles, parent_styles);
+    propagate_text_decorations(&mut styles, parent_styles);
 
     reset_marker_box_properties(&mut styles);
     styles.display = Display::Inline;
@@ -783,6 +881,8 @@ fn reset_marker_box_properties(styles: &mut ComputedStyle) {
     styles.overflow_y = defaults.overflow_y;
     styles.opacity = defaults.opacity;
     styles.text_decoration = defaults.text_decoration.clone();
+    styles.text_decoration_line_specified = defaults.text_decoration_line_specified;
+    styles.applied_text_decorations = defaults.applied_text_decorations.clone();
     styles.text_decoration_skip_ink = defaults.text_decoration_skip_ink;
     styles.text_underline_offset = defaults.text_underline_offset;
     styles.text_align = defaults.text_align;
