@@ -29,7 +29,8 @@ use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutCo
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::display::Display;
 use crate::style::types::{
-    AlignContent, AlignItems, AspectRatio, BoxSizing, FlexBasis, FlexDirection, FlexWrap, JustifyContent,
+    AlignContent, AlignItems, AspectRatio, BoxSizing, Direction, FlexBasis, FlexDirection, FlexWrap, JustifyContent,
+    WritingMode,
 };
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
@@ -209,19 +210,24 @@ impl FlexFormattingContext {
     /// The `is_root` flag indicates if this is the root flex container.
     /// For the root, we use Flex display; for children, we use Block.
     fn computed_style_to_taffy(&self, style: &ComputedStyle, is_root: bool) -> taffy::style::Style {
+        let inline_positive = self.inline_axis_positive(style);
+        let block_positive = self.block_axis_positive(style);
+        let main_is_inline = matches!(style.flex_direction, FlexDirection::Row | FlexDirection::RowReverse);
+        let cross_positive = if main_is_inline { block_positive } else { inline_positive };
+
         taffy::style::Style {
             // Display mode - only root is Flex, children are Block (flex items)
             display: self.display_to_taffy(style, is_root),
 
             // Flex container properties
-            flex_direction: self.flex_direction_to_taffy(style),
+            flex_direction: self.flex_direction_to_taffy(style, inline_positive, block_positive),
             flex_wrap: self.flex_wrap_to_taffy(style.flex_wrap),
             justify_content: self.justify_content_to_taffy(style.justify_content),
-            align_items: self.align_items_to_taffy(style.align_items),
-            align_content: self.align_content_to_taffy(style.align_content),
-            align_self: self.align_self_to_taffy(style.align_self),
-            justify_self: self.align_self_to_taffy(style.justify_self),
-            justify_items: self.align_items_to_taffy(style.justify_items),
+            align_items: self.align_items_to_taffy(style.align_items, cross_positive),
+            align_content: self.align_content_to_taffy(style.align_content, cross_positive),
+            align_self: self.align_self_to_taffy(style.align_self, cross_positive),
+            justify_self: self.align_self_to_taffy(style.justify_self, inline_positive),
+            justify_items: self.align_items_to_taffy(style.justify_items, inline_positive),
 
             // Gap
             gap: taffy::geometry::Size {
@@ -365,27 +371,17 @@ impl FlexFormattingContext {
         }
     }
 
-    fn flex_direction_to_taffy(&self, style: &ComputedStyle) -> taffy::style::FlexDirection {
+    fn flex_direction_to_taffy(
+        &self,
+        style: &ComputedStyle,
+        inline_forward_positive: bool,
+        block_forward_positive: bool,
+    ) -> taffy::style::FlexDirection {
         let inline_is_horizontal = matches!(
             style.writing_mode,
-            crate::style::types::WritingMode::HorizontalTb
-                | crate::style::types::WritingMode::SidewaysLr
-                | crate::style::types::WritingMode::SidewaysRl
+            WritingMode::HorizontalTb | WritingMode::SidewaysLr | WritingMode::SidewaysRl
         );
-        let inline_forward_positive = match style.writing_mode {
-            crate::style::types::WritingMode::HorizontalTb => style.direction != crate::style::types::Direction::Rtl,
-            crate::style::types::WritingMode::SidewaysRl => false,
-            crate::style::types::WritingMode::SidewaysLr => true,
-            crate::style::types::WritingMode::VerticalRl | crate::style::types::WritingMode::VerticalLr => true,
-        };
         let block_is_horizontal = !inline_is_horizontal;
-        let block_forward_positive = match style.writing_mode {
-            crate::style::types::WritingMode::HorizontalTb
-            | crate::style::types::WritingMode::SidewaysRl
-            | crate::style::types::WritingMode::SidewaysLr => true,
-            crate::style::types::WritingMode::VerticalRl => false,
-            crate::style::types::WritingMode::VerticalLr => true,
-        };
 
         match style.flex_direction {
             FlexDirection::Row => {
@@ -451,6 +447,23 @@ impl FlexFormattingContext {
         }
     }
 
+    fn inline_axis_positive(&self, style: &ComputedStyle) -> bool {
+        match style.writing_mode {
+            WritingMode::HorizontalTb => style.direction != Direction::Rtl,
+            WritingMode::SidewaysRl => false,
+            WritingMode::SidewaysLr => true,
+            WritingMode::VerticalRl | WritingMode::VerticalLr => true,
+        }
+    }
+
+    fn block_axis_positive(&self, style: &ComputedStyle) -> bool {
+        match style.writing_mode {
+            WritingMode::HorizontalTb | WritingMode::SidewaysRl | WritingMode::SidewaysLr => true,
+            WritingMode::VerticalRl => false,
+            WritingMode::VerticalLr => true,
+        }
+    }
+
     fn justify_content_to_taffy(&self, justify: JustifyContent) -> Option<taffy::style::JustifyContent> {
         Some(match justify {
             JustifyContent::FlexStart => taffy::style::JustifyContent::FlexStart,
@@ -462,10 +475,14 @@ impl FlexFormattingContext {
         })
     }
 
-    fn align_items_to_taffy(&self, align: AlignItems) -> Option<taffy::style::AlignItems> {
+    fn align_items_to_taffy(&self, align: AlignItems, axis_positive: bool) -> Option<taffy::style::AlignItems> {
         Some(match align {
-            AlignItems::Start | AlignItems::SelfStart => taffy::style::AlignItems::Start,
-            AlignItems::End | AlignItems::SelfEnd => taffy::style::AlignItems::End,
+            AlignItems::Start | AlignItems::SelfStart => {
+                if axis_positive { taffy::style::AlignItems::Start } else { taffy::style::AlignItems::End }
+            }
+            AlignItems::End | AlignItems::SelfEnd => {
+                if axis_positive { taffy::style::AlignItems::End } else { taffy::style::AlignItems::Start }
+            }
             AlignItems::FlexStart => taffy::style::AlignItems::FlexStart,
             AlignItems::FlexEnd => taffy::style::AlignItems::FlexEnd,
             AlignItems::Center => taffy::style::AlignItems::Center,
@@ -474,14 +491,18 @@ impl FlexFormattingContext {
         })
     }
 
-    fn align_self_to_taffy(&self, align: Option<AlignItems>) -> Option<taffy::style::AlignItems> {
-        align.and_then(|a| self.align_items_to_taffy(a))
+    fn align_self_to_taffy(&self, align: Option<AlignItems>, axis_positive: bool) -> Option<taffy::style::AlignItems> {
+        align.and_then(|a| self.align_items_to_taffy(a, axis_positive))
     }
 
-    fn align_content_to_taffy(&self, align: AlignContent) -> Option<taffy::style::AlignContent> {
+    fn align_content_to_taffy(&self, align: AlignContent, axis_positive: bool) -> Option<taffy::style::AlignContent> {
         Some(match align {
-            AlignContent::FlexStart => taffy::style::AlignContent::FlexStart,
-            AlignContent::FlexEnd => taffy::style::AlignContent::FlexEnd,
+            AlignContent::FlexStart => {
+                if axis_positive { taffy::style::AlignContent::FlexStart } else { taffy::style::AlignContent::FlexEnd }
+            }
+            AlignContent::FlexEnd => {
+                if axis_positive { taffy::style::AlignContent::FlexEnd } else { taffy::style::AlignContent::FlexStart }
+            }
             AlignContent::Center => taffy::style::AlignContent::Center,
             AlignContent::SpaceBetween => taffy::style::AlignContent::SpaceBetween,
             AlignContent::SpaceEvenly => taffy::style::AlignContent::SpaceEvenly,
@@ -878,6 +899,26 @@ mod tests {
     }
 
     #[test]
+    fn writing_mode_vertical_align_start_maps_to_block_start() {
+        let fc = FlexFormattingContext::new();
+
+        let mut style = ComputedStyle::default();
+        style.display = Display::Flex;
+        style.flex_direction = FlexDirection::Row;
+        style.writing_mode = crate::style::types::WritingMode::VerticalRl;
+        style.align_items = AlignItems::Start;
+        style.width = Some(Length::px(100.0));
+
+        let child = BoxNode::new_block(create_item_style(20.0, 10.0), FormattingContextType::Block, vec![]);
+        let container = BoxNode::new_block(Arc::new(style), FormattingContextType::Flex, vec![child]);
+        let constraints = LayoutConstraints::definite(100.0, 100.0);
+        let fragment = fc.layout(&container, &constraints).unwrap();
+
+        // Block axis start for vertical-rl is the right edge, so x should be at 80
+        assert_eq!(fragment.children[0].bounds.x(), 80.0);
+    }
+
+    #[test]
     fn flex_item_aspect_ratio_sets_width_from_height() {
         let fc = FlexFormattingContext::new();
 
@@ -1006,27 +1047,27 @@ mod tests {
         let fc = FlexFormattingContext::new();
 
         assert_eq!(
-            fc.flex_direction_to_taffy(&ComputedStyle::default()),
+            fc.flex_direction_to_taffy(&ComputedStyle::default(), true, true),
             taffy::style::FlexDirection::Row
         );
         let mut row_rev = ComputedStyle::default();
         row_rev.flex_direction = FlexDirection::RowReverse;
         assert_eq!(
-            fc.flex_direction_to_taffy(&row_rev),
+            fc.flex_direction_to_taffy(&row_rev, true, true),
             taffy::style::FlexDirection::RowReverse
         );
 
         let mut col = ComputedStyle::default();
         col.flex_direction = FlexDirection::Column;
         assert_eq!(
-            fc.flex_direction_to_taffy(&col),
+            fc.flex_direction_to_taffy(&col, true, true),
             taffy::style::FlexDirection::Column
         );
 
         let mut col_rev = ComputedStyle::default();
         col_rev.flex_direction = FlexDirection::ColumnReverse;
         assert_eq!(
-            fc.flex_direction_to_taffy(&col_rev),
+            fc.flex_direction_to_taffy(&col_rev, true, true),
             taffy::style::FlexDirection::ColumnReverse
         );
     }

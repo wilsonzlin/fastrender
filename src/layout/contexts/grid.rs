@@ -43,7 +43,7 @@ use crate::geometry::Rect;
 use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutConstraints};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::display::Display as CssDisplay;
-use crate::style::types::{AlignContent, AlignItems, AspectRatio, BoxSizing, GridAutoFlow, GridTrack};
+use crate::style::types::{AlignContent, AlignItems, AspectRatio, BoxSizing, Direction, GridAutoFlow, GridTrack, WritingMode};
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::style::grid::validate_area_rectangles;
@@ -85,6 +85,23 @@ impl GridFormattingContext {
     pub fn new() -> Self {
         Self {
             viewport_size: crate::geometry::Size::new(800.0, 600.0),
+        }
+    }
+
+    fn inline_axis_positive(&self, style: &ComputedStyle) -> bool {
+        match style.writing_mode {
+            WritingMode::HorizontalTb => style.direction != Direction::Rtl,
+            WritingMode::SidewaysRl => false,
+            WritingMode::SidewaysLr => true,
+            WritingMode::VerticalRl | WritingMode::VerticalLr => true,
+        }
+    }
+
+    fn block_axis_positive(&self, style: &ComputedStyle) -> bool {
+        match style.writing_mode {
+            WritingMode::HorizontalTb | WritingMode::SidewaysRl | WritingMode::SidewaysLr => true,
+            WritingMode::VerticalRl => false,
+            WritingMode::VerticalLr => true,
         }
     }
 
@@ -141,6 +158,8 @@ impl GridFormattingContext {
     /// Converts ComputedStyle to Taffy Style
     fn convert_style(&self, style: &ComputedStyle) -> TaffyStyle {
         let mut taffy_style = TaffyStyle::default();
+        let inline_positive = self.inline_axis_positive(style);
+        let block_positive = self.block_axis_positive(style);
 
         // Display mode
         let is_grid = matches!(style.display, CssDisplay::Grid | CssDisplay::InlineGrid);
@@ -190,7 +209,7 @@ impl GridFormattingContext {
             bottom: self.convert_length_to_lp(&style.border_bottom_width, style),
         };
         taffy_style.aspect_ratio = self.convert_aspect_ratio(style.aspect_ratio);
-        taffy_style.align_items = Some(self.convert_align_items(&style.align_items));
+        taffy_style.align_items = Some(self.convert_align_items(&style.align_items, block_positive));
 
         // Grid container properties
         if is_grid {
@@ -251,12 +270,12 @@ impl GridFormattingContext {
             };
 
             // Alignment
-            taffy_style.align_content = Some(self.convert_align_content(&style.align_content));
+            taffy_style.align_content = Some(self.convert_align_content(&style.align_content, block_positive));
         }
-        taffy_style.align_items = Some(self.convert_align_items(&style.align_items));
-        taffy_style.justify_items = Some(self.convert_align_items(&style.justify_items));
-        taffy_style.align_self = style.align_self.map(|a| self.convert_align_items(&a));
-        taffy_style.justify_self = style.justify_self.map(|a| self.convert_align_items(&a));
+        taffy_style.align_items = Some(self.convert_align_items(&style.align_items, block_positive));
+        taffy_style.justify_items = Some(self.convert_align_items(&style.justify_items, inline_positive));
+        taffy_style.align_self = style.align_self.map(|a| self.convert_align_items(&a, block_positive));
+        taffy_style.justify_self = style.justify_self.map(|a| self.convert_align_items(&a, inline_positive));
 
         // Grid item properties using raw line numbers
         taffy_style.grid_column =
@@ -504,10 +523,14 @@ impl GridFormattingContext {
     }
 
     /// Converts AlignContent to Taffy AlignContent
-    fn convert_align_content(&self, align: &AlignContent) -> TaffyAlignContent {
+    fn convert_align_content(&self, align: &AlignContent, axis_positive: bool) -> TaffyAlignContent {
         match align {
-            AlignContent::FlexStart => TaffyAlignContent::Start,
-            AlignContent::FlexEnd => TaffyAlignContent::End,
+            AlignContent::FlexStart => {
+                if axis_positive { TaffyAlignContent::Start } else { TaffyAlignContent::End }
+            }
+            AlignContent::FlexEnd => {
+                if axis_positive { TaffyAlignContent::End } else { TaffyAlignContent::Start }
+            }
             AlignContent::Center => TaffyAlignContent::Center,
             AlignContent::Stretch => TaffyAlignContent::Stretch,
             AlignContent::SpaceBetween => TaffyAlignContent::SpaceBetween,
@@ -516,10 +539,14 @@ impl GridFormattingContext {
         }
     }
 
-    fn convert_align_items(&self, align: &AlignItems) -> taffy::style::AlignItems {
+    fn convert_align_items(&self, align: &AlignItems, axis_positive: bool) -> taffy::style::AlignItems {
         match align {
-            AlignItems::Start | AlignItems::SelfStart => taffy::style::AlignItems::Start,
-            AlignItems::End | AlignItems::SelfEnd => taffy::style::AlignItems::End,
+            AlignItems::Start | AlignItems::SelfStart => {
+                if axis_positive { taffy::style::AlignItems::Start } else { taffy::style::AlignItems::End }
+            }
+            AlignItems::End | AlignItems::SelfEnd => {
+                if axis_positive { taffy::style::AlignItems::End } else { taffy::style::AlignItems::Start }
+            }
             AlignItems::FlexStart => taffy::style::AlignItems::FlexStart,
             AlignItems::FlexEnd => taffy::style::AlignItems::FlexEnd,
             AlignItems::Center => taffy::style::AlignItems::Center,
