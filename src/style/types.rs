@@ -366,6 +366,49 @@ pub enum FontStyle {
     Oblique,
 }
 
+/// Font stretch
+///
+/// CSS: `font-stretch`
+/// Reference: CSS Fonts Module Level 4
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FontStretch {
+    UltraCondensed,
+    ExtraCondensed,
+    Condensed,
+    SemiCondensed,
+    Normal,
+    SemiExpanded,
+    Expanded,
+    ExtraExpanded,
+    UltraExpanded,
+    /// Percentage stretch (50%-200%)
+    Percentage(f32),
+}
+
+impl FontStretch {
+    /// Creates a FontStretch from a percentage value, clamped to the spec range (50%-200%).
+    pub fn from_percentage(percent: f32) -> Self {
+        let clamped = percent.clamp(50.0, 200.0);
+        FontStretch::Percentage(clamped)
+    }
+
+    /// Returns the percentage representation of this stretch value.
+    pub fn to_percentage(self) -> f32 {
+        match self {
+            FontStretch::UltraCondensed => 50.0,
+            FontStretch::ExtraCondensed => 62.5,
+            FontStretch::Condensed => 75.0,
+            FontStretch::SemiCondensed => 87.5,
+            FontStretch::Normal => 100.0,
+            FontStretch::SemiExpanded => 112.5,
+            FontStretch::Expanded => 125.0,
+            FontStretch::ExtraExpanded => 150.0,
+            FontStretch::UltraExpanded => 200.0,
+            FontStretch::Percentage(p) => p.clamp(50.0, 200.0),
+        }
+    }
+}
+
 /// Line height specification
 ///
 /// CSS: `line-height`

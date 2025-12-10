@@ -499,11 +499,12 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         // Typography
         "font" => {
             if let PropertyValue::Keyword(raw) = &resolved_value {
-                if let Some((font_style, font_weight, font_size, line_height, families)) =
+                if let Some((font_style, font_weight, font_stretch, font_size, line_height, families)) =
                     parse_font_shorthand(raw, parent_font_size, root_font_size)
                 {
                     styles.font_style = font_style;
                     styles.font_weight = font_weight;
+                    styles.font_stretch = font_stretch;
                     styles.font_size = font_size;
                     styles.line_height = line_height;
                     styles.font_family = families;
@@ -557,6 +558,17 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "font-stretch" => match &resolved_value {
+            PropertyValue::Keyword(kw) => {
+                if let Some(stretch) = parse_font_stretch_keyword(kw) {
+                    styles.font_stretch = stretch;
+                }
+            }
+            PropertyValue::Percentage(p) => {
+                styles.font_stretch = FontStretch::from_percentage(*p);
+            }
+            _ => {}
+        },
         "line-height" => match &resolved_value {
             PropertyValue::Keyword(kw) if kw == "normal" => {
                 styles.line_height = LineHeight::Normal;
@@ -1549,11 +1561,26 @@ fn parse_number_or_percentage<'i, 't>(input: &mut Parser<'i, 't>) -> Result<f32,
     }
 }
 
+fn parse_font_stretch_keyword(kw: &str) -> Option<FontStretch> {
+    match kw {
+        "ultra-condensed" => Some(FontStretch::UltraCondensed),
+        "extra-condensed" => Some(FontStretch::ExtraCondensed),
+        "condensed" => Some(FontStretch::Condensed),
+        "semi-condensed" => Some(FontStretch::SemiCondensed),
+        "normal" => Some(FontStretch::Normal),
+        "semi-expanded" => Some(FontStretch::SemiExpanded),
+        "expanded" => Some(FontStretch::Expanded),
+        "extra-expanded" => Some(FontStretch::ExtraExpanded),
+        "ultra-expanded" => Some(FontStretch::UltraExpanded),
+        _ => None,
+    }
+}
+
 fn parse_font_shorthand(
     value: &str,
     parent_font_size: f32,
     root_font_size: f32,
-) -> Option<(FontStyle, FontWeight, f32, LineHeight, Vec<String>)> {
+) -> Option<(FontStyle, FontWeight, FontStretch, f32, LineHeight, Vec<String>)> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return None;
@@ -1570,6 +1597,7 @@ fn parse_font_shorthand(
         return Some((
             defaults.font_style,
             defaults.font_weight,
+            defaults.font_stretch,
             defaults.font_size,
             defaults.line_height.clone(),
             defaults.font_family.clone(),
@@ -1588,6 +1616,7 @@ fn parse_font_shorthand(
     let mut phase = Phase::PreSize;
     let mut font_style: Option<FontStyle> = None;
     let mut font_weight: Option<FontWeight> = None;
+    let mut font_stretch: Option<FontStretch> = None;
     let mut font_size: Option<f32> = None;
     let mut line_height: Option<LineHeight> = None;
     let mut families: Vec<String> = Vec::new();
@@ -1616,6 +1645,8 @@ fn parse_font_shorthand(
                                 font_style = Some(FontStyle::Normal);
                             } else if font_weight.is_none() {
                                 font_weight = Some(FontWeight::Normal);
+                            } else if font_stretch.is_none() {
+                                font_stretch = Some(FontStretch::Normal);
                             }
                         }
                         "italic" => font_style = Some(FontStyle::Italic),
@@ -1623,11 +1654,21 @@ fn parse_font_shorthand(
                         "bold" => font_weight = Some(FontWeight::Bold),
                         "bolder" => font_weight = Some(FontWeight::Bolder),
                         "lighter" => font_weight = Some(FontWeight::Lighter),
-                        _ => {}
+                        _ => {
+                            if font_stretch.is_none() {
+                                if let Some(stretch) = parse_font_stretch_keyword(ident) {
+                                    font_stretch = Some(stretch);
+                                }
+                            }
+                        }
                     }
                 } else if let Token::Number { value, .. } = token {
                     if font_weight.is_none() && *value >= 1.0 && *value <= 1000.0 {
                         font_weight = Some(FontWeight::Number((*value as u16).clamp(1, 1000)));
+                    }
+                } else if let Token::Percentage { unit_value, .. } = token {
+                    if font_stretch.is_none() {
+                        font_stretch = Some(FontStretch::from_percentage(*unit_value * 100.0));
                     }
                 } else if let Token::Dimension { ref unit, .. } = token {
                     // Oblique angles are allowed; ignore them for now.
@@ -1688,6 +1729,7 @@ fn parse_font_shorthand(
     Some((
         font_style.unwrap_or(FontStyle::Normal),
         font_weight.unwrap_or(FontWeight::Normal),
+        font_stretch.unwrap_or(FontStretch::Normal),
         font_size.unwrap_or(parent_font_size),
         line_height.unwrap_or(LineHeight::Normal),
         families,
@@ -2471,7 +2513,7 @@ pub fn parse_border_style(kw: &str) -> BorderStyle {
 mod tests {
     use super::*;
     use crate::style::types::{
-        BackgroundRepeatKeyword, ListStylePosition, ListStyleType, PositionComponent, PositionKeyword,
+        BackgroundRepeatKeyword, FontStretch, ListStylePosition, ListStyleType, PositionComponent, PositionKeyword,
         TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
     };
 
@@ -3132,6 +3174,7 @@ mod tests {
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert!(matches!(style.font_style, FontStyle::Italic));
         assert!(matches!(style.font_weight, FontWeight::Number(700)));
+        assert!(matches!(style.font_stretch, FontStretch::Normal | FontStretch::Percentage(_)));
         assert!((style.font_size - 20.0).abs() < 0.01);
         match style.line_height {
             LineHeight::Length(len) => assert!((len.to_px() - 30.0).abs() < 0.01),
@@ -3151,6 +3194,7 @@ mod tests {
 
         apply_declaration(&mut style, &decl, 20.0, 16.0);
         assert!(matches!(style.font_weight, FontWeight::Bold));
+        assert!((style.font_stretch.to_percentage() - 100.0).abs() < 0.01);
         assert!((style.font_size - 24.0).abs() < 0.01);
         assert!(matches!(style.line_height, LineHeight::Number(n) if (n - 1.25).abs() < 0.001));
         assert_eq!(style.font_family, vec!["serif".to_string()]);
@@ -3182,6 +3226,43 @@ mod tests {
 
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert!(matches!(style.line_height, LineHeight::Number(n) if (n - 1.5).abs() < 0.001));
+    }
+
+    #[test]
+    fn parses_font_stretch_longhand_keywords_and_percentages() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font-stretch".to_string(),
+            value: PropertyValue::Keyword("expanded".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_stretch, FontStretch::Expanded));
+
+        let decl = Declaration {
+            property: "font-stretch".to_string(),
+            value: PropertyValue::Percentage(125.0),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!((style.font_stretch.to_percentage() - 125.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn font_shorthand_accepts_font_stretch_keyword() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font".to_string(),
+            value: PropertyValue::Keyword("italic small-caps bold condensed 16px/20px serif".to_string()),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!((style.font_stretch.to_percentage() - FontStretch::Condensed.to_percentage()).abs() < 0.01);
+        assert!(matches!(style.font_weight, FontWeight::Bold));
+        assert!(matches!(style.font_style, FontStyle::Italic));
+        assert!((style.font_size - 16.0).abs() < 0.01);
+        assert!(matches!(style.line_height, LineHeight::Length(_)));
     }
 }
 #[derive(Default)]

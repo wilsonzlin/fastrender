@@ -12,7 +12,7 @@ use crate::paint::display_list::{
 };
 use crate::paint::rasterize::{render_box_shadow, BoxShadow};
 use crate::style::color::Rgba;
-use crate::text::font_db::{FontStyle as DbFontStyle, LoadedFont};
+use crate::text::font_db::{FontStretch, FontStyle as DbFontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
 use crate::text::shaper::GlyphPosition;
 use tiny_skia::{
@@ -304,12 +304,14 @@ impl DisplayListRenderer {
         let mut weight = 400;
         let mut italic = false;
         let mut oblique = false;
+        let mut stretch = FontStretch::Normal;
 
         if let Some(id) = font_id {
             families.push(id.family.clone());
             weight = id.weight;
             italic = matches!(id.style, DbFontStyle::Italic);
             oblique = matches!(id.style, DbFontStyle::Oblique);
+            stretch = id.stretch;
         }
 
         if families.is_empty() {
@@ -317,7 +319,18 @@ impl DisplayListRenderer {
         }
 
         self.font_ctx
-            .get_font(&families, weight, italic, oblique)
+            .get_font_full(
+                &families,
+                weight,
+                if italic {
+                    DbFontStyle::Italic
+                } else if oblique {
+                    DbFontStyle::Oblique
+                } else {
+                    DbFontStyle::Normal
+                },
+                stretch,
+            )
             .or_else(|| self.font_ctx.get_sans_serif())
     }
 

@@ -50,7 +50,7 @@
 use crate::error::{Result, TextError};
 use crate::style::types::{Direction as CssDirection, FontStyle as CssFontStyle};
 use crate::style::ComputedStyle;
-use crate::text::font_db::{FontStyle, LoadedFont};
+use crate::text::font_db::{FontStretch, FontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
 use rustybuzz::{Direction as HbDirection, Face, Language as HbLanguage, UnicodeBuffer};
 use std::str::FromStr;
@@ -612,13 +612,14 @@ fn get_font_for_run(run: &ItemizedRun, style: &ComputedStyle, font_context: &Fon
         CssFontStyle::Italic => FontStyle::Italic,
         CssFontStyle::Oblique => FontStyle::Oblique,
     };
+    let font_stretch = FontStretch::from_percentage(style.font_stretch.to_percentage());
 
     // Try the font family list first
-    if let Some(font) = font_context.get_font(
+    if let Some(font) = font_context.get_font_full(
         &style.font_family,
         style.font_weight.to_u16(),
-        font_style == FontStyle::Italic,
-        font_style == FontStyle::Oblique,
+        font_style,
+        font_stretch,
     ) {
         // Verify the font has glyphs for at least the first character
         if let Some(ch) = run.text.chars().next() {
@@ -640,11 +641,11 @@ fn get_font_for_run(run: &ItemizedRun, style: &ComputedStyle, font_context: &Fon
         _ => vec!["sans-serif".to_string()],
     };
 
-    if let Some(font) = font_context.get_font(
+    if let Some(font) = font_context.get_font_full(
         &generic_families,
         style.font_weight.to_u16(),
-        font_style == FontStyle::Italic,
-        font_style == FontStyle::Oblique,
+        font_style,
+        font_stretch,
     ) {
         return Ok(font);
     }

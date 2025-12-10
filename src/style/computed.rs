@@ -27,7 +27,7 @@ use crate::geometry::EdgeOffsets;
 use crate::style::color::{Color, Rgba};
 use crate::style::display::Display;
 use crate::style::position::Position;
-use crate::style::types::{TextAlignLast, TextIndent, TextJustify};
+use crate::style::types::{FontStretch, TextAlignLast, TextIndent, TextJustify};
 use crate::style::values::{Length, LengthOrAuto};
 
 /// Computed CSS styles for an element
@@ -222,6 +222,12 @@ pub struct PositionedStyle {
     /// CSS: `font-style`
     /// Initial: normal
     pub font_style: FontStyle,
+
+    /// Font stretch
+    ///
+    /// CSS: `font-stretch`
+    /// Initial: normal (100%)
+    pub font_stretch: super::types::FontStretch,
 
     /// Line height
     ///
@@ -433,6 +439,7 @@ impl Default for PositionedStyle {
             font_size: 16.0,  // medium = 16px
             font_weight: 400, // normal
             font_style: FontStyle::Normal,
+            font_stretch: FontStretch::Normal,
             line_height: LineHeight::Normal,
             text_align: TextAlign::Start,
             text_align_last: TextAlignLast::Auto,

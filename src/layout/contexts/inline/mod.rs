@@ -756,10 +756,22 @@ impl InlineFormattingContext {
         let font_size = style.font_size;
         let italic = matches!(style.font_style, FontStyle::Italic);
         let oblique = matches!(style.font_style, FontStyle::Oblique);
+        let stretch = crate::text::font_db::FontStretch::from_percentage(style.font_stretch.to_percentage());
 
         if let Some(font) = self
             .font_context
-            .get_font(&style.font_family, style.font_weight.to_u16(), italic, oblique)
+            .get_font_full(
+                &style.font_family,
+                style.font_weight.to_u16(),
+                if italic {
+                    crate::text::font_db::FontStyle::Italic
+                } else if oblique {
+                    crate::text::font_db::FontStyle::Oblique
+                } else {
+                    crate::text::font_db::FontStyle::Normal
+                },
+                stretch,
+            )
             .or_else(|| self.font_context.get_sans_serif())
         {
             if let Ok(metrics) = font.metrics() {
