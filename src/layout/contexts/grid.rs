@@ -43,7 +43,9 @@ use crate::geometry::Rect;
 use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutConstraints};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::display::Display as CssDisplay;
-use crate::style::types::{AlignContent, AlignItems, AspectRatio, BoxSizing, Direction, GridAutoFlow, GridTrack, WritingMode};
+use crate::style::types::{
+    AlignContent, AlignItems, AspectRatio, BoxSizing, Direction, GridAutoFlow, GridTrack, JustifyContent, WritingMode,
+};
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::style::grid::validate_area_rectangles;
@@ -271,6 +273,7 @@ impl GridFormattingContext {
 
             // Alignment
             taffy_style.align_content = Some(self.convert_align_content(&style.align_content, block_positive));
+            taffy_style.justify_content = Some(self.convert_justify_content(&style.justify_content, inline_positive));
         }
         taffy_style.align_items = Some(self.convert_align_items(&style.align_items, block_positive));
         taffy_style.justify_items = Some(self.convert_align_items(&style.justify_items, inline_positive));
@@ -536,6 +539,21 @@ impl GridFormattingContext {
             AlignContent::SpaceBetween => TaffyAlignContent::SpaceBetween,
             AlignContent::SpaceEvenly => TaffyAlignContent::SpaceEvenly,
             AlignContent::SpaceAround => TaffyAlignContent::SpaceAround,
+        }
+    }
+
+    fn convert_justify_content(&self, justify: &JustifyContent, axis_positive: bool) -> TaffyAlignContent {
+        match justify {
+            JustifyContent::FlexStart => {
+                if axis_positive { TaffyAlignContent::Start } else { TaffyAlignContent::End }
+            }
+            JustifyContent::FlexEnd => {
+                if axis_positive { TaffyAlignContent::End } else { TaffyAlignContent::Start }
+            }
+            JustifyContent::Center => TaffyAlignContent::Center,
+            JustifyContent::SpaceBetween => TaffyAlignContent::SpaceBetween,
+            JustifyContent::SpaceAround => TaffyAlignContent::SpaceAround,
+            JustifyContent::SpaceEvenly => TaffyAlignContent::SpaceEvenly,
         }
     }
 
