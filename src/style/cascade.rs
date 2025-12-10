@@ -241,6 +241,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.white_space = parent.white_space;
     styles.tab_size = parent.tab_size;
     styles.caption_side = parent.caption_side;
+    styles.empty_cells = parent.empty_cells;
     styles.hyphens = parent.hyphens;
     styles.word_break = parent.word_break;
     styles.overflow_wrap = parent.overflow_wrap;

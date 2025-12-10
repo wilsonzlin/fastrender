@@ -846,6 +846,15 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "empty-cells" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.empty_cells = match kw.as_str() {
+                    "show" => EmptyCells::Show,
+                    "hide" => EmptyCells::Hide,
+                    _ => styles.empty_cells,
+                };
+            }
+        }
         "caption-side" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.caption_side = match kw.as_str() {

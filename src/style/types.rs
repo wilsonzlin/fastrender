@@ -53,6 +53,15 @@ pub enum BorderCollapse {
     Collapse,
 }
 
+/// Whether borders/backgrounds are drawn for empty table cells.
+///
+/// CSS 2.1 §17.6.1: initial value is `show`, applies to table cells and inherits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmptyCells {
+    Show,
+    Hide,
+}
+
 /// Caption placement relative to the table box.
 ///
 /// CSS 2.1 §17.4: initial value is `top`, applies to table captions.

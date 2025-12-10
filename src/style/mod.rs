@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundPosition,
     BackgroundPositionComponent, BackgroundRepeat, BackgroundSize, BackgroundSizeComponent, BorderCollapse,
-    BorderStyle, CaptionSide, Direction, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting,
+    BorderStyle, CaptionSide, Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting,
     FontKerning, FontStretch, FontStyle, FontVariant, FontVariantAlternates, FontVariantCaps, FontVariantEastAsian,
     FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontWeight, GridTrack, HyphensMode, Isolation,
     JustifyContent, LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit,
@@ -196,6 +196,7 @@ pub struct ComputedStyle {
     pub border_collapse: BorderCollapse,
     pub table_layout: TableLayout,
     pub caption_side: CaptionSide,
+    pub empty_cells: EmptyCells,
 
     // CSS Custom Properties (variables)
     pub custom_properties: HashMap<String, String>,
@@ -359,6 +360,7 @@ impl Default for ComputedStyle {
             border_collapse: BorderCollapse::Separate,
             table_layout: TableLayout::Auto,
             caption_side: CaptionSide::Top,
+            empty_cells: EmptyCells::Show,
 
             custom_properties: HashMap::new(),
 

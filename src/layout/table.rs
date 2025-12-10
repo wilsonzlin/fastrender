@@ -36,9 +36,9 @@ use crate::layout::contexts::table::column_distribution::{
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::color::Rgba;
 use crate::style::display::Display;
-use crate::style::types::{BorderCollapse, BorderStyle, CaptionSide, Direction, TableLayout, VerticalAlign};
+use crate::style::types::{BorderCollapse, BorderStyle, CaptionSide, Direction, EmptyCells, TableLayout, VerticalAlign};
 use crate::style::values::{Length, LengthUnit};
-use crate::tree::box_tree::BoxNode;
+use crate::tree::box_tree::{BoxNode, BoxType, MarkerContent};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 use std::sync::Arc;
 
@@ -260,6 +260,25 @@ impl CellInfo {
     pub fn is_row_spanning(&self) -> bool {
         self.rowspan > 1
     }
+}
+
+fn node_has_visible_content(node: &BoxNode) -> bool {
+    match &node.box_type {
+        BoxType::Text(text) => !text.text.trim().is_empty(),
+        BoxType::Marker(marker) => match &marker.content {
+            MarkerContent::Text(t) => !t.trim().is_empty(),
+            MarkerContent::Image(_) => true,
+        },
+        BoxType::Replaced(_) => true,
+        _ => node.children.iter().any(node_has_visible_content),
+    }
+}
+
+fn cell_is_visually_empty(cell: &BoxNode) -> bool {
+    if cell.style.background_image.is_some() || !cell.style.background_color.is_transparent() {
+        return false;
+    }
+    !node_has_visible_content(cell)
 }
 
 impl TableStructure {
@@ -1148,6 +1167,10 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     let tfc = TableFormattingContext::new();
     for cell in &structure.cells {
         if let Some(cell_box) = tfc.get_cell_box(table_box, cell) {
+            let hide_empty = cell_box.style.empty_cells == EmptyCells::Hide && cell_is_visually_empty(cell_box);
+            if hide_empty {
+                continue;
+            }
             let style = &cell_box.style;
             let start_col = cell.col;
             let end_col = (cell.col + cell.colspan).min(structure.column_count);
@@ -1832,11 +1855,27 @@ impl TableFormattingContext {
         cell_width: f32,
         border_collapse: BorderCollapse,
     ) -> Result<FragmentNode, LayoutError> {
+        let hide_empty = cell_box.style.empty_cells == EmptyCells::Hide && cell_is_visually_empty(cell_box);
+        let mut cloned = cell_box.clone();
+        if hide_empty {
+            let mut style = (*cloned.style).clone();
+            style.background_color = crate::style::color::Rgba::TRANSPARENT;
+            style.background_image = None;
+            style.border_left_width = crate::style::values::Length::px(0.0);
+            style.border_right_width = crate::style::values::Length::px(0.0);
+            style.border_top_width = crate::style::values::Length::px(0.0);
+            style.border_bottom_width = crate::style::values::Length::px(0.0);
+            style.border_left_style = BorderStyle::None;
+            style.border_right_style = BorderStyle::None;
+            style.border_top_style = BorderStyle::None;
+            style.border_bottom_style = BorderStyle::None;
+            cloned.style = std::sync::Arc::new(style);
+        }
+
         let bfc = BlockFormattingContext::with_font_context(self.factory.font_context().clone());
         let constraints = LayoutConstraints::definite_width(cell_width.max(0.0));
         if matches!(border_collapse, BorderCollapse::Collapse) {
-            let mut cloned = cell_box.clone();
-            let mut style = (*cell_box.style).clone();
+            let mut style = (*cloned.style).clone();
             style.border_left_width = crate::style::values::Length::px(0.0);
             style.border_right_width = crate::style::values::Length::px(0.0);
             style.border_top_width = crate::style::values::Length::px(0.0);
@@ -1844,7 +1883,7 @@ impl TableFormattingContext {
             cloned.style = std::sync::Arc::new(style);
             bfc.layout(&cloned, &constraints)
         } else {
-            bfc.layout(cell_box, &constraints)
+            bfc.layout(&cloned, &constraints)
         }
     }
 
@@ -3175,6 +3214,96 @@ mod tests {
 
         let middle_border = &borders.vertical[1][0];
         assert_eq!(middle_border.color, Rgba::from_rgba8(0, 255, 0, 255));
+    }
+
+    #[test]
+    fn collapsed_borders_skip_empty_cells_when_hidden() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_collapse = BorderCollapse::Collapse;
+
+        let mut left_cell_style = ComputedStyle::default();
+        left_cell_style.display = Display::TableCell;
+        left_cell_style.border_right_style = BorderStyle::Solid;
+        left_cell_style.border_right_width = Length::px(4.0);
+        left_cell_style.empty_cells = EmptyCells::Hide;
+
+        let mut right_cell_style = ComputedStyle::default();
+        right_cell_style.display = Display::TableCell;
+        right_cell_style.border_left_style = BorderStyle::Solid;
+        right_cell_style.border_left_width = Length::px(2.0);
+
+        let left = BoxNode::new_block(Arc::new(left_cell_style), FormattingContextType::Block, vec![]);
+        let right = BoxNode::new_block(Arc::new(right_cell_style), FormattingContextType::Block, vec![]);
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![left, right]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        let borders = compute_collapsed_borders(&table, &structure);
+
+        assert_eq!(borders.vertical.len(), 3);
+        let middle = &borders.vertical[1][0];
+        assert!((middle.width - 2.0).abs() < f32::EPSILON, "hidden empty cell should not contribute");
+    }
+
+    fn find_cell_fragment<'a>(fragment: &'a FragmentNode) -> Option<&'a FragmentNode> {
+        if fragment
+            .style
+            .as_ref()
+            .map(|s| s.display == Display::TableCell)
+            .unwrap_or(false)
+        {
+            return Some(fragment);
+        }
+        for child in &fragment.children {
+            if let Some(found) = find_cell_fragment(child) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn empty_cells_hide_strips_borders_in_separate_model() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.empty_cells = EmptyCells::Hide;
+        cell_style.border_top_width = Length::px(3.0);
+        cell_style.border_right_width = Length::px(3.0);
+        cell_style.border_bottom_width = Length::px(3.0);
+        cell_style.border_left_width = Length::px(3.0);
+        cell_style.border_top_style = BorderStyle::Solid;
+        cell_style.border_right_style = BorderStyle::Solid;
+        cell_style.border_bottom_style = BorderStyle::Solid;
+        cell_style.border_left_style = BorderStyle::Solid;
+
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let fc = TableFormattingContext::with_factory(FormattingContextFactory::new());
+        let fragment = fc
+            .layout(
+                &table,
+                &LayoutConstraints::new(AvailableSpace::Definite(200.0), AvailableSpace::Indefinite),
+            )
+            .expect("layout");
+
+        let cell_frag = find_cell_fragment(&fragment).expect("cell fragment");
+        let style = cell_frag.style.as_ref().expect("style");
+        assert!(style.border_top_width.to_px().abs() < f32::EPSILON);
+        assert!(style.border_right_width.to_px().abs() < f32::EPSILON);
+        assert!(style.border_bottom_width.to_px().abs() < f32::EPSILON);
+        assert!(style.border_left_width.to_px().abs() < f32::EPSILON);
     }
 
     #[test]
