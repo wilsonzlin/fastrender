@@ -1269,24 +1269,23 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
             }
         }
         "letter-spacing" => {
-            if let Some(len) = extract_length(&resolved_value) {
-                if len.unit.is_absolute() {
-                    styles.letter_spacing = len.to_px();
-                } else {
-                    // Fallback for relative units in letter-spacing (usually small)
-                    // Em units should be relative to current font size, but we don't have it finalized here easily
-                    // Just use value as if px for now if not absolute, or 0
-                    styles.letter_spacing = len.value;
-                }
+            let font_size = if styles.font_size.is_finite() && styles.font_size > 0.0 {
+                styles.font_size
+            } else {
+                parent_font_size
+            };
+            if let Some(len) = parse_spacing_value(&resolved_value, font_size, root_font_size, false) {
+                styles.letter_spacing = len;
             }
         }
         "word-spacing" => {
-            if let Some(len) = extract_length(&resolved_value) {
-                if len.unit.is_absolute() {
-                    styles.word_spacing = len.to_px();
-                } else {
-                    styles.word_spacing = len.value;
-                }
+            let font_size = if styles.font_size.is_finite() && styles.font_size > 0.0 {
+                styles.font_size
+            } else {
+                parent_font_size
+            };
+            if let Some(len) = parse_spacing_value(&resolved_value, font_size, root_font_size, true) {
+                styles.word_spacing = len;
             }
         }
         "white-space" => {
@@ -1621,6 +1620,29 @@ pub fn extract_length_pair(value: &PropertyValue) -> Option<(Length, Length)> {
         }
         _ => None,
     }
+}
+
+fn parse_spacing_value(value: &PropertyValue, font_size: f32, root_font_size: f32, allow_percentage: bool) -> Option<f32> {
+    match value {
+        PropertyValue::Keyword(kw) if kw == "normal" => Some(0.0),
+        PropertyValue::Number(n) if *n == 0.0 => Some(0.0),
+        PropertyValue::Length(len) => resolve_font_relative_length(*len, font_size, root_font_size),
+        PropertyValue::Percentage(pct) if allow_percentage => Some((pct / 100.0) * font_size),
+        _ => None,
+    }
+}
+
+fn resolve_font_relative_length(len: Length, font_size: f32, root_font_size: f32) -> Option<f32> {
+    Some(match len.unit {
+        u if u.is_absolute() => len.to_px(),
+        LengthUnit::Em => len.value * font_size,
+        LengthUnit::Ex => len.value * font_size * 0.5,
+        LengthUnit::Ch => len.value * font_size * 0.5,
+        LengthUnit::Rem => len.value * root_font_size,
+        LengthUnit::Percent => (len.value / 100.0) * font_size,
+        // Fallback: keep the raw author value when we cannot resolve viewport-relative or unknown units here.
+        _ => len.value,
+    })
 }
 
 fn parse_object_fit(kw: &str) -> Option<ObjectFit> {
@@ -3831,6 +3853,45 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert_eq!(style.list_style_type, ListStyleType::LowerGreek);
+    }
+
+    #[test]
+    fn parses_letter_and_word_spacing() {
+        let mut style = ComputedStyle::default();
+        style.font_size = 20.0;
+        style.letter_spacing = 3.0;
+
+        let decl = Declaration {
+            property: "letter-spacing".to_string(),
+            value: PropertyValue::Keyword("normal".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.letter_spacing, 0.0);
+
+        let decl = Declaration {
+            property: "letter-spacing".to_string(),
+            value: PropertyValue::Length(Length::em(0.25)),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!((style.letter_spacing - 5.0).abs() < 0.01);
+
+        let decl = Declaration {
+            property: "word-spacing".to_string(),
+            value: PropertyValue::Percentage(50.0),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!((style.word_spacing - 10.0).abs() < 0.01);
+
+        let decl = Declaration {
+            property: "word-spacing".to_string(),
+            value: PropertyValue::Length(Length::em(-0.5)),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!((style.word_spacing + 10.0).abs() < 0.01);
     }
 
     #[test]
