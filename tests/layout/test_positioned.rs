@@ -427,6 +427,57 @@ fn test_absolute_position_uses_intrinsic_when_auto() {
 }
 
 #[test]
+fn absolute_auto_height_uses_aspect_ratio_with_specified_width() {
+    let layout = PositionedLayout::new();
+    let mut style = default_style();
+    style.position = Position::Absolute;
+    style.width = LengthOrAuto::px(120.0);
+    style.height = LengthOrAuto::Auto;
+    style.aspect_ratio = fastrender::style::types::AspectRatio::Ratio(2.0);
+
+    let cb = create_containing_block(300.0, 300.0);
+    let intrinsic = Size::new(0.0, 0.0);
+
+    let (_pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+    assert!((size.width - 120.0).abs() < 0.01, "width was {}", size.width);
+    assert!((size.height - 60.0).abs() < 0.01, "height was {}", size.height);
+}
+
+#[test]
+fn absolute_auto_width_uses_aspect_ratio_with_specified_height() {
+    let layout = PositionedLayout::new();
+    let mut style = default_style();
+    style.position = Position::Absolute;
+    style.height = LengthOrAuto::px(50.0);
+    style.width = LengthOrAuto::Auto;
+    style.aspect_ratio = fastrender::style::types::AspectRatio::Ratio(2.0);
+
+    let cb = create_containing_block(300.0, 300.0);
+    let intrinsic = Size::new(0.0, 0.0);
+
+    let (_pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+    assert!((size.height - 50.0).abs() < 0.01, "height was {}", size.height);
+    assert!((size.width - 100.0).abs() < 0.01, "width was {}", size.width);
+}
+
+#[test]
+fn absolute_auto_both_uses_aspect_ratio_and_intrinsic() {
+    let layout = PositionedLayout::new();
+    let mut style = default_style();
+    style.position = Position::Absolute;
+    style.width = LengthOrAuto::Auto;
+    style.height = LengthOrAuto::Auto;
+    style.aspect_ratio = fastrender::style::types::AspectRatio::Ratio(2.0);
+
+    let cb = create_containing_block(300.0, 300.0);
+    let intrinsic = Size::new(80.0, 40.0);
+
+    let (_pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+    assert!((size.width - 80.0).abs() < 0.01, "width was {}", size.width);
+    assert!((size.height - 40.0).abs() < 0.01, "height was {}", size.height);
+}
+
+#[test]
 fn test_absolute_position_overconstrained_ignores_right() {
     let layout = PositionedLayout::new();
 

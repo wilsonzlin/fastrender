@@ -338,6 +338,28 @@ impl PositionedLayout {
         // Compute vertical position and height
         let (y, height) = self.compute_absolute_vertical(style, cb_height, viewport, intrinsic_size.height)?;
 
+        let mut width = width;
+        let mut height = height;
+        if let crate::style::types::AspectRatio::Ratio(ratio) = style.aspect_ratio {
+            if ratio > 0.0 {
+                let width_auto = matches!(style.width, crate::style::values::LengthOrAuto::Auto);
+                let height_auto = matches!(style.height, crate::style::values::LengthOrAuto::Auto);
+                if width_auto && !height_auto {
+                    width = height * ratio;
+                } else if height_auto && !width_auto {
+                    height = width / ratio;
+                } else if width_auto && height_auto {
+                    if intrinsic_size.width > 0.0 {
+                        width = intrinsic_size.width;
+                        height = width / ratio;
+                    } else if intrinsic_size.height > 0.0 {
+                        height = intrinsic_size.height;
+                        width = height * ratio;
+                    }
+                }
+            }
+        }
+
         // Position is relative to containing block origin
         let position = Point::new(containing_block.origin().x + x, containing_block.origin().y + y);
 

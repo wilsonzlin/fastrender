@@ -189,7 +189,7 @@ impl AbsoluteLayout {
         let viewport = containing_block.viewport_size();
 
         // Resolve horizontal position and width
-        let (x, width, margin_left, margin_right) = self.compute_horizontal(
+        let (x, mut width, margin_left, margin_right) = self.compute_horizontal(
             style,
             cb_width,
             viewport,
@@ -198,13 +198,34 @@ impl AbsoluteLayout {
         )?;
 
         // Resolve vertical position and height
-        let (y, height, margin_top, margin_bottom) = self.compute_vertical(
+        let (y, mut height, margin_top, margin_bottom) = self.compute_vertical(
             style,
             cb_height,
             viewport,
             input.intrinsic_size.height,
             input.static_position.y,
         )?;
+
+        // Apply aspect-ratio if authored (CSS Sizing L4).
+        if let crate::style::types::AspectRatio::Ratio(ratio) = style.aspect_ratio {
+            if ratio > 0.0 {
+                let width_auto = matches!(style.width, crate::style::values::LengthOrAuto::Auto);
+                let height_auto = matches!(style.height, crate::style::values::LengthOrAuto::Auto);
+                if width_auto && !height_auto {
+                    width = height * ratio;
+                } else if height_auto && !width_auto {
+                    height = width / ratio;
+                } else if width_auto && height_auto {
+                    if input.intrinsic_size.width > 0.0 {
+                        width = input.intrinsic_size.width;
+                        height = width / ratio;
+                    } else if input.intrinsic_size.height > 0.0 {
+                        height = input.intrinsic_size.height;
+                        width = height * ratio;
+                    }
+                }
+            }
+        }
 
         // Position relative to containing block origin
         let position = Point::new(containing_block.origin().x + x, containing_block.origin().y + y);
