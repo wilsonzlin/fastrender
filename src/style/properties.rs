@@ -1293,6 +1293,17 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "text-orientation" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.text_orientation = match kw.as_str() {
+                    "mixed" => TextOrientation::Mixed,
+                    "upright" => TextOrientation::Upright,
+                    "sideways" => TextOrientation::Sideways,
+                    "sideways-right" => TextOrientation::SidewaysRight,
+                    _ => styles.text_orientation,
+                };
+            }
+        }
         "text-indent" => {
             let mut length = styles.text_indent.length;
             let mut hanging = false;
@@ -3910,8 +3921,9 @@ fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
 mod tests {
     use super::*;
     use crate::style::types::{
-        AlignContent, AlignItems, AspectRatio, BackgroundRepeatKeyword, BoxSizing, FontStretch, FontVariant,
-        GridAutoFlow, GridTrack, ImageRendering, JustifyContent, WritingMode,
+        AlignContent, AlignItems, AspectRatio, BackgroundRepeatKeyword, BoxSizing, CaseTransform, FontStretch,
+        FontVariant, GridAutoFlow, GridTrack, ImageRendering, JustifyContent, TextOrientation, TextTransform,
+        WritingMode,
         ListStylePosition, ListStyleType, OutlineColor, OutlineStyle, PositionComponent, PositionKeyword,
         TextDecorationLine, TextDecorationStyle, TextDecorationThickness, TextEmphasisFill, TextEmphasisPosition,
         TextEmphasisShape, TextEmphasisStyle,
@@ -3956,6 +3968,75 @@ mod tests {
             16.0,
         );
         assert_eq!(style.image_rendering, ImageRendering::CrispEdges);
+    }
+
+    #[test]
+    fn parses_text_orientation_keywords() {
+        let mut styles = ComputedStyle::default();
+        apply_declaration(
+            &mut styles,
+            &Declaration {
+                property: "text-orientation".into(),
+                value: PropertyValue::Keyword("upright".into()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(styles.text_orientation, TextOrientation::Upright);
+
+        apply_declaration(
+            &mut styles,
+            &Declaration {
+                property: "text-orientation".into(),
+                value: PropertyValue::Keyword("sideways-right".into()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(styles.text_orientation, TextOrientation::SidewaysRight);
+    }
+
+    #[test]
+    fn leaves_text_orientation_unchanged_on_unknown_keyword() {
+        let mut styles = ComputedStyle::default();
+        apply_declaration(
+            &mut styles,
+            &Declaration {
+                property: "text-orientation".into(),
+                value: PropertyValue::Keyword("upright".into()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        apply_declaration(
+            &mut styles,
+            &Declaration {
+                property: "text-orientation".into(),
+                value: PropertyValue::Keyword("invalid".into()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(styles.text_orientation, TextOrientation::Upright);
+    }
+
+    #[test]
+    fn parses_text_transform_keyword() {
+        let mut styles = ComputedStyle::default();
+        let prop = Declaration {
+            property: "text-transform".into(),
+            value: PropertyValue::Keyword("uppercase".into()),
+            important: false,
+        };
+        apply_declaration(&mut styles, &prop, 16.0, 16.0);
+        assert_eq!(
+            styles.text_transform,
+            TextTransform::with_case(CaseTransform::Uppercase)
+        );
     }
 
     #[test]

@@ -873,6 +873,23 @@ pub enum TextAlignLast {
     Justify,
 }
 
+/// CSS `text-orientation`
+///
+/// Reference: CSS Writing Modes Level 4
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextOrientation {
+    Mixed,
+    Upright,
+    Sideways,
+    SidewaysRight,
+}
+
+impl Default for TextOrientation {
+    fn default() -> Self {
+        TextOrientation::Mixed
+    }
+}
+
 /// CSS `text-justify`
 ///
 /// Reference: CSS Text Level 3

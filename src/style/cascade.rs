@@ -281,6 +281,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.text_emphasis_color = parent.text_emphasis_color;
     styles.text_emphasis_position = parent.text_emphasis_position;
     styles.text_transform = parent.text_transform;
+    // text-orientation is non-inherited; leave as initial value
     styles.writing_mode = parent.writing_mode;
     styles.letter_spacing = parent.letter_spacing;
     styles.word_spacing = parent.word_spacing;
@@ -1109,6 +1110,7 @@ fn reset_marker_box_properties(styles: &mut ComputedStyle) {
     styles.text_emphasis_style = defaults.text_emphasis_style.clone();
     styles.text_emphasis_color = defaults.text_emphasis_color;
     styles.text_emphasis_position = defaults.text_emphasis_position;
+    styles.text_orientation = defaults.text_orientation;
     styles.text_align = defaults.text_align;
     styles.text_align_last = defaults.text_align_last;
     styles.text_indent = defaults.text_indent.clone();
