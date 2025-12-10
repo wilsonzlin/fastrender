@@ -45,6 +45,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use unicode_bidi::{BidiInfo, Level};
 
+fn pipeline_dir_from_style(dir: Direction) -> crate::text::pipeline::Direction {
+    match dir {
+        Direction::Ltr => crate::text::pipeline::Direction::LeftToRight,
+        Direction::Rtl => crate::text::pipeline::Direction::RightToLeft,
+    }
+}
+
 /// An item in the inline formatting context
 ///
 /// Represents different types of content that can appear inline.
@@ -196,6 +203,8 @@ pub struct TextItem {
 
     /// Computed style for this text run
     pub style: Arc<ComputedStyle>,
+    /// Base paragraph direction used for shaping
+    pub base_direction: Direction,
     /// Whether this text item is a list marker
     pub is_marker: bool,
     /// Additional paint offset applied at fragment creation (used for outside markers)
@@ -231,6 +240,7 @@ impl TextItem {
         break_opportunities: Vec<BreakOpportunity>,
         forced_break_offsets: Vec<usize>,
         style: Arc<ComputedStyle>,
+        base_direction: Direction,
     ) -> Self {
         let cluster_advances = Self::compute_cluster_advances(&runs, text.len(), style.font_size);
         let aligned_breaks = Self::align_breaks_to_clusters(break_opportunities, &cluster_advances, text.len());
@@ -250,6 +260,7 @@ impl TextItem {
             text,
             font_size,
             style,
+            base_direction,
             is_marker: false,
             paint_offset: 0.0,
             cluster_advances,
@@ -406,6 +417,7 @@ impl TextItem {
                 .filter(|o| *o <= split_offset)
                 .collect(),
             self.style.clone(),
+            self.base_direction,
         )
         .with_vertical_align(self.vertical_align);
 
@@ -421,6 +433,7 @@ impl TextItem {
                 .map(|o| o - split_offset)
                 .collect(),
             self.style.clone(),
+            self.base_direction,
         )
         .with_vertical_align(self.vertical_align);
 
@@ -1925,6 +1938,7 @@ fn slice_text_item(
             text: item.text[range.clone()].to_string(),
             font_size: item.font_size,
             style: item.style.clone(),
+            base_direction: item.base_direction,
             is_marker: item.is_marker,
             paint_offset: item.paint_offset,
             cluster_advances,
@@ -1932,7 +1946,14 @@ fn slice_text_item(
     }
 
     let slice_text = &item.text[range.clone()];
-    let mut runs = pipeline.shape(slice_text, &item.style, font_context).ok()?;
+    let mut runs = pipeline
+        .shape_with_direction(
+            slice_text,
+            &item.style,
+            font_context,
+            pipeline_dir_from_style(item.base_direction),
+        )
+        .ok()?;
     TextItem::apply_spacing_to_runs(
         &mut runs,
         slice_text,
@@ -1962,6 +1983,7 @@ fn slice_text_item(
         breaks,
         forced,
         item.style.clone(),
+        item.base_direction,
     )
     .with_vertical_align(item.vertical_align);
     if item.is_marker {
@@ -2117,21 +2139,28 @@ mod tests {
         BaselineMetrics::new(12.0, 16.0, 12.0, 4.0)
     }
 
-    fn make_builder(width: f32) -> LineBuilder<'static> {
-        let strut = make_strut_metrics();
-        LineBuilder::new(
-            width,
-            width,
+fn make_builder(width: f32) -> LineBuilder<'static> {
+    let strut = make_strut_metrics();
+    LineBuilder::new(
+        width,
+        width,
             strut,
             ShapingPipeline::new(),
             FontContext::new(),
             Some(Level::ltr()),
             None,
-            0.0,
-            0.0,
-            0.0,
-        )
+        0.0,
+        0.0,
+        0.0,
+    )
+}
+
+fn pipeline_dir_from_style(dir: Direction) -> crate::text::pipeline::Direction {
+    match dir {
+        Direction::Ltr => crate::text::pipeline::Direction::LeftToRight,
+        Direction::Rtl => crate::text::pipeline::Direction::RightToLeft,
     }
+}
 
     fn make_builder_with_base(width: f32, base: Level) -> LineBuilder<'static> {
         let strut = make_strut_metrics();
@@ -2178,6 +2207,7 @@ mod tests {
             text: text.to_string(),
             font_size: 16.0,
             style: style.clone(),
+            base_direction: crate::style::types::Direction::Ltr,
             is_marker: false,
             paint_offset: 0.0,
             cluster_advances,
@@ -3007,11 +3037,15 @@ mod tests {
         let font_ctx = FontContext::new();
         let pipeline = ShapingPipeline::new();
 
-        let base_runs = pipeline.shape(text, &style, &font_ctx).expect("shape");
+        let base_runs = pipeline
+            .shape_with_direction(text, &style, &font_ctx, pipeline_dir_from_style(Direction::Ltr))
+            .expect("shape");
         let base_width: f32 = base_runs.iter().map(|r| r.advance).sum();
 
         style.letter_spacing = 2.0;
-        let mut spaced_runs = pipeline.shape(text, &style, &font_ctx).expect("shape");
+        let mut spaced_runs = pipeline
+            .shape_with_direction(text, &style, &font_ctx, pipeline_dir_from_style(Direction::Ltr))
+            .expect("shape");
         TextItem::apply_spacing_to_runs(&mut spaced_runs, text, style.letter_spacing, style.word_spacing);
         let spaced_width: f32 = spaced_runs.iter().map(|r| r.advance).sum();
 
@@ -3029,11 +3063,18 @@ mod tests {
         let pipeline = ShapingPipeline::new();
 
         let base_runs = pipeline
-            .shape(text, &ComputedStyle::default(), &font_ctx)
+            .shape_with_direction(
+                text,
+                &ComputedStyle::default(),
+                &font_ctx,
+                pipeline_dir_from_style(Direction::Ltr),
+            )
             .expect("shape");
         let base_width: f32 = base_runs.iter().map(|r| r.advance).sum();
 
-        let mut spaced_runs = pipeline.shape(text, &style, &font_ctx).expect("shape");
+        let mut spaced_runs = pipeline
+            .shape_with_direction(text, &style, &font_ctx, pipeline_dir_from_style(Direction::Ltr))
+            .expect("shape");
         TextItem::apply_spacing_to_runs(&mut spaced_runs, text, style.letter_spacing, style.word_spacing);
         let spaced_width: f32 = spaced_runs.iter().map(|r| r.advance).sum();
 
@@ -3050,10 +3091,20 @@ mod tests {
         let pipeline = ShapingPipeline::new();
         let style = Arc::new(ComputedStyle::default());
 
-        let runs = pipeline.shape("abc", &style, &font_ctx).expect("shape");
+        let runs = pipeline
+            .shape_with_direction("abc", &style, &font_ctx, pipeline_dir_from_style(Direction::Ltr))
+            .expect("shape");
         let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
         let breaks = vec![BreakOpportunity::with_hyphen(1, BreakType::Allowed, true)];
-        let item = TextItem::new(runs, "abc".to_string(), metrics, breaks, Vec::new(), style);
+        let item = TextItem::new(
+            runs,
+            "abc".to_string(),
+            metrics,
+            breaks,
+            Vec::new(),
+            style,
+            Direction::Ltr,
+        );
 
         let (before, after) = item.split_at(1, true, &pipeline, &font_ctx).expect("split succeeds");
 

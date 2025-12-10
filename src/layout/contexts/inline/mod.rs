@@ -127,7 +127,15 @@ impl InlineFormattingContext {
 
     fn hyphen_advance(&self, style: &ComputedStyle) -> f32 {
         const INSERTED_HYPHEN: &str = "\u{2010}";
-        match self.pipeline.shape(INSERTED_HYPHEN, style, &self.font_context) {
+        match self
+            .pipeline
+            .shape_with_direction(
+                INSERTED_HYPHEN,
+                style,
+                &self.font_context,
+                pipeline_direction(style.direction),
+            )
+        {
             Ok(mut runs) => {
                 TextItem::apply_spacing_to_runs(&mut runs, INSERTED_HYPHEN, style.letter_spacing, style.word_spacing);
                 runs.iter().map(|r| r.advance).sum()
@@ -170,15 +178,33 @@ impl InlineFormattingContext {
         }
     }
 
-    /// Collects inline items from box node children
+    /// Collects inline items from box node children using the author's base direction.
     fn collect_inline_items(
         &self,
         box_node: &BoxNode,
         available_width: f32,
         available_height: Option<f32>,
     ) -> Result<Vec<InlineItem>, LayoutError> {
+        let base_direction = box_node.style.direction;
+        self.collect_inline_items_with_base(box_node, available_width, available_height, base_direction)
+    }
+
+    /// Collects inline items with an explicit base direction for bidi shaping.
+    fn collect_inline_items_with_base(
+        &self,
+        box_node: &BoxNode,
+        available_width: f32,
+        available_height: Option<f32>,
+        base_direction: crate::style::types::Direction,
+    ) -> Result<Vec<InlineItem>, LayoutError> {
         let mut pending_space: Option<PendingSpace> = None;
-        self.collect_inline_items_internal(box_node, available_width, available_height, &mut pending_space)
+        self.collect_inline_items_internal(
+            box_node,
+            available_width,
+            available_height,
+            &mut pending_space,
+            base_direction,
+        )
     }
 
     fn collect_inline_items_internal(
@@ -187,6 +213,7 @@ impl InlineFormattingContext {
         available_width: f32,
         available_height: Option<f32>,
         pending_space: &mut Option<PendingSpace>,
+        base_direction: crate::style::types::Direction,
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let mut items = Vec::new();
 
@@ -202,7 +229,12 @@ impl InlineFormattingContext {
                         child.style.white_space,
                     );
 
-                    let mut produced = self.create_inline_items_from_normalized(child, normalized.clone(), false)?;
+                    let mut produced = self.create_inline_items_from_normalized_with_base(
+                        child,
+                        normalized.clone(),
+                        false,
+                        base_direction,
+                    )?;
                     items.append(&mut produced);
                     if normalized.trailing_collapsible {
                         *pending_space = Some(PendingSpace::new(child.style.clone(), normalized.allow_soft_wrap));
@@ -217,7 +249,12 @@ impl InlineFormattingContext {
                             leading_collapsible: false,
                             trailing_collapsible: false,
                         };
-                        let mut produced = self.create_inline_items_from_normalized(child, normalized.clone(), true)?;
+                        let mut produced = self.create_inline_items_from_normalized_with_base(
+                            child,
+                            normalized.clone(),
+                            true,
+                            base_direction,
+                        )?;
                         items.append(&mut produced);
                         if normalized.trailing_collapsible {
                             *pending_space = Some(PendingSpace::new(child.style.clone(), normalized.allow_soft_wrap));
@@ -335,8 +372,13 @@ impl InlineFormattingContext {
                     let content_offset_y = padding_top + border_top;
 
                     // Recursively collect children first
-                    let child_items =
-                        self.collect_inline_items_internal(child, available_width, available_height, pending_space)?;
+                    let child_items = self.collect_inline_items_internal(
+                        child,
+                        available_width,
+                        available_height,
+                        pending_space,
+                        base_direction,
+                    )?;
                     let fallback_metrics = self.compute_strut_metrics(&child.style);
                     let metrics = compute_inline_box_metrics(
                         &child_items,
@@ -507,17 +549,43 @@ impl InlineFormattingContext {
         text: &str,
         is_marker: bool,
     ) -> Result<Vec<InlineItem>, LayoutError> {
+        self.create_inline_items_for_text_with_base(box_node, text, is_marker, box_node.style.direction)
+    }
+
+    fn create_inline_items_for_text_with_base(
+        &self,
+        box_node: &BoxNode,
+        text: &str,
+        is_marker: bool,
+        base_direction: crate::style::types::Direction,
+    ) -> Result<Vec<InlineItem>, LayoutError> {
         let style = &box_node.style;
         let transformed = apply_text_transform(text, style.text_transform, style.white_space);
         let normalized = normalize_text_for_white_space(&transformed, style.white_space);
-        self.create_inline_items_from_normalized(box_node, normalized, is_marker)
+        self.create_inline_items_from_normalized_with_base(box_node, normalized, is_marker, base_direction)
     }
 
+    #[allow(dead_code)]
     fn create_inline_items_from_normalized(
         &self,
         box_node: &BoxNode,
         normalized: NormalizedText,
         is_marker: bool,
+    ) -> Result<Vec<InlineItem>, LayoutError> {
+        self.create_inline_items_from_normalized_with_base(
+            box_node,
+            normalized,
+            is_marker,
+            box_node.style.direction,
+        )
+    }
+
+    fn create_inline_items_from_normalized_with_base(
+        &self,
+        box_node: &BoxNode,
+        normalized: NormalizedText,
+        is_marker: bool,
+        base_direction: crate::style::types::Direction,
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let NormalizedText {
             text: normalized_text,
@@ -536,6 +604,7 @@ impl InlineFormattingContext {
                 forced_breaks,
                 allow_soft_wrap,
                 is_marker,
+                base_direction,
             )?;
             return Ok(vec![InlineItem::Text(item)]);
         }
@@ -555,6 +624,7 @@ impl InlineFormattingContext {
                     segment_breaks,
                     allow_soft_wrap,
                     is_marker,
+                    base_direction,
                 )?;
                 if !item.text.is_empty() {
                     items.push(InlineItem::Text(item));
@@ -573,6 +643,7 @@ impl InlineFormattingContext {
                 segment_breaks,
                 allow_soft_wrap,
                 is_marker,
+                base_direction,
             )?;
             if !item.text.is_empty() {
                 items.push(InlineItem::Text(item));
@@ -584,7 +655,20 @@ impl InlineFormattingContext {
 
     /// Creates a text item from a text box
     #[allow(dead_code)]
-    fn create_text_item(&self, box_node: &BoxNode, text: &str) -> Result<TextItem, LayoutError> {
+    fn create_text_item(
+        &self,
+        box_node: &BoxNode,
+        text: &str,
+    ) -> Result<TextItem, LayoutError> {
+        self.create_text_item_with_base(box_node, text, box_node.style.direction)
+    }
+
+    fn create_text_item_with_base(
+        &self,
+        box_node: &BoxNode,
+        text: &str,
+        base_direction: crate::style::types::Direction,
+    ) -> Result<TextItem, LayoutError> {
         let style = &box_node.style;
         let transformed = apply_text_transform(text, style.text_transform, style.white_space);
         let normalized = normalize_text_for_white_space(&transformed, style.white_space);
@@ -594,6 +678,7 @@ impl InlineFormattingContext {
             normalized.forced_breaks,
             normalized.allow_soft_wrap,
             false,
+            base_direction,
         )
     }
 
@@ -604,6 +689,7 @@ impl InlineFormattingContext {
         forced_breaks: Vec<crate::text::line_break::BreakOpportunity>,
         allow_soft_wrap: bool,
         is_marker: bool,
+        base_direction: crate::style::types::Direction,
     ) -> Result<TextItem, LayoutError> {
         let metrics = self.resolve_scaled_metrics(style);
         let line_height = compute_line_height_with_metrics(style, metrics.as_ref());
@@ -616,7 +702,7 @@ impl InlineFormattingContext {
 
         let forced_break_offsets: Vec<usize> = forced_breaks.iter().map(|b| b.byte_offset).collect();
 
-        let mut shaped_runs = self.shape_with_fallback(&hyphen_free, style)?;
+        let mut shaped_runs = self.shape_with_fallback(&hyphen_free, style, base_direction)?;
         TextItem::apply_spacing_to_runs(&mut shaped_runs, &hyphen_free, style.letter_spacing, style.word_spacing);
 
         let metrics = TextItem::metrics_from_runs(&shaped_runs, line_height, style.font_size);
@@ -646,6 +732,7 @@ impl InlineFormattingContext {
             breaks,
             forced_break_offsets,
             style.clone(),
+            base_direction,
         )
         .with_vertical_align(va);
 
@@ -688,19 +775,39 @@ impl InlineFormattingContext {
         style: &Arc<ComputedStyle>,
         allow_soft_wrap: bool,
     ) -> Result<InlineItem, LayoutError> {
-        let item = self.create_text_item_from_normalized(style, " ", Vec::new(), allow_soft_wrap, false)?;
+        let item = self.create_text_item_from_normalized(
+            style,
+            " ",
+            Vec::new(),
+            allow_soft_wrap,
+            false,
+            style.direction,
+        )?;
         Ok(InlineItem::Text(item))
     }
 
-    fn shape_with_fallback(&self, text: &str, style: &ComputedStyle) -> Result<Vec<ShapedRun>, LayoutError> {
-        match self.pipeline.shape(text, style, &self.font_context) {
+    fn shape_with_fallback(
+        &self,
+        text: &str,
+        style: &ComputedStyle,
+        base_direction: crate::style::types::Direction,
+    ) -> Result<Vec<ShapedRun>, LayoutError> {
+        match self
+            .pipeline
+            .shape_with_direction(text, style, &self.font_context, pipeline_direction(base_direction))
+        {
             Ok(runs) => Ok(runs),
             Err(err) => {
                 if let Some(fallback_font) = self.font_context.get_sans_serif() {
                     let mut fallback_style = style.clone();
                     fallback_style.font_family = vec![fallback_font.family.clone()];
                     self.pipeline
-                        .shape(text, &fallback_style, &self.font_context)
+                        .shape_with_direction(
+                            text,
+                            &fallback_style,
+                            &self.font_context,
+                            pipeline_direction(base_direction),
+                        )
                         .map_err(|e| {
                             LayoutError::MissingContext(format!(
                                 "Shaping failed (fonts={}): {:?}",
@@ -720,7 +827,7 @@ impl InlineFormattingContext {
     }
 
     fn space_advance(&self, style: &ComputedStyle) -> Result<f32, LayoutError> {
-        let mut runs = self.shape_with_fallback(" ", style)?;
+        let mut runs = self.shape_with_fallback(" ", style, style.direction)?;
         TextItem::apply_spacing_to_runs(&mut runs, " ", style.letter_spacing, style.word_spacing);
         Ok(runs.iter().map(|r| r.advance).sum())
     }
@@ -2648,14 +2755,11 @@ impl InlineFormattingContext {
         // Create strut metrics from containing block style
         let strut_metrics = self.compute_strut_metrics(style);
 
-        // Collect inline items
-        let items = self.collect_inline_items(box_node, available_width, available_height)?;
+        // Resolve paragraph base direction before shaping so bidi analysis uses the correct base.
+        let base_direction = resolve_base_direction_for_box(box_node);
 
-        let base_direction = if matches!(style.unicode_bidi, crate::style::types::UnicodeBidi::Plaintext) {
-            determine_paragraph_direction(&items).unwrap_or(style.direction)
-        } else {
-            style.direction
-        };
+        // Collect inline items
+        let items = self.collect_inline_items_with_base(box_node, available_width, available_height, base_direction)?;
 
         let indent_value = resolve_length_with_percentage_inline(
             style.text_indent.length,
@@ -3031,6 +3135,7 @@ fn compute_paragraph_line_flags(lines: &[Line]) -> Vec<(bool, bool)> {
     flags
 }
 
+#[allow(dead_code)]
 fn determine_paragraph_direction(items: &[InlineItem]) -> Option<crate::style::types::Direction> {
     const OBJECT_REPLACEMENT: char = '\u{FFFC}';
 
@@ -3066,6 +3171,52 @@ fn determine_paragraph_direction(items: &[InlineItem]) -> Option<crate::style::t
             crate::style::types::Direction::Ltr
         }
     })
+}
+
+fn collect_logical_text_for_direction(node: &BoxNode, out: &mut String) {
+    const OBJECT_REPLACEMENT: char = '\u{FFFC}';
+    match &node.box_type {
+        BoxType::Text(t) => out.push_str(&t.text),
+        BoxType::Marker(marker) => {
+            if let MarkerContent::Text(t) = &marker.content {
+                out.push_str(t);
+            }
+        }
+        _ => out.push(OBJECT_REPLACEMENT),
+    }
+
+    for child in &node.children {
+        collect_logical_text_for_direction(child, out);
+    }
+}
+
+fn resolve_base_direction_for_box(box_node: &BoxNode) -> crate::style::types::Direction {
+    if !matches!(box_node.style.unicode_bidi, crate::style::types::UnicodeBidi::Plaintext) {
+        return box_node.style.direction;
+    }
+
+    let mut logical = String::new();
+    collect_logical_text_for_direction(box_node, &mut logical);
+    if logical.is_empty() {
+        return box_node.style.direction;
+    }
+    let info = unicode_bidi::BidiInfo::new(&logical, None);
+    if let Some(p) = info.paragraphs.first() {
+        if p.level.is_rtl() {
+            crate::style::types::Direction::Rtl
+        } else {
+            crate::style::types::Direction::Ltr
+        }
+    } else {
+        box_node.style.direction
+    }
+}
+
+fn pipeline_direction(dir: crate::style::types::Direction) -> crate::text::pipeline::Direction {
+    match dir {
+        crate::style::types::Direction::Ltr => crate::text::pipeline::Direction::LeftToRight,
+        crate::style::types::Direction::Rtl => crate::text::pipeline::Direction::RightToLeft,
+    }
 }
 
 fn resolve_auto_text_justify(mode: TextJustify, items: &[PositionedItem]) -> TextJustify {
