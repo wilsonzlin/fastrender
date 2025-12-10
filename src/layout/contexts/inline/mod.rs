@@ -699,16 +699,17 @@ impl InlineFormattingContext {
             } else {
                 style.font_size * 0.5
             };
+            let marker_extent = item.advance + gap;
             let sign = if style.direction == crate::style::types::Direction::Rtl {
                 1.0
             } else {
                 -1.0
             };
             if style.list_style_position == ListStylePosition::Outside {
-                item.advance_for_layout = 0.0;
-                item.paint_offset = sign * (item.advance + gap);
+                item.advance_for_layout = marker_extent;
+                item.paint_offset = sign * marker_extent;
             } else {
-                item.advance_for_layout = item.advance;
+                item.advance_for_layout = marker_extent;
                 item.paint_offset = 0.0;
             }
             item.is_marker = true;
@@ -2686,8 +2687,13 @@ mod tests {
         let line = fragment.children.first().expect("line fragment");
         let (marker_x, text_x) = marker_and_text_positions(line);
 
-        assert!(text_x.unwrap_or(-100.0) >= -0.01 && text_x.unwrap() <= 0.1);
-        assert!(marker_x.unwrap_or(0.0) < -5.0);
+        let text_pos = text_x.expect("text position");
+        assert!(
+            text_pos > 17.0 && text_pos < 19.5,
+            "outside marker should reserve its width+gap; got text x={}",
+            text_pos
+        );
+        assert!(marker_x.unwrap_or(0.0) < -10.0);
     }
 
     #[test]

@@ -991,15 +991,14 @@ impl ReplacedItem {
 
     /// Marks this replaced item as a list marker and adjusts layout/paint offsets accordingly.
     pub fn as_marker(mut self, gap: f32, position: ListStylePosition, direction: Direction) -> Self {
-        let paint_advance = self.width + gap;
+        let extent = self.width + gap;
         let sign = if direction == Direction::Rtl { 1.0 } else { -1.0 };
-        if matches!(position, ListStylePosition::Outside) {
-            self.layout_advance = 0.0;
-            self.paint_offset = sign * paint_advance;
+        self.layout_advance = extent;
+        self.paint_offset = if matches!(position, ListStylePosition::Outside) {
+            sign * extent
         } else {
-            self.layout_advance = paint_advance;
-            self.paint_offset = 0.0;
-        }
+            0.0
+        };
         self.margin_left = 0.0;
         self.margin_right = 0.0;
         self.is_marker = true;
