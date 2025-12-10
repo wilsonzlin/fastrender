@@ -38,6 +38,7 @@ use crate::style::color::Rgba;
 use crate::style::display::Display;
 use crate::style::types::{BorderCollapse, BorderStyle, CaptionSide, Direction, EmptyCells, TableLayout, VerticalAlign};
 use crate::style::values::{Length, LengthUnit};
+use crate::style::ComputedStyle;
 use crate::tree::box_tree::{BoxNode, BoxType, MarkerContent};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 use std::sync::Arc;
@@ -279,6 +280,23 @@ fn cell_is_visually_empty(cell: &BoxNode) -> bool {
         return false;
     }
     !node_has_visible_content(cell)
+}
+
+fn style_paints_background_or_border(style: &ComputedStyle) -> bool {
+    if !style.background_color.is_transparent() || style.background_image.is_some() {
+        return true;
+    }
+    let paints_border = |style: BorderStyle, width: &Length| {
+        !matches!(style, BorderStyle::None | BorderStyle::Hidden) && width.to_px() > 0.0
+    };
+    if paints_border(style.border_top_style, &style.border_top_width)
+        || paints_border(style.border_right_style, &style.border_right_width)
+        || paints_border(style.border_bottom_style, &style.border_bottom_width)
+        || paints_border(style.border_left_style, &style.border_left_width)
+    {
+        return true;
+    }
+    !style.box_shadow.is_empty()
 }
 
 impl TableStructure {
@@ -2455,7 +2473,95 @@ impl FormattingContext for TableFormattingContext {
             }
         }
 
-        // Position fragments with vertical alignment within their row block
+        let content_width: f32 = if structure.border_collapse == BorderCollapse::Collapse {
+            col_widths.iter().sum::<f32>() + vertical_line_max.iter().copied().sum::<f32>()
+        } else {
+            col_widths.iter().sum::<f32>() + spacing
+        };
+
+        // Paint order backgrounds before cells.
+        // Row groups
+        let mut row_styles: Vec<Option<Arc<ComputedStyle>>> = vec![None; structure.row_count];
+        let mut row_groups: Vec<(usize, usize, Arc<ComputedStyle>)> = Vec::new();
+        let mut row_cursor = 0usize;
+        for child in &box_node.children {
+            match TableStructure::get_table_element_type(child) {
+                TableElementType::RowGroup | TableElementType::HeaderGroup | TableElementType::FooterGroup => {
+                    let start = row_cursor;
+                    for row_child in &child.children {
+                        if TableStructure::get_table_element_type(row_child) == TableElementType::Row {
+                            if row_cursor < row_styles.len() {
+                                row_styles[row_cursor] = Some(row_child.style.clone());
+                            }
+                            row_cursor += 1;
+                        }
+                    }
+                    let end = row_cursor.min(row_styles.len());
+                    if start < end {
+                        row_groups.push((start, end, child.style.clone()));
+                    }
+                }
+                TableElementType::Row => {
+                    if row_cursor < row_styles.len() {
+                        row_styles[row_cursor] = Some(child.style.clone());
+                    }
+                    row_cursor += 1;
+                }
+                _ => {}
+            }
+        }
+
+        for (start, end, style) in row_groups {
+            if !style_paints_background_or_border(&style) {
+                continue;
+            }
+            if start >= row_offsets.len() {
+                break;
+            }
+            let top = row_offsets[start];
+            let bottom = if end < row_offsets.len() {
+                row_offsets[end]
+            } else {
+                row_offsets
+                    .last()
+                    .copied()
+                    .unwrap_or(top)
+                    + row_metrics.last().map(|r| r.height).unwrap_or(0.0)
+                    + if structure.border_collapse != BorderCollapse::Collapse {
+                        v_spacing
+                    } else {
+                        0.0
+                    }
+            };
+            let height = (bottom - top).max(0.0);
+            let rect = Rect::from_xywh(content_origin_x, top, content_width, height);
+            fragments.push(FragmentNode::new_with_style(
+                rect,
+                FragmentContent::Block { box_id: None },
+                Vec::new(),
+                style,
+            ));
+        }
+
+        // Rows
+        for (idx, style) in row_styles.into_iter().enumerate() {
+            if let Some(style) = style {
+                if !style_paints_background_or_border(&style) {
+                    continue;
+                }
+                let top = row_offsets.get(idx).copied().unwrap_or(0.0);
+                let height = row_metrics.get(idx).map(|r| r.height).unwrap_or(0.0);
+                let rect = Rect::from_xywh(content_origin_x, top, content_width, height);
+                fragments.push(FragmentNode::new_with_style(
+                    rect,
+                    FragmentContent::Block { box_id: None },
+                    Vec::new(),
+                    style,
+                ));
+            }
+        }
+
+        // Position cell fragments with vertical alignment within their row block
         for laid in laid_out_cells {
             let cell = laid.cell;
             // Compute horizontal position
@@ -2501,11 +2607,6 @@ impl FormattingContext for TableFormattingContext {
             fragments.push(laid.fragment.translate(Point::new(x, y)));
         }
 
-        let content_width: f32 = if structure.border_collapse == BorderCollapse::Collapse {
-            col_widths.iter().sum::<f32>() + vertical_line_max.iter().copied().sum::<f32>()
-        } else {
-            col_widths.iter().sum::<f32>() + spacing
-        };
         let content_height = if structure.row_count > 0 {
             if structure.border_collapse == BorderCollapse::Collapse {
                 let mut h = horizontal_line_max.get(0).copied().unwrap_or(0.0);
@@ -3272,6 +3373,44 @@ mod tests {
             }
         }
         None
+    }
+
+    #[test]
+    fn row_backgrounds_are_emitted_before_cells() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        row_style.background_color = Rgba::from_rgba8(200, 0, 0, 255);
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let fc = TableFormattingContext::with_factory(FormattingContextFactory::new());
+        let fragment = fc
+            .layout(
+                &table,
+                &LayoutConstraints::new(AvailableSpace::Definite(100.0), AvailableSpace::Indefinite),
+            )
+            .expect("layout");
+
+        assert!(
+            !fragment.children.is_empty(),
+            "table fragment should contain row background and cell fragments"
+        );
+        let row_frag = &fragment.children[0];
+        let row_color = row_frag
+            .style
+            .as_ref()
+            .map(|s| s.background_color)
+            .expect("row fragment has style");
+        assert_eq!(row_color, Rgba::from_rgba8(200, 0, 0, 255));
+        let cell_frag = find_cell_fragment(&fragment).expect("cell fragment");
+        assert!(row_frag.bounds.y() <= cell_frag.bounds.y());
     }
 
     #[test]
