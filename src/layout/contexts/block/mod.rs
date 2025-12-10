@@ -126,9 +126,6 @@ impl BlockFormattingContext {
         let font_size = style.font_size; // Get font-size for resolving em units
         let containing_height = constraints.height();
 
-        // Compute width using CSS 2.1 Section 10.3.3 algorithm
-        let computed_width = compute_block_width(style, containing_width, self.viewport_size);
-
         // Handle vertical margins (resolve em/rem units with font-size)
         let margin_top = resolve_opt_length(
             style.margin_top.as_ref(),
@@ -163,6 +160,16 @@ impl BlockFormattingContext {
         let child_height_space = specified_height
             .map(AvailableSpace::Definite)
             .unwrap_or(AvailableSpace::Indefinite);
+
+        // Compute width using CSS 2.1 Section 10.3.3 algorithm
+        let mut computed_width = compute_block_width(style, containing_width, self.viewport_size);
+        if matches!(style.width, LengthOrAuto::Auto) {
+            if let (crate::style::types::AspectRatio::Ratio(ratio), Some(h)) = (style.aspect_ratio, specified_height) {
+                if ratio > 0.0 {
+                    computed_width.content_width = h * ratio;
+                }
+            }
+        }
 
         let child_constraints = LayoutConstraints::new(
             AvailableSpace::Definite(computed_width.content_width),
