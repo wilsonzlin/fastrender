@@ -11,7 +11,9 @@ use crate::style::color::Rgba;
 use crate::style::counters::CounterSet;
 use crate::style::display::Display;
 use crate::style::float::{Clear, Float};
-use crate::style::grid::{parse_grid_template_areas, parse_grid_template_shorthand, parse_grid_tracks_with_names};
+use crate::style::grid::{
+    parse_grid_template_areas, parse_grid_template_shorthand, parse_grid_tracks_with_names, parse_track_list, ParsedTracks,
+};
 use crate::css::properties::parse_length;
 use crate::style::position::Position;
 use crate::style::types::*;
@@ -557,6 +559,42 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 }
             }
         }
+        "grid-auto-rows" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                let ParsedTracks { tracks, .. } = parse_track_list(kw);
+                if !tracks.is_empty() {
+                    styles.grid_auto_rows = tracks;
+                }
+            }
+        }
+        "grid-auto-columns" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                let ParsedTracks { tracks, .. } = parse_track_list(kw);
+                if !tracks.is_empty() {
+                    styles.grid_auto_columns = tracks;
+                }
+            }
+        }
+        "grid-auto-flow" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                let lower = kw.to_ascii_lowercase();
+                let dense = lower.contains("dense");
+                let primary = if lower.contains("column") {
+                    "column"
+                } else if lower.contains("row") {
+                    "row"
+                } else {
+                    "row"
+                };
+                styles.grid_auto_flow = match (primary, dense) {
+                    ("row", false) => GridAutoFlow::Row,
+                    ("row", true) => GridAutoFlow::RowDense,
+                    ("column", false) => GridAutoFlow::Column,
+                    ("column", true) => GridAutoFlow::ColumnDense,
+                    _ => GridAutoFlow::Row,
+                };
+            }
+        }
         "grid-gap" | "gap" => {
             if let Some((row, column)) = parse_gap_lengths(&resolved_value) {
                 styles.grid_gap = row;
@@ -649,6 +687,27 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                         .unwrap_or("auto");
                     styles.grid_row_raw = Some(format!("{} / {}", current_start, kw));
                 }
+            }
+        }
+        "grid-area" => {
+            if let PropertyValue::Keyword(kw) | PropertyValue::String(kw) = &resolved_value {
+                let parts: Vec<&str> = kw.split('/').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                if parts.is_empty() {
+                    return;
+                }
+                let mut row_start = parts.get(0).copied().unwrap_or("auto").to_string();
+                let mut col_start = parts.get(1).copied().unwrap_or("auto").to_string();
+                let mut row_end = parts.get(2).copied().unwrap_or("auto").to_string();
+                let mut col_end = parts.get(3).copied().unwrap_or("auto").to_string();
+                if parts.len() == 1 {
+                    // Single area name: map to area start/end
+                    row_start = format!("{}-start", parts[0]);
+                    row_end = format!("{}-end", parts[0]);
+                    col_start = row_start.clone();
+                    col_end = row_end.clone();
+                }
+                styles.grid_row_raw = Some(format!("{} / {}", row_start, row_end));
+                styles.grid_column_raw = Some(format!("{} / {}", col_start, col_end));
             }
         }
 
@@ -3596,8 +3655,9 @@ fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
 mod tests {
     use super::*;
     use crate::style::types::{
-        BackgroundRepeatKeyword, BoxSizing, FontStretch, FontVariant, ListStylePosition, ListStyleType, OutlineColor,
-        OutlineStyle, PositionComponent, PositionKeyword, TextDecorationLine, TextDecorationStyle,
+        BackgroundRepeatKeyword, BoxSizing, FontStretch, FontVariant, GridAutoFlow, GridTrack, ListStylePosition,
+        ListStyleType, OutlineColor, OutlineStyle, PositionComponent, PositionKeyword, TextDecorationLine,
+        TextDecorationStyle,
         TextDecorationThickness, TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
     };
 
@@ -3652,6 +3712,73 @@ mod tests {
         );
 
         assert!(matches!(style.box_sizing, BoxSizing::BorderBox));
+    }
+
+    #[test]
+    fn parses_grid_auto_rows_and_columns() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "grid-auto-rows".into(),
+                value: PropertyValue::Keyword("10px minmax(0,1fr)".into()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.grid_auto_rows.len(), 2);
+        assert!(matches!(style.grid_auto_rows[0], GridTrack::Length(_)));
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "grid-auto-columns".into(),
+                value: PropertyValue::Keyword("20%".into()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.grid_auto_columns.len(), 1);
+    }
+
+    #[test]
+    fn parses_grid_auto_flow() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "grid-auto-flow".into(),
+                value: PropertyValue::Keyword("column dense".into()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.grid_auto_flow, GridAutoFlow::ColumnDense);
+    }
+
+    #[test]
+    fn parses_grid_area_named_area() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "grid-area".into(),
+                value: PropertyValue::Keyword("hero".into()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(
+            style.grid_row_raw.as_deref(),
+            Some("hero-start / hero-end")
+        );
+        assert_eq!(
+            style.grid_column_raw.as_deref(),
+            Some("hero-start / hero-end")
+        );
     }
 
     #[test]

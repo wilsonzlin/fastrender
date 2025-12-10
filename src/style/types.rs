@@ -362,7 +362,30 @@ pub enum GridTrack {
     Length(Length),
     Fr(f32),
     Auto,
+    MinContent,
+    MaxContent,
+    FitContent(Length),
     MinMax(Box<GridTrack>, Box<GridTrack>),
+    RepeatAutoFill {
+        tracks: Vec<GridTrack>,
+        line_names: Vec<Vec<String>>,
+    },
+    RepeatAutoFit {
+        tracks: Vec<GridTrack>,
+        line_names: Vec<Vec<String>>,
+    },
+}
+
+/// Auto-placement direction and density for implicit grid items
+///
+/// CSS: `grid-auto-flow`
+/// Reference: CSS Grid Layout Module Level 1
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GridAutoFlow {
+    Row,
+    Column,
+    RowDense,
+    ColumnDense,
 }
 
 /// Font weight

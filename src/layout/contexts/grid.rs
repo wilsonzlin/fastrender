@@ -43,7 +43,7 @@ use crate::geometry::Rect;
 use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutConstraints};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::display::Display as CssDisplay;
-use crate::style::types::{AlignContent, BoxSizing, GridTrack};
+use crate::style::types::{AlignContent, BoxSizing, GridAutoFlow, GridTrack};
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::style::grid::validate_area_rectangles;
@@ -203,6 +203,27 @@ impl GridFormattingContext {
             if !style.grid_row_line_names.is_empty() {
                 taffy_style.grid_template_row_names = style.grid_row_line_names.clone();
             }
+            // Implicit track sizing
+            if !style.grid_auto_rows.is_empty() {
+                taffy_style.grid_auto_rows = style
+                    .grid_auto_rows
+                    .iter()
+                    .map(|t| self.convert_track_size(t, style))
+                    .collect();
+            }
+            if !style.grid_auto_columns.is_empty() {
+                taffy_style.grid_auto_columns = style
+                    .grid_auto_columns
+                    .iter()
+                    .map(|t| self.convert_track_size(t, style))
+                    .collect();
+            }
+            taffy_style.grid_auto_flow = match style.grid_auto_flow {
+                GridAutoFlow::Row => taffy::style::GridAutoFlow::Row,
+                GridAutoFlow::Column => taffy::style::GridAutoFlow::Column,
+                GridAutoFlow::RowDense => taffy::style::GridAutoFlow::RowDense,
+                GridAutoFlow::ColumnDense => taffy::style::GridAutoFlow::ColumnDense,
+            };
             if !style.grid_template_areas.is_empty() {
                 if let Some(mut bounds) = validate_area_rectangles(&style.grid_template_areas) {
                     let mut entries: Vec<_> = bounds.drain().collect();

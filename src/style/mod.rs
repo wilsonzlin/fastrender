@@ -119,6 +119,12 @@ pub struct ComputedStyle {
     pub grid_template_rows: Vec<GridTrack>,
     /// Parsed grid-template-areas rows (None for empty cells)
     pub grid_template_areas: Vec<Vec<Option<String>>>,
+    /// Sizes for implicitly created rows
+    pub grid_auto_rows: Vec<GridTrack>,
+    /// Sizes for implicitly created columns
+    pub grid_auto_columns: Vec<GridTrack>,
+    /// Auto-placement direction/density
+    pub grid_auto_flow: types::GridAutoFlow,
     pub grid_column_names: HashMap<String, Vec<usize>>, // Named grid lines for columns
     pub grid_row_names: HashMap<String, Vec<usize>>,    // Named grid lines for rows
     pub grid_column_line_names: Vec<Vec<String>>,       // Line names per column line (tracks+1)
@@ -299,6 +305,9 @@ impl Default for ComputedStyle {
             grid_template_columns: Vec::new(),
             grid_template_rows: Vec::new(),
             grid_template_areas: Vec::new(),
+            grid_auto_rows: vec![GridTrack::Auto],
+            grid_auto_columns: vec![GridTrack::Auto],
+            grid_auto_flow: types::GridAutoFlow::Row,
             grid_column_names: HashMap::new(),
             grid_row_names: HashMap::new(),
             grid_column_line_names: Vec::new(),
