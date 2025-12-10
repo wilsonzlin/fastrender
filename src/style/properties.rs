@@ -95,6 +95,36 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 styles.z_index = n as i32;
             }
         }
+        "outline-color" => {
+            match &resolved_value {
+                PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentcolor") => {
+                    styles.outline_color_from_current = true;
+                }
+                PropertyValue::Color(c) => {
+                    styles.outline_color = *c;
+                    styles.outline_color_from_current = false;
+                }
+                _ => {}
+            }
+        }
+        "outline-style" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.outline_style = parse_border_style(kw);
+            }
+        }
+        "outline-width" => {
+            if let Some(width) = parse_outline_width(&resolved_value) {
+                styles.outline_width = width;
+            }
+        }
+        "outline-offset" => {
+            if let Some(len) = extract_length(&resolved_value) {
+                styles.outline_offset = len;
+            }
+        }
+        "outline" => {
+            apply_outline_shorthand(styles, &resolved_value);
+        }
 
         // Width and height
         "width" => styles.width = extract_length(&resolved_value),
@@ -2893,12 +2923,88 @@ pub fn parse_border_style(kw: &str) -> BorderStyle {
     }
 }
 
+fn parse_outline_width(value: &PropertyValue) -> Option<Length> {
+    match value {
+        PropertyValue::Length(l) if l.value >= 0.0 => Some(*l),
+        PropertyValue::Keyword(kw) => match kw.as_str() {
+            "thin" => Some(Length::px(1.0)),
+            "medium" => Some(Length::px(3.0)),
+            "thick" => Some(Length::px(5.0)),
+            _ => None,
+        },
+        PropertyValue::Number(n) if *n >= 0.0 => Some(Length::px(*n)),
+        _ => None,
+    }
+}
+
+fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
+    // The outline shorthand resets color/style/width to their initial values
+    // before applying provided tokens (offset is not part of the shorthand).
+    let defaults = ComputedStyle::default();
+    styles.outline_style = defaults.outline_style;
+    styles.outline_width = defaults.outline_width;
+    styles.outline_color = defaults.outline_color;
+    styles.outline_color_from_current = defaults.outline_color_from_current;
+
+    let mut color = None;
+    let mut style = None;
+    let mut width = None;
+
+    let tokens = match value {
+        PropertyValue::Multiple(list) => list.clone(),
+        other => vec![other.clone()],
+    };
+
+    for token in tokens {
+        match token {
+            PropertyValue::Color(c) => {
+                color = Some(c);
+            }
+            PropertyValue::Keyword(ref kw) if kw.eq_ignore_ascii_case("currentcolor") => {
+                color = None;
+                styles.outline_color_from_current = true;
+            }
+            PropertyValue::Keyword(ref kw) => {
+                // Try style then width keywords
+                let parsed_style = parse_border_style(kw);
+                if !matches!(parsed_style, BorderStyle::None) || kw == "none" || kw == "hidden" {
+                    style = Some(parsed_style);
+                    continue;
+                }
+                match kw.as_str() {
+                    "thin" | "medium" | "thick" => {
+                        width = parse_outline_width(&PropertyValue::Keyword(kw.clone()));
+                    }
+                    _ => {}
+                }
+            }
+            PropertyValue::Length(_) | PropertyValue::Number(_) => {
+                if width.is_none() {
+                    width = parse_outline_width(&token);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(c) = color {
+        styles.outline_color = c;
+        styles.outline_color_from_current = false;
+    }
+    if let Some(s) = style {
+        styles.outline_style = s;
+    }
+    if let Some(w) = width {
+        styles.outline_width = w;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::style::types::{
-        BackgroundRepeatKeyword, FontStretch, FontVariant, ListStylePosition, ListStyleType, PositionComponent,
-        PositionKeyword, TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
+        BackgroundRepeatKeyword, BorderStyle, FontStretch, FontVariant, ListStylePosition, ListStyleType,
+        PositionComponent, PositionKeyword, TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
     };
 
     #[test]
@@ -2935,6 +3041,76 @@ mod tests {
             style.object_position.y,
             PositionComponent::Keyword(PositionKeyword::End)
         ));
+    }
+
+    #[test]
+    fn outline_shorthand_resets_missing_parts() {
+        let mut style = ComputedStyle::default();
+        style.outline_style = BorderStyle::Solid;
+        style.outline_width = Length::px(8.0);
+        style.outline_color = Rgba::GREEN;
+        style.outline_color_from_current = false;
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "outline".to_string(),
+                value: PropertyValue::Color(Rgba::RED),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(style.outline_style, BorderStyle::None);
+        assert_eq!(style.outline_width, Length::px(3.0)); // medium
+        assert_eq!(style.outline_color, Rgba::RED);
+        assert!(!style.outline_color_from_current);
+    }
+
+    #[test]
+    fn outline_shorthand_defaults_color_to_currentcolor() {
+        let mut style = ComputedStyle::default();
+        style.color = Rgba::BLUE;
+        style.outline_color = Rgba::GREEN;
+        style.outline_color_from_current = false;
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "outline".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("solid".to_string()),
+                    PropertyValue::Keyword("thin".to_string()),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(style.outline_style, BorderStyle::Solid);
+        assert_eq!(style.outline_width, Length::px(1.0));
+        assert!(style.outline_color_from_current);
+        // color resolves to currentColor during cascade when requested
+    }
+
+    #[test]
+    fn negative_outline_width_is_ignored() {
+        let mut style = ComputedStyle::default();
+        style.outline_width = Length::px(5.0);
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "outline-width".to_string(),
+                value: PropertyValue::Number(-3.0),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(style.outline_width, Length::px(5.0));
     }
 
     #[test]

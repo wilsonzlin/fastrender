@@ -31,13 +31,13 @@ use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundPosition,
     BackgroundPositionComponent, BackgroundRepeat, BackgroundSize, BackgroundSizeComponent, BorderCollapse,
-    BorderStyle, CaptionSide, Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting,
-    FontKerning, FontStretch, FontStyle, FontVariant, FontVariantAlternates, FontVariantCaps, FontVariantEastAsian,
-    FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontWeight, GridTrack, HyphensMode, Isolation,
-    JustifyContent, LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit,
-    ObjectPosition, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration,
-    TextDecorationSkipInk, TextIndent, TextJustify, TextTransform, TextUnderlineOffset, TransformOrigin, UnicodeBidi,
-    VerticalAlign, WhiteSpace, WordBreak,
+    BorderStyle, CaptionSide, Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap,
+    FontFeatureSetting, FontKerning, FontStretch, FontStyle, FontVariant, FontVariantAlternates, FontVariantCaps,
+    FontVariantEastAsian, FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontWeight, GridTrack,
+    HyphensMode, Isolation, JustifyContent, LineHeight, ListStyleImage, ListStylePosition, ListStyleType,
+    MixBlendMode, ObjectFit, ObjectPosition, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast,
+    TextDecoration, TextDecorationSkipInk, TextIndent, TextJustify, TextTransform, TextUnderlineOffset, TransformOrigin,
+    UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
 };
 use values::Length;
 
@@ -55,6 +55,11 @@ pub struct ComputedStyle {
     pub left: Option<Length>,
     pub z_index: i32,
     pub visibility: Visibility,
+    pub outline_color: Rgba,
+    pub outline_color_from_current: bool,
+    pub outline_style: BorderStyle,
+    pub outline_width: Length,
+    pub outline_offset: Length,
 
     // Box model
     pub width: Option<Length>,
@@ -218,6 +223,11 @@ impl Default for ComputedStyle {
             left: None,
             z_index: 0,
             visibility: Visibility::Visible,
+            outline_color: Rgba::BLACK,
+            outline_color_from_current: true,
+            outline_style: BorderStyle::None,
+            outline_width: Length::px(3.0),
+            outline_offset: Length::px(0.0),
 
             width: None,
             height: None,

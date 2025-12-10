@@ -49,6 +49,9 @@ use image::GenericImageView;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+#[cfg(test)]
+use crate::style::values::Length;
+
 /// Builder that converts a fragment tree to a display list
 ///
 /// Walks the fragment tree depth-first, emitting display items
@@ -188,6 +191,10 @@ impl DisplayListBuilder {
             for child in &fragment.children {
                 self.build_fragment_internal(child, child_offset, true);
             }
+        }
+
+        if let Some(style) = fragment.style.as_deref() {
+            self.emit_outline(absolute_rect, style);
         }
     }
 
@@ -406,6 +413,22 @@ impl DisplayListBuilder {
             self.list
                 .push(DisplayItem::StrokeRect(StrokeRectItem { rect, color, width }));
         }
+    }
+
+    fn emit_outline(&mut self, rect: Rect, style: &ComputedStyle) {
+        let ow = style.outline_width.to_px();
+        if ow <= 0.0 || matches!(style.outline_style, crate::style::types::BorderStyle::None | crate::style::types::BorderStyle::Hidden) {
+            return;
+        }
+        let offset = style.outline_offset.to_px();
+        let expand = offset + ow * 0.5;
+        let outline_rect = Rect::from_xywh(
+            rect.x() - expand,
+            rect.y() - expand,
+            rect.width() + 2.0 * expand,
+            rect.height() + 2.0 * expand,
+        );
+        self.emit_border(outline_rect, ow, style.outline_color);
     }
 
     /// Begins an opacity layer
@@ -874,6 +897,26 @@ mod tests {
         let list = builder.build(&fragment);
 
         assert!(list.is_empty());
+    }
+
+    #[test]
+    fn outline_emits_stroke_rect() {
+        let mut style = ComputedStyle::default();
+        style.outline_style = crate::style::types::BorderStyle::Solid;
+        style.outline_width = Length::px(2.0);
+        style.outline_color = Rgba::RED;
+        let fragment = FragmentNode::new_block_styled(
+            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+            vec![],
+            Arc::new(style),
+        );
+
+        let builder = DisplayListBuilder::new();
+        let list = builder.build(&fragment);
+        assert!(
+            list.items().iter().any(|item| matches!(item, DisplayItem::StrokeRect(_))),
+            "outline should emit stroke rect"
+        );
     }
 
     #[test]

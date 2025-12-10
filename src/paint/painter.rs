@@ -111,6 +111,10 @@ enum DisplayCommand {
         replaced_type: ReplacedType,
         style: Arc<ComputedStyle>,
     },
+    Outline {
+        rect: Rect,
+        style: Arc<ComputedStyle>,
+    },
     StackingContext {
         rect: Rect,
         opacity: f32,
@@ -512,6 +516,21 @@ impl Painter {
                 style: style.clone(),
             });
         }
+
+        if style.outline_style != CssBorderStyle::None && style.outline_width.to_px() > 0.0 {
+            let ow = style.outline_width.to_px();
+            let expand = style.outline_offset.to_px() + ow * 0.5;
+            let outline_rect = Rect::from_xywh(
+                abs_bounds.x() - expand,
+                abs_bounds.y() - expand,
+                abs_bounds.width() + 2.0 * expand,
+                abs_bounds.height() + 2.0 * expand,
+            );
+            items.push(DisplayCommand::Outline {
+                rect: outline_rect,
+                style,
+            });
+        }
     }
 
     /// Enqueue paint commands for the fragment's own content (text/replaced).
@@ -553,6 +572,9 @@ impl Painter {
             }
             DisplayCommand::Border { rect, style } => {
                 self.paint_borders(rect.x(), rect.y(), rect.width(), rect.height(), &style);
+            }
+            DisplayCommand::Outline { rect, style } => {
+                self.paint_outline(rect.x(), rect.y(), rect.width(), rect.height(), &style);
             }
             DisplayCommand::Text {
                 rect,
@@ -1247,6 +1269,61 @@ impl Painter {
                     .stroke_path(&base_path, &paint, &stroke, Transform::identity(), None);
             }
         }
+    }
+
+    fn paint_outline(&mut self, x: f32, y: f32, width: f32, height: f32, style: &ComputedStyle) {
+        let ow = style.outline_width.to_px();
+        if ow <= 0.0 || matches!(style.outline_style, CssBorderStyle::None | CssBorderStyle::Hidden) {
+            return;
+        }
+        let offset = style.outline_offset.to_px();
+        let expand = offset + ow * 0.5;
+        let outer_x = x - expand;
+        let outer_y = y - expand;
+        let outer_w = width + 2.0 * expand;
+        let outer_h = height + 2.0 * expand;
+        let color = style.outline_color;
+
+        self.paint_border_edge(
+            BorderEdge::Top,
+            outer_x,
+            outer_y + ow * 0.5,
+            outer_x + outer_w,
+            outer_y + ow * 0.5,
+            ow,
+            style.outline_style,
+            &color,
+        );
+        self.paint_border_edge(
+            BorderEdge::Bottom,
+            outer_x,
+            outer_y + outer_h - ow * 0.5,
+            outer_x + outer_w,
+            outer_y + outer_h - ow * 0.5,
+            ow,
+            style.outline_style,
+            &color,
+        );
+        self.paint_border_edge(
+            BorderEdge::Left,
+            outer_x + ow * 0.5,
+            outer_y,
+            outer_x + ow * 0.5,
+            outer_y + outer_h,
+            ow,
+            style.outline_style,
+            &color,
+        );
+        self.paint_border_edge(
+            BorderEdge::Right,
+            outer_x + outer_w - ow * 0.5,
+            outer_y,
+            outer_x + outer_w - ow * 0.5,
+            outer_y + outer_h,
+            ow,
+            style.outline_style,
+            &color,
+        );
     }
 
     /// Paints text by shaping and rasterizing glyph outlines.
@@ -2403,6 +2480,7 @@ fn command_bounds(cmd: &DisplayCommand) -> Option<Rect> {
     match cmd {
         DisplayCommand::Background { rect, .. }
         | DisplayCommand::Border { rect, .. }
+        | DisplayCommand::Outline { rect, .. }
         | DisplayCommand::Text { rect, .. }
         | DisplayCommand::Replaced { rect, .. } => Some(*rect),
         DisplayCommand::StackingContext {
@@ -2448,6 +2526,10 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
                 style,
             },
             DisplayCommand::Border { rect, style } => DisplayCommand::Border {
+                rect: rect.translate(offset),
+                style,
+            },
+            DisplayCommand::Outline { rect, style } => DisplayCommand::Outline {
                 rect: rect.translate(offset),
                 style,
             },
@@ -4083,6 +4165,34 @@ mod tests {
     fn background_repeat_round_resizes_to_integer_tiles() {
         let rounded = round_tile_length(1099.0, 100.0);
         assert!((rounded - (1099.0 / 11.0)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn outline_draws_outside_box() {
+        let mut style = ComputedStyle::default();
+        style.background_color = Rgba::BLUE;
+        style.outline_style = CssBorderStyle::Solid;
+        style.outline_width = Length::px(4.0);
+        style.outline_color = Rgba::RED;
+        style.outline_color_from_current = false;
+        style.outline_offset = Length::px(2.0);
+        let fragment =
+            FragmentNode::new_block_styled(Rect::from_xywh(4.0, 4.0, 10.0, 10.0), vec![], Arc::new(style));
+        let tree = FragmentTree::new(fragment);
+
+        let pixmap = paint_tree(&tree, 30, 30, Rgba::WHITE).expect("paint");
+        assert_eq!(color_at(&pixmap, 5, 5), (0, 0, 255, 255));
+        let mut found_outline = false;
+        for y in 0..5 {
+            for x in 0..10 {
+                let px = color_at(&pixmap, x, y);
+                if px != (255, 255, 255, 255) {
+                    found_outline = true;
+                }
+            }
+        }
+        assert!(found_outline, "outline stroke should paint outside the box");
+        assert_eq!(color_at(&pixmap, 0, 0), (255, 255, 255, 255));
     }
 
     #[test]
