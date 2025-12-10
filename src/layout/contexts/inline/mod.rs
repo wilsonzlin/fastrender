@@ -1657,7 +1657,7 @@ fn normalize_text_for_white_space(text: &str, white_space: WhiteSpace) -> Normal
                             leading_collapsible = true;
                         }
                     }
-                    '\n' | '\u{000B}' | '\u{000C}' | ' ' | '\t' => {
+                    '\n' | '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{2028}' | '\u{2029}' | ' ' | '\t' => {
                         in_whitespace = true;
                         if !seen_content {
                             leading_collapsible = true;
@@ -1707,7 +1707,7 @@ fn normalize_text_for_white_space(text: &str, white_space: WhiteSpace) -> Normal
                         }
                         run_has_newline = true;
                     }
-                    '\n' | '\u{000B}' | '\u{000C}' => {
+                    '\n' | '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{2028}' | '\u{2029}' => {
                         run_has_newline = true;
                     }
                     _ => {
@@ -1758,7 +1758,7 @@ fn normalize_text_for_white_space(text: &str, white_space: WhiteSpace) -> Normal
                         }
                         mandatory_breaks.push(BreakOpportunity::mandatory(out.len()));
                     }
-                    '\n' | '\u{000B}' | '\u{000C}' => {
+                    '\n' | '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{2028}' | '\u{2029}' => {
                         mandatory_breaks.push(BreakOpportunity::mandatory(out.len()));
                     }
                     '\t' => out.push('\t'),
@@ -1787,7 +1787,7 @@ fn normalize_text_for_white_space(text: &str, white_space: WhiteSpace) -> Normal
                         }
                         mandatory_breaks.push(BreakOpportunity::mandatory(out.len()));
                     }
-                    '\n' | '\u{000B}' | '\u{000C}' => {
+                    '\n' | '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{2028}' | '\u{2029}' => {
                         mandatory_breaks.push(BreakOpportunity::mandatory(out.len()));
                     }
                     _ => out.push(ch),
@@ -3342,6 +3342,16 @@ mod tests {
     }
 
     #[test]
+    fn unicode_separators_are_collapsed_in_normal() {
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::Normal;
+        let normalized = normalize_text_for_white_space("a\u{2028}b\u{2029}c\u{0085}d", style.white_space);
+        assert_eq!(normalized.text, "a b c d");
+        assert!(normalized.forced_breaks.is_empty());
+        assert!(normalized.allow_soft_wrap);
+    }
+
+    #[test]
     fn white_space_pre_preserves_tabs_as_items() {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::Pre;
@@ -3360,6 +3370,24 @@ mod tests {
         assert_eq!(normalized.text, "ab");
         assert_eq!(normalized.forced_breaks.len(), 1);
         assert_eq!(normalized.forced_breaks[0].byte_offset, 1);
+        assert!(!normalized.allow_soft_wrap);
+    }
+
+    #[test]
+    fn unicode_line_and_paragraph_separators_break_in_pre() {
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::Pre;
+        let normalized = normalize_text_for_white_space("a\u{2028}b\u{2029}c\u{0085}d", style.white_space);
+        assert_eq!(normalized.text, "abcd");
+        assert_eq!(normalized.forced_breaks.len(), 3);
+        assert_eq!(
+            normalized
+                .forced_breaks
+                .iter()
+                .map(|b| b.byte_offset)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
         assert!(!normalized.allow_soft_wrap);
     }
 
@@ -3625,6 +3653,17 @@ mod tests {
         assert_eq!(normalized.text, "a b");
         assert_eq!(normalized.forced_breaks.len(), 1);
         assert_eq!(normalized.forced_breaks[0].byte_offset, 2);
+        assert!(normalized.allow_soft_wrap);
+    }
+
+    #[test]
+    fn pre_line_treats_unicode_separators_as_breaks() {
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::PreLine;
+        let normalized = normalize_text_for_white_space("a\u{2028} b\u{2029}c\u{0085}d", style.white_space);
+        assert_eq!(normalized.text, "a bcd");
+        let offsets: Vec<usize> = normalized.forced_breaks.iter().map(|b| b.byte_offset).collect();
+        assert_eq!(offsets, vec![2, 3, 4]);
         assert!(normalized.allow_soft_wrap);
     }
 
