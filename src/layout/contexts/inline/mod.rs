@@ -2970,9 +2970,30 @@ impl InlineFormattingContext {
         );
 
         // Create containing fragment
-        let bounds = Rect::from_xywh(0.0, 0.0, max_width.min(available_width), total_height);
+        let mut bounds = Rect::from_xywh(0.0, 0.0, max_width.min(available_width), total_height);
         let mut merged_children = float_fragments;
         merged_children.extend(children);
+
+        // For vertical writing modes, rotate the inline content so the inline axis is vertical and
+        // lines advance along the block axis (horizontal).
+        match style.writing_mode {
+            crate::style::types::WritingMode::VerticalRl => {
+                let (w, h) = (bounds.height(), bounds.width());
+                for child in &mut merged_children {
+                    Self::rotate_fragment_ccw(child, h);
+                }
+                bounds = Rect::from_xywh(0.0, 0.0, w, h);
+            }
+            crate::style::types::WritingMode::VerticalLr => {
+                let (w, h) = (bounds.height(), bounds.width());
+                for child in &mut merged_children {
+                    Self::rotate_fragment_cw(child, h);
+                }
+                bounds = Rect::from_xywh(0.0, 0.0, w, h);
+            }
+            _ => {}
+        }
+
         Ok(FragmentNode::new_block(bounds, merged_children))
     }
 }
@@ -2980,6 +3001,32 @@ impl InlineFormattingContext {
 impl Default for InlineFormattingContext {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl InlineFormattingContext {
+    fn rotate_fragment_ccw(fragment: &mut FragmentNode, max_x: f32) {
+        fragment.bounds = Rect::from_xywh(
+            fragment.bounds.y(),
+            max_x - fragment.bounds.x() - fragment.bounds.width(),
+            fragment.bounds.height(),
+            fragment.bounds.width(),
+        );
+        for child in &mut fragment.children {
+            Self::rotate_fragment_ccw(child, max_x);
+        }
+    }
+
+    fn rotate_fragment_cw(fragment: &mut FragmentNode, max_x: f32) {
+        fragment.bounds = Rect::from_xywh(
+            max_x - fragment.bounds.y() - fragment.bounds.height(),
+            fragment.bounds.x(),
+            fragment.bounds.height(),
+            fragment.bounds.width(),
+        );
+        for child in &mut fragment.children {
+            Self::rotate_fragment_cw(child, max_x);
+        }
     }
 }
 
