@@ -1785,6 +1785,11 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 }
             }
         }
+        "aspect-ratio" => {
+            if let Some(ratio) = parse_aspect_ratio(&resolved_value) {
+                styles.aspect_ratio = ratio;
+            }
+        }
         "object-fit" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 if let Some(fit) = parse_object_fit(kw) {
@@ -1937,6 +1942,58 @@ fn parse_image_rendering(kw: &str) -> Option<ImageRendering> {
         "optimizespeed" => Some(ImageRendering::CrispEdges),
         _ => None,
     }
+}
+
+fn parse_aspect_ratio(value: &PropertyValue) -> Option<AspectRatio> {
+    match value {
+        PropertyValue::Keyword(kw) => {
+            if kw.eq_ignore_ascii_case("auto") {
+                return Some(AspectRatio::Auto);
+            }
+            parse_ratio_string(kw).map(AspectRatio::Ratio)
+        }
+        PropertyValue::Number(n) => (*n > 0.0).then_some(AspectRatio::Ratio(*n)),
+        PropertyValue::Multiple(values) => {
+            let mut nums: Vec<f32> = Vec::new();
+            for v in values {
+                match v {
+                    PropertyValue::Number(n) if *n > 0.0 => nums.push(*n),
+                    PropertyValue::Keyword(kw) => {
+                        if let Ok(n) = kw.parse::<f32>() {
+                            if n > 0.0 {
+                                nums.push(n);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            match nums.as_slice() {
+                [num] => Some(AspectRatio::Ratio(*num)),
+                [num, denom, ..] if *denom > 0.0 => Some(AspectRatio::Ratio(*num / *denom)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn parse_ratio_string(raw: &str) -> Option<f32> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(val) = trimmed.parse::<f32>() {
+        return (val > 0.0).then_some(val);
+    }
+    if let Some((num_str, denom_str)) = trimmed.split_once('/') {
+        let num = num_str.trim().parse::<f32>().ok()?;
+        let denom = denom_str.trim().parse::<f32>().ok()?;
+        if num > 0.0 && denom > 0.0 {
+            return Some(num / denom);
+        }
+    }
+    None
 }
 
 fn parse_object_position(value: &PropertyValue) -> Option<ObjectPosition> {
@@ -3702,7 +3759,8 @@ fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
 mod tests {
     use super::*;
     use crate::style::types::{
-        BackgroundRepeatKeyword, BoxSizing, FontStretch, FontVariant, GridAutoFlow, GridTrack, ImageRendering,
+        AspectRatio, BackgroundRepeatKeyword, BoxSizing, FontStretch, FontVariant, GridAutoFlow, GridTrack,
+        ImageRendering,
         ListStylePosition, ListStyleType, OutlineColor, OutlineStyle, PositionComponent, PositionKeyword,
         TextDecorationLine, TextDecorationStyle, TextDecorationThickness, TextEmphasisFill, TextEmphasisPosition,
         TextEmphasisShape, TextEmphasisStyle,
@@ -3747,6 +3805,46 @@ mod tests {
             16.0,
         );
         assert_eq!(style.image_rendering, ImageRendering::CrispEdges);
+    }
+
+    #[test]
+    fn parses_aspect_ratio_keywords_and_numbers() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "aspect-ratio".to_string(),
+                value: PropertyValue::Keyword("16/9".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.aspect_ratio, AspectRatio::Ratio(r) if (r - (16.0/9.0)).abs() < 0.0001));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "aspect-ratio".to_string(),
+                value: PropertyValue::Number(2.0),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.aspect_ratio, AspectRatio::Ratio(r) if (r - 2.0).abs() < 0.0001));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "aspect-ratio".to_string(),
+                value: PropertyValue::Keyword("auto".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.aspect_ratio, AspectRatio::Auto));
     }
 
     #[test]

@@ -36,10 +36,11 @@ use types::{
     FontFeatureSetting, FontKerning, FontSizeAdjust, FontStretch, FontStyle, FontSynthesis, FontVariant,
     FontVariantAlternates, FontVariantCaps, FontVariantEastAsian, FontVariantLigatures, FontVariantNumeric,
     FontVariantPosition, FontWeight, GridTrack, HyphensMode, Isolation, JustifyContent, LineBreak, LineHeight,
-    ImageRendering, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
-    OutlineColor, OutlineStyle, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration,
-    TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextTransform,
-    TextUnderlineOffset, TextUnderlinePosition, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
+    AspectRatio, ImageRendering, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit,
+    ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign,
+    TextAlignLast, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent,
+    TextJustify, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TransformOrigin, UnicodeBidi, VerticalAlign,
+    WhiteSpace, WordBreak,
 };
 use values::Length;
 
@@ -209,6 +210,7 @@ pub struct ComputedStyle {
     pub object_fit: ObjectFit,
     pub object_position: ObjectPosition,
     pub image_rendering: ImageRendering,
+    pub aspect_ratio: AspectRatio,
     /// CSS filter effects applied to this element
     pub filter: Vec<FilterFunction>,
     /// Backdrop filters applied to the backdrop behind this element
@@ -396,6 +398,7 @@ impl Default for ComputedStyle {
                 y: types::PositionComponent::Keyword(types::PositionKeyword::Center),
             },
             image_rendering: ImageRendering::Auto,
+            aspect_ratio: AspectRatio::Auto,
             filter: Vec::new(),
             backdrop_filter: Vec::new(),
             mix_blend_mode: MixBlendMode::Normal,

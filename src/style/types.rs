@@ -219,6 +219,13 @@ pub enum ImageRendering {
     Pixelated,
 }
 
+/// Computed aspect-ratio value
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AspectRatio {
+    Auto,
+    Ratio(f32),
+}
+
 /// Logical alignment for object-position
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PositionKeyword {

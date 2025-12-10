@@ -290,7 +290,12 @@ pub fn compute_replaced_size(
     let intrinsic = replaced.intrinsic_size;
     let intrinsic_w = intrinsic.and_then(|s| (s.width > 0.0).then_some(s.width));
     let intrinsic_h = intrinsic.and_then(|s| (s.height > 0.0).then_some(s.height));
-    let intrinsic_ratio = replaced.aspect_ratio.or_else(|| match (intrinsic_w, intrinsic_h) {
+    let specified_ratio = match style.aspect_ratio {
+        crate::style::types::AspectRatio::Ratio(r) if r > 0.0 => Some(r),
+        _ => None,
+    };
+
+    let intrinsic_ratio = specified_ratio.or_else(|| replaced.aspect_ratio).or_else(|| match (intrinsic_w, intrinsic_h) {
         (Some(w), Some(h)) if h > 0.0 => Some(w / h),
         _ => None,
     });
@@ -528,7 +533,7 @@ mod tests {
 
     #[test]
     fn test_replaced_auto_auto_ratio_only_uses_default_with_ratio() {
-        let mut style = ComputedStyle::default();
+        let style = ComputedStyle::default();
         let replaced = ReplacedBox {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "".to_string(),
@@ -544,8 +549,47 @@ mod tests {
     }
 
     #[test]
-    fn test_replaced_auto_auto_intrinsic_width_only_falls_back_height() {
+    fn test_replaced_aspect_ratio_property_overrides_intrinsic_ratio() {
         let mut style = ComputedStyle::default();
+        style.aspect_ratio = crate::style::types::AspectRatio::Ratio(1.5);
+
+        let replaced = ReplacedBox {
+            replaced_type: crate::tree::box_tree::ReplacedType::Image {
+                src: "".to_string(),
+                alt: None,
+            },
+            intrinsic_size: Some(Size::new(120.0, 0.0)),
+            aspect_ratio: Some(2.0),
+        };
+
+        let size = compute_replaced_size(&style, &replaced, None, Size::new(800.0, 600.0));
+        assert!((size.width - 120.0).abs() < 0.01);
+        assert!((size.height - 80.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_replaced_aspect_ratio_property_with_specified_height() {
+        let mut style = ComputedStyle::default();
+        style.aspect_ratio = crate::style::types::AspectRatio::Ratio(2.0);
+        style.height = Some(Length::px(75.0));
+
+        let replaced = ReplacedBox {
+            replaced_type: crate::tree::box_tree::ReplacedType::Image {
+                src: "".to_string(),
+                alt: None,
+            },
+            intrinsic_size: None,
+            aspect_ratio: None,
+        };
+
+        let size = compute_replaced_size(&style, &replaced, None, Size::new(800.0, 600.0));
+        assert!((size.width - 150.0).abs() < 0.01);
+        assert!((size.height - 75.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_replaced_auto_auto_intrinsic_width_only_falls_back_height() {
+        let style = ComputedStyle::default();
         let replaced = ReplacedBox {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "".to_string(),
@@ -562,7 +606,7 @@ mod tests {
 
     #[test]
     fn test_replaced_auto_auto_intrinsic_height_only_falls_back_width() {
-        let mut style = ComputedStyle::default();
+        let style = ComputedStyle::default();
         let replaced = ReplacedBox {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "".to_string(),
