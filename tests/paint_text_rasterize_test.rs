@@ -329,6 +329,8 @@ fn test_render_shaped_run() {
         font: Arc::new(font),
         font_size: 24.0,
         language: None,
+        synthetic_bold: 0.0,
+        synthetic_oblique: 0.0,
     };
 
     let mut pixmap = create_test_pixmap(150, 100);
@@ -379,6 +381,8 @@ fn test_render_multiple_runs() {
             font: Arc::new(font.clone()),
             font_size: 20.0,
             language: None,
+            synthetic_bold: 0.0,
+            synthetic_oblique: 0.0,
         }
     };
 

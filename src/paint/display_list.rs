@@ -388,6 +388,12 @@ pub struct TextItem {
     /// Font identifier (for looking up font data)
     pub font_id: Option<FontId>,
 
+    /// Synthetic bold stroke width in pixels (0 = none).
+    pub synthetic_bold: f32,
+
+    /// Synthetic oblique shear factor (tan(angle); 0 = none).
+    pub synthetic_oblique: f32,
+
     /// Optional emphasis marks to render for this run.
     pub emphasis: Option<TextEmphasis>,
 }

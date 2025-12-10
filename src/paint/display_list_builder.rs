@@ -344,6 +344,8 @@ impl DisplayListBuilder {
                     font_size,
                     advance_width,
                     font_id: None,
+                    synthetic_bold: 0.0,
+                    synthetic_oblique: 0.0,
                     emphasis: None,
                 }));
             }
@@ -515,6 +517,8 @@ impl DisplayListBuilder {
                 font_size: run.font_size,
                 advance_width: run.advance,
                 font_id: Some(font_id),
+                synthetic_bold: run.synthetic_bold,
+                synthetic_oblique: run.synthetic_oblique,
                 emphasis,
             }));
 
@@ -793,6 +797,8 @@ impl DisplayListBuilder {
             font_size,
             advance_width,
             font_id: None,
+            synthetic_bold: 0.0,
+            synthetic_oblique: 0.0,
             emphasis: None,
         }));
         true

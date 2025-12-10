@@ -165,8 +165,8 @@ impl FormattingContextFactory {
                 self.font_context.clone(),
                 self.viewport_size,
             )),
-            FormattingContextType::Flex => Box::new(FlexFormattingContext::new()),
-            FormattingContextType::Grid => Box::new(GridFormattingContext::new()),
+            FormattingContextType::Flex => Box::new(FlexFormattingContext::with_viewport(self.viewport_size)),
+            FormattingContextType::Grid => Box::new(GridFormattingContext::with_viewport(self.viewport_size)),
             FormattingContextType::Table => Box::new(TableFormattingContext::with_factory(self.clone())),
         }
     }

@@ -157,10 +157,34 @@ impl StickyConstraints {
         let root_font_size = style.root_font_size;
         let viewport = containing_block.viewport_size();
         Self {
-            top: resolve_offset(&style.top, containing_block.height(), viewport, font_size, root_font_size),
-            right: resolve_offset(&style.right, containing_block.width(), viewport, font_size, root_font_size),
-            bottom: resolve_offset(&style.bottom, containing_block.height(), viewport, font_size, root_font_size),
-            left: resolve_offset(&style.left, containing_block.width(), viewport, font_size, root_font_size),
+            top: resolve_offset(
+                &style.top,
+                containing_block.height(),
+                viewport,
+                font_size,
+                root_font_size,
+            ),
+            right: resolve_offset(
+                &style.right,
+                containing_block.width(),
+                viewport,
+                font_size,
+                root_font_size,
+            ),
+            bottom: resolve_offset(
+                &style.bottom,
+                containing_block.height(),
+                viewport,
+                font_size,
+                root_font_size,
+            ),
+            left: resolve_offset(
+                &style.left,
+                containing_block.width(),
+                viewport,
+                font_size,
+                root_font_size,
+            ),
         }
     }
 
@@ -422,7 +446,13 @@ impl PositionedLayout {
         intrinsic_height: f32,
     ) -> Result<(f32, f32), LayoutError> {
         let top = resolve_offset(&style.top, cb_height, viewport, style.font_size, style.root_font_size);
-        let bottom = resolve_offset(&style.bottom, cb_height, viewport, style.font_size, style.root_font_size);
+        let bottom = resolve_offset(
+            &style.bottom,
+            cb_height,
+            viewport,
+            style.font_size,
+            style.root_font_size,
+        );
 
         // Get margin values
         let margin_top = style.margin.top;
@@ -1028,10 +1058,7 @@ mod tests {
     #[test]
     fn test_resolve_offset_auto() {
         let value = LengthOrAuto::Auto;
-        assert_eq!(
-            resolve_offset(&value, 100.0, Size::new(800.0, 600.0), 16.0, 16.0),
-            None
-        );
+        assert_eq!(resolve_offset(&value, 100.0, Size::new(800.0, 600.0), 16.0, 16.0), None);
     }
 
     #[test]

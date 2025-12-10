@@ -171,6 +171,8 @@ fn test_text_item() {
         font_size: 16.0,
         advance_width: 22.0,
         font_id: None,
+        synthetic_bold: 0.0,
+        synthetic_oblique: 0.0,
         emphasis: None,
     }));
 
@@ -740,6 +742,8 @@ fn test_complex_display_list() {
         font_size: 16.0,
         advance_width: 100.0,
         font_id: None,
+        synthetic_bold: 0.0,
+        synthetic_oblique: 0.0,
         emphasis: None,
     }));
 

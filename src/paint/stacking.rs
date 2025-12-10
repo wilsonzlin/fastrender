@@ -460,8 +460,7 @@ pub fn creates_stacking_context(style: &ComputedStyle, parent_style: Option<&Com
     ) || matches!(
         style.overflow_y,
         Overflow::Hidden | Overflow::Scroll | Overflow::Auto | Overflow::Clip
-    )
-    {
+    ) {
         // Only if positioned, this creates a stacking context
         if is_positioned(style) {
             return true;

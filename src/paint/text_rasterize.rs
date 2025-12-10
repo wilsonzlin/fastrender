@@ -80,6 +80,8 @@ struct GlyphOutlineBuilder {
     builder: PathBuilder,
     /// Scale factor to convert font units to pixels
     scale: f32,
+    /// Horizontal shear factor (tan(angle)) for synthetic oblique
+    skew: f32,
     /// X offset for positioning
     x_offset: f32,
     /// Y offset for positioning (inverted for Y-down coordinate system)
@@ -92,12 +94,14 @@ impl GlyphOutlineBuilder {
     /// # Arguments
     ///
     /// * `scale` - Scale factor (font_size / units_per_em)
+    /// * `skew` - Synthetic shear factor to emulate oblique (tan(angle))
     /// * `x_offset` - X position offset in pixels
     /// * `y_offset` - Y position offset in pixels (baseline position)
-    fn new(scale: f32, x_offset: f32, y_offset: f32) -> Self {
+    fn new(scale: f32, skew: f32, x_offset: f32, y_offset: f32) -> Self {
         Self {
             builder: PathBuilder::new(),
             scale,
+            skew,
             x_offset,
             y_offset,
         }
@@ -105,8 +109,8 @@ impl GlyphOutlineBuilder {
 
     /// Converts font units to pixels with positioning.
     #[inline]
-    fn transform_x(&self, x: f32) -> f32 {
-        x * self.scale + self.x_offset
+    fn transform_x(&self, x: f32, y: f32) -> f32 {
+        (x + self.skew * y) * self.scale + self.x_offset
     }
 
     /// Converts font units to pixels with positioning.
@@ -126,29 +130,29 @@ impl GlyphOutlineBuilder {
 
 impl ttf_parser::OutlineBuilder for GlyphOutlineBuilder {
     fn move_to(&mut self, x: f32, y: f32) {
-        self.builder.move_to(self.transform_x(x), self.transform_y(y));
+        self.builder.move_to(self.transform_x(x, y), self.transform_y(y));
     }
 
     fn line_to(&mut self, x: f32, y: f32) {
-        self.builder.line_to(self.transform_x(x), self.transform_y(y));
+        self.builder.line_to(self.transform_x(x, y), self.transform_y(y));
     }
 
     fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
         self.builder.quad_to(
-            self.transform_x(x1),
+            self.transform_x(x1, y1),
             self.transform_y(y1),
-            self.transform_x(x),
+            self.transform_x(x, y),
             self.transform_y(y),
         );
     }
 
     fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
         self.builder.cubic_to(
-            self.transform_x(x1),
+            self.transform_x(x1, y1),
             self.transform_y(y1),
-            self.transform_x(x2),
+            self.transform_x(x2, y2),
             self.transform_y(y2),
-            self.transform_x(x),
+            self.transform_x(x, y),
             self.transform_y(y),
         );
     }
@@ -254,11 +258,12 @@ impl GlyphCache {
         font_size: f32,
         x_offset: f32,
         y_offset: f32,
+        skew: f32,
     ) -> Option<Path> {
         // For now, always build the path with the correct position
         // (caching positioned paths is complex, we'd need to store
         // unpositioned paths and transform them)
-        self.build_glyph_path(font, glyph_id, font_size, x_offset, y_offset)
+        self.build_glyph_path(font, glyph_id, font_size, x_offset, y_offset, skew)
     }
 
     /// Builds a glyph path without caching.
@@ -269,6 +274,7 @@ impl GlyphCache {
         font_size: f32,
         x_offset: f32,
         y_offset: f32,
+        skew: f32,
     ) -> Option<Path> {
         // Parse font face
         let face = font.as_ttf_face().ok()?;
@@ -278,7 +284,7 @@ impl GlyphCache {
         let scale = font_size / units_per_em;
 
         // Create outline builder
-        let mut builder = GlyphOutlineBuilder::new(scale, x_offset, y_offset);
+        let mut builder = GlyphOutlineBuilder::new(scale, skew, x_offset, y_offset);
 
         // Get glyph outline
         let glyph_id = ttf_parser::GlyphId(glyph_id as u16);
@@ -419,10 +425,24 @@ impl TextRasterizer {
             // Get or build glyph path
             if let Some(path) = self
                 .cache
-                .get_or_build(&run.font, glyph.glyph_id, run.font_size, glyph_x, glyph_y)
+                .get_or_build(
+                    &run.font,
+                    glyph.glyph_id,
+                    run.font_size,
+                    glyph_x,
+                    glyph_y,
+                    run.synthetic_oblique,
+                )
             {
                 // Render the path
                 pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+                if run.synthetic_bold > 0.0 {
+                    let mut stroke = tiny_skia::Stroke::default();
+                    stroke.width = run.synthetic_bold * 2.0;
+                    stroke.line_join = tiny_skia::LineJoin::Round;
+                    stroke.line_cap = tiny_skia::LineCap::Round;
+                    pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+                }
             }
 
             // Advance cursor (x_offset is already applied, x_advance is the main movement)
@@ -501,7 +521,7 @@ impl TextRasterizer {
 
             if let Some(path) = self
                 .cache
-                .get_or_build(font, glyph.glyph_id, font_size, glyph_x, glyph_y)
+                .get_or_build(font, glyph.glyph_id, font_size, glyph_x, glyph_y, 0.0)
             {
                 pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
             }
@@ -573,7 +593,7 @@ pub fn render_glyph(
     let scale = font_size / units_per_em;
 
     // Build path
-    let mut builder = GlyphOutlineBuilder::new(scale, x, y);
+    let mut builder = GlyphOutlineBuilder::new(scale, 0.0, x, y);
     let glyph = ttf_parser::GlyphId(glyph_id as u16);
 
     if face.outline_glyph(glyph, &mut builder).is_none() {
@@ -816,11 +836,11 @@ mod tests {
 
     #[test]
     fn test_glyph_outline_builder_transform() {
-        let builder = GlyphOutlineBuilder::new(1.0, 100.0, 200.0);
+        let builder = GlyphOutlineBuilder::new(1.0, 0.0, 100.0, 200.0);
 
         // X should add offset
-        assert_eq!(builder.transform_x(0.0), 100.0);
-        assert_eq!(builder.transform_x(50.0), 150.0);
+        assert_eq!(builder.transform_x(0.0, 0.0), 100.0);
+        assert_eq!(builder.transform_x(50.0, 0.0), 150.0);
 
         // Y should invert and add baseline
         assert_eq!(builder.transform_y(0.0), 200.0);
@@ -829,10 +849,11 @@ mod tests {
 
     #[test]
     fn test_glyph_outline_builder_scale() {
-        let builder = GlyphOutlineBuilder::new(0.5, 0.0, 100.0);
+        // Zero offsets so we isolate the scaling behavior; baseline at 100 for y inversion
+        let builder = GlyphOutlineBuilder::new(0.5, 0.0, 0.0, 100.0);
 
         // With scale 0.5, 100 font units = 50 pixels
-        assert_eq!(builder.transform_x(100.0), 50.0);
+        assert_eq!(builder.transform_x(100.0, 0.0), 50.0);
         assert_eq!(builder.transform_y(100.0), 50.0); // 100 - 50
     }
 }

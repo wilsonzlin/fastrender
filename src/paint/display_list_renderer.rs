@@ -5,12 +5,12 @@
 //! paint-time contract while still reusing the shared `FontContext`.
 
 use crate::error::{RenderError, Result};
-use crate::paint::blur::apply_gaussian_blur;
 use crate::geometry::Point;
+use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::canvas::Canvas;
 use crate::paint::display_list::{
-    BoxShadowItem, ClipItem, DisplayItem, DisplayList, TextEmphasis, FillRectItem, FontId, ImageItem, LinearGradientItem,
-    OpacityItem, RadialGradientItem, StrokeRectItem, TextItem, TransformItem,
+    BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FontId, ImageItem, LinearGradientItem,
+    OpacityItem, RadialGradientItem, StrokeRectItem, TextEmphasis, TextItem, TransformItem,
 };
 use crate::paint::rasterize::{render_box_shadow, BoxShadow};
 use crate::paint::text_shadow::PathBounds;
@@ -260,8 +260,15 @@ impl DisplayListRenderer {
             })
             .collect();
 
-        self.canvas
-            .draw_text(item.origin, &glyphs, &font, item.font_size, item.color);
+        self.canvas.draw_text(
+            item.origin,
+            &glyphs,
+            &font,
+            item.font_size,
+            item.color,
+            item.synthetic_bold,
+            item.synthetic_oblique,
+        );
         if let Some(emphasis) = &item.emphasis {
             self.render_emphasis(emphasis)?;
         }
@@ -277,7 +284,8 @@ impl DisplayListRenderer {
         for glyph in &item.glyphs {
             let x = item.origin.x + glyph.offset.x;
             let y = item.origin.y + glyph.offset.y;
-            if let Some(path) = Self::build_glyph_path(face, glyph.glyph_id as u16, x, y, scale) {
+            if let Some(path) = Self::build_glyph_path(face, glyph.glyph_id as u16, x, y, scale, item.synthetic_oblique)
+            {
                 bounds.include(&path.bounds());
                 paths.push(path);
             }
@@ -292,6 +300,7 @@ impl DisplayListRenderer {
         x: f32,
         baseline_y: f32,
         scale: f32,
+        synthetic_oblique: f32,
     ) -> Option<tiny_skia::Path> {
         use ttf_parser::OutlineBuilder;
 
@@ -300,33 +309,36 @@ impl DisplayListRenderer {
             scale: f32,
             x: f32,
             y: f32,
+            skew: f32,
         }
 
         impl OutlineBuilder for PathConverter {
             fn move_to(&mut self, px: f32, py: f32) {
-                self.builder.move_to(self.x + px * self.scale, self.y - py * self.scale);
+                self.builder
+                    .move_to(self.x + (px + self.skew * py) * self.scale, self.y - py * self.scale);
             }
 
             fn line_to(&mut self, px: f32, py: f32) {
-                self.builder.line_to(self.x + px * self.scale, self.y - py * self.scale);
+                self.builder
+                    .line_to(self.x + (px + self.skew * py) * self.scale, self.y - py * self.scale);
             }
 
             fn quad_to(&mut self, x1: f32, y1: f32, px: f32, py: f32) {
                 self.builder.quad_to(
-                    self.x + x1 * self.scale,
+                    self.x + (x1 + self.skew * y1) * self.scale,
                     self.y - y1 * self.scale,
-                    self.x + px * self.scale,
+                    self.x + (px + self.skew * py) * self.scale,
                     self.y - py * self.scale,
                 );
             }
 
             fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, px: f32, py: f32) {
                 self.builder.cubic_to(
-                    self.x + x1 * self.scale,
+                    self.x + (x1 + self.skew * y1) * self.scale,
                     self.y - y1 * self.scale,
-                    self.x + x2 * self.scale,
+                    self.x + (x2 + self.skew * y2) * self.scale,
                     self.y - y2 * self.scale,
-                    self.x + px * self.scale,
+                    self.x + (px + self.skew * py) * self.scale,
                     self.y - py * self.scale,
                 );
             }
@@ -341,6 +353,7 @@ impl DisplayListRenderer {
             scale,
             x,
             y: baseline_y,
+            skew: synthetic_oblique,
         };
 
         face.outline_glyph(ttf_parser::GlyphId(glyph_id), &mut converter)?;
@@ -440,7 +453,7 @@ impl DisplayListRenderer {
                         mark.center.y - text.height * 0.5 + text.baseline_offset,
                     );
                     self.canvas
-                        .draw_text(mark_origin, &glyphs, &font, text.font_size, emphasis.color);
+                        .draw_text(mark_origin, &glyphs, &font, text.font_size, emphasis.color, 0.0, 0.0);
                 }
                 return Ok(());
             }
@@ -448,7 +461,9 @@ impl DisplayListRenderer {
 
         let mut paint = tiny_skia::Paint::default();
         paint.anti_alias = true;
-        let alpha = (emphasis.color.a * self.canvas.opacity() * 255.0).round().clamp(0.0, 255.0) as u8;
+        let alpha = (emphasis.color.a * self.canvas.opacity() * 255.0)
+            .round()
+            .clamp(0.0, 255.0) as u8;
         paint.set_color_rgba8(emphasis.color.r, emphasis.color.g, emphasis.color.b, alpha);
         paint.blend_mode = self.canvas.blend_mode();
         let transform = self.canvas.transform();
@@ -516,9 +531,7 @@ impl DisplayListRenderer {
                     stroke.width = (emphasis.size * 0.14).max(0.5);
                     let radii = [emphasis.size * 0.5, emphasis.size * 0.33];
                     for radius in radii {
-                        if let Some(path) =
-                            tiny_skia::PathBuilder::from_circle(mark.center.x, mark.center.y, radius)
-                        {
+                        if let Some(path) = tiny_skia::PathBuilder::from_circle(mark.center.x, mark.center.y, radius) {
                             self.canvas
                                 .pixmap_mut()
                                 .stroke_path(&path, &paint, &stroke, transform, clip.as_ref());
@@ -533,9 +546,7 @@ impl DisplayListRenderer {
                     let height = emphasis.size * 0.9;
                     let direction = matches!(
                         emphasis.position,
-                        TextEmphasisPosition::Over
-                            | TextEmphasisPosition::OverLeft
-                            | TextEmphasisPosition::OverRight
+                        TextEmphasisPosition::Over | TextEmphasisPosition::OverLeft | TextEmphasisPosition::OverRight
                     );
                     let apex_y = if direction {
                         mark.center.y - height * 0.5
@@ -920,6 +931,8 @@ mod tests {
                 style: font.style,
                 stretch: font.stretch,
             }),
+            synthetic_bold: 0.0,
+            synthetic_oblique: 0.0,
             emphasis: None,
         }));
 
@@ -949,6 +962,8 @@ mod tests {
             font_size: 16.0,
             advance_width: 0.0,
             font_id: None,
+            synthetic_bold: 0.0,
+            synthetic_oblique: 0.0,
             emphasis: Some(TextEmphasis {
                 style: TextEmphasisStyle::Mark {
                     fill: TextEmphasisFill::Filled,

@@ -10,7 +10,7 @@ use crate::geometry::Size;
 use crate::style::content::CounterStyle;
 use crate::style::counters::{CounterManager, CounterSet};
 use crate::style::display::{Display, FormattingContextType};
-use crate::style::types::{CaseTransform, ListStyleType, TextTransform};
+use crate::style::types::{ListStyleType, TextTransform};
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::tree::anonymous::AnonymousBoxCreator;
@@ -1251,6 +1251,7 @@ mod tests {
     use super::*;
     use crate::geometry::Size;
     use crate::style::types::ListStylePosition;
+    use crate::style::types::CaseTransform;
     use crate::tree::box_tree::{MarkerContent, ReplacedType};
     use crate::{dom, style};
 

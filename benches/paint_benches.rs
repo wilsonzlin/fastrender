@@ -20,8 +20,8 @@ use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::style::color::Rgba;
 use fastrender::tree::fragment_tree::{FragmentNode, FragmentTree};
 use fastrender::{
-    build_stacking_tree, BlendMode, BorderRadii, ClipItem, DisplayItem, DisplayList, DisplayListOptimizer, FillRectItem,
-    FillRoundedRectItem, OpacityItem, OptimizationConfig, StrokeRectItem,
+    build_stacking_tree, BlendMode, BorderRadii, ClipItem, DisplayItem, DisplayList, DisplayListOptimizer,
+    FillRectItem, FillRoundedRectItem, OpacityItem, OptimizationConfig, StrokeRectItem,
 };
 
 // ============================================================================

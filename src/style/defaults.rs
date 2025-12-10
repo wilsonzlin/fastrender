@@ -26,11 +26,11 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
         return styles;
     }
 
-        // Set proper default display values for HTML elements (user-agent stylesheet defaults)
-        if let Some(tag) = node.tag_name() {
-            styles.display = match tag {
-                // Document structure elements (must be block to establish formatting context)
-                "html" | "body" => Display::Block,
+    // Set proper default display values for HTML elements (user-agent stylesheet defaults)
+    if let Some(tag) = node.tag_name() {
+        styles.display = match tag {
+            // Document structure elements (must be block to establish formatting context)
+            "html" | "body" => Display::Block,
 
             // Block-level elements
             "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol" | "li" | "blockquote" | "pre"

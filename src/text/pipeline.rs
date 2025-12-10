@@ -590,6 +590,10 @@ pub struct FontRun {
     pub end: usize,
     /// The assigned font.
     pub font: Arc<LoadedFont>,
+    /// Synthetic bold stroke width in pixels (0 = none).
+    pub synthetic_bold: f32,
+    /// Synthetic oblique shear factor (tan(angle); 0 = none).
+    pub synthetic_oblique: f32,
     /// Script for this run.
     pub script: Script,
     /// Text direction.
@@ -773,13 +777,15 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
 
     for run in runs {
         // Try to get a font from the family list
-        let font = get_font_for_run(run, style, font_context)?;
+        let (font, synthetic_bold, synthetic_oblique) = get_font_for_run(run, style, font_context)?;
 
         font_runs.push(FontRun {
             text: run.text.clone(),
             start: run.start,
             end: run.end,
             font: Arc::new(font),
+            synthetic_bold,
+            synthetic_oblique,
             script: run.script,
             direction: run.direction,
             level: run.level,
@@ -793,7 +799,11 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
 }
 
 /// Gets a font for a specific run.
-fn get_font_for_run(run: &ItemizedRun, style: &ComputedStyle, font_context: &FontContext) -> Result<LoadedFont> {
+fn get_font_for_run(
+    run: &ItemizedRun,
+    style: &ComputedStyle,
+    font_context: &FontContext,
+) -> Result<(LoadedFont, f32, f32)> {
     // Convert CSS font style to our font style
     let font_style = match style.font_style {
         CssFontStyle::Normal => FontStyle::Normal,
@@ -810,12 +820,13 @@ fn get_font_for_run(run: &ItemizedRun, style: &ComputedStyle, font_context: &Fon
         if let Some(ch) = run.text.chars().next() {
             if let Ok(face) = font.as_ttf_face() {
                 if face.glyph_index(ch).is_some() {
-                    return Ok(font);
+                    let (bold, oblique) = compute_synthetic_styles(style, &font);
+                    return Ok((font, bold, oblique));
                 }
             }
         }
-        // If no verification possible, use it anyway
-        return Ok(font);
+        let (bold, oblique) = compute_synthetic_styles(style, &font);
+        return Ok((font, bold, oblique));
     }
 
     // Try generic fallbacks based on script
@@ -829,17 +840,47 @@ fn get_font_for_run(run: &ItemizedRun, style: &ComputedStyle, font_context: &Fon
     if let Some(font) =
         font_context.get_font_full(&generic_families, style.font_weight.to_u16(), font_style, font_stretch)
     {
-        return Ok(font);
+        let (bold, oblique) = compute_synthetic_styles(style, &font);
+        return Ok((font, bold, oblique));
     }
 
     // Last resort: try to get any sans-serif font
-    font_context.get_sans_serif().ok_or_else(|| {
-        TextError::ShapingFailed {
-            text: run.text.clone(),
-            reason: "No suitable font found".to_string(),
-        }
-        .into()
-    })
+    font_context
+        .get_sans_serif()
+        .map(|font| {
+            let (bold, oblique) = compute_synthetic_styles(style, &font);
+            (font, bold, oblique)
+        })
+        .ok_or_else(|| {
+            TextError::ShapingFailed {
+                text: run.text.clone(),
+                reason: "No suitable font found".to_string(),
+            }
+            .into()
+        })
+}
+
+fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f32) {
+    let mut synthetic_bold = 0.0;
+    let mut synthetic_oblique = 0.0;
+
+    if style.font_synthesis.weight && style.font_weight.to_u16() > font.weight.value() {
+        let delta = (style.font_weight.to_u16() as f32 - font.weight.value() as f32).max(0.0);
+        let strength = (delta / 400.0).clamp(0.0, 1.0);
+        synthetic_bold = style.font_size * 0.04 * strength;
+    }
+
+    let wants_slant = matches!(style.font_style, CssFontStyle::Italic | CssFontStyle::Oblique(_));
+    if style.font_synthesis.style && wants_slant && matches!(font.style, FontStyle::Normal) {
+        let angle = match style.font_style {
+            CssFontStyle::Oblique(Some(deg)) => deg,
+            CssFontStyle::Oblique(None) | CssFontStyle::Italic => 14.0,
+            CssFontStyle::Normal => 0.0,
+        };
+        synthetic_oblique = angle.to_radians().tan();
+    }
+
+    (synthetic_bold, synthetic_oblique)
 }
 
 // ============================================================================
@@ -886,6 +927,10 @@ pub struct ShapedRun {
     pub font_size: f32,
     /// Language set on the shaping buffer (if provided).
     pub language: Option<HbLanguage>,
+    /// Synthetic bold stroke width in pixels (0 = none).
+    pub synthetic_bold: f32,
+    /// Synthetic oblique shear factor (tan(angle); 0 = none).
+    pub synthetic_oblique: f32,
 }
 
 impl ShapedRun {
@@ -972,6 +1017,8 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
         font: Arc::clone(&run.font),
         font_size: run.font_size,
         language,
+        synthetic_bold: run.synthetic_bold,
+        synthetic_oblique: run.synthetic_oblique,
     })
 }
 

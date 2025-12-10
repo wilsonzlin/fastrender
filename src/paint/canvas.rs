@@ -486,9 +486,7 @@ impl Canvas {
 
         if let Some(skia_rect) = self.to_skia_rect(rect) {
             let path = PathBuilder::from_rect(skia_rect);
-            let paint = self
-                .current_state
-                .create_paint_with_blend(color, blend_mode.to_skia());
+            let paint = self.current_state.create_paint_with_blend(color, blend_mode.to_skia());
             let stroke = Stroke {
                 width,
                 ..Default::default()
@@ -603,6 +601,8 @@ impl Canvas {
         font: &LoadedFont,
         font_size: f32,
         color: Rgba,
+        synthetic_bold: f32,
+        synthetic_oblique: f32,
     ) {
         if glyphs.is_empty() || (color.a == 0.0 && self.current_state.opacity == 0.0) {
             return;
@@ -625,7 +625,9 @@ impl Canvas {
             let glyph_y = position.y + glyph.offset_y;
 
             // Get the glyph outline
-            if let Some(path) = self.build_glyph_path(&face, glyph.glyph_id as u16, glyph_x, glyph_y, scale) {
+            if let Some(path) =
+                self.build_glyph_path(&face, glyph.glyph_id as u16, glyph_x, glyph_y, scale, synthetic_oblique)
+            {
                 self.pixmap.fill_path(
                     &path,
                     &paint,
@@ -633,6 +635,19 @@ impl Canvas {
                     self.current_state.transform,
                     self.current_state.clip_mask.as_ref(),
                 );
+                if synthetic_bold > 0.0 {
+                    let mut stroke = Stroke::default();
+                    stroke.width = synthetic_bold * 2.0;
+                    stroke.line_join = tiny_skia::LineJoin::Round;
+                    stroke.line_cap = tiny_skia::LineCap::Round;
+                    self.pixmap.stroke_path(
+                        &path,
+                        &paint,
+                        &stroke,
+                        self.current_state.transform,
+                        self.current_state.clip_mask.as_ref(),
+                    );
+                }
             }
 
             x += glyph.advance;
@@ -884,11 +899,12 @@ impl Canvas {
         x: f32,
         y: f32,
         scale: f32,
+        synthetic_oblique: f32,
     ) -> Option<tiny_skia::Path> {
         let glyph_id = ttf_parser::GlyphId(glyph_id);
 
         // Create a path builder that collects glyph outline
-        let mut builder = GlyphPathBuilder::new(x, y, scale);
+        let mut builder = GlyphPathBuilder::new(x, y, scale, synthetic_oblique);
 
         face.outline_glyph(glyph_id, &mut builder);
 
@@ -906,20 +922,22 @@ struct GlyphPathBuilder {
     x: f32,
     y: f32,
     scale: f32,
+    skew: f32,
 }
 
 impl GlyphPathBuilder {
-    fn new(x: f32, y: f32, scale: f32) -> Self {
+    fn new(x: f32, y: f32, scale: f32, skew: f32) -> Self {
         Self {
             path_builder: PathBuilder::new(),
             x,
             y,
             scale,
+            skew,
         }
     }
 
-    fn transform_x(&self, gx: f32) -> f32 {
-        self.x + gx * self.scale
+    fn transform_x(&self, gx: f32, gy: f32) -> f32 {
+        self.x + (gx + self.skew * gy) * self.scale
     }
 
     fn transform_y(&self, gy: f32) -> f32 {
@@ -934,29 +952,31 @@ impl GlyphPathBuilder {
 
 impl ttf_parser::OutlineBuilder for GlyphPathBuilder {
     fn move_to(&mut self, x: f32, y: f32) {
-        self.path_builder.move_to(self.transform_x(x), self.transform_y(y));
+        self.path_builder
+            .move_to(self.transform_x(x, y), self.transform_y(y));
     }
 
     fn line_to(&mut self, x: f32, y: f32) {
-        self.path_builder.line_to(self.transform_x(x), self.transform_y(y));
+        self.path_builder
+            .line_to(self.transform_x(x, y), self.transform_y(y));
     }
 
     fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
         self.path_builder.quad_to(
-            self.transform_x(x1),
+            self.transform_x(x1, y1),
             self.transform_y(y1),
-            self.transform_x(x),
+            self.transform_x(x, y),
             self.transform_y(y),
         );
     }
 
     fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
         self.path_builder.cubic_to(
-            self.transform_x(x1),
+            self.transform_x(x1, y1),
             self.transform_y(y1),
-            self.transform_x(x2),
+            self.transform_x(x2, y2),
             self.transform_y(y2),
-            self.transform_x(x),
+            self.transform_x(x, y),
             self.transform_y(y),
         );
     }
