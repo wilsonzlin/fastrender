@@ -1712,9 +1712,7 @@ fn normalize_text_for_white_space(text: &str, white_space: WhiteSpace) -> Normal
                     }
                     _ => {
                         if run_has_newline {
-                            if run_has_space && seen_content {
-                                out.push(' ');
-                            }
+                            // Spaces before a segment break are removed; emit the break directly.
                             mandatory_breaks.push(BreakOpportunity::mandatory(out.len()));
                         } else if run_has_space && seen_content {
                             out.push(' ');
@@ -1729,9 +1727,6 @@ fn normalize_text_for_white_space(text: &str, white_space: WhiteSpace) -> Normal
             }
 
             if run_has_newline {
-                if run_has_space && seen_content {
-                    out.push(' ');
-                }
                 mandatory_breaks.push(BreakOpportunity::mandatory(out.len()));
             } else if run_has_space && seen_content {
                 out.push(' ');
@@ -3650,10 +3645,20 @@ mod tests {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::PreLine;
         let normalized = normalize_text_for_white_space("a\r\n b", style.white_space);
-        assert_eq!(normalized.text, "a b");
+        assert_eq!(normalized.text, "ab");
         assert_eq!(normalized.forced_breaks.len(), 1);
-        assert_eq!(normalized.forced_breaks[0].byte_offset, 2);
+        assert_eq!(normalized.forced_breaks[0].byte_offset, 1);
         assert!(normalized.allow_soft_wrap);
+    }
+
+    #[test]
+    fn pre_line_drops_spaces_before_break() {
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::PreLine;
+        let normalized = normalize_text_for_white_space("a   \n b", style.white_space);
+        assert_eq!(normalized.text, "ab");
+        assert_eq!(normalized.forced_breaks.len(), 1);
+        assert_eq!(normalized.forced_breaks[0].byte_offset, 1);
     }
 
     #[test]
@@ -3661,9 +3666,9 @@ mod tests {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::PreLine;
         let normalized = normalize_text_for_white_space("a\u{2028} b\u{2029}c\u{0085}d", style.white_space);
-        assert_eq!(normalized.text, "a bcd");
+        assert_eq!(normalized.text, "abcd");
         let offsets: Vec<usize> = normalized.forced_breaks.iter().map(|b| b.byte_offset).collect();
-        assert_eq!(offsets, vec![2, 3, 4]);
+        assert_eq!(offsets, vec![1, 2, 3]);
         assert!(normalized.allow_soft_wrap);
     }
 
