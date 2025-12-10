@@ -6,6 +6,8 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- `font-variant-ligatures` now parses/inherits and maps to OpenType toggles (`liga`/`clig`/`dlig`/`hlig`/`calt`), `font-feature-settings` parses comma-separated tags with on/off/numeric values (rejects malformed tags), and `font` shorthand resets ligatures/feature overrides to initial.
+- Shaping collects OpenType features from computed styles, applies ligature defaults, and lets `font-feature-settings` override/disable them; features flow through `FontRun` into HarfBuzz shaping and are covered by a regression.
 - `font-weight` relative keywords now resolve against the parent per CSS Fonts 4's table (100/400/700/900 breakpoints), numeric weights are clamped to the valid 1-1000 range during cascade, and out-of-range values are ignored; cascade/pseudo paths resolve weights before inheritance is used downstream and new regressions lock the mapping.
 - `font` shorthand now parses font-style/weight/size/line-height/family (with absolute/relative size keywords and line-height percentages), rejects missing family, and line-height percentages resolve to multipliers in both shorthand and longhand.
 - `font-stretch` is parsed (keywords + percentages, clamped 50-200%), inherited, stored in computed styles, carried through font selection (painter, display list, inline struts), and respected by font shorthand; shaping now requests fonts with stretch via FontContext.

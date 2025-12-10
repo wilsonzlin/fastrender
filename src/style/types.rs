@@ -393,6 +393,34 @@ pub enum FontVariant {
     SmallCaps,
 }
 
+/// Font ligature controls (font-variant-ligatures)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FontVariantLigatures {
+    pub common: bool,
+    pub discretionary: bool,
+    pub historical: bool,
+    pub contextual: bool,
+}
+
+impl Default for FontVariantLigatures {
+    fn default() -> Self {
+        // Initial value "normal": common + contextual on; discretionary/historical off.
+        Self {
+            common: true,
+            discretionary: false,
+            historical: false,
+            contextual: true,
+        }
+    }
+}
+
+/// Low-level OpenType feature override (`font-feature-settings`)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FontFeatureSetting {
+    pub tag: [u8; 4],
+    pub value: u32,
+}
+
 /// Font stretch
 ///
 /// CSS: `font-stretch`

@@ -52,7 +52,8 @@ use crate::style::types::{Direction as CssDirection, FontStyle as CssFontStyle, 
 use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStretch, FontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
-use rustybuzz::{Direction as HbDirection, Face, Language as HbLanguage, UnicodeBuffer};
+use rustybuzz::{Direction as HbDirection, Face, Feature, Language as HbLanguage, UnicodeBuffer};
+use ttf_parser::Tag;
 use std::str::FromStr;
 use std::sync::Arc;
 use unicode_bidi::{BidiInfo, Level};
@@ -575,6 +576,44 @@ pub struct FontRun {
     pub font_size: f32,
     /// BCP47 language tag (lowercased).
     pub language: String,
+    /// OpenType features to apply for this run.
+    pub features: Vec<Feature>,
+}
+
+/// Collects OpenType features from computed style.
+fn collect_opentype_features(style: &ComputedStyle) -> Vec<Feature> {
+    let mut features = Vec::new();
+    let lig = style.font_variant_ligatures;
+
+    let mut push_toggle = |tag: [u8; 4], enabled: bool| {
+        features.push(Feature {
+            tag: Tag::from_bytes(&tag),
+            value: if enabled { 1 } else { 0 },
+            start: 0,
+            end: u32::MAX,
+        });
+    };
+
+    // font-variant-ligatures keywords map to OpenType features
+    push_toggle(*b"liga", lig.common);
+    push_toggle(*b"clig", lig.common);
+    push_toggle(*b"dlig", lig.discretionary);
+    push_toggle(*b"hlig", lig.historical);
+    push_toggle(*b"calt", lig.contextual);
+
+    // Low-level font-feature-settings override defaults and prior toggles.
+    for setting in &style.font_feature_settings {
+        let tag = Tag::from_bytes(&setting.tag);
+        features.retain(|f| f.tag != tag);
+        features.push(Feature {
+            tag,
+            value: setting.value,
+            start: 0,
+            end: u32::MAX,
+        });
+    }
+
+    features
 }
 
 /// Assigns fonts to itemized runs.
@@ -583,6 +622,7 @@ pub struct FontRun {
 /// falling back through the font family list as needed.
 pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &FontContext) -> Result<Vec<FontRun>> {
     let mut font_runs = Vec::with_capacity(runs.len());
+    let features = collect_opentype_features(style);
 
     for run in runs {
         // Try to get a font from the family list
@@ -598,6 +638,7 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
             level: run.level,
             font_size: style.font_size,
             language: style.language.clone(),
+            features: features.clone(),
         });
     }
 
@@ -748,7 +789,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     }
 
     // Shape the text
-    let output = rustybuzz::shape(&rb_face, &[], buffer);
+    let output = rustybuzz::shape(&rb_face, &run.features, buffer);
 
     // Calculate scale factor
     let units_per_em = rb_face.units_per_em() as f32;
@@ -1087,6 +1128,7 @@ impl ClusterMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::types::{FontFeatureSetting, FontVariantLigatures};
 
     #[test]
     fn test_direction_from_level() {
@@ -1344,5 +1386,27 @@ mod tests {
         let shaped = ShapingPipeline::new().shape("Abc", &style, &ctx).unwrap();
         assert!(shaped.iter().any(|r| (r.font_size - 16.0).abs() < 0.1));
         assert!(shaped.iter().any(|r| (r.font_size - 20.0).abs() < 0.1));
+    }
+
+    #[test]
+    fn collect_features_respects_ligature_variants_and_overrides() {
+        let mut style = ComputedStyle::default();
+        style.font_variant_ligatures = FontVariantLigatures {
+            common: false,
+            discretionary: true,
+            historical: false,
+            contextual: false,
+        };
+        style.font_feature_settings = vec![FontFeatureSetting { tag: *b"liga", value: 1 }];
+
+        let feats = collect_opentype_features(&style);
+        let mut seen: std::collections::HashMap<[u8; 4], u32> = std::collections::HashMap::new();
+        for f in feats {
+            seen.insert(f.tag.to_bytes(), f.value);
+        }
+        assert_eq!(seen.get(b"liga"), Some(&1));
+        assert_eq!(seen.get(b"clig"), Some(&0));
+        assert_eq!(seen.get(b"dlig"), Some(&1));
+        assert_eq!(seen.get(b"calt"), Some(&0));
     }
 }

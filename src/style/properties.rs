@@ -502,6 +502,8 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 if let Some((font_style, font_weight, font_variant, font_stretch, font_size, line_height, families)) =
                     parse_font_shorthand(raw, parent_font_size, root_font_size)
                 {
+                    styles.font_variant_ligatures = FontVariantLigatures::default();
+                    styles.font_feature_settings.clear();
                     styles.font_style = font_style;
                     styles.font_weight = font_weight;
                     styles.font_variant = font_variant;
@@ -573,6 +575,54 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     "small-caps" => FontVariant::SmallCaps,
                     _ => styles.font_variant,
                 };
+            }
+        }
+        "font-variant-ligatures" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                let tokens: Vec<&str> = kw.split_whitespace().collect();
+                if tokens.len() == 1 {
+                    match tokens[0] {
+                        "normal" => styles.font_variant_ligatures = FontVariantLigatures::default(),
+                        "none" => styles.font_variant_ligatures = FontVariantLigatures {
+                            common: false,
+                            discretionary: false,
+                            historical: false,
+                            contextual: false,
+                        },
+                        _ => {}
+                    }
+                } else if !tokens.is_empty() {
+                    // Start from the initial value and apply toggles.
+                    let mut lig = FontVariantLigatures::default();
+                    for tok in tokens {
+                        match tok {
+                            "common-ligatures" => lig.common = true,
+                            "no-common-ligatures" => lig.common = false,
+                            "discretionary-ligatures" => lig.discretionary = true,
+                            "no-discretionary-ligatures" => lig.discretionary = false,
+                            "historical-ligatures" => lig.historical = true,
+                            "no-historical-ligatures" => lig.historical = false,
+                            "contextual" => lig.contextual = true,
+                            "no-contextual" => lig.contextual = false,
+                            _ => {}
+                        }
+                    }
+                    styles.font_variant_ligatures = lig;
+                }
+            }
+        }
+        "font-feature-settings" => {
+            if let PropertyValue::Keyword(raw) = &resolved_value {
+                let trimmed = raw.trim();
+                if trimmed.eq_ignore_ascii_case("normal") {
+                    styles.font_feature_settings.clear();
+                } else {
+                    let mut input = ParserInput::new(trimmed);
+                    let mut parser = Parser::new(&mut input);
+                    if let Ok(features) = parser.parse_comma_separated(|p| parse_feature_setting(p)) {
+                        styles.font_feature_settings = features;
+                    }
+                }
             }
         }
         "font-stretch" => match &resolved_value {
@@ -3575,4 +3625,35 @@ fn parse_background_shorthand(tokens: &[PropertyValue]) -> Option<BackgroundShor
     }
 
     Some(shorthand)
+}
+fn parse_feature_setting<'i, 't>(
+    parser: &mut Parser<'i, 't>,
+) -> Result<FontFeatureSetting, cssparser::ParseError<'i, ()>> {
+    parser.skip_whitespace();
+    let location = parser.current_source_location();
+
+    let tag_bytes: [u8; 4] = match parser.next()? {
+        Token::QuotedString(s) | Token::Ident(s) if s.len() == 4 && s.as_bytes().iter().all(|b| b.is_ascii()) => {
+            s.as_bytes().try_into().map_err(|_| location.new_custom_error(()))?
+        }
+        _ => return Err(location.new_custom_error(())),
+    };
+
+    parser.skip_whitespace();
+    let value = if let Ok(num) = parser.try_parse(|p| p.expect_number()) {
+        num.max(0.0) as u32
+    } else if let Ok(ident) = parser.try_parse(|p| {
+        p.expect_ident()
+            .map(|ident| ident.as_ref().to_ascii_lowercase())
+    }) {
+        match ident.as_str() {
+            "on" => 1,
+            "off" => 0,
+            _ => return Err(location.new_custom_error(())),
+        }
+    } else {
+        1
+    };
+
+    Ok(FontFeatureSetting { tag: tag_bytes, value })
 }
