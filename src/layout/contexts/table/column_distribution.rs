@@ -869,13 +869,33 @@ pub fn distribute_spanning_percentage(columns: &mut [ColumnConstraints], start_c
     if start_col >= end_col || end_col > columns.len() {
         return;
     }
-    let span = (end_col - start_col) as f32;
-    if span <= 0.0 {
+    let target_pct = pct.clamp(0.0, 100.0);
+    if target_pct <= 0.0 {
         return;
     }
-    let share = (pct / span).clamp(0.0, 100.0);
-    for col in &mut columns[start_col..end_col] {
-        col.set_percentage(share);
+
+    let span = &mut columns[start_col..end_col];
+    let mut existing_pct = 0.0;
+    let mut auto_indices = Vec::new();
+    for (idx, col) in span.iter().enumerate() {
+        if let Some(pct) = col.percentage {
+            existing_pct += pct;
+            continue;
+        }
+        if col.fixed_width.is_none() {
+            auto_indices.push(idx);
+        }
+    }
+
+    // If authored percentages already satisfy the span or there are no auto columns to assign,
+    // leave the constraints untouched.
+    if existing_pct >= target_pct || auto_indices.is_empty() {
+        return;
+    }
+
+    let share = (target_pct - existing_pct) / auto_indices.len() as f32;
+    for idx in auto_indices {
+        span[idx].set_percentage(share);
     }
 }
 
@@ -1472,6 +1492,35 @@ mod tests {
         assert_eq!(columns[1].percentage, Some(25.0));
         assert!(!columns[0].is_flexible);
         assert!(!columns[1].is_flexible);
+    }
+
+    #[test]
+    fn spanning_percentage_respects_existing_percentages_and_fills_rest() {
+        let mut columns = vec![
+            ColumnConstraints::percentage(20.0, 0.0, 100.0),
+            ColumnConstraints::new(0.0, 100.0),
+            ColumnConstraints::new(0.0, 100.0),
+        ];
+        distribute_spanning_percentage(&mut columns, 0, 3, 60.0);
+
+        // Existing 20% is preserved and the remaining 40% is split across auto columns.
+        assert_eq!(columns[0].percentage, Some(20.0));
+        assert_eq!(columns[1].percentage, Some(20.0));
+        assert_eq!(columns[2].percentage, Some(20.0));
+    }
+
+    #[test]
+    fn spanning_percentage_skips_when_only_fixed_or_percent_columns() {
+        let mut columns = vec![
+            ColumnConstraints::fixed(50.0),
+            ColumnConstraints::percentage(30.0, 0.0, 100.0),
+        ];
+
+        distribute_spanning_percentage(&mut columns, 0, 2, 80.0);
+
+        // No auto columns to receive the remainder, so authored constraints stay untouched.
+        assert_eq!(columns[0].fixed_width, Some(50.0));
+        assert_eq!(columns[1].percentage, Some(30.0));
     }
 
     // ========== Compute Column Constraints Tests ==========
