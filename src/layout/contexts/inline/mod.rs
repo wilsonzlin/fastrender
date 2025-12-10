@@ -2309,23 +2309,22 @@ fn map_small_kana(ch: char) -> Option<char> {
     }
 }
 
-fn is_word_continue(ch: char) -> bool {
-    ch.is_alphanumeric() || ch == '\'' || ch == '\u{2019}'
-}
-
 fn capitalize_words(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    let mut prev_continue = false;
-    for ch in text.chars() {
-        let is_letter = ch.is_alphabetic();
-        if is_letter && !prev_continue {
-            for up in ch.to_uppercase() {
-                out.push(up);
+    for word in unicode_segmentation::UnicodeSegmentation::split_word_bounds(text) {
+        let mut chars = word.chars();
+        if let Some(first) = chars.next() {
+            if first.is_alphabetic() {
+                for up in first.to_uppercase() {
+                    out.push(up);
+                }
+                for rest in chars {
+                    out.push(rest);
+                }
+                continue;
             }
-        } else {
-            out.push(ch);
         }
-        prev_continue = is_word_continue(ch);
+        out.push_str(word);
     }
     out
 }
@@ -4438,7 +4437,8 @@ mod tests {
         let node = BoxNode::new_text(Arc::new(style), text.to_string());
         let item = ifc.create_text_item(&node, text).unwrap();
 
-        assert_eq!(item.text, "Foo.Bar Baz");
+        // Default word boundaries keep foo.bar as a single word
+        assert_eq!(item.text, "Foo.bar Baz");
     }
 
     #[test]
