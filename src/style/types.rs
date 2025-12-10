@@ -659,6 +659,20 @@ impl Default for FontSynthesis {
     }
 }
 
+/// Font size adjustment ratio (`font-size-adjust`)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FontSizeAdjust {
+    None,
+    Number(f32),
+    FromFont,
+}
+
+impl Default for FontSizeAdjust {
+    fn default() -> Self {
+        FontSizeAdjust::None
+    }
+}
+
 /// Kerning control (`font-kerning`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontKerning {

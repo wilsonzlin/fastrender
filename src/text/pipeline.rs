@@ -49,8 +49,9 @@
 
 use crate::error::{Result, TextError};
 use crate::style::types::{
-    Direction as CssDirection, EastAsianVariant, EastAsianWidth, FontKerning, FontStyle as CssFontStyle, FontVariant,
-    FontVariantCaps, FontVariantPosition, NumericFigure, NumericFraction, NumericSpacing,
+    Direction as CssDirection, EastAsianVariant, EastAsianWidth, FontKerning, FontSizeAdjust,
+    FontStyle as CssFontStyle, FontVariant, FontVariantCaps, FontVariantPosition, NumericFigure, NumericFraction,
+    NumericSpacing,
 };
 use crate::style::ComputedStyle;
 use crate::text::font_db::font_has_feature;
@@ -767,6 +768,50 @@ fn collect_opentype_features(style: &ComputedStyle) -> Vec<Feature> {
     features
 }
 
+fn font_aspect_ratio(font: &LoadedFont) -> Option<f32> {
+    font.metrics().ok().and_then(|m| m.aspect_ratio())
+}
+
+/// Returns the author-preferred aspect ratio for font-size-adjust, if any.
+pub fn preferred_font_aspect(style: &ComputedStyle, font_context: &FontContext) -> Option<f32> {
+    match style.font_size_adjust {
+        FontSizeAdjust::None => None,
+        FontSizeAdjust::Number(n) if n > 0.0 => Some(n),
+        FontSizeAdjust::Number(_) => None,
+        FontSizeAdjust::FromFont => {
+            let font_style = match style.font_style {
+                CssFontStyle::Normal => FontStyle::Normal,
+                CssFontStyle::Italic => FontStyle::Italic,
+                CssFontStyle::Oblique(_) => FontStyle::Oblique,
+            };
+            let font_stretch = FontStretch::from_percentage(style.font_stretch.to_percentage());
+            font_context
+                .get_font_full(&style.font_family, style.font_weight.to_u16(), font_style, font_stretch)
+                .and_then(|font| font_aspect_ratio(&font))
+        }
+    }
+}
+
+/// Computes the used font size after applying font-size-adjust.
+pub fn compute_adjusted_font_size(style: &ComputedStyle, font: &LoadedFont, preferred_aspect: Option<f32>) -> f32 {
+    let base_size = style.font_size;
+    let desired_aspect = match style.font_size_adjust {
+        FontSizeAdjust::None => None,
+        FontSizeAdjust::Number(n) if n > 0.0 => Some(n),
+        FontSizeAdjust::Number(_) => None,
+        FontSizeAdjust::FromFont => preferred_aspect.or_else(|| font_aspect_ratio(font)),
+    };
+
+    if let Some(desired) = desired_aspect {
+        let actual = font_aspect_ratio(font).unwrap_or(0.5);
+        if actual > 0.0 {
+            return base_size * (desired / actual);
+        }
+    }
+
+    base_size
+}
+
 /// Assigns fonts to itemized runs.
 ///
 /// Uses the font context to find appropriate fonts for each script,
@@ -774,10 +819,15 @@ fn collect_opentype_features(style: &ComputedStyle) -> Vec<Feature> {
 pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &FontContext) -> Result<Vec<FontRun>> {
     let mut font_runs = Vec::with_capacity(runs.len());
     let features = collect_opentype_features(style);
+    let preferred_aspect = preferred_font_aspect(style, font_context);
 
     for run in runs {
         // Try to get a font from the family list
-        let (font, synthetic_bold, synthetic_oblique) = get_font_for_run(run, style, font_context)?;
+        let (font, mut synthetic_bold, synthetic_oblique) = get_font_for_run(run, style, font_context)?;
+        let used_font_size = compute_adjusted_font_size(style, &font, preferred_aspect);
+        if style.font_size > 0.0 {
+            synthetic_bold *= used_font_size / style.font_size;
+        }
 
         font_runs.push(FontRun {
             text: run.text.clone(),
@@ -789,7 +839,7 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
             script: run.script,
             direction: run.direction,
             level: run.level,
-            font_size: style.font_size,
+            font_size: used_font_size,
             language: style.language.clone(),
             features: features.clone(),
         });
@@ -1527,6 +1577,47 @@ mod tests {
         let runs = pipeline.shape("i", &style, &font_ctx).expect("shape succeeds");
         assert!(!runs.is_empty());
         assert_eq!(runs[0].language.as_ref().map(|l| l.as_str()), Some("tr-tr"));
+    }
+
+    #[test]
+    fn font_size_adjust_number_scales_font_run() {
+        let font_ctx = FontContext::new();
+        let Some(font) = font_ctx.get_sans_serif() else { return };
+        let Some(aspect) = font.metrics().ok().and_then(|m| m.aspect_ratio()) else { return };
+
+        let mut style = ComputedStyle::default();
+        style.font_family = vec![font.family.clone()];
+        style.font_size = 20.0;
+        let desired = aspect * 2.0;
+        style.font_size_adjust = FontSizeAdjust::Number(desired);
+
+        let pipeline = ShapingPipeline::new();
+        let runs = pipeline.shape("Hello", &style, &font_ctx).expect("shape succeeds");
+        assert!(!runs.is_empty());
+
+        let expected = style.font_size * (desired / aspect);
+        assert!((runs[0].font_size - expected).abs() < 0.01);
+    }
+
+    #[test]
+    fn font_size_adjust_from_font_defaults_to_base_font() {
+        let font_ctx = FontContext::new();
+        let Some(font) = font_ctx.get_sans_serif() else { return };
+        let Some(aspect) = font.metrics().ok().and_then(|m| m.aspect_ratio()) else { return };
+
+        let mut style = ComputedStyle::default();
+        style.font_family = vec![font.family.clone()];
+        style.font_size = 18.0;
+        style.font_size_adjust = FontSizeAdjust::FromFont;
+
+        let pipeline = ShapingPipeline::new();
+        let runs = pipeline.shape("Hello", &style, &font_ctx).expect("shape succeeds");
+        assert!(!runs.is_empty());
+
+        // Using the same font as the reference should preserve the base size.
+        assert!((runs[0].font_size - style.font_size).abs() < 0.01);
+        // Sanity: aspect was available to avoid the test vacuously passing.
+        assert!(aspect > 0.0);
     }
 
     #[test]

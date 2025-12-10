@@ -263,6 +263,8 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.font_variant_east_asian = parent.font_variant_east_asian;
     styles.font_variant_ligatures = parent.font_variant_ligatures;
     styles.font_variant_position = parent.font_variant_position;
+    styles.font_size_adjust = parent.font_size_adjust;
+    styles.font_synthesis = parent.font_synthesis;
     styles.font_feature_settings = parent.font_feature_settings.clone();
     styles.font_stretch = parent.font_stretch;
     styles.font_kerning = parent.font_kerning;

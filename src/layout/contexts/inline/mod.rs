@@ -55,7 +55,7 @@ use crate::text::font_loader::FontContext;
 use crate::text::hyphenation::Hyphenator;
 use crate::text::justify::is_cjk_character;
 use crate::text::line_break::{find_break_opportunities, BreakType};
-use crate::text::pipeline::{ShapedRun, ShapingPipeline};
+use crate::text::pipeline::{compute_adjusted_font_size, preferred_font_aspect, ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::{BoxNode, BoxType, MarkerContent, ReplacedBox};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 use std::sync::Arc;
@@ -949,7 +949,7 @@ impl InlineFormattingContext {
         let italic = matches!(style.font_style, FontStyle::Italic);
         let oblique = matches!(style.font_style, FontStyle::Oblique(_));
         let stretch = crate::text::font_db::FontStretch::from_percentage(style.font_stretch.to_percentage());
-
+        let preferred_aspect = preferred_font_aspect(style, &self.font_context);
         self.font_context
             .get_font_full(
                 &style.font_family,
@@ -964,8 +964,10 @@ impl InlineFormattingContext {
                 stretch,
             )
             .or_else(|| self.font_context.get_sans_serif())
-            .and_then(|font| font.metrics().ok())
-            .map(|metrics| metrics.scale(style.font_size))
+            .and_then(|font| {
+                let used_font_size = compute_adjusted_font_size(style, &font, preferred_aspect);
+                font.metrics().ok().map(|metrics| metrics.scale(used_font_size))
+            })
     }
 
     fn compute_strut_metrics(&self, style: &ComputedStyle) -> BaselineMetrics {

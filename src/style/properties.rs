@@ -596,6 +596,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     styles.font_variant_numeric = FontVariantNumeric::default();
                     styles.font_variant_east_asian = FontVariantEastAsian::default();
                     styles.font_variant_position = FontVariantPosition::Normal;
+                    styles.font_size_adjust = FontSizeAdjust::None;
                     styles.font_synthesis = FontSynthesis::default();
                     styles.font_kerning = FontKerning::Auto;
                     styles.font_feature_settings.clear();
@@ -639,6 +640,17 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 _ => {}
             }
         }
+        "font-size-adjust" => match &resolved_value {
+            PropertyValue::Keyword(kw) => match kw.as_str() {
+                "none" => styles.font_size_adjust = FontSizeAdjust::None,
+                "from-font" => styles.font_size_adjust = FontSizeAdjust::FromFont,
+                _ => {}
+            },
+            PropertyValue::Number(n) if *n >= 0.0 => {
+                styles.font_size_adjust = FontSizeAdjust::Number(*n);
+            }
+            _ => {}
+        },
         "font-weight" => match &resolved_value {
             PropertyValue::Keyword(kw) => {
                 styles.font_weight = match kw.as_str() {
@@ -4530,6 +4542,34 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert!(matches!(style.font_variant_position, FontVariantPosition::Normal));
+    }
+
+    #[test]
+    fn parses_font_size_adjust() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font-size-adjust".to_string(),
+            value: PropertyValue::Number(0.7),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_size_adjust, FontSizeAdjust::Number(v) if (v - 0.7).abs() < 1e-6));
+
+        let decl = Declaration {
+            property: "font-size-adjust".to_string(),
+            value: PropertyValue::Keyword("from-font".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_size_adjust, FontSizeAdjust::FromFont));
+
+        let decl = Declaration {
+            property: "font-size-adjust".to_string(),
+            value: PropertyValue::Keyword("none".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_size_adjust, FontSizeAdjust::None));
     }
 
     #[test]

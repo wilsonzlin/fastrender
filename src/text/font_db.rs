@@ -1069,6 +1069,13 @@ impl FontMetrics {
     pub fn normal_line_height(&self, font_size: f32) -> f32 {
         (self.line_height as f32) * font_size / (self.units_per_em as f32)
     }
+
+    /// Returns the aspect ratio (x-height / em).
+    pub fn aspect_ratio(&self) -> Option<f32> {
+        self.x_height
+            .map(|xh| xh as f32 / (self.units_per_em as f32))
+            .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
+    }
 }
 
 /// Scaled font metrics in pixels
