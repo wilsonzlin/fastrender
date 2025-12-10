@@ -140,11 +140,13 @@ impl StickyConstraints {
 
     /// Creates sticky constraints from computed style
     pub fn from_style(style: &PositionedStyle, containing_block: &ContainingBlock) -> Self {
+        let font_size = style.font_size;
+        let root_font_size = style.root_font_size;
         Self {
-            top: resolve_offset(&style.top, containing_block.height()),
-            right: resolve_offset(&style.right, containing_block.width()),
-            bottom: resolve_offset(&style.bottom, containing_block.height()),
-            left: resolve_offset(&style.left, containing_block.width()),
+            top: resolve_offset(&style.top, containing_block.height(), font_size, root_font_size),
+            right: resolve_offset(&style.right, containing_block.width(), font_size, root_font_size),
+            bottom: resolve_offset(&style.bottom, containing_block.height(), font_size, root_font_size),
+            left: resolve_offset(&style.left, containing_block.width(), font_size, root_font_size),
         }
     }
 
@@ -246,21 +248,22 @@ impl PositionedLayout {
     fn compute_relative_offset(&self, style: &PositionedStyle, containing_block: &ContainingBlock) -> Point {
         let mut offset_x = 0.0;
         let mut offset_y = 0.0;
-
+        let font_size = style.font_size;
+        let root_font_size = style.root_font_size;
         let cb_width = containing_block.width();
         let cb_height = containing_block.height();
 
         // Vertical offset: top takes precedence over bottom
-        if let Some(top) = resolve_offset(&style.top, cb_height) {
+        if let Some(top) = resolve_offset(&style.top, cb_height, font_size, root_font_size) {
             offset_y = top;
-        } else if let Some(bottom) = resolve_offset(&style.bottom, cb_height) {
+        } else if let Some(bottom) = resolve_offset(&style.bottom, cb_height, font_size, root_font_size) {
             offset_y = -bottom;
         }
 
         // Horizontal offset: left takes precedence over right (LTR)
-        if let Some(left) = resolve_offset(&style.left, cb_width) {
+        if let Some(left) = resolve_offset(&style.left, cb_width, font_size, root_font_size) {
             offset_x = left;
-        } else if let Some(right) = resolve_offset(&style.right, cb_width) {
+        } else if let Some(right) = resolve_offset(&style.right, cb_width, font_size, root_font_size) {
             offset_x = -right;
         }
 
@@ -318,8 +321,8 @@ impl PositionedLayout {
         cb_width: f32,
         intrinsic_width: f32,
     ) -> Result<(f32, f32), LayoutError> {
-        let left = resolve_offset(&style.left, cb_width);
-        let right = resolve_offset(&style.right, cb_width);
+        let left = resolve_offset(&style.left, cb_width, style.font_size, style.root_font_size);
+        let right = resolve_offset(&style.right, cb_width, style.font_size, style.root_font_size);
 
         // Get margin values (auto margins = 0 for absolute positioning unless overconstrained)
         let margin_left = style.margin.left;
@@ -400,8 +403,8 @@ impl PositionedLayout {
         cb_height: f32,
         intrinsic_height: f32,
     ) -> Result<(f32, f32), LayoutError> {
-        let top = resolve_offset(&style.top, cb_height);
-        let bottom = resolve_offset(&style.bottom, cb_height);
+        let top = resolve_offset(&style.top, cb_height, style.font_size, style.root_font_size);
+        let bottom = resolve_offset(&style.bottom, cb_height, style.font_size, style.root_font_size);
 
         // Get margin values
         let margin_top = style.margin.top;
@@ -1007,18 +1010,18 @@ mod tests {
     #[test]
     fn test_resolve_offset_auto() {
         let value = LengthOrAuto::Auto;
-        assert_eq!(resolve_offset(&value, 100.0), None);
+        assert_eq!(resolve_offset(&value, 100.0, 16.0, 16.0), None);
     }
 
     #[test]
     fn test_resolve_offset_px() {
         let value = LengthOrAuto::px(50.0);
-        assert_eq!(resolve_offset(&value, 100.0), Some(50.0));
+        assert_eq!(resolve_offset(&value, 100.0, 16.0, 16.0), Some(50.0));
     }
 
     #[test]
     fn test_resolve_offset_percent() {
         let value = LengthOrAuto::percent(25.0);
-        assert_eq!(resolve_offset(&value, 200.0), Some(50.0));
+        assert_eq!(resolve_offset(&value, 200.0, 16.0, 16.0), Some(50.0));
     }
 }

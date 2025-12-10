@@ -215,6 +215,9 @@ pub struct PositionedStyle {
     /// Note: Already resolved to px at computed value time
     pub font_size: f32,
 
+    /// Root element font size in pixels (used for resolving rem units)
+    pub root_font_size: f32,
+
     /// Font weight
     ///
     /// CSS: `font-weight`
@@ -442,7 +445,8 @@ impl Default for PositionedStyle {
 
             // Text defaults
             font_family: vec!["serif".to_string()],
-            font_size: 16.0,  // medium = 16px
+            font_size: 16.0, // medium = 16px
+            root_font_size: 16.0,
             font_weight: 400, // normal
             font_style: FontStyle::Normal,
             font_stretch: FontStretch::Normal,
@@ -620,6 +624,11 @@ impl PositionedStyleBuilder {
 
     pub fn font_size(mut self, size: f32) -> Self {
         self.style.font_size = size;
+        self
+    }
+
+    pub fn root_font_size(mut self, size: f32) -> Self {
+        self.style.root_font_size = size;
         self
     }
 

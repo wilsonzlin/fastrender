@@ -1622,7 +1622,12 @@ pub fn extract_length_pair(value: &PropertyValue) -> Option<(Length, Length)> {
     }
 }
 
-fn parse_spacing_value(value: &PropertyValue, font_size: f32, root_font_size: f32, allow_percentage: bool) -> Option<f32> {
+fn parse_spacing_value(
+    value: &PropertyValue,
+    font_size: f32,
+    root_font_size: f32,
+    allow_percentage: bool,
+) -> Option<f32> {
     match value {
         PropertyValue::Keyword(kw) if kw == "normal" => Some(0.0),
         PropertyValue::Number(n) if *n == 0.0 => Some(0.0),

@@ -144,6 +144,8 @@ pub struct ComputedStyle {
     pub line_height: LineHeight,
     pub direction: Direction,
     pub unicode_bidi: UnicodeBidi,
+    /// Computed root element font size for resolving rem units
+    pub root_font_size: f32,
     pub text_align: TextAlign,
     pub text_align_last: TextAlignLast,
     pub text_justify: TextJustify,
@@ -312,6 +314,7 @@ impl Default for ComputedStyle {
             line_height: LineHeight::Normal,
             direction: Direction::Ltr,
             unicode_bidi: UnicodeBidi::Normal,
+            root_font_size: 16.0,
             text_align: TextAlign::Start,
             text_align_last: TextAlignLast::Auto,
             text_justify: TextJustify::Auto,

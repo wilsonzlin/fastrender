@@ -29,7 +29,7 @@
 //! Reference: <https://www.w3.org/TR/CSS21/visudet.html#Computing_widths_and_margins>
 
 use crate::layout::utils::content_size_from_box_sizing;
-use crate::style::values::Length;
+use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
 
 /// Result of width computation
@@ -121,21 +121,51 @@ impl MarginValue {
 /// A `ComputedBlockWidth` containing all resolved horizontal dimensions.
 pub fn compute_block_width(style: &ComputedStyle, containing_width: f32) -> ComputedBlockWidth {
     // Resolve padding (percentages relative to containing width)
-    let padding_left = resolve_length(style.padding_left, containing_width);
-    let padding_right = resolve_length(style.padding_right, containing_width);
+    let padding_left = resolve_length(
+        style.padding_left,
+        containing_width,
+        style.font_size,
+        style.root_font_size,
+    );
+    let padding_right = resolve_length(
+        style.padding_right,
+        containing_width,
+        style.font_size,
+        style.root_font_size,
+    );
 
     // Border widths
-    let border_left = resolve_length(style.border_left_width, containing_width);
-    let border_right = resolve_length(style.border_right_width, containing_width);
+    let border_left = resolve_length(
+        style.border_left_width,
+        containing_width,
+        style.font_size,
+        style.root_font_size,
+    );
+    let border_right = resolve_length(
+        style.border_right_width,
+        containing_width,
+        style.font_size,
+        style.root_font_size,
+    );
     let horizontal_edges = padding_left + padding_right + border_left + border_right;
 
     // Resolve margins (may be auto - represented by None)
     let margin_left = match &style.margin_left {
-        Some(len) => MarginValue::Length(len.resolve_against(containing_width)),
+        Some(len) => MarginValue::Length(resolve_length(
+            *len,
+            containing_width,
+            style.font_size,
+            style.root_font_size,
+        )),
         None => MarginValue::Auto,
     };
     let margin_right = match &style.margin_right {
-        Some(len) => MarginValue::Length(len.resolve_against(containing_width)),
+        Some(len) => MarginValue::Length(resolve_length(
+            *len,
+            containing_width,
+            style.font_size,
+            style.root_font_size,
+        )),
         None => MarginValue::Auto,
     };
 
@@ -143,7 +173,7 @@ pub fn compute_block_width(style: &ComputedStyle, containing_width: f32) -> Comp
     let width_value = style
         .width
         .as_ref()
-        .map(|len| len.resolve_against(containing_width))
+        .map(|len| resolve_length(*len, containing_width, style.font_size, style.root_font_size))
         .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing));
 
     // Compute the resolved values using the constraint equation
@@ -179,12 +209,32 @@ pub fn compute_block_width_with_auto_margins(
     margin_right_is_auto: bool,
 ) -> ComputedBlockWidth {
     // Resolve padding
-    let padding_left = resolve_length(style.padding_left, containing_width);
-    let padding_right = resolve_length(style.padding_right, containing_width);
+    let padding_left = resolve_length(
+        style.padding_left,
+        containing_width,
+        style.font_size,
+        style.root_font_size,
+    );
+    let padding_right = resolve_length(
+        style.padding_right,
+        containing_width,
+        style.font_size,
+        style.root_font_size,
+    );
 
     // Border widths
-    let border_left = resolve_length(style.border_left_width, containing_width);
-    let border_right = resolve_length(style.border_right_width, containing_width);
+    let border_left = resolve_length(
+        style.border_left_width,
+        containing_width,
+        style.font_size,
+        style.root_font_size,
+    );
+    let border_right = resolve_length(
+        style.border_right_width,
+        containing_width,
+        style.font_size,
+        style.root_font_size,
+    );
     let horizontal_edges = padding_left + padding_right + border_left + border_right;
 
     // Resolve margins with explicit auto flags
@@ -195,7 +245,7 @@ pub fn compute_block_width_with_auto_margins(
             style
                 .margin_left
                 .as_ref()
-                .map(|l| l.resolve_against(containing_width))
+                .map(|l| resolve_length(*l, containing_width, style.font_size, style.root_font_size))
                 .unwrap_or(0.0),
         )
     };
@@ -207,7 +257,7 @@ pub fn compute_block_width_with_auto_margins(
             style
                 .margin_right
                 .as_ref()
-                .map(|l| l.resolve_against(containing_width))
+                .map(|l| resolve_length(*l, containing_width, style.font_size, style.root_font_size))
                 .unwrap_or(0.0),
         )
     };
@@ -216,7 +266,7 @@ pub fn compute_block_width_with_auto_margins(
     let width_value = style
         .width
         .as_ref()
-        .map(|len| len.resolve_against(containing_width))
+        .map(|len| resolve_length(*len, containing_width, style.font_size, style.root_font_size))
         .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing));
 
     // Compute the resolved values
@@ -301,9 +351,21 @@ fn resolve_constraint(
     }
 }
 
-/// Resolves a Length value to pixels
-fn resolve_length(length: Length, containing_width: f32) -> f32 {
-    length.resolve_against(containing_width)
+/// Resolves a Length value to pixels using the element and root font sizes for font-relative units.
+fn resolve_length(length: Length, containing_width: f32, font_size: f32, root_font_size: f32) -> f32 {
+    if length.unit.is_percentage() {
+        length.resolve_against(containing_width)
+    } else if length.unit.is_absolute() {
+        length.to_px()
+    } else {
+        match length.unit {
+            LengthUnit::Em => length.value * font_size,
+            LengthUnit::Ex => length.value * font_size * 0.5,
+            LengthUnit::Ch => length.value * font_size * 0.5,
+            LengthUnit::Rem => length.value * root_font_size,
+            _ => length.value,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -356,6 +418,19 @@ mod tests {
             margin_right: 10.0,
         };
         assert_eq!(w.padding_box_width(), 110.0);
+    }
+
+    #[test]
+    fn resolves_font_relative_padding_and_rem() {
+        let mut style = default_style();
+        style.font_size = 10.0;
+        style.root_font_size = 12.0;
+        style.padding_left = Length::em(1.5);
+        style.padding_right = Length::rem(1.0);
+
+        let width = compute_block_width(&style, 200.0);
+        assert!((width.padding_left - 15.0).abs() < f32::EPSILON);
+        assert!((width.padding_right - 12.0).abs() < f32::EPSILON);
     }
 
     #[test]

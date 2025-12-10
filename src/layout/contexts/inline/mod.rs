@@ -49,7 +49,7 @@ use crate::style::types::{
     FontStyle, HyphensMode, ListStylePosition, OverflowWrap, TabSize, TextAlign, TextJustify, TextTransform,
     WhiteSpace, WordBreak,
 };
-use crate::style::values::Length;
+use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::text::hyphenation::Hyphenator;
@@ -219,7 +219,9 @@ impl InlineFormattingContext {
                             .style
                             .margin_right
                             .as_ref()
-                            .map(|m| resolve_length_for_width(*m, 0.0))
+                            .map(|m| {
+                                resolve_length_for_width(*m, 0.0, child.style.font_size, child.style.root_font_size)
+                            })
                             .unwrap_or(0.0);
                         let gap = if raw_gap.abs() > f32::EPSILON {
                             raw_gap
@@ -242,14 +244,54 @@ impl InlineFormattingContext {
                     } else {
                         0.0
                     };
-                    let padding_left = resolve_length_for_width(child.style.padding_left, percentage_base);
-                    let padding_right = resolve_length_for_width(child.style.padding_right, percentage_base);
-                    let padding_top = resolve_length_for_width(child.style.padding_top, percentage_base);
-                    let padding_bottom = resolve_length_for_width(child.style.padding_bottom, percentage_base);
-                    let border_left = resolve_length_for_width(child.style.border_left_width, percentage_base);
-                    let border_right = resolve_length_for_width(child.style.border_right_width, percentage_base);
-                    let border_top = resolve_length_for_width(child.style.border_top_width, percentage_base);
-                    let border_bottom = resolve_length_for_width(child.style.border_bottom_width, percentage_base);
+                    let padding_left = resolve_length_for_width(
+                        child.style.padding_left,
+                        percentage_base,
+                        child.style.font_size,
+                        child.style.root_font_size,
+                    );
+                    let padding_right = resolve_length_for_width(
+                        child.style.padding_right,
+                        percentage_base,
+                        child.style.font_size,
+                        child.style.root_font_size,
+                    );
+                    let padding_top = resolve_length_for_width(
+                        child.style.padding_top,
+                        percentage_base,
+                        child.style.font_size,
+                        child.style.root_font_size,
+                    );
+                    let padding_bottom = resolve_length_for_width(
+                        child.style.padding_bottom,
+                        percentage_base,
+                        child.style.font_size,
+                        child.style.root_font_size,
+                    );
+                    let border_left = resolve_length_for_width(
+                        child.style.border_left_width,
+                        percentage_base,
+                        child.style.font_size,
+                        child.style.root_font_size,
+                    );
+                    let border_right = resolve_length_for_width(
+                        child.style.border_right_width,
+                        percentage_base,
+                        child.style.font_size,
+                        child.style.root_font_size,
+                    );
+                    let border_top = resolve_length_for_width(
+                        child.style.border_top_width,
+                        percentage_base,
+                        child.style.font_size,
+                        child.style.root_font_size,
+                    );
+                    let border_bottom = resolve_length_for_width(
+                        child.style.border_bottom_width,
+                        percentage_base,
+                        child.style.font_size,
+                        child.style.root_font_size,
+                    );
 
                     let start_edge = padding_left + border_left;
                     let end_edge = padding_right + border_right;
@@ -324,12 +366,12 @@ impl InlineFormattingContext {
         let margin_left = style
             .margin_left
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, percentage_base))
+            .map(|l| resolve_length_for_width(*l, percentage_base, style.font_size, style.root_font_size))
             .unwrap_or(0.0);
         let margin_right = style
             .margin_right
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, percentage_base))
+            .map(|l| resolve_length_for_width(*l, percentage_base, style.font_size, style.root_font_size))
             .unwrap_or(0.0);
         let available_for_box = if available_width.is_finite() {
             (available_width - margin_left - margin_right).max(0.0)
@@ -353,19 +395,19 @@ impl InlineFormattingContext {
         let specified_width = style
             .width
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, percentage_base))
+            .map(|l| resolve_length_for_width(*l, percentage_base, style.font_size, style.root_font_size))
             .map(|w| border_size_from_box_sizing(w, horizontal_edges, style.box_sizing));
 
         let min_width = style
             .min_width
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, percentage_base))
+            .map(|l| resolve_length_for_width(*l, percentage_base, style.font_size, style.root_font_size))
             .map(|w| border_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
             .unwrap_or(0.0);
         let max_width = style
             .max_width
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, percentage_base))
+            .map(|l| resolve_length_for_width(*l, percentage_base, style.font_size, style.root_font_size))
             .map(|w| border_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
             .unwrap_or(f32::INFINITY);
 
@@ -398,12 +440,12 @@ impl InlineFormattingContext {
         let margin_left = style
             .margin_left
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, percentage_base))
+            .map(|l| resolve_length_for_width(*l, percentage_base, style.font_size, style.root_font_size))
             .unwrap_or(0.0);
         let margin_right = style
             .margin_right
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, percentage_base))
+            .map(|l| resolve_length_for_width(*l, percentage_base, style.font_size, style.root_font_size))
             .unwrap_or(0.0);
 
         let va = self.convert_vertical_align(style.vertical_align, style.font_size, line_height);
@@ -572,7 +614,7 @@ impl InlineFormattingContext {
             let raw_gap = style
                 .margin_right
                 .as_ref()
-                .map(|m| resolve_length_for_width(*m, 0.0))
+                .map(|m| resolve_length_for_width(*m, 0.0, style.font_size, style.root_font_size))
                 .unwrap_or(0.0);
             let gap = if raw_gap.abs() > f32::EPSILON {
                 raw_gap
@@ -645,7 +687,9 @@ impl InlineFormattingContext {
         let space_advance = self.space_advance(style)?;
         let tab_interval = match style.tab_size {
             TabSize::Number(n) => n.max(0.0) * space_advance,
-            TabSize::Length(len) => resolve_length_with_percentage(len, None, style.font_size).unwrap_or(0.0),
+            TabSize::Length(len) => {
+                resolve_length_with_percentage(len, None, style.font_size, style.root_font_size).unwrap_or(0.0)
+            }
         };
         let va = self.convert_vertical_align(style.vertical_align, style.font_size, metrics.line_height);
         Ok(InlineItem::Tab(
@@ -676,15 +720,55 @@ impl InlineFormattingContext {
         } else {
             0.0
         };
-        let padding_left = resolve_length_for_width(style.padding_left, percentage_base);
-        let padding_right = resolve_length_for_width(style.padding_right, percentage_base);
-        let padding_top = resolve_length_for_width(style.padding_top, percentage_base);
-        let padding_bottom = resolve_length_for_width(style.padding_bottom, percentage_base);
+        let padding_left = resolve_length_for_width(
+            style.padding_left,
+            percentage_base,
+            style.font_size,
+            style.root_font_size,
+        );
+        let padding_right = resolve_length_for_width(
+            style.padding_right,
+            percentage_base,
+            style.font_size,
+            style.root_font_size,
+        );
+        let padding_top = resolve_length_for_width(
+            style.padding_top,
+            percentage_base,
+            style.font_size,
+            style.root_font_size,
+        );
+        let padding_bottom = resolve_length_for_width(
+            style.padding_bottom,
+            percentage_base,
+            style.font_size,
+            style.root_font_size,
+        );
 
-        let border_left = resolve_length_for_width(style.border_left_width, percentage_base);
-        let border_right = resolve_length_for_width(style.border_right_width, percentage_base);
-        let border_top = resolve_length_for_width(style.border_top_width, percentage_base);
-        let border_bottom = resolve_length_for_width(style.border_bottom_width, percentage_base);
+        let border_left = resolve_length_for_width(
+            style.border_left_width,
+            percentage_base,
+            style.font_size,
+            style.root_font_size,
+        );
+        let border_right = resolve_length_for_width(
+            style.border_right_width,
+            percentage_base,
+            style.font_size,
+            style.root_font_size,
+        );
+        let border_top = resolve_length_for_width(
+            style.border_top_width,
+            percentage_base,
+            style.font_size,
+            style.root_font_size,
+        );
+        let border_bottom = resolve_length_for_width(
+            style.border_bottom_width,
+            percentage_base,
+            style.font_size,
+            style.root_font_size,
+        );
 
         let box_width = size.width + padding_left + padding_right + border_left + border_right;
         let box_height = size.height + padding_top + padding_bottom + border_top + border_bottom;
@@ -696,12 +780,12 @@ impl InlineFormattingContext {
         let margin_left = style
             .margin_left
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, percentage_base))
+            .map(|l| resolve_length_for_width(*l, percentage_base, style.font_size, style.root_font_size))
             .unwrap_or(0.0);
         let margin_right = style
             .margin_right
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, percentage_base))
+            .map(|l| resolve_length_for_width(*l, percentage_base, style.font_size, style.root_font_size))
             .unwrap_or(0.0);
 
         let va = self.convert_vertical_align(style.vertical_align, style.font_size, line_height);
@@ -1230,7 +1314,8 @@ impl InlineFormattingContext {
         };
         let style = &box_node.style;
         let indent_value =
-            resolve_length_with_percentage(style.text_indent.length, None, style.font_size).unwrap_or(0.0);
+            resolve_length_with_percentage(style.text_indent.length, None, style.font_size, style.root_font_size)
+                .unwrap_or(0.0);
         let indent_positive = indent_value.max(0.0);
         let indent_applies_first = !style.text_indent.hanging;
         let indent_applies_subsequent = style.text_indent.each_line || style.text_indent.hanging;
@@ -1404,22 +1489,44 @@ impl InlineFormattingContext {
     }
 }
 
-fn resolve_length_for_width(length: Length, percentage_base: f32) -> f32 {
+fn resolve_length_for_width(length: Length, percentage_base: f32, font_size: f32, root_font_size: f32) -> f32 {
     if length.unit.is_percentage() {
         length.resolve_against(percentage_base)
     } else if length.unit.is_absolute() {
         length.to_px()
     } else {
-        // Relative units (em/rem) should have been resolved earlier; treat as px fallback
-        length.value
+        match length.unit {
+            LengthUnit::Em => length.value * font_size,
+            LengthUnit::Ex => length.value * font_size * 0.5,
+            LengthUnit::Ch => length.value * font_size * 0.5,
+            LengthUnit::Rem => length.value * root_font_size,
+            _ => length.value,
+        }
     }
 }
 
 fn horizontal_padding_and_borders(style: &ComputedStyle, percentage_base: f32) -> f32 {
-    resolve_length_for_width(style.padding_left, percentage_base)
-        + resolve_length_for_width(style.padding_right, percentage_base)
-        + resolve_length_for_width(style.border_left_width, percentage_base)
-        + resolve_length_for_width(style.border_right_width, percentage_base)
+    resolve_length_for_width(
+        style.padding_left,
+        percentage_base,
+        style.font_size,
+        style.root_font_size,
+    ) + resolve_length_for_width(
+        style.padding_right,
+        percentage_base,
+        style.font_size,
+        style.root_font_size,
+    ) + resolve_length_for_width(
+        style.border_left_width,
+        percentage_base,
+        style.font_size,
+        style.root_font_size,
+    ) + resolve_length_for_width(
+        style.border_right_width,
+        percentage_base,
+        style.font_size,
+        style.root_font_size,
+    )
 }
 
 fn compute_inline_box_metrics(
@@ -1905,9 +2012,13 @@ impl FormattingContext for InlineFormattingContext {
             style.direction
         };
 
-        let indent_value =
-            resolve_length_with_percentage(style.text_indent.length, constraints.width(), style.font_size)
-                .unwrap_or(0.0);
+        let indent_value = resolve_length_with_percentage(
+            style.text_indent.length,
+            constraints.width(),
+            style.font_size,
+            style.root_font_size,
+        )
+        .unwrap_or(0.0);
         let indent_applies_first = !style.text_indent.hanging;
         let indent_applies_subsequent = style.text_indent.each_line || style.text_indent.hanging;
         let indent_positive = indent_value.max(0.0);

@@ -4,18 +4,23 @@
 
 use crate::geometry::Size;
 use crate::style::types::BoxSizing;
-use crate::style::values::{Length, LengthOrAuto};
+use crate::style::values::{Length, LengthOrAuto, LengthUnit};
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::ReplacedBox;
 
-/// Resolves a length using the provided percentage base and font size.
+/// Resolves a length using the provided percentage base, font size, and root font size.
 ///
 /// Returns `None` when a percentage cannot be resolved due to a missing base.
-pub fn resolve_length_with_percentage(length: Length, percentage_base: Option<f32>, font_size: f32) -> Option<f32> {
+pub fn resolve_length_with_percentage(
+    length: Length,
+    percentage_base: Option<f32>,
+    font_size: f32,
+    root_font_size: f32,
+) -> Option<f32> {
     if length.unit.is_percentage() {
         percentage_base.map(|b| length.resolve_against(b))
     } else if length.unit.is_font_relative() {
-        Some(length.resolve_with_font_size(font_size))
+        Some(resolve_font_relative(length, font_size, root_font_size))
     } else if length.unit.is_absolute() {
         Some(length.to_px())
     } else {
@@ -42,7 +47,7 @@ pub fn resolve_length_with_percentage(length: Length, percentage_base: Option<f3
 ///
 /// CSS 2.1 Section 10.3.7 and 10.6.4 describe how offsets are resolved
 /// for absolutely positioned elements.
-pub fn resolve_offset(value: &LengthOrAuto, percentage_base: f32) -> Option<f32> {
+pub fn resolve_offset(value: &LengthOrAuto, percentage_base: f32, font_size: f32, root_font_size: f32) -> Option<f32> {
     match value {
         LengthOrAuto::Auto => None,
         LengthOrAuto::Length(length) => {
@@ -51,9 +56,7 @@ pub fn resolve_offset(value: &LengthOrAuto, percentage_base: f32) -> Option<f32>
             } else if length.unit.is_absolute() {
                 Some(length.to_px())
             } else {
-                // For relative units (em, rem, etc.), we'd need font context
-                // For now, treat as 0 - should be resolved earlier in the pipeline
-                Some(0.0)
+                Some(resolve_font_relative(*length, font_size, root_font_size))
             }
         }
     }
@@ -99,9 +102,12 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
     let width_base = percentage_base.and_then(|s| s.width.is_finite().then_some(s.width));
     let height_base = percentage_base.and_then(|s| s.height.is_finite().then_some(s.height));
     let font_size = style.font_size;
+    let root_font_size = style.root_font_size;
 
-    let resolve_for_width = |len: Length| resolve_replaced_length(&len, width_base, font_size).unwrap_or(0.0);
-    let resolve_for_height = |len: Length| resolve_replaced_length(&len, height_base, font_size).unwrap_or(0.0);
+    let resolve_for_width =
+        |len: Length| resolve_replaced_length(&len, width_base, font_size, root_font_size).unwrap_or(0.0);
+    let resolve_for_height =
+        |len: Length| resolve_replaced_length(&len, height_base, font_size, root_font_size).unwrap_or(0.0);
 
     let horizontal_edges = resolve_for_width(style.padding_left)
         + resolve_for_width(style.padding_right)
@@ -115,13 +121,13 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
     let mut width = style
         .width
         .as_ref()
-        .and_then(|l| resolve_replaced_length(l, width_base, font_size))
+        .and_then(|l| resolve_replaced_length(l, width_base, font_size, root_font_size))
         .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
         .unwrap_or(intrinsic.width);
     let mut height = style
         .height
         .as_ref()
-        .and_then(|l| resolve_replaced_length(l, height_base, font_size))
+        .and_then(|l| resolve_replaced_length(l, height_base, font_size, root_font_size))
         .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
         .unwrap_or(intrinsic.height);
 
@@ -146,7 +152,7 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
     if let Some(min_w) = style
         .min_width
         .as_ref()
-        .and_then(|l| resolve_replaced_length(l, width_base, font_size))
+        .and_then(|l| resolve_replaced_length(l, width_base, font_size, root_font_size))
         .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
     {
         width = width.max(min_w);
@@ -154,7 +160,7 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
     if let Some(max_w) = style
         .max_width
         .as_ref()
-        .and_then(|l| resolve_replaced_length(l, width_base, font_size))
+        .and_then(|l| resolve_replaced_length(l, width_base, font_size, root_font_size))
         .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
     {
         width = width.min(max_w);
@@ -162,7 +168,7 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
     if let Some(min_h) = style
         .min_height
         .as_ref()
-        .and_then(|l| resolve_replaced_length(l, height_base, font_size))
+        .and_then(|l| resolve_replaced_length(l, height_base, font_size, root_font_size))
         .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
     {
         height = height.max(min_h);
@@ -170,7 +176,7 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
     if let Some(max_h) = style
         .max_height
         .as_ref()
-        .and_then(|l| resolve_replaced_length(l, height_base, font_size))
+        .and_then(|l| resolve_replaced_length(l, height_base, font_size, root_font_size))
         .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
     {
         height = height.min(max_h);
@@ -179,15 +185,30 @@ pub fn compute_replaced_size(style: &ComputedStyle, replaced: &ReplacedBox, perc
     Size::new(width, height)
 }
 
-fn resolve_replaced_length(len: &Length, percentage_base: Option<f32>, font_size: f32) -> Option<f32> {
+fn resolve_replaced_length(
+    len: &Length,
+    percentage_base: Option<f32>,
+    font_size: f32,
+    root_font_size: f32,
+) -> Option<f32> {
     if len.unit.is_percentage() {
         percentage_base.map(|b| len.resolve_against(b))
     } else if len.unit.is_font_relative() {
-        Some(len.resolve_with_font_size(font_size))
+        Some(resolve_font_relative(*len, font_size, root_font_size))
     } else if len.unit.is_absolute() {
         Some(len.to_px())
     } else {
         Some(len.value)
+    }
+}
+
+fn resolve_font_relative(len: Length, font_size: f32, root_font_size: f32) -> f32 {
+    match len.unit {
+        LengthUnit::Em => len.value * font_size,
+        LengthUnit::Ex => len.value * font_size * 0.5,
+        LengthUnit::Ch => len.value * font_size * 0.5,
+        LengthUnit::Rem => len.value * root_font_size,
+        _ => len.resolve_with_font_size(font_size),
     }
 }
 
@@ -201,25 +222,25 @@ mod tests {
 
     #[test]
     fn test_resolve_offset_auto() {
-        assert_eq!(resolve_offset(&LengthOrAuto::Auto, 100.0), None);
+        assert_eq!(resolve_offset(&LengthOrAuto::Auto, 100.0, 16.0, 16.0), None);
     }
 
     #[test]
     fn test_resolve_offset_pixels() {
         let value = LengthOrAuto::Length(Length::new(50.0, LengthUnit::Px));
-        assert_eq!(resolve_offset(&value, 100.0), Some(50.0));
+        assert_eq!(resolve_offset(&value, 100.0, 16.0, 16.0), Some(50.0));
     }
 
     #[test]
     fn test_resolve_offset_percentage() {
         let value = LengthOrAuto::Length(Length::new(25.0, LengthUnit::Percent));
-        assert_eq!(resolve_offset(&value, 200.0), Some(50.0));
+        assert_eq!(resolve_offset(&value, 200.0, 16.0, 16.0), Some(50.0));
     }
 
     #[test]
     fn test_resolve_offset_em_fallback() {
         let value = LengthOrAuto::Length(Length::new(2.0, LengthUnit::Em));
-        assert_eq!(resolve_offset(&value, 100.0), Some(0.0));
+        assert_eq!(resolve_offset(&value, 100.0, 16.0, 16.0), Some(32.0));
     }
 
     #[test]

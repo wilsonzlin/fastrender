@@ -105,12 +105,29 @@ fn apply_styles_internal(
     resolve_relative_font_weight(&mut styles, parent_styles);
     propagate_text_decorations(&mut styles, parent_styles);
 
+    // Root font size for rem resolution: the document root sets the value for all descendants.
+    let is_root = ancestors.is_empty();
+    let current_root_font_size = if is_root { styles.font_size } else { root_font_size };
+    styles.root_font_size = current_root_font_size;
+
     // Compute pseudo-element styles
-    let before_styles =
-        compute_pseudo_element_styles(node, rules, &ancestors, &styles, root_font_size, &PseudoElement::Before);
-    let after_styles =
-        compute_pseudo_element_styles(node, rules, &ancestors, &styles, root_font_size, &PseudoElement::After);
-    let marker_styles = compute_marker_styles(node, rules, &ancestors, &styles, root_font_size);
+    let before_styles = compute_pseudo_element_styles(
+        node,
+        rules,
+        &ancestors,
+        &styles,
+        current_root_font_size,
+        &PseudoElement::Before,
+    );
+    let after_styles = compute_pseudo_element_styles(
+        node,
+        rules,
+        &ancestors,
+        &styles,
+        current_root_font_size,
+        &PseudoElement::After,
+    );
+    let marker_styles = compute_marker_styles(node, rules, &ancestors, &styles, current_root_font_size);
 
     // Recursively style children (passing current node in ancestors)
     let mut new_ancestors = ancestors.clone();
@@ -118,7 +135,9 @@ fn apply_styles_internal(
     let children = node
         .children
         .iter()
-        .map(|child| apply_styles_internal_with_ancestors(child, rules, &styles, root_font_size, &new_ancestors))
+        .map(|child| {
+            apply_styles_internal_with_ancestors(child, rules, &styles, current_root_font_size, &new_ancestors)
+        })
         .collect();
 
     StyledNode {
@@ -186,12 +205,28 @@ fn apply_styles_internal_with_ancestors(
     resolve_relative_font_weight(&mut styles, parent_styles);
     propagate_text_decorations(&mut styles, parent_styles);
 
+    let is_root = ancestors.is_empty();
+    let current_root_font_size = if is_root { styles.font_size } else { root_font_size };
+    styles.root_font_size = current_root_font_size;
+
     // Compute pseudo-element styles from CSS rules
-    let before_styles =
-        compute_pseudo_element_styles(node, rules, ancestors, &styles, root_font_size, &PseudoElement::Before);
-    let after_styles =
-        compute_pseudo_element_styles(node, rules, ancestors, &styles, root_font_size, &PseudoElement::After);
-    let marker_styles = compute_marker_styles(node, rules, ancestors, &styles, root_font_size);
+    let before_styles = compute_pseudo_element_styles(
+        node,
+        rules,
+        ancestors,
+        &styles,
+        current_root_font_size,
+        &PseudoElement::Before,
+    );
+    let after_styles = compute_pseudo_element_styles(
+        node,
+        rules,
+        ancestors,
+        &styles,
+        current_root_font_size,
+        &PseudoElement::After,
+    );
+    let marker_styles = compute_marker_styles(node, rules, ancestors, &styles, current_root_font_size);
 
     // Recursively style children (passing current node in ancestors)
     let mut new_ancestors = ancestors.to_vec();
@@ -199,7 +234,9 @@ fn apply_styles_internal_with_ancestors(
     let children: Vec<StyledNode> = node
         .children
         .iter()
-        .map(|child| apply_styles_internal_with_ancestors(child, rules, &styles, root_font_size, &new_ancestors))
+        .map(|child| {
+            apply_styles_internal_with_ancestors(child, rules, &styles, current_root_font_size, &new_ancestors)
+        })
         .collect();
 
     StyledNode {
@@ -216,6 +253,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     // Typography properties inherit
     styles.font_family = parent.font_family.clone();
     styles.font_size = parent.font_size;
+    styles.root_font_size = parent.root_font_size;
     styles.font_weight = parent.font_weight;
     styles.font_style = parent.font_style;
     styles.font_variant = parent.font_variant;

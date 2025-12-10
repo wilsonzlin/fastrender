@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Font-relative and percentage lengths in layout now resolve against the element font size and the root font size for `rem` across block/inline sizing, padding/borders, margins, replaced sizing, and positioned offsets; root font size is propagated from the computed root element. Offset resolution now honors em/rem instead of dropping to 0, and a regression covers em/rem padding resolution.
 - Letter/word spacing now parse `normal`, resolve font-relative units/em/rem/ex/ch and percentages (word-spacing) against the element font size/root size, instead of ignoring relative units or leaving inherited values. Added regression covering normal reset, em resolution, percentage word spacing, and negative values.
 - Removed duplicated `overflow`/`overflow-x`/`overflow-y` parsing arms to silence unreachable-pattern warnings while keeping clip keyword handling intact.
 - `text-underline-position` now parses/inherits (auto/from-font/under/left/right combinations), handles space-separated inline values, propagates with decorations, and the painter respects it by pushing underlines below descenders when authored; regression covers parsing, inheritance, and paint positioning.
