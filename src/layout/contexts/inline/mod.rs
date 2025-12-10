@@ -2243,10 +2243,11 @@ fn capitalize_words(text: &str) -> String {
 }
 
 fn char_boundary_breaks(text: &str) -> Vec<crate::text::line_break::BreakOpportunity> {
+    use unicode_segmentation::UnicodeSegmentation;
     use crate::text::line_break::BreakOpportunity;
     let mut breaks = Vec::new();
-    for (idx, _) in text.char_indices().skip(1) {
-        breaks.push(BreakOpportunity::allowed(idx));
+    for (byte_idx, _) in text.grapheme_indices(true).skip(1) {
+        breaks.push(BreakOpportunity::allowed(byte_idx));
     }
     breaks.push(BreakOpportunity::allowed(text.len()));
     breaks
@@ -3561,6 +3562,78 @@ mod tests {
         assert!(
             fragment.children.len() > 1,
             "line-break:anywhere should allow breaking long tokens when they overflow"
+        );
+    }
+
+    #[test]
+    fn grapheme_boundaries_preserved_for_break_all_and_break_word() {
+        // a + combining diaeresis should not break between the base and combining mark.
+        let text = "a\u{0308}b";
+        let mut text_style = ComputedStyle::default();
+        text_style.word_break = WordBreak::BreakAll;
+        text_style.white_space = WhiteSpace::Normal;
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(text_style.clone()), text.to_string())],
+        );
+        let ifc = InlineFormattingContext::new();
+        let items = ifc
+            .collect_inline_items(&root, 800.0, Some(800.0))
+            .expect("collect items");
+
+        // Grab the text item and ensure break opportunities align to grapheme cluster boundaries.
+        let text_item = items
+            .iter()
+            .find_map(|item| match item {
+                InlineItem::Text(t) => Some(t),
+                _ => None,
+            })
+            .expect("text item");
+        let mut offsets: Vec<usize> = text_item
+            .break_opportunities
+            .iter()
+            .map(|b| b.byte_offset)
+            .collect();
+        offsets.sort_unstable();
+        offsets.dedup();
+
+        assert!(
+            !offsets.contains(&1),
+            "should not create a break between grapheme codepoints"
+        );
+        assert!(
+            offsets.contains(&3) && offsets.contains(&text.len()),
+            "should still break at grapheme boundaries and at the end of the string"
+        );
+
+        // break-word shares the same anywhere behavior; ensure it also avoids intra-grapheme splits.
+        let mut bw_style = ComputedStyle::default();
+        bw_style.word_break = WordBreak::BreakWord;
+        bw_style.white_space = WhiteSpace::Normal;
+        let root_bw = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(bw_style), text.to_string())],
+        );
+        let items_bw = ifc
+            .collect_inline_items(&root_bw, 800.0, Some(800.0))
+            .expect("collect items");
+        let offsets_bw: Vec<usize> = items_bw
+            .iter()
+            .find_map(|item| match item {
+                InlineItem::Text(t) => Some(
+                    t.break_opportunities
+                        .iter()
+                        .map(|b| b.byte_offset)
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+            .unwrap_or_default();
+        assert!(
+            !offsets_bw.contains(&1),
+            "break-word should not create intra-grapheme break opportunities"
         );
     }
 
