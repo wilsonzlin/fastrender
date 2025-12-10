@@ -1079,6 +1079,38 @@ mod tests {
         assert_eq!(result.widths[0], 100.0);
     }
 
+    #[test]
+    fn percentage_columns_can_overconstrain() {
+        // Two percentage columns that sum to 140% of the available width.
+        let columns = vec![
+            ColumnConstraints::percentage(60.0, 20.0, 500.0),
+            ColumnConstraints::percentage(80.0, 20.0, 500.0),
+        ];
+        let distributor = ColumnDistributor::new(DistributionMode::Auto);
+
+        let result = distributor.distribute(&columns, 100.0);
+        // Percentages are honored even if they exceed the available space.
+        assert!((result.widths[0] - 60.0).abs() < 0.1);
+        assert!((result.widths[1] - 80.0).abs() < 0.1);
+        assert!(result.is_over_constrained);
+    }
+
+    #[test]
+    fn percentage_over_budget_still_clamps_to_min() {
+        // Percentages over budget with mins that force an over-constraint.
+        let columns = vec![
+            ColumnConstraints::percentage(90.0, 60.0, 500.0),
+            ColumnConstraints::percentage(30.0, 60.0, 500.0),
+        ];
+        let distributor = ColumnDistributor::new(DistributionMode::Auto);
+
+        let result = distributor.distribute(&columns, 100.0);
+        // Mins are respected and the distribution reports over-constraint.
+        assert!(result.widths[0] >= 60.0);
+        assert!(result.widths[1] >= 60.0);
+        assert!(result.is_over_constrained);
+    }
+
     // ========== ColumnDistributor Tests - Proportional ==========
 
     #[test]
