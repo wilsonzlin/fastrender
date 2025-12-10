@@ -2370,6 +2370,59 @@ mod tests {
         assert!(width > 0.0, "items should keep their width after reordering");
     }
 
+    fn collect_text(item: &InlineItem, out: &mut String) {
+        match item {
+            InlineItem::Text(t) => out.push_str(&t.text),
+            InlineItem::InlineBox(b) => {
+                for child in &b.children {
+                    collect_text(child, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn suppressed_controls_do_not_duplicate_text() {
+        // When embeddings are suppressed (depth clamp), the logical text should remain intact.
+        let mut inner = InlineItem::Text(make_text_item("abc", 30.0));
+        for idx in 0..(level::MAX_EXPLICIT_DEPTH as usize + 8) {
+            let mut box_item = InlineBoxItem::new(
+                0.0,
+                0.0,
+                0.0,
+                make_strut_metrics(),
+                Arc::new(ComputedStyle::default()),
+                idx + 1,
+                Direction::Ltr,
+                UnicodeBidi::Embed,
+            );
+            box_item.add_child(inner);
+            inner = InlineItem::InlineBox(box_item);
+        }
+
+        let mut line = Line::new();
+        line.items.push(PositionedItem {
+            item: inner,
+            x: 0.0,
+            baseline_offset: 0.0,
+        });
+        let mut lines = vec![line];
+
+        reorder_paragraph(
+            &mut lines,
+            Some(Level::ltr()),
+            &ShapingPipeline::new(),
+            &FontContext::new(),
+        );
+
+        let mut collected = String::new();
+        for item in &lines[0].items {
+            collect_text(&item.item, &mut collected);
+        }
+        assert_eq!(collected, "abc");
+    }
+
     #[test]
     fn bidi_plaintext_on_inline_box_forces_first_strong() {
         let mut builder = make_builder_with_base(200.0, Level::rtl());
