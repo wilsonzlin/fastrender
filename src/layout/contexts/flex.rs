@@ -66,16 +66,20 @@ enum Axis {
 /// ```
 #[derive(Debug, Clone)]
 pub struct FlexFormattingContext {
-    /// Phantom field - we don't store any state
-    _phantom: std::marker::PhantomData<()>,
+    /// Viewport size used for resolving viewport-relative units inside Taffy conversion.
+    viewport_size: Size,
 }
 
 impl FlexFormattingContext {
     /// Creates a new FlexFormattingContext
     pub fn new() -> Self {
         Self {
-            _phantom: std::marker::PhantomData,
+            viewport_size: Size::new(800.0, 600.0),
         }
+    }
+
+    pub fn with_viewport(viewport_size: Size) -> Self {
+        Self { viewport_size }
     }
 }
 
@@ -216,14 +220,14 @@ impl FlexFormattingContext {
 
             // Gap
             gap: taffy::geometry::Size {
-                width: self.length_to_taffy_lp(&style.grid_column_gap),
-                height: self.length_to_taffy_lp(&style.grid_row_gap),
+                width: self.length_to_taffy_lp(&style.grid_column_gap, style),
+                height: self.length_to_taffy_lp(&style.grid_row_gap, style),
             },
 
             // Flex item properties
             flex_grow: style.flex_grow,
             flex_shrink: style.flex_shrink,
-            flex_basis: self.flex_basis_to_taffy(&style.flex_basis),
+            flex_basis: self.flex_basis_to_taffy(&style.flex_basis, style),
 
             // Sizing - for root flex container without explicit size, use 100%
             // to fill the available space (block-level behavior)
@@ -239,22 +243,22 @@ impl FlexFormattingContext {
 
             // Spacing
             padding: taffy::geometry::Rect {
-                left: self.length_to_taffy_lp(&style.padding_left),
-                right: self.length_to_taffy_lp(&style.padding_right),
-                top: self.length_to_taffy_lp(&style.padding_top),
-                bottom: self.length_to_taffy_lp(&style.padding_bottom),
+                left: self.length_to_taffy_lp(&style.padding_left, style),
+                right: self.length_to_taffy_lp(&style.padding_right, style),
+                top: self.length_to_taffy_lp(&style.padding_top, style),
+                bottom: self.length_to_taffy_lp(&style.padding_bottom, style),
             },
             margin: taffy::geometry::Rect {
-                left: self.length_option_to_lpa(style.margin_left.as_ref()),
-                right: self.length_option_to_lpa(style.margin_right.as_ref()),
-                top: self.length_option_to_lpa(style.margin_top.as_ref()),
-                bottom: self.length_option_to_lpa(style.margin_bottom.as_ref()),
+                left: self.length_option_to_lpa(style.margin_left.as_ref(), style),
+                right: self.length_option_to_lpa(style.margin_right.as_ref(), style),
+                top: self.length_option_to_lpa(style.margin_top.as_ref(), style),
+                bottom: self.length_option_to_lpa(style.margin_bottom.as_ref(), style),
             },
             border: taffy::geometry::Rect {
-                left: self.length_to_taffy_lp(&style.border_left_width),
-                right: self.length_to_taffy_lp(&style.border_right_width),
-                top: self.length_to_taffy_lp(&style.border_top_width),
-                bottom: self.length_to_taffy_lp(&style.border_bottom_width),
+                left: self.length_to_taffy_lp(&style.border_left_width, style),
+                right: self.length_to_taffy_lp(&style.border_right_width, style),
+                top: self.length_to_taffy_lp(&style.border_top_width, style),
+                bottom: self.length_to_taffy_lp(&style.border_bottom_width, style),
             },
 
             ..Default::default()
@@ -404,35 +408,41 @@ impl FlexFormattingContext {
         })
     }
 
-    fn flex_basis_to_taffy(&self, basis: &FlexBasis) -> Dimension {
+    fn flex_basis_to_taffy(&self, basis: &FlexBasis, style: &ComputedStyle) -> Dimension {
         match basis {
             FlexBasis::Auto => Dimension::auto(),
-            FlexBasis::Length(len) => self.length_to_dimension(len),
+            FlexBasis::Length(len) => self.length_to_dimension(len, style),
         }
     }
 
     fn horizontal_edges_px(&self, style: &ComputedStyle) -> Option<f32> {
-        let left = self.length_to_px_if_absolute(&style.padding_left)?;
-        let right = self.length_to_px_if_absolute(&style.padding_right)?;
-        let bl = self.length_to_px_if_absolute(&style.border_left_width)?;
-        let br = self.length_to_px_if_absolute(&style.border_right_width)?;
+        let left = self.resolve_length_px(&style.padding_left, style)?;
+        let right = self.resolve_length_px(&style.padding_right, style)?;
+        let bl = self.resolve_length_px(&style.border_left_width, style)?;
+        let br = self.resolve_length_px(&style.border_right_width, style)?;
         Some(left + right + bl + br)
     }
 
     fn vertical_edges_px(&self, style: &ComputedStyle) -> Option<f32> {
-        let top = self.length_to_px_if_absolute(&style.padding_top)?;
-        let bottom = self.length_to_px_if_absolute(&style.padding_bottom)?;
-        let bt = self.length_to_px_if_absolute(&style.border_top_width)?;
-        let bb = self.length_to_px_if_absolute(&style.border_bottom_width)?;
+        let top = self.resolve_length_px(&style.padding_top, style)?;
+        let bottom = self.resolve_length_px(&style.padding_bottom, style)?;
+        let bt = self.resolve_length_px(&style.border_top_width, style)?;
+        let bb = self.resolve_length_px(&style.border_bottom_width, style)?;
         Some(top + bottom + bt + bb)
     }
 
-    fn length_to_px_if_absolute(&self, len: &Length) -> Option<f32> {
+    fn resolve_length_px(&self, len: &Length, style: &ComputedStyle) -> Option<f32> {
         match len.unit {
-            LengthUnit::Px => Some(len.to_px()),
-            LengthUnit::Pt | LengthUnit::In | LengthUnit::Cm | LengthUnit::Mm | LengthUnit::Pc => Some(len.to_px()),
-            LengthUnit::Rem | LengthUnit::Em => Some(len.value * 16.0),
-            _ => None, // Percent/viewport/calc-like not representable here
+            LengthUnit::Percent => None,
+            _ if len.unit.is_absolute() => Some(len.to_px()),
+            u if u.is_viewport_relative() => {
+                Some(len.resolve_with_viewport(self.viewport_size.width, self.viewport_size.height))
+            }
+            LengthUnit::Rem => Some(len.value * style.root_font_size),
+            LengthUnit::Em => Some(len.value * style.font_size),
+            LengthUnit::Ex => Some(len.value * style.font_size * 0.5),
+            LengthUnit::Ch => Some(len.value * style.font_size * 0.5),
+            _ => None,
         }
     }
 
@@ -442,29 +452,25 @@ impl FlexFormattingContext {
                 Axis::Horizontal => self.horizontal_edges_px(style),
                 Axis::Vertical => self.vertical_edges_px(style),
             } {
-                if let Some(px) = self.length_to_px_if_absolute(len) {
+                if let Some(px) = self.resolve_length_px(len, style) {
                     return Dimension::length((px + edges).max(0.0));
                 }
             }
         }
-        self.length_to_dimension(len)
+        self.length_to_dimension(len, style)
     }
 
-    fn length_to_dimension(&self, len: &Length) -> Dimension {
+    fn length_to_dimension(&self, len: &Length, style: &ComputedStyle) -> Dimension {
         match len.unit {
             LengthUnit::Px => Dimension::length(len.to_px()),
             LengthUnit::Percent => Dimension::percent(len.value / 100.0),
-            LengthUnit::Em | LengthUnit::Rem => {
-                // Em/Rem need to be resolved to px, but we don't have font context here
-                // Use value as-is (assuming 16px base for rem)
-                let px = match len.unit {
-                    LengthUnit::Rem => len.value * 16.0,
-                    LengthUnit::Em => len.value * 16.0, // Approximate
-                    _ => len.to_px(),
-                };
-                Dimension::length(px)
+            _ => {
+                if let Some(px) = self.resolve_length_px(len, style) {
+                    Dimension::length(px)
+                } else {
+                    Dimension::length(len.to_px())
+                }
             }
-            _ => Dimension::length(len.to_px()),
         }
     }
 
@@ -481,43 +487,37 @@ impl FlexFormattingContext {
     }
 
     #[allow(dead_code)]
-    fn length_option_to_dimension(&self, len: Option<&Length>) -> Dimension {
+    fn length_option_to_dimension(&self, len: Option<&Length>, style: &ComputedStyle) -> Dimension {
         match len {
-            Some(l) => self.length_to_dimension(l),
+            Some(l) => self.length_to_dimension(l, style),
             None => Dimension::auto(),
         }
     }
 
-    fn length_to_taffy_lp(&self, len: &Length) -> LengthPercentage {
+    fn length_to_taffy_lp(&self, len: &Length, style: &ComputedStyle) -> LengthPercentage {
         match len.unit {
-            LengthUnit::Px => LengthPercentage::length(len.to_px()),
             LengthUnit::Percent => LengthPercentage::percent(len.value / 100.0),
-            LengthUnit::Em | LengthUnit::Rem => {
-                let px = match len.unit {
-                    LengthUnit::Rem => len.value * 16.0,
-                    LengthUnit::Em => len.value * 16.0,
-                    _ => len.to_px(),
-                };
-                LengthPercentage::length(px)
+            _ => {
+                if let Some(px) = self.resolve_length_px(len, style) {
+                    LengthPercentage::length(px)
+                } else {
+                    LengthPercentage::length(len.to_px())
+                }
             }
-            _ => LengthPercentage::length(len.to_px()),
         }
     }
 
-    fn length_option_to_lpa(&self, len: Option<&Length>) -> LengthPercentageAuto {
+    fn length_option_to_lpa(&self, len: Option<&Length>, style: &ComputedStyle) -> LengthPercentageAuto {
         match len {
             Some(l) => match l.unit {
-                LengthUnit::Px => LengthPercentageAuto::length(l.to_px()),
                 LengthUnit::Percent => LengthPercentageAuto::percent(l.value / 100.0),
-                LengthUnit::Em | LengthUnit::Rem => {
-                    let px = match l.unit {
-                        LengthUnit::Rem => l.value * 16.0,
-                        LengthUnit::Em => l.value * 16.0,
-                        _ => l.to_px(),
-                    };
-                    LengthPercentageAuto::length(px)
+                _ => {
+                    if let Some(px) = self.resolve_length_px(l, style) {
+                        LengthPercentageAuto::length(px)
+                    } else {
+                        LengthPercentageAuto::length(l.to_px())
+                    }
                 }
-                _ => LengthPercentageAuto::length(l.to_px()),
             },
             None => LengthPercentageAuto::auto(),
         }
@@ -847,16 +847,17 @@ mod tests {
     #[test]
     fn test_length_conversion() {
         let fc = FlexFormattingContext::new();
+        let style = ComputedStyle::default();
 
         // Pixel values
         let len_px = Length::px(100.0);
-        assert_eq!(fc.length_to_dimension(&len_px), Dimension::length(100.0));
+        assert_eq!(fc.length_to_dimension(&len_px, &style), Dimension::length(100.0));
 
         // Percentage values
         let len_percent = Length::percent(50.0);
-        assert_eq!(fc.length_to_dimension(&len_percent), Dimension::percent(0.5)); // 50% = 0.5
+        assert_eq!(fc.length_to_dimension(&len_percent, &style), Dimension::percent(0.5)); // 50% = 0.5
 
         // Auto (None)
-        assert_eq!(fc.length_option_to_dimension(None), Dimension::auto());
+        assert_eq!(fc.length_option_to_dimension(None, &style), Dimension::auto());
     }
 }

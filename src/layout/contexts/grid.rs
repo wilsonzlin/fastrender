@@ -74,12 +74,20 @@ enum Axis {
 /// let fc = GridFormattingContext::new();
 /// let fragment = fc.layout(&box_node, &constraints)?;
 /// ```
-pub struct GridFormattingContext;
+pub struct GridFormattingContext {
+    viewport_size: crate::geometry::Size,
+}
 
 impl GridFormattingContext {
     /// Creates a new GridFormattingContext
     pub fn new() -> Self {
-        Self
+        Self {
+            viewport_size: crate::geometry::Size::new(800.0, 600.0),
+        }
+    }
+
+    pub fn with_viewport(viewport_size: crate::geometry::Size) -> Self {
+        Self { viewport_size }
     }
 
     /// Builds a Taffy tree from a BoxNode tree
@@ -158,38 +166,38 @@ impl GridFormattingContext {
 
         // Margin
         taffy_style.margin = taffy::geometry::Rect {
-            left: self.convert_opt_length_to_lpa(&style.margin_left),
-            right: self.convert_opt_length_to_lpa(&style.margin_right),
-            top: self.convert_opt_length_to_lpa(&style.margin_top),
-            bottom: self.convert_opt_length_to_lpa(&style.margin_bottom),
+            left: self.convert_opt_length_to_lpa(&style.margin_left, style),
+            right: self.convert_opt_length_to_lpa(&style.margin_right, style),
+            top: self.convert_opt_length_to_lpa(&style.margin_top, style),
+            bottom: self.convert_opt_length_to_lpa(&style.margin_bottom, style),
         };
 
         // Padding
         taffy_style.padding = taffy::geometry::Rect {
-            left: self.convert_length_to_lp(&style.padding_left),
-            right: self.convert_length_to_lp(&style.padding_right),
-            top: self.convert_length_to_lp(&style.padding_top),
-            bottom: self.convert_length_to_lp(&style.padding_bottom),
+            left: self.convert_length_to_lp(&style.padding_left, style),
+            right: self.convert_length_to_lp(&style.padding_right, style),
+            top: self.convert_length_to_lp(&style.padding_top, style),
+            bottom: self.convert_length_to_lp(&style.padding_bottom, style),
         };
 
         // Border
         taffy_style.border = taffy::geometry::Rect {
-            left: self.convert_length_to_lp(&style.border_left_width),
-            right: self.convert_length_to_lp(&style.border_right_width),
-            top: self.convert_length_to_lp(&style.border_top_width),
-            bottom: self.convert_length_to_lp(&style.border_bottom_width),
+            left: self.convert_length_to_lp(&style.border_left_width, style),
+            right: self.convert_length_to_lp(&style.border_right_width, style),
+            top: self.convert_length_to_lp(&style.border_top_width, style),
+            bottom: self.convert_length_to_lp(&style.border_bottom_width, style),
         };
 
         // Grid container properties
         if is_grid {
             // Grid template columns/rows
-            taffy_style.grid_template_columns = self.convert_grid_template(&style.grid_template_columns);
-            taffy_style.grid_template_rows = self.convert_grid_template(&style.grid_template_rows);
+            taffy_style.grid_template_columns = self.convert_grid_template(&style.grid_template_columns, style);
+            taffy_style.grid_template_rows = self.convert_grid_template(&style.grid_template_rows, style);
 
             // Gap
             taffy_style.gap = taffy::geometry::Size {
-                width: self.convert_length_to_lp(&style.grid_column_gap),
-                height: self.convert_length_to_lp(&style.grid_row_gap),
+                width: self.convert_length_to_lp(&style.grid_column_gap, style),
+                height: self.convert_length_to_lp(&style.grid_row_gap, style),
             };
 
             // Alignment
@@ -217,89 +225,117 @@ impl GridFormattingContext {
     }
 
     /// Converts Length to Taffy Dimension
-    fn convert_length_to_dimension(&self, length: &Length) -> Dimension {
+    fn convert_length_to_dimension(&self, length: &Length, style: &ComputedStyle) -> Dimension {
         use crate::style::values::LengthUnit;
         match length.unit {
             LengthUnit::Percent => Dimension::percent(length.value / 100.0),
-            _ => Dimension::length(length.to_px()),
+            _ => {
+                if let Some(px) = self.resolve_length_px(length, style) {
+                    Dimension::length(px)
+                } else {
+                    Dimension::length(length.to_px())
+                }
+            }
         }
     }
 
     /// Converts Option<Length> to Taffy LengthPercentageAuto
-    fn convert_opt_length_to_lpa(&self, length: &Option<Length>) -> LengthPercentageAuto {
+    fn convert_opt_length_to_lpa(&self, length: &Option<Length>, style: &ComputedStyle) -> LengthPercentageAuto {
         use crate::style::values::LengthUnit;
         match length {
             None => LengthPercentageAuto::auto(),
             Some(len) => match len.unit {
                 LengthUnit::Percent => LengthPercentageAuto::percent(len.value / 100.0),
-                _ => LengthPercentageAuto::length(len.to_px()),
+                _ => {
+                    if let Some(px) = self.resolve_length_px(len, style) {
+                        LengthPercentageAuto::length(px)
+                    } else {
+                        LengthPercentageAuto::length(len.to_px())
+                    }
+                }
             },
         }
     }
 
     /// Converts Length to Taffy LengthPercentage
-    fn convert_length_to_lp(&self, length: &Length) -> LengthPercentage {
+    fn convert_length_to_lp(&self, length: &Length, style: &ComputedStyle) -> LengthPercentage {
         use crate::style::values::LengthUnit;
         match length.unit {
             LengthUnit::Percent => LengthPercentage::percent(length.value / 100.0),
-            _ => LengthPercentage::length(length.to_px()),
+            _ => {
+                if let Some(px) = self.resolve_length_px(length, style) {
+                    LengthPercentage::length(px)
+                } else {
+                    LengthPercentage::length(length.to_px())
+                }
+            }
         }
     }
 
     fn dimension_for_box_sizing(&self, len: &Length, style: &ComputedStyle, axis: Axis) -> Dimension {
         if style.box_sizing == BoxSizing::ContentBox {
             if let Some(edges) = self.edges_px(style, axis) {
-                if let Some(px) = self.length_to_px_if_absolute(len) {
+                if let Some(px) = self.resolve_length_px(len, style) {
                     return Dimension::length((px + edges).max(0.0));
                 }
             }
         }
-        self.convert_length_to_dimension(len)
+        self.convert_length_to_dimension(len, style)
     }
 
     fn edges_px(&self, style: &ComputedStyle, axis: Axis) -> Option<f32> {
         match axis {
             Axis::Horizontal => {
-                let p1 = self.length_to_px_if_absolute(&style.padding_left)?;
-                let p2 = self.length_to_px_if_absolute(&style.padding_right)?;
-                let b1 = self.length_to_px_if_absolute(&style.border_left_width)?;
-                let b2 = self.length_to_px_if_absolute(&style.border_right_width)?;
+                let p1 = self.resolve_length_px(&style.padding_left, style)?;
+                let p2 = self.resolve_length_px(&style.padding_right, style)?;
+                let b1 = self.resolve_length_px(&style.border_left_width, style)?;
+                let b2 = self.resolve_length_px(&style.border_right_width, style)?;
                 Some(p1 + p2 + b1 + b2)
             }
             Axis::Vertical => {
-                let p1 = self.length_to_px_if_absolute(&style.padding_top)?;
-                let p2 = self.length_to_px_if_absolute(&style.padding_bottom)?;
-                let b1 = self.length_to_px_if_absolute(&style.border_top_width)?;
-                let b2 = self.length_to_px_if_absolute(&style.border_bottom_width)?;
+                let p1 = self.resolve_length_px(&style.padding_top, style)?;
+                let p2 = self.resolve_length_px(&style.padding_bottom, style)?;
+                let b1 = self.resolve_length_px(&style.border_top_width, style)?;
+                let b2 = self.resolve_length_px(&style.border_bottom_width, style)?;
                 Some(p1 + p2 + b1 + b2)
             }
         }
     }
 
-    fn length_to_px_if_absolute(&self, len: &Length) -> Option<f32> {
+    fn resolve_length_px(&self, len: &Length, style: &ComputedStyle) -> Option<f32> {
         use crate::style::values::LengthUnit::*;
         match len.unit {
+            Percent => None,
             Px | Pt | In | Cm | Mm | Pc => Some(len.to_px()),
-            Em | Rem => Some(len.value * 16.0),
+            Rem => Some(len.value * style.root_font_size),
+            Em => Some(len.value * style.font_size),
+            Ex => Some(len.value * style.font_size * 0.5),
+            Ch => Some(len.value * style.font_size * 0.5),
+            unit if unit.is_viewport_relative() => {
+                Some(len.resolve_with_viewport(self.viewport_size.width, self.viewport_size.height))
+            }
             _ => None,
         }
     }
 
     /// Converts GridTrack Vec to Taffy track list
-    fn convert_grid_template(&self, tracks: &[GridTrack]) -> Vec<GridTemplateComponent<String>> {
-        tracks.iter().map(|t| self.convert_track_to_component(t)).collect()
+    fn convert_grid_template(&self, tracks: &[GridTrack], style: &ComputedStyle) -> Vec<GridTemplateComponent<String>> {
+        tracks
+            .iter()
+            .map(|t| self.convert_track_to_component(t, style))
+            .collect()
     }
 
     /// Converts a single GridTrack to GridTemplateComponent
-    fn convert_track_to_component(&self, track: &GridTrack) -> GridTemplateComponent<String> {
-        GridTemplateComponent::Single(self.convert_track_size(track))
+    fn convert_track_to_component(&self, track: &GridTrack, style: &ComputedStyle) -> GridTemplateComponent<String> {
+        GridTemplateComponent::Single(self.convert_track_size(track, style))
     }
 
     /// Converts a single GridTrack to TrackSizingFunction
-    fn convert_track_size(&self, track: &GridTrack) -> TrackSizingFunction {
+    fn convert_track_size(&self, track: &GridTrack, style: &ComputedStyle) -> TrackSizingFunction {
         match track {
             GridTrack::Length(len) => {
-                let lp = self.convert_length_to_lp(len);
+                let lp = self.convert_length_to_lp(len, style);
                 TrackSizingFunction::from(lp)
             }
             GridTrack::Fr(fr) => TrackSizingFunction {
@@ -308,8 +344,8 @@ impl GridFormattingContext {
             },
             GridTrack::Auto => TrackSizingFunction::AUTO,
             GridTrack::MinMax(min, max) => {
-                let min_fn = self.convert_min_track(min);
-                let max_fn = self.convert_max_track(max);
+                let min_fn = self.convert_min_track(min, style);
+                let max_fn = self.convert_max_track(max, style);
                 TrackSizingFunction {
                     min: min_fn,
                     max: max_fn,
@@ -319,12 +355,18 @@ impl GridFormattingContext {
     }
 
     /// Converts GridTrack to MinTrackSizingFunction
-    fn convert_min_track(&self, track: &GridTrack) -> MinTrackSizingFunction {
+    fn convert_min_track(&self, track: &GridTrack, style: &ComputedStyle) -> MinTrackSizingFunction {
         use crate::style::values::LengthUnit;
         match track {
             GridTrack::Length(len) => match len.unit {
                 LengthUnit::Percent => MinTrackSizingFunction::percent(len.value / 100.0),
-                _ => MinTrackSizingFunction::length(len.to_px()),
+                _ => {
+                    if let Some(px) = self.resolve_length_px(len, style) {
+                        MinTrackSizingFunction::length(px)
+                    } else {
+                        MinTrackSizingFunction::length(len.to_px())
+                    }
+                }
             },
             GridTrack::Auto => MinTrackSizingFunction::auto(),
             _ => MinTrackSizingFunction::auto(),
@@ -332,12 +374,18 @@ impl GridFormattingContext {
     }
 
     /// Converts GridTrack to MaxTrackSizingFunction
-    fn convert_max_track(&self, track: &GridTrack) -> MaxTrackSizingFunction {
+    fn convert_max_track(&self, track: &GridTrack, style: &ComputedStyle) -> MaxTrackSizingFunction {
         use crate::style::values::LengthUnit;
         match track {
             GridTrack::Length(len) => match len.unit {
                 LengthUnit::Percent => MaxTrackSizingFunction::percent(len.value / 100.0),
-                _ => MaxTrackSizingFunction::length(len.to_px()),
+                _ => {
+                    if let Some(px) = self.resolve_length_px(len, style) {
+                        MaxTrackSizingFunction::length(px)
+                    } else {
+                        MaxTrackSizingFunction::length(len.to_px())
+                    }
+                }
             },
             GridTrack::Fr(fr) => MaxTrackSizingFunction::fr(*fr),
             GridTrack::Auto | GridTrack::MinMax(..) => MaxTrackSizingFunction::auto(),
@@ -514,9 +562,8 @@ mod tests {
     #[test]
     fn test_grid_fc_creation() {
         let fc = GridFormattingContext::new();
-        let default_fc = GridFormattingContext;
-        // Both should exist
-        assert!(std::mem::size_of_val(&fc) == std::mem::size_of_val(&default_fc));
+        let default_fc = GridFormattingContext::default();
+        assert_eq!(std::mem::size_of_val(&fc), std::mem::size_of_val(&default_fc));
     }
 
     // Test 2: Empty grid layout
