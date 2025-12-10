@@ -142,6 +142,200 @@ pub fn validate_area_rectangles(
     Some(bounds)
 }
 
+/// Parsed representation of the `grid-template` shorthand.
+pub struct ParsedGridTemplate {
+    pub areas: Option<Vec<Vec<Option<String>>>>,
+    pub row_tracks: Option<(Vec<GridTrack>, Vec<Vec<String>>)>,
+    pub column_tracks: Option<(Vec<GridTrack>, Vec<Vec<String>>)>,
+}
+
+/// Parse the `grid-template` shorthand.
+///
+/// Supports two forms:
+/// 1) `<track-list> / <track-list>` (explicit rows/columns)
+/// 2) `<area-rows> [ / <col-tracks> ]`, where area rows are quoted strings with optional
+///    per-row track sizes following each string.
+pub fn parse_grid_template_shorthand(value: &str) -> Option<ParsedGridTemplate> {
+    let (main, cols_part) = split_once_unquoted(value, '/');
+
+    let main = main.trim();
+    let cols_part = cols_part.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    });
+
+    // If there are no area strings, treat as pure track list shorthand.
+    if !main.contains('"') {
+        let ParsedTracks {
+            tracks: row_tracks,
+            line_names: row_line_names,
+            ..
+        } = parse_track_list(main);
+        if row_tracks.is_empty() {
+            return None;
+        }
+
+        let (col_tracks, col_line_names) = if let Some(cols_raw) = cols_part {
+            let ParsedTracks {
+                tracks,
+                line_names,
+                ..
+            } = parse_track_list(cols_raw);
+            if tracks.is_empty() {
+                return None;
+            }
+            (tracks, line_names)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
+        return Some(ParsedGridTemplate {
+            areas: None,
+            row_tracks: Some((row_tracks, row_line_names)),
+            column_tracks: if col_tracks.is_empty() {
+                None
+            } else {
+                Some((col_tracks, col_line_names))
+            },
+        });
+    }
+
+    // Area form: parse quoted rows with optional row sizes.
+    let (area_rows, row_sizes_raw) = parse_area_rows_with_sizes(main)?;
+    let areas = build_area_matrix(&area_rows)?;
+    validate_area_rectangles(&areas)?;
+
+    // Row tracks: if row sizes were provided, use them; otherwise default to auto.
+    let row_tracks = if row_sizes_raw.iter().any(|s| s.is_some()) {
+        let mut tracks = Vec::with_capacity(row_sizes_raw.len());
+        for size in &row_sizes_raw {
+            let Some(size_str) = size else {
+                tracks.push(GridTrack::Auto);
+                continue;
+            };
+            let track = parse_single_grid_track(&size_str)?;
+            tracks.push(track);
+        }
+        Some((tracks, vec![Vec::new(); row_sizes_raw.len() + 1]))
+    } else {
+        Some((vec![GridTrack::Auto; areas.len()], vec![Vec::new(); areas.len() + 1]))
+    };
+
+    // Column tracks: explicit slash wins; otherwise derive auto from area width.
+    let column_tracks = if let Some(cols_raw) = cols_part {
+        let ParsedTracks {
+            tracks,
+            line_names,
+            ..
+        } = parse_track_list(cols_raw);
+        if tracks.is_empty() {
+            return None;
+        }
+        Some((tracks, line_names))
+    } else {
+        let cols = areas.first().map(|r| r.len()).unwrap_or(0);
+        Some((vec![GridTrack::Auto; cols], vec![Vec::new(); cols + 1]))
+    };
+
+    Some(ParsedGridTemplate {
+        areas: Some(areas),
+        row_tracks,
+        column_tracks,
+    })
+}
+
+fn parse_area_rows_with_sizes(input: &str) -> Option<(Vec<String>, Vec<Option<String>>)> {
+    let mut rows = Vec::new();
+    let mut row_sizes = Vec::new();
+    let mut i = 0;
+    let bytes = input.as_bytes();
+    while i < bytes.len() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        if bytes[i] != b'"' {
+            return None;
+        }
+        i += 1;
+        let start = i;
+        while i < bytes.len() && bytes[i] != b'"' {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            return None;
+        }
+        let row_str = &input[start..i];
+        rows.push(row_str.to_string());
+        i += 1; // skip closing quote
+
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        // Capture optional row size until next quote or slash
+        let size_start = i;
+        while i < bytes.len() && bytes[i] != b'"' && bytes[i] != b'/' {
+            i += 1;
+        }
+        let size = input[size_start..i].trim();
+        if size.is_empty() {
+            row_sizes.push(None);
+        } else {
+            row_sizes.push(Some(size.to_string()));
+        }
+    }
+
+    if rows.is_empty() {
+        None
+    } else {
+        Some((rows, row_sizes))
+    }
+}
+
+fn build_area_matrix(rows: &[String]) -> Option<Vec<Vec<Option<String>>>> {
+    let mut matrix = Vec::with_capacity(rows.len());
+    let mut expected_cols: Option<usize> = None;
+    for row in rows {
+        let cols: Vec<Option<String>> = row
+            .split_whitespace()
+            .map(|name| if name == "." { None } else { Some(name.to_string()) })
+            .collect();
+        if cols.is_empty() {
+            return None;
+        }
+        if let Some(exp) = expected_cols {
+            if cols.len() != exp {
+                return None;
+            }
+        } else {
+            expected_cols = Some(cols.len());
+        }
+        matrix.push(cols);
+    }
+    Some(matrix)
+}
+
+fn split_once_unquoted(input: &str, delim: char) -> (&str, Option<&str>) {
+    let mut in_quote = false;
+    for (idx, ch) in input.char_indices() {
+        match ch {
+            '"' => in_quote = !in_quote,
+            d if d == delim && !in_quote => {
+                let (left, right) = input.split_at(idx);
+                return (left, Some(&right[delim.len_utf8()..]));
+            }
+            _ => {}
+        }
+    }
+    (input, None)
+}
+
 /// Finalize grid placement: keep raw values for Taffy to resolve (named/numeric/nth)
 pub fn finalize_grid_placement(_styles: &mut ComputedStyle) {}
 
@@ -194,10 +388,10 @@ pub fn parse_grid_line_placement(value: &str, named_lines: &HashMap<String, Vec<
 
 /// A parsed track list containing the concrete tracks and named line offsets.
 #[derive(Default)]
-struct ParsedTracks {
-    tracks: Vec<GridTrack>,
-    named_lines: HashMap<String, Vec<usize>>,
-    line_names: Vec<Vec<String>>,
+pub(crate) struct ParsedTracks {
+    pub tracks: Vec<GridTrack>,
+    pub named_lines: HashMap<String, Vec<usize>>,
+    pub line_names: Vec<Vec<String>>,
 }
 
 impl ParsedTracks {
@@ -453,7 +647,7 @@ fn split_once_comma(input: &str) -> Option<(&str, &str)> {
     None
 }
 
-fn parse_track_list(input: &str) -> ParsedTracks {
+pub(crate) fn parse_track_list(input: &str) -> ParsedTracks {
     let mut parser = TrackListParser::new(input);
     let mut tracks = Vec::new();
     let mut named_lines: HashMap<String, Vec<usize>> = HashMap::new();
@@ -530,7 +724,7 @@ fn parse_track_list(input: &str) -> ParsedTracks {
 }
 
 /// Parse a single grid track value
-fn parse_single_grid_track(track_str: &str) -> Option<GridTrack> {
+pub(crate) fn parse_single_grid_track(track_str: &str) -> Option<GridTrack> {
     let track_str = track_str.trim();
     if track_str.is_empty() {
         return None;
@@ -733,5 +927,32 @@ mod tests {
         }
         assert_eq!(styles.grid_template_columns.len(), 2);
         assert_eq!(styles.grid_template_rows.len(), 2);
+    }
+
+    #[test]
+    fn grid_template_shorthand_tracks_only() {
+        let parsed = parse_grid_template_shorthand("100px auto / 1fr 2fr").expect("should parse");
+        let (rows, _) = parsed.row_tracks.expect("rows");
+        let (cols, _) = parsed.column_tracks.expect("cols");
+        assert_eq!(rows.len(), 2);
+        assert!(matches!(rows[0], GridTrack::Length(_)));
+        assert!(matches!(rows[1], GridTrack::Auto));
+        assert_eq!(cols.len(), 2);
+        assert!(matches!(cols[0], GridTrack::Fr(_)));
+    }
+
+    #[test]
+    fn grid_template_shorthand_areas_with_sizes_and_cols() {
+        let parsed =
+            parse_grid_template_shorthand("\"a b\" 40px \"c d\" 50px / 20px 30px").expect("should parse");
+        let areas = parsed.areas.expect("areas");
+        assert_eq!(areas.len(), 2);
+        assert_eq!(areas[0][0], Some("a".into()));
+        let (rows, _) = parsed.row_tracks.expect("rows");
+        assert_eq!(rows.len(), 2);
+        assert!(matches!(rows[0], GridTrack::Length(_)));
+        let (cols, _) = parsed.column_tracks.expect("cols");
+        assert_eq!(cols.len(), 2);
+        assert!(matches!(cols[0], GridTrack::Length(_)));
     }
 }

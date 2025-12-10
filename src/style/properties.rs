@@ -11,7 +11,7 @@ use crate::style::color::Rgba;
 use crate::style::counters::CounterSet;
 use crate::style::display::Display;
 use crate::style::float::{Clear, Float};
-use crate::style::grid::{parse_grid_template_areas, parse_grid_tracks_with_names};
+use crate::style::grid::{parse_grid_template_areas, parse_grid_template_shorthand, parse_grid_tracks_with_names};
 use crate::css::properties::parse_length;
 use crate::style::position::Position;
 use crate::style::types::*;
@@ -540,6 +540,23 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
             }
             _ => {}
         },
+        "grid-template" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                if let Some(parsed) = parse_grid_template_shorthand(kw) {
+                    if let Some((rows, row_line_names)) = parsed.row_tracks {
+                        styles.grid_template_rows = rows;
+                        styles.grid_row_line_names = row_line_names;
+                    }
+                    if let Some((cols, col_line_names)) = parsed.column_tracks {
+                        styles.grid_template_columns = cols;
+                        styles.grid_column_line_names = col_line_names;
+                    }
+                    if let Some(areas) = parsed.areas {
+                        styles.grid_template_areas = areas;
+                    }
+                }
+            }
+        }
         "grid-gap" | "gap" => {
             if let Some((row, column)) = parse_gap_lengths(&resolved_value) {
                 styles.grid_gap = row;
