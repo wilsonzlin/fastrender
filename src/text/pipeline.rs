@@ -364,10 +364,23 @@ impl BidiAnalysis {
     /// * `text` - The text to analyze
     /// * `style` - ComputedStyle containing CSS direction property
     pub fn analyze(text: &str, style: &ComputedStyle) -> Self {
+        let base_direction = match style.direction {
+            CssDirection::Ltr => Direction::LeftToRight,
+            CssDirection::Rtl => Direction::RightToLeft,
+        };
+        Self::analyze_with_base(text, style, base_direction)
+    }
+
+    /// Analyzes text for bidirectional properties with an explicit base direction.
+    ///
+    /// This mirrors CSS paragraph base resolution while allowing callers (e.g. layout)
+    /// to supply the containing block's resolved direction when it differs from the
+    /// style value.
+    pub fn analyze_with_base(text: &str, style: &ComputedStyle, base_direction: Direction) -> Self {
         // Determine base direction from CSS direction property (inherited, initial LTR)
-        let base_level = match style.direction {
-            CssDirection::Ltr => Level::ltr(),
-            CssDirection::Rtl => Level::rtl(),
+        let base_level = match base_direction {
+            Direction::LeftToRight => Level::ltr(),
+            Direction::RightToLeft => Level::rtl(),
         };
 
         // Handle empty text
@@ -1172,11 +1185,46 @@ impl ShapingPipeline {
         text: &str,
         style: &ComputedStyle,
         font_context: &FontContext,
-        _base_direction: Direction,
+        base_direction: Direction,
     ) -> Result<Vec<ShapedRun>> {
-        // For now, delegate to shape() - direction is determined by bidi analysis
-        // TODO: Implement CSS direction property support
-        self.shape(text, style, font_context)
+        // Handle empty text
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        if matches!(style.font_variant, FontVariant::SmallCaps)
+            || matches!(
+                style.font_variant_caps,
+                FontVariantCaps::SmallCaps | FontVariantCaps::AllSmallCaps
+            )
+        {
+            if !has_native_small_caps(style, font_context) && style.font_synthesis.small_caps {
+                return self.shape_small_caps(text, style, font_context);
+            }
+        }
+
+        // Step 1: Bidi analysis with explicit base direction
+        let bidi = BidiAnalysis::analyze_with_base(text, style, base_direction);
+
+        // Step 2: Script itemization
+        let itemized_runs = itemize_text(text, &bidi);
+
+        // Step 3: Font matching
+        let font_runs = assign_fonts(&itemized_runs, style, font_context)?;
+
+        // Step 4: Shape each run
+        let mut shaped_runs = Vec::with_capacity(font_runs.len());
+        for run in &font_runs {
+            let shaped = shape_font_run(run)?;
+            shaped_runs.push(shaped);
+        }
+
+        // Step 5: Reorder for bidi if needed
+        if bidi.needs_reordering() {
+            reorder_runs(&mut shaped_runs);
+        }
+
+        Ok(shaped_runs)
     }
 
     /// Measures the total advance width of shaped text.
@@ -1670,6 +1718,23 @@ mod tests {
         let mut runs: Vec<ShapedRun> = Vec::new();
         reorder_runs(&mut runs);
         assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn shape_with_direction_uses_explicit_base() {
+        let mut style = ComputedStyle::default();
+        style.unicode_bidi = crate::style::types::UnicodeBidi::Normal;
+        let ctx = FontContext::new();
+        let text = "!?";
+
+        let shaped = ShapingPipeline::new()
+            .shape_with_direction(text, &style, &ctx, Direction::RightToLeft)
+            .expect("shape_with_direction");
+
+        assert_eq!(shaped.len(), 1);
+        let run = &shaped[0];
+        assert_eq!(run.direction, Direction::RightToLeft);
+        assert_eq!(run.level % 2, 1, "bidi level should reflect RTL base");
     }
 
     #[test]
