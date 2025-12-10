@@ -38,6 +38,7 @@
 
 use crate::geometry::{Point, Rect, Size};
 use crate::style::color::Rgba;
+use crate::style::types::{TextEmphasisPosition, TextEmphasisStyle};
 use crate::text::font_db::{FontStretch, FontStyle};
 use std::fmt;
 use std::sync::Arc;
@@ -386,6 +387,9 @@ pub struct TextItem {
 
     /// Font identifier (for looking up font data)
     pub font_id: Option<FontId>,
+
+    /// Optional emphasis marks to render for this run.
+    pub emphasis: Option<TextEmphasis>,
 }
 
 /// A single glyph instance for rendering
@@ -399,6 +403,34 @@ pub struct GlyphInstance {
 
     /// Advance width to next glyph
     pub advance: f32,
+}
+
+/// Emphasis mark to render relative to the text run.
+#[derive(Debug, Clone)]
+pub struct EmphasisMark {
+    pub center: Point,
+}
+
+/// Shaped emphasis string glyphs (for string emphasis styles).
+#[derive(Debug, Clone)]
+pub struct EmphasisText {
+    pub glyphs: Vec<GlyphInstance>,
+    pub font_id: Option<FontId>,
+    pub font_size: f32,
+    pub width: f32,
+    pub height: f32,
+    pub baseline_offset: f32,
+}
+
+/// Resolved emphasis data for a text run.
+#[derive(Debug, Clone)]
+pub struct TextEmphasis {
+    pub style: TextEmphasisStyle,
+    pub color: Rgba,
+    pub position: TextEmphasisPosition,
+    pub size: f32,
+    pub marks: Vec<EmphasisMark>,
+    pub text: Option<EmphasisText>,
 }
 
 /// A resolved text shadow ready for painting

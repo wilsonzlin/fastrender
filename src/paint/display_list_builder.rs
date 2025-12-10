@@ -31,14 +31,14 @@ use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::paint::display_list::{
-    BlendMode, ClipItem, DisplayItem, DisplayList, FillRectItem, FontId, GlyphInstance, ImageData, ImageItem,
-    OpacityItem, StrokeRectItem, TextItem, TextShadowItem,
+    BlendMode, ClipItem, DisplayItem, DisplayList, EmphasisMark, EmphasisText, TextEmphasis, FillRectItem, FontId,
+    GlyphInstance, ImageData, ImageItem, OpacityItem, StrokeRectItem, TextItem, TextShadowItem,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::style::color::Rgba;
-use crate::style::types::ObjectFit;
+use crate::style::types::{ObjectFit, TextEmphasisPosition, TextEmphasisStyle};
 use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStretch, FontStyle, ScaledMetrics};
 use crate::text::font_loader::FontContext;
@@ -299,7 +299,7 @@ impl DisplayListBuilder {
                 let start_x = rect.origin.x;
 
                 if let Some(runs) = shaped {
-                    self.emit_shaped_runs(runs, color, baseline, start_x, &shadows);
+                    self.emit_shaped_runs(runs, color, baseline, start_x, &shadows, fragment.style.as_deref());
                     return;
                 }
 
@@ -311,7 +311,7 @@ impl DisplayListBuilder {
                             style.letter_spacing,
                             style.word_spacing,
                         );
-                        self.emit_shaped_runs(&runs, color, baseline, start_x, &shadows);
+                        self.emit_shaped_runs(&runs, color, baseline, start_x, &shadows, Some(style));
                         return;
                     }
                 }
@@ -338,6 +338,7 @@ impl DisplayListBuilder {
                     font_size,
                     advance_width,
                     font_id: None,
+                    emphasis: None,
                 }));
             }
 
@@ -414,15 +415,24 @@ impl DisplayListBuilder {
     /// Emits border strokes for a fragment
     pub fn emit_border(&mut self, rect: Rect, width: f32, color: Rgba) {
         if width > 0.0 && !color.is_transparent() {
-            self.list
-                .push(DisplayItem::StrokeRect(StrokeRectItem { rect, color, width, blend_mode: BlendMode::Normal }));
+            self.list.push(DisplayItem::StrokeRect(StrokeRectItem {
+                rect,
+                color,
+                width,
+                blend_mode: BlendMode::Normal,
+            }));
         }
     }
 
     fn emit_outline(&mut self, rect: Rect, style: &ComputedStyle) {
         let ow = style.outline_width.to_px();
         let outline_style = style.outline_style.to_border_style();
-        if ow <= 0.0 || matches!(outline_style, crate::style::types::BorderStyle::None | crate::style::types::BorderStyle::Hidden) {
+        if ow <= 0.0
+            || matches!(
+                outline_style,
+                crate::style::types::BorderStyle::None | crate::style::types::BorderStyle::Hidden
+            )
+        {
             return;
         }
         let offset = style.outline_offset.to_px();
@@ -434,7 +444,11 @@ impl DisplayListBuilder {
             rect.height() + 2.0 * expand,
         );
         let (color, invert) = style.outline_color.resolve(style.color);
-        let blend_mode = if invert { BlendMode::Difference } else { BlendMode::Normal };
+        let blend_mode = if invert {
+            BlendMode::Difference
+        } else {
+            BlendMode::Normal
+        };
         if ow > 0.0 && !color.is_transparent() {
             self.list.push(DisplayItem::StrokeRect(StrokeRectItem {
                 rect: outline_rect,
@@ -472,6 +486,7 @@ impl DisplayListBuilder {
         baseline_y: f32,
         start_x: f32,
         shadows: &[TextShadowItem],
+        style: Option<&ComputedStyle>,
     ) {
         let mut pen_x = start_x;
         for run in runs {
@@ -482,6 +497,7 @@ impl DisplayListBuilder {
             };
             let glyphs = self.glyphs_from_run(run, origin_x, baseline_y);
             let font_id = self.font_id_from_run(run);
+            let emphasis = style.and_then(|s| self.build_emphasis(run, s, origin_x, baseline_y));
 
             self.list.push(DisplayItem::Text(TextItem {
                 origin: Point::new(origin_x, baseline_y),
@@ -491,6 +507,7 @@ impl DisplayListBuilder {
                 font_size: run.font_size,
                 advance_width: run.advance,
                 font_id: Some(font_id),
+                emphasis,
             }));
 
             pen_x += run.advance;
@@ -514,6 +531,139 @@ impl DisplayListBuilder {
         }
 
         glyphs
+    }
+
+    fn build_emphasis(
+        &self,
+        run: &ShapedRun,
+        style: &ComputedStyle,
+        origin_x: f32,
+        baseline_y: f32,
+    ) -> Option<TextEmphasis> {
+        if style.text_emphasis_style.is_none() {
+            return None;
+        }
+        let mark_color = style.text_emphasis_color.unwrap_or(style.color);
+        let mut ascent = run.font_size * 0.8;
+        let mut descent = run.font_size * 0.2;
+        if let Ok(metrics) = run.font.metrics() {
+            let scaled = metrics.scale(run.font_size);
+            ascent = scaled.ascent;
+            descent = scaled.descent;
+        }
+        let mark_size = (style.font_size * 0.5).max(1.0);
+        let gap = mark_size * 0.3;
+        let resolved_position = match style.text_emphasis_position {
+            TextEmphasisPosition::Auto => TextEmphasisPosition::Over,
+            other => other,
+        };
+        let center_y = match resolved_position {
+            TextEmphasisPosition::Over
+            | TextEmphasisPosition::OverLeft
+            | TextEmphasisPosition::OverRight => baseline_y - ascent - gap - mark_size * 0.5,
+            TextEmphasisPosition::Under
+            | TextEmphasisPosition::UnderLeft
+            | TextEmphasisPosition::UnderRight => baseline_y + descent + gap + mark_size * 0.5,
+            TextEmphasisPosition::Auto => baseline_y - ascent - gap - mark_size * 0.5,
+        };
+
+        let mut marks = Vec::new();
+        let mut seen_clusters = HashSet::new();
+        let run_origin = if run.direction.is_rtl() {
+            origin_x + run.advance
+        } else {
+            origin_x
+        };
+        for glyph in &run.glyphs {
+            if !seen_clusters.insert(glyph.cluster) {
+                continue;
+            }
+            let text_byte = glyph.cluster as usize;
+            if text_byte < run.text.len() {
+                if let Some(ch) = run.text[text_byte..].chars().next() {
+                    if ch.is_whitespace() || ch.is_control() {
+                        continue;
+                    }
+                }
+            }
+            let center_x = match run.direction {
+                crate::text::pipeline::Direction::RightToLeft => {
+                    run_origin - (glyph.x_offset + glyph.x_advance * 0.5)
+                }
+                _ => run_origin + glyph.x_offset + glyph.x_advance * 0.5,
+            };
+            marks.push(EmphasisMark {
+                center: Point::new(center_x, center_y),
+            });
+        }
+
+        let text = if let TextEmphasisStyle::String(ref s) = style.text_emphasis_style {
+            if s.is_empty() {
+                None
+            } else {
+                let mut mark_style = style.clone();
+                mark_style.font_size = style.font_size * 0.5;
+                match self.shaper.shape(s, &mark_style, &self.font_ctx) {
+                    Ok(mark_runs) if !mark_runs.is_empty() => {
+                        let mark_font_id = self.font_id_from_run(&mark_runs[0]);
+                        let mut glyphs = Vec::new();
+                        let mut width = 0.0;
+                        let mut ascent: f32 = 0.0;
+                        let mut descent: f32 = 0.0;
+                        for r in &mark_runs {
+                            if let Ok(m) = r.font.metrics() {
+                                let scaled = m.scale(r.font_size);
+                                ascent = ascent.max(scaled.ascent);
+                                descent = descent.max(scaled.descent);
+                            }
+                        }
+                        if ascent == 0.0 && descent == 0.0 {
+                            ascent = mark_style.font_size * 0.8;
+                            descent = mark_style.font_size * 0.2;
+                        }
+                        for r in mark_runs {
+                            let mark_origin = if r.direction.is_rtl() {
+                                width + r.advance
+                            } else {
+                                width
+                            };
+                            for g in r.glyphs {
+                                let x = match r.direction {
+                                    crate::text::pipeline::Direction::RightToLeft => mark_origin - g.x_offset,
+                                    _ => mark_origin + g.x_offset,
+                                };
+                                glyphs.push(GlyphInstance {
+                                    glyph_id: g.glyph_id,
+                                    offset: Point::new(x, -g.y_offset),
+                                    advance: g.x_advance,
+                                });
+                            }
+                            width += r.advance;
+                        }
+                        Some(EmphasisText {
+                            glyphs,
+                            font_id: Some(mark_font_id),
+                            font_size: mark_style.font_size,
+                            width,
+                            height: ascent + descent,
+                            baseline_offset: ascent,
+                        })
+                    }
+                    _ => None,
+                }
+            }
+        } else {
+            None
+        };
+
+        Some(TextEmphasis {
+            style: style.text_emphasis_style.clone(),
+            color: mark_color,
+            position: resolved_position,
+            size: mark_size,
+            marks,
+            text,
+        })
     }
 
     fn font_id_from_run(&self, run: &ShapedRun) -> FontId {
@@ -563,7 +713,7 @@ impl DisplayListBuilder {
         let baseline = rect.y() + half_leading + metrics.baseline_offset;
 
         let shadows = Self::text_shadows_from_style(Some(style));
-        self.emit_shaped_runs(&runs, style.color, baseline, rect.x(), &shadows);
+        self.emit_shaped_runs(&runs, style.color, baseline, rect.x(), &shadows, Some(style));
         true
     }
 
@@ -592,6 +742,7 @@ impl DisplayListBuilder {
             font_size,
             advance_width,
             font_id: None,
+            emphasis: None,
         }));
         true
     }
@@ -919,16 +1070,14 @@ mod tests {
         style.outline_style = crate::style::types::OutlineStyle::Solid;
         style.outline_width = Length::px(2.0);
         style.outline_color = crate::style::types::OutlineColor::Color(Rgba::RED);
-        let fragment = FragmentNode::new_block_styled(
-            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-            vec![],
-            Arc::new(style),
-        );
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
 
         let builder = DisplayListBuilder::new();
         let list = builder.build(&fragment);
         assert!(
-            list.items().iter().any(|item| matches!(item, DisplayItem::StrokeRect(_))),
+            list.items()
+                .iter()
+                .any(|item| matches!(item, DisplayItem::StrokeRect(_))),
             "outline should emit stroke rect"
         );
     }
@@ -939,16 +1088,14 @@ mod tests {
         style.outline_style = crate::style::types::OutlineStyle::Solid;
         style.outline_width = Length::px(2.0);
         style.outline_color = crate::style::types::OutlineColor::Color(Rgba::RED);
-        let fragment = FragmentNode::new_block_styled(
-            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-            vec![],
-            Arc::new(style),
-        );
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
         let clips = vec![None].into_iter().collect();
         let builder = DisplayListBuilder::new();
         let list = builder.build_with_clips(&fragment, &clips);
         assert!(
-            list.items().iter().any(|item| matches!(item, DisplayItem::StrokeRect(_))),
+            list.items()
+                .iter()
+                .any(|item| matches!(item, DisplayItem::StrokeRect(_))),
             "outline should be emitted even when fragment is clipped"
         );
     }

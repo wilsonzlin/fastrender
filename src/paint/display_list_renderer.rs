@@ -6,14 +6,16 @@
 
 use crate::error::{RenderError, Result};
 use crate::paint::blur::apply_gaussian_blur;
+use crate::geometry::Point;
 use crate::paint::canvas::Canvas;
 use crate::paint::display_list::{
-    BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FontId, ImageItem, LinearGradientItem,
+    BoxShadowItem, ClipItem, DisplayItem, DisplayList, TextEmphasis, FillRectItem, FontId, ImageItem, LinearGradientItem,
     OpacityItem, RadialGradientItem, StrokeRectItem, TextItem, TransformItem,
 };
 use crate::paint::rasterize::{render_box_shadow, BoxShadow};
 use crate::paint::text_shadow::PathBounds;
 use crate::style::color::Rgba;
+use crate::style::types::{TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle};
 use crate::text::font_db::{FontStretch, FontStyle as DbFontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
 use crate::text::shaper::GlyphPosition;
@@ -179,9 +181,12 @@ impl DisplayListRenderer {
     fn render_item(&mut self, item: &DisplayItem) -> Result<()> {
         match item {
             DisplayItem::FillRect(FillRectItem { rect, color }) => self.canvas.draw_rect(*rect, *color),
-            DisplayItem::StrokeRect(StrokeRectItem { rect, color, width, blend_mode }) => {
-                self.canvas.stroke_rect_with_blend(*rect, *color, *width, *blend_mode)
-            }
+            DisplayItem::StrokeRect(StrokeRectItem {
+                rect,
+                color,
+                width,
+                blend_mode,
+            }) => self.canvas.stroke_rect_with_blend(*rect, *color, *width, *blend_mode),
             DisplayItem::FillRoundedRect(item) => self.canvas.draw_rounded_rect(item.rect, item.radii, item.color),
             DisplayItem::StrokeRoundedRect(item) => self
                 .canvas
@@ -257,6 +262,9 @@ impl DisplayListRenderer {
 
         self.canvas
             .draw_text(item.origin, &glyphs, &font, item.font_size, item.color);
+        if let Some(emphasis) = &item.emphasis {
+            self.render_emphasis(emphasis)?;
+        }
         Ok(())
     }
 
@@ -402,6 +410,195 @@ impl DisplayListRenderer {
         }
     }
 
+    fn render_emphasis(&mut self, emphasis: &TextEmphasis) -> Result<()> {
+        if emphasis.marks.is_empty() {
+            return Ok(());
+        }
+
+        if let TextEmphasisStyle::String(_) = emphasis.style {
+            if let Some(text) = &emphasis.text {
+                let font = self
+                    .resolve_font(text.font_id.as_ref())
+                    .ok_or(RenderError::RasterizationFailed {
+                        reason: "Unable to resolve font for emphasis string".into(),
+                    })?;
+                let glyphs: Vec<GlyphPosition> = text
+                    .glyphs
+                    .iter()
+                    .map(|g| GlyphPosition {
+                        glyph_id: g.glyph_id,
+                        cluster: 0,
+                        advance: g.advance,
+                        advance_y: 0.0,
+                        offset_x: g.offset.x,
+                        offset_y: g.offset.y,
+                    })
+                    .collect();
+                for mark in &emphasis.marks {
+                    let mark_origin = Point::new(
+                        mark.center.x - text.width * 0.5,
+                        mark.center.y - text.height * 0.5 + text.baseline_offset,
+                    );
+                    self.canvas
+                        .draw_text(mark_origin, &glyphs, &font, text.font_size, emphasis.color);
+                }
+                return Ok(());
+            }
+        }
+
+        let mut paint = tiny_skia::Paint::default();
+        paint.anti_alias = true;
+        let alpha = (emphasis.color.a * self.canvas.opacity() * 255.0).round().clamp(0.0, 255.0) as u8;
+        paint.set_color_rgba8(emphasis.color.r, emphasis.color.g, emphasis.color.b, alpha);
+        paint.blend_mode = self.canvas.blend_mode();
+        let transform = self.canvas.transform();
+        let clip = self.canvas.clip_mask().cloned();
+
+        for mark in &emphasis.marks {
+            match emphasis.style {
+                TextEmphasisStyle::Mark {
+                    fill,
+                    shape: TextEmphasisShape::Dot,
+                } => {
+                    let radius = emphasis.size * 0.5;
+                    if let Some(path) = tiny_skia::PathBuilder::from_circle(mark.center.x, mark.center.y, radius) {
+                        match fill {
+                            TextEmphasisFill::Filled => {
+                                self.canvas.pixmap_mut().fill_path(
+                                    &path,
+                                    &paint,
+                                    tiny_skia::FillRule::EvenOdd,
+                                    transform,
+                                    clip.as_ref(),
+                                );
+                            }
+                            TextEmphasisFill::Open => {
+                                let mut stroke = tiny_skia::Stroke::default();
+                                stroke.width = (emphasis.size * 0.18).max(0.5);
+                                self.canvas
+                                    .pixmap_mut()
+                                    .stroke_path(&path, &paint, &stroke, transform, clip.as_ref());
+                            }
+                        }
+                    }
+                }
+                TextEmphasisStyle::Mark {
+                    fill,
+                    shape: TextEmphasisShape::Circle,
+                } => {
+                    let radius = emphasis.size * 0.5;
+                    if let Some(path) = tiny_skia::PathBuilder::from_circle(mark.center.x, mark.center.y, radius) {
+                        match fill {
+                            TextEmphasisFill::Filled => {
+                                self.canvas.pixmap_mut().fill_path(
+                                    &path,
+                                    &paint,
+                                    tiny_skia::FillRule::EvenOdd,
+                                    transform,
+                                    clip.as_ref(),
+                                );
+                            }
+                            TextEmphasisFill::Open => {
+                                let mut stroke = tiny_skia::Stroke::default();
+                                stroke.width = (emphasis.size * 0.18).max(0.5);
+                                self.canvas
+                                    .pixmap_mut()
+                                    .stroke_path(&path, &paint, &stroke, transform, clip.as_ref());
+                            }
+                        }
+                    }
+                }
+                TextEmphasisStyle::Mark {
+                    fill: _,
+                    shape: TextEmphasisShape::DoubleCircle,
+                } => {
+                    let mut stroke = tiny_skia::Stroke::default();
+                    stroke.width = (emphasis.size * 0.14).max(0.5);
+                    let radii = [emphasis.size * 0.5, emphasis.size * 0.33];
+                    for radius in radii {
+                        if let Some(path) =
+                            tiny_skia::PathBuilder::from_circle(mark.center.x, mark.center.y, radius)
+                        {
+                            self.canvas
+                                .pixmap_mut()
+                                .stroke_path(&path, &paint, &stroke, transform, clip.as_ref());
+                        }
+                    }
+                }
+                TextEmphasisStyle::Mark {
+                    fill,
+                    shape: TextEmphasisShape::Triangle,
+                } => {
+                    let half = emphasis.size * 0.5;
+                    let height = emphasis.size * 0.9;
+                    let direction = matches!(
+                        emphasis.position,
+                        TextEmphasisPosition::Over
+                            | TextEmphasisPosition::OverLeft
+                            | TextEmphasisPosition::OverRight
+                    );
+                    let apex_y = if direction {
+                        mark.center.y - height * 0.5
+                    } else {
+                        mark.center.y + height * 0.5
+                    };
+                    let base_y = if direction {
+                        mark.center.y + height * 0.5
+                    } else {
+                        mark.center.y - height * 0.5
+                    };
+                    let mut builder = tiny_skia::PathBuilder::new();
+                    builder.move_to(mark.center.x, apex_y);
+                    builder.line_to(mark.center.x - half, base_y);
+                    builder.line_to(mark.center.x + half, base_y);
+                    builder.close();
+                    if let Some(path) = builder.finish() {
+                        match fill {
+                            TextEmphasisFill::Filled => {
+                                self.canvas.pixmap_mut().fill_path(
+                                    &path,
+                                    &paint,
+                                    tiny_skia::FillRule::EvenOdd,
+                                    transform,
+                                    clip.as_ref(),
+                                );
+                            }
+                            TextEmphasisFill::Open => {
+                                let mut stroke = tiny_skia::Stroke::default();
+                                stroke.width = (emphasis.size * 0.18).max(0.5);
+                                self.canvas
+                                    .pixmap_mut()
+                                    .stroke_path(&path, &paint, &stroke, transform, clip.as_ref());
+                            }
+                        }
+                    }
+                }
+                TextEmphasisStyle::Mark {
+                    fill: _,
+                    shape: TextEmphasisShape::Sesame,
+                } => {
+                    let len = emphasis.size * 0.75;
+                    let angle = 20.0_f32.to_radians();
+                    let dx = (angle.cos() * len * 0.5, angle.sin() * len * 0.5);
+                    let mut builder = tiny_skia::PathBuilder::new();
+                    builder.move_to(mark.center.x - dx.0, mark.center.y - dx.1);
+                    builder.line_to(mark.center.x + dx.0, mark.center.y + dx.1);
+                    if let Some(path) = builder.finish() {
+                        let mut stroke = tiny_skia::Stroke::default();
+                        stroke.width = (emphasis.size * 0.2).max(0.6);
+                        stroke.line_cap = tiny_skia::LineCap::Round;
+                        self.canvas
+                            .pixmap_mut()
+                            .stroke_path(&path, &paint, &stroke, transform, clip.as_ref());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
     fn render_image(&mut self, item: &ImageItem) -> Result<()> {
         if let Some(clip) = self.canvas.clip_bounds() {
             if clip.width() <= 0.0 || clip.height() <= 0.0 || clip.intersection(item.dest_rect).is_none() {
@@ -519,9 +716,10 @@ mod tests {
     use crate::geometry::{Point, Rect};
     use crate::paint::display_list::{
         BoxShadowItem, DisplayItem, DisplayList, FillRectItem, GlyphInstance, GradientSpread, GradientStop,
-        LinearGradientItem, RadialGradientItem, TextItem, TextShadowItem, Transform2D,
+        LinearGradientItem, RadialGradientItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
     };
     use crate::style::color::Rgba;
+    use crate::style::types::{TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle};
 
     fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let idx = ((y * pixmap.width() + x) * 4) as usize;
@@ -722,6 +920,7 @@ mod tests {
                 style: font.style,
                 stretch: font.stretch,
             }),
+            emphasis: None,
         }));
 
         let renderer = DisplayListRenderer::new(80, 40, Rgba::WHITE, font_ctx).expect("renderer");
@@ -736,6 +935,48 @@ mod tests {
         assert!(
             red_bbox.1.abs_diff(black_bbox.1) <= 2,
             "shadow should align vertically when y-offset is zero"
+        );
+    }
+
+    #[test]
+    fn renders_text_emphasis_marks() {
+        let mut list = DisplayList::new();
+        list.push(DisplayItem::Text(TextItem {
+            origin: Point::new(20.0, 30.0),
+            glyphs: Vec::new(),
+            color: Rgba::BLACK,
+            shadows: vec![],
+            font_size: 16.0,
+            advance_width: 0.0,
+            font_id: None,
+            emphasis: Some(TextEmphasis {
+                style: TextEmphasisStyle::Mark {
+                    fill: TextEmphasisFill::Filled,
+                    shape: TextEmphasisShape::Circle,
+                },
+                color: Rgba::from_rgba8(255, 0, 0, 255),
+                position: TextEmphasisPosition::Over,
+                size: 6.0,
+                marks: vec![crate::paint::display_list::EmphasisMark {
+                    center: Point::new(20.0, 12.0),
+                }],
+                text: None,
+            }),
+        }));
+
+        let renderer = DisplayListRenderer::new(40, 40, Rgba::WHITE, FontContext::new()).expect("renderer");
+        let pixmap = renderer.render(&list).expect("rendered");
+
+        let red_pixel = pixel(&pixmap, 20, 12);
+        assert!(
+            red_pixel.0 > 200 && red_pixel.1 < 80 && red_pixel.2 < 80,
+            "emphasis mark should paint at the provided center"
+        );
+        let below_pixel = pixel(&pixmap, 20, 30);
+        assert_eq!(
+            below_pixel,
+            (255, 255, 255, 255),
+            "baseline area should remain untouched when no text glyphs are present"
         );
     }
 
