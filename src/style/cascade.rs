@@ -285,6 +285,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.word_spacing = parent.word_spacing;
     styles.visibility = parent.visibility;
     styles.white_space = parent.white_space;
+    styles.line_break = parent.line_break;
     styles.tab_size = parent.tab_size;
     styles.caption_side = parent.caption_side;
     styles.empty_cells = parent.empty_cells;
@@ -352,7 +353,7 @@ mod tests {
     use crate::style::color::Rgba;
     use crate::style::display::Display;
     use crate::style::types::{
-        ListStylePosition, ListStyleType, TextDecorationLine, TextUnderlineOffset, TextUnderlinePosition,
+        LineBreak, ListStylePosition, ListStyleType, TextDecorationLine, TextUnderlineOffset, TextUnderlinePosition,
     };
 
     fn element_with_style(style: &str) -> DomNode {
@@ -496,6 +497,28 @@ mod tests {
             child_styles.text_emphasis_position,
             crate::style::types::TextEmphasisPosition::UnderLeft
         ));
+    }
+
+    #[test]
+    fn line_break_inherits() {
+        let child = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "span".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), "line-break: anywhere;".to_string())],
+            },
+            children: vec![child],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let child_styles = &styled.children[0].styles;
+        assert_eq!(child_styles.line_break, LineBreak::Anywhere);
     }
 
     #[test]
