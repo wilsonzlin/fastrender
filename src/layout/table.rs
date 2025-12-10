@@ -1283,7 +1283,15 @@ fn find_first_baseline(fragment: &FragmentNode, parent_offset: f32) -> Option<f3
 }
 
 fn cell_baseline(fragment: &FragmentNode) -> Option<f32> {
-    find_first_baseline(fragment, 0.0)
+    find_first_baseline(fragment, 0.0).or_else(|| {
+        let origin = fragment.bounds.y();
+        let height = fragment.bounds.height();
+        if height.is_finite() && height > 0.0 {
+            Some(origin + height)
+        } else {
+            None
+        }
+    })
 }
 
 /// Types of table elements for structure analysis
@@ -4088,6 +4096,13 @@ mod tests {
         assert!((structure.rows[1].computed_height - 50.0).abs() < 0.01);
         assert!((structure.rows[0].y_position - 0.0).abs() < 0.01);
         assert!((structure.rows[1].y_position - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn cell_baseline_falls_back_to_bottom() {
+        let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 10.0, 20.0), vec![]);
+        let baseline = cell_baseline(&fragment).expect("baseline");
+        assert!((baseline - 20.0).abs() < 0.01);
     }
 
     #[test]
