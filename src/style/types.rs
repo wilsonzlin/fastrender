@@ -781,6 +781,13 @@ pub enum TextDecorationStyle {
     Wavy,
 }
 
+/// Whether underlines skip glyph ink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextDecorationSkipInk {
+    Auto,
+    None,
+}
+
 /// Thickness of text decorations
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TextDecorationThickness {

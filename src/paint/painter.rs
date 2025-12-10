@@ -1874,50 +1874,55 @@ impl Painter {
         paint.set_color(color_to_skia(decoration_color));
         paint.anti_alias = true;
 
-        let draw_solid_line = |pixmap: &mut Pixmap, center: f32, thickness: f32| {
+        let draw_solid_line = |pixmap: &mut Pixmap, start: f32, len: f32, center: f32, thickness: f32| {
             if thickness <= 0.0 {
                 return;
             }
-            if let Some(rect) = SkiaRect::from_xywh(x, center - thickness * 0.5, width, thickness) {
+            if let Some(rect) = SkiaRect::from_xywh(start, center - thickness * 0.5, len, thickness) {
                 let path = PathBuilder::from_rect(rect);
                 pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
             }
         };
 
-        let draw_stroked_line =
-            |pixmap: &mut Pixmap, center: f32, thickness: f32, dash: Option<Vec<f32>>, round: bool| {
-                let mut path = PathBuilder::new();
-                path.move_to(x, center);
-                path.line_to(x + width, center);
-                let Some(path) = path.finish() else { return };
+        let draw_stroked_line = |pixmap: &mut Pixmap,
+                                 start: f32,
+                                 len: f32,
+                                 center: f32,
+                                 thickness: f32,
+                                 dash: Option<Vec<f32>>,
+                                 round: bool| {
+            let mut path = PathBuilder::new();
+            path.move_to(start, center);
+            path.line_to(start + len, center);
+            let Some(path) = path.finish() else { return };
 
-                let mut stroke = Stroke::default();
-                stroke.width = thickness;
-                stroke.line_cap = if round {
-                    tiny_skia::LineCap::Round
-                } else {
-                    tiny_skia::LineCap::Butt
-                };
-                if let Some(arr) = dash {
-                    stroke.dash = tiny_skia::StrokeDash::new(arr, 0.0);
-                }
-
-                pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+            let mut stroke = Stroke::default();
+            stroke.width = thickness;
+            stroke.line_cap = if round {
+                tiny_skia::LineCap::Round
+            } else {
+                tiny_skia::LineCap::Butt
             };
+            if let Some(arr) = dash {
+                stroke.dash = tiny_skia::StrokeDash::new(arr, 0.0);
+            }
 
-        let draw_wavy_line = |pixmap: &mut Pixmap, center: f32, thickness: f32| {
-            if thickness <= 0.0 || width <= 0.0 {
+            pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+        };
+
+        let draw_wavy_line = |pixmap: &mut Pixmap, start: f32, len: f32, center: f32, thickness: f32| {
+            if thickness <= 0.0 || len <= 0.0 {
                 return;
             }
             let wavelength = (thickness * 4.0).max(6.0);
             let amplitude = (thickness * 0.75).max(thickness * 0.5);
 
             let mut path = PathBuilder::new();
-            path.move_to(x, center);
-            let mut cursor = x;
+            path.move_to(start, center);
+            let mut cursor = start;
             let mut up = true;
-            while cursor < x + width {
-                let end = (cursor + wavelength).min(x + width);
+            while cursor < start + len {
+                let end = (cursor + wavelength).min(start + len);
                 let mid = cursor + (end - cursor) * 0.5;
                 let control_y = if up { center - amplitude } else { center + amplitude };
                 path.quad_to(mid, control_y, end, center);
@@ -1953,30 +1958,93 @@ impl Painter {
 
         let painter_style = style.text_decoration.style;
         let render_line = |pixmap: &mut Pixmap, center: f32, thickness: f32| match painter_style {
-            TextDecorationStyle::Solid => draw_solid_line(pixmap, center, thickness),
+            TextDecorationStyle::Solid => draw_solid_line(pixmap, x, width, center, thickness),
             TextDecorationStyle::Double => {
                 let line_thickness = (thickness * 0.7).max(0.5);
                 let gap = line_thickness.max(thickness * 0.6);
-                draw_solid_line(pixmap, center - (gap * 0.5), line_thickness);
-                draw_solid_line(pixmap, center + (gap * 0.5), line_thickness);
+                draw_solid_line(pixmap, x, width, center - (gap * 0.5), line_thickness);
+                draw_solid_line(pixmap, x, width, center + (gap * 0.5), line_thickness);
             }
             TextDecorationStyle::Dotted => {
-                draw_stroked_line(pixmap, center, thickness, Some(vec![thickness, thickness]), true);
+                draw_stroked_line(
+                    pixmap,
+                    x,
+                    width,
+                    center,
+                    thickness,
+                    Some(vec![thickness, thickness]),
+                    true,
+                );
             }
             TextDecorationStyle::Dashed => {
-                draw_stroked_line(pixmap, center, thickness, Some(vec![3.0 * thickness, thickness]), false);
+                draw_stroked_line(
+                    pixmap,
+                    x,
+                    width,
+                    center,
+                    thickness,
+                    Some(vec![3.0 * thickness, thickness]),
+                    false,
+                );
             }
-            TextDecorationStyle::Wavy => draw_wavy_line(pixmap, center, thickness),
+            TextDecorationStyle::Wavy => draw_wavy_line(pixmap, x, width, center, thickness),
         };
+
+        let render_line_segment =
+            |pixmap: &mut Pixmap, start: f32, len: f32, center: f32, thickness: f32| match painter_style {
+                TextDecorationStyle::Solid => draw_solid_line(pixmap, start, len, center, thickness),
+                TextDecorationStyle::Double => {
+                    let line_thickness = (thickness * 0.7).max(0.5);
+                    let gap = line_thickness.max(thickness * 0.6);
+                    draw_solid_line(pixmap, start, len, center - (gap * 0.5), line_thickness);
+                    draw_solid_line(pixmap, start, len, center + (gap * 0.5), line_thickness);
+                }
+                TextDecorationStyle::Dotted => {
+                    draw_stroked_line(
+                        pixmap,
+                        start,
+                        len,
+                        center,
+                        thickness,
+                        Some(vec![thickness, thickness]),
+                        true,
+                    );
+                }
+                TextDecorationStyle::Dashed => {
+                    draw_stroked_line(
+                        pixmap,
+                        start,
+                        len,
+                        center,
+                        thickness,
+                        Some(vec![3.0 * thickness, thickness]),
+                        false,
+                    );
+                }
+                TextDecorationStyle::Wavy => draw_wavy_line(pixmap, start, len, center, thickness),
+            };
 
         let underline_offset = self.resolve_underline_offset(style);
         if style.text_decoration.lines.contains(TextDecorationLine::UNDERLINE) {
             let adjusted_pos = self.underline_position(&metrics, underline_offset);
-            render_line(
-                &mut self.pixmap,
-                baseline_y - adjusted_pos,
-                used_thickness.unwrap_or(metrics.underline_thickness),
-            );
+            let center = baseline_y - adjusted_pos;
+            let thickness = used_thickness.unwrap_or(metrics.underline_thickness);
+            if style.text_decoration_skip_ink == crate::style::types::TextDecorationSkipInk::Auto {
+                if let Some(runs) = runs {
+                    let segments = self.build_underline_segments(runs, x, width, center, thickness, baseline_y);
+                    for (seg_start, seg_end) in segments {
+                        let seg_width = seg_end - seg_start;
+                        if seg_width <= 0.0 {
+                            continue;
+                        }
+                        render_line_segment(&mut self.pixmap, seg_start, seg_width, center, thickness);
+                    }
+                } else {
+                    render_line(&mut self.pixmap, center, thickness);
+                }
+            } else {
+                render_line(&mut self.pixmap, center, thickness);
+            }
         }
         if style.text_decoration.lines.contains(TextDecorationLine::OVERLINE) {
             render_line(
@@ -1992,6 +2060,27 @@ impl Painter {
                 used_thickness.unwrap_or(metrics.strike_thickness),
             );
         }
+    }
+
+    fn build_underline_segments(
+        &self,
+        runs: &[ShapedRun],
+        line_start: f32,
+        line_width: f32,
+        center: f32,
+        thickness: f32,
+        baseline_y: f32,
+    ) -> Vec<(f32, f32)> {
+        if line_width <= 0.0 {
+            return Vec::new();
+        }
+
+        let band_half = (thickness * 0.5).abs();
+        let band_top = center - band_half;
+        let band_bottom = center + band_half;
+        let mut exclusions = collect_underline_exclusions(runs, line_start, baseline_y, band_top, band_bottom);
+
+        subtract_intervals((line_start, line_start + line_width), &mut exclusions)
     }
 }
 
@@ -2009,6 +2098,86 @@ impl DecorationMetrics {
         let direction = if self.underline_pos >= 0.0 { 1.0 } else { -1.0 };
         self.underline_pos + offset * direction
     }
+}
+
+fn collect_underline_exclusions(
+    runs: &[ShapedRun],
+    line_start: f32,
+    baseline_y: f32,
+    band_top: f32,
+    band_bottom: f32,
+) -> Vec<(f32, f32)> {
+    let mut intervals = Vec::new();
+    let tolerance = (band_bottom - band_top).abs() * 0.5 + 0.5;
+
+    let mut pen_x = line_start;
+    for run in runs {
+        let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        let units_per_em = face.units_per_em() as f32;
+        if units_per_em == 0.0 {
+            continue;
+        }
+        let scale = run.font_size / units_per_em;
+        let run_origin = if run.direction.is_rtl() {
+            pen_x + run.advance
+        } else {
+            pen_x
+        };
+
+        for glyph in &run.glyphs {
+            let glyph_x = match run.direction {
+                crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset,
+                _ => run_origin + glyph.x_offset,
+            };
+            let glyph_y = baseline_y - glyph.y_offset;
+            if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
+                let left = glyph_x + bbox.x_min as f32 * scale - tolerance;
+                let right = glyph_x + bbox.x_max as f32 * scale + tolerance;
+                let top = glyph_y - bbox.y_max as f32 * scale - tolerance;
+                let bottom = glyph_y - bbox.y_min as f32 * scale + tolerance;
+
+                if bottom >= band_top && top <= band_bottom {
+                    intervals.push((left, right));
+                }
+            }
+        }
+
+        pen_x += run.advance;
+    }
+
+    intervals
+}
+
+fn subtract_intervals(total: (f32, f32), exclusions: &mut Vec<(f32, f32)>) -> Vec<(f32, f32)> {
+    exclusions.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut start = total.0;
+    let mut allowed = Vec::new();
+
+    for &(ex_start, ex_end) in exclusions.iter() {
+        if ex_end <= start {
+            continue;
+        }
+        if ex_start > total.1 {
+            break;
+        }
+        let seg_end = ex_start.min(total.1);
+        if seg_end > start {
+            allowed.push((start, seg_end));
+        }
+        start = ex_end.max(start);
+        if start >= total.1 {
+            break;
+        }
+    }
+
+    if start < total.1 {
+        allowed.push((start, total.1));
+    }
+
+    allowed
 }
 
 fn color_to_skia(color: Rgba) -> tiny_skia::Color {
@@ -3308,7 +3477,7 @@ mod tests {
         style.text_decoration.color = Some(Rgba::BLACK);
         style.font_size = 20.0;
 
-        let mut painter = Painter::new(10, 10, Rgba::WHITE).expect("painter");
+        let painter = Painter::new(10, 10, Rgba::WHITE).expect("painter");
         let runs = painter.shaper.shape("Hi", &style, &painter.font_ctx).expect("shape");
         let metrics = painter.decoration_metrics(Some(&runs), &style).expect("metrics");
         let baseline = 20.0;
@@ -3324,6 +3493,85 @@ mod tests {
         assert!(
             (shifted_center - base_center - 4.0).abs() < 0.5,
             "underline offset should roughly follow the authored length"
+        );
+    }
+
+    #[test]
+    fn underline_skip_ink_carves_descenders() {
+        let mut style = ComputedStyle::default();
+        style.color = Rgba::BLACK;
+        style.font_size = 28.0;
+        style.text_decoration.lines = crate::style::types::TextDecorationLine::UNDERLINE;
+        style.text_decoration.color = Some(Rgba::from_rgba8(255, 0, 0, 255));
+        style.text_decoration.thickness = crate::style::types::TextDecorationThickness::Length(Length::px(3.0));
+        style.text_underline_offset = crate::style::types::TextUnderlineOffset::Length(Length::px(-1.0));
+
+        let painter = Painter::new(160, 100, Rgba::WHITE).expect("painter");
+        let runs = painter.shaper.shape("gy", &style, &painter.font_ctx).expect("shape");
+        assert!(!runs.is_empty(), "shaping should yield glyphs for skip-ink evaluation");
+        let metrics = painter.decoration_metrics(Some(&runs), &style).expect("metrics");
+        let line_start = 10.0;
+        let line_width: f32 = runs.iter().map(|r| r.advance).sum();
+        let baseline = 50.0;
+        let center = baseline - painter.underline_position(&metrics, painter.resolve_underline_offset(&style));
+        let thickness = match style.text_decoration.thickness {
+            crate::style::types::TextDecorationThickness::Length(l) => l.to_px(),
+            _ => metrics.underline_thickness,
+        };
+        let exclusions = collect_underline_exclusions(
+            &runs,
+            line_start,
+            baseline,
+            center - thickness * 0.5,
+            center + thickness * 0.5,
+        );
+        let target = exclusions
+            .iter()
+            .max_by(|a, b| {
+                (a.1 - a.0)
+                    .partial_cmp(&(b.1 - b.0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .copied()
+            .expect("descenders should intersect the underline band when skip-ink is evaluated");
+        let sample_x_f = (target.0 + target.1) * 0.5;
+        let sample_x = sample_x_f.round().clamp(0.0, 159.0) as u32;
+        let segments = painter.build_underline_segments(&runs, line_start, line_width, center, thickness, baseline);
+        assert!(
+            !segments.iter().any(|(s, e)| sample_x_f >= *s && sample_x_f <= *e),
+            "segments should omit the exclusion area chosen for sampling"
+        );
+        let sample_y = center.round().clamp(0.0, 99.0) as u32;
+
+        let baseline_offset = baseline - 10.0;
+        let rect = Rect::from_xywh(line_start, 10.0, line_width, 60.0);
+        let fragment_auto = FragmentNode::new_text_shaped(
+            rect,
+            "gy".to_string(),
+            baseline_offset,
+            runs.clone(),
+            Arc::new(style.clone()),
+        );
+        let root_auto = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 160.0, 100.0), vec![fragment_auto]);
+        let pix_auto = paint_tree(&FragmentTree::new(root_auto), 160, 100, Rgba::WHITE).expect("auto paint");
+
+        let mut no_skip_style = style;
+        no_skip_style.text_decoration_skip_ink = crate::style::types::TextDecorationSkipInk::None;
+        let fragment_none =
+            FragmentNode::new_text_shaped(rect, "gy".to_string(), baseline_offset, runs, Arc::new(no_skip_style));
+        let root_none = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 160.0, 100.0), vec![fragment_none]);
+        let pix_none = paint_tree(&FragmentTree::new(root_none), 160, 100, Rgba::WHITE).expect("no-skip paint");
+
+        let auto_px = color_at(&pix_auto, sample_x, sample_y);
+        let no_skip_px = color_at(&pix_none, sample_x, sample_y);
+
+        assert!(
+            no_skip_px.0 > 200 && no_skip_px.1 < 80 && no_skip_px.2 < 80,
+            "a continuous underline should paint the decoration color through descenders when skip-ink is none"
+        );
+        assert!(
+            auto_px.0 < 80 && auto_px.1 < 80 && auto_px.2 < 80,
+            "skip-ink should leave the descender covered by the text color instead of the decoration color"
         );
     }
 

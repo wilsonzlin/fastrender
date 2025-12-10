@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- `text-decoration-skip-ink` now parses to computed styles, inherits, and painter builds underline segments by subtracting glyph bounding boxes from the decoration band so descenders stay unpainted; regression compares decoration vs text color to ensure skip-ink gaps, and underline offset test warning cleared.
 - `font-variant-alternates` now parses/inherits (historical-forms, stylistic/ styleset/ character-variant sets, swash, ornaments, annotation), resets via `font` shorthand, and maps to OpenType features (`hist`, `ssXX`, `cvXX`, `swsh`, `ornm`) during feature collection; regression added for alternates emission.
 - Small-caps shaping now prefers native OpenType features when available (`smcp`/`c2sc` via font_db::font_has_feature), synthesizing only when the chosen face lacks them (covers all-small-caps too).
 - `font-variant-east-asian` now parses/inherits (jis78/83/90/04, simplified/traditional, proportional/full-width, ruby), maps to OpenType toggles (`jp78/jp83/jp90/jp04/smpl/trad/fwid/pwid/ruby`), and resets via `font` shorthand alongside ligatures/numeric/kerning/feature overrides.

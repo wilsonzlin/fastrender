@@ -1009,6 +1009,11 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 styles.text_decoration.thickness = thick;
             }
         }
+        "text-decoration-skip-ink" => {
+            if let Some(skip) = parse_text_decoration_skip_ink(&resolved_value) {
+                styles.text_decoration_skip_ink = skip;
+            }
+        }
         "text-underline-offset" => {
             if let Some(offset) = parse_text_underline_offset(&resolved_value) {
                 styles.text_underline_offset = offset;
@@ -2644,6 +2649,17 @@ fn parse_text_decoration_thickness(
         PropertyValue::Percentage(p) => Some(TextDecorationThickness::Length(Length::percent(*p))),
         _ => None,
     }
+}
+
+fn parse_text_decoration_skip_ink(value: &PropertyValue) -> Option<TextDecorationSkipInk> {
+    if let PropertyValue::Keyword(kw) = value {
+        return match kw.as_str() {
+            "auto" => Some(TextDecorationSkipInk::Auto),
+            "none" => Some(TextDecorationSkipInk::None),
+            _ => None,
+        };
+    }
+    None
 }
 
 fn parse_list_style_type(value: &PropertyValue) -> Option<ListStyleType> {

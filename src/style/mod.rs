@@ -34,9 +34,9 @@ use types::{
     FontStretch, FontStyle, FontVariant, FontVariantAlternates, FontVariantCaps, FontVariantEastAsian,
     FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontWeight, GridTrack, HyphensMode, Isolation,
     JustifyContent, LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit,
-    ObjectPosition, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration, TextIndent,
-    TextJustify, TextTransform, TextUnderlineOffset, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace,
-    WordBreak,
+    ObjectPosition, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration,
+    TextDecorationSkipInk, TextIndent, TextJustify, TextTransform, TextUnderlineOffset, TransformOrigin, UnicodeBidi,
+    VerticalAlign, WhiteSpace, WordBreak,
 };
 use values::Length;
 
@@ -141,6 +141,7 @@ pub struct ComputedStyle {
     pub text_justify: TextJustify,
     pub text_indent: TextIndent,
     pub text_decoration: TextDecoration,
+    pub text_decoration_skip_ink: TextDecorationSkipInk,
     pub text_underline_offset: TextUnderlineOffset,
     pub text_transform: TextTransform,
     pub letter_spacing: f32,
@@ -291,6 +292,7 @@ impl Default for ComputedStyle {
             text_justify: TextJustify::Auto,
             text_indent: TextIndent::default(),
             text_decoration: TextDecoration::default(),
+            text_decoration_skip_ink: TextDecorationSkipInk::Auto,
             text_underline_offset: TextUnderlineOffset::default(),
             text_transform: TextTransform::None,
             letter_spacing: 0.0,

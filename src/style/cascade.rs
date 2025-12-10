@@ -232,6 +232,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.text_align_last = parent.text_align_last;
     styles.text_justify = parent.text_justify;
     styles.text_indent = parent.text_indent;
+    styles.text_decoration_skip_ink = parent.text_decoration_skip_ink;
     styles.text_transform = parent.text_transform;
     styles.letter_spacing = parent.letter_spacing;
     styles.word_spacing = parent.word_spacing;
@@ -782,6 +783,7 @@ fn reset_marker_box_properties(styles: &mut ComputedStyle) {
     styles.overflow_y = defaults.overflow_y;
     styles.opacity = defaults.opacity;
     styles.text_decoration = defaults.text_decoration.clone();
+    styles.text_decoration_skip_ink = defaults.text_decoration_skip_ink;
     styles.text_underline_offset = defaults.text_underline_offset;
     styles.text_align = defaults.text_align;
     styles.text_align_last = defaults.text_align_last;
