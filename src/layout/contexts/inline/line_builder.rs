@@ -1507,6 +1507,9 @@ fn reorder_paragraph(
             for ctx in leaf.box_stack.iter().skip(shared) {
                 let (opens, closes) =
                     bidi_controls_limited(ctx.unicode_bidi, ctx.direction, active_stack.len(), max_depth);
+                if opens.is_empty() && closes.is_empty() {
+                    continue;
+                }
                 logical_text.extend(opens);
                 context_closers.push(if closes.is_empty() { None } else { Some(closes) });
                 active_stack.push(ctx.clone());
@@ -1519,7 +1522,9 @@ fn reorder_paragraph(
                 active_stack.len(),
                 max_depth,
             );
-            logical_text.extend(leaf_opens.iter());
+            if !leaf_opens.is_empty() || !leaf_closes.is_empty() {
+                logical_text.extend(leaf_opens.iter());
+            }
 
             let content_start = logical_text.len();
             match &leaf.item {
@@ -1529,8 +1534,10 @@ fn reorder_paragraph(
             }
             let content_end = logical_text.len();
 
-            for ch in leaf_closes {
-                logical_text.push(ch);
+            if !leaf_closes.is_empty() {
+                for ch in leaf_closes {
+                    logical_text.push(ch);
+                }
             }
 
             if content_start < content_end {
