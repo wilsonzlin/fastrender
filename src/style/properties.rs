@@ -504,6 +504,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 {
                     styles.font_variant_ligatures = FontVariantLigatures::default();
                     styles.font_variant_numeric = FontVariantNumeric::default();
+                    styles.font_variant_east_asian = FontVariantEastAsian::default();
                     styles.font_kerning = FontKerning::Auto;
                     styles.font_feature_settings.clear();
                     styles.font_style = font_style;
@@ -577,6 +578,31 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     "small-caps" => FontVariant::SmallCaps,
                     _ => styles.font_variant,
                 };
+            }
+        }
+        "font-variant-east-asian" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                let tokens: Vec<&str> = kw.split_whitespace().collect();
+                if tokens.len() == 1 && tokens[0] == "normal" {
+                    styles.font_variant_east_asian = FontVariantEastAsian::default();
+                } else if !tokens.is_empty() {
+                    let mut east = FontVariantEastAsian::default();
+                    for tok in tokens {
+                        match tok {
+                            "jis78" => east.variant = Some(EastAsianVariant::Jis78),
+                            "jis83" => east.variant = Some(EastAsianVariant::Jis83),
+                            "jis90" => east.variant = Some(EastAsianVariant::Jis90),
+                            "jis04" => east.variant = Some(EastAsianVariant::Jis04),
+                            "simplified" => east.variant = Some(EastAsianVariant::Simplified),
+                            "traditional" => east.variant = Some(EastAsianVariant::Traditional),
+                            "full-width" => east.width = Some(EastAsianWidth::FullWidth),
+                            "proportional-width" => east.width = Some(EastAsianWidth::ProportionalWidth),
+                            "ruby" => east.ruby = true,
+                            _ => {}
+                        }
+                    }
+                    styles.font_variant_east_asian = east;
+                }
             }
         }
         "font-variant-numeric" => {
@@ -3474,6 +3500,30 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert!(matches!(style.font_variant, FontVariant::SmallCaps));
+    }
+
+    #[test]
+    fn parses_font_variant_east_asian() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font-variant-east-asian".to_string(),
+            value: PropertyValue::Keyword("jis90 proportional-width ruby".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_variant_east_asian.variant, Some(EastAsianVariant::Jis90)));
+        assert!(matches!(style.font_variant_east_asian.width, Some(EastAsianWidth::ProportionalWidth)));
+        assert!(style.font_variant_east_asian.ruby);
+
+        let decl = Declaration {
+            property: "font-variant-east-asian".to_string(),
+            value: PropertyValue::Keyword("normal".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(style.font_variant_east_asian.variant.is_none());
+        assert!(style.font_variant_east_asian.width.is_none());
+        assert!(!style.font_variant_east_asian.ruby);
     }
 
     #[test]

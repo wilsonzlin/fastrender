@@ -49,8 +49,8 @@
 
 use crate::error::{Result, TextError};
 use crate::style::types::{
-    Direction as CssDirection, FontKerning, FontStyle as CssFontStyle, FontVariant, NumericFigure, NumericFraction,
-    NumericSpacing,
+    Direction as CssDirection, EastAsianVariant, EastAsianWidth, FontKerning, FontStyle as CssFontStyle, FontVariant,
+    NumericFigure, NumericFraction, NumericSpacing,
 };
 use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStretch, FontStyle, LoadedFont};
@@ -588,6 +588,7 @@ fn collect_opentype_features(style: &ComputedStyle) -> Vec<Feature> {
     let mut features = Vec::new();
     let lig = style.font_variant_ligatures;
     let numeric = &style.font_variant_numeric;
+    let east = &style.font_variant_east_asian;
 
     let mut push_toggle = |tag: [u8; 4], enabled: bool| {
         features.push(Feature {
@@ -626,6 +627,27 @@ fn collect_opentype_features(style: &ComputedStyle) -> Vec<Feature> {
     }
     if numeric.slashed_zero {
         push_toggle(*b"zero", true);
+    }
+
+    // font-variant-east-asian
+    if let Some(variant) = east.variant {
+        match variant {
+            EastAsianVariant::Jis78 => push_toggle(*b"jp78", true),
+            EastAsianVariant::Jis83 => push_toggle(*b"jp83", true),
+            EastAsianVariant::Jis90 => push_toggle(*b"jp90", true),
+            EastAsianVariant::Jis04 => push_toggle(*b"jp04", true),
+            EastAsianVariant::Simplified => push_toggle(*b"smpl", true),
+            EastAsianVariant::Traditional => push_toggle(*b"trad", true),
+        }
+    }
+    if let Some(width) = east.width {
+        match width {
+            EastAsianWidth::FullWidth => push_toggle(*b"fwid", true),
+            EastAsianWidth::ProportionalWidth => push_toggle(*b"pwid", true),
+        }
+    }
+    if east.ruby {
+        push_toggle(*b"ruby", true);
     }
 
     match style.font_kerning {
@@ -1162,7 +1184,8 @@ impl ClusterMap {
 mod tests {
     use super::*;
     use crate::style::types::{
-        FontFeatureSetting, FontKerning, FontVariantLigatures, NumericFigure, NumericFraction, NumericSpacing,
+        EastAsianVariant, EastAsianWidth, FontFeatureSetting, FontKerning, FontVariantLigatures, NumericFigure,
+        NumericFraction, NumericSpacing,
     };
 
     #[test]
@@ -1454,6 +1477,9 @@ mod tests {
         style.font_variant_numeric.ordinal = true;
         style.font_variant_numeric.slashed_zero = true;
         style.font_kerning = FontKerning::None;
+        style.font_variant_east_asian.variant = Some(EastAsianVariant::Jis04);
+        style.font_variant_east_asian.width = Some(EastAsianWidth::FullWidth);
+        style.font_variant_east_asian.ruby = true;
 
         let feats = collect_opentype_features(&style);
         let mut seen: std::collections::HashMap<[u8; 4], u32> = std::collections::HashMap::new();
@@ -1466,5 +1492,8 @@ mod tests {
         assert_eq!(seen.get(b"ordn"), Some(&1));
         assert_eq!(seen.get(b"zero"), Some(&1));
         assert_eq!(seen.get(b"kern"), Some(&0));
+        assert_eq!(seen.get(b"jp04"), Some(&1));
+        assert_eq!(seen.get(b"fwid"), Some(&1));
+        assert_eq!(seen.get(b"ruby"), Some(&1));
     }
 }

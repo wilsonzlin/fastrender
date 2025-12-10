@@ -6,6 +6,8 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- `font-variant-east-asian` now parses/inherits (jis78/83/90/04, simplified/traditional, proportional/full-width, ruby), maps to OpenType toggles (`jp78/jp83/jp90/jp04/smpl/trad/fwid/pwid/ruby`), and resets via `font` shorthand alongside ligatures/numeric/kerning/feature overrides.
+- Shaping collects OpenType features from computed styles, applies ligature defaults, and maps numeric/east-asian variants plus kerning into feature tags; `font-feature-settings` still overrides. New regressions cover numeric+EA feature emission.
 - `font-variant-numeric` and `font-kerning` now parse/inherit and map to OpenType features: numeric figure/spacing/fraction variants drive `lnum/onum`, `pnum/tnum`, `frac/afrc`, plus `ordn`/`zero`, and kerning toggles `kern` (auto leaves defaults). `font` shorthand resets numeric, ligatures, kerning, and custom feature overrides.
 - Shaping collects OpenType features from computed styles, applies ligature defaults, and lets `font-feature-settings` override/disable them; features flow through `FontRun` into HarfBuzz shaping and are covered by a regression.
 - `font-variant-ligatures` now parses/inherits and maps to OpenType toggles (`liga`/`clig`/`dlig`/`hlig`/`calt`), `font-feature-settings` parses comma-separated tags with on/off/numeric values (rejects malformed tags), and `font` shorthand resets ligatures/feature overrides to initial.

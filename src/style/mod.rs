@@ -31,10 +31,11 @@ use types::{
     AlignContent, AlignItems, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundPosition,
     BackgroundPositionComponent, BackgroundRepeat, BackgroundSize, BackgroundSizeComponent, BorderCollapse,
     BorderStyle, Direction, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting, FontKerning,
-    FontStretch, FontStyle, FontVariant, FontVariantLigatures, FontVariantNumeric, FontWeight, GridTrack, HyphensMode,
-    Isolation, JustifyContent, LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit,
-    ObjectPosition, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration, TextIndent,
-    TextJustify, TextTransform, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
+    FontStretch, FontStyle, FontVariant, FontVariantEastAsian, FontVariantLigatures, FontVariantNumeric, FontWeight,
+    GridTrack, HyphensMode, Isolation, JustifyContent, LineHeight, ListStyleImage, ListStylePosition, ListStyleType,
+    MixBlendMode, ObjectFit, ObjectPosition, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast,
+    TextDecoration, TextIndent, TextJustify, TextTransform, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace,
+    WordBreak,
 };
 use values::Length;
 
@@ -123,6 +124,7 @@ pub struct ComputedStyle {
     pub font_style: FontStyle,
     pub font_variant: FontVariant,
     pub font_variant_numeric: FontVariantNumeric,
+    pub font_variant_east_asian: FontVariantEastAsian,
     pub font_variant_ligatures: FontVariantLigatures,
     pub font_feature_settings: Vec<FontFeatureSetting>,
     pub font_stretch: FontStretch,
@@ -268,6 +270,7 @@ impl Default for ComputedStyle {
             font_style: FontStyle::Normal,
             font_variant: FontVariant::Normal,
             font_variant_numeric: FontVariantNumeric::default(),
+            font_variant_east_asian: FontVariantEastAsian::default(),
             font_variant_ligatures: FontVariantLigatures::default(),
             font_feature_settings: Vec::new(),
             font_stretch: FontStretch::Normal,

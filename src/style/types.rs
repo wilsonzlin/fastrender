@@ -464,6 +464,40 @@ pub struct FontFeatureSetting {
     pub value: u32,
 }
 
+/// East Asian variants (`font-variant-east-asian`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EastAsianVariant {
+    Jis78,
+    Jis83,
+    Jis90,
+    Jis04,
+    Simplified,
+    Traditional,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EastAsianWidth {
+    FullWidth,
+    ProportionalWidth,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FontVariantEastAsian {
+    pub variant: Option<EastAsianVariant>,
+    pub width: Option<EastAsianWidth>,
+    pub ruby: bool,
+}
+
+impl Default for FontVariantEastAsian {
+    fn default() -> Self {
+        Self {
+            variant: None,
+            width: None,
+            ruby: false,
+        }
+    }
+}
+
 /// Kerning control (`font-kerning`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontKerning {
