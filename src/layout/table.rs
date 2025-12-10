@@ -282,21 +282,33 @@ fn cell_is_visually_empty(cell: &BoxNode) -> bool {
     !node_has_visible_content(cell)
 }
 
-fn style_paints_background_or_border(style: &ComputedStyle) -> bool {
-    if !style.background_color.is_transparent() || style.background_image.is_some() {
+fn style_paints_background_or_border(style: &ComputedStyle, allow_borders: bool) -> bool {
+    if !style.background_color.is_transparent() || style.background_image.is_some() || !style.box_shadow.is_empty() {
         return true;
+    }
+    if !allow_borders {
+        return false;
     }
     let paints_border = |style: BorderStyle, width: &Length| {
         !matches!(style, BorderStyle::None | BorderStyle::Hidden) && width.to_px() > 0.0
     };
-    if paints_border(style.border_top_style, &style.border_top_width)
+    paints_border(style.border_top_style, &style.border_top_width)
         || paints_border(style.border_right_style, &style.border_right_width)
         || paints_border(style.border_bottom_style, &style.border_bottom_width)
         || paints_border(style.border_left_style, &style.border_left_width)
-    {
-        return true;
-    }
-    !style.box_shadow.is_empty()
+}
+
+fn strip_borders(style: &ComputedStyle) -> Arc<ComputedStyle> {
+    let mut clone = style.clone();
+    clone.border_top_width = Length::px(0.0);
+    clone.border_right_width = Length::px(0.0);
+    clone.border_bottom_width = Length::px(0.0);
+    clone.border_left_width = Length::px(0.0);
+    clone.border_top_style = BorderStyle::None;
+    clone.border_right_style = BorderStyle::None;
+    clone.border_bottom_style = BorderStyle::None;
+    clone.border_left_style = BorderStyle::None;
+    Arc::new(clone)
 }
 
 impl TableStructure {
@@ -2549,9 +2561,10 @@ impl FormattingContext for TableFormattingContext {
             if start >= end || start >= col_offsets.len() {
                 return;
             }
-            if !style_paints_background_or_border(&style) {
+            if !style_paints_background_or_border(&style, false) {
                 return;
             }
+            let style = strip_borders(&style);
             let mut x = if structure.border_collapse == BorderCollapse::Collapse {
                 col_offsets
                     .get(start)
@@ -2635,7 +2648,8 @@ impl FormattingContext for TableFormattingContext {
         }
 
         for (start, end, style) in row_groups {
-            if !style_paints_background_or_border(&style) {
+            let style = strip_borders(&style);
+            if !style_paints_background_or_border(&style, false) {
                 continue;
             }
             if start >= row_offsets.len() {
@@ -2669,7 +2683,8 @@ impl FormattingContext for TableFormattingContext {
         // Rows
         for (idx, style) in row_styles.into_iter().enumerate() {
             if let Some(style) = style {
-                if !style_paints_background_or_border(&style) {
+                let style = strip_borders(&style);
+                if !style_paints_background_or_border(&style, false) {
                     continue;
                 }
                 let top = row_offsets.get(idx).copied().unwrap_or(0.0);
@@ -3527,10 +3542,14 @@ mod tests {
         let mut colgroup_style = ComputedStyle::default();
         colgroup_style.display = Display::TableColumnGroup;
         colgroup_style.background_color = Rgba::from_rgba8(255, 0, 0, 255);
+        colgroup_style.border_top_width = Length::px(3.0);
+        colgroup_style.border_top_style = BorderStyle::Solid;
 
         let mut col_style = ComputedStyle::default();
         col_style.display = Display::TableColumn;
         col_style.background_color = Rgba::from_rgba8(0, 0, 255, 255);
+        col_style.border_left_width = Length::px(2.0);
+        col_style.border_left_style = BorderStyle::Solid;
 
         let mut row_style = ComputedStyle::default();
         row_style.display = Display::TableRow;
