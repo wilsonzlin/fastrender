@@ -2929,7 +2929,8 @@ mod tests {
     use crate::style::types::{
         CaseTransform, HyphensMode, ListStylePosition, OverflowWrap, TextTransform, WhiteSpace, WordBreak,
     };
-    use crate::style::values::Length;
+    use crate::style::types::{FontSizeAdjust};
+    use crate::style::values::{Length, LengthUnit};
     use crate::style::ComputedStyle;
     use crate::tree::box_tree::ReplacedType;
     use crate::tree::fragment_tree::FragmentContent;
@@ -4584,5 +4585,38 @@ mod tests {
             (max_width - expected).abs() < 0.25,
             "max_width={max_width}, expected={expected}"
         );
+    }
+
+    #[test]
+    fn font_relative_lengths_use_metrics_and_adjustments() {
+        let font_context = FontContext::new();
+        let Some(font) = font_context.get_sans_serif() else { return };
+        let Ok(metrics) = font.metrics() else { return };
+
+        let mut style = ComputedStyle::default();
+        style.font_family = vec![font.family.clone()];
+        style.font_size = 20.0;
+
+        let scaled = metrics.scale(style.font_size);
+        let Some(x_height) = scaled.x_height else { return };
+        let Some(face) = font.as_ttf_face().ok() else { return };
+        let Some(advance) = face.glyph_index('0').and_then(|g| face.glyph_hor_advance(g)) else { return };
+        let ch_width = advance as f32 * (style.font_size / face.units_per_em() as f32);
+
+        let ex = resolve_font_relative_length(Length::new(1.0, LengthUnit::Ex), &style, &font_context);
+        let ch = resolve_font_relative_length(Length::new(1.0, LengthUnit::Ch), &style, &font_context);
+
+        assert!((ex - x_height).abs() < 1e-3);
+        assert!((ch - ch_width).abs() < 1e-3);
+
+        // font-size-adjust scales em/ex/ch consistently
+        let Some(aspect) = metrics.aspect_ratio() else { return };
+        style.font_size_adjust = FontSizeAdjust::Number(aspect * 1.5);
+        let adjusted_size = compute_adjusted_font_size(&style, &font, Some(aspect * 1.5));
+        let adjusted_scaled = metrics.scale(adjusted_size);
+        let Some(adj_x) = adjusted_scaled.x_height else { return };
+
+        let ex_adjusted = resolve_font_relative_length(Length::new(1.0, LengthUnit::Ex), &style, &font_context);
+        assert!((ex_adjusted - adj_x).abs() < 1e-3);
     }
 }
