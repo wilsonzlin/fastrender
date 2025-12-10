@@ -1094,6 +1094,7 @@ impl ShapingPipeline {
     ) -> Result<()> {
         let mut seg_style = style.clone();
         seg_style.font_variant = FontVariant::Normal;
+        seg_style.font_variant_caps = FontVariantCaps::Normal;
         if is_small {
             seg_style.font_size *= scale;
         }
