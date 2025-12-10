@@ -30,10 +30,11 @@
 use std::collections::HashMap;
 
 use taffy::geometry::Line;
+use taffy::prelude::{TaffyFitContent, TaffyMaxContent, TaffyMinContent};
 use taffy::style::{
     AlignContent as TaffyAlignContent, Dimension, Display, GridPlacement as TaffyGridPlacement, GridTemplateComponent,
-    LengthPercentage, LengthPercentageAuto, MaxTrackSizingFunction, MinTrackSizingFunction, Style as TaffyStyle,
-    TrackSizingFunction,
+    GridTemplateRepetition, LengthPercentage, LengthPercentageAuto, MaxTrackSizingFunction, MinTrackSizingFunction,
+    RepetitionCount, Style as TaffyStyle, TrackSizingFunction,
 };
 use taffy::style_helpers::TaffyAuto;
 use taffy::tree::{NodeId as TaffyNodeId, TaffyTree};
@@ -194,6 +195,14 @@ impl GridFormattingContext {
             taffy_style.grid_template_columns = self.convert_grid_template(&style.grid_template_columns, style);
             taffy_style.grid_template_rows = self.convert_grid_template(&style.grid_template_rows, style);
 
+            // Line names
+            if !style.grid_column_line_names.is_empty() {
+                taffy_style.grid_template_column_names = style.grid_column_line_names.clone();
+            }
+            if !style.grid_row_line_names.is_empty() {
+                taffy_style.grid_template_row_names = style.grid_row_line_names.clone();
+            }
+
             // Gap
             taffy_style.gap = taffy::geometry::Size {
                 width: self.convert_length_to_lp(&style.grid_column_gap, style),
@@ -205,8 +214,10 @@ impl GridFormattingContext {
         }
 
         // Grid item properties using raw line numbers
-        taffy_style.grid_column = self.convert_grid_line_numbers(style.grid_column_start, style.grid_column_end);
-        taffy_style.grid_row = self.convert_grid_line_numbers(style.grid_row_start, style.grid_row_end);
+        taffy_style.grid_column =
+            self.convert_grid_placement(style.grid_column_raw.as_deref(), style.grid_column_start, style.grid_column_end);
+        taffy_style.grid_row =
+            self.convert_grid_placement(style.grid_row_raw.as_deref(), style.grid_row_start, style.grid_row_end);
 
         taffy_style
     }
@@ -320,15 +331,33 @@ impl GridFormattingContext {
 
     /// Converts GridTrack Vec to Taffy track list
     fn convert_grid_template(&self, tracks: &[GridTrack], style: &ComputedStyle) -> Vec<GridTemplateComponent<String>> {
-        tracks
-            .iter()
-            .map(|t| self.convert_track_to_component(t, style))
-            .collect()
-    }
-
-    /// Converts a single GridTrack to GridTemplateComponent
-    fn convert_track_to_component(&self, track: &GridTrack, style: &ComputedStyle) -> GridTemplateComponent<String> {
-        GridTemplateComponent::Single(self.convert_track_size(track, style))
+        let mut components = Vec::new();
+        for track in tracks {
+            match track {
+                GridTrack::RepeatAutoFill { tracks: inner, line_names } => {
+                    let converted: Vec<TrackSizingFunction> =
+                        inner.iter().map(|t| self.convert_track_size(t, style)).collect();
+                    let repetition = GridTemplateRepetition {
+                        count: RepetitionCount::AutoFill,
+                        tracks: converted,
+                        line_names: line_names.clone(),
+                    };
+                    components.push(GridTemplateComponent::Repeat(repetition));
+                }
+                GridTrack::RepeatAutoFit { tracks: inner, line_names } => {
+                    let converted: Vec<TrackSizingFunction> =
+                        inner.iter().map(|t| self.convert_track_size(t, style)).collect();
+                    let repetition = GridTemplateRepetition {
+                        count: RepetitionCount::AutoFit,
+                        tracks: converted,
+                        line_names: line_names.clone(),
+                    };
+                    components.push(GridTemplateComponent::Repeat(repetition));
+                }
+                _ => components.push(GridTemplateComponent::Single(self.convert_track_size(track, style))),
+            }
+        }
+        components
     }
 
     /// Converts a single GridTrack to TrackSizingFunction
@@ -338,6 +367,9 @@ impl GridFormattingContext {
                 let lp = self.convert_length_to_lp(len, style);
                 TrackSizingFunction::from(lp)
             }
+            GridTrack::MinContent => TrackSizingFunction::MIN_CONTENT,
+            GridTrack::MaxContent => TrackSizingFunction::MAX_CONTENT,
+            GridTrack::FitContent(len) => TrackSizingFunction::fit_content(self.convert_length_to_lp(len, style)),
             GridTrack::Fr(fr) => TrackSizingFunction {
                 min: MinTrackSizingFunction::AUTO,
                 max: MaxTrackSizingFunction::fr(*fr),
@@ -351,6 +383,7 @@ impl GridFormattingContext {
                     max: max_fn,
                 }
             }
+            GridTrack::RepeatAutoFill { .. } | GridTrack::RepeatAutoFit { .. } => TrackSizingFunction::AUTO,
         }
     }
 
@@ -368,6 +401,8 @@ impl GridFormattingContext {
                     }
                 }
             },
+            GridTrack::MinContent => MinTrackSizingFunction::MIN_CONTENT,
+            GridTrack::MaxContent => MinTrackSizingFunction::MAX_CONTENT,
             GridTrack::Auto => MinTrackSizingFunction::auto(),
             _ => MinTrackSizingFunction::auto(),
         }
@@ -388,12 +423,27 @@ impl GridFormattingContext {
                 }
             },
             GridTrack::Fr(fr) => MaxTrackSizingFunction::fr(*fr),
-            GridTrack::Auto | GridTrack::MinMax(..) => MaxTrackSizingFunction::auto(),
+            GridTrack::MinContent => MaxTrackSizingFunction::MIN_CONTENT,
+            GridTrack::MaxContent => MaxTrackSizingFunction::MAX_CONTENT,
+            GridTrack::FitContent(len) => MaxTrackSizingFunction::fit_content(self.convert_length_to_lp(len, style)),
+            GridTrack::Auto
+            | GridTrack::MinMax(..)
+            | GridTrack::RepeatAutoFill { .. }
+            | GridTrack::RepeatAutoFit { .. } => MaxTrackSizingFunction::auto(),
         }
     }
 
-    /// Converts grid line numbers to Taffy Line<GridPlacement>
-    fn convert_grid_line_numbers(&self, start: i32, end: i32) -> Line<TaffyGridPlacement<String>> {
+    /// Converts grid placements (with optional named lines) to Taffy Line<GridPlacement>
+    fn convert_grid_placement(
+        &self,
+        raw: Option<&str>,
+        start: i32,
+        end: i32,
+    ) -> Line<TaffyGridPlacement<String>> {
+        if let Some(raw_str) = raw {
+            return parse_grid_line_placement_raw(raw_str);
+        }
+
         Line {
             start: if start == 0 {
                 TaffyGridPlacement::Auto
@@ -486,6 +536,76 @@ impl GridFormattingContext {
             .map_err(|e| LayoutError::MissingContext(format!("Taffy layout error: {:?}", e)))?;
 
         Ok(layout.size.width)
+    }
+}
+
+fn parse_grid_line_placement_raw(raw: &str) -> Line<TaffyGridPlacement<String>> {
+    let mut parts = raw.splitn(2, '/').map(|s| s.trim());
+    let start_str = parts.next().unwrap_or("auto");
+    let end_str = parts.next().unwrap_or("auto");
+    Line {
+        start: parse_grid_line_component(start_str),
+        end: parse_grid_line_component(end_str),
+    }
+}
+
+fn parse_grid_line_component(token: &str) -> TaffyGridPlacement<String> {
+    let trimmed = token.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
+        return TaffyGridPlacement::Auto;
+    }
+
+    let parts: Vec<&str> = trimmed.split_whitespace().filter(|p| !p.is_empty()).collect();
+    if parts.is_empty() {
+        return TaffyGridPlacement::Auto;
+    }
+
+    // Span syntax: span && (<integer> || <custom-ident>) in any order
+    if parts[0].eq_ignore_ascii_case("span") {
+        let mut name: Option<String> = None;
+        let mut count: Option<u16> = None;
+        for part in parts.iter().skip(1) {
+            if count.is_none() {
+                if let Ok(n) = part.parse::<i32>() {
+                    if n > 0 {
+                        count = Some(n as u16);
+                        continue;
+                    }
+                }
+            }
+            if name.is_none() {
+                name = Some((*part).to_string());
+            }
+        }
+
+        return match (name, count) {
+            (Some(name), Some(count)) => TaffyGridPlacement::NamedSpan(name, count.max(1)),
+            (Some(name), None) => TaffyGridPlacement::NamedSpan(name, 1),
+            (None, Some(count)) => TaffyGridPlacement::Span(count.max(1)),
+            (None, None) => TaffyGridPlacement::Span(1),
+        };
+    }
+
+    // Non-span grammar: <custom-ident>? <integer>? in any order (integer controls the nth occurrence)
+    let mut number: Option<i16> = None;
+    let mut name: Option<String> = None;
+    for part in &parts {
+        if number.is_none() {
+            if let Ok(n) = part.parse::<i16>() {
+                number = Some(n);
+                continue;
+            }
+        }
+        if name.is_none() {
+            name = Some((*part).to_string());
+        }
+    }
+
+    match (name, number) {
+        (Some(name), Some(idx)) => TaffyGridPlacement::NamedLine(name, idx),
+        (Some(name), None) => TaffyGridPlacement::NamedLine(name, 1),
+        (None, Some(idx)) => TaffyGridPlacement::Line(idx.into()),
+        (None, None) => TaffyGridPlacement::Auto,
     }
 }
 
@@ -908,6 +1028,48 @@ mod tests {
         let fragment = fc.layout(&grid, &constraints).unwrap();
 
         assert_eq!(fragment.children.len(), 3);
+    }
+
+    #[test]
+    fn parses_named_line_with_integer_in_any_order() {
+        let placement = parse_grid_line_placement_raw("foo 2");
+        match placement.start {
+            TaffyGridPlacement::NamedLine(name, idx) => {
+                assert_eq!(name, "foo");
+                assert_eq!(idx, 2);
+            }
+            other => panic!("expected named line, got {:?}", other),
+        }
+
+        let placement_rev = parse_grid_line_placement_raw("2 foo");
+        match placement_rev.start {
+            TaffyGridPlacement::NamedLine(name, idx) => {
+                assert_eq!(name, "foo");
+                assert_eq!(idx, 2);
+            }
+            other => panic!("expected named line, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_named_span_in_any_order() {
+        let placement = parse_grid_line_placement_raw("span foo 3");
+        match placement.start {
+            TaffyGridPlacement::NamedSpan(name, count) => {
+                assert_eq!(name, "foo");
+                assert_eq!(count, 3);
+            }
+            other => panic!("expected named span, got {:?}", other),
+        }
+
+        let placement_rev = parse_grid_line_placement_raw("span 3 foo");
+        match placement_rev.start {
+            TaffyGridPlacement::NamedSpan(name, count) => {
+                assert_eq!(name, "foo");
+                assert_eq!(count, 3);
+            }
+            other => panic!("expected named span, got {:?}", other),
+        }
     }
 
     // Test 20: Grid with both row and column gaps
