@@ -342,6 +342,7 @@
 - `text-indent` keyword semantics refined: `each-line` now forces indentation on the first line even when `hanging` is present, hanging applies to subsequent lines as before, and regressions cover hanging + each-line behavior and intrinsic sizing with a hanging indent across lines (`src/layout/contexts/inline/mod.rs`).
 - List markers respect `list-style-position`: outside markers no longer shift inline layout (painted outside with a gap), inside markers reserve their width+gap in layout. Regression updated to reflect outside marker positioning (`src/layout/contexts/inline/{mod.rs,line_builder.rs}`).
 - Text decorations now render even when font metrics aren’t available: painter synthesizes underline/strike metrics from the font size instead of skipping decorations when fonts can’t supply metrics (`src/paint/painter.rs`).
+- Replaced element sizing now follows the CSS 2.1 replaced-element algorithm: specified width/height pairs win; single-dimension auto derives the other from intrinsic ratio, intrinsic dimensions, or default 300×150; auto/auto handles ratio-only and one-sided intrinsic data gracefully; constraints apply post-solve. Tests lock ratio-only, partial intrinsic, and min-width clamping behavior (`src/layout/utils.rs`).
 
 ## Current issues / gaps
 - Bidi: still relies on injected controls instead of a dedicated embedding/isolate stack; nested isolates/overrides need validation against UAX#9 beyond the FSI/PDI wrapping.

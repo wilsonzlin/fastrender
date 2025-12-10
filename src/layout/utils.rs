@@ -287,13 +287,12 @@ pub fn compute_replaced_size(
         height: 150.0,
     };
 
-    let intrinsic = replaced.intrinsic_size.unwrap_or(DEFAULT_SIZE);
-    let intrinsic_ratio = replaced.aspect_ratio.or_else(|| {
-        if intrinsic.height > 0.0 {
-            Some(intrinsic.width / intrinsic.height)
-        } else {
-            None
-        }
+    let intrinsic = replaced.intrinsic_size;
+    let intrinsic_w = intrinsic.and_then(|s| (s.width > 0.0).then_some(s.width));
+    let intrinsic_h = intrinsic.and_then(|s| (s.height > 0.0).then_some(s.height));
+    let intrinsic_ratio = replaced.aspect_ratio.or_else(|| match (intrinsic_w, intrinsic_h) {
+        (Some(w), Some(h)) if h > 0.0 => Some(w / h),
+        _ => None,
     });
 
     let width_base = percentage_base.and_then(|s| s.width.is_finite().then_some(s.width));
@@ -315,34 +314,77 @@ pub fn compute_replaced_size(
         + resolve_for_height(style.border_top_width)
         + resolve_for_height(style.border_bottom_width);
 
-    let mut width = style
+    let specified_w = style
         .width
         .as_ref()
         .and_then(|l| resolve_replaced_length(l, width_base, viewport, font_size, root_font_size))
-        .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
-        .unwrap_or(intrinsic.width);
-    let mut height = style
+        .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing));
+    let specified_h = style
         .height
         .as_ref()
         .and_then(|l| resolve_replaced_length(l, height_base, viewport, font_size, root_font_size))
-        .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
-        .unwrap_or(intrinsic.height);
+        .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing));
 
-    match (style.width.as_ref(), style.height.as_ref(), intrinsic_ratio) {
-        (Some(_), None, Some(ratio)) => {
-            // Width specified, derive height from aspect ratio
-            height = width / ratio;
+    let mut width: f32;
+    let mut height: f32;
+
+    match (specified_w, specified_h) {
+        (Some(w), Some(h)) => {
+            width = w;
+            height = h;
         }
-        (None, Some(_), Some(ratio)) => {
-            // Height specified, derive width from aspect ratio
-            width = height * ratio;
+        (Some(w), None) => {
+            width = w;
+            height = if let Some(r) = intrinsic_ratio {
+                w / r
+            } else if let Some(h) = intrinsic_h {
+                h
+            } else {
+                DEFAULT_SIZE.height
+            };
         }
-        (None, None, None) => {
-            // No information at all, fall back to default object size
-            width = DEFAULT_SIZE.width;
-            height = DEFAULT_SIZE.height;
+        (None, Some(h)) => {
+            height = h;
+            width = if let Some(r) = intrinsic_ratio {
+                h * r
+            } else if let Some(w) = intrinsic_w {
+                w
+            } else {
+                DEFAULT_SIZE.width
+            };
         }
-        _ => {}
+        (None, None) => {
+            match (intrinsic_w, intrinsic_h, intrinsic_ratio) {
+                (Some(w), Some(h), _) => {
+                    width = w;
+                    height = h;
+                }
+                (Some(w), None, Some(r)) => {
+                    width = w;
+                    height = w / r;
+                }
+                (None, Some(h), Some(r)) => {
+                    height = h;
+                    width = h * r;
+                }
+                (Some(w), None, None) => {
+                    width = w;
+                    height = DEFAULT_SIZE.height;
+                }
+                (None, Some(h), None) => {
+                    width = DEFAULT_SIZE.width;
+                    height = h;
+                }
+                (None, None, Some(r)) => {
+                    width = DEFAULT_SIZE.width;
+                    height = width / r;
+                }
+                _ => {
+                    width = DEFAULT_SIZE.width;
+                    height = DEFAULT_SIZE.height;
+                }
+            }
+        }
     }
 
     // Apply min/max constraints when present
@@ -379,7 +421,7 @@ pub fn compute_replaced_size(
         height = height.min(max_h);
     }
 
-    Size::new(width, height)
+    Size::new(width.max(0.0), height.max(0.0))
 }
 
 fn resolve_replaced_length(
@@ -485,6 +527,57 @@ mod tests {
     }
 
     #[test]
+    fn test_replaced_auto_auto_ratio_only_uses_default_with_ratio() {
+        let mut style = ComputedStyle::default();
+        let replaced = ReplacedBox {
+            replaced_type: crate::tree::box_tree::ReplacedType::Image {
+                src: "".to_string(),
+                alt: None,
+            },
+            intrinsic_size: None,
+            aspect_ratio: Some(2.0),
+        };
+
+        let size = compute_replaced_size(&style, &replaced, None, Size::new(800.0, 600.0));
+        assert_eq!(size.width, 300.0);
+        assert_eq!(size.height, 150.0);
+    }
+
+    #[test]
+    fn test_replaced_auto_auto_intrinsic_width_only_falls_back_height() {
+        let mut style = ComputedStyle::default();
+        let replaced = ReplacedBox {
+            replaced_type: crate::tree::box_tree::ReplacedType::Image {
+                src: "".to_string(),
+                alt: None,
+            },
+            intrinsic_size: Some(Size::new(120.0, 0.0)),
+            aspect_ratio: None,
+        };
+
+        let size = compute_replaced_size(&style, &replaced, None, Size::new(800.0, 600.0));
+        assert_eq!(size.width, 120.0);
+        assert_eq!(size.height, 150.0);
+    }
+
+    #[test]
+    fn test_replaced_auto_auto_intrinsic_height_only_falls_back_width() {
+        let mut style = ComputedStyle::default();
+        let replaced = ReplacedBox {
+            replaced_type: crate::tree::box_tree::ReplacedType::Image {
+                src: "".to_string(),
+                alt: None,
+            },
+            intrinsic_size: Some(Size::new(0.0, 80.0)),
+            aspect_ratio: None,
+        };
+
+        let size = compute_replaced_size(&style, &replaced, None, Size::new(800.0, 600.0));
+        assert_eq!(size.width, 300.0);
+        assert_eq!(size.height, 80.0);
+    }
+
+    #[test]
     fn test_compute_replaced_size_derives_missing_dimension() {
         let mut style = ComputedStyle::default();
         style.width = Some(Length::px(200.0));
@@ -502,6 +595,26 @@ mod tests {
         let size = compute_replaced_size(&style, &replaced, None, Size::new(800.0, 600.0));
         assert_eq!(size.width, 200.0);
         assert_eq!(size.height, 100.0);
+    }
+
+    #[test]
+    fn test_replaced_min_width_clamps_content_size() {
+        let mut style = ComputedStyle::default();
+        style.min_width = Some(Length::px(250.0));
+        style.height = Some(Length::px(50.0));
+        let replaced = ReplacedBox {
+            replaced_type: crate::tree::box_tree::ReplacedType::Image {
+                src: "".to_string(),
+                alt: None,
+            },
+            intrinsic_size: Some(Size::new(100.0, 50.0)),
+            aspect_ratio: Some(2.0),
+        };
+
+        let size = compute_replaced_size(&style, &replaced, None, Size::new(800.0, 600.0));
+        assert_eq!(size.width, 250.0);
+        // Height clamps independently; we do not re-derive ratio after constraints.
+        assert_eq!(size.height, 50.0);
     }
 
     #[test]
