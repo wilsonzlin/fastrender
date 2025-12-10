@@ -165,7 +165,7 @@ impl FlexFormattingContext {
         box_node: &BoxNode,
         node_map: &mut HashMap<*const BoxNode, NodeId>,
     ) -> Result<NodeId, LayoutError> {
-        self.build_taffy_tree_inner(taffy_tree, box_node, node_map, true)
+        self.build_taffy_tree_inner(taffy_tree, box_node, node_map, true, None)
     }
 
     /// Internal tree builder that tracks whether we're at the root
@@ -175,9 +175,10 @@ impl FlexFormattingContext {
         box_node: &BoxNode,
         node_map: &mut HashMap<*const BoxNode, NodeId>,
         is_root: bool,
+        containing_flex: Option<&ComputedStyle>,
     ) -> Result<NodeId, LayoutError> {
         // Convert style to Taffy style
-        let taffy_style = self.computed_style_to_taffy(&box_node.style, is_root);
+        let taffy_style = self.computed_style_to_taffy(&box_node.style, is_root, containing_flex);
 
         // Create Taffy node
         let taffy_node = if box_node.children.is_empty() {
@@ -189,7 +190,20 @@ impl FlexFormattingContext {
             // Create children first (not root)
             let mut taffy_children = Vec::with_capacity(box_node.children.len());
             for child in &box_node.children {
-                let child_node = self.build_taffy_tree_inner(taffy_tree, child, node_map, false)?;
+                let next_containing_flex = if is_root
+                    || matches!(box_node.style.display, Display::Flex | Display::InlineFlex)
+                {
+                    Some(&box_node.style)
+                } else {
+                    None
+                };
+                let child_node = self.build_taffy_tree_inner(
+                    taffy_tree,
+                    child,
+                    node_map,
+                    false,
+                    next_containing_flex.map(|s| &**s),
+                )?;
                 taffy_children.push(child_node);
             }
 
@@ -209,25 +223,40 @@ impl FlexFormattingContext {
     ///
     /// The `is_root` flag indicates if this is the root flex container.
     /// For the root, we use Flex display; for children, we use Block.
-    fn computed_style_to_taffy(&self, style: &ComputedStyle, is_root: bool) -> taffy::style::Style {
-        let inline_positive = self.inline_axis_positive(style);
-        let block_positive = self.block_axis_positive(style);
+    fn computed_style_to_taffy(
+        &self,
+        style: &ComputedStyle,
+        is_root: bool,
+        containing_flex: Option<&ComputedStyle>,
+    ) -> taffy::style::Style {
+        let inline_positive_container = self.inline_axis_positive(style);
+        let block_positive_container = self.block_axis_positive(style);
         let main_is_inline = matches!(style.flex_direction, FlexDirection::Row | FlexDirection::RowReverse);
-        let cross_positive = if main_is_inline { block_positive } else { inline_positive };
+        let cross_positive_container = if main_is_inline {
+            block_positive_container
+        } else {
+            inline_positive_container
+        };
+
+        // Flex items align to the parent flex container's axes, not their own writing-mode/direction.
+        let axis_source = containing_flex.unwrap_or(style);
+        let inline_positive_item = self.inline_axis_positive(axis_source);
+        let block_positive_item = self.block_axis_positive(axis_source);
+        let cross_positive_item = if main_is_inline { block_positive_item } else { inline_positive_item };
 
         taffy::style::Style {
             // Display mode - only root is Flex, children are Block (flex items)
             display: self.display_to_taffy(style, is_root),
 
             // Flex container properties
-            flex_direction: self.flex_direction_to_taffy(style, inline_positive, block_positive),
+            flex_direction: self.flex_direction_to_taffy(style, inline_positive_container, block_positive_container),
             flex_wrap: self.flex_wrap_to_taffy(style.flex_wrap),
             justify_content: self.justify_content_to_taffy(style.justify_content),
-            align_items: self.align_items_to_taffy(style.align_items, cross_positive),
-            align_content: self.align_content_to_taffy(style.align_content, cross_positive),
-            align_self: self.align_self_to_taffy(style.align_self, cross_positive),
-            justify_self: self.align_self_to_taffy(style.justify_self, inline_positive),
-            justify_items: self.align_items_to_taffy(style.justify_items, inline_positive),
+            align_items: self.align_items_to_taffy(style.align_items, cross_positive_container),
+            align_content: self.align_content_to_taffy(style.align_content, cross_positive_container),
+            align_self: self.align_self_to_taffy(style.align_self, cross_positive_item),
+            justify_self: self.align_self_to_taffy(style.justify_self, inline_positive_item),
+            justify_items: self.align_items_to_taffy(style.justify_items, inline_positive_container),
 
             // Gap
             gap: taffy::geometry::Size {
@@ -916,6 +945,49 @@ mod tests {
 
         // Block axis start for vertical-rl is the right edge, so x should be at 80
         assert_eq!(fragment.children[0].bounds.x(), 80.0);
+    }
+
+    #[test]
+    fn flex_item_alignment_uses_parent_axes_not_item_writing_mode() {
+        let fc = FlexFormattingContext::new();
+
+        let mut container_style = ComputedStyle::default();
+        container_style.display = Display::Flex;
+        container_style.flex_direction = FlexDirection::Row; // becomes vertical under vertical-rl
+        container_style.writing_mode = crate::style::types::WritingMode::VerticalRl;
+        container_style.align_items = AlignItems::Center;
+        container_style.width = Some(Length::px(100.0));
+
+        let mut child1_style = ComputedStyle::default();
+        child1_style.width = Some(Length::px(10.0));
+        child1_style.height = Some(Length::px(10.0));
+        child1_style.align_self = Some(AlignItems::Start);
+        // Different writing mode should not affect axis interpretation
+        child1_style.writing_mode = crate::style::types::WritingMode::HorizontalTb;
+        let child1 = BoxNode::new_block(Arc::new(child1_style), FormattingContextType::Block, vec![]);
+
+        let mut child2_style = ComputedStyle::default();
+        child2_style.width = Some(Length::px(10.0));
+        child2_style.height = Some(Length::px(10.0));
+        child2_style.align_self = Some(AlignItems::End);
+        child2_style.writing_mode = crate::style::types::WritingMode::HorizontalTb;
+        let child2 = BoxNode::new_block(Arc::new(child2_style), FormattingContextType::Block, vec![]);
+
+        let container = BoxNode::new_block(
+            Arc::new(container_style),
+            FormattingContextType::Flex,
+            vec![child1, child2],
+        );
+
+        let constraints = LayoutConstraints::definite(100.0, 200.0);
+        let fragment = fc.layout(&container, &constraints).unwrap();
+
+        // Cross axis is horizontal with start at the right edge for vertical-rl.
+        assert_eq!(fragment.children[0].bounds.x(), 90.0);
+        assert_eq!(fragment.children[1].bounds.x(), 0.0);
+        // Main axis is vertical; children stack along y.
+        assert_eq!(fragment.children[0].bounds.y(), 0.0);
+        assert_eq!(fragment.children[1].bounds.y(), 10.0);
     }
 
     #[test]
