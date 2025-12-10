@@ -2479,6 +2479,129 @@ impl FormattingContext for TableFormattingContext {
             col_widths.iter().sum::<f32>() + spacing
         };
 
+        let content_height = if structure.row_count > 0 {
+            if structure.border_collapse == BorderCollapse::Collapse {
+                let mut h = horizontal_line_max.get(0).copied().unwrap_or(0.0);
+                for (idx, row) in row_metrics.iter().enumerate() {
+                    h += row.height;
+                    h += horizontal_line_max.get(idx + 1).copied().unwrap_or(0.0);
+                }
+                h
+            } else {
+                row_offsets
+                    .last()
+                    .map(|start| start + row_metrics.last().map(|r| r.height).unwrap_or(0.0))
+                    .unwrap_or(0.0)
+                    + v_spacing
+                    - content_origin_y
+            }
+        } else {
+            0.0
+        };
+
+        // Column group and column backgrounds precede row backgrounds/cells.
+        let mut column_styles: Vec<Option<Arc<ComputedStyle>>> = vec![None; structure.column_count];
+        let mut column_groups: Vec<(usize, usize, Arc<ComputedStyle>)> = Vec::new();
+        let mut col_cursor = 0usize;
+        for child in &box_node.children {
+            match TableStructure::get_table_element_type(child) {
+                TableElementType::Column => {
+                    if col_cursor < column_styles.len() {
+                        column_styles[col_cursor] = Some(child.style.clone());
+                    }
+                    col_cursor += 1;
+                }
+                TableElementType::ColumnGroup => {
+                    if !child.children.is_empty() {
+                        let start = col_cursor;
+                        for col_child in &child.children {
+                            if TableStructure::get_table_element_type(col_child) == TableElementType::Column {
+                                if col_cursor < column_styles.len() {
+                                    column_styles[col_cursor] = Some(col_child.style.clone());
+                                }
+                                col_cursor += 1;
+                            }
+                        }
+                        let end = col_cursor.min(structure.column_count);
+                        if start < end {
+                            column_groups.push((start, end, child.style.clone()));
+                        }
+                    } else {
+                        let start = col_cursor;
+                        if col_cursor < column_styles.len() {
+                            column_styles[col_cursor] = Some(child.style.clone());
+                        }
+                        col_cursor += 1;
+                        let end = col_cursor.min(structure.column_count);
+                        if start < end {
+                            column_groups.push((start, end, child.style.clone()));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let push_column_span_fragment = |fragments: &mut Vec<FragmentNode>,
+                                         style: Arc<ComputedStyle>,
+                                         start: usize,
+                                         end: usize| {
+            if start >= end || start >= col_offsets.len() {
+                return;
+            }
+            if !style_paints_background_or_border(&style) {
+                return;
+            }
+            let mut x = if structure.border_collapse == BorderCollapse::Collapse {
+                col_offsets
+                    .get(start)
+                    .copied()
+                    .unwrap_or(0.0)
+                    - vertical_line_max.get(start).copied().unwrap_or(0.0)
+            } else {
+                (col_offsets.get(start).copied().unwrap_or(content_origin_x) - h_spacing * 0.5)
+                    .max(content_origin_x)
+            };
+            let mut right = if structure.border_collapse == BorderCollapse::Collapse {
+                let base = col_offsets
+                    .get(end.saturating_sub(1))
+                    .copied()
+                    .unwrap_or(x)
+                    + col_widths.get(end.saturating_sub(1)).copied().unwrap_or(0.0);
+                base + vertical_line_max.get(end).copied().unwrap_or(0.0)
+            } else {
+                let base = col_offsets
+                    .get(end.saturating_sub(1))
+                    .copied()
+                    .unwrap_or(x)
+                    + col_widths.get(end.saturating_sub(1)).copied().unwrap_or(0.0);
+                base + h_spacing * 0.5
+            };
+            let max_x = content_origin_x + content_width;
+            x = x.max(content_origin_x);
+            right = right.min(max_x);
+            let width = (right - x).max(0.0);
+            if width <= 0.0 || content_height <= 0.0 {
+                return;
+            }
+            let rect = Rect::from_xywh(x, content_origin_y, width, content_height);
+            fragments.push(FragmentNode::new_with_style(
+                rect,
+                FragmentContent::Block { box_id: None },
+                Vec::new(),
+                style,
+            ));
+        };
+
+        for (start, end, style) in column_groups {
+            push_column_span_fragment(&mut fragments, style, start, end);
+        }
+        for (idx, style) in column_styles.into_iter().enumerate() {
+            if let Some(style) = style {
+                push_column_span_fragment(&mut fragments, style, idx, idx + 1);
+            }
+        }
+
         // Paint order backgrounds before cells.
         // Row groups
         let mut row_styles: Vec<Option<Arc<ComputedStyle>>> = vec![None; structure.row_count];
@@ -2607,25 +2730,6 @@ impl FormattingContext for TableFormattingContext {
             fragments.push(laid.fragment.translate(Point::new(x, y)));
         }
 
-        let content_height = if structure.row_count > 0 {
-            if structure.border_collapse == BorderCollapse::Collapse {
-                let mut h = horizontal_line_max.get(0).copied().unwrap_or(0.0);
-                for (idx, row) in row_metrics.iter().enumerate() {
-                    h += row.height;
-                    h += horizontal_line_max.get(idx + 1).copied().unwrap_or(0.0);
-                }
-                h
-            } else {
-                row_offsets
-                    .last()
-                    .map(|start| start + row_metrics.last().map(|r| r.height).unwrap_or(0.0))
-                    .unwrap_or(0.0)
-                    + v_spacing
-                    - content_origin_y
-            }
-        } else {
-            0.0
-        };
         let total_width = if structure.border_collapse == BorderCollapse::Collapse {
             content_width
         } else {
@@ -3411,6 +3515,70 @@ mod tests {
         assert_eq!(row_color, Rgba::from_rgba8(200, 0, 0, 255));
         let cell_frag = find_cell_fragment(&fragment).expect("cell fragment");
         assert!(row_frag.bounds.y() <= cell_frag.bounds.y());
+    }
+
+    #[test]
+    fn column_and_colgroup_backgrounds_paint_before_rows() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut colgroup_style = ComputedStyle::default();
+        colgroup_style.display = Display::TableColumnGroup;
+        colgroup_style.background_color = Rgba::from_rgba8(255, 0, 0, 255);
+
+        let mut col_style = ComputedStyle::default();
+        col_style.display = Display::TableColumn;
+        col_style.background_color = Rgba::from_rgba8(0, 0, 255, 255);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        row_style.background_color = Rgba::from_rgba8(0, 200, 0, 255);
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        let mut child_style = ComputedStyle::default();
+        child_style.display = Display::Block;
+        child_style.height = Some(Length::px(10.0));
+        let child = BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![]);
+
+        let cell1 = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![child.clone()]);
+        let cell2 = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![child]);
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell1, cell2]);
+
+        let col = BoxNode::new_block(Arc::new(col_style), FormattingContextType::Block, vec![]);
+        let colgroup = BoxNode::new_block(Arc::new(colgroup_style), FormattingContextType::Block, vec![col]);
+
+        let table = BoxNode::new_block(
+            Arc::new(table_style),
+            FormattingContextType::Table,
+            vec![colgroup, row],
+        );
+
+        let fc = TableFormattingContext::with_factory(FormattingContextFactory::new());
+        let fragment = fc
+            .layout(
+                &table,
+                &LayoutConstraints::new(AvailableSpace::Definite(200.0), AvailableSpace::Indefinite),
+            )
+            .expect("layout");
+
+        let colors: Vec<Rgba> = fragment
+            .children
+            .iter()
+            .filter_map(|f| f.style.as_ref().map(|s| s.background_color))
+            .collect();
+        assert!(
+            colors.len() >= 2,
+            "column group and column backgrounds should be present before cells"
+        );
+        assert_eq!(colors[0], Rgba::from_rgba8(255, 0, 0, 255));
+        assert_eq!(colors[1], Rgba::from_rgba8(0, 0, 255, 255));
+        assert!(
+            colors.contains(&Rgba::from_rgba8(0, 200, 0, 255)),
+            "row background should still be painted"
+        );
     }
 
     #[test]
