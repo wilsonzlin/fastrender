@@ -1009,6 +1009,11 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 styles.text_decoration.thickness = thick;
             }
         }
+        "text-underline-offset" => {
+            if let Some(offset) = parse_text_underline_offset(&resolved_value) {
+                styles.text_underline_offset = offset;
+            }
+        }
         "text-decoration" => {
             let tokens: Vec<PropertyValue> = match resolved_value {
                 PropertyValue::Multiple(ref values) => values.clone(),
@@ -2611,6 +2616,15 @@ fn parse_text_decoration_color(value: &PropertyValue) -> Option<Option<Rgba>> {
     match value {
         PropertyValue::Color(c) => Some(Some(*c)),
         PropertyValue::Keyword(kw) if kw == "currentcolor" => Some(None),
+        _ => None,
+    }
+}
+
+fn parse_text_underline_offset(value: &PropertyValue) -> Option<TextUnderlineOffset> {
+    match value {
+        PropertyValue::Keyword(kw) if kw == "auto" => Some(TextUnderlineOffset::Auto),
+        PropertyValue::Length(l) => Some(TextUnderlineOffset::Length(*l)),
+        PropertyValue::Percentage(p) => Some(TextUnderlineOffset::Length(Length::percent(*p))),
         _ => None,
     }
 }

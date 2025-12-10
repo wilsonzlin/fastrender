@@ -35,7 +35,8 @@ use types::{
     FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontWeight, GridTrack, HyphensMode, Isolation,
     JustifyContent, LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit,
     ObjectPosition, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration, TextIndent,
-    TextJustify, TextTransform, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
+    TextJustify, TextTransform, TextUnderlineOffset, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace,
+    WordBreak,
 };
 use values::Length;
 
@@ -140,6 +141,7 @@ pub struct ComputedStyle {
     pub text_justify: TextJustify,
     pub text_indent: TextIndent,
     pub text_decoration: TextDecoration,
+    pub text_underline_offset: TextUnderlineOffset,
     pub text_transform: TextTransform,
     pub letter_spacing: f32,
     pub word_spacing: f32,
@@ -289,6 +291,7 @@ impl Default for ComputedStyle {
             text_justify: TextJustify::Auto,
             text_indent: TextIndent::default(),
             text_decoration: TextDecoration::default(),
+            text_underline_offset: TextUnderlineOffset::default(),
             text_transform: TextTransform::None,
             letter_spacing: 0.0,
             word_spacing: 0.0,

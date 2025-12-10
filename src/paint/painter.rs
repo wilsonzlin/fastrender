@@ -1808,6 +1808,29 @@ impl Painter {
         })
     }
 
+    fn resolve_underline_offset(&self, style: &ComputedStyle) -> f32 {
+        match style.text_underline_offset {
+            crate::style::types::TextUnderlineOffset::Auto => 0.0,
+            crate::style::types::TextUnderlineOffset::Length(l) => {
+                if l.unit == LengthUnit::Percent {
+                    l.resolve_against(style.font_size)
+                } else if l.unit.is_font_relative() {
+                    l.resolve_with_font_size(style.font_size)
+                } else if l.unit.is_viewport_relative() {
+                    l.resolve_with_viewport(self.pixmap.width() as f32, self.pixmap.height() as f32)
+                } else if l.unit.is_absolute() {
+                    l.to_px()
+                } else {
+                    l.value * style.font_size
+                }
+            }
+        }
+    }
+
+    fn underline_position(&self, metrics: &DecorationMetrics, offset: f32) -> f32 {
+        metrics.underline_position_with_offset(offset)
+    }
+
     fn dynamic_image_to_pixmap(image: &DynamicImage) -> Option<Pixmap> {
         let rgba = image.to_rgba8();
         let (width, height) = rgba.dimensions();
@@ -1946,10 +1969,12 @@ impl Painter {
             TextDecorationStyle::Wavy => draw_wavy_line(pixmap, center, thickness),
         };
 
+        let underline_offset = self.resolve_underline_offset(style);
         if style.text_decoration.lines.contains(TextDecorationLine::UNDERLINE) {
+            let adjusted_pos = self.underline_position(&metrics, underline_offset);
             render_line(
                 &mut self.pixmap,
-                baseline_y - metrics.underline_pos,
+                baseline_y - adjusted_pos,
                 used_thickness.unwrap_or(metrics.underline_thickness),
             );
         }
@@ -1977,6 +2002,13 @@ struct DecorationMetrics {
     strike_pos: f32,
     strike_thickness: f32,
     ascent: f32,
+}
+
+impl DecorationMetrics {
+    fn underline_position_with_offset(&self, offset: f32) -> f32 {
+        let direction = if self.underline_pos >= 0.0 { 1.0 } else { -1.0 };
+        self.underline_pos + offset * direction
+    }
 }
 
 fn color_to_skia(color: Rgba) -> tiny_skia::Color {
@@ -3266,6 +3298,32 @@ mod tests {
         assert!(
             red_bbox.1.abs_diff(black_bbox.1) <= 2,
             "shadow should align vertically when no y offset is set"
+        );
+    }
+
+    #[test]
+    fn underline_offset_moves_line() {
+        let mut style = ComputedStyle::default();
+        style.text_decoration.lines = crate::style::types::TextDecorationLine::UNDERLINE;
+        style.text_decoration.color = Some(Rgba::BLACK);
+        style.font_size = 20.0;
+
+        let mut painter = Painter::new(10, 10, Rgba::WHITE).expect("painter");
+        let runs = painter.shaper.shape("Hi", &style, &painter.font_ctx).expect("shape");
+        let metrics = painter.decoration_metrics(Some(&runs), &style).expect("metrics");
+        let baseline = 20.0;
+        let base_center = baseline - painter.underline_position(&metrics, 0.0);
+
+        style.text_underline_offset = crate::style::types::TextUnderlineOffset::Length(Length::px(4.0));
+        let shifted_center = baseline - painter.underline_position(&metrics, painter.resolve_underline_offset(&style));
+
+        assert!(
+            shifted_center > base_center,
+            "positive offset should move underline further from the baseline"
+        );
+        assert!(
+            (shifted_center - base_center - 4.0).abs() < 0.5,
+            "underline offset should roughly follow the authored length"
         );
     }
 

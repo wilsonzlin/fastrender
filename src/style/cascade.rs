@@ -782,6 +782,7 @@ fn reset_marker_box_properties(styles: &mut ComputedStyle) {
     styles.overflow_y = defaults.overflow_y;
     styles.opacity = defaults.opacity;
     styles.text_decoration = defaults.text_decoration.clone();
+    styles.text_underline_offset = defaults.text_underline_offset;
     styles.text_align = defaults.text_align;
     styles.text_align_last = defaults.text_align_last;
     styles.text_indent = defaults.text_indent.clone();

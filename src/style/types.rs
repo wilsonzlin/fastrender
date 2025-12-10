@@ -789,6 +789,19 @@ pub enum TextDecorationThickness {
     Length(Length),
 }
 
+/// Controls underline offset relative to the default position.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextUnderlineOffset {
+    Auto,
+    Length(Length),
+}
+
+impl Default for TextUnderlineOffset {
+    fn default() -> Self {
+        TextUnderlineOffset::Auto
+    }
+}
+
 /// list-style-type values
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListStyleType {
