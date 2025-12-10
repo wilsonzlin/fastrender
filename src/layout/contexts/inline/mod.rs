@@ -46,7 +46,7 @@ use crate::layout::contexts::inline::line_builder::InlineBoxItem;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::utils::{border_size_from_box_sizing, compute_replaced_size, resolve_font_relative_length};
 use crate::style::types::{
-    FontStyle, HyphensMode, ListStylePosition, OverflowWrap, TabSize, TextAlign, TextJustify, TextTransform,
+    FontStyle, HyphensMode, LineBreak, ListStylePosition, OverflowWrap, TabSize, TextAlign, TextJustify, TextTransform,
     WhiteSpace, WordBreak,
 };
 use crate::style::values::Length;
@@ -617,15 +617,13 @@ impl InlineFormattingContext {
 
         let va = self.convert_vertical_align(style.vertical_align, style.font_size, line_height);
 
-        let mut item = TextItem::new(
-            shaped_runs,
-            hyphen_free,
-            metrics,
-            breaks,
-            forced_break_offsets,
-            style.clone(),
-        )
-        .with_vertical_align(va);
+        let mut item =
+            TextItem::new(shaped_runs, hyphen_free, metrics, breaks, forced_break_offsets, style.clone())
+                .with_vertical_align(va);
+
+        if allow_soft_wrap && style.line_break == LineBreak::Anywhere {
+            item.add_breaks_at_clusters();
+        }
 
         if is_marker {
             let raw_gap = style
@@ -3537,6 +3535,28 @@ mod tests {
             fragment.children.len(),
             1,
             "nowrap should suppress break-word forced wraps"
+        );
+    }
+
+    #[test]
+    fn line_break_anywhere_breaks_long_words() {
+        let mut text_style = ComputedStyle::default();
+        text_style.line_break = LineBreak::Anywhere;
+        text_style.white_space = WhiteSpace::Normal;
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "supercalifragilisticexpialidocious".to_string(),
+            )],
+        );
+        let constraints = LayoutConstraints::definite_width(40.0);
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert!(
+            fragment.children.len() > 1,
+            "line-break:anywhere should allow breaking long tokens when they overflow"
         );
     }
 

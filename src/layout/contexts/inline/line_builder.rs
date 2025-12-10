@@ -241,6 +241,29 @@ impl TextItem {
         self.cluster_advances.iter().map(|c| c.byte_offset)
     }
 
+    /// Add allowed break opportunities at every cluster boundary.
+    pub fn add_breaks_at_clusters(&mut self) {
+        if self.text.is_empty() {
+            return;
+        }
+        let additional: Vec<BreakOpportunity> = self
+            .cluster_byte_offsets()
+            .filter(|offset| *offset > 0 && *offset < self.text.len())
+            .map(|offset| BreakOpportunity::new(offset, BreakType::Allowed))
+            .collect();
+        self.break_opportunities.extend(additional);
+        self.break_opportunities.sort_by_key(|b| b.byte_offset);
+        self.break_opportunities.dedup_by(|a, b| {
+            if a.byte_offset != b.byte_offset {
+                return false;
+            }
+            if let BreakType::Mandatory = a.break_type {
+                *b = *a;
+            }
+            true
+        });
+    }
+
     /// Derive baseline metrics from shaped runs and CSS line-height
     pub fn metrics_from_runs(runs: &[ShapedRun], line_height: f32, fallback_font_size: f32) -> BaselineMetrics {
         let mut ascent: f32 = 0.0;

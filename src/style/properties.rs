@@ -1335,6 +1335,18 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "line-break" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.line_break = match kw.as_str() {
+                    "auto" => LineBreak::Auto,
+                    "loose" => LineBreak::Loose,
+                    "normal" => LineBreak::Normal,
+                    "strict" => LineBreak::Strict,
+                    "anywhere" => LineBreak::Anywhere,
+                    _ => styles.line_break,
+                };
+            }
+        }
         "tab-size" => match &resolved_value {
             PropertyValue::Number(n) => {
                 styles.tab_size = TabSize::Number(n.max(0.0));
@@ -4258,6 +4270,19 @@ mod tests {
 
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert_eq!(style.white_space, WhiteSpace::BreakSpaces);
+    }
+
+    #[test]
+    fn parses_line_break_anywhere() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "line-break".to_string(),
+            value: PropertyValue::Keyword("anywhere".to_string()),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.line_break, LineBreak::Anywhere);
     }
 
     #[test]

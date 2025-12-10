@@ -34,11 +34,11 @@ use types::{
     BorderStyle, BoxSizing, CaptionSide, Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap,
     FontFeatureSetting, FontKerning, FontSizeAdjust, FontStretch, FontStyle, FontSynthesis, FontVariant,
     FontVariantAlternates, FontVariantCaps, FontVariantEastAsian, FontVariantLigatures, FontVariantNumeric,
-    FontVariantPosition, FontWeight, GridTrack, HyphensMode, Isolation, JustifyContent, LineHeight, ListStyleImage,
-    ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow,
-    OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration, TextDecorationSkipInk,
-    TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextTransform, TextUnderlineOffset,
-    TextUnderlinePosition, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
+    FontVariantPosition, FontWeight, GridTrack, HyphensMode, Isolation, JustifyContent, LineBreak, LineHeight,
+    ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor,
+    OutlineStyle, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextDecoration,
+    TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextTransform,
+    TextUnderlineOffset, TextUnderlinePosition, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
 };
 use values::Length;
 
@@ -168,6 +168,7 @@ pub struct ComputedStyle {
     pub letter_spacing: f32,
     pub word_spacing: f32,
     pub white_space: WhiteSpace,
+    pub line_break: LineBreak,
     pub tab_size: TabSize,
     pub hyphens: HyphensMode,
     pub word_break: WordBreak,
@@ -336,6 +337,7 @@ impl Default for ComputedStyle {
             letter_spacing: 0.0,
             word_spacing: 0.0,
             white_space: WhiteSpace::Normal,
+            line_break: LineBreak::Auto,
             tab_size: TabSize::default(),
             hyphens: HyphensMode::Manual,
             word_break: WordBreak::Normal,

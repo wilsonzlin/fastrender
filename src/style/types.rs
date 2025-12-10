@@ -1120,6 +1120,19 @@ pub enum WhiteSpace {
     BreakSpaces,
 }
 
+/// Line break strictness
+///
+/// CSS: `line-break`
+/// Reference: CSS Text Module Level 3
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineBreak {
+    Auto,
+    Loose,
+    Normal,
+    Strict,
+    Anywhere,
+}
+
 /// Tab stop sizing
 ///
 /// CSS: `tab-size`
