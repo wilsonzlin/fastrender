@@ -11,7 +11,7 @@ use fastrender::FragmentNode;
 use fastrender::{
     build_stacking_tree, creates_stacking_context, get_stacking_context_reason, StackingContext, StackingContextReason,
 };
-use fastrender::{ComputedStyle, Display, Overflow, Position};
+use fastrender::{ComputedStyle, Display, Float, Overflow, Position};
 use std::sync::Arc;
 
 // Helper functions
@@ -424,6 +424,69 @@ fn test_layer_classification_positioned() {
     sc.add_fragment_to_layer(fragment, Some(&style));
 
     assert_eq!(sc.layer6_positioned.len(), 1);
+}
+
+// Test: Layer classification - floats
+
+#[test]
+fn test_layer_classification_floats() {
+    let mut sc = StackingContext::root();
+    let fragment = block_fragment(0.0, 0.0, 80.0, 20.0);
+    let mut style = ComputedStyle::default();
+    style.display = Display::Block;
+    style.float = Float::Left;
+
+    sc.add_fragment_to_layer(fragment, Some(&style));
+
+    assert!(sc.layer3_blocks.is_empty());
+    assert_eq!(sc.layer4_floats.len(), 1);
+    assert!(sc.layer5_inlines.is_empty());
+    assert!(sc.layer6_positioned.is_empty());
+}
+
+// Test: Floats on positioned elements stay in positioned layer
+
+#[test]
+fn test_layer_classification_floats_ignored_for_positioned() {
+    let mut sc = StackingContext::root();
+    let fragment = block_fragment(0.0, 0.0, 80.0, 20.0);
+    let mut style = ComputedStyle::default();
+    style.display = Display::Block;
+    style.float = Float::Left;
+    style.position = Position::Absolute;
+
+    sc.add_fragment_to_layer(fragment, Some(&style));
+
+    assert!(sc.layer4_floats.is_empty());
+    assert_eq!(sc.layer6_positioned.len(), 1);
+}
+
+// Test: Paint order includes floats between blocks and inlines
+
+#[test]
+fn test_paint_order_with_float_layer() {
+    let mut sc = StackingContext::root();
+    sc.fragments.push(block_fragment(0.0, 0.0, 10.0, 10.0));
+
+    let mut block_style = ComputedStyle::default();
+    block_style.display = Display::Block;
+    sc.add_fragment_to_layer(block_fragment(10.0, 0.0, 10.0, 10.0), Some(&block_style));
+
+    let mut float_style = ComputedStyle::default();
+    float_style.display = Display::Block;
+    float_style.float = Float::Left;
+    sc.add_fragment_to_layer(block_fragment(20.0, 0.0, 10.0, 10.0), Some(&float_style));
+
+    let mut inline_style = ComputedStyle::default();
+    inline_style.display = Display::Inline;
+    sc.add_fragment_to_layer(text_fragment(30.0, 0.0, 10.0, 10.0, "x"), Some(&inline_style));
+
+    let mut positioned_style = ComputedStyle::default();
+    positioned_style.position = Position::Relative;
+    sc.add_fragment_to_layer(block_fragment(40.0, 0.0, 10.0, 10.0), Some(&positioned_style));
+
+    let order: Vec<f32> = sc.iter_paint_order().map(|f| f.bounds.x()).collect();
+    assert_eq!(order, vec![0.0, 10.0, 20.0, 30.0, 40.0]);
 }
 
 // Test: Bounds computation

@@ -570,11 +570,15 @@ fn is_positioned(style: &ComputedStyle) -> bool {
 
 /// Checks if an element is a float
 ///
-/// Note: Float is not currently in ComputedStyle, so we return false.
-/// When Float support is added, this should check style.float != Float::None
-fn is_float(_style: &ComputedStyle) -> bool {
-    // TODO: Check style.float when Float is added to ComputedStyle
-    false
+/// Floats participate in layer 4 of the stacking order (between blocks and
+/// inlines). Spec-wise floats are ignored for absolutely/fixed positioned
+/// elements because their used value becomes `none`; we mirror that so
+/// positioned elements stay in the positioned layer.
+fn is_float(style: &ComputedStyle) -> bool {
+    if matches!(style.position, Position::Absolute | Position::Fixed) {
+        return false;
+    }
+    style.float.is_floating()
 }
 
 /// Checks if an element is inline-level
