@@ -1435,6 +1435,17 @@ mod tests {
         assert!(columns[1].max_width > columns[0].max_width);
     }
 
+    #[test]
+    fn spanning_growth_prefers_flexible_columns() {
+        let mut columns = vec![ColumnConstraints::fixed(100.0), ColumnConstraints::new(10.0, 200.0)];
+
+        distribute_spanning_cell_width(&mut columns, 0, 2, 210.0, 210.0);
+
+        // Fixed column stays at its authored width; flexible column absorbs the remainder.
+        assert_eq!(columns[0].min_width, 100.0);
+        assert!(columns[1].min_width > 100.0);
+    }
+
     // ========== Compute Column Constraints Tests ==========
 
     #[test]
