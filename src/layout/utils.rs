@@ -21,12 +21,28 @@ pub fn resolve_length_with_percentage(
     font_size: f32,
     root_font_size: f32,
 ) -> Option<f32> {
+    resolve_length_with_percentage_metrics(length, percentage_base, viewport, font_size, root_font_size, None, None)
+}
+
+/// Resolves a length using percentage base, viewport, and optional metric-aware font resolution.
+pub fn resolve_length_with_percentage_metrics(
+    length: Length,
+    percentage_base: Option<f32>,
+    viewport: Size,
+    font_size: f32,
+    root_font_size: f32,
+    style: Option<&ComputedStyle>,
+    font_context: Option<&FontContext>,
+) -> Option<f32> {
     if length.unit.is_percentage() {
         percentage_base.map(|b| length.resolve_against(b))
     } else if length.unit.is_viewport_relative() {
         Some(length.resolve_with_viewport(viewport.width, viewport.height))
     } else if length.unit.is_font_relative() {
-        Some(resolve_font_relative(length, font_size, root_font_size))
+        match (style, font_context) {
+            (Some(style), Some(ctx)) => Some(resolve_font_relative_length(length, style, ctx)),
+            _ => Some(resolve_font_relative(length, font_size, root_font_size)),
+        }
     } else if length.unit.is_absolute() {
         Some(length.to_px())
     } else {
@@ -60,6 +76,19 @@ pub fn resolve_offset(
     font_size: f32,
     root_font_size: f32,
 ) -> Option<f32> {
+    resolve_offset_with_metrics(value, percentage_base, viewport, font_size, root_font_size, None, None)
+}
+
+/// Metric-aware offset resolver (uses font metrics when style/context provided).
+pub fn resolve_offset_with_metrics(
+    value: &LengthOrAuto,
+    percentage_base: f32,
+    viewport: crate::geometry::Size,
+    font_size: f32,
+    root_font_size: f32,
+    style: Option<&ComputedStyle>,
+    font_context: Option<&FontContext>,
+) -> Option<f32> {
     match value {
         LengthOrAuto::Auto => None,
         LengthOrAuto::Length(length) => {
@@ -70,7 +99,10 @@ pub fn resolve_offset(
             } else if length.unit.is_viewport_relative() {
                 Some(length.resolve_with_viewport(viewport.width, viewport.height))
             } else {
-                Some(resolve_font_relative(*length, font_size, root_font_size))
+                match (style, font_context) {
+                    (Some(style), Some(ctx)) => Some(resolve_font_relative_length(*length, style, ctx)),
+                    _ => Some(resolve_font_relative(*length, font_size, root_font_size)),
+                }
             }
         }
     }

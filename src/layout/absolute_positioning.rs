@@ -320,13 +320,7 @@ impl AbsoluteLayout {
         static_y: f32,
     ) -> Result<(f32, f32, f32, f32), LayoutError> {
         let top = resolve_offset(&style.top, cb_height, viewport, style.font_size, style.root_font_size);
-        let bottom = resolve_offset(
-            &style.bottom,
-            cb_height,
-            viewport,
-            style.font_size,
-            style.root_font_size,
-        );
+        let bottom = resolve_offset(&style.bottom, cb_height, viewport, style.font_size, style.root_font_size);
 
         // Get padding and border
         let padding_top = style.padding.top;
@@ -413,8 +407,7 @@ impl AbsoluteLayout {
         viewport: Size,
         width: f32,
     ) -> (f32, f32, f32) {
-        let left =
-            resolve_offset(&style.left, cb_width, viewport, style.font_size, style.root_font_size).unwrap_or(0.0);
+        let left = resolve_offset(&style.left, cb_width, viewport, style.font_size, style.root_font_size).unwrap_or(0.0);
         let right =
             resolve_offset(&style.right, cb_width, viewport, style.font_size, style.root_font_size).unwrap_or(0.0);
 
@@ -462,15 +455,10 @@ impl AbsoluteLayout {
         viewport: Size,
         height: f32,
     ) -> (f32, f32, f32) {
-        let top = resolve_offset(&style.top, cb_height, viewport, style.font_size, style.root_font_size).unwrap_or(0.0);
-        let bottom = resolve_offset(
-            &style.bottom,
-            cb_height,
-            viewport,
-            style.font_size,
-            style.root_font_size,
-        )
-        .unwrap_or(0.0);
+        let top =
+            resolve_offset(&style.top, cb_height, viewport, style.font_size, style.root_font_size).unwrap_or(0.0);
+        let bottom =
+            resolve_offset(&style.bottom, cb_height, viewport, style.font_size, style.root_font_size).unwrap_or(0.0);
 
         let padding_top = style.padding.top;
         let padding_bottom = style.padding.bottom;
