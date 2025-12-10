@@ -2734,31 +2734,24 @@ impl InlineFormattingContext {
             }
             *line_offset += seg_height;
             *use_first_line_width = false;
+            pending.clear();
             Some((seg_height, last_top, last_height))
         };
 
         for item in items {
             if let InlineItem::Floating(floating) = item {
-                let ctx_ref = float_ctx.as_deref().or_else(|| local_float_ctx.as_ref());
-                let (_seg_height, last_top, last_height) = flush_pending(
-                    &mut pending,
-                    &mut use_first_line_width,
-                    &mut line_offset,
-                    &mut lines,
-                    ctx_ref,
-                )
-                .unwrap_or((0.0, 0.0, 0.0));
+                if float_ctx.is_none() && local_float_ctx.is_none() {
+                    local_float_ctx = Some(FloatContext::new(available_width.max(0.0)));
+                }
 
-                let float_ctx_mut: &mut FloatContext = if let Some(ctx) = float_ctx.as_deref_mut() {
-                    ctx
-                } else {
-                    local_float_ctx
-                        .get_or_insert_with(|| FloatContext::new(available_width.max(0.0)))
-                };
+                let mut candidate_ctx = float_ctx
+                    .as_deref()
+                    .or_else(|| local_float_ctx.as_ref())
+                    .cloned()
+                    .unwrap_or_else(|| FloatContext::new(available_width.max(0.0)));
 
-                let mut candidate_ctx = float_ctx_mut.clone();
-                // Place the float at the top of the last emitted line (current line).
-                let float_min_y = float_base_y + (line_offset - last_height) + last_top;
+                // Place the float at the current line offset and reflow accumulated content around it.
+                let float_min_y = float_base_y + line_offset;
                 let (fragment, _, bottom_rel) = self.layout_inline_float_fragment(
                     &floating,
                     available_width,
@@ -2769,14 +2762,21 @@ impl InlineFormattingContext {
                 max_float_bottom = max_float_bottom.max(bottom_rel);
                 float_fragments.push(fragment);
 
+                // Lay out any buffered inline items with the updated float context.
+                let _ = flush_pending(
+                    &mut pending,
+                    &mut use_first_line_width,
+                    &mut line_offset,
+                    &mut lines,
+                    Some(&candidate_ctx),
+                );
+
                 // Replace the working float context with the candidate that includes the new float.
                 if let Some(ctx) = float_ctx.as_deref_mut() {
                     *ctx = candidate_ctx;
                 } else {
                     local_float_ctx = Some(candidate_ctx);
                 }
-
-                use_first_line_width = false;
             } else {
                 pending.push(item);
             }

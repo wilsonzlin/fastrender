@@ -7,6 +7,7 @@
 
 ## Recent changes (this branch)
 - Floats/clear now flow through computed styles and block layout: floating boxes use shrink-to-fit sizing, are placed via the BFC float context with `clear` handling, and extend BFC height; inline formatting still skips floating inline boxes for now. Added a block regression to lock float height/clearance behavior. Parsing tests already cover float/clear.
+- Inline floats now place the float into a cloned context at the current line offset and then flush buffered inline content against that updated context (clearing the buffer), so the float shapes the current segment without duplicating earlier lines or altering prior segments.
 - Inline lines now consult the float context: line widths/boxes are shortened per float coverage via InlineFloatIntegration, and a regression asserts inline text adjacent to a float uses the reduced width.
 - Float-wrapping lines now carry float-aware offsets: line boxes include the float-determined left edge and any vertical displacement, bounding boxes shift accordingly, and line-breaking inside float space subtracts positive text-indent so text no longer overlays floats or starts at x=0 when narrowed by floats.
 - Added an inline formatting regression to assert float-driven line offsets/width shortening are visible via line metadata, guarding the float-aware offsets path.
