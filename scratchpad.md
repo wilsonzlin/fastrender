@@ -6,7 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
-- Floats/clear now flow through computed styles and block layout: floating boxes are taken out of normal flow, placed with the float context, obey `clear`, and contribute to the BFC height; inline formatting skips floating inline boxes for now. Parsing tests added for float/clear.
+- Floats/clear now flow through computed styles and block layout: floating boxes use shrink-to-fit sizing, are placed via the BFC float context with `clear` handling, and extend BFC height; inline formatting still skips floating inline boxes for now. Added a block regression to lock float height/clearance behavior. Parsing tests already cover float/clear.
 - Added `float`/`clear` to computed styles with parsing and regression coverage, so float metadata now flows through style resolution in preparation for a full float layout implementation.
 - Inline intrinsic sizing in block formatting contexts now splits inline runs around intervening block-level children; min/max-content widths take the widest run rather than concatenating text across forced breaks, aligning shrink-to-fit math with anonymous block box generation.
 - `visibility: collapse` now prunes table rows/columns from TableStructure, keeps source indices for mapping, trims spans, drops collapsed cells, and maps row/column backgrounds/borders using source→visible lookup; regressions cover collapsed rows and columns. Row/column group collapse is propagated to child tracks so entire groups vanish from layout and painting.

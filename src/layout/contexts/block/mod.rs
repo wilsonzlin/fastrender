@@ -31,7 +31,7 @@ use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
 use crate::layout::contexts::block::width::MarginValue;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::InlineFormattingContext;
-use crate::layout::float_context::FloatContext;
+use crate::layout::float_context::{FloatContext, FloatSide};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::utils::{
     border_size_from_box_sizing, compute_replaced_size, content_size_from_box_sizing, resolve_font_relative_length,
@@ -462,7 +462,6 @@ impl BlockFormattingContext {
                 // Honor clearance against existing floats
                 current_y = float_ctx.compute_clearance(current_y, child.style.clear);
 
-                // Resolve horizontal metrics, treating auto margins as zero per float rules
                 let percentage_base = containing_width;
                 let margin_left = child
                     .style
@@ -494,14 +493,85 @@ impl BlockFormattingContext {
                     })
                     .unwrap_or(0.0)
                     .max(0.0);
+                let horizontal_edges = horizontal_padding_and_borders(
+                    &child.style,
+                    percentage_base,
+                    self.viewport_size,
+                    &self.font_context,
+                );
 
-                let mut width_style = (*child.style).clone();
-                width_style.margin_left = Some(Length::px(margin_left));
-                width_style.margin_right = Some(Length::px(margin_right));
-                let width_metrics = compute_block_width(&width_style, containing_width, self.viewport_size);
+                // CSS 2.1 shrink-to-fit formula for floats
+                let factory = FormattingContextFactory::with_font_context_and_viewport(
+                    self.font_context.clone(),
+                    self.viewport_size,
+                );
+                let fc_type = child.formatting_context().unwrap_or(FormattingContextType::Block);
+                let fc = factory.create(fc_type);
+                let preferred_min_content = fc
+                    .compute_intrinsic_inline_size(child, IntrinsicSizingMode::MinContent)
+                    .unwrap_or(0.0);
+                let preferred_content = fc
+                    .compute_intrinsic_inline_size(child, IntrinsicSizingMode::MaxContent)
+                    .unwrap_or(preferred_min_content);
 
-                let box_width = width_metrics.total_width();
-                let content_width = width_metrics.content_width;
+                let preferred_min = preferred_min_content + horizontal_edges;
+                let preferred = preferred_content + horizontal_edges;
+
+                let specified_width = child
+                    .style
+                    .width
+                    .as_ref()
+                    .map(|l| {
+                        resolve_length_for_width(
+                            *l,
+                            percentage_base,
+                            &child.style,
+                            &self.font_context,
+                            self.viewport_size,
+                        )
+                    })
+                    .map(|w| border_size_from_box_sizing(w, horizontal_edges, child.style.box_sizing));
+
+                let min_width = child
+                    .style
+                    .min_width
+                    .as_ref()
+                    .map(|l| {
+                        resolve_length_for_width(
+                            *l,
+                            percentage_base,
+                            &child.style,
+                            &self.font_context,
+                            self.viewport_size,
+                        )
+                    })
+                    .map(|w| border_size_from_box_sizing(w, horizontal_edges, child.style.box_sizing))
+                    .unwrap_or(0.0);
+                let max_width = child
+                    .style
+                    .max_width
+                    .as_ref()
+                    .map(|l| {
+                        resolve_length_for_width(
+                            *l,
+                            percentage_base,
+                            &child.style,
+                            &self.font_context,
+                            self.viewport_size,
+                        )
+                    })
+                    .map(|w| border_size_from_box_sizing(w, horizontal_edges, child.style.box_sizing))
+                    .unwrap_or(f32::INFINITY);
+
+                let available = (containing_width - margin_left - margin_right).max(0.0);
+                let used_border_box = if let Some(specified) = specified_width {
+                    specified.clamp(min_width, max_width)
+                } else {
+                    let shrink = preferred.min(available.max(preferred_min));
+                    shrink.clamp(min_width, max_width)
+                };
+
+                let content_width = (used_border_box - horizontal_edges).max(0.0);
 
                 let child_constraints =
                     LayoutConstraints::new(AvailableSpace::Definite(content_width), AvailableSpace::Indefinite);
@@ -541,11 +611,12 @@ impl BlockFormattingContext {
                     })
                     .unwrap_or(0.0)
                     .max(0.0);
+                let box_width = used_border_box;
                 let float_height = margin_top + fragment.bounds.height() + margin_bottom;
 
                 let side = match child.style.float {
-                    Float::Left => crate::layout::float_context::FloatSide::Left,
-                    Float::Right => crate::layout::float_context::FloatSide::Right,
+                    Float::Left => FloatSide::Left,
+                    Float::Right => FloatSide::Right,
                     Float::None => unreachable!(),
                 };
 
@@ -888,10 +959,7 @@ impl FormattingContext for BlockFormattingContext {
 /// Checks if a box is out of normal flow (absolute/fixed positioned or float)
 fn is_out_of_flow(box_node: &BoxNode) -> bool {
     let position = box_node.style.position;
-    if matches!(position, Position::Absolute | Position::Fixed) {
-        return true;
-    }
-    box_node.style.float.is_floating()
+    matches!(position, Position::Absolute | Position::Fixed)
 }
 
 fn resolve_length_for_width(
@@ -1113,6 +1181,62 @@ mod tests {
     fn test_fc_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<BlockFormattingContext>();
+    }
+
+    #[test]
+    fn floats_extend_height_and_clear_moves_following_block() {
+        let bfc = BlockFormattingContext::new();
+
+        let mut float_style = ComputedStyle::default();
+        float_style.display = Display::Block;
+        float_style.float = Float::Left;
+        float_style.width = Some(Length::px(60.0));
+        float_style.height = Some(Length::px(50.0));
+        let float_node = BoxNode::new_block(Arc::new(float_style), FormattingContextType::Block, vec![]);
+
+        let mut cleared_style = ComputedStyle::default();
+        cleared_style.display = Display::Block;
+        cleared_style.clear = crate::style::float::Clear::Left;
+        cleared_style.height = Some(Length::px(10.0));
+        let cleared_node = BoxNode::new_block(Arc::new(cleared_style), FormattingContextType::Block, vec![]);
+
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![float_node, cleared_node],
+        );
+        let constraints = LayoutConstraints::definite(200.0, 400.0);
+
+        let fragment = bfc.layout(&root, &constraints).unwrap();
+        assert!(
+            fragment.bounds.height() >= 60.0,
+            "BFC height should include float and cleared block; got {}",
+            fragment.bounds.height()
+        );
+
+        let mut float_y = None;
+        let mut clear_y = None;
+        for child in &fragment.children {
+            if let Some(style) = &child.style {
+                if style.float.is_floating() {
+                    float_y = Some(child.bounds.y());
+                }
+                if matches!(
+                    style.clear,
+                    crate::style::float::Clear::Left | crate::style::float::Clear::Both
+                ) {
+                    clear_y = Some(child.bounds.y());
+                }
+            }
+        }
+
+        let float_y = float_y.expect("float fragment");
+        let clear_y = clear_y.expect("cleared fragment");
+        assert!(float_y.abs() < 0.01);
+        assert!(
+            clear_y >= 50.0,
+            "cleared block should be pushed below float; got clear_y={clear_y}"
+        );
     }
 
     #[test]
