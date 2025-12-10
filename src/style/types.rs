@@ -393,6 +393,24 @@ pub enum FontVariant {
     SmallCaps,
 }
 
+/// Caps variants (font-variant-caps)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontVariantCaps {
+    Normal,
+    SmallCaps,
+    AllSmallCaps,
+    PetiteCaps,
+    AllPetiteCaps,
+    Unicase,
+    TitlingCaps,
+}
+
+impl Default for FontVariantCaps {
+    fn default() -> Self {
+        FontVariantCaps::Normal
+    }
+}
+
 /// Numeric variants (`font-variant-numeric`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumericFigure {

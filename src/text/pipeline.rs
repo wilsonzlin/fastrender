@@ -50,7 +50,7 @@
 use crate::error::{Result, TextError};
 use crate::style::types::{
     Direction as CssDirection, EastAsianVariant, EastAsianWidth, FontKerning, FontStyle as CssFontStyle, FontVariant,
-    FontVariantPosition, NumericFigure, NumericFraction, NumericSpacing,
+    FontVariantCaps, FontVariantPosition, NumericFigure, NumericFraction, NumericSpacing,
 };
 use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStretch, FontStyle, LoadedFont};
@@ -590,6 +590,7 @@ fn collect_opentype_features(style: &ComputedStyle) -> Vec<Feature> {
     let numeric = &style.font_variant_numeric;
     let east = &style.font_variant_east_asian;
     let position = style.font_variant_position;
+    let caps = style.font_variant_caps;
 
     let mut push_toggle = |tag: [u8; 4], enabled: bool| {
         features.push(Feature {
@@ -649,6 +650,22 @@ fn collect_opentype_features(style: &ComputedStyle) -> Vec<Feature> {
     }
     if east.ruby {
         push_toggle(*b"ruby", true);
+    }
+
+    match caps {
+        FontVariantCaps::Normal => {}
+        FontVariantCaps::SmallCaps => push_toggle(*b"smcp", true),
+        FontVariantCaps::AllSmallCaps => {
+            push_toggle(*b"smcp", true);
+            push_toggle(*b"c2sc", true);
+        }
+        FontVariantCaps::PetiteCaps => push_toggle(*b"pcap", true),
+        FontVariantCaps::AllPetiteCaps => {
+            push_toggle(*b"pcap", true);
+            push_toggle(*b"c2pc", true);
+        }
+        FontVariantCaps::Unicase => push_toggle(*b"unic", true),
+        FontVariantCaps::TitlingCaps => push_toggle(*b"titl", true),
     }
 
     match position {
@@ -953,7 +970,9 @@ impl ShapingPipeline {
             return Ok(Vec::new());
         }
 
-        if matches!(style.font_variant, FontVariant::SmallCaps) {
+        if matches!(style.font_variant, FontVariant::SmallCaps)
+            || matches!(style.font_variant_caps, FontVariantCaps::SmallCaps | FontVariantCaps::AllSmallCaps)
+        {
             return self.shape_small_caps(text, style, font_context);
         }
 
@@ -1016,9 +1035,10 @@ impl ShapingPipeline {
         let mut segment_start: usize = 0;
         let mut buffer = String::new();
         let mut current_small = None;
+        let all_small = matches!(style.font_variant_caps, FontVariantCaps::AllSmallCaps);
 
         for (idx, ch) in text.char_indices() {
-            let is_small = ch.is_lowercase();
+            let is_small = ch.is_lowercase() || (all_small && ch.is_uppercase());
             if let Some(flag) = current_small {
                 if flag != is_small {
                     self.flush_small_caps_segment(
@@ -1504,5 +1524,32 @@ mod tests {
         assert_eq!(seen.get(b"fwid"), Some(&1));
         assert_eq!(seen.get(b"ruby"), Some(&1));
         assert_eq!(seen.get(b"sups"), Some(&1));
+    }
+
+    #[test]
+    fn collect_features_includes_caps_variants() {
+        let mut style = ComputedStyle::default();
+        style.font_variant_caps = FontVariantCaps::AllSmallCaps;
+
+        let feats = collect_opentype_features(&style);
+        let mut seen: std::collections::HashMap<[u8; 4], u32> = std::collections::HashMap::new();
+        for f in feats {
+            seen.insert(f.tag.to_bytes(), f.value);
+        }
+        assert_eq!(seen.get(b"smcp"), Some(&1));
+        assert_eq!(seen.get(b"c2sc"), Some(&1));
+
+        style.font_variant_caps = FontVariantCaps::AllPetiteCaps;
+        let feats = collect_opentype_features(&style);
+        let mut seen: std::collections::HashMap<[u8; 4], u32> = std::collections::HashMap::new();
+        for f in feats {
+            seen.insert(f.tag.to_bytes(), f.value);
+        }
+        assert_eq!(seen.get(b"pcap"), Some(&1));
+        assert_eq!(seen.get(b"c2pc"), Some(&1));
+
+        style.font_variant_caps = FontVariantCaps::Unicase;
+        let feats = collect_opentype_features(&style);
+        assert!(feats.iter().any(|f| f.tag.to_bytes() == *b"unic"));
     }
 }

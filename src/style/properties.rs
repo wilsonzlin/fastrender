@@ -503,6 +503,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     parse_font_shorthand(raw, parent_font_size, root_font_size)
                 {
                     styles.font_variant_ligatures = FontVariantLigatures::default();
+                    styles.font_variant_caps = FontVariantCaps::Normal;
                     styles.font_variant_numeric = FontVariantNumeric::default();
                     styles.font_variant_east_asian = FontVariantEastAsian::default();
                     styles.font_variant_position = FontVariantPosition::Normal;
@@ -574,10 +575,53 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         }
         "font-variant" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.font_variant = match kw.as_str() {
-                    "normal" => FontVariant::Normal,
-                    "small-caps" => FontVariant::SmallCaps,
-                    _ => styles.font_variant,
+                // Accept both the legacy shorthand and caps values.
+                let tokens: Vec<&str> = kw.split_whitespace().collect();
+                if tokens.len() == 1 && tokens[0] == "normal" {
+                    styles.font_variant = FontVariant::Normal;
+                    styles.font_variant_caps = FontVariantCaps::Normal;
+                } else {
+                    for tok in tokens {
+                        match tok {
+                            "small-caps" => {
+                                styles.font_variant = FontVariant::SmallCaps;
+                                styles.font_variant_caps = FontVariantCaps::SmallCaps;
+                            }
+                            "all-small-caps" => {
+                                styles.font_variant_caps = FontVariantCaps::AllSmallCaps;
+                            }
+                            "petite-caps" => {
+                                styles.font_variant_caps = FontVariantCaps::PetiteCaps;
+                            }
+                            "all-petite-caps" => {
+                                styles.font_variant_caps = FontVariantCaps::AllPetiteCaps;
+                            }
+                            "unicase" => {
+                                styles.font_variant_caps = FontVariantCaps::Unicase;
+                            }
+                            "titling-caps" => {
+                                styles.font_variant_caps = FontVariantCaps::TitlingCaps;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        "font-variant-caps" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.font_variant_caps = match kw.as_str() {
+                    "normal" => FontVariantCaps::Normal,
+                    "small-caps" => {
+                        styles.font_variant = FontVariant::SmallCaps;
+                        FontVariantCaps::SmallCaps
+                    }
+                    "all-small-caps" => FontVariantCaps::AllSmallCaps,
+                    "petite-caps" => FontVariantCaps::PetiteCaps,
+                    "all-petite-caps" => FontVariantCaps::AllPetiteCaps,
+                    "unicase" => FontVariantCaps::Unicase,
+                    "titling-caps" => FontVariantCaps::TitlingCaps,
+                    _ => styles.font_variant_caps,
                 };
             }
         }
@@ -3511,6 +3555,26 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert!(matches!(style.font_variant, FontVariant::SmallCaps));
+    }
+
+    #[test]
+    fn parses_font_variant_caps_longhand() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font-variant-caps".to_string(),
+            value: PropertyValue::Keyword("all-small-caps".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_variant_caps, FontVariantCaps::AllSmallCaps));
+
+        let decl = Declaration {
+            property: "font-variant".to_string(),
+            value: PropertyValue::Keyword("all-petite-caps titling-caps".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_variant_caps, FontVariantCaps::TitlingCaps));
     }
 
     #[test]

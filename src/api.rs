@@ -877,7 +877,6 @@ impl FastRender {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::contexts::inline::baseline::compute_line_height;
     use crate::layout::contexts::inline::line_builder::TextItem;
     use crate::text::pipeline::ShapingPipeline;
     use crate::ComputedStyle;
