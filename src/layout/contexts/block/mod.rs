@@ -33,11 +33,12 @@ use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::InlineFormattingContext;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::utils::{
-    border_size_from_box_sizing, compute_replaced_size, content_size_from_box_sizing, resolve_length_with_percentage,
+    border_size_from_box_sizing, compute_replaced_size, content_size_from_box_sizing, resolve_font_relative_length,
+    resolve_length_with_percentage,
 };
 use crate::style::display::FormattingContextType;
 use crate::style::position::Position;
-use crate::style::values::{Length, LengthUnit};
+use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::tree::box_tree::{BoxNode, BoxType, ReplacedBox};
@@ -197,29 +198,29 @@ impl BlockFormattingContext {
         let border_top = resolve_length_for_width(
             style.border_top_width,
             containing_width,
-            style.font_size,
-            style.root_font_size,
+            style,
+            &self.font_context,
             self.viewport_size,
         );
         let border_bottom = resolve_length_for_width(
             style.border_bottom_width,
             containing_width,
-            style.font_size,
-            style.root_font_size,
+            style,
+            &self.font_context,
             self.viewport_size,
         );
         let padding_top = resolve_length_for_width(
             style.padding_top,
             containing_width,
-            style.font_size,
-            style.root_font_size,
+            style,
+            &self.font_context,
             self.viewport_size,
         );
         let padding_bottom = resolve_length_for_width(
             style.padding_bottom,
             containing_width,
-            style.font_size,
-            style.root_font_size,
+            style,
+            &self.font_context,
             self.viewport_size,
         );
 
@@ -310,30 +311,30 @@ impl BlockFormattingContext {
         let padding_top = resolve_length_for_width(
             style.padding_top,
             containing_width,
-            style.font_size,
-            style.root_font_size,
+            style,
+            &self.font_context,
             self.viewport_size,
         );
         let padding_bottom = resolve_length_for_width(
             style.padding_bottom,
             containing_width,
-            style.font_size,
-            style.root_font_size,
+            style,
+            &self.font_context,
             self.viewport_size,
         );
 
         let border_top = resolve_length_for_width(
             style.border_top_width,
             containing_width,
-            style.font_size,
-            style.root_font_size,
+            style,
+            &self.font_context,
             self.viewport_size,
         );
         let border_bottom = resolve_length_for_width(
             style.border_bottom_width,
             containing_width,
-            style.font_size,
-            style.root_font_size,
+            style,
+            &self.font_context,
             self.viewport_size,
         );
 
@@ -383,15 +384,15 @@ impl BlockFormattingContext {
         let parent_has_top_separation = resolve_length_for_width(
             parent.style.border_top_width,
             containing_width,
-            parent.style.font_size,
-            parent.style.root_font_size,
+            &parent.style,
+            &self.font_context,
             self.viewport_size,
         ) > 0.0
             || resolve_length_for_width(
                 parent.style.padding_top,
                 containing_width,
-                parent.style.font_size,
-                parent.style.root_font_size,
+                &parent.style,
+                &self.font_context,
                 self.viewport_size,
             ) > 0.0;
 
@@ -481,15 +482,15 @@ impl BlockFormattingContext {
         let parent_has_bottom_separation = resolve_length_for_width(
             parent.style.border_bottom_width,
             containing_width,
-            parent.style.font_size,
-            parent.style.root_font_size,
+            &parent.style,
+            &self.font_context,
             self.viewport_size,
         ) > 0.0
             || resolve_length_for_width(
                 parent.style.padding_bottom,
                 containing_width,
-                parent.style.font_size,
-                parent.style.root_font_size,
+                &parent.style,
+                &self.font_context,
                 self.viewport_size,
             ) > 0.0;
 
@@ -532,8 +533,8 @@ impl FormattingContext for BlockFormattingContext {
                 resolve_length_for_width(
                     *l,
                     containing_width,
-                    style.font_size,
-                    style.root_font_size,
+                    style,
+                    &self.font_context,
                     self.viewport_size,
                 )
             })
@@ -546,8 +547,8 @@ impl FormattingContext for BlockFormattingContext {
                 resolve_length_for_width(
                     *l,
                     containing_width,
-                    style.font_size,
-                    style.root_font_size,
+                    style,
+                    &self.font_context,
                     self.viewport_size,
                 )
             })
@@ -565,6 +566,7 @@ impl FormattingContext for BlockFormattingContext {
                 computed_width.padding_right,
                 computed_width.border_right,
                 self.viewport_size,
+                &self.font_context,
             );
             computed_width.content_width = clamped_content_width;
             computed_width.margin_left = margin_left;
@@ -574,29 +576,29 @@ impl FormattingContext for BlockFormattingContext {
         let border_top = resolve_length_for_width(
             style.border_top_width,
             containing_width,
-            style.font_size,
-            style.root_font_size,
+            style,
+            &self.font_context,
             self.viewport_size,
         );
         let border_bottom = resolve_length_for_width(
             style.border_bottom_width,
             containing_width,
-            style.font_size,
-            style.root_font_size,
+            style,
+            &self.font_context,
             self.viewport_size,
         );
         let padding_top = resolve_length_for_width(
             style.padding_top,
             containing_width,
-            style.font_size,
-            style.root_font_size,
+            style,
+            &self.font_context,
             self.viewport_size,
         );
         let padding_bottom = resolve_length_for_width(
             style.padding_bottom,
             containing_width,
-            style.font_size,
-            style.root_font_size,
+            style,
+            &self.font_context,
             self.viewport_size,
         );
         let vertical_edges = border_top + padding_top + padding_bottom + border_bottom;
@@ -671,13 +673,13 @@ impl FormattingContext for BlockFormattingContext {
     fn compute_intrinsic_inline_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
         let style = &box_node.style;
         // Honor specified widths that resolve without a containing block
-        let edges = horizontal_padding_and_borders(style, 0.0, self.viewport_size);
+        let edges = horizontal_padding_and_borders(style, 0.0, self.viewport_size, &self.font_context);
         if let Some(specified) = style.width.as_ref() {
             let resolved = resolve_length_for_width(
                 *specified,
                 0.0,
-                style.font_size,
-                style.root_font_size,
+                style,
+                &self.font_context,
                 self.viewport_size,
             );
             // Ignore auto/relative cases that resolve to 0.0
@@ -689,7 +691,7 @@ impl FormattingContext for BlockFormattingContext {
         // Replaced elements fall back to their intrinsic content size plus padding/borders
         if let BoxType::Replaced(replaced_box) = &box_node.box_type {
             let size = compute_replaced_size(style, replaced_box, None, self.viewport_size);
-            let edges = horizontal_padding_and_borders(style, size.width, self.viewport_size);
+            let edges = horizontal_padding_and_borders(style, size.width, self.viewport_size, &self.font_context);
             return Ok(size.width + edges);
         }
 
@@ -722,13 +724,13 @@ impl FormattingContext for BlockFormattingContext {
         let min_width = style
             .min_width
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, 0.0, style.font_size, style.root_font_size, self.viewport_size))
+            .map(|l| resolve_length_for_width(*l, 0.0, style, &self.font_context, self.viewport_size))
             .map(|w| border_size_from_box_sizing(w, edges, style.box_sizing))
             .unwrap_or(0.0);
         let max_width = style
             .max_width
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, 0.0, style.font_size, style.root_font_size, self.viewport_size))
+            .map(|l| resolve_length_for_width(*l, 0.0, style, &self.font_context, self.viewport_size))
             .map(|w| border_size_from_box_sizing(w, edges, style.box_sizing))
             .unwrap_or(f32::INFINITY);
         width = width.clamp(min_width, max_width);
@@ -746,8 +748,8 @@ fn is_out_of_flow(box_node: &BoxNode) -> bool {
 fn resolve_length_for_width(
     length: Length,
     percentage_base: f32,
-    font_size: f32,
-    root_font_size: f32,
+    style: &ComputedStyle,
+    font_context: &FontContext,
     viewport: crate::geometry::Size,
 ) -> f32 {
     if length.unit.is_percentage() {
@@ -757,40 +759,39 @@ fn resolve_length_for_width(
     } else if length.unit.is_viewport_relative() {
         length.resolve_with_viewport(viewport.width, viewport.height)
     } else {
-        match length.unit {
-            LengthUnit::Em => length.value * font_size,
-            LengthUnit::Ex => length.value * font_size * 0.5,
-            LengthUnit::Ch => length.value * font_size * 0.5,
-            LengthUnit::Rem => length.value * root_font_size,
-            _ => length.value,
-        }
+        resolve_font_relative_length(length, style, font_context)
     }
 }
 
-fn horizontal_padding_and_borders(style: &ComputedStyle, percentage_base: f32, viewport: crate::geometry::Size) -> f32 {
+fn horizontal_padding_and_borders(
+    style: &ComputedStyle,
+    percentage_base: f32,
+    viewport: crate::geometry::Size,
+    font_context: &FontContext,
+) -> f32 {
     resolve_length_for_width(
         style.padding_left,
         percentage_base,
-        style.font_size,
-        style.root_font_size,
+        style,
+        font_context,
         viewport,
     ) + resolve_length_for_width(
         style.padding_right,
         percentage_base,
-        style.font_size,
-        style.root_font_size,
+        style,
+        font_context,
         viewport,
     ) + resolve_length_for_width(
         style.border_left_width,
         percentage_base,
-        style.font_size,
-        style.root_font_size,
+        style,
+        font_context,
         viewport,
     ) + resolve_length_for_width(
         style.border_right_width,
         percentage_base,
-        style.font_size,
-        style.root_font_size,
+        style,
+        font_context,
         viewport,
     )
 }
@@ -804,13 +805,14 @@ fn recompute_margins_for_width(
     padding_right: f32,
     border_right: f32,
     viewport: crate::geometry::Size,
+    font_context: &FontContext,
 ) -> (f32, f32) {
     let margin_left = match &style.margin_left {
         Some(len) => MarginValue::Length(resolve_length_for_width(
             *len,
             containing_width,
-            style.font_size,
-            style.root_font_size,
+            style,
+            font_context,
             viewport,
         )),
         None => MarginValue::Auto,
@@ -819,8 +821,8 @@ fn recompute_margins_for_width(
         Some(len) => MarginValue::Length(resolve_length_for_width(
             *len,
             containing_width,
-            style.font_size,
-            style.root_font_size,
+            style,
+            font_context,
             viewport,
         )),
         None => MarginValue::Auto,

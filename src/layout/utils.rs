@@ -3,10 +3,13 @@
 //! Contains common functions used across multiple layout modules.
 
 use crate::geometry::Size;
-use crate::style::types::BoxSizing;
+use crate::style::types::{BoxSizing, FontStyle as CssFontStyle};
 use crate::style::values::{Length, LengthOrAuto, LengthUnit};
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::ReplacedBox;
+use crate::text::font_db::{FontStretch, FontStyle as FontFaceStyle};
+use crate::text::font_loader::FontContext;
+use crate::text::pipeline::{compute_adjusted_font_size, preferred_font_aspect};
 
 /// Resolves a length using the provided percentage base, font size, and root font size.
 ///
@@ -70,6 +73,53 @@ pub fn resolve_offset(
                 Some(resolve_font_relative(*length, font_size, root_font_size))
             }
         }
+    }
+}
+
+/// Resolves font-relative lengths (em/ex/ch/rem) using font metrics and font-size-adjust.
+pub fn resolve_font_relative_length(length: Length, style: &ComputedStyle, font_context: &FontContext) -> f32 {
+    let base_size = style.font_size;
+    let preferred_aspect = preferred_font_aspect(style, font_context);
+    let font_style = match style.font_style {
+        CssFontStyle::Normal => FontFaceStyle::Normal,
+        CssFontStyle::Italic => FontFaceStyle::Italic,
+        CssFontStyle::Oblique(_) => FontFaceStyle::Oblique,
+    };
+    let font_stretch = FontStretch::from_percentage(style.font_stretch.to_percentage());
+
+    let maybe_font = font_context
+        .get_font_full(&style.font_family, style.font_weight.to_u16(), font_style, font_stretch)
+        .or_else(|| font_context.get_sans_serif());
+
+    let (used_size, x_height, ch_width) = if let Some(font) = maybe_font {
+        let used_size = compute_adjusted_font_size(style, &font, preferred_aspect);
+        let mut x_height = None;
+        let mut ch_width = None;
+        if let Ok(metrics) = font.metrics() {
+            let scaled = metrics.scale(used_size);
+            x_height = scaled.x_height;
+        }
+        if let Ok(face) = font.as_ttf_face() {
+            if let Some(advance) = face.glyph_index('0').and_then(|g| face.glyph_hor_advance(g)) {
+                let units_per_em = face.units_per_em();
+                if units_per_em != 0 {
+                    let scale = used_size / (units_per_em as f32);
+                    ch_width = Some(advance as f32 * scale);
+                }
+            }
+        }
+        (used_size, x_height.unwrap_or(used_size * 0.5), ch_width.unwrap_or(used_size * 0.5))
+    } else {
+        let used_size = base_size;
+        (used_size, used_size * 0.5, used_size * 0.5)
+    };
+
+    match length.unit {
+        LengthUnit::Em => length.value * used_size,
+        LengthUnit::Ex => length.value * x_height,
+        LengthUnit::Ch => length.value * ch_width,
+        LengthUnit::Rem => length.value * style.root_font_size,
+        _ => length.resolve_with_font_size(base_size),
     }
 }
 

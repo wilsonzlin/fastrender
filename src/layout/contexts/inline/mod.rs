@@ -44,12 +44,12 @@ use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::line_builder::InlineBoxItem;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::layout::utils::{border_size_from_box_sizing, compute_replaced_size};
+use crate::layout::utils::{border_size_from_box_sizing, compute_replaced_size, resolve_font_relative_length};
 use crate::style::types::{
     FontStyle, HyphensMode, ListStylePosition, OverflowWrap, TabSize, TextAlign, TextJustify, TextTransform,
     WhiteSpace, WordBreak,
 };
-use crate::style::values::{Length, LengthUnit};
+use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::text::hyphenation::Hyphenator;
@@ -1580,52 +1580,6 @@ fn resolve_length_with_percentage_inline(
         Some(length.resolve_with_viewport(viewport.width, viewport.height))
     } else {
         Some(resolve_font_relative_length(length, style, font_context))
-    }
-}
-
-fn resolve_font_relative_length(length: Length, style: &ComputedStyle, font_context: &FontContext) -> f32 {
-    let base_size = style.font_size;
-    let preferred_aspect = preferred_font_aspect(style, font_context);
-    let font_style = match style.font_style {
-        FontStyle::Normal => crate::text::font_db::FontStyle::Normal,
-        FontStyle::Italic => crate::text::font_db::FontStyle::Italic,
-        FontStyle::Oblique(_) => crate::text::font_db::FontStyle::Oblique,
-    };
-    let font_stretch = crate::text::font_db::FontStretch::from_percentage(style.font_stretch.to_percentage());
-
-    let maybe_font = font_context
-        .get_font_full(&style.font_family, style.font_weight.to_u16(), font_style, font_stretch)
-        .or_else(|| font_context.get_sans_serif());
-
-    let (used_size, x_height, ch_width) = if let Some(font) = maybe_font {
-        let used_size = compute_adjusted_font_size(style, &font, preferred_aspect);
-        let mut x_height = None;
-        let mut ch_width = None;
-        if let Ok(metrics) = font.metrics() {
-            let scaled = metrics.scale(used_size);
-            x_height = scaled.x_height;
-        }
-        if let Ok(face) = font.as_ttf_face() {
-            if let Some(advance) = face.glyph_index('0').and_then(|g| face.glyph_hor_advance(g)) {
-                let units_per_em = face.units_per_em();
-                if units_per_em != 0 {
-                    let scale = used_size / (units_per_em as f32);
-                    ch_width = Some(advance as f32 * scale);
-                }
-            }
-        }
-        (used_size, x_height.unwrap_or(used_size * 0.5), ch_width.unwrap_or(used_size * 0.5))
-    } else {
-        let used_size = base_size;
-        (used_size, used_size * 0.5, used_size * 0.5)
-    };
-
-    match length.unit {
-        LengthUnit::Em => length.value * used_size,
-        LengthUnit::Ex => length.value * x_height,
-        LengthUnit::Ch => length.value * ch_width,
-        LengthUnit::Rem => length.value * style.root_font_size,
-        _ => length.resolve_with_font_size(base_size),
     }
 }
 
