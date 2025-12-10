@@ -117,8 +117,12 @@ pub struct ComputedStyle {
     // Grid
     pub grid_template_columns: Vec<GridTrack>,
     pub grid_template_rows: Vec<GridTrack>,
+    /// Parsed grid-template-areas rows (None for empty cells)
+    pub grid_template_areas: Vec<Vec<Option<String>>>,
     pub grid_column_names: HashMap<String, Vec<usize>>, // Named grid lines for columns
     pub grid_row_names: HashMap<String, Vec<usize>>,    // Named grid lines for rows
+    pub grid_column_line_names: Vec<Vec<String>>,       // Line names per column line (tracks+1)
+    pub grid_row_line_names: Vec<Vec<String>>,          // Line names per row line (tracks+1)
     pub grid_gap: Length,
     pub grid_row_gap: Length,
     pub grid_column_gap: Length,
@@ -294,8 +298,11 @@ impl Default for ComputedStyle {
 
             grid_template_columns: Vec::new(),
             grid_template_rows: Vec::new(),
+            grid_template_areas: Vec::new(),
             grid_column_names: HashMap::new(),
             grid_row_names: HashMap::new(),
+            grid_column_line_names: Vec::new(),
+            grid_row_line_names: Vec::new(),
             grid_gap: Length::px(0.0),
             grid_row_gap: Length::px(0.0),
             grid_column_gap: Length::px(0.0),

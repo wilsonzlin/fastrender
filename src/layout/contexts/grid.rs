@@ -32,9 +32,9 @@ use std::collections::HashMap;
 use taffy::geometry::Line;
 use taffy::prelude::{TaffyFitContent, TaffyMaxContent, TaffyMinContent};
 use taffy::style::{
-    AlignContent as TaffyAlignContent, Dimension, Display, GridPlacement as TaffyGridPlacement, GridTemplateComponent,
-    GridTemplateRepetition, LengthPercentage, LengthPercentageAuto, MaxTrackSizingFunction, MinTrackSizingFunction,
-    RepetitionCount, Style as TaffyStyle, TrackSizingFunction,
+    AlignContent as TaffyAlignContent, Dimension, Display, GridPlacement as TaffyGridPlacement, GridTemplateArea,
+    GridTemplateComponent, GridTemplateRepetition, LengthPercentage, LengthPercentageAuto, MaxTrackSizingFunction,
+    MinTrackSizingFunction, RepetitionCount, Style as TaffyStyle, TrackSizingFunction,
 };
 use taffy::style_helpers::TaffyAuto;
 use taffy::tree::{NodeId as TaffyNodeId, TaffyTree};
@@ -46,6 +46,7 @@ use crate::style::display::Display as CssDisplay;
 use crate::style::types::{AlignContent, BoxSizing, GridTrack};
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
+use crate::style::grid::validate_area_rectangles;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
 
@@ -201,6 +202,23 @@ impl GridFormattingContext {
             }
             if !style.grid_row_line_names.is_empty() {
                 taffy_style.grid_template_row_names = style.grid_row_line_names.clone();
+            }
+            if !style.grid_template_areas.is_empty() {
+                if let Some(mut bounds) = validate_area_rectangles(&style.grid_template_areas) {
+                    let mut entries: Vec<_> = bounds.drain().collect();
+                    entries.sort_by(|a, b| a.0.cmp(&b.0));
+                    let mut areas = Vec::with_capacity(entries.len());
+                    for (name, (top, bottom, left, right)) in entries {
+                        areas.push(GridTemplateArea {
+                            name,
+                            row_start: (top as u16) + 1,
+                            row_end: (bottom as u16) + 2,
+                            column_start: (left as u16) + 1,
+                            column_end: (right as u16) + 2,
+                        });
+                    }
+                    taffy_style.grid_template_areas = areas;
+                }
             }
 
             // Gap

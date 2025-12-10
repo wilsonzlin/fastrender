@@ -11,7 +11,8 @@ use crate::style::color::Rgba;
 use crate::style::counters::CounterSet;
 use crate::style::display::Display;
 use crate::style::float::{Clear, Float};
-use crate::style::grid::parse_grid_tracks_with_names;
+use crate::style::grid::{parse_grid_template_areas, parse_grid_tracks_with_names};
+use crate::css::properties::parse_length;
 use crate::style::position::Position;
 use crate::style::types::*;
 use crate::style::values::{Length, LengthUnit};
@@ -495,32 +496,42 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         // Grid
         "grid-template-columns" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                let (tracks, named_lines) = parse_grid_tracks_with_names(kw);
+                let (tracks, named_lines, line_names) = parse_grid_tracks_with_names(kw);
                 styles.grid_template_columns = tracks;
                 styles.grid_column_names = named_lines;
+                styles.grid_column_line_names = line_names;
             }
         }
         "grid-template-rows" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                let (tracks, named_lines) = parse_grid_tracks_with_names(kw);
+                let (tracks, named_lines, line_names) = parse_grid_tracks_with_names(kw);
                 styles.grid_template_rows = tracks;
                 styles.grid_row_names = named_lines;
+                styles.grid_row_line_names = line_names;
             }
         }
+        "grid-template-areas" => match &resolved_value {
+            PropertyValue::Keyword(kw) | PropertyValue::String(kw) => {
+                if let Some(areas) = parse_grid_template_areas(kw) {
+                    styles.grid_template_areas = areas;
+                }
+            }
+            _ => {}
+        },
         "grid-gap" | "gap" => {
-            if let Some(len) = extract_length(&resolved_value) {
-                styles.grid_gap = len;
-                styles.grid_row_gap = len;
-                styles.grid_column_gap = len;
+            if let Some((row, column)) = parse_gap_lengths(&resolved_value) {
+                styles.grid_gap = row;
+                styles.grid_row_gap = row;
+                styles.grid_column_gap = column;
             }
         }
         "grid-row-gap" | "row-gap" => {
-            if let Some(len) = extract_length(&resolved_value) {
+            if let Some(len) = parse_single_gap_length(&resolved_value) {
                 styles.grid_row_gap = len;
             }
         }
         "grid-column-gap" | "column-gap" => {
-            if let Some(len) = extract_length(&resolved_value) {
+            if let Some(len) = parse_single_gap_length(&resolved_value) {
                 styles.grid_column_gap = len;
             }
         }
@@ -1683,6 +1694,65 @@ pub fn extract_length_pair(value: &PropertyValue) -> Option<(Length, Length)> {
         }
         _ => None,
     }
+}
+
+fn parse_gap_token(token: &str) -> Option<Length> {
+    let t = token.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if t.eq_ignore_ascii_case("normal") {
+        return Some(Length::px(0.0));
+    }
+    parse_length(t)
+}
+
+fn extract_gap_component(value: &PropertyValue) -> Option<Length> {
+    match value {
+        PropertyValue::Length(len) => Some(*len),
+        PropertyValue::Percentage(p) => Some(Length::percent(*p)),
+        PropertyValue::Number(n) if *n == 0.0 => Some(Length::px(0.0)),
+        PropertyValue::Keyword(kw) => parse_gap_token(kw),
+        _ => None,
+    }
+}
+
+fn parse_gap_lengths(value: &PropertyValue) -> Option<(Length, Length)> {
+    match value {
+        PropertyValue::Multiple(values) => {
+            let lengths: Vec<Length> = values.iter().filter_map(extract_gap_component).collect();
+            match lengths.as_slice() {
+                [first] => Some((*first, *first)),
+                [first, second, ..] => Some((*first, *second)),
+                _ => None,
+            }
+        }
+        PropertyValue::Keyword(kw) => {
+            let tokens: Vec<&str> = kw.split_whitespace().filter(|s| !s.is_empty()).collect();
+            if tokens.is_empty() {
+                return None;
+            }
+            let mut lengths = Vec::new();
+            for token in tokens.iter().take(2) {
+                if let Some(len) = parse_gap_token(token) {
+                    lengths.push(len);
+                }
+            }
+            match lengths.as_slice() {
+                [first] => Some((*first, *first)),
+                [first, second] => Some((*first, *second)),
+                _ => None,
+            }
+        }
+        PropertyValue::Length(len) => Some((*len, *len)),
+        PropertyValue::Percentage(p) => Some((Length::percent(*p), Length::percent(*p))),
+        PropertyValue::Number(n) if *n == 0.0 => Some((Length::px(0.0), Length::px(0.0))),
+        _ => None,
+    }
+}
+
+fn parse_single_gap_length(value: &PropertyValue) -> Option<Length> {
+    parse_gap_lengths(value).map(|(first, _)| first)
 }
 
 fn parse_spacing_value(
@@ -3543,6 +3613,53 @@ mod tests {
         );
 
         assert!(matches!(style.box_sizing, BoxSizing::BorderBox));
+    }
+
+    #[test]
+    fn gap_shorthand_parses_two_values_and_percent() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "gap".to_string(),
+                value: PropertyValue::Keyword("10px 20%".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(style.grid_row_gap, Length::px(10.0));
+        assert_eq!(style.grid_column_gap, Length::percent(20.0));
+    }
+
+    #[test]
+    fn row_and_column_gap_accept_percent_and_normal() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "row-gap".to_string(),
+                value: PropertyValue::Keyword("normal".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.grid_row_gap, Length::px(0.0));
+
+        let mut style2 = ComputedStyle::default();
+        apply_declaration(
+            &mut style2,
+            &Declaration {
+                property: "column-gap".to_string(),
+                value: PropertyValue::Percentage(15.0),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style2.grid_column_gap, Length::percent(15.0));
     }
 
     #[test]
