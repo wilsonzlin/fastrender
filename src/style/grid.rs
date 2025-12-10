@@ -149,6 +149,14 @@ pub struct ParsedGridTemplate {
     pub column_tracks: Option<(Vec<GridTrack>, Vec<Vec<String>>)>,
 }
 
+/// Parsed representation of the `grid` shorthand.
+pub struct ParsedGridShorthand {
+    pub template: Option<ParsedGridTemplate>,
+    pub auto_rows: Option<Vec<GridTrack>>,
+    pub auto_columns: Option<Vec<GridTrack>>,
+    pub auto_flow: Option<crate::style::types::GridAutoFlow>,
+}
+
 /// Parse the `grid-template` shorthand.
 ///
 /// Supports two forms:
@@ -247,6 +255,115 @@ pub fn parse_grid_template_shorthand(value: &str) -> Option<ParsedGridTemplate> 
         areas: Some(areas),
         row_tracks,
         column_tracks,
+    })
+}
+
+/// Parse the `grid` shorthand (template or auto-flow forms).
+pub fn parse_grid_shorthand(value: &str) -> Option<ParsedGridShorthand> {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("none") {
+        return Some(ParsedGridShorthand {
+            template: Some(ParsedGridTemplate {
+                areas: Some(Vec::new()),
+                row_tracks: Some((Vec::new(), Vec::new())),
+                column_tracks: Some((Vec::new(), Vec::new())),
+            }),
+            auto_rows: Some(vec![GridTrack::Auto]),
+            auto_columns: Some(vec![GridTrack::Auto]),
+            auto_flow: Some(crate::style::types::GridAutoFlow::Row),
+        });
+    }
+
+    if !value.contains("auto-flow") {
+        return parse_grid_template_shorthand(value).map(|template| ParsedGridShorthand {
+            template: Some(template),
+            auto_rows: None,
+            auto_columns: None,
+            auto_flow: None,
+        });
+    }
+
+    // Auto-flow form: either left or right of the slash contains auto-flow
+    let (left, right_opt) = split_once_unquoted(value, '/');
+    let left = left.trim();
+    let right = right_opt.map(str::trim);
+
+    let mut auto_rows: Option<Vec<GridTrack>> = None;
+    let mut auto_cols: Option<Vec<GridTrack>> = None;
+    let mut auto_flow: Option<crate::style::types::GridAutoFlow> = None;
+
+    let parse_auto_flow_tokens =
+        |tokens: &str| -> (Option<crate::style::types::GridAutoFlow>, Option<String>) {
+        let lower = tokens.to_ascii_lowercase();
+        if !lower.contains("auto-flow") {
+            return (None, None);
+        }
+        let dense = lower.contains("dense");
+        let primary = if lower.contains("column") { "column" } else { "row" };
+        let flow = match (primary, dense) {
+            ("row", false) => crate::style::types::GridAutoFlow::Row,
+            ("row", true) => crate::style::types::GridAutoFlow::RowDense,
+            ("column", false) => crate::style::types::GridAutoFlow::Column,
+            ("column", true) => crate::style::types::GridAutoFlow::ColumnDense,
+            _ => crate::style::types::GridAutoFlow::Row,
+        };
+        // Strip the auto-flow keywords to leave a potential track list
+        let remainder = tokens
+            .replace("auto-flow", "")
+            .replace("Auto-Flow", "")
+            .replace("AUTO-FLOW", "")
+            .replace("dense", "")
+            .replace("DENSE", "")
+            .trim()
+            .to_string();
+        let remainder = if remainder.is_empty() { None } else { Some(remainder) };
+        (Some(flow), remainder)
+    };
+
+    let left_has_flow = left.to_ascii_lowercase().contains("auto-flow");
+    let right_has_flow = right.as_ref().map_or(false, |r| r.to_ascii_lowercase().contains("auto-flow"));
+
+    if left_has_flow {
+        let (flow_parsed, remainder) = parse_auto_flow_tokens(left);
+        if let Some(flow) = flow_parsed {
+            auto_flow = Some(flow);
+        }
+        if let Some(rem) = remainder {
+            let ParsedTracks { tracks, .. } = parse_track_list(&rem);
+            if !tracks.is_empty() {
+                auto_rows = Some(tracks);
+            }
+        }
+        if let Some(r) = right {
+            let ParsedTracks { tracks, .. } = parse_track_list(r);
+            if !tracks.is_empty() {
+                auto_cols = Some(tracks);
+            }
+        }
+    } else if right_has_flow {
+        let (flow_parsed, remainder) = parse_auto_flow_tokens(right.unwrap());
+        if let Some(flow) = flow_parsed {
+            auto_flow = Some(flow);
+        }
+        if let Some(rem) = remainder {
+            let ParsedTracks { tracks, .. } = parse_track_list(&rem);
+            if !tracks.is_empty() {
+                auto_cols = Some(tracks);
+            }
+        }
+        let ParsedTracks { tracks, .. } = parse_track_list(left);
+        if !tracks.is_empty() {
+            auto_rows = Some(tracks);
+        }
+    } else {
+        return None;
+    }
+
+    Some(ParsedGridShorthand {
+        template: None,
+        auto_rows,
+        auto_columns: auto_cols,
+        auto_flow,
     })
 }
 

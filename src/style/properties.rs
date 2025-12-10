@@ -12,7 +12,8 @@ use crate::style::counters::CounterSet;
 use crate::style::display::Display;
 use crate::style::float::{Clear, Float};
 use crate::style::grid::{
-    parse_grid_template_areas, parse_grid_template_shorthand, parse_grid_tracks_with_names, parse_track_list, ParsedTracks,
+    parse_grid_shorthand, parse_grid_template_areas, parse_grid_template_shorthand, parse_grid_tracks_with_names,
+    parse_track_list, ParsedTracks,
 };
 use crate::css::properties::parse_length;
 use crate::style::position::Position;
@@ -555,6 +556,32 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     }
                     if let Some(areas) = parsed.areas {
                         styles.grid_template_areas = areas;
+                    }
+                }
+            }
+        }
+        "grid" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                if let Some(parsed) = parse_grid_shorthand(kw) {
+                    if let Some(template) = parsed.template {
+                        styles.grid_template_areas = template.areas.unwrap_or_default();
+                        if let Some((rows, row_names)) = template.row_tracks {
+                            styles.grid_template_rows = rows;
+                            styles.grid_row_line_names = row_names;
+                        }
+                        if let Some((cols, col_names)) = template.column_tracks {
+                            styles.grid_template_columns = cols;
+                            styles.grid_column_line_names = col_names;
+                        }
+                    }
+                    if let Some(rows) = parsed.auto_rows {
+                        styles.grid_auto_rows = rows;
+                    }
+                    if let Some(cols) = parsed.auto_columns {
+                        styles.grid_auto_columns = cols;
+                    }
+                    if let Some(flow) = parsed.auto_flow {
+                        styles.grid_auto_flow = flow;
                     }
                 }
             }
@@ -3779,6 +3806,42 @@ mod tests {
             style.grid_column_raw.as_deref(),
             Some("hero-start / hero-end")
         );
+    }
+
+    #[test]
+    fn parses_grid_shorthand_auto_flow_form() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "grid".into(),
+                value: PropertyValue::Keyword("auto-flow 10px / 20px".into()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.grid_auto_flow, GridAutoFlow::Row);
+        assert_eq!(style.grid_auto_rows.len(), 1);
+        assert_eq!(style.grid_auto_columns.len(), 1);
+    }
+
+    #[test]
+    fn parses_grid_shorthand_template_form() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "grid".into(),
+                value: PropertyValue::Keyword("\"a a\" \"b b\" / 1fr 2fr".into()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.grid_template_rows.len(), 2);
+        assert_eq!(style.grid_template_columns.len(), 2);
+        assert_eq!(style.grid_template_areas.len(), 2);
     }
 
     #[test]
