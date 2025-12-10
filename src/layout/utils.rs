@@ -5,11 +5,11 @@
 use crate::geometry::Size;
 use crate::style::types::{BoxSizing, FontStyle as CssFontStyle};
 use crate::style::values::{Length, LengthOrAuto, LengthUnit};
+use crate::style::computed::PositionedStyle;
 use crate::style::ComputedStyle;
-use crate::tree::box_tree::ReplacedBox;
 use crate::text::font_db::{FontStretch, FontStyle as FontFaceStyle};
 use crate::text::font_loader::FontContext;
-use crate::text::pipeline::{compute_adjusted_font_size, preferred_font_aspect};
+use crate::tree::box_tree::ReplacedBox;
 
 /// Resolves a length using the provided percentage base, font size, and root font size.
 ///
@@ -108,23 +108,118 @@ pub fn resolve_offset_with_metrics(
     }
 }
 
+/// Resolves offsets using a positioned style (font-relative units use font metrics).
+pub fn resolve_offset_for_positioned(
+    value: &LengthOrAuto,
+    percentage_base: f32,
+    viewport: crate::geometry::Size,
+    style: &PositionedStyle,
+    font_context: &FontContext,
+) -> Option<f32> {
+    match value {
+        LengthOrAuto::Auto => None,
+        LengthOrAuto::Length(length) => {
+            if length.unit.is_percentage() {
+                Some(length.resolve_against(percentage_base))
+            } else if length.unit.is_absolute() {
+                Some(length.to_px())
+            } else if length.unit.is_viewport_relative() {
+                Some(length.resolve_with_viewport(viewport.width, viewport.height))
+            } else {
+                Some(resolve_font_relative_length_for_positioned(
+                    *length,
+                    style,
+                    font_context,
+                ))
+            }
+        }
+    }
+}
+
 /// Resolves font-relative lengths (em/ex/ch/rem) using font metrics and font-size-adjust.
 pub fn resolve_font_relative_length(length: Length, style: &ComputedStyle, font_context: &FontContext) -> f32 {
-    let base_size = style.font_size;
-    let preferred_aspect = preferred_font_aspect(style, font_context);
+    resolve_font_relative_length_with_params(
+        length,
+        style.font_size,
+        style.root_font_size,
+        &style.font_family,
+        style.font_weight.to_u16(),
+        style.font_style,
+        style.font_stretch,
+        style.font_size_adjust,
+        font_context,
+    )
+}
+
+pub fn resolve_font_relative_length_for_positioned(
+    length: Length,
+    style: &PositionedStyle,
+    font_context: &FontContext,
+) -> f32 {
     let font_style = match style.font_style {
+        crate::style::computed::FontStyle::Normal => CssFontStyle::Normal,
+        crate::style::computed::FontStyle::Italic => CssFontStyle::Italic,
+        crate::style::computed::FontStyle::Oblique => CssFontStyle::Oblique(None),
+    };
+    resolve_font_relative_length_with_params(
+        length,
+        style.font_size,
+        style.root_font_size,
+        &style.font_family,
+        style.font_weight,
+        font_style,
+        style.font_stretch,
+        style.font_size_adjust,
+        font_context,
+    )
+}
+
+fn resolve_font_relative_length_with_params(
+    length: Length,
+    font_size: f32,
+    root_font_size: f32,
+    font_family: &[String],
+    font_weight: u16,
+    font_style: CssFontStyle,
+    font_stretch: crate::style::types::FontStretch,
+    font_size_adjust: crate::style::types::FontSizeAdjust,
+    font_context: &FontContext,
+) -> f32 {
+    let face_style = match font_style {
         CssFontStyle::Normal => FontFaceStyle::Normal,
         CssFontStyle::Italic => FontFaceStyle::Italic,
         CssFontStyle::Oblique(_) => FontFaceStyle::Oblique,
     };
-    let font_stretch = FontStretch::from_percentage(style.font_stretch.to_percentage());
+    let face_stretch = FontStretch::from_percentage(font_stretch.to_percentage());
 
     let maybe_font = font_context
-        .get_font_full(&style.font_family, style.font_weight.to_u16(), font_style, font_stretch)
+        .get_font_full(font_family, font_weight, face_style, face_stretch)
         .or_else(|| font_context.get_sans_serif());
 
+    let mut desired_aspect = match font_size_adjust {
+        crate::style::types::FontSizeAdjust::Number(n) if n > 0.0 => Some(n),
+        _ => None,
+    };
+
     let (used_size, x_height, ch_width) = if let Some(font) = maybe_font {
-        let used_size = compute_adjusted_font_size(style, &font, preferred_aspect);
+        if desired_aspect.is_none() {
+            desired_aspect = match font_size_adjust {
+                crate::style::types::FontSizeAdjust::FromFont => font.metrics().ok().and_then(|m| m.aspect_ratio()),
+                _ => None,
+            };
+        }
+
+        let used_size = if let Some(desired) = desired_aspect {
+            let actual = font.metrics().ok().and_then(|m| m.aspect_ratio()).unwrap_or(0.5);
+            if actual > 0.0 {
+                font_size * (desired / actual)
+            } else {
+                font_size
+            }
+        } else {
+            font_size
+        };
+
         let mut x_height = None;
         let mut ch_width = None;
         if let Ok(metrics) = font.metrics() {
@@ -140,9 +235,13 @@ pub fn resolve_font_relative_length(length: Length, style: &ComputedStyle, font_
                 }
             }
         }
-        (used_size, x_height.unwrap_or(used_size * 0.5), ch_width.unwrap_or(used_size * 0.5))
+        (
+            used_size,
+            x_height.unwrap_or(used_size * 0.5),
+            ch_width.unwrap_or(used_size * 0.5),
+        )
     } else {
-        let used_size = base_size;
+        let used_size = font_size;
         (used_size, used_size * 0.5, used_size * 0.5)
     };
 
@@ -150,8 +249,8 @@ pub fn resolve_font_relative_length(length: Length, style: &ComputedStyle, font_
         LengthUnit::Em => length.value * used_size,
         LengthUnit::Ex => length.value * x_height,
         LengthUnit::Ch => length.value * ch_width,
-        LengthUnit::Rem => length.value * style.root_font_size,
-        _ => length.resolve_with_font_size(base_size),
+        LengthUnit::Rem => length.value * root_font_size,
+        _ => length.resolve_with_font_size(font_size),
     }
 }
 

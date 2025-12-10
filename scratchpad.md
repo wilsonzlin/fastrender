@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Absolute/fixed offsets now resolve `em`/`ex`/`ch` using actual font metrics and `font-size-adjust`: AbsoluteLayout carries a FontContext, offset resolution uses metric-aware helpers, and regressions cover ex-based offsets and adjust scaling; PositionedStyle builder exposes `font-size-adjust` and defaults stay intact.
 - Flex and grid formatting contexts now resolve viewport-relative units using the actual viewport during Taffy conversion: contexts store a viewport size, the factory wires it through, and gaps/padding/margins/borders/flex-basis/grid tracks resolve vw/vh/vmin/vmax via the viewport instead of falling back to font-relative px.
 - Viewport-relative units now resolve against the actual viewport/initial containing block instead of the local percentage base: the formatting-context factory carries the viewport size from `LayoutConfig`, block/inline contexts store it and pass it into length resolution, and replaced-element sizing uses viewport dimensions for vw/vh/vmin/vmax. Detached contexts default to an 800×600 viewport, and the viewport padding regression now asserts vw/vmin resolve to viewport size.
 - Positioning offsets (relative/absolute/fixed/sticky) now resolve vw/vh/vmin/vmax against the viewport size instead of font-relative fallbacks: containing blocks carry an explicit viewport size, offset resolution handles viewport units, and positioning tests now cover viewport-based offsets.

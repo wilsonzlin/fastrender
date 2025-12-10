@@ -49,9 +49,10 @@
 
 use crate::geometry::{Point, Rect, Size};
 use crate::layout::formatting_context::LayoutError;
-use crate::layout::utils::{content_size_from_box_sizing, resolve_offset};
+use crate::layout::utils::{content_size_from_box_sizing, resolve_offset_for_positioned};
 use crate::style::computed::PositionedStyle;
 use crate::style::position::Position;
+use crate::text::font_loader::FontContext;
 use crate::tree::fragment_tree::FragmentNode;
 
 use super::contexts::positioned::ContainingBlock;
@@ -138,13 +139,23 @@ impl AbsoluteLayoutInput {
 /// # Thread Safety
 ///
 /// AbsoluteLayout is stateless and can be shared across threads.
-#[derive(Debug, Clone, Default)]
-pub struct AbsoluteLayout;
+#[derive(Clone)]
+pub struct AbsoluteLayout {
+    font_context: FontContext,
+}
+
+impl Default for AbsoluteLayout {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl AbsoluteLayout {
     /// Creates a new absolute layout handler
-    pub const fn new() -> Self {
-        Self
+    pub fn new() -> Self {
+        Self {
+            font_context: FontContext::new(),
+        }
     }
 
     /// Performs complete absolute layout calculation
@@ -233,8 +244,8 @@ impl AbsoluteLayout {
         intrinsic_width: f32,
         static_x: f32,
     ) -> Result<(f32, f32, f32, f32), LayoutError> {
-        let left = resolve_offset(&style.left, cb_width, viewport, style.font_size, style.root_font_size);
-        let right = resolve_offset(&style.right, cb_width, viewport, style.font_size, style.root_font_size);
+        let left = resolve_offset_for_positioned(&style.left, cb_width, viewport, style, &self.font_context);
+        let right = resolve_offset_for_positioned(&style.right, cb_width, viewport, style, &self.font_context);
 
         // Get padding and border (never auto)
         let padding_left = style.padding.left;
@@ -319,8 +330,8 @@ impl AbsoluteLayout {
         intrinsic_height: f32,
         static_y: f32,
     ) -> Result<(f32, f32, f32, f32), LayoutError> {
-        let top = resolve_offset(&style.top, cb_height, viewport, style.font_size, style.root_font_size);
-        let bottom = resolve_offset(&style.bottom, cb_height, viewport, style.font_size, style.root_font_size);
+        let top = resolve_offset_for_positioned(&style.top, cb_height, viewport, style, &self.font_context);
+        let bottom = resolve_offset_for_positioned(&style.bottom, cb_height, viewport, style, &self.font_context);
 
         // Get padding and border
         let padding_top = style.padding.top;
@@ -407,9 +418,10 @@ impl AbsoluteLayout {
         viewport: Size,
         width: f32,
     ) -> (f32, f32, f32) {
-        let left = resolve_offset(&style.left, cb_width, viewport, style.font_size, style.root_font_size).unwrap_or(0.0);
+        let left =
+            resolve_offset_for_positioned(&style.left, cb_width, viewport, style, &self.font_context).unwrap_or(0.0);
         let right =
-            resolve_offset(&style.right, cb_width, viewport, style.font_size, style.root_font_size).unwrap_or(0.0);
+            resolve_offset_for_positioned(&style.right, cb_width, viewport, style, &self.font_context).unwrap_or(0.0);
 
         let padding_left = style.padding.left;
         let padding_right = style.padding.right;
@@ -456,9 +468,9 @@ impl AbsoluteLayout {
         height: f32,
     ) -> (f32, f32, f32) {
         let top =
-            resolve_offset(&style.top, cb_height, viewport, style.font_size, style.root_font_size).unwrap_or(0.0);
+            resolve_offset_for_positioned(&style.top, cb_height, viewport, style, &self.font_context).unwrap_or(0.0);
         let bottom =
-            resolve_offset(&style.bottom, cb_height, viewport, style.font_size, style.root_font_size).unwrap_or(0.0);
+            resolve_offset_for_positioned(&style.bottom, cb_height, viewport, style, &self.font_context).unwrap_or(0.0);
 
         let padding_top = style.padding.top;
         let padding_bottom = style.padding.bottom;
@@ -510,8 +522,11 @@ impl AbsoluteLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::utils::resolve_offset;
     use crate::geometry::EdgeOffsets;
-    use crate::style::values::LengthOrAuto;
+    use crate::style::types::FontSizeAdjust;
+    use crate::style::values::{Length, LengthOrAuto, LengthUnit};
+    use crate::text::font_loader::FontContext;
 
     fn default_style() -> PositionedStyle {
         let mut style = PositionedStyle::default();
@@ -734,6 +749,66 @@ mod tests {
         assert_eq!(result.position.y, 80.0);
         assert_eq!(result.size.width, 250.0);
         assert_eq!(result.size.height, 100.0);
+    }
+
+    #[test]
+    fn font_relative_offsets_use_font_metrics() {
+        let font_context = FontContext::new();
+        let Some(font) = font_context.get_sans_serif() else {
+            return;
+        };
+        let Ok(metrics) = font.metrics() else { return };
+        let font_size = 20.0;
+        let Some(x_height) = metrics.scale(font_size).x_height else {
+            return;
+        };
+
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.font_family = vec![font.family.clone()];
+        style.font_size = font_size;
+        style.root_font_size = font_size;
+        style.top = LengthOrAuto::Length(Length::new(1.0, LengthUnit::Ex));
+
+        let input = AbsoluteLayoutInput::new(style, Size::new(10.0, 10.0), Point::ZERO);
+        let cb = create_containing_block(200.0, 200.0);
+
+        let result = AbsoluteLayout::new().layout_absolute(&input, &cb).unwrap();
+        assert!((result.position.y - x_height).abs() < 1e-3);
+    }
+
+    #[test]
+    fn font_size_adjust_scales_offsets() {
+        let font_context = FontContext::new();
+        let Some(font) = font_context.get_sans_serif() else {
+            return;
+        };
+        let Ok(metrics) = font.metrics() else { return };
+        let Some(aspect) = metrics.aspect_ratio() else { return };
+        let adjust = aspect * 1.5;
+        let font_size = 18.0;
+        let adjusted_size = if aspect > 0.0 {
+            font_size * (adjust / aspect)
+        } else {
+            font_size
+        };
+        let Some(x_height) = metrics.scale(adjusted_size).x_height else {
+            return;
+        };
+
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.font_family = vec![font.family.clone()];
+        style.font_size = font_size;
+        style.root_font_size = font_size;
+        style.font_size_adjust = FontSizeAdjust::Number(adjust);
+        style.top = LengthOrAuto::Length(Length::new(1.0, LengthUnit::Ex));
+
+        let input = AbsoluteLayoutInput::new(style, Size::new(10.0, 10.0), Point::ZERO);
+        let cb = create_containing_block(200.0, 200.0);
+
+        let result = AbsoluteLayout::new().layout_absolute(&input, &cb).unwrap();
+        assert!((result.position.y - x_height).abs() < 1e-3);
     }
 
     #[test]

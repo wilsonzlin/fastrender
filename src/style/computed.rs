@@ -27,7 +27,7 @@ use crate::geometry::EdgeOffsets;
 use crate::style::color::{Color, Rgba};
 use crate::style::display::Display;
 use crate::style::position::Position;
-use crate::style::types::{BoxSizing, FontStretch, TextAlignLast, TextIndent, TextJustify};
+use crate::style::types::{BoxSizing, FontSizeAdjust, FontStretch, TextAlignLast, TextIndent, TextJustify};
 use crate::style::values::{Length, LengthOrAuto};
 
 /// Computed CSS styles for an element
@@ -235,6 +235,11 @@ pub struct PositionedStyle {
     /// CSS: `font-stretch`
     /// Initial: normal (100%)
     pub font_stretch: super::types::FontStretch,
+    /// Font size adjust
+    ///
+    /// CSS: `font-size-adjust`
+    /// Initial: none
+    pub font_size_adjust: FontSizeAdjust,
 
     /// Line height
     ///
@@ -449,6 +454,7 @@ impl Default for PositionedStyle {
             font_weight: 400, // normal
             font_style: FontStyle::Normal,
             font_stretch: FontStretch::Normal,
+            font_size_adjust: FontSizeAdjust::None,
             line_height: LineHeight::Normal,
             text_align: TextAlign::Start,
             text_align_last: TextAlignLast::Auto,
@@ -631,6 +637,11 @@ impl PositionedStyleBuilder {
         self
     }
 
+    pub fn font_size_adjust(mut self, adjust: FontSizeAdjust) -> Self {
+        self.style.font_size_adjust = adjust;
+        self
+    }
+
     pub fn width(mut self, width: LengthOrAuto) -> Self {
         self.style.width = width;
         self
@@ -690,6 +701,7 @@ mod tests {
         assert_eq!(style.font_size, 16.0);
         assert_eq!(style.root_font_size, 16.0);
         assert_eq!(style.font_weight, 400);
+        assert!(matches!(style.font_size_adjust, FontSizeAdjust::None));
     }
 
     #[test]
