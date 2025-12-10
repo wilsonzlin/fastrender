@@ -2656,6 +2656,51 @@ mod tests {
         assert_eq!(para2, vec!["אבג".to_string(), " ".to_string(), "abc".to_string()]);
     }
 
+    fn nested_inline_box_with_depth(
+        depth: usize,
+        ub: UnicodeBidi,
+        direction: Direction,
+        child: InlineItem,
+    ) -> InlineItem {
+        let mut current = child;
+        for idx in 0..depth {
+            let mut inline_box = InlineBoxItem::new(
+                0.0,
+                0.0,
+                0.0,
+                make_strut_metrics(),
+                Arc::new(ComputedStyle::default()),
+                idx,
+                direction,
+                ub,
+            );
+            inline_box.add_child(current);
+            current = InlineItem::InlineBox(inline_box);
+        }
+        current
+    }
+
+    #[test]
+    fn bidi_contexts_beyond_max_depth_are_ignored() {
+        // Build a chain of isolate boxes deeper than MAX_EXPLICIT_DEPTH and ensure we still reorder safely.
+        let mut builder = make_builder_with_base(200.0, Level::ltr());
+        let deep = nested_inline_box_with_depth(
+            unicode_bidi::level::MAX_EXPLICIT_DEPTH as usize + 5,
+            UnicodeBidi::Isolate,
+            Direction::Rtl,
+            InlineItem::Text(make_text_item("abc", 30.0)),
+        );
+        builder.add_item(deep);
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 1);
+        let mut collected = String::new();
+        for positioned in &lines[0].items {
+            collect_text(&positioned.item, &mut collected);
+        }
+        assert_eq!(collected, "abc");
+    }
+
     fn reorder_with_controls(text: &str, base: Option<Level>) -> String {
         let bidi = BidiInfo::new(text, base);
         let para = &bidi.paragraphs[0];
