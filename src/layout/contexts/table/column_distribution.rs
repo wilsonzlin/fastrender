@@ -733,42 +733,53 @@ pub fn distribute_spanning_cell_width(
 
     let spanned = &mut columns[start_col..end_col];
 
-    // Ensure the span can satisfy the cell's minimum width. Use headroom up to
-    // each column's max width first (water-filling), then grow all columns
-    // together if the span still falls short.
+    // Ensure the span can satisfy the cell's minimum width. Prefer to grow only flexible
+    // columns up to their max width before inflating fixed/percent columns.
     let mut grow_minimum = |target_sum: f32| {
-        let mut current_sum: f32 = spanned.iter().map(|c| c.min_width).sum();
+        let current_sum: f32 = spanned.iter().map(|c| c.min_width).sum();
         if current_sum >= target_sum {
             return;
         }
 
-        let mut needed = target_sum - current_sum;
-        loop {
-            let headrooms: Vec<f32> = spanned.iter().map(|c| (c.max_width - c.min_width).max(0.0)).collect();
+        let distribute = |columns: &mut [ColumnConstraints], need: f32| -> f32 {
+            let headrooms: Vec<f32> = columns.iter().map(|c| (c.max_width - c.min_width).max(0.0)).collect();
             let total_headroom: f32 = headrooms.iter().sum();
-
             if total_headroom <= 0.0 {
-                break;
+                return need;
             }
-
-            for (col, headroom) in spanned.iter_mut().zip(headrooms.iter()) {
+            for (col, headroom) in columns.iter_mut().zip(headrooms.iter()) {
                 if *headroom <= 0.0 {
                     continue;
                 }
-                let delta = needed * (*headroom / total_headroom);
+                let delta = need * (*headroom / total_headroom);
                 col.min_width += delta;
                 if col.min_width > col.max_width {
                     col.max_width = col.min_width;
                 }
             }
+            let new_sum: f32 = columns.iter().map(|c| c.min_width).sum();
+            (target_sum - new_sum).max(0.0)
+        };
 
-            current_sum = spanned.iter().map(|c| c.min_width).sum();
-            let remaining = (target_sum - current_sum).max(0.0);
-            if remaining <= 0.01 || (remaining - needed).abs() < 0.01 {
-                needed = remaining;
-                break;
+        let mut needed = target_sum - current_sum;
+        // First try flexible columns only.
+        let flex_indices: Vec<usize> = spanned
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| if c.is_flexible { Some(i) } else { None })
+            .collect();
+        if !flex_indices.is_empty() {
+            let mut flex_slice: Vec<ColumnConstraints> = flex_indices.iter().map(|&i| spanned[i].clone()).collect();
+            needed = distribute(&mut flex_slice, needed);
+            for (tmp, &idx) in flex_slice.iter().zip(flex_indices.iter()) {
+                spanned[idx].min_width = tmp.min_width;
+                spanned[idx].max_width = tmp.max_width;
             }
-            needed = remaining;
+        }
+
+        // If still short, grow all columns together.
+        if needed > 0.0 {
+            needed = distribute(spanned, needed);
         }
 
         if needed > 0.0 {
@@ -784,35 +795,58 @@ pub fn distribute_spanning_cell_width(
 
     grow_minimum(cell_min);
 
-    // Then ensure the span can satisfy the cell's maximum width request.
+    // Then ensure the span can satisfy the cell's maximum width request, preferring flexible columns first.
     let current_max_sum: f32 = spanned.iter().map(|c| c.max_width).sum();
     if cell_max > current_max_sum {
         let mut extra = cell_max - current_max_sum;
-        for _ in 0..4 {
-            let headrooms: Vec<f32> = spanned
-                .iter()
-                .map(|c| (c.max_width - c.min_width).max(0.0).max(0.01))
-                .collect();
-            let total_headroom: f32 = headrooms.iter().sum();
-            if total_headroom <= 0.0 || extra <= 0.0 {
-                break;
-            }
-
-            for (col, headroom) in spanned.iter_mut().zip(headrooms.iter()) {
-                let delta = extra * (*headroom / total_headroom);
-                col.max_width += delta;
-                if col.max_width < col.min_width {
-                    col.max_width = col.min_width;
+        let distribute = |columns: &mut [ColumnConstraints], mut remaining: f32| {
+            for _ in 0..4 {
+                let headrooms: Vec<f32> = columns
+                    .iter()
+                    .map(|c| (c.max_width - c.min_width).max(0.0).max(0.01))
+                    .collect();
+                let total_headroom: f32 = headrooms.iter().sum();
+                if total_headroom <= 0.0 || remaining <= 0.0 {
+                    break;
                 }
-            }
 
-            let new_sum: f32 = spanned.iter().map(|c| c.max_width).sum();
-            let new_extra = (cell_max - new_sum).max(0.0);
-            if (new_extra - extra).abs() < 0.01 {
-                extra = new_extra;
-                break;
+                for (col, headroom) in columns.iter_mut().zip(headrooms.iter()) {
+                    let delta = remaining * (*headroom / total_headroom);
+                    col.max_width += delta;
+                    if col.max_width < col.min_width {
+                        col.max_width = col.min_width;
+                    }
+                }
+
+                let new_sum: f32 = columns.iter().map(|c| c.max_width).sum();
+                let new_extra = (cell_max - new_sum).max(0.0);
+                if (new_extra - remaining).abs() < 0.01 {
+                    remaining = new_extra;
+                    break;
+                }
+                remaining = new_extra;
             }
-            extra = new_extra;
+            remaining
+        };
+
+        // Try to satisfy the span using flexible columns first.
+        let flex_indices: Vec<usize> = spanned
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| if c.is_flexible { Some(i) } else { None })
+            .collect();
+        if !flex_indices.is_empty() {
+            let mut flex_slice: Vec<ColumnConstraints> = flex_indices.iter().map(|&i| spanned[i].clone()).collect();
+            extra = distribute(&mut flex_slice, extra);
+            for (tmp, &idx) in flex_slice.iter().zip(flex_indices.iter()) {
+                spanned[idx].max_width = tmp.max_width;
+                spanned[idx].min_width = tmp.min_width;
+            }
+        }
+
+        // Fall back to all columns if still short.
+        if extra > 0.0 {
+            extra = distribute(spanned, extra);
         }
 
         // If still short, split the remainder evenly.
