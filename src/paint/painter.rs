@@ -25,7 +25,7 @@ use crate::css::types::ColorStop;
 use crate::error::{RenderError, Result};
 use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
-use crate::layout::contexts::inline::baseline::compute_line_height;
+use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem;
 use crate::paint::display_list::BorderRadii;
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
@@ -41,6 +41,7 @@ use crate::style::types::{FilterColor, FilterFunction, MixBlendMode, Overflow};
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
+use crate::text::font_db::{FontStretch, FontStyle, ScaledMetrics};
 use crate::text::pipeline::{ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
@@ -224,6 +225,29 @@ fn shade_color(color: &Rgba, factor: f32) -> Rgba {
 }
 
 impl Painter {
+    fn resolve_scaled_metrics(&self, style: &ComputedStyle) -> Option<ScaledMetrics> {
+        let italic = matches!(style.font_style, crate::style::types::FontStyle::Italic);
+        let oblique = matches!(style.font_style, crate::style::types::FontStyle::Oblique(_));
+        let stretch = FontStretch::from_percentage(style.font_stretch.to_percentage());
+
+        self.font_ctx
+            .get_font_full(
+                &style.font_family,
+                style.font_weight.to_u16(),
+                if italic {
+                    FontStyle::Italic
+                } else if oblique {
+                    FontStyle::Oblique
+                } else {
+                    FontStyle::Normal
+                },
+                stretch,
+            )
+            .or_else(|| self.font_ctx.get_sans_serif())
+            .and_then(|font| font.metrics().ok())
+            .map(|m| m.scale(style.font_size))
+    }
+
     /// Creates a new painter with the given dimensions
     pub fn new(width: u32, height: u32, background: Rgba) -> Result<Self> {
         Self::with_resources(width, height, background, FontContext::new(), ImageCache::new())
@@ -1628,7 +1652,8 @@ impl Painter {
 
         TextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
 
-        let line_height = compute_line_height(style);
+        let metrics_scaled = self.resolve_scaled_metrics(style);
+        let line_height = compute_line_height_with_metrics(style, metrics_scaled.as_ref());
         let metrics = TextItem::metrics_from_runs(&runs, line_height, style.font_size);
         let half_leading = ((metrics.line_height - (metrics.ascent + metrics.descent)) / 2.0).max(0.0);
         let baseline_y = rect.y() + half_leading + metrics.baseline_offset;

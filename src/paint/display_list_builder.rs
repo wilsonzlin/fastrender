@@ -28,7 +28,7 @@
 
 use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
-use crate::layout::contexts::inline::baseline::compute_line_height;
+use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::paint::display_list::{
     ClipItem, DisplayItem, DisplayList, FillRectItem, FontId, GlyphInstance, ImageData, ImageItem, OpacityItem,
@@ -40,6 +40,7 @@ use crate::style::color::Rgba;
 use crate::style::types::ObjectFit;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
+use crate::text::font_db::{FontStretch, FontStyle, ScaledMetrics};
 use crate::text::pipeline::{ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
@@ -61,6 +62,29 @@ pub struct DisplayListBuilder {
 }
 
 impl DisplayListBuilder {
+    fn resolve_scaled_metrics(style: &ComputedStyle, font_ctx: &FontContext) -> Option<ScaledMetrics> {
+        let italic = matches!(style.font_style, crate::style::types::FontStyle::Italic);
+        let oblique = matches!(style.font_style, crate::style::types::FontStyle::Oblique(_));
+        let stretch = FontStretch::from_percentage(style.font_stretch.to_percentage());
+
+        font_ctx
+            .get_font_full(
+                &style.font_family,
+                style.font_weight.to_u16(),
+                if italic {
+                    FontStyle::Italic
+                } else if oblique {
+                    FontStyle::Oblique
+                } else {
+                    FontStyle::Normal
+                },
+                stretch,
+            )
+            .or_else(|| font_ctx.get_sans_serif())
+            .and_then(|font| font.metrics().ok())
+            .map(|m| m.scale(style.font_size))
+    }
+
     /// Creates a new display list builder
     pub fn new() -> Self {
         Self {
@@ -463,7 +487,8 @@ impl DisplayListBuilder {
         };
         InlineTextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
 
-        let line_height = compute_line_height(style);
+        let metrics_scaled = Self::resolve_scaled_metrics(style, &self.font_ctx);
+        let line_height = compute_line_height_with_metrics(style, metrics_scaled.as_ref());
         let metrics = InlineTextItem::metrics_from_runs(&runs, line_height, style.font_size);
         let half_leading = ((metrics.line_height - (metrics.ascent + metrics.descent)) / 2.0).max(0.0);
         let baseline = rect.y() + half_leading + metrics.baseline_offset;
