@@ -517,18 +517,28 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
             }
         }
         "font-size" => {
-            if let Some(len) = extract_length(&resolved_value) {
-                // Resolve font-size against parent font size
-                if len.unit.is_absolute() {
-                    styles.font_size = len.to_px();
-                } else if len.unit == LengthUnit::Em || len.unit == LengthUnit::Percent {
-                    // Em/percent are relative to parent font size
-                    styles.font_size =
-                        len.value / (if len.unit == LengthUnit::Percent { 100.0 } else { 1.0 }) * parent_font_size;
-                } else if len.unit == LengthUnit::Rem {
-                    // Rem is relative to root font size
-                    styles.font_size = len.value * root_font_size;
+            match &resolved_value {
+                PropertyValue::Keyword(kw) => {
+                    if let Some(size) = parse_font_size_keyword(kw, parent_font_size) {
+                        styles.font_size = size;
+                    }
                 }
+                PropertyValue::Length(len) => {
+                    // Resolve font-size against parent or root depending on unit
+                    if len.unit.is_absolute() {
+                        styles.font_size = len.to_px();
+                    } else if len.unit == LengthUnit::Em {
+                        styles.font_size = len.value * parent_font_size;
+                    } else if len.unit == LengthUnit::Rem {
+                        styles.font_size = len.value * root_font_size;
+                    } else if len.unit == LengthUnit::Percent {
+                        styles.font_size = (len.value / 100.0) * parent_font_size;
+                    }
+                }
+                PropertyValue::Percentage(p) => {
+                    styles.font_size = (p / 100.0) * parent_font_size;
+                }
+                _ => {}
             }
         }
         "font-weight" => match &resolved_value {
@@ -3229,6 +3239,35 @@ mod tests {
     }
 
     #[test]
+    fn font_size_keywords_and_percentages_resolve_against_parent() {
+        let mut style = ComputedStyle::default();
+
+        let decl = Declaration {
+            property: "font-size".to_string(),
+            value: PropertyValue::Keyword("large".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!((style.font_size - 19.2).abs() < 0.01);
+
+        let decl = Declaration {
+            property: "font-size".to_string(),
+            value: PropertyValue::Percentage(150.0),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 20.0, 16.0);
+        assert!((style.font_size - 30.0).abs() < 0.01);
+
+        let decl = Declaration {
+            property: "font-size".to_string(),
+            value: PropertyValue::Length(Length::em(2.0)),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 10.0, 16.0);
+        assert!((style.font_size - 20.0).abs() < 0.01);
+    }
+
+    #[test]
     fn parses_font_stretch_longhand_keywords_and_percentages() {
         let mut style = ComputedStyle::default();
         let decl = Declaration {
@@ -3253,7 +3292,7 @@ mod tests {
         let mut style = ComputedStyle::default();
         let decl = Declaration {
             property: "font".to_string(),
-            value: PropertyValue::Keyword("italic small-caps bold condensed 16px/20px serif".to_string()),
+            value: PropertyValue::Keyword("italic bold condensed 16px/20px serif".to_string()),
             important: false,
         };
 
