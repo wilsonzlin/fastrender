@@ -1286,6 +1286,30 @@ mod tests {
     }
 
     #[test]
+    fn vertical_writing_mode_swaps_tracks_for_template_sizes() {
+        let fc = GridFormattingContext::new();
+
+        let mut style = ComputedStyle::default();
+        style.display = CssDisplay::Grid;
+        style.writing_mode = crate::style::types::WritingMode::VerticalRl;
+        style.grid_template_columns = vec![GridTrack::Length(Length::px(20.0)), GridTrack::Length(Length::px(20.0))];
+        style.grid_template_rows = vec![GridTrack::Length(Length::px(30.0))];
+        let style = Arc::new(style);
+
+        let child = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
+        let grid = BoxNode::new_block(style, FormattingContextType::Grid, vec![child]);
+
+        let constraints = LayoutConstraints::definite(200.0, 200.0);
+        let fragment = fc.layout(&grid, &constraints).unwrap();
+
+        // Inline axis vertical: column tracks become rows (height = 20+20), row tracks become columns (width = 30).
+        assert_eq!(fragment.bounds.width(), 30.0);
+        assert_eq!(fragment.bounds.height(), 40.0);
+        assert_eq!(fragment.children[0].bounds.width(), 30.0);
+        assert_eq!(fragment.children[0].bounds.height(), 20.0);
+    }
+
+    #[test]
     fn test_grid_fixed_and_fr() {
         let fc = GridFormattingContext::new();
 
