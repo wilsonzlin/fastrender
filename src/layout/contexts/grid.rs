@@ -107,6 +107,13 @@ impl GridFormattingContext {
         }
     }
 
+    fn inline_axis_is_horizontal(&self, style: &ComputedStyle) -> bool {
+        matches!(
+            style.writing_mode,
+            WritingMode::HorizontalTb | WritingMode::SidewaysLr | WritingMode::SidewaysRl
+        )
+    }
+
     pub fn with_viewport(viewport_size: crate::geometry::Size) -> Self {
         Self { viewport_size }
     }
@@ -162,6 +169,7 @@ impl GridFormattingContext {
         let mut taffy_style = TaffyStyle::default();
         let inline_positive = self.inline_axis_positive(style);
         let block_positive = self.block_axis_positive(style);
+        let inline_is_horizontal = self.inline_axis_is_horizontal(style);
 
         // Display mode
         let is_grid = matches!(style.display, CssDisplay::Grid | CssDisplay::InlineGrid);
@@ -215,37 +223,72 @@ impl GridFormattingContext {
 
         // Grid container properties
         if is_grid {
-            // Grid template columns/rows
-            taffy_style.grid_template_columns = self.convert_grid_template(&style.grid_template_columns, style);
-            taffy_style.grid_template_rows = self.convert_grid_template(&style.grid_template_rows, style);
+            // Grid template columns/rows (swap when inline axis is vertical)
+            if inline_is_horizontal {
+                taffy_style.grid_template_columns = self.convert_grid_template(&style.grid_template_columns, style);
+                taffy_style.grid_template_rows = self.convert_grid_template(&style.grid_template_rows, style);
+            } else {
+                taffy_style.grid_template_columns = self.convert_grid_template(&style.grid_template_rows, style);
+                taffy_style.grid_template_rows = self.convert_grid_template(&style.grid_template_columns, style);
+            }
 
             // Line names
-            if !style.grid_column_line_names.is_empty() {
-                taffy_style.grid_template_column_names = style.grid_column_line_names.clone();
-            }
-            if !style.grid_row_line_names.is_empty() {
-                taffy_style.grid_template_row_names = style.grid_row_line_names.clone();
+            if inline_is_horizontal {
+                if !style.grid_column_line_names.is_empty() {
+                    taffy_style.grid_template_column_names = style.grid_column_line_names.clone();
+                }
+                if !style.grid_row_line_names.is_empty() {
+                    taffy_style.grid_template_row_names = style.grid_row_line_names.clone();
+                }
+            } else {
+                if !style.grid_row_line_names.is_empty() {
+                    taffy_style.grid_template_column_names = style.grid_row_line_names.clone();
+                }
+                if !style.grid_column_line_names.is_empty() {
+                    taffy_style.grid_template_row_names = style.grid_column_line_names.clone();
+                }
             }
             // Implicit track sizing
-            if !style.grid_auto_rows.is_empty() {
-                taffy_style.grid_auto_rows = style
-                    .grid_auto_rows
-                    .iter()
-                    .map(|t| self.convert_track_size(t, style))
-                    .collect();
+            if inline_is_horizontal {
+                if !style.grid_auto_rows.is_empty() {
+                    taffy_style.grid_auto_rows = style
+                        .grid_auto_rows
+                        .iter()
+                        .map(|t| self.convert_track_size(t, style))
+                        .collect();
+                }
+                if !style.grid_auto_columns.is_empty() {
+                    taffy_style.grid_auto_columns = style
+                        .grid_auto_columns
+                        .iter()
+                        .map(|t| self.convert_track_size(t, style))
+                        .collect();
+                }
+            } else {
+                if !style.grid_auto_columns.is_empty() {
+                    taffy_style.grid_auto_rows = style
+                        .grid_auto_columns
+                        .iter()
+                        .map(|t| self.convert_track_size(t, style))
+                        .collect();
+                }
+                if !style.grid_auto_rows.is_empty() {
+                    taffy_style.grid_auto_columns = style
+                        .grid_auto_rows
+                        .iter()
+                        .map(|t| self.convert_track_size(t, style))
+                        .collect();
+                }
             }
-            if !style.grid_auto_columns.is_empty() {
-                taffy_style.grid_auto_columns = style
-                    .grid_auto_columns
-                    .iter()
-                    .map(|t| self.convert_track_size(t, style))
-                    .collect();
-            }
-            taffy_style.grid_auto_flow = match style.grid_auto_flow {
-                GridAutoFlow::Row => taffy::style::GridAutoFlow::Row,
-                GridAutoFlow::Column => taffy::style::GridAutoFlow::Column,
-                GridAutoFlow::RowDense => taffy::style::GridAutoFlow::RowDense,
-                GridAutoFlow::ColumnDense => taffy::style::GridAutoFlow::ColumnDense,
+            taffy_style.grid_auto_flow = match (style.grid_auto_flow, inline_is_horizontal) {
+                (GridAutoFlow::Row, true) => taffy::style::GridAutoFlow::Row,
+                (GridAutoFlow::RowDense, true) => taffy::style::GridAutoFlow::RowDense,
+                (GridAutoFlow::Column, true) => taffy::style::GridAutoFlow::Column,
+                (GridAutoFlow::ColumnDense, true) => taffy::style::GridAutoFlow::ColumnDense,
+                (GridAutoFlow::Row, false) => taffy::style::GridAutoFlow::Column,
+                (GridAutoFlow::RowDense, false) => taffy::style::GridAutoFlow::ColumnDense,
+                (GridAutoFlow::Column, false) => taffy::style::GridAutoFlow::Row,
+                (GridAutoFlow::ColumnDense, false) => taffy::style::GridAutoFlow::RowDense,
             };
             if !style.grid_template_areas.is_empty() {
                 if let Some(mut bounds) = validate_area_rectangles(&style.grid_template_areas) {
@@ -253,12 +296,18 @@ impl GridFormattingContext {
                     entries.sort_by(|a, b| a.0.cmp(&b.0));
                     let mut areas = Vec::with_capacity(entries.len());
                     for (name, (top, bottom, left, right)) in entries {
+                        let (row_start, row_end, column_start, column_end) = if inline_is_horizontal {
+                            ((top as u16) + 1, (bottom as u16) + 2, (left as u16) + 1, (right as u16) + 2)
+                        } else {
+                            // Transpose area matrix for vertical inline axis
+                            ((left as u16) + 1, (right as u16) + 2, (top as u16) + 1, (bottom as u16) + 2)
+                        };
                         areas.push(GridTemplateArea {
                             name,
-                            row_start: (top as u16) + 1,
-                            row_end: (bottom as u16) + 2,
-                            column_start: (left as u16) + 1,
-                            column_end: (right as u16) + 2,
+                            row_start,
+                            row_end,
+                            column_start,
+                            column_end,
                         });
                     }
                     taffy_style.grid_template_areas = areas;
@@ -267,8 +316,16 @@ impl GridFormattingContext {
 
             // Gap
             taffy_style.gap = taffy::geometry::Size {
-                width: self.convert_length_to_lp(&style.grid_column_gap, style),
-                height: self.convert_length_to_lp(&style.grid_row_gap, style),
+                width: if inline_is_horizontal {
+                    self.convert_length_to_lp(&style.grid_column_gap, style)
+                } else {
+                    self.convert_length_to_lp(&style.grid_row_gap, style)
+                },
+                height: if inline_is_horizontal {
+                    self.convert_length_to_lp(&style.grid_row_gap, style)
+                } else {
+                    self.convert_length_to_lp(&style.grid_column_gap, style)
+                },
             };
 
             // Alignment
@@ -280,11 +337,27 @@ impl GridFormattingContext {
         taffy_style.align_self = style.align_self.map(|a| self.convert_align_items(&a, block_positive));
         taffy_style.justify_self = style.justify_self.map(|a| self.convert_align_items(&a, inline_positive));
 
-        // Grid item properties using raw line numbers
-        taffy_style.grid_column =
-            self.convert_grid_placement(style.grid_column_raw.as_deref(), style.grid_column_start, style.grid_column_end);
-        taffy_style.grid_row =
-            self.convert_grid_placement(style.grid_row_raw.as_deref(), style.grid_row_start, style.grid_row_end);
+        // Grid item properties using raw line numbers (swap placements when inline axis is vertical)
+        if inline_is_horizontal {
+            taffy_style.grid_column = self.convert_grid_placement(
+                style.grid_column_raw.as_deref(),
+                style.grid_column_start,
+                style.grid_column_end,
+            );
+            taffy_style.grid_row =
+                self.convert_grid_placement(style.grid_row_raw.as_deref(), style.grid_row_start, style.grid_row_end);
+        } else {
+            taffy_style.grid_column = self.convert_grid_placement(
+                style.grid_row_raw.as_deref(),
+                style.grid_row_start,
+                style.grid_row_end,
+            );
+            taffy_style.grid_row = self.convert_grid_placement(
+                style.grid_column_raw.as_deref(),
+                style.grid_column_start,
+                style.grid_column_end,
+            );
+        }
 
         taffy_style
     }
@@ -1212,7 +1285,6 @@ mod tests {
         assert_eq!(fragment.children.len(), 1);
     }
 
-    // Test 19: Grid with fixed and fr columns
     #[test]
     fn test_grid_fixed_and_fr() {
         let fc = GridFormattingContext::new();
