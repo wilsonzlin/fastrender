@@ -678,8 +678,38 @@ impl FormattingContext for BlockFormattingContext {
         let inline_fc =
             InlineFormattingContext::with_font_context_and_viewport(self.font_context.clone(), self.viewport_size);
 
-        // Inline formatting context contribution (text and inline-level children)
-        let inline_width = inline_fc.compute_intrinsic_inline_size(box_node, mode).unwrap_or(0.0);
+        // Inline formatting context contribution (text and inline-level children).
+        // Block-level children split inline runs into separate formatting contexts.
+        let mut inline_width = 0.0f32;
+        let mut inline_run: Vec<BoxNode> = Vec::new();
+        let flush_inline_run = |run: &mut Vec<BoxNode>, widest: &mut f32| -> Result<(), LayoutError> {
+            if run.is_empty() {
+                return Ok(());
+            }
+            let inline_container = BoxNode::new_inline(box_node.style.clone(), run.clone());
+            let width = inline_fc.compute_intrinsic_inline_size(&inline_container, mode)?;
+            *widest = widest.max(width);
+            run.clear();
+            Ok(())
+        };
+
+        for child in &box_node.children {
+            if is_out_of_flow(child) {
+                continue;
+            }
+
+            let treated_as_block = match child.box_type {
+                BoxType::Replaced(_) if child.style.display.is_inline_level() => false,
+                _ => child.is_block_level(),
+            };
+
+            if treated_as_block {
+                flush_inline_run(&mut inline_run, &mut inline_width)?;
+            } else {
+                inline_run.push(child.clone());
+            }
+        }
+        flush_inline_run(&mut inline_run, &mut inline_width)?;
 
         // Block-level in-flow children contribute their own intrinsic widths
         let mut block_child_width = 0.0f32;
@@ -811,6 +841,8 @@ fn recompute_margins_for_width(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::contexts::inline::InlineFormattingContext;
+    use crate::layout::formatting_context::IntrinsicSizingMode;
     use crate::style::display::Display;
     use crate::style::display::FormattingContextType;
     use crate::style::types::{ListStylePosition, ListStyleType};
@@ -1007,5 +1039,45 @@ mod tests {
 
         assert!(marker.bounds.x() < 0.0);
         assert!(text.bounds.x() >= 0.0);
+    }
+
+    #[test]
+    fn intrinsic_inline_size_splits_runs_around_block_children() {
+        let bfc = BlockFormattingContext::new();
+        let ifc = InlineFormattingContext::new();
+
+        let text_left = BoxNode::new_text(default_style(), "unbreakable".to_string());
+        let text_right = BoxNode::new_text(default_style(), "unbreakable".to_string());
+        let block_child = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
+
+        let run_container =
+            BoxNode::new_block(default_style(), FormattingContextType::Block, vec![text_left.clone()]);
+        let run_min = ifc
+            .compute_intrinsic_inline_size(&run_container, IntrinsicSizingMode::MinContent)
+            .unwrap();
+        let run_max = ifc
+            .compute_intrinsic_inline_size(&run_container, IntrinsicSizingMode::MaxContent)
+            .unwrap();
+
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![text_left, block_child, text_right],
+        );
+        let min_width = bfc
+            .compute_intrinsic_inline_size(&root, IntrinsicSizingMode::MinContent)
+            .unwrap();
+        assert!(
+            min_width <= run_min * 1.1,
+            "min-content width should follow the widest inline run, got {min_width} vs run {run_min}"
+        );
+
+        let max_width = bfc
+            .compute_intrinsic_inline_size(&root, IntrinsicSizingMode::MaxContent)
+            .unwrap();
+        assert!(
+            max_width <= run_max * 1.1,
+            "max-content width should not concatenate inline runs across blocks, got {max_width} vs run {run_max}"
+        );
     }
 }

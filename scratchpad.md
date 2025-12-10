@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Inline intrinsic sizing in block formatting contexts now splits inline runs around intervening block-level children; min/max-content widths take the widest run rather than concatenating text across forced breaks, aligning shrink-to-fit math with anonymous block box generation.
 - `visibility: collapse` now prunes table rows/columns from TableStructure, keeps source indices for mapping, trims spans, drops collapsed cells, and maps row/column backgrounds/borders using source→visible lookup; regressions cover collapsed rows and columns. Row/column group collapse is propagated to child tracks so entire groups vanish from layout and painting.
 - Table column distributor leaves authored percentages intact even when they exceed available width, reporting over-constraints and honoring per-column mins/maxes; new regressions cover over-budget percentage pairs and min clamping under overflow.
 - Inline bidi reordering now builds explicit embedding/isolate control streams from ancestor `unicode-bidi` settings, enforcing max explicit depth and closing contexts deterministically before running UAX#9 reordering for each paragraph of lines, reducing reliance on heuristic control sharing; dead helper pruned.
