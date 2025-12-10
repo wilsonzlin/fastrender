@@ -50,7 +50,7 @@
 use crate::error::{Result, TextError};
 use crate::style::types::{
     Direction as CssDirection, EastAsianVariant, EastAsianWidth, FontKerning, FontStyle as CssFontStyle, FontVariant,
-    NumericFigure, NumericFraction, NumericSpacing,
+    FontVariantPosition, NumericFigure, NumericFraction, NumericSpacing,
 };
 use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStretch, FontStyle, LoadedFont};
@@ -589,6 +589,7 @@ fn collect_opentype_features(style: &ComputedStyle) -> Vec<Feature> {
     let lig = style.font_variant_ligatures;
     let numeric = &style.font_variant_numeric;
     let east = &style.font_variant_east_asian;
+    let position = style.font_variant_position;
 
     let mut push_toggle = |tag: [u8; 4], enabled: bool| {
         features.push(Feature {
@@ -648,6 +649,12 @@ fn collect_opentype_features(style: &ComputedStyle) -> Vec<Feature> {
     }
     if east.ruby {
         push_toggle(*b"ruby", true);
+    }
+
+    match position {
+        FontVariantPosition::Normal => {}
+        FontVariantPosition::Sub => push_toggle(*b"subs", true),
+        FontVariantPosition::Super => push_toggle(*b"sups", true),
     }
 
     match style.font_kerning {
@@ -1480,6 +1487,7 @@ mod tests {
         style.font_variant_east_asian.variant = Some(EastAsianVariant::Jis04);
         style.font_variant_east_asian.width = Some(EastAsianWidth::FullWidth);
         style.font_variant_east_asian.ruby = true;
+        style.font_variant_position = FontVariantPosition::Super;
 
         let feats = collect_opentype_features(&style);
         let mut seen: std::collections::HashMap<[u8; 4], u32> = std::collections::HashMap::new();
@@ -1495,5 +1503,6 @@ mod tests {
         assert_eq!(seen.get(b"jp04"), Some(&1));
         assert_eq!(seen.get(b"fwid"), Some(&1));
         assert_eq!(seen.get(b"ruby"), Some(&1));
+        assert_eq!(seen.get(b"sups"), Some(&1));
     }
 }

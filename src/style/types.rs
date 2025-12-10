@@ -498,6 +498,14 @@ impl Default for FontVariantEastAsian {
     }
 }
 
+/// Positional variants (`font-variant-position`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontVariantPosition {
+    Normal,
+    Sub,
+    Super,
+}
+
 /// Kerning control (`font-kerning`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontKerning {

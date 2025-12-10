@@ -505,6 +505,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     styles.font_variant_ligatures = FontVariantLigatures::default();
                     styles.font_variant_numeric = FontVariantNumeric::default();
                     styles.font_variant_east_asian = FontVariantEastAsian::default();
+                    styles.font_variant_position = FontVariantPosition::Normal;
                     styles.font_kerning = FontKerning::Auto;
                     styles.font_feature_settings.clear();
                     styles.font_style = font_style;
@@ -577,6 +578,16 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     "normal" => FontVariant::Normal,
                     "small-caps" => FontVariant::SmallCaps,
                     _ => styles.font_variant,
+                };
+            }
+        }
+        "font-variant-position" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.font_variant_position = match kw.as_str() {
+                    "normal" => FontVariantPosition::Normal,
+                    "sub" => FontVariantPosition::Sub,
+                    "super" => FontVariantPosition::Super,
+                    _ => styles.font_variant_position,
                 };
             }
         }
@@ -3500,6 +3511,26 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert!(matches!(style.font_variant, FontVariant::SmallCaps));
+    }
+
+    #[test]
+    fn parses_font_variant_position() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font-variant-position".to_string(),
+            value: PropertyValue::Keyword("super".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_variant_position, FontVariantPosition::Super));
+
+        let decl = Declaration {
+            property: "font-variant-position".to_string(),
+            value: PropertyValue::Keyword("normal".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_variant_position, FontVariantPosition::Normal));
     }
 
     #[test]
