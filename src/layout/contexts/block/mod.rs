@@ -163,7 +163,7 @@ impl BlockFormattingContext {
 
         // Compute width using CSS 2.1 Section 10.3.3 algorithm
         let mut computed_width = compute_block_width(style, containing_width, self.viewport_size);
-        if matches!(style.width, LengthOrAuto::Auto) {
+        if style.width.is_none() {
             if let (crate::style::types::AspectRatio::Ratio(ratio), Some(h)) = (style.aspect_ratio, specified_height) {
                 if ratio > 0.0 {
                     computed_width.content_width = h * ratio;

@@ -474,6 +474,20 @@ impl InlineFormattingContext {
         let preferred_min = preferred_min_content + horizontal_edges;
         let preferred = preferred_content + horizontal_edges;
 
+        let resolved_specified_height = style.height.as_ref().and_then(|h| {
+            available_height
+                .filter(|h| h.is_finite())
+                .and_then(|base| {
+                    resolve_length_with_percentage_inline(
+                        *h,
+                        Some(base),
+                        style,
+                        &self.font_context,
+                        self.viewport_size,
+                    )
+                })
+        });
+
         let specified_width = style
             .width
             .as_ref()
@@ -497,19 +511,36 @@ impl InlineFormattingContext {
             // Honor specified width; use containing block width for layout to avoid over-constraining margins.
             let used = content_width.clamp(min_width, max_width);
             if available_for_box.is_finite() {
-                available_for_box
+                used.min(available_for_box.max(preferred_min))
             } else {
                 used
             }
         } else {
-            let available = if available_for_box.is_finite() {
-                available_for_box
+            if let (crate::style::types::AspectRatio::Ratio(ratio), Some(h)) =
+                (style.aspect_ratio, resolved_specified_height)
+            {
+                if ratio > 0.0 {
+                    let target_border = h * ratio;
+                    let target_content = (target_border - horizontal_edges).max(0.0);
+                    let used = target_content.clamp(min_width, max_width);
+                    if available_for_box.is_finite() {
+                        used.min(available_for_box.max(preferred_min))
+                    } else {
+                        used
+                    }
+                } else {
+                    preferred.min(available_for_box.max(preferred_min)).clamp(min_width, max_width)
+                }
             } else {
-                preferred
-            };
-            let shrink = preferred.min(available.max(preferred_min));
-            let used = shrink.clamp(min_width, max_width);
-            used
+                let available = if available_for_box.is_finite() {
+                    available_for_box
+                } else {
+                    preferred
+                };
+                let shrink = preferred.min(available.max(preferred_min));
+                let used = shrink.clamp(min_width, max_width);
+                used
+            }
         };
 
         let height_space = available_height
@@ -518,6 +549,7 @@ impl InlineFormattingContext {
             .unwrap_or(AvailableSpace::Indefinite);
         let constraints = LayoutConstraints::new(AvailableSpace::Definite(constraint_width), height_space);
         let fragment = fc.layout(box_node, &constraints)?;
+        let mut fragment = fragment;
 
         let margin_left = style
             .margin_left
@@ -531,6 +563,20 @@ impl InlineFormattingContext {
             .unwrap_or(0.0);
 
         let va = self.convert_vertical_align(style.vertical_align, style.font_size, line_height);
+
+        if matches!(style.aspect_ratio, crate::style::types::AspectRatio::Ratio(r) if r > 0.0)
+            && style.height.is_none()
+        {
+            if let crate::style::types::AspectRatio::Ratio(r) = style.aspect_ratio {
+                if r > 0.0 && fragment.bounds.width().is_finite() {
+                    let target_height = fragment.bounds.width() / r;
+                    if target_height > fragment.bounds.height() {
+                        fragment.bounds =
+                            Rect::from_xywh(fragment.bounds.x(), fragment.bounds.y(), fragment.bounds.width(), target_height);
+                    }
+                }
+            }
+        }
 
         Ok(InlineBlockItem::new(
             fragment,
@@ -3787,6 +3833,42 @@ mod tests {
         let line = fragment.children.first().expect("line fragment");
         let child = line.children.first().expect("inline-block fragment");
         assert!((child.bounds.height() - 60.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn inline_block_aspect_ratio_sets_width_from_height() {
+        let ifc = InlineFormattingContext::new();
+        let mut ib_style = ComputedStyle::default();
+        ib_style.display = Display::InlineBlock;
+        ib_style.height = Some(Length::px(50.0));
+        ib_style.aspect_ratio = crate::style::types::AspectRatio::Ratio(2.0);
+        let inline_block = BoxNode::new_inline_block(Arc::new(ib_style), FormattingContextType::Block, vec![]);
+        let root = make_inline_container(vec![inline_block]);
+        let constraints = LayoutConstraints::definite(400.0, 200.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let line = fragment.children.first().expect("line fragment");
+        let child = line.children.first().expect("inline-block fragment");
+        assert!((child.bounds.width() - 100.0).abs() < 0.1);
+        assert!((child.bounds.height() - 50.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn inline_block_aspect_ratio_sets_height_from_width_when_auto_height() {
+        let ifc = InlineFormattingContext::new();
+        let mut ib_style = ComputedStyle::default();
+        ib_style.display = Display::InlineBlock;
+        ib_style.width = Some(Length::px(80.0));
+        ib_style.aspect_ratio = crate::style::types::AspectRatio::Ratio(2.0);
+        let inline_block = BoxNode::new_inline_block(Arc::new(ib_style), FormattingContextType::Block, vec![]);
+        let root = make_inline_container(vec![inline_block]);
+        let constraints = LayoutConstraints::definite(400.0, 200.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let line = fragment.children.first().expect("line fragment");
+        let child = line.children.first().expect("inline-block fragment");
+        assert!((child.bounds.width() - 80.0).abs() < 0.1);
+        assert!((child.bounds.height() - 40.0).abs() < 0.1);
     }
 
     #[test]
