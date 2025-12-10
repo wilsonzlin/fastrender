@@ -580,6 +580,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 if tokens.len() == 1 && tokens[0] == "normal" {
                     styles.font_variant = FontVariant::Normal;
                     styles.font_variant_caps = FontVariantCaps::Normal;
+                    styles.font_variant_alternates = FontVariantAlternates::default();
                 } else {
                     for tok in tokens {
                         match tok {
@@ -623,6 +624,71 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     "titling-caps" => FontVariantCaps::TitlingCaps,
                     _ => styles.font_variant_caps,
                 };
+            }
+        }
+        "font-variant-alternates" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                let trimmed = kw.trim();
+                if trimmed == "normal" {
+                    styles.font_variant_alternates = FontVariantAlternates::default();
+                } else {
+                    let mut alt = FontVariantAlternates::default();
+                    for token in trimmed.split_whitespace() {
+                        if token == "historical-forms" {
+                            alt.historical_forms = true;
+                            continue;
+                        }
+                        if let Some(inner) = token.strip_prefix("stylistic(").and_then(|s| s.strip_suffix(')')) {
+                            if let Ok(n) = inner.trim().parse::<u8>() {
+                                alt.stylistic = Some(n);
+                            }
+                            continue;
+                        }
+                        if let Some(inner) = token.strip_prefix("styleset(").and_then(|s| s.strip_suffix(')')) {
+                            for part in inner
+                                .split(|c: char| c == ',' || c.is_whitespace())
+                                .filter(|s| !s.is_empty())
+                            {
+                                if let Ok(n) = part.parse::<u8>() {
+                                    alt.stylesets.push(n);
+                                }
+                            }
+                            continue;
+                        }
+                        if let Some(inner) =
+                            token.strip_prefix("character-variant(").and_then(|s| s.strip_suffix(')'))
+                        {
+                            for part in inner
+                                .split(|c: char| c == ',' || c.is_whitespace())
+                                .filter(|s| !s.is_empty())
+                            {
+                                if let Ok(n) = part.parse::<u8>() {
+                                    alt.character_variants.push(n);
+                                }
+                            }
+                            continue;
+                        }
+                        if let Some(inner) = token.strip_prefix("swash(").and_then(|s| s.strip_suffix(')')) {
+                            if let Ok(n) = inner.trim().parse::<u8>() {
+                                alt.swash = Some(n);
+                            }
+                            continue;
+                        }
+                        if let Some(inner) = token.strip_prefix("ornaments(").and_then(|s| s.strip_suffix(')')) {
+                            if let Ok(n) = inner.trim().parse::<u8>() {
+                                alt.ornaments = Some(n);
+                            }
+                            continue;
+                        }
+                        if let Some(inner) = token.strip_prefix("annotation(").and_then(|s| s.strip_suffix(')')) {
+                            if !inner.trim().is_empty() {
+                                alt.annotation = Some(inner.trim().to_string());
+                            }
+                            continue;
+                        }
+                    }
+                    styles.font_variant_alternates = alt;
+                }
             }
         }
         "font-variant-position" => {

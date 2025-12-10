@@ -612,8 +612,9 @@ fn collect_opentype_features(style: &ComputedStyle) -> Vec<Feature> {
     let east = &style.font_variant_east_asian;
     let position = style.font_variant_position;
     let caps = style.font_variant_caps;
+    let alternates = &style.font_variant_alternates;
 
-    let mut push_toggle = |tag: [u8; 4], enabled: bool| {
+    let push_toggle = |features: &mut Vec<Feature>, tag: [u8; 4], enabled: bool| {
         features.push(Feature {
             tag: Tag::from_bytes(&tag),
             value: if enabled { 1 } else { 0 },
@@ -623,82 +624,128 @@ fn collect_opentype_features(style: &ComputedStyle) -> Vec<Feature> {
     };
 
     // font-variant-ligatures keywords map to OpenType features
-    push_toggle(*b"liga", lig.common);
-    push_toggle(*b"clig", lig.common);
-    push_toggle(*b"dlig", lig.discretionary);
-    push_toggle(*b"hlig", lig.historical);
-    push_toggle(*b"calt", lig.contextual);
+    push_toggle(&mut features, *b"liga", lig.common);
+    push_toggle(&mut features, *b"clig", lig.common);
+    push_toggle(&mut features, *b"dlig", lig.discretionary);
+    push_toggle(&mut features, *b"hlig", lig.historical);
+    push_toggle(&mut features, *b"calt", lig.contextual);
 
     // font-variant-numeric mappings
     match numeric.figure {
-        NumericFigure::Lining => push_toggle(*b"lnum", true),
-        NumericFigure::Oldstyle => push_toggle(*b"onum", true),
+        NumericFigure::Lining => push_toggle(&mut features, *b"lnum", true),
+        NumericFigure::Oldstyle => push_toggle(&mut features, *b"onum", true),
         NumericFigure::Normal => {}
     }
     match numeric.spacing {
-        NumericSpacing::Proportional => push_toggle(*b"pnum", true),
-        NumericSpacing::Tabular => push_toggle(*b"tnum", true),
+        NumericSpacing::Proportional => push_toggle(&mut features, *b"pnum", true),
+        NumericSpacing::Tabular => push_toggle(&mut features, *b"tnum", true),
         NumericSpacing::Normal => {}
     }
     match numeric.fraction {
-        NumericFraction::Diagonal => push_toggle(*b"frac", true),
-        NumericFraction::Stacked => push_toggle(*b"afrc", true),
+        NumericFraction::Diagonal => push_toggle(&mut features, *b"frac", true),
+        NumericFraction::Stacked => push_toggle(&mut features, *b"afrc", true),
         NumericFraction::Normal => {}
     }
     if numeric.ordinal {
-        push_toggle(*b"ordn", true);
+        push_toggle(&mut features, *b"ordn", true);
     }
     if numeric.slashed_zero {
-        push_toggle(*b"zero", true);
+        push_toggle(&mut features, *b"zero", true);
     }
 
     // font-variant-east-asian
     if let Some(variant) = east.variant {
         match variant {
-            EastAsianVariant::Jis78 => push_toggle(*b"jp78", true),
-            EastAsianVariant::Jis83 => push_toggle(*b"jp83", true),
-            EastAsianVariant::Jis90 => push_toggle(*b"jp90", true),
-            EastAsianVariant::Jis04 => push_toggle(*b"jp04", true),
-            EastAsianVariant::Simplified => push_toggle(*b"smpl", true),
-            EastAsianVariant::Traditional => push_toggle(*b"trad", true),
+            EastAsianVariant::Jis78 => push_toggle(&mut features, *b"jp78", true),
+            EastAsianVariant::Jis83 => push_toggle(&mut features, *b"jp83", true),
+            EastAsianVariant::Jis90 => push_toggle(&mut features, *b"jp90", true),
+            EastAsianVariant::Jis04 => push_toggle(&mut features, *b"jp04", true),
+            EastAsianVariant::Simplified => push_toggle(&mut features, *b"smpl", true),
+            EastAsianVariant::Traditional => push_toggle(&mut features, *b"trad", true),
         }
     }
     if let Some(width) = east.width {
         match width {
-            EastAsianWidth::FullWidth => push_toggle(*b"fwid", true),
-            EastAsianWidth::ProportionalWidth => push_toggle(*b"pwid", true),
+            EastAsianWidth::FullWidth => push_toggle(&mut features, *b"fwid", true),
+            EastAsianWidth::ProportionalWidth => push_toggle(&mut features, *b"pwid", true),
         }
     }
     if east.ruby {
-        push_toggle(*b"ruby", true);
+        push_toggle(&mut features, *b"ruby", true);
     }
 
     match caps {
         FontVariantCaps::Normal => {}
-        FontVariantCaps::SmallCaps => push_toggle(*b"smcp", true),
+        FontVariantCaps::SmallCaps => push_toggle(&mut features, *b"smcp", true),
         FontVariantCaps::AllSmallCaps => {
-            push_toggle(*b"smcp", true);
-            push_toggle(*b"c2sc", true);
+            push_toggle(&mut features, *b"smcp", true);
+            push_toggle(&mut features, *b"c2sc", true);
         }
-        FontVariantCaps::PetiteCaps => push_toggle(*b"pcap", true),
+        FontVariantCaps::PetiteCaps => push_toggle(&mut features, *b"pcap", true),
         FontVariantCaps::AllPetiteCaps => {
-            push_toggle(*b"pcap", true);
-            push_toggle(*b"c2pc", true);
+            push_toggle(&mut features, *b"pcap", true);
+            push_toggle(&mut features, *b"c2pc", true);
         }
-        FontVariantCaps::Unicase => push_toggle(*b"unic", true),
-        FontVariantCaps::TitlingCaps => push_toggle(*b"titl", true),
+        FontVariantCaps::Unicase => push_toggle(&mut features, *b"unic", true),
+        FontVariantCaps::TitlingCaps => push_toggle(&mut features, *b"titl", true),
     }
 
     match position {
         FontVariantPosition::Normal => {}
-        FontVariantPosition::Sub => push_toggle(*b"subs", true),
-        FontVariantPosition::Super => push_toggle(*b"sups", true),
+        FontVariantPosition::Sub => push_toggle(&mut features, *b"subs", true),
+        FontVariantPosition::Super => push_toggle(&mut features, *b"sups", true),
+    }
+
+    if alternates.historical_forms {
+        push_toggle(&mut features, *b"hist", true);
+    }
+    if let Some(set) = alternates.stylistic {
+        if let Some(tag) = number_tag(b"ss", set) {
+            push_toggle(&mut features, tag, true);
+        }
+    }
+    for set in &alternates.stylesets {
+        if let Some(tag) = number_tag(b"ss", *set) {
+            push_toggle(&mut features, tag, true);
+        }
+    }
+    for cv in &alternates.character_variants {
+        if let Some(tag) = number_tag(b"cv", *cv) {
+            let tag = Tag::from_bytes(&tag);
+            features.push(Feature {
+                tag,
+                value: 1,
+                start: 0,
+                end: u32::MAX,
+            });
+        }
+    }
+    if let Some(swash) = alternates.swash {
+        // CSS doesn't distinguish swash types; map to swsh.
+        let tag = Tag::from_bytes(b"swsh");
+        features.retain(|f| f.tag != tag);
+        features.push(Feature {
+            tag,
+            value: swash as u32,
+            start: 0,
+            end: u32::MAX,
+        });
+    }
+    if let Some(orn) = alternates.ornaments {
+        let tag = Tag::from_bytes(b"ornm");
+        features.retain(|f| f.tag != tag);
+        features.push(Feature {
+            tag,
+            value: orn as u32,
+            start: 0,
+            end: u32::MAX,
+        });
     }
 
     match style.font_kerning {
         FontKerning::Auto => {}
-        FontKerning::Normal => push_toggle(*b"kern", true),
-        FontKerning::None => push_toggle(*b"kern", false),
+        FontKerning::Normal => push_toggle(&mut features, *b"kern", true),
+        FontKerning::None => push_toggle(&mut features, *b"kern", false),
     }
 
     // Low-level font-feature-settings override defaults and prior toggles.
@@ -1576,4 +1623,41 @@ mod tests {
         let feats = collect_opentype_features(&style);
         assert!(feats.iter().any(|f| f.tag.to_bytes() == *b"unic"));
     }
+
+    #[test]
+    fn collect_features_includes_alternates() {
+        let mut style = ComputedStyle::default();
+        style.font_variant_alternates.historical_forms = true;
+        style.font_variant_alternates.stylistic = Some(3);
+        style.font_variant_alternates.stylesets = vec![1, 2];
+        style.font_variant_alternates.character_variants = vec![4];
+        style.font_variant_alternates.swash = Some(1);
+        style.font_variant_alternates.ornaments = Some(2);
+
+        let feats = collect_opentype_features(&style);
+        let mut seen: std::collections::HashMap<[u8; 4], u32> = std::collections::HashMap::new();
+        for f in feats {
+            seen.insert(f.tag.to_bytes(), f.value);
+        }
+        assert_eq!(seen.get(b"hist"), Some(&1));
+        assert_eq!(seen.get(b"ss03"), Some(&1));
+        assert_eq!(seen.get(b"ss01"), Some(&1));
+        assert_eq!(seen.get(b"ss02"), Some(&1));
+        assert_eq!(seen.get(b"cv04"), Some(&1));
+        assert_eq!(seen.get(b"swsh"), Some(&1));
+        assert_eq!(seen.get(b"ornm"), Some(&2));
+    }
+}
+fn number_tag(prefix: &[u8; 2], n: u8) -> Option<[u8; 4]> {
+    if n == 0 {
+        return None;
+    }
+    let mut tag = [b' ', b' ', b' ', b' '];
+    tag[0] = prefix[0];
+    tag[1] = prefix[1];
+    let tens = (n / 10) % 10;
+    let ones = n % 10;
+    tag[2] = b'0' + tens;
+    tag[3] = b'0' + ones;
+    Some(tag)
 }

@@ -6,6 +6,8 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- `font-variant-alternates` now parses/inherits (historical-forms, stylistic/ styleset/ character-variant sets, swash, ornaments, annotation), resets via `font` shorthand, and maps to OpenType features (`hist`, `ssXX`, `cvXX`, `swsh`, `ornm`) during feature collection; regression added for alternates emission.
+- Small-caps shaping now prefers native OpenType features when available (`smcp`/`c2sc` via font_db::font_has_feature), synthesizing only when the chosen face lacks them (covers all-small-caps too).
 - `font-variant-east-asian` now parses/inherits (jis78/83/90/04, simplified/traditional, proportional/full-width, ruby), maps to OpenType toggles (`jp78/jp83/jp90/jp04/smpl/trad/fwid/pwid/ruby`), and resets via `font` shorthand alongside ligatures/numeric/kerning/feature overrides.
 - Shaping collects OpenType features from computed styles, applies ligature defaults, and maps numeric/east-asian variants plus kerning into feature tags; `font-feature-settings` still overrides. New regressions cover numeric+EA feature emission.
 - `font-variant-numeric` and `font-kerning` now parse/inherit and map to OpenType features: numeric figure/spacing/fraction variants drive `lnum/onum`, `pnum/tnum`, `frac/afrc`, plus `ordn`/`zero`, and kerning toggles `kern` (auto leaves defaults). `font` shorthand resets numeric, ligatures, kerning, and custom feature overrides.

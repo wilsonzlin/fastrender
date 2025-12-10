@@ -411,6 +411,32 @@ impl Default for FontVariantCaps {
     }
 }
 
+/// Alternates (`font-variant-alternates`)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FontVariantAlternates {
+    pub historical_forms: bool,
+    pub stylistic: Option<u8>,
+    pub stylesets: Vec<u8>,
+    pub character_variants: Vec<u8>,
+    pub swash: Option<u8>,
+    pub ornaments: Option<u8>,
+    pub annotation: Option<String>,
+}
+
+impl Default for FontVariantAlternates {
+    fn default() -> Self {
+        Self {
+            historical_forms: false,
+            stylistic: None,
+            stylesets: Vec::new(),
+            character_variants: Vec::new(),
+            swash: None,
+            ornaments: None,
+            annotation: None,
+        }
+    }
+}
+
 /// Numeric variants (`font-variant-numeric`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumericFigure {

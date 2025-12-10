@@ -218,6 +218,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.font_style = parent.font_style;
     styles.font_variant = parent.font_variant;
     styles.font_variant_caps = parent.font_variant_caps;
+    styles.font_variant_alternates = parent.font_variant_alternates.clone();
     styles.font_variant_numeric = parent.font_variant_numeric;
     styles.font_variant_east_asian = parent.font_variant_east_asian;
     styles.font_variant_ligatures = parent.font_variant_ligatures;
