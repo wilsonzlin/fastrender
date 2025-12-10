@@ -215,10 +215,6 @@ pub struct PositionedStyle {
     /// Note: Already resolved to px at computed value time
     pub font_size: f32,
 
-    /// Root element font size for resolving rem units
-    pub root_font_size: f32,
-
-    /// Root element font size in pixels (used for resolving rem units)
     pub root_font_size: f32,
 
     /// Font weight

@@ -357,6 +357,14 @@ fn resolve_length(length: Length, containing_width: f32, font_size: f32, root_fo
         length.resolve_against(containing_width)
     } else if length.unit.is_absolute() {
         length.to_px()
+    } else if length.unit.is_viewport_relative() {
+        match length.unit {
+            LengthUnit::Vw => (length.value / 100.0) * containing_width,
+            LengthUnit::Vh => (length.value / 100.0) * containing_width,
+            LengthUnit::Vmin => (length.value / 100.0) * containing_width,
+            LengthUnit::Vmax => (length.value / 100.0) * containing_width,
+            _ => length.value,
+        }
     } else {
         match length.unit {
             LengthUnit::Em => length.value * font_size,
@@ -431,6 +439,17 @@ mod tests {
         let width = compute_block_width(&style, 200.0);
         assert!((width.padding_left - 15.0).abs() < f32::EPSILON);
         assert!((width.padding_right - 12.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn resolves_viewport_units_against_containing_width() {
+        let mut style = default_style();
+        style.padding_left = Length::new(10.0, LengthUnit::Vw);
+        style.padding_right = Length::new(5.0, LengthUnit::Vmin);
+
+        let width = compute_block_width(&style, 200.0);
+        assert!((width.padding_left - 20.0).abs() < f32::EPSILON);
+        assert!((width.padding_right - 10.0).abs() < f32::EPSILON);
     }
 
     #[test]

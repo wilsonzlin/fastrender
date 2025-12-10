@@ -1494,6 +1494,14 @@ fn resolve_length_for_width(length: Length, percentage_base: f32, font_size: f32
         length.resolve_against(percentage_base)
     } else if length.unit.is_absolute() {
         length.to_px()
+    } else if length.unit.is_viewport_relative() {
+        match length.unit {
+            LengthUnit::Vw => (length.value / 100.0) * percentage_base,
+            LengthUnit::Vh => (length.value / 100.0) * percentage_base,
+            LengthUnit::Vmin => (length.value / 100.0) * percentage_base,
+            LengthUnit::Vmax => (length.value / 100.0) * percentage_base,
+            _ => length.value,
+        }
     } else {
         match length.unit {
             LengthUnit::Em => length.value * font_size,

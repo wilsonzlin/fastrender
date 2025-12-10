@@ -19,6 +19,24 @@ pub fn resolve_length_with_percentage(
 ) -> Option<f32> {
     if length.unit.is_percentage() {
         percentage_base.map(|b| length.resolve_against(b))
+    } else if length.unit.is_viewport_relative() {
+        let vw = percentage_base;
+        let vh = percentage_base;
+        match length.unit {
+            LengthUnit::Vw => vw.map(|w| (length.value / 100.0) * w),
+            LengthUnit::Vh => vh.map(|h| (length.value / 100.0) * h),
+            LengthUnit::Vmin => match (vw, vh) {
+                (Some(w), Some(h)) => Some((length.value / 100.0) * w.min(h)),
+                (Some(w), None) | (None, Some(w)) => Some((length.value / 100.0) * w),
+                _ => None,
+            },
+            LengthUnit::Vmax => match (vw, vh) {
+                (Some(w), Some(h)) => Some((length.value / 100.0) * w.max(h)),
+                (Some(w), None) | (None, Some(w)) => Some((length.value / 100.0) * w),
+                _ => None,
+            },
+            _ => None,
+        }
     } else if length.unit.is_font_relative() {
         Some(resolve_font_relative(length, font_size, root_font_size))
     } else if length.unit.is_absolute() {
@@ -193,6 +211,8 @@ fn resolve_replaced_length(
 ) -> Option<f32> {
     if len.unit.is_percentage() {
         percentage_base.map(|b| len.resolve_against(b))
+    } else if len.unit.is_viewport_relative() {
+        percentage_base.map(|base| (len.value / 100.0) * base)
     } else if len.unit.is_font_relative() {
         Some(resolve_font_relative(*len, font_size, root_font_size))
     } else if len.unit.is_absolute() {
