@@ -1425,7 +1425,7 @@ impl InlineFormattingContext {
         )
         .unwrap_or(0.0);
         let indent_positive = indent_value.max(0.0);
-        let indent_applies_first = !style.text_indent.hanging;
+        let indent_applies_first = style.text_indent.each_line || !style.text_indent.hanging;
         let indent_applies_subsequent = style.text_indent.each_line || style.text_indent.hanging;
 
         let mut width = match mode {
@@ -2140,7 +2140,7 @@ impl FormattingContext for InlineFormattingContext {
             style.root_font_size,
         )
         .unwrap_or(0.0);
-        let indent_applies_first = !style.text_indent.hanging;
+        let indent_applies_first = style.text_indent.each_line || !style.text_indent.hanging;
         let indent_applies_subsequent = style.text_indent.each_line || style.text_indent.hanging;
         let indent_positive = indent_value.max(0.0);
         let first_line_width = if indent_applies_first {
@@ -2842,11 +2842,11 @@ mod tests {
         let mut parent_style = ComputedStyle::default();
         parent_style.text_indent.length = Length::px(14.0);
         parent_style.text_indent.hanging = true;
-        let text = "word";
+        let text = "word\nword";
         let text_node = make_text_box(text);
         let root = BoxNode::new_block(Arc::new(parent_style), FormattingContextType::Block, vec![text_node]);
 
-        let base_item = ifc.create_text_item(&make_text_box(text), text).unwrap();
+        let base_item = ifc.create_text_item(&make_text_box("word"), "word").unwrap();
         let base_width = base_item.advance;
 
         let min_width = ifc
@@ -2854,7 +2854,7 @@ mod tests {
             .unwrap();
         assert!(
             min_width >= base_width + 10.0,
-            "min-content should include hanging indent for subsequent lines"
+            "min-content should include hanging indent for subsequent lines; got {min_width}"
         );
     }
 
@@ -3911,7 +3911,7 @@ mod tests {
     }
 
     #[test]
-    fn text_indent_hanging_each_line_still_skips_first_line() {
+    fn text_indent_hanging_each_line_indents_all_lines() {
         let mut root_style = ComputedStyle::default();
         root_style.text_indent.length = Length::px(12.0);
         root_style.text_indent.hanging = true;
@@ -3932,8 +3932,8 @@ mod tests {
         let first_x = fragment.children[0].children[0].bounds.x();
         let second_x = fragment.children[1].children[0].bounds.x();
         assert!(
-            first_x < 1.0,
-            "first line should remain unindented even with each-line + hanging"
+            first_x >= 11.0,
+            "first line should be indented when each-line is present alongside hanging"
         );
         assert!(
             second_x >= 11.0,
