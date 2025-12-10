@@ -1519,6 +1519,37 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
         return;
     }
 
+    let spacing = if structure.border_collapse == BorderCollapse::Collapse {
+        0.0
+    } else {
+        structure.border_spacing.1
+    };
+    let content_available = available_height.map(|h| {
+        (h - spacing
+            * (if spacing > 0.0 {
+                structure.row_count as f32 + 1.0
+            } else {
+                0.0
+            }))
+        .max(0.0)
+    });
+
+    let row_floor = |row: &RowInfo| -> f32 {
+        let mut floor = row.min_height;
+        if let Some(spec) = row.specified_height {
+            match spec {
+                SpecifiedHeight::Fixed(h) => floor = floor.max(h),
+                SpecifiedHeight::Percent(pct) => {
+                    if let Some(base) = content_available {
+                        floor = floor.max((pct / 100.0) * base);
+                    }
+                }
+                SpecifiedHeight::Auto => {}
+            }
+        }
+        floor
+    };
+
     // Phase 1: Calculate row heights from non-spanning cells
     for cell in &structure.cells {
         if cell.rowspan == 1 {
@@ -1533,7 +1564,10 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
             let span_start = cell.row;
             let span_end = (cell.row + cell.rowspan).min(structure.row_count);
 
-            let current_height: f32 = structure.rows[span_start..span_end].iter().map(|r| r.min_height).sum();
+            let current_height: f32 = structure.rows[span_start..span_end]
+                .iter()
+                .map(row_floor)
+                .sum();
 
             let spacing = structure.border_spacing.1 * (cell.rowspan - 1) as f32;
 
@@ -1565,21 +1599,6 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
     }
 
     // Phase 3: Apply specified/percentage heights when an available height is known.
-    let spacing = if structure.border_collapse == BorderCollapse::Collapse {
-        0.0
-    } else {
-        structure.border_spacing.1
-    };
-    let content_available = available_height.map(|h| {
-        (h - spacing
-            * (if spacing > 0.0 {
-                structure.row_count as f32 + 1.0
-            } else {
-                0.0
-            }))
-        .max(0.0)
-    });
-
     let mut fixed_sum = 0.0;
     let mut percent_rows = Vec::new();
     let mut auto_rows = Vec::new();
@@ -2057,6 +2076,45 @@ impl FormattingContext for TableFormattingContext {
             }
         }
 
+        let percent_height_base = table_height.map(|base| {
+            let mut content_base = if structure.border_collapse == BorderCollapse::Collapse {
+                base
+            } else {
+                (base - padding_v - border_v).max(0.0)
+            };
+            if structure.border_collapse != BorderCollapse::Collapse {
+                let spacing_total = v_spacing * (structure.row_count as f32 + 1.0);
+                content_base = (content_base - spacing_total).max(0.0);
+            }
+            content_base
+        });
+
+        let row_floor = |idx: usize, current: f32| -> f32 {
+            let row = structure.rows.get(idx);
+            if row.is_none() {
+                return current;
+            }
+            let row = row.unwrap();
+            let mut floor = current;
+            if let Some((min_len, _)) = Some(resolve_row_min_max(row, percent_height_base)) {
+                if let Some(min) = min_len {
+                    floor = floor.max(min);
+                }
+            }
+            if let Some(spec) = row.specified_height {
+                match spec {
+                    SpecifiedHeight::Fixed(h) => floor = floor.max(h),
+                    SpecifiedHeight::Percent(pct) => {
+                        if let Some(base) = percent_height_base {
+                            floor = floor.max((pct / 100.0) * base);
+                        }
+                    }
+                    SpecifiedHeight::Auto => {}
+                }
+            }
+            floor
+        };
+
         for laid in &laid_out_cells {
             if laid.cell.rowspan == 1 {
                 row_heights[laid.cell.row] = row_heights[laid.cell.row].max(laid.height);
@@ -2064,7 +2122,9 @@ impl FormattingContext for TableFormattingContext {
                 let span_start = laid.cell.row;
                 let span_end = (laid.cell.row + laid.cell.rowspan).min(structure.row_count);
                 let spacing_total = v_spacing * (laid.cell.rowspan.saturating_sub(1) as f32);
-                let current: f32 = row_heights[span_start..span_end].iter().sum();
+                let current: f32 = (span_start..span_end)
+                    .map(|idx| row_floor(idx, *row_heights.get(idx).unwrap_or(&0.0)))
+                    .sum();
                 if laid.height > current + spacing_total {
                     let extra = laid.height - current - spacing_total;
                     let auto_rows: Vec<usize> = (span_start..span_end)
@@ -4152,6 +4212,58 @@ mod tests {
         let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 10.0, 20.0), vec![]);
         let baseline = cell_baseline(&fragment).expect("baseline");
         assert!((baseline - 20.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn calculate_row_heights_prefers_auto_rows_for_rowspan_extra() {
+        let mut structure = TableStructure::new();
+        structure.row_count = 2;
+        structure.rows = vec![RowInfo::new(0), RowInfo::new(1)];
+        structure.rows[0].specified_height = Some(SpecifiedHeight::Fixed(50.0));
+        structure.cells = vec![CellInfo {
+            index: 0,
+            row: 0,
+            col: 0,
+            rowspan: 2,
+            colspan: 1,
+            box_index: 0,
+            min_width: 0.0,
+            max_width: 0.0,
+            min_height: 120.0,
+            bounds: Rect::ZERO,
+        }];
+        structure.border_spacing = (0.0, 0.0);
+
+        calculate_row_heights(&mut structure, None);
+
+        assert!((structure.rows[0].computed_height - 50.0).abs() < 0.01);
+        assert!((structure.rows[1].computed_height - 70.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn calculate_row_heights_with_percent_row_and_rowspan_extra() {
+        let mut structure = TableStructure::new();
+        structure.row_count = 2;
+        structure.rows = vec![RowInfo::new(0), RowInfo::new(1)];
+        structure.rows[0].specified_height = Some(SpecifiedHeight::Percent(50.0));
+        structure.cells = vec![CellInfo {
+            index: 0,
+            row: 0,
+            col: 0,
+            rowspan: 2,
+            colspan: 1,
+            box_index: 0,
+            min_width: 0.0,
+            max_width: 0.0,
+            min_height: 160.0,
+            bounds: Rect::ZERO,
+        }];
+        structure.border_spacing = (0.0, 0.0);
+
+        calculate_row_heights(&mut structure, Some(200.0));
+
+        assert!((structure.rows[0].computed_height - 100.0).abs() < 0.01);
+        assert!((structure.rows[1].computed_height - 100.0).abs() < 0.01);
     }
 
     #[test]
