@@ -3805,6 +3805,45 @@ mod tests {
     }
 
     #[test]
+    fn collapsed_table_padding_offsets_content_and_preserves_total_height() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_collapse = BorderCollapse::Collapse;
+        table_style.padding_top = Length::px(10.0);
+        table_style.padding_bottom = Length::px(10.0);
+        table_style.padding_left = Length::px(5.0);
+        table_style.padding_right = Length::px(5.0);
+        table_style.height = Some(Length::px(100.0));
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![BoxNode::new_text(
+            Arc::new(ComputedStyle::default()),
+            "data".to_string(),
+        )]);
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let fc = TableFormattingContext::with_factory(FormattingContextFactory::new());
+        let fragment = fc
+            .layout(
+                &table,
+                &LayoutConstraints::new(AvailableSpace::Definite(200.0), AvailableSpace::Definite(100.0)),
+            )
+            .expect("layout");
+
+        // Total height honors the specified height.
+        assert!((fragment.bounds.height() - 100.0).abs() < 0.01);
+
+        // Content (rows/cells) starts after padding top.
+        let cell_frag = find_cell_fragment(&fragment).expect("cell fragment");
+        assert!((cell_frag.bounds.y() - 10.0).abs() < 0.1);
+    }
+
+    #[test]
     fn column_and_colgroup_backgrounds_paint_before_rows() {
         let mut table_style = ComputedStyle::default();
         table_style.display = Display::Table;
