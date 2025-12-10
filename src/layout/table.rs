@@ -1498,16 +1498,15 @@ pub fn calculate_auto_layout_widths(structure: &mut TableStructure, available_wi
 // Row Height Algorithm
 // ============================================================================
 
-/// Calculates row heights based on cell content
+/// Calculates row heights based on cell content and optional available height.
 ///
-/// Row heights are determined by the tallest cell in each row, taking
-/// into account rowspan cells which contribute to multiple rows.
-///
-/// # Arguments
-///
-/// * `structure` - The table structure with cell heights populated
-/// * `available_height` - Optional height constraint for the table
-pub fn calculate_row_heights(structure: &mut TableStructure, _available_height: Option<f32>) {
+/// This is a simplified stand-alone distributor used by unit tests and legacy
+/// paths. It accounts for:
+/// - min-height contributions from non-spanning cells
+/// - rowspan contributions spread evenly across rows
+/// - specified row heights (length or percentage when a definite available height is provided)
+/// - distributing remaining space to auto rows when an available height is known
+pub fn calculate_row_heights(structure: &mut TableStructure, available_height: Option<f32>) {
     if structure.row_count == 0 {
         return;
     }
@@ -1540,15 +1539,56 @@ pub fn calculate_row_heights(structure: &mut TableStructure, _available_height: 
         }
     }
 
-    // Phase 3: Apply specified heights and calculate positions
-    let mut y = structure.border_spacing.1;
-    for row in &mut structure.rows {
-        row.computed_height = match row.specified_height {
-            Some(SpecifiedHeight::Fixed(h)) => h.max(row.min_height),
-            _ => row.min_height,
-        };
+    // Phase 3: Apply specified/percentage heights when an available height is known.
+    let spacing = structure.border_spacing.1;
+    let content_available = available_height.map(|h| (h - spacing * (structure.row_count as f32 + 1.0)).max(0.0));
+
+    let mut fixed_sum = 0.0;
+    let mut percent_rows = Vec::new();
+    let mut auto_rows = Vec::new();
+
+    for (idx, row) in structure.rows.iter().enumerate() {
+        match row.specified_height {
+            Some(SpecifiedHeight::Fixed(h)) => fixed_sum += h.max(row.min_height),
+            Some(SpecifiedHeight::Percent(p)) => percent_rows.push((idx, p)),
+            Some(SpecifiedHeight::Auto) | None => auto_rows.push(idx),
+        }
+    }
+
+    let mut computed: Vec<f32> = structure.rows.iter().map(|r| r.min_height).collect();
+
+    if let Some(base) = content_available {
+        // Apply percentage rows against the definite base.
+        for (idx, pct) in percent_rows {
+            let target = (pct / 100.0) * base;
+            computed[idx] = computed[idx].max(target);
+            fixed_sum += computed[idx];
+        }
+
+        // Fixed rows were already counted in fixed_sum via target or explicit fixed.
+        // Compute remaining space for auto rows.
+        let remaining = base - fixed_sum;
+        if remaining > 0.0 && !auto_rows.is_empty() {
+            let per = remaining / auto_rows.len() as f32;
+            for idx in auto_rows {
+                computed[idx] = computed[idx].max(per);
+            }
+        }
+    }
+
+    // Fallback: no available height, just use min heights and explicit lengths.
+    for (idx, row) in structure.rows.iter().enumerate() {
+        if let Some(SpecifiedHeight::Fixed(h)) = row.specified_height {
+            computed[idx] = computed[idx].max(h);
+        }
+    }
+
+    // Phase 4: calculate positions.
+    let mut y = spacing;
+    for (idx, row) in structure.rows.iter_mut().enumerate() {
+        row.computed_height = computed[idx];
         row.y_position = y;
-        y += row.computed_height + structure.border_spacing.1;
+        y += row.computed_height + spacing;
     }
 }
 
@@ -4004,6 +4044,21 @@ mod tests {
 
         let total_height: f32 = structure.rows.iter().map(|r| r.computed_height).sum();
         assert!(total_height >= 100.0);
+    }
+
+    #[test]
+    fn test_row_percent_with_available_height() {
+        let mut structure = TableStructure::new();
+        structure.row_count = 2;
+        structure.rows = vec![RowInfo::new(0), RowInfo::new(1)];
+        structure.rows[0].specified_height = Some(SpecifiedHeight::Percent(50.0));
+        structure.rows[1].min_height = 10.0;
+        structure.border_spacing = (0.0, 0.0);
+
+        calculate_row_heights(&mut structure, Some(200.0));
+
+        assert!((structure.rows[0].computed_height - 100.0).abs() < 0.01);
+        assert!((structure.rows[1].computed_height - 100.0).abs() < 0.01);
     }
 
     #[test]
