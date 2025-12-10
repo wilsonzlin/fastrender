@@ -226,8 +226,17 @@ impl BlockFormattingContext {
             self.viewport_size,
         );
 
-        // Height computation (CSS 2.1 Section 10.6.3)
-        let height = specified_height.unwrap_or(content_height);
+        // Height computation (CSS 2.1 Section 10.6.3) with aspect-ratio adjustment (CSS Sizing L4)
+        let mut height = specified_height.unwrap_or(content_height);
+        if specified_height.is_none() {
+            if let crate::style::types::AspectRatio::Ratio(ratio) = style.aspect_ratio {
+                if ratio > 0.0 && computed_width.content_width.is_finite() {
+                    let ratio_height = computed_width.content_width / ratio;
+                    // Do not shrink below content-based height
+                    height = height.max(ratio_height);
+                }
+            }
+        }
 
         // Apply min/max height constraints
         let min_height = style
@@ -1155,6 +1164,25 @@ mod tests {
         let fragment = bfc.layout(&root, &constraints).unwrap();
         let child_fragment = fragment.children.first().expect("child fragment");
         assert!((child_fragment.bounds.height() - 150.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn aspect_ratio_sets_auto_height() {
+        let bfc = BlockFormattingContext::new();
+
+        let mut child_style = ComputedStyle::default();
+        child_style.display = Display::Block;
+        child_style.aspect_ratio = crate::style::types::AspectRatio::Ratio(2.0);
+        let child = BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![]);
+
+        let mut root_style = ComputedStyle::default();
+        root_style.display = Display::Block;
+        let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![child]);
+        let constraints = LayoutConstraints::definite(200.0, 400.0);
+
+        let fragment = bfc.layout(&root, &constraints).unwrap();
+        let child_fragment = fragment.children.first().expect("child fragment");
+        assert_eq!(child_fragment.bounds.height(), 100.0);
     }
 
     #[test]
