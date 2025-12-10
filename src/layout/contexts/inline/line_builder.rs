@@ -1496,22 +1496,25 @@ fn reorder_paragraph(
     let mut current_depth: usize = 0;
     let mut global_idx = 0usize;
 
-    let push_controls =
-        |opens: &[char], closes: &[char], depth: &mut usize, buffer: &mut String| -> (usize, Vec<char>) {
-            if opens.is_empty() {
-                return (0, Vec::new());
-            }
-            // UAX#9 counts explicit depth per embedding/isolate context, not per control codepoint.
-            let added = 1usize;
-            if *depth + added > max_depth {
-                return (0, Vec::new());
-            }
-            for ch in opens {
-                buffer.push(*ch);
-            }
-            *depth += added;
-            (added, closes.to_vec())
-        };
+    let push_controls = |opens: &[char],
+                         closes: &[char],
+                         depth: &mut usize,
+                         buffer: &mut String|
+     -> Option<(usize, Vec<char>)> {
+        if opens.is_empty() {
+            return None;
+        }
+        // UAX#9 counts explicit depth per embedding/isolate context, not per control codepoint.
+        let added = 1usize;
+        if *depth + added > max_depth {
+            return None;
+        }
+        for ch in opens {
+            buffer.push(*ch);
+        }
+        *depth += added;
+        Some((added, closes.to_vec()))
+    };
 
     for (line_idx, leaves) in line_leaves.iter().enumerate() {
         let line_start = logical_text.len();
@@ -1536,19 +1539,24 @@ fn reorder_paragraph(
             // Open new contexts
         for ctx in leaf.box_stack.iter().skip(shared) {
             let (opens, closes) = bidi_controls(ctx.unicode_bidi, ctx.direction);
-            let (depth_added, closer_vec) =
-                push_controls(&opens, &closes, &mut current_depth, &mut logical_text);
-            active_stack.push(ActiveCtx {
-                id: ctx.id,
-                closers: closer_vec,
-                depth_added,
-            });
+            if let Some((depth_added, closer_vec)) =
+                push_controls(&opens, &closes, &mut current_depth, &mut logical_text)
+            {
+                active_stack.push(ActiveCtx {
+                    id: ctx.id,
+                    closers: closer_vec,
+                    depth_added,
+                });
+            }
         }
 
             // Leaf-local controls
         let (leaf_opens, leaf_closes) = bidi_controls(leaf.item.unicode_bidi(), leaf.item.direction());
         let (leaf_depth_added, leaf_closers) =
-            push_controls(&leaf_opens, &leaf_closes, &mut current_depth, &mut logical_text);
+            match push_controls(&leaf_opens, &leaf_closes, &mut current_depth, &mut logical_text) {
+                Some((d, closers)) => (d, closers),
+                None => (0, Vec::new()),
+            };
 
             let content_start = logical_text.len();
             match &leaf.item {
