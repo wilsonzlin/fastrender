@@ -283,6 +283,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.text_transform = parent.text_transform;
     styles.letter_spacing = parent.letter_spacing;
     styles.word_spacing = parent.word_spacing;
+    styles.justify_items = parent.justify_items;
     styles.visibility = parent.visibility;
     styles.white_space = parent.white_space;
     styles.line_break = parent.line_break;

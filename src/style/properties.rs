@@ -463,6 +463,20 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "align-self" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.align_self = match kw.as_str() {
+                    "auto" => None,
+                    "normal" => Some(AlignItems::Stretch),
+                    "flex-start" | "start" => Some(AlignItems::FlexStart),
+                    "flex-end" | "end" => Some(AlignItems::FlexEnd),
+                    "center" => Some(AlignItems::Center),
+                    "baseline" => Some(AlignItems::Baseline),
+                    "stretch" => Some(AlignItems::Stretch),
+                    _ => styles.align_self,
+                };
+            }
+        }
         "align-content" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.align_content = match kw.as_str() {
@@ -473,6 +487,33 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     "space-around" => AlignContent::SpaceAround,
                     "stretch" => AlignContent::Stretch,
                     _ => styles.align_content,
+                };
+            }
+        }
+        "justify-items" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.justify_items = match kw.as_str() {
+                    "normal" | "auto" => AlignItems::Stretch,
+                    "flex-start" | "start" => AlignItems::FlexStart,
+                    "flex-end" | "end" => AlignItems::FlexEnd,
+                    "center" => AlignItems::Center,
+                    "baseline" => AlignItems::Baseline,
+                    "stretch" => AlignItems::Stretch,
+                    _ => styles.justify_items,
+                };
+            }
+        }
+        "justify-self" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.justify_self = match kw.as_str() {
+                    "auto" => None,
+                    "normal" => Some(AlignItems::Stretch),
+                    "flex-start" | "start" => Some(AlignItems::FlexStart),
+                    "flex-end" | "end" => Some(AlignItems::FlexEnd),
+                    "center" => Some(AlignItems::Center),
+                    "baseline" => Some(AlignItems::Baseline),
+                    "stretch" => Some(AlignItems::Stretch),
+                    _ => styles.justify_self,
                 };
             }
         }

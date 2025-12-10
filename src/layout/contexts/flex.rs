@@ -219,6 +219,9 @@ impl FlexFormattingContext {
             justify_content: self.justify_content_to_taffy(style.justify_content),
             align_items: self.align_items_to_taffy(style.align_items),
             align_content: self.align_content_to_taffy(style.align_content),
+            align_self: self.align_self_to_taffy(style.align_self),
+            justify_self: self.align_self_to_taffy(style.justify_self),
+            justify_items: self.align_items_to_taffy(style.justify_items),
 
             // Gap
             gap: taffy::geometry::Size {
@@ -398,6 +401,10 @@ impl FlexFormattingContext {
             AlignItems::Baseline => taffy::style::AlignItems::Baseline,
             AlignItems::Stretch => taffy::style::AlignItems::Stretch,
         })
+    }
+
+    fn align_self_to_taffy(&self, align: Option<AlignItems>) -> Option<taffy::style::AlignItems> {
+        align.and_then(|a| self.align_items_to_taffy(a))
     }
 
     fn align_content_to_taffy(&self, align: AlignContent) -> Option<taffy::style::AlignContent> {
@@ -747,6 +754,35 @@ mod tests {
         assert_eq!(fragment.children[0].bounds.y(), 25.0); // (100 - 50) / 2
         assert_eq!(fragment.children[1].bounds.y(), 0.0); // Tallest, at top
         assert_eq!(fragment.children[2].bounds.y(), 13.0); // (100 - 74) / 2 = 13
+    }
+
+    #[test]
+    fn flex_align_self_overrides_parent_align_items() {
+        let fc = FlexFormattingContext::new();
+
+        let mut container_style = ComputedStyle::default();
+        container_style.display = Display::Flex;
+        container_style.flex_direction = FlexDirection::Row;
+        container_style.align_items = AlignItems::Center;
+        container_style.height = Some(Length::px(100.0));
+
+        let mut item_style = ComputedStyle::default();
+        item_style.height = Some(Length::px(20.0));
+        item_style.align_self = Some(AlignItems::FlexEnd);
+
+        let item = BoxNode::new_block(Arc::new(item_style), FormattingContextType::Block, vec![]);
+
+        let container = BoxNode::new_block(
+            Arc::new(container_style),
+            FormattingContextType::Flex,
+            vec![item],
+        );
+
+        let constraints = LayoutConstraints::definite(100.0, 100.0);
+        let fragment = fc.layout(&container, &constraints).unwrap();
+
+        // Parent would center to y=40; align-self:end should place it at y=80
+        assert_eq!(fragment.children[0].bounds.y(), 80.0);
     }
 
     #[test]

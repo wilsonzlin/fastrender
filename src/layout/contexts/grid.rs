@@ -253,6 +253,10 @@ impl GridFormattingContext {
             // Alignment
             taffy_style.align_content = Some(self.convert_align_content(&style.align_content));
         }
+        taffy_style.align_items = Some(self.convert_align_items(&style.align_items));
+        taffy_style.justify_items = Some(self.convert_align_items(&style.justify_items));
+        taffy_style.align_self = style.align_self.map(|a| self.convert_align_items(&a));
+        taffy_style.justify_self = style.justify_self.map(|a| self.convert_align_items(&a));
 
         // Grid item properties using raw line numbers
         taffy_style.grid_column =
@@ -994,6 +998,58 @@ mod tests {
         let fragment = fc.layout(&grid, &constraints).unwrap();
 
         assert_eq!(fragment.children.len(), 1);
+    }
+
+    #[test]
+    fn grid_justify_items_centers_children() {
+        let fc = GridFormattingContext::new();
+
+        let mut style = ComputedStyle::default();
+        style.display = CssDisplay::Grid;
+        style.grid_template_columns = vec![GridTrack::Length(Length::px(200.0))];
+        style.grid_template_rows = vec![GridTrack::Length(Length::px(100.0))];
+        style.justify_items = AlignItems::Center;
+        style.align_items = AlignItems::FlexStart;
+        let style = Arc::new(style);
+
+        let mut item_style = ComputedStyle::default();
+        item_style.width = Some(Length::px(50.0));
+        item_style.height = Some(Length::px(20.0));
+        let item = BoxNode::new_block(Arc::new(item_style), FormattingContextType::Block, vec![]);
+
+        let grid = BoxNode::new_block(style, FormattingContextType::Grid, vec![item]);
+        let constraints = LayoutConstraints::definite(400.0, 200.0);
+        let fragment = fc.layout(&grid, &constraints).unwrap();
+
+        assert_eq!(fragment.children[0].bounds.x(), 75.0);
+        assert_eq!(fragment.children[0].bounds.y(), 0.0);
+    }
+
+    #[test]
+    fn grid_align_self_and_justify_self_override_container_alignment() {
+        let fc = GridFormattingContext::new();
+
+        let mut style = ComputedStyle::default();
+        style.display = CssDisplay::Grid;
+        style.grid_template_columns = vec![GridTrack::Length(Length::px(200.0))];
+        style.grid_template_rows = vec![GridTrack::Length(Length::px(100.0))];
+        style.justify_items = AlignItems::FlexStart;
+        style.align_items = AlignItems::FlexStart;
+        let style = Arc::new(style);
+
+        let mut item_style = ComputedStyle::default();
+        item_style.width = Some(Length::px(50.0));
+        item_style.height = Some(Length::px(30.0));
+        item_style.justify_self = Some(AlignItems::FlexEnd);
+        item_style.align_self = Some(AlignItems::FlexEnd);
+        let item = BoxNode::new_block(Arc::new(item_style), FormattingContextType::Block, vec![]);
+
+        let grid = BoxNode::new_block(style, FormattingContextType::Grid, vec![item]);
+        let constraints = LayoutConstraints::definite(400.0, 200.0);
+        let fragment = fc.layout(&grid, &constraints).unwrap();
+
+        assert_eq!(fragment.children[0].bounds.x(), 150.0);
+        assert_eq!(fragment.children[0].bounds.y(), 70.0);
     }
 
     #[test]

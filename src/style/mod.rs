@@ -111,9 +111,14 @@ pub struct ComputedStyle {
     pub justify_content: JustifyContent,
     pub align_items: AlignItems,
     pub align_content: AlignContent,
+    /// Align-self overrides the parent's align-items for this item (None represents `auto`)
+    pub align_self: Option<AlignItems>,
     pub flex_grow: f32,
     pub flex_shrink: f32,
     pub flex_basis: FlexBasis,
+    /// Justify-items / justify-self are used for grid/inflow alignment on the inline axis.
+    pub justify_items: AlignItems,
+    pub justify_self: Option<AlignItems>,
 
     // Grid
     pub grid_template_columns: Vec<GridTrack>,
@@ -301,9 +306,12 @@ impl Default for ComputedStyle {
             justify_content: JustifyContent::FlexStart,
             align_items: AlignItems::Stretch,
             align_content: AlignContent::Stretch,
+            align_self: None,
             flex_grow: 0.0,
             flex_shrink: 1.0,
             flex_basis: FlexBasis::Auto,
+            justify_items: AlignItems::Stretch,
+            justify_self: None,
 
             grid_template_columns: Vec::new(),
             grid_template_rows: Vec::new(),
