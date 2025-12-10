@@ -499,11 +499,12 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         // Typography
         "font" => {
             if let PropertyValue::Keyword(raw) = &resolved_value {
-                if let Some((font_style, font_weight, font_stretch, font_size, line_height, families)) =
+                if let Some((font_style, font_weight, font_variant, font_stretch, font_size, line_height, families)) =
                     parse_font_shorthand(raw, parent_font_size, root_font_size)
                 {
                     styles.font_style = font_style;
                     styles.font_weight = font_weight;
+                    styles.font_variant = font_variant;
                     styles.font_stretch = font_stretch;
                     styles.font_size = font_size;
                     styles.line_height = line_height;
@@ -563,6 +564,15 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 if let Some(fs) = parse_font_style_keyword(kw) {
                     styles.font_style = fs;
                 }
+            }
+        }
+        "font-variant" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.font_variant = match kw.as_str() {
+                    "normal" => FontVariant::Normal,
+                    "small-caps" => FontVariant::SmallCaps,
+                    _ => styles.font_variant,
+                };
             }
         }
         "font-stretch" => match &resolved_value {
@@ -1629,7 +1639,7 @@ fn parse_font_shorthand(
     value: &str,
     parent_font_size: f32,
     root_font_size: f32,
-) -> Option<(FontStyle, FontWeight, FontStretch, f32, LineHeight, Vec<String>)> {
+) -> Option<(FontStyle, FontWeight, FontVariant, FontStretch, f32, LineHeight, Vec<String>)> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return None;
@@ -1646,6 +1656,7 @@ fn parse_font_shorthand(
         return Some((
             defaults.font_style,
             defaults.font_weight,
+            defaults.font_variant,
             defaults.font_stretch,
             defaults.font_size,
             defaults.line_height.clone(),
@@ -1665,6 +1676,7 @@ fn parse_font_shorthand(
     let mut phase = Phase::PreSize;
     let mut font_style: Option<FontStyle> = None;
     let mut font_weight: Option<FontWeight> = None;
+    let mut font_variant: Option<FontVariant> = None;
     let mut font_stretch: Option<FontStretch> = None;
     let mut font_size: Option<f32> = None;
     let mut line_height: Option<LineHeight> = None;
@@ -1698,6 +1710,7 @@ fn parse_font_shorthand(
                                 font_stretch = Some(FontStretch::Normal);
                             }
                         }
+                        "small-caps" => font_variant = Some(FontVariant::SmallCaps),
                         "italic" => font_style = Some(FontStyle::Italic),
                         "oblique" => {
                             font_style = Some(FontStyle::Oblique(None));
@@ -1715,6 +1728,11 @@ fn parse_font_shorthand(
                             if font_stretch.is_none() {
                                 if let Some(stretch) = parse_font_stretch_keyword(ident) {
                                     font_stretch = Some(stretch);
+                                }
+                            }
+                            if font_variant.is_none() {
+                                if ident == "normal" {
+                                    font_variant = Some(FontVariant::Normal);
                                 }
                             }
                         }
@@ -1786,6 +1804,7 @@ fn parse_font_shorthand(
     Some((
         font_style.unwrap_or(FontStyle::Normal),
         font_weight.unwrap_or(FontWeight::Normal),
+        font_variant.unwrap_or(FontVariant::Normal),
         font_stretch.unwrap_or(FontStretch::Normal),
         font_size.unwrap_or(parent_font_size),
         line_height.unwrap_or(LineHeight::Normal),
@@ -2570,8 +2589,8 @@ pub fn parse_border_style(kw: &str) -> BorderStyle {
 mod tests {
     use super::*;
     use crate::style::types::{
-        BackgroundRepeatKeyword, FontStretch, ListStylePosition, ListStyleType, PositionComponent, PositionKeyword,
-        TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
+        BackgroundRepeatKeyword, FontStretch, FontVariant, ListStylePosition, ListStyleType, PositionComponent,
+        PositionKeyword, TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
     };
 
     #[test]
@@ -3349,6 +3368,26 @@ mod tests {
         assert!(matches!(style.font_style, FontStyle::Italic));
         assert!((style.font_size - 16.0).abs() < 0.01);
         assert!(matches!(style.line_height, LineHeight::Length(_)));
+    }
+
+    #[test]
+    fn parses_font_variant_longhand_and_shorthand() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font-variant".to_string(),
+            value: PropertyValue::Keyword("small-caps".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_variant, FontVariant::SmallCaps));
+
+        let decl = Declaration {
+            property: "font".to_string(),
+            value: PropertyValue::Keyword("small-caps 16px serif".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_variant, FontVariant::SmallCaps));
     }
 }
 #[derive(Default)]

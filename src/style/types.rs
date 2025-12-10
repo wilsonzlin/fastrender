@@ -384,6 +384,15 @@ impl FontStyle {
     }
 }
 
+/// Font variant
+///
+/// CSS: `font-variant`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontVariant {
+    Normal,
+    SmallCaps,
+}
+
 /// Font stretch
 ///
 /// CSS: `font-stretch`

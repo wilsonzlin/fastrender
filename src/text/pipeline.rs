@@ -48,7 +48,7 @@
 //! - rustybuzz documentation: <https://docs.rs/rustybuzz/>
 
 use crate::error::{Result, TextError};
-use crate::style::types::{Direction as CssDirection, FontStyle as CssFontStyle};
+use crate::style::types::{Direction as CssDirection, FontStyle as CssFontStyle, FontVariant};
 use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStretch, FontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
@@ -850,6 +850,10 @@ impl ShapingPipeline {
             return Ok(Vec::new());
         }
 
+        if matches!(style.font_variant, FontVariant::SmallCaps) {
+            return self.shape_small_caps(text, style, font_context);
+        }
+
         // Step 1: Bidi analysis
         let bidi = BidiAnalysis::analyze(text, style);
 
@@ -895,6 +899,88 @@ impl ShapingPipeline {
     pub fn measure_width(&self, text: &str, style: &ComputedStyle, font_context: &FontContext) -> Result<f32> {
         let runs = self.shape(text, style, font_context)?;
         Ok(runs.iter().map(|r| r.advance).sum())
+    }
+
+    fn shape_small_caps(
+        &self,
+        text: &str,
+        style: &ComputedStyle,
+        font_context: &FontContext,
+    ) -> Result<Vec<ShapedRun>> {
+        const SMALL_CAPS_SCALE: f32 = 0.8;
+
+        let mut runs = Vec::new();
+        let mut segment_start: usize = 0;
+        let mut buffer = String::new();
+        let mut current_small = None;
+
+        for (idx, ch) in text.char_indices() {
+            let is_small = ch.is_lowercase();
+            if let Some(flag) = current_small {
+                if flag != is_small {
+                    self.flush_small_caps_segment(
+                        &mut runs,
+                        &buffer,
+                        segment_start,
+                        flag,
+                        style,
+                        font_context,
+                        SMALL_CAPS_SCALE,
+                    )?;
+                    buffer.clear();
+                    segment_start = idx;
+                    current_small = Some(is_small);
+                }
+            } else {
+                current_small = Some(is_small);
+            }
+
+            if is_small {
+                for up in ch.to_uppercase() {
+                    buffer.push(up);
+                }
+            } else {
+                buffer.push(ch);
+            }
+        }
+
+        if !buffer.is_empty() {
+            self.flush_small_caps_segment(
+                &mut runs,
+                &buffer,
+                segment_start,
+                current_small.unwrap_or(false),
+                style,
+                font_context,
+                SMALL_CAPS_SCALE,
+            )?;
+        }
+
+        Ok(runs)
+    }
+
+    fn flush_small_caps_segment(
+        &self,
+        out: &mut Vec<ShapedRun>,
+        segment_text: &str,
+        base_offset: usize,
+        is_small: bool,
+        style: &ComputedStyle,
+        font_context: &FontContext,
+        scale: f32,
+    ) -> Result<()> {
+        let mut seg_style = style.clone();
+        seg_style.font_variant = FontVariant::Normal;
+        if is_small {
+            seg_style.font_size *= scale;
+        }
+        let mut shaped = self.shape(segment_text, &seg_style, font_context)?;
+        for run in &mut shaped {
+            run.start += base_offset;
+            run.end += base_offset;
+        }
+        out.extend(shaped);
+        Ok(())
     }
 }
 
@@ -1247,5 +1333,16 @@ mod tests {
         let mut runs: Vec<ShapedRun> = Vec::new();
         reorder_runs(&mut runs);
         assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn small_caps_shapes_lowercase_with_scaled_size() {
+        let mut style = ComputedStyle::default();
+        style.font_variant = FontVariant::SmallCaps;
+        style.font_size = 20.0;
+        let ctx = FontContext::new();
+        let shaped = ShapingPipeline::new().shape("Abc", &style, &ctx).unwrap();
+        assert!(shaped.iter().any(|r| (r.font_size - 16.0).abs() < 0.1));
+        assert!(shaped.iter().any(|r| (r.font_size - 20.0).abs() < 0.1));
     }
 }

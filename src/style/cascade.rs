@@ -216,6 +216,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.font_size = parent.font_size;
     styles.font_weight = parent.font_weight;
     styles.font_style = parent.font_style;
+    styles.font_variant = parent.font_variant;
     styles.font_stretch = parent.font_stretch;
     styles.line_height = parent.line_height.clone();
     styles.direction = parent.direction;
