@@ -405,6 +405,7 @@ dependencies = [
  "unicode-linebreak",
  "unicode-script",
  "unicode-segmentation",
+ "unicode-vo",
  "ureq",
  "url",
  "urlencoding",

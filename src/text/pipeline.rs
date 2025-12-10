@@ -62,6 +62,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use ttf_parser::Tag;
 use unicode_bidi::{BidiInfo, Level};
+use unicode_vo::{char_orientation, Orientation as VerticalOrientation};
 
 // ============================================================================
 // Core Types
@@ -620,6 +621,9 @@ pub struct FontRun {
     pub language: String,
     /// OpenType features to apply for this run.
     pub features: Vec<Feature>,
+
+    /// Optional rotation hint for vertical writing modes.
+    pub rotation: RunRotation,
 }
 
 /// Collects OpenType features from computed style.
@@ -855,10 +859,90 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
             font_size: used_font_size,
             language: style.language.clone(),
             features: features.clone(),
+            rotation: RunRotation::None,
         });
     }
 
     Ok(font_runs)
+}
+
+fn is_vertical_writing_mode(mode: crate::style::types::WritingMode) -> bool {
+    matches!(
+        mode,
+        crate::style::types::WritingMode::VerticalRl | crate::style::types::WritingMode::VerticalLr
+    )
+}
+
+fn apply_vertical_text_orientation(
+    runs: Vec<FontRun>,
+    orientation: crate::style::types::TextOrientation,
+) -> Vec<FontRun> {
+    use crate::style::types::TextOrientation;
+
+    match orientation {
+        TextOrientation::Sideways | TextOrientation::SidewaysRight => runs
+            .into_iter()
+            .map(|mut run| {
+                run.rotation = RunRotation::Cw90;
+                run
+            })
+            .collect(),
+        TextOrientation::Upright => runs
+            .into_iter()
+            .map(|mut run| {
+                run.rotation = RunRotation::None;
+                run
+            })
+            .collect(),
+        TextOrientation::Mixed => runs.into_iter().flat_map(split_run_by_vertical_orientation).collect(),
+    }
+}
+
+fn split_run_by_vertical_orientation(run: FontRun) -> Vec<FontRun> {
+    if run.text.is_empty() {
+        return Vec::new();
+    }
+
+    let mut segments: Vec<FontRun> = Vec::new();
+    let mut iter = run.text.char_indices();
+    let (first_idx, first_char) = match iter.next() {
+        Some(pair) => pair,
+        None => return segments,
+    };
+    let mut current_rotation = rotation_for_mixed_char(first_char);
+    let mut current_start = first_idx;
+
+    for (idx, ch) in iter {
+        let rotation = rotation_for_mixed_char(ch);
+        if rotation != current_rotation {
+            push_oriented_segment(&run, current_start, idx, current_rotation, &mut segments);
+            current_start = idx;
+            current_rotation = rotation;
+        }
+    }
+
+    push_oriented_segment(&run, current_start, run.text.len(), current_rotation, &mut segments);
+    segments
+}
+
+fn rotation_for_mixed_char(ch: char) -> RunRotation {
+    match char_orientation(ch) {
+        VerticalOrientation::Upright | VerticalOrientation::TransformedOrUpright => RunRotation::None,
+        VerticalOrientation::Rotated | VerticalOrientation::TransformedOrRotated => RunRotation::Cw90,
+    }
+}
+
+fn push_oriented_segment(run: &FontRun, start: usize, end: usize, rotation: RunRotation, out: &mut Vec<FontRun>) {
+    if start >= end {
+        return;
+    }
+
+    let mut segment = run.clone();
+    segment.text = run.text[start..end].to_string();
+    segment.start = run.start + start;
+    segment.end = run.start + end;
+    segment.rotation = rotation;
+    out.push(segment);
 }
 
 /// Gets a font for a specific run.
@@ -994,8 +1078,15 @@ pub struct ShapedRun {
     pub synthetic_bold: f32,
     /// Synthetic oblique shear factor (tan(angle); 0 = none).
     pub synthetic_oblique: f32,
-    /// Whether this run should be painted rotated 90deg counterclockwise (vertical sideways text).
-    pub rotated_90_ccw: bool,
+    /// Optional rotation to apply when painting.
+    pub rotation: RunRotation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunRotation {
+    None,
+    Ccw90,
+    Cw90,
 }
 
 impl ShapedRun {
@@ -1084,7 +1175,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
         language,
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
-        rotated_90_ccw: false,
+        rotation: RunRotation::None,
     })
 }
 
@@ -1179,15 +1270,16 @@ impl ShapingPipeline {
         // Step 3: Font matching
         let font_runs = assign_fonts(&itemized_runs, style, font_context)?;
 
-        // Step 4: Shape each run
+        // Step 4: Shape each run, applying vertical text-orientation when needed.
+        let mut font_runs = font_runs;
+        if is_vertical_writing_mode(style.writing_mode) {
+            font_runs = apply_vertical_text_orientation(font_runs, style.text_orientation);
+        }
+
         let mut shaped_runs = Vec::with_capacity(font_runs.len());
         for run in &font_runs {
             let mut shaped = shape_font_run(run)?;
-            if matches!(style.writing_mode, crate::style::types::WritingMode::VerticalRl | crate::style::types::WritingMode::VerticalLr)
-                && matches!(style.text_orientation, crate::style::types::TextOrientation::Sideways | crate::style::types::TextOrientation::SidewaysRight)
-            {
-                shaped.rotated_90_ccw = true;
-            }
+            shaped.rotation = run.rotation;
             shaped_runs.push(shaped);
         }
 
@@ -1414,7 +1506,7 @@ mod tests {
     use super::*;
     use crate::style::types::{
         EastAsianVariant, EastAsianWidth, FontFeatureSetting, FontKerning, FontVariantLigatures, NumericFigure,
-        NumericFraction, NumericSpacing,
+        NumericFraction, NumericSpacing, TextOrientation, WritingMode,
     };
 
     #[test]
@@ -1756,7 +1848,28 @@ mod tests {
         style.text_orientation = crate::style::types::TextOrientation::Sideways;
         let ctx = FontContext::new();
         let shaped = ShapingPipeline::new().shape("Abc", &style, &ctx).unwrap();
-        assert!(shaped.iter().all(|r| r.rotated_90_ccw));
+        assert!(shaped.iter().all(|r| r.rotation == RunRotation::Cw90));
+    }
+
+    #[test]
+    fn vertical_mixed_rotates_non_upright_segments() {
+        let mut style = ComputedStyle::default();
+        style.writing_mode = WritingMode::VerticalRl;
+        style.text_orientation = TextOrientation::Mixed;
+        let ctx = FontContext::new();
+        let shaped = ShapingPipeline::new().shape("A。B本", &style, &ctx).unwrap();
+        assert!(shaped.iter().any(|r| r.rotation == RunRotation::Cw90));
+        assert!(shaped.iter().any(|r| r.rotation == RunRotation::None));
+    }
+
+    #[test]
+    fn vertical_upright_forces_all_runs_upright() {
+        let mut style = ComputedStyle::default();
+        style.writing_mode = WritingMode::VerticalLr;
+        style.text_orientation = TextOrientation::Upright;
+        let ctx = FontContext::new();
+        let shaped = ShapingPipeline::new().shape("Abc本", &style, &ctx).unwrap();
+        assert!(shaped.iter().all(|r| r.rotation == RunRotation::None));
     }
 
     #[test]
