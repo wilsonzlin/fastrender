@@ -2797,8 +2797,25 @@ impl InlineFormattingContext {
         float_base_y: f32,
     ) -> Result<FragmentNode, LayoutError> {
         let style = &box_node.style;
-        let available_width = constraints.width().unwrap_or(f32::MAX);
-        let available_height = constraints.height();
+        let inline_vertical = matches!(
+            style.writing_mode,
+            crate::style::types::WritingMode::VerticalRl | crate::style::types::WritingMode::VerticalLr
+        );
+        let available_inline = if inline_vertical {
+            constraints.height().unwrap_or(f32::MAX)
+        } else {
+            constraints.width().unwrap_or(f32::MAX)
+        };
+        let available_block = if inline_vertical {
+            constraints.width().unwrap_or(f32::MAX)
+        } else {
+            constraints.height().unwrap_or(f32::MAX)
+        };
+        let available_height = if inline_vertical {
+            Some(available_block)
+        } else {
+            constraints.height()
+        };
 
         // Create strut metrics from containing block style
         let strut_metrics = self.compute_strut_metrics(style);
@@ -2807,11 +2824,12 @@ impl InlineFormattingContext {
         let base_direction = resolve_base_direction_for_box(box_node);
 
         // Collect inline items
-        let items = self.collect_inline_items_with_base(box_node, available_width, available_height, base_direction)?;
+        let items =
+            self.collect_inline_items_with_base(box_node, available_inline, available_height, base_direction)?;
 
         let indent_value = resolve_length_with_percentage_inline(
             style.text_indent.length,
-            constraints.width(),
+            if inline_vertical { constraints.height() } else { constraints.width() },
             style,
             &self.font_context,
             self.viewport_size,
@@ -2821,14 +2839,14 @@ impl InlineFormattingContext {
         let indent_applies_subsequent = style.text_indent.each_line || style.text_indent.hanging;
         let indent_positive = indent_value.max(0.0);
         let first_line_width = if indent_applies_first {
-            (available_width - indent_positive).max(0.0)
+            (available_inline - indent_positive).max(0.0)
         } else {
-            available_width
+            available_inline
         };
         let subsequent_line_width = if indent_applies_subsequent {
-            (available_width - indent_positive).max(0.0)
+            (available_inline - indent_positive).max(0.0)
         } else {
-            available_width
+            available_inline
         };
         let first_line_indent_cut = if indent_applies_first { indent_positive } else { 0.0 };
         let subsequent_line_indent_cut = if indent_applies_subsequent {
@@ -2893,20 +2911,20 @@ impl InlineFormattingContext {
         for item in items {
             if let InlineItem::Floating(floating) = item {
                 if float_ctx.is_none() && local_float_ctx.is_none() {
-                    local_float_ctx = Some(FloatContext::new(available_width.max(0.0)));
+                    local_float_ctx = Some(FloatContext::new(available_inline.max(0.0)));
                 }
 
                 let mut candidate_ctx = float_ctx
                     .as_deref()
                     .or_else(|| local_float_ctx.as_ref())
                     .cloned()
-                    .unwrap_or_else(|| FloatContext::new(available_width.max(0.0)));
+                    .unwrap_or_else(|| FloatContext::new(available_inline.max(0.0)));
 
                 // Place the float at the current line offset and reflow accumulated content around it.
                 let float_min_y = float_base_y + line_offset;
                 let (fragment, _, bottom_rel) = self.layout_inline_float_fragment(
                     &floating,
-                    available_width,
+                    available_inline,
                     float_base_y,
                     float_min_y,
                     &mut candidate_ctx,
@@ -2952,8 +2970,8 @@ impl InlineFormattingContext {
             .iter()
             .map(|f| f.bounds.x() + f.bounds.width())
             .fold(0.0, f32::max);
-        let max_width: f32 = if available_width.is_finite() {
-            available_width
+        let max_width: f32 = if available_inline.is_finite() {
+            available_inline
         } else {
             line_max_width.max(float_max_width)
         };
@@ -2970,7 +2988,7 @@ impl InlineFormattingContext {
         );
 
         // Create containing fragment
-        let mut bounds = Rect::from_xywh(0.0, 0.0, max_width.min(available_width), total_height);
+        let mut bounds = Rect::from_xywh(0.0, 0.0, max_width.min(available_inline), total_height);
         let mut merged_children = float_fragments;
         merged_children.extend(children);
 
@@ -5212,6 +5230,23 @@ mod tests {
         let item = ifc.create_text_item(&node, text).unwrap();
 
         assert_eq!(item.text, "HELLO WORLD");
+    }
+
+    #[test]
+    fn rotate_fragment_helpers_swap_axes() {
+        let mut fragment = FragmentNode::new_inline(Rect::from_xywh(10.0, 5.0, 20.0, 30.0), 0, vec![]);
+        InlineFormattingContext::rotate_fragment_ccw(&mut fragment, 100.0);
+        assert_eq!(fragment.bounds.x(), 5.0);
+        assert_eq!(fragment.bounds.y(), 70.0);
+        assert_eq!(fragment.bounds.width(), 30.0);
+        assert_eq!(fragment.bounds.height(), 20.0);
+
+        let mut fragment = FragmentNode::new_inline(Rect::from_xywh(10.0, 5.0, 20.0, 30.0), 0, vec![]);
+        InlineFormattingContext::rotate_fragment_cw(&mut fragment, 100.0);
+        assert_eq!(fragment.bounds.x(), 65.0);
+        assert_eq!(fragment.bounds.y(), 10.0);
+        assert_eq!(fragment.bounds.width(), 30.0);
+        assert_eq!(fragment.bounds.height(), 20.0);
     }
 
     #[test]
