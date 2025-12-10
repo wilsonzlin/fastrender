@@ -200,6 +200,12 @@ impl DisplayListBuilder {
 
     /// Recursively builds display items with clipping support
     fn build_fragment_with_clips(&mut self, fragment: &FragmentNode, offset: Point, clips: &HashSet<Option<usize>>) {
+        if let Some(style) = fragment.style.as_deref() {
+            if !matches!(style.visibility, crate::style::computed::Visibility::Visible) {
+                return;
+            }
+        }
+
         let absolute_rect = Rect::new(
             Point::new(fragment.bounds.origin.x + offset.x, fragment.bounds.origin.y + offset.y),
             fragment.bounds.size,
@@ -1149,6 +1155,25 @@ mod tests {
                 .any(|item| matches!(item, DisplayItem::StrokeRect(_))),
             "outline should be emitted even when fragment is clipped"
         );
+    }
+
+    #[test]
+    fn hidden_fragment_skipped_with_clips() {
+        let mut style = ComputedStyle::default();
+        style.visibility = crate::style::computed::Visibility::Hidden;
+        let fragment = FragmentNode::new_block_styled(
+            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+            vec![FragmentNode::new_text(
+                Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+                "hidden".to_string(),
+                12.0,
+            )],
+            Arc::new(style),
+        );
+        let clips = HashSet::from([None]);
+        let builder = DisplayListBuilder::new();
+        let list = builder.build_with_clips(&fragment, &clips);
+        assert!(list.is_empty(), "hidden fragments should not emit display items");
     }
 
     #[test]
