@@ -730,6 +730,29 @@ impl FastRender {
                     }
                 }
             }
+            ReplacedType::Embed { src } | ReplacedType::Object { data: src } | ReplacedType::Iframe { src } => {
+                let needs_intrinsic = replaced_box.intrinsic_size.is_none();
+                let needs_ratio = replaced_box.aspect_ratio.is_none();
+                if (needs_intrinsic || needs_ratio) && !src.is_empty() {
+                    let image = if src.trim_start().starts_with('<') {
+                        self.image_cache.render_svg(src)
+                    } else {
+                        self.image_cache.load(src)
+                    };
+                    if let Ok(image) = image {
+                        let (w, h) = image.dimensions();
+                        if w > 0 && h > 0 {
+                            let size = Size::new(w as f32, h as f32);
+                            if needs_intrinsic {
+                                replaced_box.intrinsic_size = Some(size);
+                            }
+                            if needs_ratio {
+                                replaced_box.aspect_ratio = Some(size.width / size.height);
+                            }
+                        }
+                    }
+                }
+            }
             _ => {}
         }
 
@@ -1058,6 +1081,56 @@ mod tests {
             replaced.aspect_ratio,
             Some(20.0 / 12.0),
             "inline svg should populate aspect ratio"
+        );
+    }
+
+    #[test]
+    fn resolve_intrinsic_sizes_handles_embed_and_object_svg() {
+        let renderer = FastRender::new().expect("init renderer");
+        let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='10'></svg>";
+
+        let mut embed_node = BoxNode::new_replaced(
+            Arc::new(ComputedStyle::default()),
+            ReplacedType::Embed { src: svg.to_string() },
+            None,
+            None,
+        );
+        renderer.resolve_replaced_intrinsic_sizes(&mut embed_node);
+        let embed_replaced = match embed_node.box_type {
+            BoxType::Replaced(ref r) => r,
+            _ => panic!("not replaced"),
+        };
+        assert_eq!(
+            embed_replaced.intrinsic_size,
+            Some(Size::new(16.0, 10.0)),
+            "embed should pick intrinsic size from SVG"
+        );
+        assert_eq!(
+            embed_replaced.aspect_ratio,
+            Some(16.0 / 10.0),
+            "embed should set aspect ratio from SVG"
+        );
+
+        let mut object_node = BoxNode::new_replaced(
+            Arc::new(ComputedStyle::default()),
+            ReplacedType::Object { data: svg.to_string() },
+            None,
+            None,
+        );
+        renderer.resolve_replaced_intrinsic_sizes(&mut object_node);
+        let object_replaced = match object_node.box_type {
+            BoxType::Replaced(ref r) => r,
+            _ => panic!("not replaced"),
+        };
+        assert_eq!(
+            object_replaced.intrinsic_size,
+            Some(Size::new(16.0, 10.0)),
+            "object should pick intrinsic size from SVG"
+        );
+        assert_eq!(
+            object_replaced.aspect_ratio,
+            Some(16.0 / 10.0),
+            "object should set aspect ratio from SVG"
         );
     }
 }
