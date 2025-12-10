@@ -175,14 +175,25 @@ impl AbsoluteLayout {
         let style = &input.style;
         let cb_width = containing_block.width();
         let cb_height = containing_block.height();
+        let viewport = containing_block.viewport_size();
 
         // Resolve horizontal position and width
-        let (x, width, margin_left, margin_right) =
-            self.compute_horizontal(style, cb_width, input.intrinsic_size.width, input.static_position.x)?;
+        let (x, width, margin_left, margin_right) = self.compute_horizontal(
+            style,
+            cb_width,
+            viewport,
+            input.intrinsic_size.width,
+            input.static_position.x,
+        )?;
 
         // Resolve vertical position and height
-        let (y, height, margin_top, margin_bottom) =
-            self.compute_vertical(style, cb_height, input.intrinsic_size.height, input.static_position.y)?;
+        let (y, height, margin_top, margin_bottom) = self.compute_vertical(
+            style,
+            cb_height,
+            viewport,
+            input.intrinsic_size.height,
+            input.static_position.y,
+        )?;
 
         // Position relative to containing block origin
         let position = Point::new(containing_block.origin().x + x, containing_block.origin().y + y);
@@ -218,11 +229,12 @@ impl AbsoluteLayout {
         &self,
         style: &PositionedStyle,
         cb_width: f32,
+        viewport: Size,
         intrinsic_width: f32,
         static_x: f32,
     ) -> Result<(f32, f32, f32, f32), LayoutError> {
-        let left = resolve_offset(&style.left, cb_width, style.font_size, style.root_font_size);
-        let right = resolve_offset(&style.right, cb_width, style.font_size, style.root_font_size);
+        let left = resolve_offset(&style.left, cb_width, viewport, style.font_size, style.root_font_size);
+        let right = resolve_offset(&style.right, cb_width, viewport, style.font_size, style.root_font_size);
 
         // Get padding and border (never auto)
         let padding_left = style.padding.left;
@@ -303,11 +315,12 @@ impl AbsoluteLayout {
         &self,
         style: &PositionedStyle,
         cb_height: f32,
+        viewport: Size,
         intrinsic_height: f32,
         static_y: f32,
     ) -> Result<(f32, f32, f32, f32), LayoutError> {
-        let top = resolve_offset(&style.top, cb_height, style.font_size, style.root_font_size);
-        let bottom = resolve_offset(&style.bottom, cb_height, style.font_size, style.root_font_size);
+        let top = resolve_offset(&style.top, cb_height, viewport, style.font_size, style.root_font_size);
+        let bottom = resolve_offset(&style.bottom, cb_height, viewport, style.font_size, style.root_font_size);
 
         // Get padding and border
         let padding_top = style.padding.top;
@@ -387,9 +400,17 @@ impl AbsoluteLayout {
     /// "If both 'left' and 'right' are set, and 'width' is not 'auto', and
     /// 'margin-left' or 'margin-right' are 'auto', solve the equation to
     /// distribute the remaining space equally."
-    pub fn compute_centered_horizontal(&self, style: &PositionedStyle, cb_width: f32, width: f32) -> (f32, f32, f32) {
-        let left = resolve_offset(&style.left, cb_width, style.font_size, style.root_font_size).unwrap_or(0.0);
-        let right = resolve_offset(&style.right, cb_width, style.font_size, style.root_font_size).unwrap_or(0.0);
+    pub fn compute_centered_horizontal(
+        &self,
+        style: &PositionedStyle,
+        cb_width: f32,
+        viewport: Size,
+        width: f32,
+    ) -> (f32, f32, f32) {
+        let left =
+            resolve_offset(&style.left, cb_width, viewport, style.font_size, style.root_font_size).unwrap_or(0.0);
+        let right =
+            resolve_offset(&style.right, cb_width, viewport, style.font_size, style.root_font_size).unwrap_or(0.0);
 
         let padding_left = style.padding.left;
         let padding_right = style.padding.right;
@@ -428,9 +449,16 @@ impl AbsoluteLayout {
     }
 
     /// Computes centering for vertical axis
-    pub fn compute_centered_vertical(&self, style: &PositionedStyle, cb_height: f32, height: f32) -> (f32, f32, f32) {
-        let top = resolve_offset(&style.top, cb_height, style.font_size, style.root_font_size).unwrap_or(0.0);
-        let bottom = resolve_offset(&style.bottom, cb_height, style.font_size, style.root_font_size).unwrap_or(0.0);
+    pub fn compute_centered_vertical(
+        &self,
+        style: &PositionedStyle,
+        cb_height: f32,
+        viewport: Size,
+        height: f32,
+    ) -> (f32, f32, f32) {
+        let top = resolve_offset(&style.top, cb_height, viewport, style.font_size, style.root_font_size).unwrap_or(0.0);
+        let bottom =
+            resolve_offset(&style.bottom, cb_height, viewport, style.font_size, style.root_font_size).unwrap_or(0.0);
 
         let padding_top = style.padding.top;
         let padding_bottom = style.padding.bottom;
@@ -809,18 +837,30 @@ mod tests {
 
     #[test]
     fn test_resolve_offset_auto() {
-        assert_eq!(resolve_offset(&LengthOrAuto::Auto, 100.0, 16.0, 16.0), None);
+        assert_eq!(
+            resolve_offset(&LengthOrAuto::Auto, 100.0, Size::new(800.0, 600.0), 16.0, 16.0),
+            None
+        );
     }
 
     #[test]
     fn test_resolve_offset_px() {
-        assert_eq!(resolve_offset(&LengthOrAuto::px(50.0), 100.0, 16.0, 16.0), Some(50.0));
+        assert_eq!(
+            resolve_offset(&LengthOrAuto::px(50.0), 100.0, Size::new(800.0, 600.0), 16.0, 16.0),
+            Some(50.0)
+        );
     }
 
     #[test]
     fn test_resolve_offset_percent() {
         assert_eq!(
-            resolve_offset(&LengthOrAuto::percent(25.0), 200.0, 16.0, 16.0),
+            resolve_offset(
+                &LengthOrAuto::percent(25.0),
+                200.0,
+                Size::new(800.0, 600.0),
+                16.0,
+                16.0
+            ),
             Some(50.0)
         );
     }

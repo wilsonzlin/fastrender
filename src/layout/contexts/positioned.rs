@@ -65,28 +65,33 @@ pub struct ContainingBlock {
     /// For absolute positioning, this is the padding box.
     /// For fixed positioning, this is the viewport.
     pub rect: Rect,
+    viewport_size: Size,
 }
 
 impl ContainingBlock {
     /// Creates a new containing block from a rectangle
     pub const fn new(rect: Rect) -> Self {
-        Self { rect }
+        Self {
+            viewport_size: rect.size,
+            rect,
+        }
+    }
+
+    /// Creates a containing block from a rectangle and an explicit viewport size
+    pub const fn with_viewport(rect: Rect, viewport_size: Size) -> Self {
+        Self { rect, viewport_size }
     }
 
     /// Creates a containing block from position and size
     pub fn from_origin_size(origin: Point, size: Size) -> Self {
-        Self {
-            rect: Rect::new(origin, size),
-        }
+        Self::with_viewport(Rect::new(origin, size), size)
     }
 
     /// Creates a containing block representing the viewport
     ///
     /// Used for fixed positioning and as the initial containing block.
     pub fn viewport(size: Size) -> Self {
-        Self {
-            rect: Rect::new(Point::ZERO, size),
-        }
+        Self::with_viewport(Rect::new(Point::ZERO, size), size)
     }
 
     /// Returns the width of the containing block
@@ -102,6 +107,14 @@ impl ContainingBlock {
     /// Returns the origin of the containing block
     pub fn origin(&self) -> Point {
         self.rect.origin
+    }
+
+    /// Returns the viewport size associated with this containing block.
+    ///
+    /// For viewport CBs this is the viewport; for other CBs this falls back
+    /// to the rect size when no explicit viewport is available.
+    pub fn viewport_size(&self) -> Size {
+        self.viewport_size
     }
 }
 
@@ -142,11 +155,12 @@ impl StickyConstraints {
     pub fn from_style(style: &PositionedStyle, containing_block: &ContainingBlock) -> Self {
         let font_size = style.font_size;
         let root_font_size = style.root_font_size;
+        let viewport = containing_block.viewport_size();
         Self {
-            top: resolve_offset(&style.top, containing_block.height(), font_size, root_font_size),
-            right: resolve_offset(&style.right, containing_block.width(), font_size, root_font_size),
-            bottom: resolve_offset(&style.bottom, containing_block.height(), font_size, root_font_size),
-            left: resolve_offset(&style.left, containing_block.width(), font_size, root_font_size),
+            top: resolve_offset(&style.top, containing_block.height(), viewport, font_size, root_font_size),
+            right: resolve_offset(&style.right, containing_block.width(), viewport, font_size, root_font_size),
+            bottom: resolve_offset(&style.bottom, containing_block.height(), viewport, font_size, root_font_size),
+            left: resolve_offset(&style.left, containing_block.width(), viewport, font_size, root_font_size),
         }
     }
 
@@ -252,18 +266,19 @@ impl PositionedLayout {
         let root_font_size = style.root_font_size;
         let cb_width = containing_block.width();
         let cb_height = containing_block.height();
+        let viewport = containing_block.viewport_size();
 
         // Vertical offset: top takes precedence over bottom
-        if let Some(top) = resolve_offset(&style.top, cb_height, font_size, root_font_size) {
+        if let Some(top) = resolve_offset(&style.top, cb_height, viewport, font_size, root_font_size) {
             offset_y = top;
-        } else if let Some(bottom) = resolve_offset(&style.bottom, cb_height, font_size, root_font_size) {
+        } else if let Some(bottom) = resolve_offset(&style.bottom, cb_height, viewport, font_size, root_font_size) {
             offset_y = -bottom;
         }
 
         // Horizontal offset: left takes precedence over right (LTR)
-        if let Some(left) = resolve_offset(&style.left, cb_width, font_size, root_font_size) {
+        if let Some(left) = resolve_offset(&style.left, cb_width, viewport, font_size, root_font_size) {
             offset_x = left;
-        } else if let Some(right) = resolve_offset(&style.right, cb_width, font_size, root_font_size) {
+        } else if let Some(right) = resolve_offset(&style.right, cb_width, viewport, font_size, root_font_size) {
             offset_x = -right;
         }
 
@@ -298,12 +313,13 @@ impl PositionedLayout {
     ) -> Result<(Point, Size), LayoutError> {
         let cb_width = containing_block.width();
         let cb_height = containing_block.height();
+        let viewport = containing_block.viewport_size();
 
         // Compute horizontal position and width
-        let (x, width) = self.compute_absolute_horizontal(style, cb_width, intrinsic_size.width)?;
+        let (x, width) = self.compute_absolute_horizontal(style, cb_width, viewport, intrinsic_size.width)?;
 
         // Compute vertical position and height
-        let (y, height) = self.compute_absolute_vertical(style, cb_height, intrinsic_size.height)?;
+        let (y, height) = self.compute_absolute_vertical(style, cb_height, viewport, intrinsic_size.height)?;
 
         // Position is relative to containing block origin
         let position = Point::new(containing_block.origin().x + x, containing_block.origin().y + y);
@@ -319,10 +335,11 @@ impl PositionedLayout {
         &self,
         style: &PositionedStyle,
         cb_width: f32,
+        viewport: Size,
         intrinsic_width: f32,
     ) -> Result<(f32, f32), LayoutError> {
-        let left = resolve_offset(&style.left, cb_width, style.font_size, style.root_font_size);
-        let right = resolve_offset(&style.right, cb_width, style.font_size, style.root_font_size);
+        let left = resolve_offset(&style.left, cb_width, viewport, style.font_size, style.root_font_size);
+        let right = resolve_offset(&style.right, cb_width, viewport, style.font_size, style.root_font_size);
 
         // Get margin values (auto margins = 0 for absolute positioning unless overconstrained)
         let margin_left = style.margin.left;
@@ -401,10 +418,11 @@ impl PositionedLayout {
         &self,
         style: &PositionedStyle,
         cb_height: f32,
+        viewport: Size,
         intrinsic_height: f32,
     ) -> Result<(f32, f32), LayoutError> {
-        let top = resolve_offset(&style.top, cb_height, style.font_size, style.root_font_size);
-        let bottom = resolve_offset(&style.bottom, cb_height, style.font_size, style.root_font_size);
+        let top = resolve_offset(&style.top, cb_height, viewport, style.font_size, style.root_font_size);
+        let bottom = resolve_offset(&style.bottom, cb_height, viewport, style.font_size, style.root_font_size);
 
         // Get margin values
         let margin_top = style.margin.top;
@@ -506,13 +524,13 @@ impl PositionedLayout {
             Position::Static | Position::Relative | Position::Sticky => {
                 // Use nearest block container ancestor, or viewport if none
                 block_ancestor_rect
-                    .map(ContainingBlock::new)
+                    .map(|rect| ContainingBlock::with_viewport(rect, viewport_size))
                     .unwrap_or_else(|| ContainingBlock::viewport(viewport_size))
             }
             Position::Absolute => {
                 // Use nearest positioned ancestor, or viewport if none (initial containing block)
                 positioned_ancestor_rect
-                    .map(ContainingBlock::new)
+                    .map(|rect| ContainingBlock::with_viewport(rect, viewport_size))
                     .unwrap_or_else(|| ContainingBlock::viewport(viewport_size))
             }
             Position::Fixed => {
@@ -1010,18 +1028,27 @@ mod tests {
     #[test]
     fn test_resolve_offset_auto() {
         let value = LengthOrAuto::Auto;
-        assert_eq!(resolve_offset(&value, 100.0, 16.0, 16.0), None);
+        assert_eq!(
+            resolve_offset(&value, 100.0, Size::new(800.0, 600.0), 16.0, 16.0),
+            None
+        );
     }
 
     #[test]
     fn test_resolve_offset_px() {
         let value = LengthOrAuto::px(50.0);
-        assert_eq!(resolve_offset(&value, 100.0, 16.0, 16.0), Some(50.0));
+        assert_eq!(
+            resolve_offset(&value, 100.0, Size::new(800.0, 600.0), 16.0, 16.0),
+            Some(50.0)
+        );
     }
 
     #[test]
     fn test_resolve_offset_percent() {
         let value = LengthOrAuto::percent(25.0);
-        assert_eq!(resolve_offset(&value, 200.0, 16.0, 16.0), Some(50.0));
+        assert_eq!(
+            resolve_offset(&value, 200.0, Size::new(800.0, 600.0), 16.0, 16.0),
+            Some(50.0)
+        );
     }
 }
