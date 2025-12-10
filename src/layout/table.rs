@@ -35,6 +35,7 @@ use crate::layout::contexts::table::column_distribution::{
 };
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::color::Rgba;
+use crate::style::computed::Visibility;
 use crate::style::display::Display;
 use crate::style::types::{
     BorderCollapse, BorderStyle, CaptionSide, Direction, EmptyCells, TableLayout, VerticalAlign,
@@ -101,6 +102,12 @@ pub struct ColumnInfo {
     /// Column index (0-based)
     pub index: usize,
 
+    /// Source column index prior to any filtering (0-based)
+    pub source_index: usize,
+
+    /// Visibility state for this column
+    pub visibility: Visibility,
+
     /// Specified width (from col element or first cell)
     pub specified_width: Option<SpecifiedWidth>,
 
@@ -119,6 +126,8 @@ impl ColumnInfo {
     pub fn new(index: usize) -> Self {
         Self {
             index,
+            source_index: index,
+            visibility: Visibility::Visible,
             specified_width: None,
             min_width: 0.0,
             max_width: f32::INFINITY,
@@ -132,6 +141,12 @@ impl ColumnInfo {
 pub struct RowInfo {
     /// Row index (0-based)
     pub index: usize,
+
+    /// Source row index prior to any filtering (0-based)
+    pub source_index: usize,
+
+    /// Visibility state for this row
+    pub visibility: Visibility,
 
     /// Specified height (from row element)
     pub specified_height: Option<SpecifiedHeight>,
@@ -157,6 +172,8 @@ impl RowInfo {
     pub fn new(index: usize) -> Self {
         Self {
             index,
+            source_index: index,
+            visibility: Visibility::Visible,
             specified_height: None,
             author_min_height: None,
             author_max_height: None,
@@ -209,6 +226,12 @@ pub struct CellInfo {
     /// Cell index in the cells array
     pub index: usize,
 
+    /// Source row index prior to any filtering
+    pub source_row: usize,
+
+    /// Source column index prior to any filtering
+    pub source_col: usize,
+
     /// Starting row (0-based)
     pub row: usize,
 
@@ -242,6 +265,8 @@ impl CellInfo {
     pub fn new(index: usize, row: usize, col: usize) -> Self {
         Self {
             index,
+            source_row: row,
+            source_col: col,
             row,
             col,
             rowspan: 1,
@@ -363,6 +388,7 @@ impl TableStructure {
         let mut row_heights: Vec<Option<SpecifiedHeight>> = Vec::new();
         let mut row_min_heights: Vec<Option<SpecifiedHeight>> = Vec::new();
         let mut row_max_heights: Vec<Option<SpecifiedHeight>> = Vec::new();
+        let mut row_visibilities: Vec<Visibility> = Vec::new();
 
         // Collect all cells first
         let mut cell_data: Vec<(usize, usize, usize, usize, usize)> = Vec::new(); // (row, col, rowspan, colspan, box_idx)
@@ -385,6 +411,7 @@ impl TableStructure {
                                 row_child.style.max_height.as_ref(),
                                 row_child.style.font_size,
                             );
+                            row_visibilities.push(row_child.style.visibility);
                             row_heights.push(spec_height);
                             row_min_heights.push(min_h);
                             row_max_heights.push(max_h);
@@ -408,6 +435,7 @@ impl TableStructure {
                         Self::length_to_specified_height_opt(child.style.min_height.as_ref(), child.style.font_size);
                     let max_h =
                         Self::length_to_specified_height_opt(child.style.max_height.as_ref(), child.style.font_size);
+                    row_visibilities.push(child.style.visibility);
                     row_heights.push(spec_height);
                     row_min_heights.push(min_h);
                     row_max_heights.push(max_h);
@@ -438,8 +466,9 @@ impl TableStructure {
         for child in &table_box.children {
             match Self::get_table_element_type(child) {
                 TableElementType::Column => {
-                    if let Some(width) = &child.style.width {
-                        if let Some(col) = structure.columns.get_mut(col_cursor) {
+                    if let Some(col) = structure.columns.get_mut(col_cursor) {
+                        col.visibility = child.style.visibility;
+                        if let Some(width) = &child.style.width {
                             col.specified_width = Some(Self::length_to_specified_width(width));
                         }
                     }
@@ -450,17 +479,21 @@ impl TableStructure {
                     if !child.children.is_empty() {
                         for group_child in &child.children {
                             if Self::get_table_element_type(group_child) == TableElementType::Column {
-                                if let Some(width) = &group_child.style.width {
-                                    if let Some(col) = structure.columns.get_mut(col_cursor) {
+                                if let Some(col) = structure.columns.get_mut(col_cursor) {
+                                    col.visibility = group_child.style.visibility;
+                                    if let Some(width) = &group_child.style.width {
                                         col.specified_width = Some(Self::length_to_specified_width(width));
                                     }
                                 }
                                 col_cursor += 1;
                             }
                         }
-                    } else if let Some(width) = &child.style.width {
+                    } else {
                         if let Some(col) = structure.columns.get_mut(col_cursor) {
-                            col.specified_width = Some(Self::length_to_specified_width(width));
+                            col.visibility = child.style.visibility;
+                            if let Some(width) = &child.style.width {
+                                col.specified_width = Some(Self::length_to_specified_width(width));
+                            }
                         }
                         col_cursor += 1;
                     }
@@ -475,6 +508,8 @@ impl TableStructure {
             row.specified_height = row_heights.get(i).cloned().unwrap_or(None);
             row.author_min_height = row_min_heights.get(i).cloned().unwrap_or(None);
             row.author_max_height = row_max_heights.get(i).cloned().unwrap_or(None);
+            row.visibility = row_visibilities.get(i).cloned().unwrap_or(Visibility::Visible);
+            row.source_index = i;
             structure.rows.push(row);
         }
 
@@ -498,7 +533,110 @@ impl TableStructure {
             structure.cells.push(cell);
         }
 
-        structure
+        structure.apply_visibility_collapse()
+    }
+
+    /// Removes rows and columns with `visibility: collapse` from the structure
+    /// while preserving source indices so cell lookup and styling can map back
+    /// to the original table tree.
+    fn apply_visibility_collapse(self) -> Self {
+        let mut row_map: Vec<Option<usize>> = Vec::with_capacity(self.row_count);
+        let mut next_row = 0usize;
+        for row in &self.rows {
+            if matches!(row.visibility, Visibility::Collapse) {
+                row_map.push(None);
+            } else {
+                row_map.push(Some(next_row));
+                next_row += 1;
+            }
+        }
+
+        let mut col_map: Vec<Option<usize>> = Vec::with_capacity(self.column_count);
+        let mut next_col = 0usize;
+        for col in &self.columns {
+            if matches!(col.visibility, Visibility::Collapse) {
+                col_map.push(None);
+            } else {
+                col_map.push(Some(next_col));
+                next_col += 1;
+            }
+        }
+
+        if next_row == self.row_count && next_col == self.column_count {
+            return self;
+        }
+
+        let mut new_structure = TableStructure {
+            column_count: next_col,
+            row_count: next_row,
+            columns: Vec::with_capacity(next_col),
+            rows: Vec::with_capacity(next_row),
+            cells: Vec::new(),
+            grid: vec![vec![None; next_col]; next_row],
+            border_spacing: self.border_spacing,
+            border_collapse: self.border_collapse,
+            is_fixed_layout: self.is_fixed_layout,
+        };
+
+        for (old_idx, mut col) in self.columns.into_iter().enumerate() {
+            if let Some(new_idx) = col_map.get(old_idx).and_then(|m| *m) {
+                col.index = new_idx;
+                new_structure.columns.push(col);
+            }
+        }
+
+        for (old_idx, mut row) in self.rows.into_iter().enumerate() {
+            if let Some(new_idx) = row_map.get(old_idx).and_then(|m| *m) {
+                row.index = new_idx;
+                new_structure.rows.push(row);
+            }
+        }
+
+        for cell in self.cells.into_iter() {
+            let Some(new_row) = row_map.get(cell.row).and_then(|m| *m) else { continue; };
+            let row_span_end = (cell.row + cell.rowspan).min(row_map.len());
+            let mut visible_rows = 0usize;
+            for r in cell.row..row_span_end {
+                if row_map.get(r).and_then(|m| *m).is_some() {
+                    visible_rows += 1;
+                }
+            }
+            if visible_rows == 0 {
+                continue;
+            }
+
+            let col_span_end = (cell.col + cell.colspan).min(col_map.len());
+            let mut mapped_cols: Vec<usize> = (cell.col..col_span_end)
+                .filter_map(|c| col_map.get(c).and_then(|m| *m))
+                .collect();
+            if mapped_cols.is_empty() {
+                continue;
+            }
+            mapped_cols.sort_unstable();
+            mapped_cols.dedup();
+
+            let mut new_cell = cell;
+            new_cell.row = new_row;
+            new_cell.col = *mapped_cols.first().unwrap_or(&0);
+            new_cell.rowspan = visible_rows;
+            new_cell.colspan = mapped_cols.len();
+            new_cell.index = new_structure.cells.len();
+            new_structure.cells.push(new_cell);
+        }
+
+        for cell in &new_structure.cells {
+            let row_end = (cell.row + cell.rowspan).min(new_structure.row_count);
+            let col_end = (cell.col + cell.colspan).min(new_structure.column_count);
+            for r in cell.row..row_end {
+                for c in cell.col..col_end {
+                    if let Some(slot) = new_structure.grid.get_mut(r).and_then(|row| row.get_mut(c)) {
+                        *slot = Some(cell.index);
+                    }
+                }
+            }
+        }
+
+        new_structure
     }
 
     /// Gets the table element type from a box node
@@ -894,86 +1032,131 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     let mut horizontal: Vec<Vec<Vec<BorderCandidate>>> =
         vec![vec![Vec::new(); structure.column_count]; structure.row_count + 1];
 
+    let max_source_row = structure
+        .rows
+        .iter()
+        .map(|r| r.source_index)
+        .max()
+        .unwrap_or(0);
+    let mut source_row_to_visible = if structure.rows.is_empty() {
+        Vec::new()
+    } else {
+        vec![None; max_source_row + 1]
+    };
+    for row in &structure.rows {
+        if row.source_index >= source_row_to_visible.len() {
+            source_row_to_visible.resize(row.source_index + 1, None);
+        }
+        source_row_to_visible[row.source_index] = Some(row.index);
+    }
+
+    let max_source_col = structure
+        .columns
+        .iter()
+        .map(|c| c.source_index)
+        .max()
+        .unwrap_or(0);
+    let mut source_col_to_visible = if structure.columns.is_empty() {
+        Vec::new()
+    } else {
+        vec![None; max_source_col + 1]
+    };
+    for col in &structure.columns {
+        if col.source_index >= source_col_to_visible.len() {
+            source_col_to_visible.resize(col.source_index + 1, None);
+        }
+        source_col_to_visible[col.source_index] = Some(col.index);
+    }
+
     // Gather row, row-group, column, and column-group styles with document order.
-    let mut row_styles: Vec<(std::sync::Arc<crate::style::ComputedStyle>, u32)> = Vec::new();
+    let mut row_styles: Vec<Option<(std::sync::Arc<crate::style::ComputedStyle>, u32)>> =
+        vec![None; structure.row_count];
     let mut row_groups: Vec<(usize, usize, std::sync::Arc<crate::style::ComputedStyle>, u32)> = Vec::new();
     let mut column_styles: Vec<Option<(std::sync::Arc<crate::style::ComputedStyle>, u32)>> =
         vec![None; structure.column_count];
     let mut column_groups: Vec<(usize, usize, std::sync::Arc<crate::style::ComputedStyle>, u32)> = Vec::new();
 
     let mut source_counter: u32 = 1;
-    let mut row_cursor = 0usize;
-    let mut col_cursor = 0usize;
+    let mut source_row_idx = 0usize;
+    let mut source_col_idx = 0usize;
 
     for child in &table_box.children {
         match TableStructure::get_table_element_type(child) {
             TableElementType::RowGroup | TableElementType::HeaderGroup | TableElementType::FooterGroup => {
-                let group_start = row_cursor;
                 let group_order = source_counter;
                 source_counter += 1;
+                let mut first_visible = None;
+                let mut last_visible = None;
                 for row_child in &child.children {
                     if TableStructure::get_table_element_type(row_child) == TableElementType::Row {
-                        if row_cursor < structure.row_count {
-                            row_styles.push((row_child.style.clone(), source_counter));
+                        if let Some(visible) = source_row_to_visible.get(source_row_idx).and_then(|m| *m) {
+                            row_styles[visible] = Some((row_child.style.clone(), source_counter));
                             source_counter += 1;
+                            first_visible.get_or_insert(visible);
+                            last_visible = Some(visible);
                         }
-                        row_cursor += 1;
+                        source_row_idx += 1;
                     }
                 }
-                let group_end = row_cursor.min(structure.row_count);
-                if group_start < group_end {
-                    row_groups.push((group_start, group_end, child.style.clone(), group_order));
+                if let (Some(start), Some(end)) = (first_visible, last_visible) {
+                    row_groups.push((start, end + 1, child.style.clone(), group_order));
                 }
             }
             TableElementType::Row => {
-                if row_cursor < structure.row_count {
-                    row_styles.push((child.style.clone(), source_counter));
+                if let Some(visible) = source_row_to_visible.get(source_row_idx).and_then(|m| *m) {
+                    row_styles[visible] = Some((child.style.clone(), source_counter));
                     source_counter += 1;
                 }
-                row_cursor += 1;
+                source_row_idx += 1;
             }
             TableElementType::Column => {
-                if col_cursor < structure.column_count {
-                    column_styles[col_cursor] = Some((child.style.clone(), source_counter));
+                if let Some(visible) = source_col_to_visible.get(source_col_idx).and_then(|m| *m) {
+                    column_styles[visible] = Some((child.style.clone(), source_counter));
                     source_counter += 1;
                 }
-                col_cursor += 1;
+                source_col_idx += 1;
             }
             TableElementType::ColumnGroup => {
-                let group_start = col_cursor;
                 let group_order = source_counter;
                 source_counter += 1;
+                let mut first_visible = None;
+                let mut last_visible = None;
                 if child.children.is_empty() {
-                    if col_cursor < structure.column_count {
-                        column_styles[col_cursor] = column_styles[col_cursor]
+                    if let Some(visible) = source_col_to_visible.get(source_col_idx).and_then(|m| *m) {
+                        column_styles[visible] = column_styles[visible]
                             .take()
                             .or_else(|| Some((child.style.clone(), source_counter)));
                         source_counter += 1;
-                        col_cursor += 1;
+                        first_visible.get_or_insert(visible);
+                        last_visible = Some(visible);
                     }
+                    source_col_idx += 1;
                 } else {
                     for group_child in &child.children {
                         if TableStructure::get_table_element_type(group_child) == TableElementType::Column {
-                            if col_cursor < structure.column_count {
-                                column_styles[col_cursor] = Some((group_child.style.clone(), source_counter));
+                            if let Some(visible) = source_col_to_visible.get(source_col_idx).and_then(|m| *m) {
+                                column_styles[visible] = Some((group_child.style.clone(), source_counter));
                                 source_counter += 1;
+                                first_visible.get_or_insert(visible);
+                                last_visible = Some(visible);
                             }
-                            col_cursor += 1;
+                            source_col_idx += 1;
                         }
                     }
                 }
-                let group_end = col_cursor.min(structure.column_count);
-                if group_start < group_end {
-                    column_groups.push((group_start, group_end, child.style.clone(), group_order));
+                if let (Some(start), Some(end)) = (first_visible, last_visible) {
+                    column_groups.push((start, end + 1, child.style.clone(), group_order));
                 }
             }
             _ => {}
         }
     }
 
-    while row_styles.len() < structure.row_count {
-        row_styles.push((table_box.style.clone(), source_counter));
-        source_counter += 1;
+    for entry in row_styles.iter_mut() {
+        if entry.is_none() {
+            *entry = Some((table_box.style.clone(), source_counter));
+            source_counter += 1;
+        }
     }
 
     let mut apply_vertical = |col_idx: usize,
@@ -1110,31 +1293,33 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     }
 
     // Row borders
-    for (row_idx, (style, order)) in row_styles.iter().enumerate() {
-        apply_horizontal(
-            row_idx,
-            0,
-            structure.column_count,
-            style.border_top_style,
-            &style.border_top_width,
-            &style.border_top_color,
-            BorderOrigin::Row,
-            *order,
-            row_idx,
-            0,
-        );
-        apply_horizontal(
-            row_idx + 1,
-            0,
-            structure.column_count,
-            style.border_bottom_style,
-            &style.border_bottom_width,
-            &style.border_bottom_color,
-            BorderOrigin::Row,
-            *order,
-            row_idx,
-            0,
-        );
+    for (row_idx, entry) in row_styles.iter().enumerate() {
+        if let Some((style, order)) = entry {
+            apply_horizontal(
+                row_idx,
+                0,
+                structure.column_count,
+                style.border_top_style,
+                &style.border_top_width,
+                &style.border_top_color,
+                BorderOrigin::Row,
+                *order,
+                row_idx,
+                0,
+            );
+            apply_horizontal(
+                row_idx + 1,
+                0,
+                structure.column_count,
+                style.border_bottom_style,
+                &style.border_bottom_width,
+                &style.border_bottom_color,
+                BorderOrigin::Row,
+                *order,
+                row_idx,
+                0,
+            );
+        }
     }
 
     // Column group borders
@@ -1938,14 +2123,14 @@ impl TableFormattingContext {
             match TableStructure::get_table_element_type(child) {
                 TableElementType::RowGroup | TableElementType::HeaderGroup | TableElementType::FooterGroup => {
                     for row_child in &child.children {
-                        if row_idx == cell.row {
+                        if row_idx == cell.source_row {
                             return row_child.children.get(cell.box_index);
                         }
                         row_idx += 1;
                     }
                 }
                 TableElementType::Row => {
-                    if row_idx == cell.row {
+                    if row_idx == cell.source_row {
                         return child.children.get(cell.box_index);
                     }
                     row_idx += 1;
@@ -1972,6 +2157,42 @@ impl FormattingContext for TableFormattingContext {
             .iter()
             .filter(|child| matches!(child.style.display, Display::TableCaption))
             .collect();
+
+        let max_source_row = structure
+            .rows
+            .iter()
+            .map(|r| r.source_index)
+            .max()
+            .unwrap_or(0);
+        let mut source_row_to_visible = if structure.rows.is_empty() {
+            Vec::new()
+        } else {
+            vec![None; max_source_row + 1]
+        };
+        for row in &structure.rows {
+            if row.source_index >= source_row_to_visible.len() {
+                source_row_to_visible.resize(row.source_index + 1, None);
+            }
+            source_row_to_visible[row.source_index] = Some(row.index);
+        }
+
+        let max_source_col = structure
+            .columns
+            .iter()
+            .map(|c| c.source_index)
+            .max()
+            .unwrap_or(0);
+        let mut source_col_to_visible = if structure.columns.is_empty() {
+            Vec::new()
+        } else {
+            vec![None; max_source_col + 1]
+        };
+        for col in &structure.columns {
+            if col.source_index >= source_col_to_visible.len() {
+                source_col_to_visible.resize(col.source_index + 1, None);
+            }
+            source_col_to_visible[col.source_index] = Some(col.index);
+        }
 
         let containing_width = match constraints.available_width {
             AvailableSpace::Definite(w) => Some(w),
@@ -2519,40 +2740,39 @@ impl FormattingContext for TableFormattingContext {
         // Column group and column backgrounds precede row backgrounds/cells.
         let mut column_styles: Vec<Option<Arc<ComputedStyle>>> = vec![None; structure.column_count];
         let mut column_groups: Vec<(usize, usize, Arc<ComputedStyle>)> = Vec::new();
-        let mut col_cursor = 0usize;
+        let mut source_col_idx = 0usize;
         for child in &box_node.children {
             match TableStructure::get_table_element_type(child) {
                 TableElementType::Column => {
-                    if col_cursor < column_styles.len() {
-                        column_styles[col_cursor] = Some(child.style.clone());
+                    if let Some(visible) = source_col_to_visible.get(source_col_idx).and_then(|m| *m) {
+                        column_styles[visible] = Some(child.style.clone());
                     }
-                    col_cursor += 1;
+                    source_col_idx += 1;
                 }
                 TableElementType::ColumnGroup => {
+                    let mut first_visible = None;
+                    let mut last_visible = None;
                     if !child.children.is_empty() {
-                        let start = col_cursor;
                         for col_child in &child.children {
                             if TableStructure::get_table_element_type(col_child) == TableElementType::Column {
-                                if col_cursor < column_styles.len() {
-                                    column_styles[col_cursor] = Some(col_child.style.clone());
+                                if let Some(visible) = source_col_to_visible.get(source_col_idx).and_then(|m| *m) {
+                                    column_styles[visible] = Some(col_child.style.clone());
+                                    first_visible.get_or_insert(visible);
+                                    last_visible = Some(visible);
                                 }
-                                col_cursor += 1;
+                                source_col_idx += 1;
                             }
                         }
-                        let end = col_cursor.min(structure.column_count);
-                        if start < end {
-                            column_groups.push((start, end, child.style.clone()));
-                        }
                     } else {
-                        let start = col_cursor;
-                        if col_cursor < column_styles.len() {
-                            column_styles[col_cursor] = Some(child.style.clone());
+                        if let Some(visible) = source_col_to_visible.get(source_col_idx).and_then(|m| *m) {
+                            column_styles[visible] = Some(child.style.clone());
+                            first_visible.get_or_insert(visible);
+                            last_visible = Some(visible);
                         }
-                        col_cursor += 1;
-                        let end = col_cursor.min(structure.column_count);
-                        if start < end {
-                            column_groups.push((start, end, child.style.clone()));
-                        }
+                        source_col_idx += 1;
+                    }
+                    if let (Some(start), Some(end)) = (first_visible, last_visible) {
+                        column_groups.push((start, end + 1, child.style.clone()));
                     }
                 }
                 _ => {}
@@ -2617,23 +2837,25 @@ impl FormattingContext for TableFormattingContext {
         for child in &box_node.children {
             match TableStructure::get_table_element_type(child) {
                 TableElementType::RowGroup | TableElementType::HeaderGroup | TableElementType::FooterGroup => {
-                    let start = row_cursor;
+                    let mut first_visible = None;
+                    let mut last_visible = None;
                     for row_child in &child.children {
                         if TableStructure::get_table_element_type(row_child) == TableElementType::Row {
-                            if row_cursor < row_styles.len() {
-                                row_styles[row_cursor] = Some(row_child.style.clone());
+                            if let Some(visible) = source_row_to_visible.get(row_cursor).and_then(|m| *m) {
+                                row_styles[visible] = Some(row_child.style.clone());
+                                first_visible.get_or_insert(visible);
+                                last_visible = Some(visible);
                             }
                             row_cursor += 1;
                         }
                     }
-                    let end = row_cursor.min(row_styles.len());
-                    if start < end {
-                        row_groups.push((start, end, child.style.clone()));
+                    if let (Some(start), Some(end)) = (first_visible, last_visible) {
+                        row_groups.push((start, end + 1, child.style.clone()));
                     }
                 }
                 TableElementType::Row => {
-                    if row_cursor < row_styles.len() {
-                        row_styles[row_cursor] = Some(child.style.clone());
+                    if let Some(visible) = source_row_to_visible.get(row_cursor).and_then(|m| *m) {
+                        row_styles[visible] = Some(child.style.clone());
                     }
                     row_cursor += 1;
                 }
@@ -3085,6 +3307,7 @@ mod tests {
     use crate::style::color::Rgba;
     use crate::style::display::Display;
     use crate::style::display::FormattingContextType;
+    use crate::style::computed::Visibility;
     use crate::style::types::{BorderCollapse, BorderStyle, CaptionSide, Direction, TableLayout, VerticalAlign};
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
@@ -4412,9 +4635,88 @@ mod tests {
     }
 
     #[test]
+    fn visibility_collapse_filters_rows_and_cells() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut collapsed_row_style = row_style.clone();
+        collapsed_row_style.visibility = Visibility::Collapse;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+
+        let collapsed_cell = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![]);
+        let visible_cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let collapsed_row =
+            BoxNode::new_block(Arc::new(collapsed_row_style), FormattingContextType::Block, vec![collapsed_cell]);
+        let visible_row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![visible_cell]);
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![collapsed_row, visible_row]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        assert_eq!(structure.row_count, 1);
+        assert_eq!(structure.column_count, 1);
+        assert_eq!(structure.rows[0].source_index, 1);
+        assert_eq!(structure.cells.len(), 1);
+        let cell = &structure.cells[0];
+        assert_eq!(cell.row, 0);
+        assert_eq!(cell.source_row, 1);
+    }
+
+    #[test]
+    fn visibility_collapse_filters_columns_and_adjusts_colspan() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut col_style = ComputedStyle::default();
+        col_style.display = Display::TableColumn;
+
+        let mut collapsed_col_style = col_style.clone();
+        collapsed_col_style.visibility = Visibility::Collapse;
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+
+        let spanning_cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]).with_debug_info(
+            DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(2, 1),
+        );
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![spanning_cell]);
+
+        let table = BoxNode::new_block(
+            Arc::new(table_style),
+            FormattingContextType::Table,
+            vec![
+                BoxNode::new_block(Arc::new(col_style), FormattingContextType::Block, vec![]),
+                BoxNode::new_block(Arc::new(collapsed_col_style), FormattingContextType::Block, vec![]),
+                row,
+            ],
+        );
+
+        let structure = TableStructure::from_box_tree(&table);
+        assert_eq!(structure.column_count, 1);
+        assert_eq!(structure.columns[0].source_index, 0);
+        assert_eq!(structure.cells.len(), 1);
+        let cell = &structure.cells[0];
+        assert_eq!(cell.colspan, 1);
+        assert_eq!(cell.source_col, 0);
+    }
+
+    #[test]
     fn test_column_info_new() {
         let col = ColumnInfo::new(5);
         assert_eq!(col.index, 5);
+        assert_eq!(col.source_index, 5);
+        assert_eq!(col.visibility, Visibility::Visible);
         assert!(col.specified_width.is_none());
         assert_eq!(col.min_width, 0.0);
         assert_eq!(col.computed_width, 0.0);
@@ -4424,6 +4726,8 @@ mod tests {
     fn test_row_info_new() {
         let row = RowInfo::new(3);
         assert_eq!(row.index, 3);
+        assert_eq!(row.source_index, 3);
+        assert_eq!(row.visibility, Visibility::Visible);
         assert!(row.specified_height.is_none());
         assert!(row.author_min_height.is_none());
         assert!(row.author_max_height.is_none());
@@ -4435,6 +4739,8 @@ mod tests {
     fn test_cell_info_new() {
         let cell = CellInfo::new(0, 2, 3);
         assert_eq!(cell.index, 0);
+        assert_eq!(cell.source_row, 2);
+        assert_eq!(cell.source_col, 3);
         assert_eq!(cell.row, 2);
         assert_eq!(cell.col, 3);
         assert_eq!(cell.rowspan, 1);
@@ -4507,6 +4813,8 @@ mod tests {
         structure.columns = vec![
             ColumnInfo {
                 index: 0,
+                source_index: 0,
+                visibility: Visibility::Visible,
                 specified_width: Some(SpecifiedWidth::Fixed(100.0)),
                 min_width: 0.0,
                 max_width: f32::INFINITY,
@@ -4514,6 +4822,8 @@ mod tests {
             },
             ColumnInfo {
                 index: 1,
+                source_index: 1,
+                visibility: Visibility::Visible,
                 specified_width: None,
                 min_width: 0.0,
                 max_width: f32::INFINITY,
@@ -4521,6 +4831,8 @@ mod tests {
             },
             ColumnInfo {
                 index: 2,
+                source_index: 2,
+                visibility: Visibility::Visible,
                 specified_width: Some(SpecifiedWidth::Fixed(50.0)),
                 min_width: 0.0,
                 max_width: f32::INFINITY,
@@ -4543,6 +4855,8 @@ mod tests {
         structure.columns = vec![
             ColumnInfo {
                 index: 0,
+                source_index: 0,
+                visibility: Visibility::Visible,
                 specified_width: Some(SpecifiedWidth::Percent(25.0)),
                 min_width: 0.0,
                 max_width: f32::INFINITY,
@@ -4550,6 +4864,8 @@ mod tests {
             },
             ColumnInfo {
                 index: 1,
+                source_index: 1,
+                visibility: Visibility::Visible,
                 specified_width: Some(SpecifiedWidth::Percent(75.0)),
                 min_width: 0.0,
                 max_width: f32::INFINITY,
@@ -4572,6 +4888,8 @@ mod tests {
         structure.cells = vec![
             CellInfo {
                 index: 0,
+                source_row: 0,
+                source_col: 0,
                 row: 0,
                 col: 0,
                 rowspan: 1,
@@ -4584,6 +4902,8 @@ mod tests {
             },
             CellInfo {
                 index: 1,
+                source_row: 0,
+                source_col: 1,
                 row: 0,
                 col: 1,
                 rowspan: 1,
@@ -4612,6 +4932,8 @@ mod tests {
         structure.cells = vec![
             CellInfo {
                 index: 0,
+                source_row: 0,
+                source_col: 0,
                 row: 0,
                 col: 0,
                 rowspan: 1,
@@ -4624,6 +4946,8 @@ mod tests {
             },
             CellInfo {
                 index: 1,
+                source_row: 0,
+                source_col: 1,
                 row: 0,
                 col: 1,
                 rowspan: 1,
@@ -4651,6 +4975,8 @@ mod tests {
         structure.columns = vec![ColumnInfo::new(0), ColumnInfo::new(1)];
         structure.cells = vec![CellInfo {
             index: 0,
+            source_row: 0,
+            source_col: 0,
             row: 0,
             col: 0,
             rowspan: 1,
@@ -4690,6 +5016,8 @@ mod tests {
         structure.cells = vec![
             CellInfo {
                 index: 0,
+                source_row: 0,
+                source_col: 0,
                 row: 0,
                 col: 0,
                 rowspan: 1,
@@ -4702,6 +5030,8 @@ mod tests {
             },
             CellInfo {
                 index: 1,
+                source_row: 0,
+                source_col: 1,
                 row: 0,
                 col: 1,
                 rowspan: 1,
@@ -4714,6 +5044,8 @@ mod tests {
             },
             CellInfo {
                 index: 2,
+                source_row: 1,
+                source_col: 0,
                 row: 1,
                 col: 0,
                 rowspan: 1,
@@ -4742,6 +5074,8 @@ mod tests {
         structure.rows = vec![RowInfo::new(0), RowInfo::new(1)];
         structure.cells = vec![CellInfo {
             index: 0,
+            source_row: 0,
+            source_col: 0,
             row: 0,
             col: 0,
             rowspan: 2,
@@ -4898,6 +5232,8 @@ mod tests {
         structure.rows[0].specified_height = Some(SpecifiedHeight::Fixed(50.0));
         structure.cells = vec![CellInfo {
             index: 0,
+            source_row: 0,
+            source_col: 0,
             row: 0,
             col: 0,
             rowspan: 2,
@@ -4924,6 +5260,8 @@ mod tests {
         structure.rows[0].specified_height = Some(SpecifiedHeight::Percent(50.0));
         structure.cells = vec![CellInfo {
             index: 0,
+            source_row: 0,
+            source_col: 0,
             row: 0,
             col: 0,
             rowspan: 2,
@@ -4950,6 +5288,8 @@ mod tests {
         structure.cells = vec![
             CellInfo {
                 index: 0,
+                source_row: 0,
+                source_col: 0,
                 row: 0,
                 col: 0,
                 rowspan: 2,
@@ -4962,6 +5302,8 @@ mod tests {
             },
             CellInfo {
                 index: 1,
+                source_row: 0,
+                source_col: 1,
                 row: 0,
                 col: 1,
                 rowspan: 1,
@@ -4974,6 +5316,8 @@ mod tests {
             },
             CellInfo {
                 index: 2,
+                source_row: 1,
+                source_col: 1,
                 row: 1,
                 col: 1,
                 rowspan: 1,
@@ -5003,6 +5347,8 @@ mod tests {
         // Baseline-aligned spanning cell; its first-row baseline should lift row 0's baseline metrics.
         structure.cells = vec![CellInfo {
             index: 0,
+            source_row: 0,
+            source_col: 0,
             row: 0,
             col: 0,
             rowspan: 2,

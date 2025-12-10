@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- `visibility: collapse` now prunes table rows/columns from TableStructure, keeps source indices for mapping, trims spans, drops collapsed cells, and maps row/column backgrounds/borders using source→visible lookup; regressions cover collapsed rows and columns.
 - Absolute/fixed offsets now resolve `em`/`ex`/`ch` using actual font metrics and `font-size-adjust`: AbsoluteLayout carries a FontContext, offset resolution uses metric-aware helpers, and regressions cover ex-based offsets and adjust scaling; PositionedStyle builder exposes `font-size-adjust` and defaults stay intact.
 - Relative/sticky offsets now reuse the metric-aware resolver: PositionedLayout carries a FontContext, sticky constraints resolve through font metrics/size-adjust, and relative/absolute helpers use the same path so all positioned flows honor em/ex/ch accurately.
 - Added regressions for positioned offsets with font metrics and font-size-adjust in relative and sticky cases to lock the metric-aware behavior.
