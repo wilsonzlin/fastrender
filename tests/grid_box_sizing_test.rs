@@ -32,7 +32,11 @@ fn grid_item_border_box_respects_outer_width() {
     let container = BoxNode::new_block(
         Arc::new(container_style),
         FormattingContextType::Grid,
-        vec![BoxNode::new_block(Arc::new(child_style.clone()), FormattingContextType::Block, vec![])],
+        vec![BoxNode::new_block(
+            Arc::new(child_style.clone()),
+            FormattingContextType::Block,
+            vec![],
+        )],
     );
 
     let grid_fc = GridFormattingContext::new();

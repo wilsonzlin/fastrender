@@ -437,15 +437,13 @@ impl FlexFormattingContext {
     }
 
     fn dimension_for_box_sizing(&self, len: &Length, style: &ComputedStyle, axis: Axis) -> Dimension {
-        if style.box_sizing == BoxSizing::BorderBox {
-            let edges = match axis {
+        if style.box_sizing == BoxSizing::ContentBox {
+            if let Some(edges) = match axis {
                 Axis::Horizontal => self.horizontal_edges_px(style),
                 Axis::Vertical => self.vertical_edges_px(style),
-            };
-            if let Some(edges) = edges {
-                if !len.unit.is_percentage() {
-                    let content = (self.length_to_px_if_absolute(len).unwrap_or(len.to_px()) - edges).max(0.0);
-                    return Dimension::length(content);
+            } {
+                if let Some(px) = self.length_to_px_if_absolute(len) {
+                    return Dimension::length((px + edges).max(0.0));
                 }
             }
         }

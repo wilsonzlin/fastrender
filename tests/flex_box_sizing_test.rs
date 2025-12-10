@@ -36,7 +36,11 @@ fn flex_item_border_box_width_uses_content_size() {
     let container = BoxNode::new_block(
         Arc::new(container_style),
         FormattingContextType::Flex,
-        vec![BoxNode::new_block(Arc::new(child_style.clone()), FormattingContextType::Block, vec![])],
+        vec![BoxNode::new_block(
+            Arc::new(child_style.clone()),
+            FormattingContextType::Block,
+            vec![],
+        )],
     );
 
     let fc = FlexFormattingContext::new();

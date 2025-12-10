@@ -444,8 +444,14 @@ impl Painter {
             .unwrap_or_default();
         let has_backdrop = !backdrop_filters.is_empty();
         let clip = style_ref.and_then(|style| {
-            let clip_x = matches!(style.overflow_x, Overflow::Hidden | Overflow::Scroll | Overflow::Auto);
-            let clip_y = matches!(style.overflow_y, Overflow::Hidden | Overflow::Scroll | Overflow::Auto);
+            let clip_x = matches!(
+                style.overflow_x,
+                Overflow::Hidden | Overflow::Scroll | Overflow::Auto | Overflow::Clip
+            );
+            let clip_y = matches!(
+                style.overflow_y,
+                Overflow::Hidden | Overflow::Scroll | Overflow::Auto | Overflow::Clip
+            );
             if !clip_x && !clip_y {
                 return None;
             }
@@ -518,7 +524,10 @@ impl Painter {
         }
 
         let outline_style = style.outline_style.to_border_style();
-        if outline_style != CssBorderStyle::None && outline_style != CssBorderStyle::Hidden && style.outline_width.to_px() > 0.0 {
+        if outline_style != CssBorderStyle::None
+            && outline_style != CssBorderStyle::Hidden
+            && style.outline_width.to_px() > 0.0
+        {
             let ow = style.outline_width.to_px();
             let expand = style.outline_offset.to_px() + ow * 0.5;
             let outline_rect = Rect::from_xywh(
@@ -2531,7 +2540,13 @@ fn compute_commands_bounds(commands: &[DisplayCommand]) -> Option<Rect> {
     current
 }
 
-fn clip_non_outline(commands: &[DisplayCommand], mut bounds: Rect, clip_rect: Rect, clip_x: bool, clip_y: bool) -> Rect {
+fn clip_non_outline(
+    commands: &[DisplayCommand],
+    mut bounds: Rect,
+    clip_rect: Rect,
+    clip_x: bool,
+    clip_y: bool,
+) -> Rect {
     let mut current: Option<Rect> = None;
     for cmd in commands {
         if matches!(cmd, DisplayCommand::Outline { .. }) {
@@ -4207,8 +4222,7 @@ mod tests {
         style.outline_width = Length::px(4.0);
         style.outline_color = OutlineColor::Color(Rgba::RED);
         style.outline_offset = Length::px(2.0);
-        let fragment =
-            FragmentNode::new_block_styled(Rect::from_xywh(4.0, 4.0, 10.0, 10.0), vec![], Arc::new(style));
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(4.0, 4.0, 10.0, 10.0), vec![], Arc::new(style));
         let tree = FragmentTree::new(fragment);
 
         let pixmap = paint_tree(&tree, 30, 30, Rgba::WHITE).expect("paint");
@@ -4235,8 +4249,7 @@ mod tests {
         style.outline_color = OutlineColor::Color(Rgba::RED);
         style.overflow_x = Overflow::Hidden;
         style.overflow_y = Overflow::Hidden;
-        let fragment =
-            FragmentNode::new_block_styled(Rect::from_xywh(10.0, 10.0, 10.0, 10.0), vec![], Arc::new(style));
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(10.0, 10.0, 10.0, 10.0), vec![], Arc::new(style));
         let tree = FragmentTree::new(fragment);
 
         let pixmap = paint_tree(&tree, 40, 40, Rgba::WHITE).expect("paint");
@@ -4249,8 +4262,7 @@ mod tests {
         let mut style = ComputedStyle::default();
         style.visibility = crate::style::computed::Visibility::Hidden;
         style.background_color = Rgba::RED;
-        let fragment =
-            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
         let tree = FragmentTree::new(fragment);
 
         let pixmap = paint_tree(&tree, 20, 20, Rgba::WHITE).expect("paint");
@@ -4262,8 +4274,7 @@ mod tests {
         let mut style = ComputedStyle::default();
         style.visibility = crate::style::computed::Visibility::Collapse;
         style.background_color = Rgba::BLUE;
-        let fragment =
-            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
         let tree = FragmentTree::new(fragment);
 
         let pixmap = paint_tree(&tree, 20, 20, Rgba::WHITE).expect("paint");

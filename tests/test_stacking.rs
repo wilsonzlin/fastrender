@@ -488,6 +488,19 @@ fn test_positioned_overflow_creates_stacking_context() {
     );
 }
 
+#[test]
+fn test_positioned_overflow_clip_creates_stacking_context() {
+    let mut style = ComputedStyle::default();
+    style.position = Position::Relative;
+    style.overflow_y = Overflow::Clip;
+
+    assert!(creates_stacking_context(&style, None, false));
+    assert_eq!(
+        get_stacking_context_reason(&style, None, false),
+        Some(StackingContextReason::OverflowClip)
+    );
+}
+
 // Test: Multiple stacking context triggers (opacity takes precedence order)
 
 #[test]

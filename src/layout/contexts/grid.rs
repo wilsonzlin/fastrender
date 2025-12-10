@@ -247,11 +247,10 @@ impl GridFormattingContext {
     }
 
     fn dimension_for_box_sizing(&self, len: &Length, style: &ComputedStyle, axis: Axis) -> Dimension {
-        if style.box_sizing == BoxSizing::BorderBox {
+        if style.box_sizing == BoxSizing::ContentBox {
             if let Some(edges) = self.edges_px(style, axis) {
-                if !len.unit.is_percentage() {
-                    let content = (self.length_to_px_if_absolute(len).unwrap_or(len.to_px()) - edges).max(0.0);
-                    return Dimension::length(content);
+                if let Some(px) = self.length_to_px_if_absolute(len) {
+                    return Dimension::length((px + edges).max(0.0));
                 }
             }
         }

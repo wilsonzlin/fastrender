@@ -42,6 +42,7 @@ pub enum Overflow {
     Hidden,
     Scroll,
     Auto,
+    Clip,
 }
 
 /// Determines which box the width/height properties apply to.

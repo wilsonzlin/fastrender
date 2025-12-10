@@ -76,6 +76,44 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "overflow" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                let overflow = match kw.as_str() {
+                    "visible" => Overflow::Visible,
+                    "hidden" => Overflow::Hidden,
+                    "scroll" => Overflow::Scroll,
+                    "auto" => Overflow::Auto,
+                    "clip" => Overflow::Clip,
+                    _ => styles.overflow_x,
+                };
+                styles.overflow_x = overflow;
+                styles.overflow_y = overflow;
+            }
+        }
+        "overflow-x" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.overflow_x = match kw.as_str() {
+                    "visible" => Overflow::Visible,
+                    "hidden" => Overflow::Hidden,
+                    "scroll" => Overflow::Scroll,
+                    "auto" => Overflow::Auto,
+                    "clip" => Overflow::Clip,
+                    _ => styles.overflow_x,
+                };
+            }
+        }
+        "overflow-y" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.overflow_y = match kw.as_str() {
+                    "visible" => Overflow::Visible,
+                    "hidden" => Overflow::Hidden,
+                    "scroll" => Overflow::Scroll,
+                    "auto" => Overflow::Auto,
+                    "clip" => Overflow::Clip,
+                    _ => styles.overflow_y,
+                };
+            }
+        }
 
         // Position
         "position" => {
@@ -1479,42 +1517,6 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
             }
         }
 
-        // Overflow
-        "overflow" => {
-            if let PropertyValue::Keyword(kw) = &resolved_value {
-                let overflow = match kw.as_str() {
-                    "visible" => Overflow::Visible,
-                    "hidden" => Overflow::Hidden,
-                    "scroll" => Overflow::Scroll,
-                    "auto" => Overflow::Auto,
-                    _ => Overflow::Visible,
-                };
-                styles.overflow_x = overflow;
-                styles.overflow_y = overflow;
-            }
-        }
-        "overflow-x" => {
-            if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.overflow_x = match kw.as_str() {
-                    "visible" => Overflow::Visible,
-                    "hidden" => Overflow::Hidden,
-                    "scroll" => Overflow::Scroll,
-                    "auto" => Overflow::Auto,
-                    _ => styles.overflow_x,
-                };
-            }
-        }
-        "overflow-y" => {
-            if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.overflow_y = match kw.as_str() {
-                    "visible" => Overflow::Visible,
-                    "hidden" => Overflow::Hidden,
-                    "scroll" => Overflow::Scroll,
-                    "auto" => Overflow::Auto,
-                    _ => styles.overflow_y,
-                };
-            }
-        }
         "border-collapse" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.border_collapse = match kw.as_str() {
@@ -3152,6 +3154,24 @@ mod tests {
         );
 
         assert_eq!(style.outline_width, Length::px(5.0));
+    }
+
+    #[test]
+    fn overflow_clip_sets_both_axes() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "overflow".to_string(),
+                value: PropertyValue::Keyword("clip".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(style.overflow_x, Overflow::Clip);
+        assert_eq!(style.overflow_y, Overflow::Clip);
     }
 
     #[test]

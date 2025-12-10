@@ -454,8 +454,13 @@ pub fn creates_stacking_context(style: &ComputedStyle, parent_style: Option<&Com
     // 7. Overflow hidden/scroll/auto with visible overflow on the other axis
     // This creates a stacking context in some browsers
     // For simplicity, we create stacking context for any non-visible overflow
-    if matches!(style.overflow_x, Overflow::Hidden | Overflow::Scroll | Overflow::Auto)
-        || matches!(style.overflow_y, Overflow::Hidden | Overflow::Scroll | Overflow::Auto)
+    if matches!(
+        style.overflow_x,
+        Overflow::Hidden | Overflow::Scroll | Overflow::Auto | Overflow::Clip
+    ) || matches!(
+        style.overflow_y,
+        Overflow::Hidden | Overflow::Scroll | Overflow::Auto | Overflow::Clip
+    )
     {
         // Only if positioned, this creates a stacking context
         if is_positioned(style) {
@@ -533,8 +538,13 @@ pub fn get_stacking_context_reason(
     }
 
     if is_positioned(style)
-        && (matches!(style.overflow_x, Overflow::Hidden | Overflow::Scroll | Overflow::Auto)
-            || matches!(style.overflow_y, Overflow::Hidden | Overflow::Scroll | Overflow::Auto))
+        && (matches!(
+            style.overflow_x,
+            Overflow::Hidden | Overflow::Scroll | Overflow::Auto | Overflow::Clip
+        ) || matches!(
+            style.overflow_y,
+            Overflow::Hidden | Overflow::Scroll | Overflow::Auto | Overflow::Clip
+        ))
     {
         return Some(StackingContextReason::OverflowClip);
     }
