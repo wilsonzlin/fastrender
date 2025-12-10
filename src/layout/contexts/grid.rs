@@ -128,7 +128,7 @@ impl GridFormattingContext {
         box_node: &'a BoxNode,
     ) -> Result<(TaffyNodeId, HashMap<TaffyNodeId, &'a BoxNode>), LayoutError> {
         let mut node_map = HashMap::new();
-        let root_id = self.build_node_recursive(taffy, box_node, &mut node_map)?;
+        let root_id = self.build_node_recursive(taffy, box_node, &mut node_map, None)?;
         Ok((root_id, node_map))
     }
 
@@ -138,16 +138,23 @@ impl GridFormattingContext {
         taffy: &mut TaffyTree<()>,
         box_node: &'a BoxNode,
         node_map: &mut HashMap<TaffyNodeId, &'a BoxNode>,
+        containing_grid: Option<&'a ComputedStyle>,
     ) -> Result<TaffyNodeId, LayoutError> {
         // Convert children first
         let child_ids: Vec<TaffyNodeId> = box_node
             .children
             .iter()
-            .map(|child| self.build_node_recursive(taffy, child, node_map))
+            .map(|child| {
+                let next_containing_grid = match box_node.style.display {
+                    CssDisplay::Grid | CssDisplay::InlineGrid => Some(box_node.style.as_ref()),
+                    _ => None,
+                };
+                self.build_node_recursive(taffy, child, node_map, next_containing_grid)
+            })
             .collect::<Result<_, _>>()?;
 
         // Convert style
-        let taffy_style = self.convert_style(&box_node.style);
+        let taffy_style = self.convert_style(&box_node.style, containing_grid);
 
         // Create Taffy node
         let node_id = if child_ids.is_empty() {
@@ -165,11 +172,17 @@ impl GridFormattingContext {
     }
 
     /// Converts ComputedStyle to Taffy Style
-    fn convert_style(&self, style: &ComputedStyle) -> TaffyStyle {
+    fn convert_style(&self, style: &ComputedStyle, containing_grid: Option<&ComputedStyle>) -> TaffyStyle {
         let mut taffy_style = TaffyStyle::default();
-        let inline_positive = self.inline_axis_positive(style);
-        let block_positive = self.block_axis_positive(style);
-        let inline_is_horizontal = self.inline_axis_is_horizontal(style);
+        let inline_positive_container = self.inline_axis_positive(style);
+        let block_positive_container = self.block_axis_positive(style);
+        let inline_is_horizontal_container = self.inline_axis_is_horizontal(style);
+
+        // Grid item axes follow the containing grid's writing mode, not the item's own.
+        let item_axis_style = containing_grid.unwrap_or(style);
+        let inline_positive_item = self.inline_axis_positive(item_axis_style);
+        let block_positive_item = self.block_axis_positive(item_axis_style);
+        let inline_is_horizontal_item = self.inline_axis_is_horizontal(item_axis_style);
 
         // Display mode
         let is_grid = matches!(style.display, CssDisplay::Grid | CssDisplay::InlineGrid);
@@ -219,12 +232,11 @@ impl GridFormattingContext {
             bottom: self.convert_length_to_lp(&style.border_bottom_width, style),
         };
         taffy_style.aspect_ratio = self.convert_aspect_ratio(style.aspect_ratio);
-        taffy_style.align_items = Some(self.convert_align_items(&style.align_items, block_positive));
 
         // Grid container properties
         if is_grid {
             // Grid template columns/rows (swap when inline axis is vertical)
-            if inline_is_horizontal {
+            if inline_is_horizontal_container {
                 taffy_style.grid_template_columns = self.convert_grid_template(&style.grid_template_columns, style);
                 taffy_style.grid_template_rows = self.convert_grid_template(&style.grid_template_rows, style);
             } else {
@@ -233,7 +245,7 @@ impl GridFormattingContext {
             }
 
             // Line names
-            if inline_is_horizontal {
+            if inline_is_horizontal_container {
                 if !style.grid_column_line_names.is_empty() {
                     taffy_style.grid_template_column_names = style.grid_column_line_names.clone();
                 }
@@ -249,7 +261,7 @@ impl GridFormattingContext {
                 }
             }
             // Implicit track sizing
-            if inline_is_horizontal {
+            if inline_is_horizontal_container {
                 if !style.grid_auto_rows.is_empty() {
                     taffy_style.grid_auto_rows = style
                         .grid_auto_rows
@@ -280,7 +292,7 @@ impl GridFormattingContext {
                         .collect();
                 }
             }
-            taffy_style.grid_auto_flow = match (style.grid_auto_flow, inline_is_horizontal) {
+            taffy_style.grid_auto_flow = match (style.grid_auto_flow, inline_is_horizontal_container) {
                 (GridAutoFlow::Row, true) => taffy::style::GridAutoFlow::Row,
                 (GridAutoFlow::RowDense, true) => taffy::style::GridAutoFlow::RowDense,
                 (GridAutoFlow::Column, true) => taffy::style::GridAutoFlow::Column,
@@ -296,7 +308,7 @@ impl GridFormattingContext {
                     entries.sort_by(|a, b| a.0.cmp(&b.0));
                     let mut areas = Vec::with_capacity(entries.len());
                     for (name, (top, bottom, left, right)) in entries {
-                        let (row_start, row_end, column_start, column_end) = if inline_is_horizontal {
+                        let (row_start, row_end, column_start, column_end) = if inline_is_horizontal_container {
                             ((top as u16) + 1, (bottom as u16) + 2, (left as u16) + 1, (right as u16) + 2)
                         } else {
                             // Transpose area matrix for vertical inline axis
@@ -316,12 +328,12 @@ impl GridFormattingContext {
 
             // Gap
             taffy_style.gap = taffy::geometry::Size {
-                width: if inline_is_horizontal {
+                width: if inline_is_horizontal_container {
                     self.convert_length_to_lp(&style.grid_column_gap, style)
                 } else {
                     self.convert_length_to_lp(&style.grid_row_gap, style)
                 },
-                height: if inline_is_horizontal {
+                height: if inline_is_horizontal_container {
                     self.convert_length_to_lp(&style.grid_row_gap, style)
                 } else {
                     self.convert_length_to_lp(&style.grid_column_gap, style)
@@ -329,16 +341,17 @@ impl GridFormattingContext {
             };
 
             // Alignment
-            taffy_style.align_content = Some(self.convert_align_content(&style.align_content, block_positive));
-            taffy_style.justify_content = Some(self.convert_justify_content(&style.justify_content, inline_positive));
+            taffy_style.align_content = Some(self.convert_align_content(&style.align_content, block_positive_container));
+            taffy_style.justify_content =
+                Some(self.convert_justify_content(&style.justify_content, inline_positive_container));
         }
-        taffy_style.align_items = Some(self.convert_align_items(&style.align_items, block_positive));
-        taffy_style.justify_items = Some(self.convert_align_items(&style.justify_items, inline_positive));
-        taffy_style.align_self = style.align_self.map(|a| self.convert_align_items(&a, block_positive));
-        taffy_style.justify_self = style.justify_self.map(|a| self.convert_align_items(&a, inline_positive));
+        taffy_style.align_items = Some(self.convert_align_items(&style.align_items, block_positive_container));
+        taffy_style.justify_items = Some(self.convert_align_items(&style.justify_items, inline_positive_container));
+        taffy_style.align_self = style.align_self.map(|a| self.convert_align_items(&a, block_positive_item));
+        taffy_style.justify_self = style.justify_self.map(|a| self.convert_align_items(&a, inline_positive_item));
 
         // Grid item properties using raw line numbers (swap placements when inline axis is vertical)
-        if inline_is_horizontal {
+        if inline_is_horizontal_item {
             taffy_style.grid_column = self.convert_grid_placement(
                 style.grid_column_raw.as_deref(),
                 style.grid_column_start,
@@ -347,15 +360,16 @@ impl GridFormattingContext {
             taffy_style.grid_row =
                 self.convert_grid_placement(style.grid_row_raw.as_deref(), style.grid_row_start, style.grid_row_end);
         } else {
-            taffy_style.grid_column = self.convert_grid_placement(
-                style.grid_row_raw.as_deref(),
-                style.grid_row_start,
-                style.grid_row_end,
-            );
+            // Inline axis maps to rows (y), block axis maps to columns (x)
             taffy_style.grid_row = self.convert_grid_placement(
                 style.grid_column_raw.as_deref(),
                 style.grid_column_start,
                 style.grid_column_end,
+            );
+            taffy_style.grid_column = self.convert_grid_placement(
+                style.grid_row_raw.as_deref(),
+                style.grid_row_start,
+                style.grid_row_end,
             );
         }
 
@@ -840,7 +854,7 @@ impl FormattingContext for GridFormattingContext {
 mod tests {
     use super::*;
     use crate::style::display::FormattingContextType;
-    use crate::style::types::{AlignItems, AspectRatio, GridTrack};
+    use crate::style::types::{AlignItems, AspectRatio, GridAutoFlow, GridTrack, WritingMode};
     use std::sync::Arc;
 
     fn make_grid_style() -> Arc<ComputedStyle> {
@@ -1291,7 +1305,7 @@ mod tests {
 
         let mut style = ComputedStyle::default();
         style.display = CssDisplay::Grid;
-        style.writing_mode = crate::style::types::WritingMode::VerticalRl;
+        style.writing_mode = WritingMode::VerticalRl;
         style.grid_template_columns = vec![GridTrack::Length(Length::px(20.0)), GridTrack::Length(Length::px(20.0))];
         style.grid_template_rows = vec![GridTrack::Length(Length::px(30.0))];
         let style = Arc::new(style);
@@ -1307,6 +1321,119 @@ mod tests {
         assert_eq!(fragment.bounds.height(), 40.0);
         assert_eq!(fragment.children[0].bounds.width(), 30.0);
         assert_eq!(fragment.children[0].bounds.height(), 20.0);
+    }
+
+    #[test]
+    fn vertical_writing_mode_swaps_placements_to_physical_axes() {
+        let fc = GridFormattingContext::new();
+
+        let mut style = ComputedStyle::default();
+        style.display = CssDisplay::Grid;
+        style.writing_mode = WritingMode::VerticalRl;
+        style.grid_template_columns =
+            vec![GridTrack::Length(Length::px(30.0)), GridTrack::Length(Length::px(40.0))];
+        style.grid_template_rows =
+            vec![GridTrack::Length(Length::px(100.0)), GridTrack::Length(Length::px(200.0))];
+        let style = Arc::new(style);
+
+        let mut inline_item_style = ComputedStyle::default();
+        inline_item_style.grid_column_start = 2;
+        inline_item_style.grid_column_end = 3;
+        inline_item_style.grid_row_start = 1;
+        inline_item_style.grid_row_end = 2;
+        let inline_item = BoxNode::new_block(Arc::new(inline_item_style), FormattingContextType::Block, vec![]);
+
+        let mut block_item_style = ComputedStyle::default();
+        block_item_style.grid_row_start = 2;
+        block_item_style.grid_row_end = 3;
+        block_item_style.grid_column_start = 1;
+        block_item_style.grid_column_end = 2;
+        let block_item = BoxNode::new_block(Arc::new(block_item_style), FormattingContextType::Block, vec![]);
+
+        let grid = BoxNode::new_block(style, FormattingContextType::Grid, vec![inline_item, block_item]);
+
+        let constraints = LayoutConstraints::definite(500.0, 500.0);
+        let fragment = fc.layout(&grid, &constraints).unwrap();
+
+        // Tracks transpose: block tracks become Taffy columns (width), inline tracks become Taffy rows (height).
+        assert_eq!(fragment.bounds.width(), 300.0);
+        assert_eq!(fragment.bounds.height(), 70.0);
+
+        // grid-column maps to the inline axis (vertical), so it should affect y/height.
+        assert_eq!(fragment.children[0].bounds.x(), 0.0);
+        assert_eq!(fragment.children[0].bounds.y(), 30.0);
+        assert_eq!(fragment.children[0].bounds.width(), 100.0);
+        assert_eq!(fragment.children[0].bounds.height(), 40.0);
+
+        // grid-row maps to the block axis (horizontal), so it should affect x/width.
+        assert_eq!(fragment.children[1].bounds.x(), 100.0);
+        assert_eq!(fragment.children[1].bounds.y(), 0.0);
+        assert_eq!(fragment.children[1].bounds.width(), 200.0);
+        assert_eq!(fragment.children[1].bounds.height(), 30.0);
+    }
+
+    #[test]
+    fn vertical_writing_mode_row_autoflow_fills_inline_axis_first() {
+        let fc = GridFormattingContext::new();
+
+        let mut style = ComputedStyle::default();
+        style.display = CssDisplay::Grid;
+        style.writing_mode = WritingMode::VerticalRl;
+        style.grid_auto_flow = GridAutoFlow::Row;
+        style.grid_template_columns = vec![GridTrack::Length(Length::px(20.0)), GridTrack::Length(Length::px(20.0))];
+        style.grid_template_rows = vec![GridTrack::Length(Length::px(40.0)), GridTrack::Length(Length::px(40.0))];
+        let style = Arc::new(style);
+
+        let children: Vec<_> = (0..3)
+            .map(|_| BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]))
+            .collect();
+        let grid = BoxNode::new_block(style, FormattingContextType::Grid, children);
+
+        let constraints = LayoutConstraints::definite(200.0, 200.0);
+        let fragment = fc.layout(&grid, &constraints).unwrap();
+
+        assert_eq!(fragment.bounds.width(), 80.0);
+        assert_eq!(fragment.bounds.height(), 40.0);
+
+        // Row auto-flow maps to column auto-flow when inline is vertical: fill inline tracks top→bottom, then start a new block track.
+        assert_eq!(fragment.children[0].bounds.x(), 0.0);
+        assert_eq!(fragment.children[0].bounds.y(), 0.0);
+        assert_eq!(fragment.children[1].bounds.x(), 0.0);
+        assert_eq!(fragment.children[1].bounds.y(), 20.0);
+        assert_eq!(fragment.children[2].bounds.x(), 40.0);
+        assert_eq!(fragment.children[2].bounds.y(), 0.0);
+    }
+
+    #[test]
+    fn vertical_writing_mode_column_autoflow_fills_block_axis_first() {
+        let fc = GridFormattingContext::new();
+
+        let mut style = ComputedStyle::default();
+        style.display = CssDisplay::Grid;
+        style.writing_mode = WritingMode::VerticalRl;
+        style.grid_auto_flow = GridAutoFlow::Column;
+        style.grid_template_columns = vec![GridTrack::Length(Length::px(20.0)), GridTrack::Length(Length::px(20.0))];
+        style.grid_template_rows = vec![GridTrack::Length(Length::px(40.0)), GridTrack::Length(Length::px(40.0))];
+        let style = Arc::new(style);
+
+        let children: Vec<_> = (0..3)
+            .map(|_| BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]))
+            .collect();
+        let grid = BoxNode::new_block(style, FormattingContextType::Grid, children);
+
+        let constraints = LayoutConstraints::definite(200.0, 200.0);
+        let fragment = fc.layout(&grid, &constraints).unwrap();
+
+        assert_eq!(fragment.bounds.width(), 80.0);
+        assert_eq!(fragment.bounds.height(), 40.0);
+
+        // Column auto-flow maps to row auto-flow when inline is vertical: fill block tracks first, then wrap inline.
+        assert_eq!(fragment.children[0].bounds.x(), 0.0);
+        assert_eq!(fragment.children[0].bounds.y(), 0.0);
+        assert_eq!(fragment.children[1].bounds.x(), 40.0);
+        assert_eq!(fragment.children[1].bounds.y(), 0.0);
+        assert_eq!(fragment.children[2].bounds.x(), 0.0);
+        assert_eq!(fragment.children[2].bounds.y(), 20.0);
     }
 
     #[test]
