@@ -2242,12 +2242,18 @@ impl FormattingContext for TableFormattingContext {
         let table_width = specified_width
             .or(containing_width)
             .map(|w| clamp_to_min_max(w, min_width, max_width));
-        // Table padding and borders (ignored in collapsed border model per CSS 2.1).
+        // Table padding and borders (ignored for box sizing under collapsed model per CSS 2.1),
+        // but we still track outer borders for percentage-height resolution.
         let resolve_abs = |l: &crate::style::values::Length| match l.unit {
             LengthUnit::Percent => 0.0,
             _ if l.unit.is_absolute() => l.to_px(),
             _ => l.value,
         };
+        let _outer_border_left = resolve_abs(&box_node.style.border_left_width);
+        let _outer_border_right = resolve_abs(&box_node.style.border_right_width);
+        let outer_border_top = resolve_abs(&box_node.style.border_top_width);
+        let outer_border_bottom = resolve_abs(&box_node.style.border_bottom_width);
+        let outer_border_v = outer_border_top + outer_border_bottom;
         let (pad_left, pad_right, pad_top, pad_bottom, border_left, border_right, border_top, border_bottom) =
             if structure.border_collapse == BorderCollapse::Collapse {
                 (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
@@ -2420,7 +2426,7 @@ impl FormattingContext for TableFormattingContext {
 
         let percent_height_base = table_height.map(|base| {
             let mut content_base = if structure.border_collapse == BorderCollapse::Collapse {
-                base
+                (base - outer_border_v).max(0.0)
             } else {
                 (base - padding_v - border_v).max(0.0)
             };
@@ -2499,7 +2505,7 @@ impl FormattingContext for TableFormattingContext {
 
         let percent_height_base = table_height.map(|base| {
             let mut content_base = if structure.border_collapse == BorderCollapse::Collapse {
-                base
+                (base - outer_border_v).max(0.0)
             } else {
                 (base - padding_v - border_v).max(0.0)
             };
