@@ -1874,9 +1874,17 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
         // Compute remaining space for auto rows.
         let remaining = base - fixed_sum;
         if remaining > 0.0 && !auto_rows.is_empty() {
-            let per = remaining / auto_rows.len() as f32;
-            for idx in auto_rows {
-                computed[idx] = computed[idx].max(per);
+            let auto_sum: f32 = auto_rows.iter().map(|i| computed[*i]).sum();
+            if auto_sum > 0.0 {
+                for idx in auto_rows {
+                    let weight = computed[idx] / auto_sum;
+                    computed[idx] = computed[idx].max(remaining * weight);
+                }
+            } else {
+                let per = remaining / auto_rows.len() as f32;
+                for idx in auto_rows {
+                    computed[idx] = computed[idx].max(per);
+                }
             }
         }
     }
@@ -2393,6 +2401,11 @@ impl FormattingContext for TableFormattingContext {
 
         // Compute row heights, accounting for rowspans and vertical spacing.
         let mut row_heights = vec![0.0f32; structure.row_count];
+        for (idx, row) in structure.rows.iter().enumerate() {
+            if let Some(slot) = row_heights.get_mut(idx) {
+                *slot = row.min_height.max(*slot);
+            }
+        }
 
         // Baseline-aligned, single-row cells reserve baseline space in their own row.
         for laid in &laid_out_cells {
@@ -2640,24 +2653,38 @@ impl FormattingContext for TableFormattingContext {
             let target_rows = (target_height - spacing_total).max(0.0);
             if target_rows > rows_space && !row_metrics.is_empty() {
                 let extra = target_rows - rows_space;
-                let weights: Vec<f32> = structure
+                let mut flex_indices: Vec<usize> = structure
                     .rows
                     .iter()
-                    .map(|row| match row.specified_height {
-                        Some(SpecifiedHeight::Percent(pct)) if percent_height_base.is_some() => pct.max(0.0),
-                        Some(SpecifiedHeight::Fixed(_)) => 0.0,
-                        _ => 1.0,
+                    .enumerate()
+                    .filter_map(|(idx, row)| match row.specified_height {
+                        Some(SpecifiedHeight::Fixed(_)) | Some(SpecifiedHeight::Percent(_)) => None,
+                        _ => Some(idx),
                     })
                     .collect();
-                let total_weight: f32 = weights.iter().copied().sum();
-                let norm = if total_weight <= 0.0 {
-                    structure.row_count as f32
+                if flex_indices.is_empty() {
+                    // No auto rows: distribute across all rows proportionally to their current height.
+                    flex_indices = (0..structure.row_count).collect();
+                }
+
+                let flex_sum: f32 = flex_indices
+                    .iter()
+                    .map(|i| row_metrics.get(*i).map(|r| r.height).unwrap_or(0.0))
+                    .sum();
+                if flex_sum > 0.0 {
+                    for idx in flex_indices {
+                        if let Some(row) = row_metrics.get_mut(idx) {
+                            let weight = row.height / flex_sum;
+                            row.height += extra * weight;
+                        }
+                    }
                 } else {
-                    total_weight
-                };
-                for (row, weight) in row_metrics.iter_mut().zip(weights) {
-                    let share = if norm > 0.0 { weight / norm } else { 0.0 };
-                    row.height += extra * share;
+                    let share = extra / flex_indices.len() as f32;
+                    for idx in flex_indices {
+                        if let Some(row) = row_metrics.get_mut(idx) {
+                            row.height += share;
+                        }
+                    }
                 }
             }
         }
@@ -5364,6 +5391,44 @@ mod tests {
 
         assert!((structure.rows[0].computed_height - 100.0).abs() < 0.01);
         assert!((structure.rows[1].computed_height - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn extra_table_height_distributes_proportionally_to_auto_rows() {
+        let mut structure = TableStructure::new();
+        structure.row_count = 2;
+        structure.rows = vec![RowInfo::new(0), RowInfo::new(1)];
+        // Give rows different intrinsic heights so proportional distribution is observable.
+        structure.rows[0].min_height = 10.0;
+        structure.rows[1].min_height = 30.0;
+        structure.border_spacing = (0.0, 0.0);
+
+        calculate_row_heights(&mut structure, Some(100.0));
+
+        // Sum to table height.
+        let total = structure.rows[0].computed_height + structure.rows[1].computed_height;
+        assert!((total - 100.0).abs() < 0.01);
+        // Extra space (60px) apportioned in 1:3 ratio -> 10+15 vs 30+45.
+        assert!((structure.rows[0].computed_height - 25.0).abs() < 0.5);
+        assert!((structure.rows[1].computed_height - 75.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn extra_table_height_skips_fixed_and_percent_rows() {
+        let mut structure = TableStructure::new();
+        structure.row_count = 3;
+        structure.rows = vec![RowInfo::new(0), RowInfo::new(1), RowInfo::new(2)];
+        structure.rows[0].specified_height = Some(SpecifiedHeight::Fixed(20.0));
+        structure.rows[1].specified_height = Some(SpecifiedHeight::Percent(50.0));
+        structure.rows[2].min_height = 10.0;
+        structure.border_spacing = (0.0, 0.0);
+
+        calculate_row_heights(&mut structure, Some(200.0));
+
+        // Fixed row stays at 20, percent row at 100; remaining 80 goes to the auto row.
+        assert!((structure.rows[0].computed_height - 20.0).abs() < 0.01);
+        assert!((structure.rows[1].computed_height - 100.0).abs() < 0.01);
+        assert!((structure.rows[2].computed_height - 80.0).abs() < 0.5);
     }
 
     #[test]
