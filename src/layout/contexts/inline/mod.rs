@@ -179,6 +179,7 @@ impl InlineFormattingContext {
     }
 
     /// Collects inline items from box node children using the author's base direction.
+    #[allow(dead_code)]
     fn collect_inline_items(
         &self,
         box_node: &BoxNode,
