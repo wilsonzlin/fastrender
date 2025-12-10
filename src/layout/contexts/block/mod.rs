@@ -407,7 +407,8 @@ impl BlockFormattingContext {
                                    fragments: &mut Vec<FragmentNode>,
                                    current_y: &mut f32,
                                    content_height: &mut f32,
-                                   margin_ctx: &mut MarginCollapseContext|
+                                   margin_ctx: &mut MarginCollapseContext,
+                                   float_ctx_ref: &FloatContext|
          -> Result<(), LayoutError> {
             if buffer.is_empty() {
                 return Ok(());
@@ -422,7 +423,8 @@ impl BlockFormattingContext {
                 InlineFormattingContext::with_font_context_and_viewport(self.font_context.clone(), self.viewport_size);
             let inline_constraints =
                 LayoutConstraints::new(AvailableSpace::Definite(containing_width), available_height);
-            let mut inline_fragment = inline_fc.layout(&inline_container, &inline_constraints)?;
+            let mut inline_fragment =
+                inline_fc.layout_with_floats(&inline_container, &inline_constraints, Some(float_ctx_ref))?;
 
             inline_fragment.bounds = Rect::from_xywh(
                 0.0,
@@ -453,6 +455,7 @@ impl BlockFormattingContext {
                     &mut current_y,
                     &mut content_height,
                     &mut margin_ctx,
+                    &float_ctx,
                 )?;
 
                 // Apply any pending collapsed margin before placing the float
@@ -648,6 +651,7 @@ impl BlockFormattingContext {
                     &mut current_y,
                     &mut content_height,
                     &mut margin_ctx,
+                    &float_ctx,
                 )?;
 
                 // Apply clearance for in-flow blocks against floats
@@ -674,6 +678,7 @@ impl BlockFormattingContext {
             &mut current_y,
             &mut content_height,
             &mut margin_ctx,
+            &float_ctx,
         )?;
 
         // Resolve any trailing margins
@@ -1236,6 +1241,51 @@ mod tests {
         assert!(
             clear_y >= 50.0,
             "cleared block should be pushed below float; got clear_y={clear_y}"
+        );
+    }
+
+    #[test]
+    fn inline_lines_shorten_next_to_float() {
+        let bfc = BlockFormattingContext::new();
+
+        let mut float_style = ComputedStyle::default();
+        float_style.display = Display::Block;
+        float_style.float = Float::Left;
+        float_style.width = Some(Length::px(80.0));
+        float_style.height = Some(Length::px(20.0));
+        let float_node = BoxNode::new_block(Arc::new(float_style), FormattingContextType::Block, vec![]);
+
+        let text = BoxNode::new_text(default_style(), "text".to_string());
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![float_node, BoxNode::new_inline(default_style(), vec![text])],
+        );
+        let constraints = LayoutConstraints::definite(200.0, 200.0);
+
+        let fragment = bfc.layout(&root, &constraints).unwrap();
+
+        fn find_line(fragment: &FragmentNode) -> Option<&FragmentNode> {
+            if matches!(fragment.content, FragmentContent::Line { .. }) {
+                return Some(fragment);
+            }
+            for child in &fragment.children {
+                if let Some(line) = find_line(child) {
+                    return Some(line);
+                }
+            }
+            None
+        }
+
+        let line = find_line(&fragment).expect("line fragment");
+        assert!(
+            line.bounds.width() <= 120.0,
+            "line width should be shortened by float; got {}",
+            line.bounds.width()
+        );
+        assert!(
+            line.bounds.x() >= 0.0,
+            "line should still be positioned relative to content box"
         );
     }
 

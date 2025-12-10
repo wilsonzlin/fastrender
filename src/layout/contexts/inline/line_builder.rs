@@ -33,6 +33,7 @@
 
 use super::baseline::{BaselineMetrics, LineBaselineAccumulator, VerticalAlign};
 use crate::geometry::Size;
+use crate::layout::inline::float_integration::{InlineFloatIntegration, LineSpaceOptions};
 use crate::style::types::{Direction, ListStylePosition, OverflowWrap, UnicodeBidi, WhiteSpace, WordBreak};
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
@@ -1142,6 +1143,12 @@ pub struct Line {
     /// Resolved paragraph direction for this line (LTR/RTL from bidi base level)
     pub resolved_direction: Direction,
 
+    /// Available width for this line after float shortening
+    pub available_width: f32,
+
+    /// Width of the line box (same as available width for now)
+    pub box_width: f32,
+
     /// Total width used by items
     pub width: f32,
 
@@ -1161,6 +1168,8 @@ impl Line {
         Self {
             items: Vec::new(),
             resolved_direction: Direction::Ltr,
+            available_width: 0.0,
+            box_width: 0.0,
             width: 0.0,
             height: 0.0,
             baseline: 0.0,
@@ -1183,11 +1192,17 @@ impl Default for Line {
 /// Builder for constructing lines from inline items
 ///
 /// Handles line breaking and item positioning.
-pub struct LineBuilder {
+pub struct LineBuilder<'a> {
     /// Available width for the first line
     first_line_width: f32,
     /// Available width for subsequent lines
     subsequent_line_width: f32,
+    /// Float-aware line width provider
+    float_integration: Option<InlineFloatIntegration<'a>>,
+    /// Current line space when floats are present
+    current_line_space: Option<crate::layout::inline::float_integration::LineSpace>,
+    /// Accumulated y offset for lines when floats shorten width
+    current_y: f32,
 
     /// Current line being built
     current_line: Line,
@@ -1214,7 +1229,7 @@ pub struct LineBuilder {
     base_level: Option<Level>,
 }
 
-impl LineBuilder {
+impl<'a> LineBuilder<'a> {
     /// Creates a new line builder
     pub fn new(
         first_line_width: f32,
@@ -1223,6 +1238,7 @@ impl LineBuilder {
         shaper: ShapingPipeline,
         font_context: FontContext,
         base_level: Option<Level>,
+        float_integration: Option<InlineFloatIntegration<'a>>,
     ) -> Self {
         let initial_direction = if let Some(level) = base_level {
             if level.is_rtl() {
@@ -1233,9 +1249,12 @@ impl LineBuilder {
         } else {
             Direction::Ltr
         };
-        Self {
+        let mut builder = Self {
             first_line_width,
             subsequent_line_width,
+            float_integration,
+            current_line_space: None,
+            current_y: 0.0,
             current_line: Line {
                 resolved_direction: initial_direction,
                 ..Line::new()
@@ -1247,10 +1266,28 @@ impl LineBuilder {
             shaper,
             font_context,
             base_level,
+        };
+
+        if let Some(integration) = builder.float_integration.as_ref() {
+            let space = integration.find_line_space(
+                builder.current_y,
+                LineSpaceOptions::default().line_height(builder.strut_metrics.line_height),
+            );
+            builder.current_line_space = Some(space);
+            builder.current_line.available_width = space.width;
+            builder.current_line.box_width = space.width;
+        } else {
+            builder.current_line.available_width = first_line_width;
+            builder.current_line.box_width = first_line_width;
         }
+
+        builder
     }
 
     fn current_line_width(&self) -> f32 {
+        if let Some(space) = self.current_line_space {
+            return space.width;
+        }
         if self.lines.is_empty() {
             self.first_line_width
         } else {
@@ -1385,6 +1422,9 @@ impl LineBuilder {
             self.current_line.width = self.current_x;
             self.current_line.height = self.baseline_acc.line_height();
             self.current_line.baseline = self.baseline_acc.baseline_position();
+            let line_width = self.current_line_width();
+            self.current_line.available_width = line_width;
+            self.current_line.box_width = line_width;
 
             // Adjust Y positions for top/bottom aligned items
             for positioned in &mut self.current_line.items {
@@ -1404,7 +1444,9 @@ impl LineBuilder {
                 }
             }
 
+            let finished_height = self.current_line.height;
             self.lines.push(std::mem::take(&mut self.current_line));
+            self.current_y += finished_height;
         }
 
         // Reset for new line
@@ -1423,6 +1465,25 @@ impl LineBuilder {
             resolved_direction: next_direction,
             ..Line::new()
         };
+
+        if let Some(integration) = self.float_integration.as_ref() {
+            let space = integration.find_line_space(
+                self.current_y,
+                LineSpaceOptions::default().line_height(self.strut_metrics.line_height),
+            );
+            self.current_line_space = Some(space);
+            self.current_line.available_width = space.width;
+            self.current_line.box_width = space.width;
+        } else {
+            self.current_line_space = None;
+            let w = if self.lines.is_empty() {
+                self.first_line_width
+            } else {
+                self.subsequent_line_width
+            };
+            self.current_line.available_width = w;
+            self.current_line.box_width = w;
+        }
     }
 
     /// Run bidi reordering across all built lines, respecting paragraph boundaries.
@@ -1519,25 +1580,22 @@ fn reorder_paragraph(
     let mut current_depth: usize = 0;
     let mut global_idx = 0usize;
 
-    let push_controls = |opens: &[char],
-                         closes: &[char],
-                         depth: &mut usize,
-                         buffer: &mut String|
-     -> Option<(usize, Vec<char>)> {
-        if opens.is_empty() {
-            return None;
-        }
-        // UAX#9 counts explicit depth per embedding/isolate context, not per control codepoint.
-        let added = 1usize;
-        if *depth + added > max_depth {
-            return None;
-        }
-        for ch in opens {
-            buffer.push(*ch);
-        }
-        *depth += added;
-        Some((added, closes.to_vec()))
-    };
+    let push_controls =
+        |opens: &[char], closes: &[char], depth: &mut usize, buffer: &mut String| -> Option<(usize, Vec<char>)> {
+            if opens.is_empty() {
+                return None;
+            }
+            // UAX#9 counts explicit depth per embedding/isolate context, not per control codepoint.
+            let added = 1usize;
+            if *depth + added > max_depth {
+                return None;
+            }
+            for ch in opens {
+                buffer.push(*ch);
+            }
+            *depth += added;
+            Some((added, closes.to_vec()))
+        };
 
     for (line_idx, leaves) in line_leaves.iter().enumerate() {
         let line_start = logical_text.len();
@@ -1560,26 +1618,26 @@ fn reorder_paragraph(
             }
 
             // Open new contexts
-        for ctx in leaf.box_stack.iter().skip(shared) {
-            let (opens, closes) = bidi_controls(ctx.unicode_bidi, ctx.direction);
-            if let Some((depth_added, closer_vec)) =
-                push_controls(&opens, &closes, &mut current_depth, &mut logical_text)
-            {
-                active_stack.push(ActiveCtx {
-                    id: ctx.id,
-                    closers: closer_vec,
-                    depth_added,
-                });
+            for ctx in leaf.box_stack.iter().skip(shared) {
+                let (opens, closes) = bidi_controls(ctx.unicode_bidi, ctx.direction);
+                if let Some((depth_added, closer_vec)) =
+                    push_controls(&opens, &closes, &mut current_depth, &mut logical_text)
+                {
+                    active_stack.push(ActiveCtx {
+                        id: ctx.id,
+                        closers: closer_vec,
+                        depth_added,
+                    });
+                }
             }
-        }
 
             // Leaf-local controls
-        let (leaf_opens, leaf_closes) = bidi_controls(leaf.item.unicode_bidi(), leaf.item.direction());
-        let (leaf_depth_added, leaf_closers) =
-            match push_controls(&leaf_opens, &leaf_closes, &mut current_depth, &mut logical_text) {
-                Some((d, closers)) => (d, closers),
-                None => (0, Vec::new()),
-            };
+            let (leaf_opens, leaf_closes) = bidi_controls(leaf.item.unicode_bidi(), leaf.item.direction());
+            let (leaf_depth_added, leaf_closers) =
+                match push_controls(&leaf_opens, &leaf_closes, &mut current_depth, &mut logical_text) {
+                    Some((d, closers)) => (d, closers),
+                    None => (0, Vec::new()),
+                };
 
             let content_start = logical_text.len();
             match &leaf.item {
@@ -1589,12 +1647,12 @@ fn reorder_paragraph(
             }
             let content_end = logical_text.len();
 
-        if leaf_depth_added > 0 {
-            for ch in leaf_closers {
-                logical_text.push(ch);
+            if leaf_depth_added > 0 {
+                for ch in leaf_closers {
+                    logical_text.push(ch);
+                }
+                current_depth = current_depth.saturating_sub(leaf_depth_added);
             }
-            current_depth = current_depth.saturating_sub(leaf_depth_added);
-        }
 
             if content_start < content_end {
                 paragraph_leaves.push(ParagraphLeaf {
@@ -1960,13 +2018,7 @@ fn flatten_positioned_item(
                     x: positioned.x,
                     baseline_offset: positioned.baseline_offset,
                 };
-                flatten_positioned_item(
-                    &child_positioned,
-                    box_stack,
-                    box_counter,
-                    leaves,
-                    has_plaintext,
-                );
+                flatten_positioned_item(&child_positioned, box_stack, box_counter, leaves, has_plaintext);
             }
             box_stack.pop();
         }
@@ -2000,7 +2052,7 @@ mod tests {
         BaselineMetrics::new(12.0, 16.0, 12.0, 4.0)
     }
 
-    fn make_builder(width: f32) -> LineBuilder {
+    fn make_builder(width: f32) -> LineBuilder<'static> {
         let strut = make_strut_metrics();
         LineBuilder::new(
             width,
@@ -2009,10 +2061,11 @@ mod tests {
             ShapingPipeline::new(),
             FontContext::new(),
             Some(Level::ltr()),
+            None,
         )
     }
 
-    fn make_builder_with_base(width: f32, base: Level) -> LineBuilder {
+    fn make_builder_with_base(width: f32, base: Level) -> LineBuilder<'static> {
         let strut = make_strut_metrics();
         LineBuilder::new(
             width,
@@ -2021,6 +2074,7 @@ mod tests {
             ShapingPipeline::new(),
             FontContext::new(),
             Some(base),
+            None,
         )
     }
 

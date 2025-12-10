@@ -43,7 +43,9 @@ use crate::geometry::{Rect, Size};
 use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::line_builder::InlineBoxItem;
+use crate::layout::float_context::FloatContext;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
+use crate::layout::inline::float_integration::InlineFloatIntegration;
 use crate::layout::utils::{border_size_from_box_sizing, compute_replaced_size, resolve_font_relative_length};
 use crate::style::types::{
     FontStyle, HyphensMode, LineBreak, ListStylePosition, OverflowWrap, TabSize, TextAlign, TextJustify, TextTransform,
@@ -836,21 +838,24 @@ impl InlineFormattingContext {
     }
 
     /// Builds lines from inline items
-    fn build_lines(
+    fn build_lines<'a>(
         &self,
         items: Vec<InlineItem>,
         first_line_width: f32,
         subsequent_line_width: f32,
         strut_metrics: &BaselineMetrics,
         base_level: Option<unicode_bidi::Level>,
+        float_ctx: Option<&'a FloatContext>,
     ) -> Vec<Line> {
-        let mut builder = LineBuilder::new(
+        let float_integration = float_ctx.map(InlineFloatIntegration::new);
+        let mut builder: LineBuilder<'a> = LineBuilder::new(
             first_line_width,
             subsequent_line_width,
             *strut_metrics,
             self.pipeline.clone(),
             self.font_context.clone(),
             base_level,
+            float_integration,
         );
 
         for item in items {
@@ -984,10 +989,6 @@ impl InlineFormattingContext {
         &self,
         lines: Vec<Line>,
         start_y: f32,
-        first_line_width: f32,
-        subsequent_line_width: f32,
-        first_line_box_width: f32,
-        subsequent_line_box_width: f32,
         text_align: TextAlign,
         text_align_last: crate::style::types::TextAlignLast,
         text_justify: TextJustify,
@@ -1002,15 +1003,17 @@ impl InlineFormattingContext {
         for (idx, line) in lines.into_iter().enumerate() {
             let line_direction = line.resolved_direction;
             let (is_last_line, is_single_line) = paragraph_info[idx];
-            let line_width = if idx == 0 {
-                first_line_width
+            let line_width = if line.available_width > 0.0 {
+                line.available_width
+            } else if idx == 0 {
+                line.width
             } else {
-                subsequent_line_width
+                line.width
             };
-            let line_box_width = if idx == 0 {
-                first_line_box_width
+            let line_box_width = if line.box_width > 0.0 {
+                line.box_width
             } else {
-                subsequent_line_box_width
+                line_width
             };
             let indent_raw = if idx == 0 {
                 first_line_indent
@@ -2399,6 +2402,21 @@ fn hyphenation_breaks(
 
 impl FormattingContext for InlineFormattingContext {
     fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
+        self.layout_with_floats(box_node, constraints, None)
+    }
+
+    fn compute_intrinsic_inline_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
+        Ok(self.calculate_intrinsic_width(box_node, mode))
+    }
+}
+
+impl InlineFormattingContext {
+    pub fn layout_with_floats(
+        &self,
+        box_node: &BoxNode,
+        constraints: &LayoutConstraints,
+        float_ctx: Option<&FloatContext>,
+    ) -> Result<FragmentNode, LayoutError> {
         let style = &box_node.style;
         let available_width = constraints.width().unwrap_or(f32::MAX);
         let available_height = constraints.height();
@@ -2445,17 +2463,6 @@ impl FormattingContext for InlineFormattingContext {
             },
         };
 
-        let first_line_box_width = if available_width.is_finite() {
-            available_width
-        } else {
-            first_line_width + indent_positive
-        };
-        let subsequent_line_box_width = if available_width.is_finite() {
-            available_width
-        } else {
-            subsequent_line_width + indent_positive
-        };
-
         // Build lines
         let lines = self.build_lines(
             items,
@@ -2463,6 +2470,7 @@ impl FormattingContext for InlineFormattingContext {
             subsequent_line_width,
             &strut_metrics,
             base_level,
+            float_ctx,
         );
 
         // Calculate total height
@@ -2472,15 +2480,7 @@ impl FormattingContext for InlineFormattingContext {
         } else {
             lines
                 .iter()
-                .enumerate()
-                .map(|(idx, l)| {
-                    let box_width = if idx == 0 {
-                        first_line_box_width
-                    } else {
-                        subsequent_line_box_width
-                    };
-                    box_width.max(l.width + indent_value.abs())
-                })
+                .map(|l| l.box_width.max(l.width + indent_value.abs()))
                 .fold(0.0, f32::max)
         };
 
@@ -2488,10 +2488,6 @@ impl FormattingContext for InlineFormattingContext {
         let children = self.create_fragments(
             lines,
             0.0,
-            first_line_width,
-            subsequent_line_width,
-            first_line_box_width,
-            subsequent_line_box_width,
             style.text_align,
             style.text_align_last,
             style.text_justify,
@@ -2502,10 +2498,6 @@ impl FormattingContext for InlineFormattingContext {
         // Create containing fragment
         let bounds = Rect::from_xywh(0.0, 0.0, max_width.min(available_width), total_height);
         Ok(FragmentNode::new_block(bounds, children))
-    }
-
-    fn compute_intrinsic_inline_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
-        Ok(self.calculate_intrinsic_width(box_node, mode))
     }
 }
 
@@ -3171,6 +3163,7 @@ mod tests {
             constraints.width().unwrap(),
             &strut,
             Some(unicode_bidi::Level::ltr()),
+            None,
         );
         let first = lines.first().expect("first line");
         let resolved = resolve_auto_text_justify(TextJustify::Auto, &first.items);
@@ -3253,6 +3246,7 @@ mod tests {
             constraints.width().unwrap(),
             &strut,
             Some(unicode_bidi::Level::ltr()),
+            None,
         );
         let first = lines.first().expect("first line");
         let resolved = resolve_auto_text_justify(TextJustify::Auto, &first.items);
@@ -3847,7 +3841,7 @@ mod tests {
         let ifc = InlineFormattingContext::new();
         let mut items = ifc.create_inline_items_for_text(&node, "ab\tc", false).unwrap();
         let strut = ifc.compute_strut_metrics(&node.style);
-        let lines = ifc.build_lines(std::mem::take(&mut items), 1000.0, 1000.0, &strut, None);
+        let lines = ifc.build_lines(std::mem::take(&mut items), 1000.0, 1000.0, &strut, None, None);
         let line = &lines[0];
         assert_eq!(line.items.len(), 3);
 
