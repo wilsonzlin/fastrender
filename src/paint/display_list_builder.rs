@@ -164,6 +164,12 @@ impl DisplayListBuilder {
     }
 
     fn build_fragment_internal(&mut self, fragment: &FragmentNode, offset: Point, recurse_children: bool) {
+        if let Some(style) = fragment.style.as_deref() {
+            if !matches!(style.visibility, crate::style::computed::Visibility::Visible) {
+                return;
+            }
+        }
+
         let absolute_rect = Rect::new(
             Point::new(fragment.bounds.origin.x + offset.x, fragment.bounds.origin.y + offset.y),
             fragment.bounds.size,
@@ -848,6 +854,22 @@ mod tests {
     #[test]
     fn test_empty_text_skipped() {
         let fragment = create_text_fragment(0.0, 0.0, 100.0, 20.0, "");
+        let builder = DisplayListBuilder::new();
+        let list = builder.build(&fragment);
+
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn visibility_hidden_skips_display_items() {
+        let mut style = ComputedStyle::default();
+        style.visibility = crate::style::computed::Visibility::Hidden;
+        let fragment = FragmentNode::new_text_styled(
+            Rect::from_xywh(0.0, 0.0, 100.0, 20.0),
+            "hidden".to_string(),
+            16.0,
+            Arc::new(style),
+        );
         let builder = DisplayListBuilder::new();
         let list = builder.build(&fragment);
 

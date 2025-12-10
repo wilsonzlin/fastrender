@@ -773,6 +773,12 @@ where
     let current_order = *tree_order;
     *tree_order += 1;
 
+    if let Some(style) = style {
+        if !matches!(style.visibility, crate::style::computed::Visibility::Visible) {
+            return StackingContext::new(0);
+        }
+    }
+
     let creates_context = if let Some(s) = style {
         creates_stacking_context(s, parent_style, is_root)
     } else {

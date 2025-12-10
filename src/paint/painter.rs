@@ -316,6 +316,12 @@ impl Painter {
         is_root_context: bool,
         items: &mut Vec<DisplayCommand>,
     ) {
+        if let Some(style) = fragment.style.as_deref() {
+            if !matches!(style.visibility, crate::style::computed::Visibility::Visible) {
+                return;
+            }
+        }
+
         let abs_bounds = Rect::from_xywh(
             fragment.bounds.x() + offset.x,
             fragment.bounds.y() + offset.y,
@@ -4077,5 +4083,31 @@ mod tests {
     fn background_repeat_round_resizes_to_integer_tiles() {
         let rounded = round_tile_length(1099.0, 100.0);
         assert!((rounded - (1099.0 / 11.0)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn visibility_hidden_prevents_painting() {
+        let mut style = ComputedStyle::default();
+        style.visibility = crate::style::computed::Visibility::Hidden;
+        style.background_color = Rgba::RED;
+        let fragment =
+            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
+        let tree = FragmentTree::new(fragment);
+
+        let pixmap = paint_tree(&tree, 20, 20, Rgba::WHITE).expect("paint");
+        assert_eq!(color_at(&pixmap, 5, 5), (255, 255, 255, 255));
+    }
+
+    #[test]
+    fn visibility_collapse_prevents_painting() {
+        let mut style = ComputedStyle::default();
+        style.visibility = crate::style::computed::Visibility::Collapse;
+        style.background_color = Rgba::BLUE;
+        let fragment =
+            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
+        let tree = FragmentTree::new(fragment);
+
+        let pixmap = paint_tree(&tree, 20, 20, Rgba::WHITE).expect("paint");
+        assert_eq!(color_at(&pixmap, 5, 5), (255, 255, 255, 255));
     }
 }

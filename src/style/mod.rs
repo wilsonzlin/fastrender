@@ -26,6 +26,7 @@ use color::Rgba;
 use counters::CounterProperties;
 use display::Display;
 use position::Position;
+use crate::style::computed::Visibility;
 use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundPosition,
@@ -53,6 +54,7 @@ pub struct ComputedStyle {
     pub bottom: Option<Length>,
     pub left: Option<Length>,
     pub z_index: i32,
+    pub visibility: Visibility,
 
     // Box model
     pub width: Option<Length>,
@@ -215,6 +217,7 @@ impl Default for ComputedStyle {
             bottom: None,
             left: None,
             z_index: 0,
+            visibility: Visibility::Visible,
 
             width: None,
             height: None,

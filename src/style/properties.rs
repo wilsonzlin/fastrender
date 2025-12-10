@@ -66,6 +66,16 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 }
             }
         }
+        "visibility" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.visibility = match kw.as_str() {
+                    "visible" => crate::style::computed::Visibility::Visible,
+                    "hidden" => crate::style::computed::Visibility::Hidden,
+                    "collapse" => crate::style::computed::Visibility::Collapse,
+                    _ => styles.visibility,
+                };
+            }
+        }
 
         // Position
         "position" => {
