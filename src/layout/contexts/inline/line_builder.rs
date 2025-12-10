@@ -1479,7 +1479,7 @@ fn reorder_paragraph(
     let mut paragraph_leaves: Vec<ParagraphLeaf> = Vec::new();
     let mut line_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(lines.len());
     let mut active_stack: Vec<BoxContext> = Vec::new();
-    let mut context_closers: Vec<Vec<char>> = Vec::new();
+    let mut context_closers: Vec<Option<Vec<char>>> = Vec::new();
     let mut global_idx = 0usize;
 
     for (line_idx, leaves) in line_leaves.iter().enumerate() {
@@ -1493,16 +1493,13 @@ fn reorder_paragraph(
 
             // Close contexts no longer shared
             for _ in 0..active_stack.len().saturating_sub(shared) {
-                if let Some(ctx) = active_stack.pop() {
-                    if let Some(close_seq) = context_closers.pop() {
-                        for ch in close_seq {
-                            logical_text.push(ch);
-                        }
-                    } else {
-                        for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
-                            logical_text.push(ch);
-                        }
+                active_stack.pop();
+                if let Some(Some(close_seq)) = context_closers.pop() {
+                    for ch in close_seq {
+                        logical_text.push(ch);
                     }
+                } else {
+                    context_closers.pop();
                 }
             }
 
@@ -1511,7 +1508,7 @@ fn reorder_paragraph(
                 let (opens, closes) =
                     bidi_controls_limited(ctx.unicode_bidi, ctx.direction, active_stack.len(), max_depth);
                 logical_text.extend(opens);
-                context_closers.push(closes);
+                context_closers.push(if closes.is_empty() { None } else { Some(closes) });
                 active_stack.push(ctx.clone());
             }
 
@@ -1550,16 +1547,13 @@ fn reorder_paragraph(
     }
 
     // Close any remaining contexts
-    while let Some(ctx) = active_stack.pop() {
-        if let Some(close_seq) = context_closers.pop() {
+    while let Some(opt_closer) = context_closers.pop() {
+        if let Some(close_seq) = opt_closer {
             for ch in close_seq {
                 logical_text.push(ch);
             }
-        } else {
-            for ch in bidi_controls(ctx.unicode_bidi, ctx.direction).1 {
-                logical_text.push(ch);
-            }
         }
+        active_stack.pop();
     }
 
     if logical_text.is_empty() {
