@@ -522,8 +522,8 @@ impl AbsoluteLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::utils::resolve_offset;
     use crate::geometry::EdgeOffsets;
+    use crate::layout::utils::resolve_offset;
     use crate::style::types::FontSizeAdjust;
     use crate::style::values::{Length, LengthOrAuto, LengthUnit};
     use crate::text::font_loader::FontContext;

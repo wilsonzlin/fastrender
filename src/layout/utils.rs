@@ -3,9 +3,9 @@
 //! Contains common functions used across multiple layout modules.
 
 use crate::geometry::Size;
+use crate::style::computed::PositionedStyle;
 use crate::style::types::{BoxSizing, FontStyle as CssFontStyle};
 use crate::style::values::{Length, LengthOrAuto, LengthUnit};
-use crate::style::computed::PositionedStyle;
 use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStretch, FontStyle as FontFaceStyle};
 use crate::text::font_loader::FontContext;

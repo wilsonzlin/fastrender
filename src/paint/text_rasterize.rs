@@ -423,17 +423,14 @@ impl TextRasterizer {
             let glyph_y = baseline_y + glyph.y_offset;
 
             // Get or build glyph path
-            if let Some(path) = self
-                .cache
-                .get_or_build(
-                    &run.font,
-                    glyph.glyph_id,
-                    run.font_size,
-                    glyph_x,
-                    glyph_y,
-                    run.synthetic_oblique,
-                )
-            {
+            if let Some(path) = self.cache.get_or_build(
+                &run.font,
+                glyph.glyph_id,
+                run.font_size,
+                glyph_x,
+                glyph_y,
+                run.synthetic_oblique,
+            ) {
                 // Render the path
                 pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
                 if run.synthetic_bold > 0.0 {

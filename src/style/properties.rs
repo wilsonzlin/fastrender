@@ -3139,7 +3139,9 @@ fn parse_text_transform(value: &PropertyValue) -> Option<TextTransform> {
         PropertyValue::Keyword(kw) => apply_keyword(kw)?,
         PropertyValue::Multiple(list) if !list.is_empty() => {
             // 'none' cannot be combined with other keywords
-            let has_none = list.iter().any(|v| matches!(v, PropertyValue::Keyword(k) if k == "none"));
+            let has_none = list
+                .iter()
+                .any(|v| matches!(v, PropertyValue::Keyword(k) if k == "none"));
             if has_none && list.len() > 1 {
                 return None;
             }

@@ -529,29 +529,13 @@ impl FormattingContext for BlockFormattingContext {
         let min_width = style
             .min_width
             .as_ref()
-            .map(|l| {
-                resolve_length_for_width(
-                    *l,
-                    containing_width,
-                    style,
-                    &self.font_context,
-                    self.viewport_size,
-                )
-            })
+            .map(|l| resolve_length_for_width(*l, containing_width, style, &self.font_context, self.viewport_size))
             .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
             .unwrap_or(0.0);
         let max_width = style
             .max_width
             .as_ref()
-            .map(|l| {
-                resolve_length_for_width(
-                    *l,
-                    containing_width,
-                    style,
-                    &self.font_context,
-                    self.viewport_size,
-                )
-            })
+            .map(|l| resolve_length_for_width(*l, containing_width, style, &self.font_context, self.viewport_size))
             .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
             .unwrap_or(f32::INFINITY);
 
@@ -675,13 +659,7 @@ impl FormattingContext for BlockFormattingContext {
         // Honor specified widths that resolve without a containing block
         let edges = horizontal_padding_and_borders(style, 0.0, self.viewport_size, &self.font_context);
         if let Some(specified) = style.width.as_ref() {
-            let resolved = resolve_length_for_width(
-                *specified,
-                0.0,
-                style,
-                &self.font_context,
-                self.viewport_size,
-            );
+            let resolved = resolve_length_for_width(*specified, 0.0, style, &self.font_context, self.viewport_size);
             // Ignore auto/relative cases that resolve to 0.0
             if resolved > 0.0 {
                 return Ok(border_size_from_box_sizing(resolved, edges, style.box_sizing));
@@ -769,31 +747,10 @@ fn horizontal_padding_and_borders(
     viewport: crate::geometry::Size,
     font_context: &FontContext,
 ) -> f32 {
-    resolve_length_for_width(
-        style.padding_left,
-        percentage_base,
-        style,
-        font_context,
-        viewport,
-    ) + resolve_length_for_width(
-        style.padding_right,
-        percentage_base,
-        style,
-        font_context,
-        viewport,
-    ) + resolve_length_for_width(
-        style.border_left_width,
-        percentage_base,
-        style,
-        font_context,
-        viewport,
-    ) + resolve_length_for_width(
-        style.border_right_width,
-        percentage_base,
-        style,
-        font_context,
-        viewport,
-    )
+    resolve_length_for_width(style.padding_left, percentage_base, style, font_context, viewport)
+        + resolve_length_for_width(style.padding_right, percentage_base, style, font_context, viewport)
+        + resolve_length_for_width(style.border_left_width, percentage_base, style, font_context, viewport)
+        + resolve_length_for_width(style.border_right_width, percentage_base, style, font_context, viewport)
 }
 
 fn recompute_margins_for_width(

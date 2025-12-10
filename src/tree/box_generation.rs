@@ -1250,8 +1250,8 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
 mod tests {
     use super::*;
     use crate::geometry::Size;
-    use crate::style::types::ListStylePosition;
     use crate::style::types::CaseTransform;
+    use crate::style::types::ListStylePosition;
     use crate::tree::box_tree::{MarkerContent, ReplacedType};
     use crate::{dom, style};
 

@@ -428,7 +428,15 @@ fn test_draw_text_with_glyphs() {
         .unwrap();
 
     // Draw the glyphs
-    canvas.draw_text(Point::new(10.0, 30.0), &shaped.glyphs, &font, 16.0, Rgba::BLACK, 0.0, 0.0);
+    canvas.draw_text(
+        Point::new(10.0, 30.0),
+        &shaped.glyphs,
+        &font,
+        16.0,
+        Rgba::BLACK,
+        0.0,
+        0.0,
+    );
 
     let pixmap = canvas.into_pixmap();
     assert!(pixmap.data().iter().any(|&b| b != 255)); // Some non-white pixels

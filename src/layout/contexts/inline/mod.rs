@@ -227,13 +227,7 @@ impl InlineFormattingContext {
                             .margin_right
                             .as_ref()
                             .map(|m| {
-                                resolve_length_for_width(
-                                    *m,
-                                    0.0,
-                                    &child.style,
-                                    &self.font_context,
-                                    self.viewport_size,
-                                )
+                                resolve_length_for_width(*m, 0.0, &child.style, &self.font_context, self.viewport_size)
                             })
                             .unwrap_or(0.0);
                         let gap = if raw_gap.abs() > f32::EPSILON {
@@ -388,16 +382,12 @@ impl InlineFormattingContext {
         let margin_left = style
             .margin_left
             .as_ref()
-            .map(|l| {
-                resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size)
-            })
+            .map(|l| resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size))
             .unwrap_or(0.0);
         let margin_right = style
             .margin_right
             .as_ref()
-            .map(|l| {
-                resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size)
-            })
+            .map(|l| resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size))
             .unwrap_or(0.0);
         let available_for_box = if available_width.is_finite() {
             (available_width - margin_left - margin_right).max(0.0)
@@ -422,25 +412,19 @@ impl InlineFormattingContext {
         let specified_width = style
             .width
             .as_ref()
-            .map(|l| {
-                resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size)
-            })
+            .map(|l| resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size))
             .map(|w| border_size_from_box_sizing(w, horizontal_edges, style.box_sizing));
 
         let min_width = style
             .min_width
             .as_ref()
-            .map(|l| {
-                resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size)
-            })
+            .map(|l| resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size))
             .map(|w| border_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
             .unwrap_or(0.0);
         let max_width = style
             .max_width
             .as_ref()
-            .map(|l| {
-                resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size)
-            })
+            .map(|l| resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size))
             .map(|w| border_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
             .unwrap_or(f32::INFINITY);
 
@@ -473,16 +457,12 @@ impl InlineFormattingContext {
         let margin_left = style
             .margin_left
             .as_ref()
-            .map(|l| {
-                resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size)
-            })
+            .map(|l| resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size))
             .unwrap_or(0.0);
         let margin_right = style
             .margin_right
             .as_ref()
-            .map(|l| {
-                resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size)
-            })
+            .map(|l| resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size))
             .unwrap_or(0.0);
 
         let va = self.convert_vertical_align(style.vertical_align, style.font_size, line_height);
@@ -827,16 +807,12 @@ impl InlineFormattingContext {
         let margin_left = style
             .margin_left
             .as_ref()
-            .map(|l| {
-                resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size)
-            })
+            .map(|l| resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size))
             .unwrap_or(0.0);
         let margin_right = style
             .margin_right
             .as_ref()
-            .map(|l| {
-                resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size)
-            })
+            .map(|l| resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size))
             .unwrap_or(0.0);
 
         let va = self.convert_vertical_align(style.vertical_align, style.font_size, line_height);
@@ -1589,31 +1565,10 @@ fn horizontal_padding_and_borders(
     viewport: crate::geometry::Size,
     font_context: &FontContext,
 ) -> f32 {
-    resolve_length_for_width(
-        style.padding_left,
-        percentage_base,
-        style,
-        font_context,
-        viewport,
-    ) + resolve_length_for_width(
-        style.padding_right,
-        percentage_base,
-        style,
-        font_context,
-        viewport,
-    ) + resolve_length_for_width(
-        style.border_left_width,
-        percentage_base,
-        style,
-        font_context,
-        viewport,
-    ) + resolve_length_for_width(
-        style.border_right_width,
-        percentage_base,
-        style,
-        font_context,
-        viewport,
-    )
+    resolve_length_for_width(style.padding_left, percentage_base, style, font_context, viewport)
+        + resolve_length_for_width(style.padding_right, percentage_base, style, font_context, viewport)
+        + resolve_length_for_width(style.border_left_width, percentage_base, style, font_context, viewport)
+        + resolve_length_for_width(style.border_right_width, percentage_base, style, font_context, viewport)
 }
 
 fn compute_inline_box_metrics(
@@ -1930,14 +1885,14 @@ fn apply_text_transform(text: &str, transform: TextTransform, white_space: White
             }
             out
         }
-        CaseTransform::Capitalize => {
-            capitalize_words(text)
-        }
+        CaseTransform::Capitalize => capitalize_words(text),
     };
 
     if transform.full_width {
-        let preserve_spaces =
-            matches!(white_space, WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::BreakSpaces);
+        let preserve_spaces = matches!(
+            white_space,
+            WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::BreakSpaces
+        );
         out = apply_full_width(&out, preserve_spaces);
     }
 
@@ -2880,10 +2835,10 @@ mod tests {
     use crate::geometry::Size;
     use crate::layout::formatting_context::IntrinsicSizingMode;
     use crate::style::display::{Display, FormattingContextType};
+    use crate::style::types::FontSizeAdjust;
     use crate::style::types::{
         CaseTransform, HyphensMode, ListStylePosition, OverflowWrap, TextTransform, WhiteSpace, WordBreak,
     };
-    use crate::style::types::{FontSizeAdjust};
     use crate::style::values::{Length, LengthUnit};
     use crate::style::ComputedStyle;
     use crate::tree::box_tree::ReplacedType;
@@ -4544,7 +4499,9 @@ mod tests {
     #[test]
     fn font_relative_lengths_use_metrics_and_adjustments() {
         let font_context = FontContext::new();
-        let Some(font) = font_context.get_sans_serif() else { return };
+        let Some(font) = font_context.get_sans_serif() else {
+            return;
+        };
         let Ok(metrics) = font.metrics() else { return };
 
         let mut style = ComputedStyle::default();
@@ -4554,7 +4511,9 @@ mod tests {
         let scaled = metrics.scale(style.font_size);
         let Some(x_height) = scaled.x_height else { return };
         let Some(face) = font.as_ttf_face().ok() else { return };
-        let Some(advance) = face.glyph_index('0').and_then(|g| face.glyph_hor_advance(g)) else { return };
+        let Some(advance) = face.glyph_index('0').and_then(|g| face.glyph_hor_advance(g)) else {
+            return;
+        };
         let ch_width = advance as f32 * (style.font_size / face.units_per_em() as f32);
 
         let ex = resolve_font_relative_length(Length::new(1.0, LengthUnit::Ex), &style, &font_context);

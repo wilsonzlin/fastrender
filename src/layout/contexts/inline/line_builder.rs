@@ -1489,6 +1489,22 @@ fn reorder_paragraph(
     let mut current_depth: usize = 0;
     let mut global_idx = 0usize;
 
+    let push_controls =
+        |opens: &[char], closes: &[char], depth: &mut usize, buffer: &mut String| -> (usize, Vec<char>) {
+            if opens.is_empty() {
+                return (0, Vec::new());
+            }
+            let added = opens.len();
+            if *depth + added > max_depth {
+                return (0, Vec::new());
+            }
+            for ch in opens {
+                buffer.push(*ch);
+            }
+            *depth += added;
+            (added, closes.to_vec())
+        };
+
     for (line_idx, leaves) in line_leaves.iter().enumerate() {
         let line_start = logical_text.len();
         for leaf in leaves {
@@ -1510,37 +1526,21 @@ fn reorder_paragraph(
             }
 
             // Open new contexts
-            for ctx in leaf.box_stack.iter().skip(shared) {
-                let (opens, closes) =
-                    bidi_controls(ctx.unicode_bidi, ctx.direction);
-                if current_depth >= max_depth {
-                    active_stack.push(ActiveCtx {
-                        id: ctx.id,
-                        closers: Vec::new(),
-                        depth_added: 0,
-                    });
-                    continue;
-                }
-                if !opens.is_empty() {
-                    logical_text.extend(opens.iter());
-                }
-                let closer_vec = if closes.is_empty() { Vec::new() } else { closes };
-                active_stack.push(ActiveCtx {
-                    id: ctx.id,
-                    closers: closer_vec,
-                    depth_added: 1,
-                });
-                current_depth += 1;
-            }
+        for ctx in leaf.box_stack.iter().skip(shared) {
+            let (opens, closes) = bidi_controls(ctx.unicode_bidi, ctx.direction);
+            let (depth_added, closer_vec) =
+                push_controls(&opens, &closes, &mut current_depth, &mut logical_text);
+            active_stack.push(ActiveCtx {
+                id: ctx.id,
+                closers: closer_vec,
+                depth_added,
+            });
+        }
 
             // Leaf-local controls
-            let (leaf_opens, leaf_closes) = bidi_controls(leaf.item.unicode_bidi(), leaf.item.direction());
-            let mut leaf_depth_added = 0usize;
-            if !leaf_opens.is_empty() && current_depth < max_depth {
-                logical_text.extend(leaf_opens.iter());
-                leaf_depth_added = 1;
-                current_depth += 1;
-            }
+        let (leaf_opens, leaf_closes) = bidi_controls(leaf.item.unicode_bidi(), leaf.item.direction());
+        let (leaf_depth_added, leaf_closers) =
+            push_controls(&leaf_opens, &leaf_closes, &mut current_depth, &mut logical_text);
 
             let content_start = logical_text.len();
             match &leaf.item {
@@ -1550,12 +1550,12 @@ fn reorder_paragraph(
             }
             let content_end = logical_text.len();
 
-            if leaf_depth_added > 0 {
-                for ch in leaf_closes {
-                    logical_text.push(ch);
-                }
-                current_depth = current_depth.saturating_sub(leaf_depth_added);
+        if leaf_depth_added > 0 {
+            for ch in leaf_closers {
+                logical_text.push(ch);
             }
+            current_depth = current_depth.saturating_sub(leaf_depth_added);
+        }
 
             if content_start < content_end {
                 paragraph_leaves.push(ParagraphLeaf {

@@ -952,13 +952,11 @@ impl GlyphPathBuilder {
 
 impl ttf_parser::OutlineBuilder for GlyphPathBuilder {
     fn move_to(&mut self, x: f32, y: f32) {
-        self.path_builder
-            .move_to(self.transform_x(x, y), self.transform_y(y));
+        self.path_builder.move_to(self.transform_x(x, y), self.transform_y(y));
     }
 
     fn line_to(&mut self, x: f32, y: f32) {
-        self.path_builder
-            .line_to(self.transform_x(x, y), self.transform_y(y));
+        self.path_builder.line_to(self.transform_x(x, y), self.transform_y(y));
     }
 
     fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {

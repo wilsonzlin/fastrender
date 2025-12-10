@@ -1583,7 +1583,9 @@ mod tests {
     fn font_size_adjust_number_scales_font_run() {
         let font_ctx = FontContext::new();
         let Some(font) = font_ctx.get_sans_serif() else { return };
-        let Some(aspect) = font.metrics().ok().and_then(|m| m.aspect_ratio()) else { return };
+        let Some(aspect) = font.metrics().ok().and_then(|m| m.aspect_ratio()) else {
+            return;
+        };
 
         let mut style = ComputedStyle::default();
         style.font_family = vec![font.family.clone()];
@@ -1603,7 +1605,9 @@ mod tests {
     fn font_size_adjust_from_font_defaults_to_base_font() {
         let font_ctx = FontContext::new();
         let Some(font) = font_ctx.get_sans_serif() else { return };
-        let Some(aspect) = font.metrics().ok().and_then(|m| m.aspect_ratio()) else { return };
+        let Some(aspect) = font.metrics().ok().and_then(|m| m.aspect_ratio()) else {
+            return;
+        };
 
         let mut style = ComputedStyle::default();
         style.font_family = vec![font.family.clone()];
