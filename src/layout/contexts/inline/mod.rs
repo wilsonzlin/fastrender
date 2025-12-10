@@ -54,7 +54,7 @@ use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::text::hyphenation::Hyphenator;
 use crate::text::justify::is_cjk_character;
-use crate::text::line_break::{find_break_opportunities, BreakType};
+use crate::text::line_break::{find_break_opportunities, BreakOpportunity, BreakType};
 use crate::text::pipeline::{compute_adjusted_font_size, preferred_font_aspect, ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::{BoxNode, BoxType, MarkerContent, ReplacedBox};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
@@ -2299,9 +2299,19 @@ fn apply_break_properties(
         if a.byte_offset != b.byte_offset {
             return false;
         }
-        if let BreakType::Mandatory = a.break_type {
-            *b = *a;
-        }
+        // Collapse to the strongest break at this offset, preserving any hyphen insertions.
+        let break_type = if matches!(a.break_type, BreakType::Mandatory) || matches!(b.break_type, BreakType::Mandatory)
+        {
+            BreakType::Mandatory
+        } else {
+            BreakType::Allowed
+        };
+        let adds_hyphen = a.adds_hyphen || b.adds_hyphen;
+        *a = BreakOpportunity {
+            byte_offset: a.byte_offset,
+            break_type,
+            adds_hyphen,
+        };
         true
     });
 
@@ -3634,6 +3644,41 @@ mod tests {
         assert!(
             !offsets_bw.contains(&1),
             "break-word should not create intra-grapheme break opportunities"
+        );
+    }
+
+    #[test]
+    fn mandatory_breaks_survive_added_anywhere_breaks() {
+        // Combine a mandatory break with word-break:anywhere-style additions at the same offset.
+        let text = "a\nb";
+        let mut style = ComputedStyle::default();
+        style.word_break = WordBreak::BreakWord; // adds anywhere breaks
+        style.white_space = WhiteSpace::PreWrap; // preserves newline as mandatory
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(style), text.to_string())],
+        );
+        let ifc = InlineFormattingContext::new();
+        let items = ifc
+            .collect_inline_items(&root, 800.0, Some(800.0))
+            .expect("collect items");
+
+        let text_item = items
+            .iter()
+            .find_map(|item| match item {
+                InlineItem::Text(t) => Some(t),
+                _ => None,
+            })
+            .expect("text item");
+
+        let has_mandatory_at_newline = text_item
+            .break_opportunities
+            .iter()
+            .any(|b| b.byte_offset == 1 && matches!(b.break_type, BreakType::Mandatory));
+        assert!(
+            has_mandatory_at_newline,
+            "mandatory newline break should survive deduplication against added anywhere breaks"
         );
     }
 
