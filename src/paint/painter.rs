@@ -1408,6 +1408,42 @@ impl Painter {
                     return;
                 }
             }
+            ReplacedType::Embed { src } => {
+                if self.paint_image_from_src(
+                    src,
+                    style,
+                    content_rect.x(),
+                    content_rect.y(),
+                    content_rect.width(),
+                    content_rect.height(),
+                ) {
+                    return;
+                }
+            }
+            ReplacedType::Object { data } => {
+                if self.paint_image_from_src(
+                    data,
+                    style,
+                    content_rect.x(),
+                    content_rect.y(),
+                    content_rect.width(),
+                    content_rect.height(),
+                ) {
+                    return;
+                }
+            }
+            ReplacedType::Iframe { src } | ReplacedType::Video { src } => {
+                if self.paint_image_from_src(
+                    src,
+                    style,
+                    content_rect.x(),
+                    content_rect.y(),
+                    content_rect.width(),
+                    content_rect.height(),
+                ) {
+                    return;
+                }
+            }
             _ => {}
         }
 
@@ -1455,7 +1491,16 @@ impl Painter {
 
         let image = match self.image_cache.load(src) {
             Ok(img) => img,
-            Err(_) => return false,
+            Err(_) => {
+                if src.trim_start().starts_with('<') {
+                    match self.image_cache.render_svg(src) {
+                        Ok(img) => img,
+                        Err(_) => return false,
+                    }
+                } else {
+                    return false;
+                }
+            }
         };
 
         let pixmap = match Self::dynamic_image_to_pixmap(&image) {
@@ -3225,6 +3270,30 @@ mod tests {
             }
         }
         assert!(has_ink, "alt text should paint glyphs");
+    }
+
+    #[test]
+    fn paints_embed_svg_content() {
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2\" height=\"2\"><rect width=\"2\" height=\"2\" fill=\"red\"/></svg>";
+        let style = Arc::new(ComputedStyle::default());
+        let fragment = FragmentNode::new_with_style(
+            Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
+            FragmentContent::Replaced {
+                replaced_type: ReplacedType::Embed { src: svg.to_string() },
+                box_id: None,
+            },
+            vec![],
+            style,
+        );
+        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![fragment]);
+        let tree = FragmentTree::new(root);
+
+        let pixmap = paint_tree(&tree, 20, 20, Rgba::WHITE).expect("paint embed");
+        assert_eq!(
+            color_at(&pixmap, 10, 10),
+            (255, 0, 0, 255),
+            "embed should render svg content"
+        );
     }
 
     #[test]

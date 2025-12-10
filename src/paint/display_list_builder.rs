@@ -301,6 +301,9 @@ impl DisplayListBuilder {
                 let source = match replaced_type {
                     ReplacedType::Image { src, .. } => src.as_str(),
                     ReplacedType::Svg { content } => content.as_str(),
+                    ReplacedType::Embed { src } => src.as_str(),
+                    ReplacedType::Object { data } => data.as_str(),
+                    ReplacedType::Iframe { src } | ReplacedType::Video { src } => src.as_str(),
                     _ => "",
                 };
                 let image = self.decode_image(source);
@@ -859,6 +862,33 @@ mod tests {
         let pixels = img.image.pixels.as_ref();
         assert_eq!(pixels.len(), 4);
         assert_eq!(pixels, &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn embed_and_object_decode_images() {
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="blue"/></svg>"#;
+
+        let embed_fragment = FragmentNode::new_replaced(
+            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+            ReplacedType::Embed { src: svg.to_string() },
+        );
+        let embed_list = DisplayListBuilder::with_image_cache(ImageCache::new()).build(&embed_fragment);
+        let DisplayItem::Image(embed_img) = &embed_list.items()[0] else {
+            panic!("expected image item for embed");
+        };
+        assert_eq!(embed_img.image.width, 2);
+        assert_eq!(embed_img.image.height, 2);
+
+        let object_fragment = FragmentNode::new_replaced(
+            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+            ReplacedType::Object { data: svg.to_string() },
+        );
+        let object_list = DisplayListBuilder::with_image_cache(ImageCache::new()).build(&object_fragment);
+        let DisplayItem::Image(object_img) = &object_list.items()[0] else {
+            panic!("expected image item for object");
+        };
+        assert_eq!(object_img.image.width, 2);
+        assert_eq!(object_img.image.height, 2);
     }
 
     #[test]

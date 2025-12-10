@@ -9,6 +9,7 @@
 - Inline RTL placement now positions visual fragments from the right edge using the resolved paragraph direction, so start/end alignment and indentation respect RTL flow; added regression for multi-fragment RTL lines.
 - Replaced media without explicit dimensions now pick HTML default intrinsics (300×150, 2:1 ratio) for canvas/video/iframe so layout has a definite size when authors omit width/height; generation tests cover the defaults.
 - Embed/object replaced elements now use dedicated types, preserve src/data, and also default to 300×150 with 2:1 aspect ratio when no intrinsic dimensions are provided.
+- Embed/object (and iframe/video sources when image-like) now render actual image/SVG content through the shared ImageCache in both painter and display-list paths, with regressions covering inline-SVG embed/object decoding and paint.
 - Bidi analysis now keys levels by character, not byte offsets, preventing multi-byte text from misclassifying levels; unicode-bidi overrides force all characters to the element direction and skip reordering. Added tests for char-index handling and overrides.
 - `unicode-bidi: plaintext` in the shaping pipeline now derives the paragraph base direction from first-strong content instead of always using the element direction, keeping shaping in sync with layout’s plaintext handling.
 - Inline bidi reorder now tracks opened/closed embedding controls with a stack when constructing the logical text to reduce control leakage across nested inline boxes.
