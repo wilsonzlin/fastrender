@@ -60,7 +60,8 @@ use crate::tree::box_tree::{BoxNode, BoxType, MarkerContent, ReplacedBox};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 use std::sync::Arc;
 
-use baseline::{compute_line_height, BaselineMetrics};
+use baseline::{compute_line_height_with_metrics, BaselineMetrics};
+use crate::text::font_db::ScaledMetrics;
 use line_builder::{InlineBlockItem, InlineItem, Line, LineBuilder, PositionedItem, ReplacedItem, TabItem, TextItem};
 
 /// Inline Formatting Context implementation
@@ -310,7 +311,8 @@ impl InlineFormattingContext {
         })?;
 
         let style = &box_node.style;
-        let line_height = compute_line_height(style);
+        let metrics = self.resolve_scaled_metrics(style);
+        let line_height = compute_line_height_with_metrics(style, metrics.as_ref());
         let factory = FormattingContextFactory::with_font_context(self.font_context.clone());
         let fc = factory.create(fc_type);
 
@@ -520,7 +522,8 @@ impl InlineFormattingContext {
         allow_soft_wrap: bool,
         is_marker: bool,
     ) -> Result<TextItem, LayoutError> {
-        let line_height = compute_line_height(style);
+        let metrics = self.resolve_scaled_metrics(style);
+        let line_height = compute_line_height_with_metrics(style, metrics.as_ref());
         let (hyphen_free, hyphen_breaks) = if is_marker {
             (normalized_text.to_string(), Vec::new())
         } else {
@@ -657,7 +660,8 @@ impl InlineFormattingContext {
         available_height: Option<f32>,
     ) -> Result<ReplacedItem, LayoutError> {
         let style = &box_node.style;
-        let line_height = compute_line_height(style);
+        let metrics = self.resolve_scaled_metrics(style);
+        let line_height = compute_line_height_with_metrics(style, metrics.as_ref());
         let width_base = available_width.is_finite().then_some(available_width);
         let height_base = available_height.filter(|h| h.is_finite());
         let percentage_size = match (width_base, height_base) {
@@ -751,15 +755,12 @@ impl InlineFormattingContext {
         builder.finish()
     }
 
-    fn compute_strut_metrics(&self, style: &ComputedStyle) -> BaselineMetrics {
-        let line_height = compute_line_height(style);
-        let font_size = style.font_size;
+    fn resolve_scaled_metrics(&self, style: &ComputedStyle) -> Option<ScaledMetrics> {
         let italic = matches!(style.font_style, FontStyle::Italic);
         let oblique = matches!(style.font_style, FontStyle::Oblique(_));
         let stretch = crate::text::font_db::FontStretch::from_percentage(style.font_stretch.to_percentage());
 
-        if let Some(font) = self
-            .font_context
+        self.font_context
             .get_font_full(
                 &style.font_family,
                 style.font_weight.to_u16(),
@@ -773,20 +774,25 @@ impl InlineFormattingContext {
                 stretch,
             )
             .or_else(|| self.font_context.get_sans_serif())
-        {
-            if let Ok(metrics) = font.metrics() {
-                let scaled = metrics.scale(font_size);
-                return BaselineMetrics {
-                    baseline_offset: scaled.ascent,
-                    height: line_height,
-                    ascent: scaled.ascent,
-                    descent: scaled.descent,
-                    line_gap: scaled.line_gap,
-                    line_height,
-                };
-            }
+            .and_then(|font| font.metrics().ok())
+            .map(|metrics| metrics.scale(style.font_size))
+    }
+
+    fn compute_strut_metrics(&self, style: &ComputedStyle) -> BaselineMetrics {
+        let scaled = self.resolve_scaled_metrics(style);
+        let line_height = compute_line_height_with_metrics(style, scaled.as_ref());
+        if let Some(scaled) = scaled {
+            return BaselineMetrics {
+                baseline_offset: scaled.ascent,
+                height: line_height,
+                ascent: scaled.ascent,
+                descent: scaled.descent,
+                line_gap: scaled.line_gap,
+                line_height,
+            };
         }
 
+        let font_size = style.font_size;
         BaselineMetrics::new(font_size * 0.8, line_height, font_size * 0.8, font_size * 0.2)
     }
 

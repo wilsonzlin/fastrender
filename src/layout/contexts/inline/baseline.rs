@@ -355,12 +355,23 @@ impl LineBaselineAccumulator {
 /// - `<length>`: Use the absolute value
 /// - `<percentage>`: Multiply font-size by percentage/100
 pub fn compute_line_height(style: &ComputedStyle) -> f32 {
+    compute_line_height_with_metrics(style, None)
+}
+
+/// Computes line height, optionally using scaled font metrics when available.
+pub fn compute_line_height_with_metrics(style: &ComputedStyle, metrics: Option<&crate::text::font_db::ScaledMetrics>) -> f32 {
     use crate::style::types::LineHeight;
 
     let font_size = style.font_size;
 
     match &style.line_height {
-        LineHeight::Normal => font_size * 1.2,
+        LineHeight::Normal => {
+            if let Some(m) = metrics {
+                m.line_height
+            } else {
+                font_size * 1.2
+            }
+        }
         LineHeight::Number(n) => font_size * n,
         LineHeight::Length(len) => len.to_px(),
     }
@@ -369,6 +380,7 @@ pub fn compute_line_height(style: &ComputedStyle) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::text::font_db::ScaledMetrics;
 
     #[test]
     fn test_vertical_align_default() {
@@ -527,5 +539,27 @@ mod tests {
         // Even empty line has strut height
         assert!(acc.line_height() > 0.0);
         assert!(acc.baseline_position() > 0.0);
+    }
+
+    #[test]
+    fn compute_line_height_prefers_scaled_metrics_for_normal() {
+        let mut style = ComputedStyle::default();
+        style.line_height = crate::style::types::LineHeight::Normal;
+        style.font_size = 16.0;
+        let metrics = ScaledMetrics {
+            font_size: 16.0,
+            scale: 1.0,
+            ascent: 10.0,
+            descent: 4.0,
+            line_gap: 2.0,
+            line_height: 16.0,
+            x_height: Some(8.0),
+            cap_height: Some(12.0),
+            underline_position: 2.0,
+            underline_thickness: 1.0,
+        };
+
+        assert!((compute_line_height(&style) - 19.2).abs() < 0.01);
+        assert!((compute_line_height_with_metrics(&style, Some(&metrics)) - 16.0).abs() < 0.01);
     }
 }
