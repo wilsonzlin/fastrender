@@ -214,7 +214,7 @@ impl FlexFormattingContext {
             display: self.display_to_taffy(style, is_root),
 
             // Flex container properties
-            flex_direction: self.flex_direction_to_taffy(style.flex_direction),
+            flex_direction: self.flex_direction_to_taffy(style),
             flex_wrap: self.flex_wrap_to_taffy(style.flex_wrap),
             justify_content: self.justify_content_to_taffy(style.justify_content),
             align_items: self.align_items_to_taffy(style.align_items),
@@ -365,12 +365,81 @@ impl FlexFormattingContext {
         }
     }
 
-    fn flex_direction_to_taffy(&self, dir: FlexDirection) -> taffy::style::FlexDirection {
-        match dir {
-            FlexDirection::Row => taffy::style::FlexDirection::Row,
-            FlexDirection::RowReverse => taffy::style::FlexDirection::RowReverse,
-            FlexDirection::Column => taffy::style::FlexDirection::Column,
-            FlexDirection::ColumnReverse => taffy::style::FlexDirection::ColumnReverse,
+    fn flex_direction_to_taffy(&self, style: &ComputedStyle) -> taffy::style::FlexDirection {
+        let inline_is_horizontal = matches!(
+            style.writing_mode,
+            crate::style::types::WritingMode::HorizontalTb
+                | crate::style::types::WritingMode::SidewaysLr
+                | crate::style::types::WritingMode::SidewaysRl
+        );
+        let inline_forward_positive = match style.writing_mode {
+            crate::style::types::WritingMode::HorizontalTb => style.direction != crate::style::types::Direction::Rtl,
+            crate::style::types::WritingMode::SidewaysRl => false,
+            crate::style::types::WritingMode::SidewaysLr => true,
+            crate::style::types::WritingMode::VerticalRl | crate::style::types::WritingMode::VerticalLr => true,
+        };
+        let block_is_horizontal = !inline_is_horizontal;
+        let block_forward_positive = match style.writing_mode {
+            crate::style::types::WritingMode::HorizontalTb
+            | crate::style::types::WritingMode::SidewaysRl
+            | crate::style::types::WritingMode::SidewaysLr => true,
+            crate::style::types::WritingMode::VerticalRl => false,
+            crate::style::types::WritingMode::VerticalLr => true,
+        };
+
+        match style.flex_direction {
+            FlexDirection::Row => {
+                if inline_is_horizontal {
+                    if inline_forward_positive {
+                        taffy::style::FlexDirection::Row
+                    } else {
+                        taffy::style::FlexDirection::RowReverse
+                    }
+                } else if inline_forward_positive {
+                    taffy::style::FlexDirection::Column
+                } else {
+                    taffy::style::FlexDirection::ColumnReverse
+                }
+            }
+            FlexDirection::RowReverse => {
+                if inline_is_horizontal {
+                    if inline_forward_positive {
+                        taffy::style::FlexDirection::RowReverse
+                    } else {
+                        taffy::style::FlexDirection::Row
+                    }
+                } else if inline_forward_positive {
+                    taffy::style::FlexDirection::ColumnReverse
+                } else {
+                    taffy::style::FlexDirection::Column
+                }
+            }
+            FlexDirection::Column => {
+                if block_is_horizontal {
+                    if block_forward_positive {
+                        taffy::style::FlexDirection::Row
+                    } else {
+                        taffy::style::FlexDirection::RowReverse
+                    }
+                } else if block_forward_positive {
+                    taffy::style::FlexDirection::Column
+                } else {
+                    taffy::style::FlexDirection::ColumnReverse
+                }
+            }
+            FlexDirection::ColumnReverse => {
+                if block_is_horizontal {
+                    if block_forward_positive {
+                        taffy::style::FlexDirection::RowReverse
+                    } else {
+                        taffy::style::FlexDirection::Row
+                    }
+                } else if block_forward_positive {
+                    taffy::style::FlexDirection::ColumnReverse
+                } else {
+                    taffy::style::FlexDirection::Column
+                }
+            }
         }
     }
 
@@ -789,6 +858,26 @@ mod tests {
     }
 
     #[test]
+    fn writing_mode_vertical_treats_row_as_column() {
+        let fc = FlexFormattingContext::new();
+
+        let mut style = ComputedStyle::default();
+        style.display = Display::Flex;
+        style.flex_direction = FlexDirection::Row;
+        style.writing_mode = crate::style::types::WritingMode::VerticalRl;
+
+        let child1 = BoxNode::new_block(create_item_style(20.0, 10.0), FormattingContextType::Block, vec![]);
+        let child2 = BoxNode::new_block(create_item_style(20.0, 10.0), FormattingContextType::Block, vec![]);
+
+        let container = BoxNode::new_block(Arc::new(style), FormattingContextType::Flex, vec![child1, child2]);
+        let constraints = LayoutConstraints::definite(100.0, 100.0);
+        let fragment = fc.layout(&container, &constraints).unwrap();
+
+        assert_eq!(fragment.children[0].bounds.y(), 0.0);
+        assert_eq!(fragment.children[1].bounds.y(), 10.0);
+    }
+
+    #[test]
     fn flex_item_aspect_ratio_sets_width_from_height() {
         let fc = FlexFormattingContext::new();
 
@@ -917,19 +1006,27 @@ mod tests {
         let fc = FlexFormattingContext::new();
 
         assert_eq!(
-            fc.flex_direction_to_taffy(FlexDirection::Row),
+            fc.flex_direction_to_taffy(&ComputedStyle::default()),
             taffy::style::FlexDirection::Row
         );
+        let mut row_rev = ComputedStyle::default();
+        row_rev.flex_direction = FlexDirection::RowReverse;
         assert_eq!(
-            fc.flex_direction_to_taffy(FlexDirection::RowReverse),
+            fc.flex_direction_to_taffy(&row_rev),
             taffy::style::FlexDirection::RowReverse
         );
+
+        let mut col = ComputedStyle::default();
+        col.flex_direction = FlexDirection::Column;
         assert_eq!(
-            fc.flex_direction_to_taffy(FlexDirection::Column),
+            fc.flex_direction_to_taffy(&col),
             taffy::style::FlexDirection::Column
         );
+
+        let mut col_rev = ComputedStyle::default();
+        col_rev.flex_direction = FlexDirection::ColumnReverse;
         assert_eq!(
-            fc.flex_direction_to_taffy(FlexDirection::ColumnReverse),
+            fc.flex_direction_to_taffy(&col_rev),
             taffy::style::FlexDirection::ColumnReverse
         );
     }
