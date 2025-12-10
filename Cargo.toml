@@ -45,6 +45,7 @@ fontdb = "0.23"
 unicode-linebreak = "0.1"
 unicode-bidi = "0.3"
 unicode-script = "0.5"
+unicode-segmentation = "1.11"
 
 # Hyphenation
 hyphenation = { version = "0.8", features = ["embed_en-us"] }

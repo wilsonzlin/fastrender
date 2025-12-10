@@ -1965,24 +1965,7 @@ fn apply_text_transform(text: &str, transform: TextTransform, white_space: White
             out
         }
         CaseTransform::Capitalize => {
-            let mut out = String::with_capacity(text.len());
-            let mut start_of_word = true;
-            for ch in text.chars() {
-                if ch.is_whitespace() {
-                    start_of_word = true;
-                    out.push(ch);
-                    continue;
-                }
-                if start_of_word {
-                    for up in ch.to_uppercase() {
-                        out.push(up);
-                    }
-                    start_of_word = false;
-                } else {
-                    out.push(ch);
-                }
-            }
-            out
+            capitalize_words(text)
         }
     };
 
@@ -2324,6 +2307,27 @@ fn map_small_kana(ch: char) -> Option<char> {
         '\u{31FF}' => Some('\u{30ED}'), // ㇿ -> ロ
         _ => None,
     }
+}
+
+fn is_word_continue(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '\'' || ch == '\u{2019}'
+}
+
+fn capitalize_words(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut prev_continue = false;
+    for ch in text.chars() {
+        let is_letter = ch.is_alphabetic();
+        if is_letter && !prev_continue {
+            for up in ch.to_uppercase() {
+                out.push(up);
+            }
+        } else {
+            out.push(ch);
+        }
+        prev_continue = is_word_continue(ch);
+    }
+    out
 }
 
 fn char_boundary_breaks(text: &str) -> Vec<crate::text::line_break::BreakOpportunity> {
@@ -4409,6 +4413,45 @@ mod tests {
 
         // full-width maps to ァ, then full-size-kana maps to ア
         assert_eq!(item.text, "\u{30A2}");
+    }
+
+    #[test]
+    fn text_transform_capitalize_respects_word_boundaries() {
+        let mut style = ComputedStyle::default();
+        style.text_transform = TextTransform::with_case(CaseTransform::Capitalize);
+        let text = "rock'n'roll stays cool";
+
+        let ifc = InlineFormattingContext::new();
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+
+        assert_eq!(item.text, "Rock'n'roll Stays Cool");
+    }
+
+    #[test]
+    fn text_transform_capitalize_after_punctuation() {
+        let mut style = ComputedStyle::default();
+        style.text_transform = TextTransform::with_case(CaseTransform::Capitalize);
+        let text = "foo.bar baz";
+
+        let ifc = InlineFormattingContext::new();
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+
+        assert_eq!(item.text, "Foo.Bar Baz");
+    }
+
+    #[test]
+    fn text_transform_capitalize_titlecases_multi_char_glyphs() {
+        let mut style = ComputedStyle::default();
+        style.text_transform = TextTransform::with_case(CaseTransform::Capitalize);
+        let text = "\u{01F3}ong"; // ǳong -> titlecase ǲong
+
+        let ifc = InlineFormattingContext::new();
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+
+        assert_eq!(item.text, "\u{01F1}ong");
     }
 
     #[test]
