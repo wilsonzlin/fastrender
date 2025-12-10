@@ -156,6 +156,15 @@ pub struct ParsedGridTemplate {
 /// 2) `<area-rows> [ / <col-tracks> ]`, where area rows are quoted strings with optional
 ///    per-row track sizes following each string.
 pub fn parse_grid_template_shorthand(value: &str) -> Option<ParsedGridTemplate> {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("none") {
+        return Some(ParsedGridTemplate {
+            areas: Some(Vec::new()),
+            row_tracks: Some((Vec::new(), Vec::new())),
+            column_tracks: Some((Vec::new(), Vec::new())),
+        });
+    }
+
     let (main, cols_part) = split_once_unquoted(value, '/');
 
     let main = main.trim();
@@ -170,6 +179,8 @@ pub fn parse_grid_template_shorthand(value: &str) -> Option<ParsedGridTemplate> 
 
     // If there are no area strings, treat as pure track list shorthand.
     if !main.contains('"') {
+        // Per spec the track-list form requires both rows and columns separated by a slash.
+        let cols_raw = cols_part?;
         let ParsedTracks {
             tracks: row_tracks,
             line_names: row_line_names,
@@ -179,28 +190,19 @@ pub fn parse_grid_template_shorthand(value: &str) -> Option<ParsedGridTemplate> 
             return None;
         }
 
-        let (col_tracks, col_line_names) = if let Some(cols_raw) = cols_part {
-            let ParsedTracks {
-                tracks,
-                line_names,
-                ..
-            } = parse_track_list(cols_raw);
-            if tracks.is_empty() {
-                return None;
-            }
-            (tracks, line_names)
-        } else {
-            (Vec::new(), Vec::new())
-        };
+        let ParsedTracks {
+            tracks: col_tracks,
+            line_names: col_line_names,
+            ..
+        } = parse_track_list(cols_raw);
+        if col_tracks.is_empty() {
+            return None;
+        }
 
         return Some(ParsedGridTemplate {
             areas: None,
             row_tracks: Some((row_tracks, row_line_names)),
-            column_tracks: if col_tracks.is_empty() {
-                None
-            } else {
-                Some((col_tracks, col_line_names))
-            },
+            column_tracks: Some((col_tracks, col_line_names)),
         });
     }
 
@@ -954,5 +956,18 @@ mod tests {
         let (cols, _) = parsed.column_tracks.expect("cols");
         assert_eq!(cols.len(), 2);
         assert!(matches!(cols[0], GridTrack::Length(_)));
+    }
+
+    #[test]
+    fn grid_template_shorthand_invalid_without_cols() {
+        assert!(parse_grid_template_shorthand("100px auto").is_none());
+    }
+
+    #[test]
+    fn grid_template_shorthand_none_resets() {
+        let parsed = parse_grid_template_shorthand("none").expect("should parse");
+        assert!(parsed.areas.as_ref().unwrap().is_empty());
+        assert!(parsed.row_tracks.as_ref().unwrap().0.is_empty());
+        assert!(parsed.column_tracks.as_ref().unwrap().0.is_empty());
     }
 }
