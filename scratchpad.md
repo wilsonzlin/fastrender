@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Painter now respects float stacking order: non-positioned floats render between in-flow blocks and inline content, and positioned boxes bypass float stacking. Added painter regression to lock the block → float → inline → positioned order and aligned child bucketing in the stacking walk to honor float/inline/positioned separation.
 - Stacking context layer classification now honors the `float` property: non-positioned floats populate layer 4 between blocks and inlines, while absolutely/fixed positioned elements ignore float for stacking; added regressions to lock float classification and paint-order placement.
 - Floats/clear now flow through computed styles and block layout: floating boxes use shrink-to-fit sizing, are placed via the BFC float context with `clear` handling, and extend BFC height; inline formatting still skips floating inline boxes for now. Added a block regression to lock float height/clearance behavior. Parsing tests already cover float/clear.
 - Inline floats now place the float into a cloned context at the current line offset and then flush buffered inline content against that updated context (clearing the buffer), so the float shapes the current segment without duplicating earlier lines or altering prior segments.

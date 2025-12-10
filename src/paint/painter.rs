@@ -39,6 +39,8 @@ use crate::style::types::{
     BackgroundSizeComponent, BackgroundSizeKeyword, BorderStyle as CssBorderStyle, ObjectFit, TextDecorationLine,
     TextDecorationStyle, TextDecorationThickness,
 };
+use crate::style::display::Display;
+use crate::style::position::Position;
 use crate::style::types::{FilterColor, FilterFunction, MixBlendMode, Overflow};
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
@@ -127,6 +129,31 @@ enum DisplayCommand {
         clip: Option<(Rect, BorderRadii, bool, bool)>,
         commands: Vec<DisplayCommand>,
     },
+}
+
+fn is_positioned(style: &ComputedStyle) -> bool {
+    !matches!(style.position, Position::Static)
+}
+
+fn is_float_for_stacking(style: &ComputedStyle) -> bool {
+    if is_positioned(style) {
+        return false;
+    }
+    style.float.is_floating()
+}
+
+fn is_inline_level(style: &ComputedStyle, fragment: &FragmentNode) -> bool {
+    let is_inline_display = matches!(
+        style.display,
+        Display::Inline | Display::InlineBlock | Display::InlineFlex | Display::InlineGrid | Display::InlineTable
+    );
+
+    let is_inline_content = matches!(
+        fragment.content,
+        FragmentContent::Inline { .. } | FragmentContent::Text { .. } | FragmentContent::Line { .. }
+    );
+
+    is_inline_display || is_inline_content
 }
 
 #[derive(Copy, Clone)]
@@ -346,9 +373,76 @@ impl Painter {
             self.enqueue_content(fragment, abs_bounds, &mut local_commands);
 
             let next_offset = Point::new(abs_bounds.x(), abs_bounds.y());
-            for child in &fragment.children {
-                self.collect_stacking_context(child, next_offset, style_ref, false, &mut local_commands);
+            let mut negative_contexts = Vec::new();
+            let mut zero_contexts = Vec::new();
+            let mut positive_contexts = Vec::new();
+            let mut blocks = Vec::new();
+            let mut floats = Vec::new();
+            let mut inlines = Vec::new();
+            let mut positioned = Vec::new();
+
+            for (idx, child) in fragment.children.iter().enumerate() {
+                if let Some(style) = child.style.as_deref() {
+                    if creates_stacking_context(style, style_ref, false) {
+                        let z = style.z_index;
+                        if z < 0 {
+                            negative_contexts.push((z, idx));
+                        } else if z == 0 {
+                            zero_contexts.push((z, idx));
+                        } else {
+                            positive_contexts.push((z, idx));
+                        }
+                        continue;
+                    }
+                    if is_positioned(style) {
+                        positioned.push(idx);
+                    } else if is_float_for_stacking(style) {
+                        floats.push(idx);
+                    } else if is_inline_level(style, child) {
+                        inlines.push(idx);
+                    } else {
+                        blocks.push(idx);
+                    }
+                } else {
+                    if matches!(
+                        child.content,
+                        FragmentContent::Inline { .. } | FragmentContent::Text { .. } | FragmentContent::Line { .. }
+                    ) {
+                        inlines.push(idx);
+                    } else {
+                        blocks.push(idx);
+                    }
+                }
             }
+
+            negative_contexts.sort_by(|(z1, i1), (z2, i2)| z1.cmp(z2).then_with(|| i1.cmp(i2)));
+            for (_, idx) in negative_contexts {
+                self.collect_stacking_context(&fragment.children[idx], next_offset, style_ref, false, &mut local_commands);
+            }
+
+            for idx in blocks {
+                self.collect_stacking_context(&fragment.children[idx], next_offset, style_ref, false, &mut local_commands);
+            }
+            for idx in floats {
+                self.collect_stacking_context(&fragment.children[idx], next_offset, style_ref, false, &mut local_commands);
+            }
+            for idx in inlines {
+                self.collect_stacking_context(&fragment.children[idx], next_offset, style_ref, false, &mut local_commands);
+            }
+            for idx in positioned {
+                self.collect_stacking_context(&fragment.children[idx], next_offset, style_ref, false, &mut local_commands);
+            }
+
+            zero_contexts.sort_by(|(z1, i1), (z2, i2)| z1.cmp(z2).then_with(|| i1.cmp(i2)));
+            for (_, idx) in zero_contexts {
+                self.collect_stacking_context(&fragment.children[idx], next_offset, style_ref, false, &mut local_commands);
+            }
+
+            positive_contexts.sort_by(|(z1, i1), (z2, i2)| z1.cmp(z2).then_with(|| i1.cmp(i2)));
+            for (_, idx) in positive_contexts {
+                self.collect_stacking_context(&fragment.children[idx], next_offset, style_ref, false, &mut local_commands);
+            }
+
             items.extend(local_commands);
             return;
         }
@@ -360,7 +454,10 @@ impl Painter {
         let mut negative_contexts = Vec::new();
         let mut zero_contexts = Vec::new();
         let mut positive_contexts = Vec::new();
-        let mut normal_children = Vec::new();
+        let mut blocks = Vec::new();
+        let mut floats = Vec::new();
+        let mut inlines = Vec::new();
+        let mut positioned = Vec::new();
 
         for (idx, child) in fragment.children.iter().enumerate() {
             if let Some(style) = child.style.as_deref() {
@@ -375,8 +472,26 @@ impl Painter {
                     }
                     continue;
                 }
+
+                if is_positioned(style) {
+                    positioned.push(idx);
+                } else if is_float_for_stacking(style) {
+                    floats.push(idx);
+                } else if is_inline_level(style, child) {
+                    inlines.push(idx);
+                } else {
+                    blocks.push(idx);
+                }
+            } else if matches!(
+                child.content,
+                FragmentContent::Inline { .. } | FragmentContent::Text { .. } | FragmentContent::Line { .. }
+            ) {
+                inlines.push(idx);
             }
-            normal_children.push(idx);
+            // No style: treat as block-level unless inline-like
+            else {
+                blocks.push(idx);
+            }
         }
 
         let child_offset = Point::new(abs_bounds.x(), abs_bounds.y());
@@ -394,7 +509,34 @@ impl Painter {
 
         // In-flow/non-positioned content for this context
         self.enqueue_content(fragment, abs_bounds, &mut local_commands);
-        for idx in normal_children {
+        for idx in blocks {
+            self.collect_stacking_context(
+                &fragment.children[idx],
+                child_offset,
+                style_ref,
+                false,
+                &mut local_commands,
+            );
+        }
+        for idx in floats {
+            self.collect_stacking_context(
+                &fragment.children[idx],
+                child_offset,
+                style_ref,
+                false,
+                &mut local_commands,
+            );
+        }
+        for idx in inlines {
+            self.collect_stacking_context(
+                &fragment.children[idx],
+                child_offset,
+                style_ref,
+                false,
+                &mut local_commands,
+            );
+        }
+        for idx in positioned {
             self.collect_stacking_context(
                 &fragment.children[idx],
                 child_offset,
@@ -3887,6 +4029,56 @@ mod tests {
         } else {
             Some((min_x, min_y, max_x, max_y))
         }
+    }
+
+    #[test]
+    fn stacking_order_places_floats_between_blocks_and_inlines() {
+        // Build four children that should paint in block → float → inline → positioned order.
+        let mut block_style = ComputedStyle::default();
+        block_style.display = Display::Block;
+        block_style.background_color = Rgba::RED;
+        let mut block = FragmentNode::new_block(Rect::from_xywh(10.0, 0.0, 5.0, 5.0), vec![]);
+        block.style = Some(Arc::new(block_style));
+
+        let mut float_style = ComputedStyle::default();
+        float_style.display = Display::Block;
+        float_style.float = crate::style::float::Float::Left;
+        float_style.background_color = Rgba::GREEN;
+        let mut float_frag = FragmentNode::new_block(Rect::from_xywh(20.0, 0.0, 5.0, 5.0), vec![]);
+        float_frag.style = Some(Arc::new(float_style));
+
+        let mut inline_style = ComputedStyle::default();
+        inline_style.display = Display::Inline;
+        inline_style.background_color = Rgba::BLUE;
+        let mut inline = FragmentNode::new_text(Rect::from_xywh(30.0, 0.0, 5.0, 5.0), "x".to_string(), 12.0);
+        inline.style = Some(Arc::new(inline_style));
+
+        let mut positioned_style = ComputedStyle::default();
+        positioned_style.display = Display::Block;
+        positioned_style.position = Position::Relative;
+        positioned_style.background_color = Rgba::WHITE;
+        let mut positioned = FragmentNode::new_block(Rect::from_xywh(40.0, 0.0, 5.0, 5.0), vec![]);
+        positioned.style = Some(Arc::new(positioned_style));
+
+        let root = FragmentNode::new_block(
+            Rect::from_xywh(0.0, 0.0, 100.0, 10.0),
+            vec![block, float_frag, inline, positioned],
+        );
+
+        let painter = Painter::new(100, 10, Rgba::WHITE).expect("painter");
+        let mut commands = Vec::new();
+        painter.collect_stacking_context(&root, Point::ZERO, None, true, &mut commands);
+
+        // Background commands occur in paint order; filter child backgrounds to check ordering.
+        let xs: Vec<f32> = commands
+            .iter()
+            .filter_map(|cmd| match cmd {
+                DisplayCommand::Background { rect, .. } if rect.width() == 5.0 => Some(rect.x()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(xs, vec![10.0, 20.0, 30.0, 40.0]);
     }
 
     #[test]
