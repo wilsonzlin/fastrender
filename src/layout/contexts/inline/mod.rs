@@ -2531,7 +2531,7 @@ impl InlineFormattingContext {
                 &strut_metrics,
                 base_level,
                 float_ctx,
-                float_base_y,
+                float_base_y + *line_offset,
                 first_cut,
                 subsequent_line_indent_cut,
             );
@@ -4196,6 +4196,59 @@ mod tests {
             first.available_width <= 120.1,
             "available width should be shortened by float; got {}",
             first.available_width
+        );
+    }
+
+    #[test]
+    fn inline_float_creates_fragment_and_wraps_following_text() {
+        let mut float_style = ComputedStyle::default();
+        float_style.display = Display::Inline;
+        float_style.float = crate::style::float::Float::Left;
+        float_style.width = Some(Length::px(40.0));
+        float_style.height = Some(Length::px(20.0));
+        let float_node = BoxNode::new_inline(Arc::new(float_style), vec![]);
+
+        let text_style = Arc::new(ComputedStyle::default());
+        let before = BoxNode::new_text(text_style.clone(), "before ".to_string());
+        let after = BoxNode::new_text(text_style.clone(), "after wrapping text".to_string());
+        let root = BoxNode::new_inline(
+            text_style,
+            vec![before, float_node.clone(), after],
+        );
+
+        let mut float_ctx = crate::layout::float_context::FloatContext::new(120.0);
+        let ifc = InlineFormattingContext::new();
+        let constraints = LayoutConstraints::definite_width(120.0);
+        let fragment = ifc
+            .layout_with_floats(&root, &constraints, Some(&mut float_ctx), 0.0)
+            .expect("layout with inline float");
+
+        // We expect a float fragment and at least one line fragment following it that starts after the float.
+        let mut float_found = false;
+        let mut float_y = 0.0;
+        let mut line_found = false;
+        for child in &fragment.children {
+            if let Some(style) = &child.style {
+                if style.float.is_floating() {
+                    float_found = true;
+                    float_y = child.bounds.y();
+                    continue;
+                }
+            }
+            if matches!(child.content, FragmentContent::Line { .. }) {
+                if child.bounds.y() >= float_y {
+                    line_found = true;
+                }
+            }
+        }
+
+        assert!(float_found, "should emit a float fragment in IFC");
+        assert!(line_found, "should emit at least one line after the float");
+
+        let (left, width) = float_ctx.available_width_at_y(float_y);
+        assert!(
+            left >= 39.9 && (120.0 - width - left).abs() < 0.1,
+            "float context should report shortened line space; left={left}, width={width}"
         );
     }
 
