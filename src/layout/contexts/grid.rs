@@ -517,6 +517,8 @@ impl GridFormattingContext {
 
     fn convert_align_items(&self, align: &AlignItems) -> taffy::style::AlignItems {
         match align {
+            AlignItems::Start | AlignItems::SelfStart => taffy::style::AlignItems::Start,
+            AlignItems::End | AlignItems::SelfEnd => taffy::style::AlignItems::End,
             AlignItems::FlexStart => taffy::style::AlignItems::FlexStart,
             AlignItems::FlexEnd => taffy::style::AlignItems::FlexEnd,
             AlignItems::Center => taffy::style::AlignItems::Center,

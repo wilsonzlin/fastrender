@@ -453,28 +453,18 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         }
         "align-items" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.align_items = match kw.as_str() {
-                    "flex-start" | "start" => AlignItems::FlexStart,
-                    "flex-end" | "end" => AlignItems::FlexEnd,
-                    "center" => AlignItems::Center,
-                    "baseline" => AlignItems::Baseline,
-                    "stretch" => AlignItems::Stretch,
-                    _ => styles.align_items,
-                };
+                if let Some(value) = parse_align_keyword(kw) {
+                    styles.align_items = value;
+                }
             }
         }
         "align-self" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.align_self = match kw.as_str() {
                     "auto" => None,
-                    "normal" => Some(AlignItems::Stretch),
-                    "flex-start" | "start" => Some(AlignItems::FlexStart),
-                    "flex-end" | "end" => Some(AlignItems::FlexEnd),
-                    "center" => Some(AlignItems::Center),
-                    "baseline" => Some(AlignItems::Baseline),
-                    "stretch" => Some(AlignItems::Stretch),
-                    _ => styles.align_self,
-                };
+                    _ => parse_align_keyword(kw),
+                }
+                .or(styles.align_self);
             }
         }
         "align-content" => {
@@ -492,29 +482,23 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         }
         "justify-items" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.justify_items = match kw.as_str() {
-                    "normal" | "auto" => AlignItems::Stretch,
-                    "flex-start" | "start" => AlignItems::FlexStart,
-                    "flex-end" | "end" => AlignItems::FlexEnd,
-                    "center" => AlignItems::Center,
-                    "baseline" => AlignItems::Baseline,
-                    "stretch" => AlignItems::Stretch,
-                    _ => styles.justify_items,
-                };
+                match kw.as_str() {
+                    "auto" => styles.justify_items = AlignItems::Stretch,
+                    _ => {
+                        if let Some(value) = parse_align_keyword(kw) {
+                            styles.justify_items = value;
+                        }
+                    }
+                }
             }
         }
         "justify-self" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.justify_self = match kw.as_str() {
                     "auto" => None,
-                    "normal" => Some(AlignItems::Stretch),
-                    "flex-start" | "start" => Some(AlignItems::FlexStart),
-                    "flex-end" | "end" => Some(AlignItems::FlexEnd),
-                    "center" => Some(AlignItems::Center),
-                    "baseline" => Some(AlignItems::Baseline),
-                    "stretch" => Some(AlignItems::Stretch),
-                    _ => styles.justify_self,
-                };
+                    _ => parse_align_keyword(kw),
+                }
+                .or(styles.justify_self);
             }
         }
         "flex-grow" => {
@@ -1931,6 +1915,24 @@ fn parse_gap_lengths(value: &PropertyValue) -> Option<(Length, Length)> {
 
 fn parse_single_gap_length(value: &PropertyValue) -> Option<Length> {
     parse_gap_lengths(value).map(|(first, _)| first)
+}
+
+fn parse_align_keyword(kw: &str) -> Option<AlignItems> {
+    match kw {
+        "start" => Some(AlignItems::Start),
+        "end" => Some(AlignItems::End),
+        "self-start" => Some(AlignItems::SelfStart),
+        "self-end" => Some(AlignItems::SelfEnd),
+        "flex-start" => Some(AlignItems::FlexStart),
+        "flex-end" => Some(AlignItems::FlexEnd),
+        "center" => Some(AlignItems::Center),
+        "baseline" => Some(AlignItems::Baseline),
+        "stretch" => Some(AlignItems::Stretch),
+        "normal" => Some(AlignItems::Stretch),
+        "left" => Some(AlignItems::Start),
+        "right" => Some(AlignItems::End),
+        _ => None,
+    }
 }
 
 fn parse_spacing_value(
@@ -3800,7 +3802,7 @@ fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
 mod tests {
     use super::*;
     use crate::style::types::{
-        AspectRatio, BackgroundRepeatKeyword, BoxSizing, FontStretch, FontVariant, GridAutoFlow, GridTrack,
+        AlignItems, AspectRatio, BackgroundRepeatKeyword, BoxSizing, FontStretch, FontVariant, GridAutoFlow, GridTrack,
         ImageRendering,
         ListStylePosition, ListStyleType, OutlineColor, OutlineStyle, PositionComponent, PositionKeyword,
         TextDecorationLine, TextDecorationStyle, TextDecorationThickness, TextEmphasisFill, TextEmphasisPosition,
@@ -3886,6 +3888,70 @@ mod tests {
             16.0,
         );
         assert!(matches!(style.aspect_ratio, AspectRatio::Auto));
+    }
+
+    #[test]
+    fn parses_alignment_keywords_with_start_variants() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "align-items".to_string(),
+                value: PropertyValue::Keyword("start".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.align_items, AlignItems::Start);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "align-self".to_string(),
+                value: PropertyValue::Keyword("self-end".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.align_self, Some(AlignItems::SelfEnd));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "justify-items".to_string(),
+                value: PropertyValue::Keyword("right".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.justify_items, AlignItems::End);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "justify-self".to_string(),
+                value: PropertyValue::Keyword("auto".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert!(style.justify_self.is_none());
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "justify-self".to_string(),
+                value: PropertyValue::Keyword("center".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.justify_self, Some(AlignItems::Center));
     }
 
     #[test]

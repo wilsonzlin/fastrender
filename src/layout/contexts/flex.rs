@@ -395,6 +395,8 @@ impl FlexFormattingContext {
 
     fn align_items_to_taffy(&self, align: AlignItems) -> Option<taffy::style::AlignItems> {
         Some(match align {
+            AlignItems::Start | AlignItems::SelfStart => taffy::style::AlignItems::Start,
+            AlignItems::End | AlignItems::SelfEnd => taffy::style::AlignItems::End,
             AlignItems::FlexStart => taffy::style::AlignItems::FlexStart,
             AlignItems::FlexEnd => taffy::style::AlignItems::FlexEnd,
             AlignItems::Center => taffy::style::AlignItems::Center,

@@ -340,6 +340,10 @@ pub enum JustifyContent {
 /// Reference: CSS Flexible Box Layout Module Level 1
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlignItems {
+    Start,
+    End,
+    SelfStart,
+    SelfEnd,
     FlexStart,
     FlexEnd,
     Center,

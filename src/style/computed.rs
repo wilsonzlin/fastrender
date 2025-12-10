@@ -405,6 +405,10 @@ pub enum JustifyContent {
 /// CSS align-items property values
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlignItems {
+    Start,
+    End,
+    SelfStart,
+    SelfEnd,
     FlexStart,
     FlexEnd,
     Center,
