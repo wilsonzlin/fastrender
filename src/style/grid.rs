@@ -262,24 +262,15 @@ pub fn parse_grid_template_shorthand(value: &str) -> Option<ParsedGridTemplate> 
 pub fn parse_grid_shorthand(value: &str) -> Option<ParsedGridShorthand> {
     let value = value.trim();
     if value.eq_ignore_ascii_case("none") {
-        return Some(ParsedGridShorthand {
-            template: Some(ParsedGridTemplate {
-                areas: Some(Vec::new()),
-                row_tracks: Some((Vec::new(), Vec::new())),
-                column_tracks: Some((Vec::new(), Vec::new())),
-            }),
-            auto_rows: Some(vec![GridTrack::Auto]),
-            auto_columns: Some(vec![GridTrack::Auto]),
-            auto_flow: Some(crate::style::types::GridAutoFlow::Row),
-        });
+        return Some(reset_grid_shorthand());
     }
 
     if !value.contains("auto-flow") {
         return parse_grid_template_shorthand(value).map(|template| ParsedGridShorthand {
             template: Some(template),
-            auto_rows: None,
-            auto_columns: None,
-            auto_flow: None,
+            auto_rows: Some(vec![GridTrack::Auto]),
+            auto_columns: Some(vec![GridTrack::Auto]),
+            auto_flow: Some(crate::style::types::GridAutoFlow::Row),
         });
     }
 
@@ -360,11 +351,28 @@ pub fn parse_grid_shorthand(value: &str) -> Option<ParsedGridShorthand> {
     }
 
     Some(ParsedGridShorthand {
-        template: None,
-        auto_rows,
-        auto_columns: auto_cols,
-        auto_flow,
+        template: Some(empty_template_reset()),
+        auto_rows: auto_rows.or_else(|| Some(vec![GridTrack::Auto])),
+        auto_columns: auto_cols.or_else(|| Some(vec![GridTrack::Auto])),
+        auto_flow: auto_flow.or_else(|| Some(crate::style::types::GridAutoFlow::Row)),
     })
+}
+
+fn reset_grid_shorthand() -> ParsedGridShorthand {
+    ParsedGridShorthand {
+        template: Some(empty_template_reset()),
+        auto_rows: Some(vec![GridTrack::Auto]),
+        auto_columns: Some(vec![GridTrack::Auto]),
+        auto_flow: Some(crate::style::types::GridAutoFlow::Row),
+    }
+}
+
+fn empty_template_reset() -> ParsedGridTemplate {
+    ParsedGridTemplate {
+        areas: Some(Vec::new()),
+        row_tracks: Some((Vec::new(), Vec::new())),
+        column_tracks: Some((Vec::new(), Vec::new())),
+    }
 }
 
 fn parse_area_rows_with_sizes(input: &str) -> Option<(Vec<String>, Vec<Option<String>>)> {
