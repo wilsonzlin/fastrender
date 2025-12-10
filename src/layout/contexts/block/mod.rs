@@ -31,12 +31,14 @@ use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
 use crate::layout::contexts::block::width::MarginValue;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::InlineFormattingContext;
+use crate::layout::float_context::FloatContext;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::utils::{
     border_size_from_box_sizing, compute_replaced_size, content_size_from_box_sizing, resolve_font_relative_length,
     resolve_length_with_percentage,
 };
 use crate::style::display::FormattingContextType;
+use crate::style::float::Float;
 use crate::style::position::Position;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
@@ -375,6 +377,7 @@ impl BlockFormattingContext {
         let mut content_height: f32 = 0.0;
         let mut margin_ctx = MarginCollapseContext::new();
         let mut inline_buffer: Vec<BoxNode> = Vec::new();
+        let mut float_ctx = FloatContext::new(constraints.width().unwrap_or(0.0));
 
         // Get containing width from constraints
         let containing_width = constraints.width().unwrap_or(0.0);
@@ -436,8 +439,128 @@ impl BlockFormattingContext {
         };
 
         for child in &parent.children {
-            // Skip out-of-flow children (positioned, floats)
+            // Skip out-of-flow positioned boxes (absolute/fixed)
             if is_out_of_flow(child) {
+                continue;
+            }
+
+            // Floats are taken out of flow but still participate in this BFC's float context
+            if child.style.float.is_floating() && !matches!(child.style.position, Position::Absolute | Position::Fixed)
+            {
+                flush_inline_buffer(
+                    &mut inline_buffer,
+                    &mut fragments,
+                    &mut current_y,
+                    &mut content_height,
+                    &mut margin_ctx,
+                )?;
+
+                // Apply any pending collapsed margin before placing the float
+                let pending_margin = margin_ctx.consume_pending();
+                current_y += pending_margin;
+
+                // Honor clearance against existing floats
+                current_y = float_ctx.compute_clearance(current_y, child.style.clear);
+
+                // Resolve horizontal metrics, treating auto margins as zero per float rules
+                let percentage_base = containing_width;
+                let margin_left = child
+                    .style
+                    .margin_left
+                    .as_ref()
+                    .map(|l| {
+                        resolve_length_for_width(
+                            *l,
+                            percentage_base,
+                            &child.style,
+                            &self.font_context,
+                            self.viewport_size,
+                        )
+                    })
+                    .unwrap_or(0.0)
+                    .max(0.0);
+                let margin_right = child
+                    .style
+                    .margin_right
+                    .as_ref()
+                    .map(|l| {
+                        resolve_length_for_width(
+                            *l,
+                            percentage_base,
+                            &child.style,
+                            &self.font_context,
+                            self.viewport_size,
+                        )
+                    })
+                    .unwrap_or(0.0)
+                    .max(0.0);
+
+                let mut width_style = (*child.style).clone();
+                width_style.margin_left = Some(Length::px(margin_left));
+                width_style.margin_right = Some(Length::px(margin_right));
+                let width_metrics = compute_block_width(&width_style, containing_width, self.viewport_size);
+
+                let box_width = width_metrics.total_width();
+                let content_width = width_metrics.content_width;
+
+                let child_constraints =
+                    LayoutConstraints::new(AvailableSpace::Definite(content_width), AvailableSpace::Indefinite);
+                let child_bfc = BlockFormattingContext::with_font_context_and_viewport(
+                    self.font_context.clone(),
+                    self.viewport_size,
+                );
+                let mut fragment = child_bfc.layout(child, &child_constraints)?;
+
+                let margin_top = child
+                    .style
+                    .margin_top
+                    .as_ref()
+                    .map(|l| {
+                        resolve_length_for_width(
+                            *l,
+                            containing_width,
+                            &child.style,
+                            &self.font_context,
+                            self.viewport_size,
+                        )
+                    })
+                    .unwrap_or(0.0)
+                    .max(0.0);
+                let margin_bottom = child
+                    .style
+                    .margin_bottom
+                    .as_ref()
+                    .map(|l| {
+                        resolve_length_for_width(
+                            *l,
+                            containing_width,
+                            &child.style,
+                            &self.font_context,
+                            self.viewport_size,
+                        )
+                    })
+                    .unwrap_or(0.0)
+                    .max(0.0);
+                let float_height = margin_top + fragment.bounds.height() + margin_bottom;
+
+                let side = match child.style.float {
+                    Float::Left => crate::layout::float_context::FloatSide::Left,
+                    Float::Right => crate::layout::float_context::FloatSide::Right,
+                    Float::None => unreachable!(),
+                };
+
+                let (fx, fy) = float_ctx.compute_float_position(
+                    side,
+                    margin_left + box_width + margin_right,
+                    float_height,
+                    current_y,
+                );
+
+                fragment.bounds =
+                    Rect::from_xywh(fx + margin_left, fy + margin_top, box_width, fragment.bounds.height());
+                float_ctx.add_float_at(side, fx, fy, margin_left + box_width + margin_right, float_height);
+                content_height = content_height.max(fy + float_height);
+                fragments.push(fragment);
                 continue;
             }
 
@@ -455,6 +578,13 @@ impl BlockFormattingContext {
                     &mut content_height,
                     &mut margin_ctx,
                 )?;
+
+                // Apply clearance for in-flow blocks against floats
+                let cleared_y = float_ctx.compute_clearance(current_y, child.style.clear);
+                if cleared_y > current_y {
+                    margin_ctx.mark_content_encountered();
+                    current_y = cleared_y;
+                }
 
                 let (fragment, next_y) =
                     self.layout_block_child(child, containing_width, constraints, &mut margin_ctx, current_y)?;
@@ -498,7 +628,15 @@ impl BlockFormattingContext {
             content_height += trailing_margin.max(0.0);
         }
 
-        Ok((fragments, content_height))
+        // Float boxes extend the formatting context height
+        let float_bottom = float_ctx
+            .left_floats()
+            .iter()
+            .chain(float_ctx.right_floats())
+            .map(|f| f.bottom())
+            .fold(content_height, f32::max);
+
+        Ok((fragments, float_bottom))
     }
 }
 
@@ -750,7 +888,10 @@ impl FormattingContext for BlockFormattingContext {
 /// Checks if a box is out of normal flow (absolute/fixed positioned or float)
 fn is_out_of_flow(box_node: &BoxNode) -> bool {
     let position = box_node.style.position;
-    matches!(position, Position::Absolute | Position::Fixed)
+    if matches!(position, Position::Absolute | Position::Fixed) {
+        return true;
+    }
+    box_node.style.float.is_floating()
 }
 
 fn resolve_length_for_width(
@@ -1050,8 +1191,7 @@ mod tests {
         let text_right = BoxNode::new_text(default_style(), "unbreakable".to_string());
         let block_child = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
 
-        let run_container =
-            BoxNode::new_block(default_style(), FormattingContextType::Block, vec![text_left.clone()]);
+        let run_container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![text_left.clone()]);
         let run_min = ifc
             .compute_intrinsic_inline_size(&run_container, IntrinsicSizingMode::MinContent)
             .unwrap();

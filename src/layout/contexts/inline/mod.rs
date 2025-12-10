@@ -240,6 +240,10 @@ impl InlineFormattingContext {
                     }
                 },
                 BoxType::Inline(_) => {
+                    if child.style.float.is_floating() {
+                        // Floats do not participate in inline formatting; they should be handled by the parent block FC.
+                        continue;
+                    }
                     if child.formatting_context().is_some() {
                         let item = self.layout_inline_block(child, available_width, available_height)?;
                         items.push(InlineItem::InlineBlock(item));
@@ -617,9 +621,15 @@ impl InlineFormattingContext {
 
         let va = self.convert_vertical_align(style.vertical_align, style.font_size, line_height);
 
-        let mut item =
-            TextItem::new(shaped_runs, hyphen_free, metrics, breaks, forced_break_offsets, style.clone())
-                .with_vertical_align(va);
+        let mut item = TextItem::new(
+            shaped_runs,
+            hyphen_free,
+            metrics,
+            breaks,
+            forced_break_offsets,
+            style.clone(),
+        )
+        .with_vertical_align(va);
 
         if allow_soft_wrap && style.line_break == LineBreak::Anywhere {
             item.add_breaks_at_clusters();
@@ -2243,8 +2253,8 @@ fn capitalize_words(text: &str) -> String {
 }
 
 fn char_boundary_breaks(text: &str) -> Vec<crate::text::line_break::BreakOpportunity> {
-    use unicode_segmentation::UnicodeSegmentation;
     use crate::text::line_break::BreakOpportunity;
+    use unicode_segmentation::UnicodeSegmentation;
     let mut breaks = Vec::new();
     for (byte_idx, _) in text.grapheme_indices(true).skip(1) {
         breaks.push(BreakOpportunity::allowed(byte_idx));
@@ -3600,11 +3610,7 @@ mod tests {
                 _ => None,
             })
             .expect("text item");
-        let mut offsets: Vec<usize> = text_item
-            .break_opportunities
-            .iter()
-            .map(|b| b.byte_offset)
-            .collect();
+        let mut offsets: Vec<usize> = text_item.break_opportunities.iter().map(|b| b.byte_offset).collect();
         offsets.sort_unstable();
         offsets.dedup();
 
@@ -3632,12 +3638,7 @@ mod tests {
         let offsets_bw: Vec<usize> = items_bw
             .iter()
             .find_map(|item| match item {
-                InlineItem::Text(t) => Some(
-                    t.break_opportunities
-                        .iter()
-                        .map(|b| b.byte_offset)
-                        .collect::<Vec<_>>(),
-                ),
+                InlineItem::Text(t) => Some(t.break_opportunities.iter().map(|b| b.byte_offset).collect::<Vec<_>>()),
                 _ => None,
             })
             .unwrap_or_default();
