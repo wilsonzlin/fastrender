@@ -41,12 +41,14 @@ pub mod line_builder;
 
 use crate::geometry::{Rect, Size};
 use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
+use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::line_builder::InlineBoxItem;
 use crate::layout::float_context::FloatContext;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::inline::float_integration::InlineFloatIntegration;
 use crate::layout::utils::{border_size_from_box_sizing, compute_replaced_size, resolve_font_relative_length};
+use crate::style::display::FormattingContextType;
 use crate::style::types::{
     FontStyle, HyphensMode, LineBreak, ListStylePosition, OverflowWrap, TabSize, TextAlign, TextJustify, TextTransform,
     WhiteSpace, WordBreak,
@@ -243,7 +245,21 @@ impl InlineFormattingContext {
                 },
                 BoxType::Inline(_) => {
                     if child.style.float.is_floating() {
-                        // Floats do not participate in inline formatting; they should be handled by the parent block FC.
+                        // Inline-level float: collect as a floating item so it can be placed into the float context.
+                        let metrics = self.compute_strut_metrics(&child.style);
+                        let va = self.convert_vertical_align(
+                            child.style.vertical_align,
+                            child.style.font_size,
+                            metrics.line_height,
+                        );
+                        let floating = crate::layout::contexts::inline::line_builder::FloatingItem {
+                            box_node: child.clone(),
+                            metrics,
+                            vertical_align: va,
+                            direction: child.style.direction,
+                            unicode_bidi: child.style.unicode_bidi,
+                        };
+                        items.push(InlineItem::Floating(floating));
                         continue;
                     }
                     if child.formatting_context().is_some() {
@@ -1348,6 +1364,7 @@ impl InlineFormattingContext {
                     replaced_item.style.clone(),
                 )
             }
+            InlineItem::Floating(_) => unreachable!("Floating items are handled before fragment creation"),
         }
     }
 
@@ -1423,6 +1440,9 @@ impl InlineFormattingContext {
                     tracker.add_width(replaced.total_width());
                     tracker.break_segment();
                 }
+                InlineItem::Floating(_) => {
+                    tracker.break_segment();
+                }
             }
         }
     }
@@ -1446,6 +1466,9 @@ impl InlineFormattingContext {
                 }
                 InlineItem::Replaced(replaced) => {
                     tracker.add_width(replaced.total_width());
+                }
+                InlineItem::Floating(_) => {
+                    tracker.break_segment();
                 }
             }
         }
@@ -2420,7 +2443,7 @@ impl InlineFormattingContext {
         &self,
         box_node: &BoxNode,
         constraints: &LayoutConstraints,
-        float_ctx: Option<&FloatContext>,
+        mut float_ctx: Option<&mut FloatContext>,
         float_base_y: f32,
     ) -> Result<FragmentNode, LayoutError> {
         let style = &box_node.style;
@@ -2475,17 +2498,258 @@ impl InlineFormattingContext {
             },
         };
 
-        // Build lines
-        let lines = self.build_lines(
-            items,
-            first_line_width,
-            subsequent_line_width,
-            &strut_metrics,
-            base_level,
-            float_ctx,
-            float_base_y,
-            first_line_indent_cut,
-            subsequent_line_indent_cut,
+        // Build lines, interleaving float placement
+        let mut lines = Vec::new();
+        let mut float_fragments: Vec<FragmentNode> = Vec::new();
+        let mut line_offset: f32 = 0.0;
+        let mut max_float_bottom: f32 = 0.0;
+        let mut pending: Vec<InlineItem> = Vec::new();
+        let mut use_first_line_width = true;
+
+        let flush_pending = |pending: &mut Vec<InlineItem>,
+                             use_first_line_width: &mut bool,
+                             line_offset: &mut f32,
+                             lines_out: &mut Vec<Line>,
+                             float_ctx: Option<&FloatContext>| {
+            if pending.is_empty() {
+                return;
+            }
+            let first_w = if *use_first_line_width {
+                first_line_width
+            } else {
+                subsequent_line_width
+            };
+            let first_cut = if *use_first_line_width {
+                first_line_indent_cut
+            } else {
+                subsequent_line_indent_cut
+            };
+            let seg_lines = self.build_lines(
+                std::mem::take(pending),
+                first_w,
+                subsequent_line_width,
+                &strut_metrics,
+                base_level,
+                float_ctx,
+                float_base_y,
+                first_cut,
+                subsequent_line_indent_cut,
+            );
+            let seg_height = seg_lines
+                .iter()
+                .map(|l| l.y_offset + l.height)
+                .fold(0.0, f32::max);
+            for mut line in seg_lines {
+                line.y_offset += *line_offset;
+                lines_out.push(line);
+            }
+            *line_offset += seg_height;
+            *use_first_line_width = false;
+        };
+
+        for item in items {
+            if let InlineItem::Floating(floating) = item {
+                flush_pending(&mut pending, &mut use_first_line_width, &mut line_offset, &mut lines, float_ctx.as_deref());
+
+                if let Some(ctx) = float_ctx.as_deref_mut() {
+                    let containing_width = available_width;
+                    let percentage_base = containing_width;
+                    let margin_left = floating
+                        .box_node
+                        .style
+                        .margin_left
+                        .as_ref()
+                        .map(|l| {
+                            resolve_length_for_width(
+                                *l,
+                                percentage_base,
+                                &floating.box_node.style,
+                                &self.font_context,
+                                self.viewport_size,
+                            )
+                        })
+                        .unwrap_or(0.0)
+                        .max(0.0);
+                    let margin_right = floating
+                        .box_node
+                        .style
+                        .margin_right
+                        .as_ref()
+                        .map(|l| {
+                            resolve_length_for_width(
+                                *l,
+                                percentage_base,
+                                &floating.box_node.style,
+                                &self.font_context,
+                                self.viewport_size,
+                            )
+                        })
+                        .unwrap_or(0.0)
+                        .max(0.0);
+
+                    let horizontal_edges =
+                        horizontal_padding_and_borders(&floating.box_node.style, percentage_base, self.viewport_size, &self.font_context);
+
+                    let factory = FormattingContextFactory::with_font_context_and_viewport(
+                        self.font_context.clone(),
+                        self.viewport_size,
+                    );
+                    let fc_type = floating
+                        .box_node
+                        .formatting_context()
+                        .unwrap_or(FormattingContextType::Block);
+                    let fc = factory.create(fc_type);
+                    let preferred_min_content = fc
+                        .compute_intrinsic_inline_size(&floating.box_node, IntrinsicSizingMode::MinContent)
+                        .unwrap_or(0.0);
+                    let preferred_content = fc
+                        .compute_intrinsic_inline_size(&floating.box_node, IntrinsicSizingMode::MaxContent)
+                        .unwrap_or(preferred_min_content);
+
+                    let preferred_min = preferred_min_content + horizontal_edges;
+                    let preferred = preferred_content + horizontal_edges;
+
+                    let specified_width = floating
+                        .box_node
+                        .style
+                        .width
+                        .as_ref()
+                        .map(|l| {
+                            resolve_length_for_width(
+                                *l,
+                                percentage_base,
+                                &floating.box_node.style,
+                                &self.font_context,
+                                self.viewport_size,
+                            )
+                        })
+                        .map(|w| border_size_from_box_sizing(w, horizontal_edges, floating.box_node.style.box_sizing));
+
+                    let min_width = floating
+                        .box_node
+                        .style
+                        .min_width
+                        .as_ref()
+                        .map(|l| {
+                            resolve_length_for_width(
+                                *l,
+                                percentage_base,
+                                &floating.box_node.style,
+                                &self.font_context,
+                                self.viewport_size,
+                            )
+                        })
+                        .map(|w| border_size_from_box_sizing(w, horizontal_edges, floating.box_node.style.box_sizing))
+                        .unwrap_or(0.0);
+                    let max_width = floating
+                        .box_node
+                        .style
+                        .max_width
+                        .as_ref()
+                        .map(|l| {
+                            resolve_length_for_width(
+                                *l,
+                                percentage_base,
+                                &floating.box_node.style,
+                                &self.font_context,
+                                self.viewport_size,
+                            )
+                        })
+                        .map(|w| border_size_from_box_sizing(w, horizontal_edges, floating.box_node.style.box_sizing))
+                        .unwrap_or(f32::INFINITY);
+
+                    let available = (containing_width - margin_left - margin_right).max(0.0);
+                    let used_border_box = if let Some(specified) = specified_width {
+                        specified.clamp(min_width, max_width)
+                    } else {
+                        let shrink = preferred.min(available.max(preferred_min));
+                        shrink.clamp(min_width, max_width)
+                    };
+
+                    let content_width = (used_border_box - horizontal_edges).max(0.0);
+                    let child_constraints = LayoutConstraints::new(
+                        AvailableSpace::Definite(content_width),
+                        AvailableSpace::Indefinite,
+                    );
+                    let bfc = BlockFormattingContext::with_font_context_and_viewport(
+                        self.font_context.clone(),
+                        self.viewport_size,
+                    );
+                    let mut fragment = bfc.layout(&floating.box_node, &child_constraints)?;
+
+                    let margin_top = floating
+                        .box_node
+                        .style
+                        .margin_top
+                        .as_ref()
+                        .map(|l| {
+                            resolve_length_for_width(
+                                *l,
+                                containing_width,
+                                &floating.box_node.style,
+                                &self.font_context,
+                                self.viewport_size,
+                            )
+                        })
+                        .unwrap_or(0.0)
+                        .max(0.0);
+                    let margin_bottom = floating
+                        .box_node
+                        .style
+                        .margin_bottom
+                        .as_ref()
+                        .map(|l| {
+                            resolve_length_for_width(
+                                *l,
+                                containing_width,
+                                &floating.box_node.style,
+                                &self.font_context,
+                                self.viewport_size,
+                            )
+                        })
+                        .unwrap_or(0.0)
+                        .max(0.0);
+                    let box_width = used_border_box;
+                    let float_height = margin_top + fragment.bounds.height() + margin_bottom;
+
+                    let side = match floating.box_node.style.float {
+                        crate::style::float::Float::Left => crate::layout::float_context::FloatSide::Left,
+                        crate::style::float::Float::Right => crate::layout::float_context::FloatSide::Right,
+                        crate::style::float::Float::None => unreachable!(),
+                    };
+
+                    let base_y = float_base_y + line_offset;
+                    let cleared_y = ctx.compute_clearance(base_y, floating.box_node.style.clear);
+                    let (fx, fy) = ctx.compute_float_position(
+                        side,
+                        margin_left + box_width + margin_right,
+                        float_height,
+                        cleared_y,
+                    );
+
+                    fragment.bounds = Rect::from_xywh(
+                        fx + margin_left,
+                        fy + margin_top - float_base_y,
+                        box_width,
+                        fragment.bounds.height(),
+                    );
+                    ctx.add_float_at(side, fx, fy, margin_left + box_width + margin_right, float_height);
+                    max_float_bottom = max_float_bottom.max(fy + float_height - float_base_y);
+                    float_fragments.push(fragment);
+                }
+
+                use_first_line_width = false;
+            } else {
+                pending.push(item);
+            }
+        }
+
+        flush_pending(
+            &mut pending,
+            &mut use_first_line_width,
+            &mut line_offset,
+            &mut lines,
+            float_ctx.as_deref(),
         );
 
         // Calculate total height
@@ -2493,6 +2757,7 @@ impl InlineFormattingContext {
             .iter()
             .map(|l| l.y_offset + l.height)
             .fold(0.0, f32::max);
+        let total_height = total_height.max(max_float_bottom);
         let max_width: f32 = if available_width.is_finite() {
             available_width
         } else {
@@ -2515,7 +2780,9 @@ impl InlineFormattingContext {
 
         // Create containing fragment
         let bounds = Rect::from_xywh(0.0, 0.0, max_width.min(available_width), total_height);
-        Ok(FragmentNode::new_block(bounds, children))
+        let mut merged_children = float_fragments;
+        merged_children.extend(children);
+        Ok(FragmentNode::new_block(bounds, merged_children))
     }
 }
 
@@ -2624,7 +2891,7 @@ fn first_char_of_item(item: &InlineItem) -> Option<char> {
         InlineItem::Text(t) => t.text.chars().next(),
         InlineItem::Tab(_) => Some('\t'),
         InlineItem::InlineBox(b) => b.children.iter().find_map(first_char_of_item),
-        InlineItem::InlineBlock(_) | InlineItem::Replaced(_) => Some(OBJECT_REPLACEMENT),
+        InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => Some(OBJECT_REPLACEMENT),
     }
 }
 
@@ -2634,7 +2901,7 @@ fn last_char_of_item(item: &InlineItem) -> Option<char> {
         InlineItem::Text(t) => t.text.chars().rev().next(),
         InlineItem::Tab(_) => Some('\t'),
         InlineItem::InlineBox(b) => b.children.iter().rev().find_map(last_char_of_item),
-        InlineItem::InlineBlock(_) | InlineItem::Replaced(_) => Some(OBJECT_REPLACEMENT),
+        InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => Some(OBJECT_REPLACEMENT),
     }
 }
 
@@ -2737,7 +3004,9 @@ fn determine_paragraph_direction(items: &[InlineItem]) -> Option<crate::style::t
                     collect_text(child, out);
                 }
             }
-            InlineItem::InlineBlock(_) | InlineItem::Replaced(_) => out.push(OBJECT_REPLACEMENT),
+            InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {
+                out.push(OBJECT_REPLACEMENT)
+            }
         }
     }
 
@@ -2852,7 +3121,7 @@ fn accumulate_scripts(item: &InlineItem, counts: &mut ScriptCounts) {
                 accumulate_scripts(child, counts);
             }
         }
-        InlineItem::InlineBlock(_) | InlineItem::Replaced(_) => {}
+        InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {}
     }
 }
 

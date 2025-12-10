@@ -408,7 +408,7 @@ impl BlockFormattingContext {
                                    current_y: &mut f32,
                                    content_height: &mut f32,
                                    margin_ctx: &mut MarginCollapseContext,
-                                   float_ctx_ref: &FloatContext|
+                                   float_ctx_ref: &mut FloatContext|
          -> Result<(), LayoutError> {
             if buffer.is_empty() {
                 return Ok(());
@@ -459,7 +459,7 @@ impl BlockFormattingContext {
                     &mut current_y,
                     &mut content_height,
                     &mut margin_ctx,
-                    &float_ctx,
+                    &mut float_ctx,
                 )?;
 
                 // Apply any pending collapsed margin before placing the float
@@ -655,7 +655,7 @@ impl BlockFormattingContext {
                     &mut current_y,
                     &mut content_height,
                     &mut margin_ctx,
-                    &float_ctx,
+                    &mut float_ctx,
                 )?;
 
                 // Apply clearance for in-flow blocks against floats
@@ -682,8 +682,8 @@ impl BlockFormattingContext {
             &mut current_y,
             &mut content_height,
             &mut margin_ctx,
-            &float_ctx,
-        )?;
+                    &mut float_ctx,
+                )?;
 
         // Resolve any trailing margins
         let trailing_margin = margin_ctx.pending_margin();

@@ -64,6 +64,9 @@ pub enum InlineItem {
 
     /// A replaced element (img, canvas, etc.)
     Replaced(ReplacedItem),
+
+    /// A floating box encountered in the inline stream
+    Floating(FloatingItem),
 }
 
 impl InlineItem {
@@ -75,6 +78,7 @@ impl InlineItem {
             InlineItem::InlineBox(b) => b.width(),
             InlineItem::InlineBlock(b) => b.total_width(),
             InlineItem::Replaced(r) => r.total_width(),
+            InlineItem::Floating(_) => 0.0,
         }
     }
 
@@ -86,6 +90,7 @@ impl InlineItem {
             InlineItem::InlineBox(b) => b.width(),
             InlineItem::InlineBlock(b) => b.width,
             InlineItem::Replaced(r) => r.intrinsic_width(),
+            InlineItem::Floating(_) => 0.0,
         }
     }
 
@@ -97,6 +102,7 @@ impl InlineItem {
             InlineItem::InlineBox(b) => b.metrics,
             InlineItem::InlineBlock(b) => b.metrics,
             InlineItem::Replaced(r) => r.metrics,
+            InlineItem::Floating(f) => f.metrics,
         }
     }
 
@@ -108,6 +114,7 @@ impl InlineItem {
             InlineItem::InlineBox(b) => b.vertical_align,
             InlineItem::InlineBlock(b) => b.vertical_align,
             InlineItem::Replaced(r) => r.vertical_align,
+            InlineItem::Floating(f) => f.vertical_align,
         }
     }
 
@@ -123,6 +130,7 @@ impl InlineItem {
             InlineItem::InlineBox(b) => b.direction,
             InlineItem::InlineBlock(b) => b.direction,
             InlineItem::Replaced(r) => r.direction,
+            InlineItem::Floating(f) => f.direction,
         }
     }
 
@@ -133,6 +141,7 @@ impl InlineItem {
             InlineItem::InlineBox(b) => b.unicode_bidi,
             InlineItem::InlineBlock(b) => b.unicode_bidi,
             InlineItem::Replaced(r) => r.unicode_bidi,
+            InlineItem::Floating(f) => f.unicode_bidi,
         }
     }
 
@@ -193,6 +202,16 @@ pub struct TextItem {
     pub paint_offset: f32,
     /// Cumulative advances at cluster boundaries (text order)
     cluster_advances: Vec<ClusterBoundary>,
+}
+
+/// A floating box placeholder encountered in the inline stream
+#[derive(Debug, Clone)]
+pub struct FloatingItem {
+    pub box_node: crate::tree::box_tree::BoxNode,
+    pub metrics: BaselineMetrics,
+    pub vertical_align: VerticalAlign,
+    pub direction: Direction,
+    pub unicode_bidi: UnicodeBidi,
 }
 
 #[derive(Debug, Clone)]
@@ -2857,7 +2876,9 @@ mod tests {
             InlineItem::Text(t) => t.text.clone(),
             InlineItem::Tab(_) => "\t".to_string(),
             InlineItem::InlineBox(b) => b.children.iter().map(flatten_text).collect(),
-            InlineItem::InlineBlock(_) | InlineItem::Replaced(_) => String::from("\u{FFFC}"),
+            InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {
+                String::from("\u{FFFC}")
+            }
         }
     }
 
