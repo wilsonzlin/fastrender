@@ -1897,30 +1897,48 @@ impl Painter {
                 .and_then(|font| font.metrics().ok().map(|m| (m, style.font_size)));
         }
 
-        let (metrics, size) = metrics_source?;
-        let scale = size / (metrics.units_per_em as f32);
+        if let Some((metrics, size)) = metrics_source {
+            let scale = size / (metrics.units_per_em as f32);
 
-        let underline_pos = metrics.underline_position as f32 * scale;
-        let underline_thickness = (metrics.underline_thickness as f32 * scale).max(1.0);
-        let descent = (metrics.descent as f32 * scale).abs();
-        let strike_pos = metrics
-            .strikeout_position
-            .map(|p| p as f32 * scale)
-            .unwrap_or_else(|| metrics.ascent as f32 * scale * 0.3);
-        let strike_thickness = metrics
-            .strikeout_thickness
-            .map(|t| t as f32 * scale)
-            .unwrap_or(underline_thickness);
-        let ascent = metrics.ascent as f32 * scale;
+            let underline_pos = metrics.underline_position as f32 * scale;
+            let underline_thickness = (metrics.underline_thickness as f32 * scale).max(1.0);
+            let descent = (metrics.descent as f32 * scale).abs();
+            let strike_pos = metrics
+                .strikeout_position
+                .map(|p| p as f32 * scale)
+                .unwrap_or_else(|| metrics.ascent as f32 * scale * 0.3);
+            let strike_thickness = metrics
+                .strikeout_thickness
+                .map(|t| t as f32 * scale)
+                .unwrap_or(underline_thickness);
+            let ascent = metrics.ascent as f32 * scale;
 
-        Some(DecorationMetrics {
-            underline_pos,
-            underline_thickness,
-            strike_pos,
-            strike_thickness,
-            ascent,
-            descent,
-        })
+            Some(DecorationMetrics {
+                underline_pos,
+                underline_thickness,
+                strike_pos,
+                strike_thickness,
+                ascent,
+                descent,
+            })
+        } else {
+            // Fallback heuristic metrics when we cannot obtain font metrics.
+            let size = style.font_size.max(1.0);
+            let ascent = size * 0.8;
+            let descent = size - ascent;
+            let underline_thickness = (size * 0.05).max(1.0);
+            let underline_pos = descent * 0.5;
+            let strike_pos = ascent * 0.4;
+
+            Some(DecorationMetrics {
+                underline_pos,
+                underline_thickness,
+                strike_pos,
+                strike_thickness: underline_thickness,
+                ascent,
+                descent,
+            })
+        }
     }
 
     #[allow(dead_code)]
