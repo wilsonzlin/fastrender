@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Removed duplicated `overflow`/`overflow-x`/`overflow-y` parsing arms to silence unreachable-pattern warnings while keeping clip keyword handling intact.
 - `text-underline-position` now parses/inherits (auto/from-font/under/left/right combinations), handles space-separated inline values, propagates with decorations, and the painter respects it by pushing underlines below descenders when authored; regression covers parsing, inheritance, and paint positioning.
 - `text-underline-offset` now inherits per spec so descendant underlines default to ancestor offsets; cascade regression added alongside the underline-position coverage.
 - CSS text emphasis added: `text-emphasis-style`/`color`/`position` parse/inherit (string or filled/open dot/circle/double-circle/triangle/sesame), shorthand is supported, and painter renders emphasis marks per glyph above/below text using currentColor fallback; regressions cover parsing, inheritance, and paint placement.

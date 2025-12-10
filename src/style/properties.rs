@@ -1550,45 +1550,6 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
-        // Overflow
-        "overflow" => {
-            if let PropertyValue::Keyword(kw) = &resolved_value {
-                let overflow = match kw.as_str() {
-                    "visible" => Overflow::Visible,
-                    "hidden" => Overflow::Hidden,
-                    "scroll" => Overflow::Scroll,
-                    "auto" => Overflow::Auto,
-                    "clip" => Overflow::Clip,
-                    _ => styles.overflow_x,
-                };
-                styles.overflow_x = overflow;
-                styles.overflow_y = overflow;
-            }
-        }
-        "overflow-x" => {
-            if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.overflow_x = match kw.as_str() {
-                    "visible" => Overflow::Visible,
-                    "hidden" => Overflow::Hidden,
-                    "scroll" => Overflow::Scroll,
-                    "auto" => Overflow::Auto,
-                    "clip" => Overflow::Clip,
-                    _ => styles.overflow_x,
-                };
-            }
-        }
-        "overflow-y" => {
-            if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.overflow_y = match kw.as_str() {
-                    "visible" => Overflow::Visible,
-                    "hidden" => Overflow::Hidden,
-                    "scroll" => Overflow::Scroll,
-                    "auto" => Overflow::Auto,
-                    "clip" => Overflow::Clip,
-                    _ => styles.overflow_y,
-                };
-            }
-        }
 
         "border-collapse" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
