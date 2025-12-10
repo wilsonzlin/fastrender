@@ -231,18 +231,32 @@ impl FlexFormattingContext {
     ) -> taffy::style::Style {
         let inline_positive_container = self.inline_axis_positive(style);
         let block_positive_container = self.block_axis_positive(style);
+        let inline_is_horizontal_container = matches!(
+            style.writing_mode,
+            WritingMode::HorizontalTb | WritingMode::SidewaysLr | WritingMode::SidewaysRl
+        );
         let main_is_inline = matches!(style.flex_direction, FlexDirection::Row | FlexDirection::RowReverse);
         let cross_positive_container = if main_is_inline {
             block_positive_container
         } else {
             inline_positive_container
         };
+        let main_positive_container = match style.flex_direction {
+            FlexDirection::Row => inline_positive_container,
+            FlexDirection::RowReverse => !inline_positive_container,
+            FlexDirection::Column => block_positive_container,
+            FlexDirection::ColumnReverse => !block_positive_container,
+        };
 
         // Flex items align to the parent flex container's axes, not their own writing-mode/direction.
         let axis_source = containing_flex.unwrap_or(style);
         let inline_positive_item = self.inline_axis_positive(axis_source);
         let block_positive_item = self.block_axis_positive(axis_source);
-        let cross_positive_item = if main_is_inline { block_positive_item } else { inline_positive_item };
+        let cross_positive_item = if main_is_inline {
+            block_positive_item
+        } else {
+            inline_positive_item
+        };
 
         taffy::style::Style {
             // Display mode - only root is Flex, children are Block (flex items)
@@ -251,7 +265,7 @@ impl FlexFormattingContext {
             // Flex container properties
             flex_direction: self.flex_direction_to_taffy(style, inline_positive_container, block_positive_container),
             flex_wrap: self.flex_wrap_to_taffy(style.flex_wrap),
-            justify_content: self.justify_content_to_taffy(style.justify_content),
+            justify_content: self.justify_content_to_taffy(style.justify_content, main_positive_container),
             align_items: self.align_items_to_taffy(style.align_items, cross_positive_container),
             align_content: self.align_content_to_taffy(style.align_content, cross_positive_container),
             align_self: self.align_self_to_taffy(style.align_self, cross_positive_item),
@@ -260,8 +274,17 @@ impl FlexFormattingContext {
 
             // Gap
             gap: taffy::geometry::Size {
-                width: self.length_to_taffy_lp(&style.grid_column_gap, style),
-                height: self.length_to_taffy_lp(&style.grid_row_gap, style),
+                // Column gap follows the inline axis; row gap follows the block axis.
+                width: if inline_is_horizontal_container {
+                    self.length_to_taffy_lp(&style.grid_column_gap, style)
+                } else {
+                    self.length_to_taffy_lp(&style.grid_row_gap, style)
+                },
+                height: if inline_is_horizontal_container {
+                    self.length_to_taffy_lp(&style.grid_row_gap, style)
+                } else {
+                    self.length_to_taffy_lp(&style.grid_column_gap, style)
+                },
             },
 
             // Flex item properties
@@ -493,10 +516,14 @@ impl FlexFormattingContext {
         }
     }
 
-    fn justify_content_to_taffy(&self, justify: JustifyContent) -> Option<taffy::style::JustifyContent> {
+    fn justify_content_to_taffy(&self, justify: JustifyContent, axis_positive: bool) -> Option<taffy::style::JustifyContent> {
         Some(match justify {
-            JustifyContent::FlexStart => taffy::style::JustifyContent::FlexStart,
-            JustifyContent::FlexEnd => taffy::style::JustifyContent::FlexEnd,
+            JustifyContent::FlexStart => {
+                if axis_positive { taffy::style::JustifyContent::FlexStart } else { taffy::style::JustifyContent::FlexEnd }
+            }
+            JustifyContent::FlexEnd => {
+                if axis_positive { taffy::style::JustifyContent::FlexEnd } else { taffy::style::JustifyContent::FlexStart }
+            }
             JustifyContent::Center => taffy::style::JustifyContent::Center,
             JustifyContent::SpaceBetween => taffy::style::JustifyContent::SpaceBetween,
             JustifyContent::SpaceAround => taffy::style::JustifyContent::SpaceAround,
@@ -945,6 +972,47 @@ mod tests {
 
         // Block axis start for vertical-rl is the right edge, so x should be at 80
         assert_eq!(fragment.children[0].bounds.x(), 80.0);
+    }
+
+    #[test]
+    fn writing_mode_vertical_row_justify_start_and_end_follow_inline_axis() {
+        let fc = FlexFormattingContext::new();
+
+        let mut style = ComputedStyle::default();
+        style.display = Display::Flex;
+        style.flex_direction = FlexDirection::Row; // inline axis (vertical in vertical-rl)
+        style.writing_mode = crate::style::types::WritingMode::VerticalRl;
+        style.justify_content = JustifyContent::FlexStart;
+        style.height = Some(Length::px(100.0));
+
+        let mut end_style = style.clone();
+        end_style.justify_content = JustifyContent::FlexEnd;
+
+        let child1 = BoxNode::new_block(create_item_style(10.0, 10.0), FormattingContextType::Block, vec![]);
+        let child2 = BoxNode::new_block(create_item_style(10.0, 10.0), FormattingContextType::Block, vec![]);
+
+        let container =
+            BoxNode::new_block(Arc::new(style), FormattingContextType::Flex, vec![child1, child2]);
+
+        let constraints = LayoutConstraints::definite(100.0, 100.0);
+        let fragment = fc.layout(&container, &constraints).unwrap();
+
+        // Inline axis is vertical; flex-start packs at the top.
+        assert_eq!(fragment.children[0].bounds.y(), 0.0);
+        assert_eq!(fragment.children[1].bounds.y(), 10.0);
+
+        // Now flex-end should pack to the bottom of the inline axis.
+        let end_container = BoxNode::new_block(
+            Arc::new(end_style),
+            FormattingContextType::Flex,
+            vec![
+                BoxNode::new_block(create_item_style(10.0, 10.0), FormattingContextType::Block, vec![]),
+                BoxNode::new_block(create_item_style(10.0, 10.0), FormattingContextType::Block, vec![]),
+            ],
+        );
+        let end_fragment = fc.layout(&end_container, &constraints).unwrap();
+        assert_eq!(end_fragment.children[0].bounds.y(), 80.0);
+        assert_eq!(end_fragment.children[1].bounds.y(), 90.0);
     }
 
     #[test]
