@@ -3282,14 +3282,38 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
 
             let first_is_vertical = matches!(first, Part::Keyword(AxisKind::Vertical, _));
             let second_is_horizontal = matches!(second, Part::Keyword(AxisKind::Horizontal, _));
-            if first_is_vertical && second_is_horizontal {
+            // center + horizontal keyword => treat first as vertical center, second as horizontal
+            if matches!(first, Part::Keyword(AxisKind::Either, _)) && second_is_horizontal {
+                x = component_from_single(second, AxisKind::Horizontal);
+                y = Some(component_from_keyword(0.5, None));
+            // center + vertical keyword => treat first as horizontal center, second as vertical
+            } else if matches!(first, Part::Keyword(AxisKind::Either, _))
+                && matches!(second, Part::Keyword(AxisKind::Vertical, _))
+            {
+                x = Some(component_from_keyword(0.5, None));
+                y = component_from_single(second, AxisKind::Vertical);
+            } else if first_is_vertical && second_is_horizontal {
                 y = component_from_single(first, AxisKind::Vertical);
                 x = component_from_single(second, AxisKind::Horizontal);
             } else {
-                x = component_from_single(first, AxisKind::Horizontal)
-                    .or_else(|| component_from_single(second, AxisKind::Horizontal));
-                y = component_from_single(second, AxisKind::Vertical)
-                    .or_else(|| component_from_single(first, AxisKind::Vertical));
+                let first_h = component_from_single(first, AxisKind::Horizontal);
+                let first_v = component_from_single(first, AxisKind::Vertical);
+                let second_h = component_from_single(second, AxisKind::Horizontal);
+                let second_v = component_from_single(second, AxisKind::Vertical);
+
+                // Ambiguous center handling: if first is center and second is a horizontal-only keyword,
+                // treat the first as vertical center and second as horizontal (center left -> left center).
+                if first_v.is_none() && first_h.is_some() && second_h.is_some() && second_v.is_none() {
+                    x = second_h;
+                    y = first_v.or_else(|| Some(component_from_keyword(0.5, None)));
+                } else if first_v.is_some() && second_h.is_none() && second_v.is_some() {
+                    // first vertical only, second vertical or center -> treat first vertical, second becomes horizontal center.
+                    y = first_v;
+                    x = second_h.or_else(|| Some(component_from_keyword(0.5, None)));
+                } else {
+                    x = first_h.or_else(|| second_h);
+                    y = second_v.or_else(|| first_v);
+                }
             }
             if x.is_none() {
                 x = Some(component_from_keyword(0.5, None));
@@ -4851,6 +4875,48 @@ mod tests {
         assert!((x.alignment - 1.0).abs() < 0.01);
         assert!(x.offset.is_zero());
         assert!((y.alignment - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn background_position_center_left_swaps_axes() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-position".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("center".to_string()),
+                    PropertyValue::Keyword("left".to_string()),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
+        assert!((x.alignment - 0.0).abs() < 0.01);
+        assert!((y.alignment - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn background_position_center_bottom_keeps_vertical() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-position".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("center".to_string()),
+                    PropertyValue::Keyword("bottom".to_string()),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
+        assert!((x.alignment - 0.5).abs() < 0.01);
+        assert!((y.alignment - 1.0).abs() < 0.01);
     }
 
     #[test]
