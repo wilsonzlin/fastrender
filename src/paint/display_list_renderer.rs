@@ -1768,6 +1768,37 @@ mod tests {
     }
 
     #[test]
+    fn text_decoration_segments_respect_gaps() {
+        let mut list = DisplayList::new();
+        list.push(DisplayItem::TextDecoration(TextDecorationItem {
+            bounds: Rect::from_xywh(0.0, 0.0, 20.0, 10.0),
+            line_start: 0.0,
+            line_width: 20.0,
+            decorations: vec![DecorationPaint {
+                style: TextDecorationStyle::Solid,
+                color: Rgba::from_rgba8(0, 0, 255, 255),
+                underline: Some(DecorationStroke {
+                    center: 5.0,
+                    thickness: 2.0,
+                    segments: Some(vec![(0.0, 6.0), (14.0, 20.0)]),
+                }),
+                overline: None,
+                line_through: None,
+            }],
+        }));
+
+        let pixmap = DisplayListRenderer::new(20, 10, Rgba::WHITE, FontContext::new())
+            .expect("renderer")
+            .render(&list)
+            .expect("rendered");
+        // Painted segments should hit inside and right span.
+        assert_eq!(pixel(&pixmap, 2, 5), (0, 0, 255, 255));
+        assert_eq!(pixel(&pixmap, 16, 5), (0, 0, 255, 255));
+        // Gap should remain white.
+        assert_eq!(pixel(&pixmap, 10, 5), (255, 255, 255, 255));
+    }
+
+    #[test]
     fn renders_linear_gradient() {
         let renderer = DisplayListRenderer::new(2, 1, Rgba::WHITE, FontContext::new()).unwrap();
         let mut list = DisplayList::new();
