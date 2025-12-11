@@ -392,6 +392,8 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.list_style_position = parent.list_style_position;
     styles.list_style_image = parent.list_style_image.clone();
     styles.quotes = parent.quotes.clone();
+    styles.cursor = parent.cursor;
+    styles.cursor_images = parent.cursor_images.clone();
 
     // Color inherits
     styles.color = parent.color;
@@ -485,6 +487,7 @@ mod tests {
     use crate::css::types::StyleSheet;
     use crate::dom::DomNodeType;
     use crate::style::color::Rgba;
+    use crate::style::CursorKeyword;
     use crate::style::computed::Visibility;
     use crate::style::display::Display;
     use crate::style::float::Float;
@@ -621,6 +624,44 @@ mod tests {
 
         let styled = apply_styles(&dom, &StyleSheet::new());
         assert!(matches!(styled.styles.direction, crate::style::types::Direction::Ltr));
+    }
+
+    #[test]
+    fn cursor_inherits_and_can_be_overridden() {
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), "cursor: move;".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "span".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            }],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let child = styled.children.first().expect("child");
+        assert_eq!(child.styles.cursor, CursorKeyword::Move);
+
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), "cursor: move;".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "span".to_string(),
+                    attributes: vec![("style".to_string(), "cursor: pointer;".to_string())],
+                },
+                children: vec![],
+            }],
+        };
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let child = styled.children.first().expect("child");
+        assert_eq!(child.styles.cursor, CursorKeyword::Pointer);
     }
 
     #[test]
