@@ -3139,231 +3139,181 @@ fn parse_background_repeat(value: &PropertyValue) -> Option<BackgroundRepeat> {
 
 fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition> {
     #[derive(Clone, Copy, PartialEq, Eq)]
-    enum Axis {
+    enum AxisKind {
         Horizontal,
         Vertical,
+        Either, // center
     }
 
     #[derive(Clone, Copy)]
-    struct TempComponent {
-        alignment: f32,
-        offset: Option<Length>,
-        from_keyword: bool,
+    enum Part {
+        Keyword(AxisKind, f32),
+        Offset(Length),
     }
 
-    let components: Vec<&PropertyValue> = match value {
-        PropertyValue::Multiple(values) if !values.is_empty() => values.iter().collect(),
-        _ => vec![value],
+    fn classify(value: &PropertyValue) -> Option<Part> {
+        match value {
+            PropertyValue::Keyword(kw) => match kw.as_str() {
+                "left" => Some(Part::Keyword(AxisKind::Horizontal, 0.0)),
+                "right" => Some(Part::Keyword(AxisKind::Horizontal, 1.0)),
+                "top" => Some(Part::Keyword(AxisKind::Vertical, 0.0)),
+                "bottom" => Some(Part::Keyword(AxisKind::Vertical, 1.0)),
+                "center" => Some(Part::Keyword(AxisKind::Either, 0.5)),
+                _ => None,
+            },
+            PropertyValue::Length(l) => Some(Part::Offset(*l)),
+            PropertyValue::Percentage(p) => Some(Part::Offset(Length::percent(*p))),
+            PropertyValue::Number(n) if *n == 0.0 => Some(Part::Offset(Length::px(0.0))),
+            _ => None,
+        }
+    }
+
+    fn component_from_keyword(align: f32, offset: Option<Length>) -> BackgroundPositionComponent {
+        let mut off = offset.unwrap_or_else(|| Length::px(0.0));
+        if (align - 1.0).abs() < 1e-6 {
+            off.value = -off.value;
+        }
+        BackgroundPositionComponent {
+            alignment: align,
+            offset: off,
+        }
+    }
+
+    fn component_from_single(part: &Part, axis: AxisKind) -> Option<BackgroundPositionComponent> {
+        match (part, axis) {
+            (Part::Keyword(kind, align), _) if *kind == AxisKind::Either => {
+                Some(component_from_keyword(*align, None))
+            }
+            (Part::Keyword(kind, align), AxisKind::Horizontal) if *kind == AxisKind::Horizontal => {
+                Some(component_from_keyword(*align, None))
+            }
+            (Part::Keyword(kind, align), AxisKind::Vertical) if *kind == AxisKind::Vertical => {
+                Some(component_from_keyword(*align, None))
+            }
+            (Part::Offset(len), AxisKind::Horizontal | AxisKind::Vertical) => {
+                Some(component_from_keyword(0.0, Some(*len)))
+            }
+            _ => None,
+        }
+    }
+
+    let parts: Vec<Part> = match value {
+        PropertyValue::Multiple(values) if !values.is_empty() => values.iter().filter_map(classify).collect(),
+        other => classify(other).into_iter().collect(),
     };
 
-    let mut x: Option<TempComponent> = None;
-    let mut y: Option<TempComponent> = None;
-    for comp in components.iter().take(4) {
-        match comp {
-            PropertyValue::Keyword(kw) => {
-                let axis = match kw.as_str() {
-                    "left" => Some((Axis::Horizontal, 0.0)),
-                    "right" => Some((Axis::Horizontal, 1.0)),
-                    "top" => Some((Axis::Vertical, 0.0)),
-                    "bottom" => Some((Axis::Vertical, 1.0)),
-                    "center" => {
-                        if x.is_none() {
-                            Some((Axis::Horizontal, 0.5))
-                        } else if y.is_none() {
-                            Some((Axis::Vertical, 0.5))
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                };
-
-                if let Some((axis, align)) = axis {
-                    let target = match axis {
-                        Axis::Horizontal => &mut x,
-                        Axis::Vertical => &mut y,
-                    };
-                    if target.is_none() {
-                        *target = Some(TempComponent {
-                            alignment: align,
-                            offset: None,
-                            from_keyword: true,
-                        });
-                    }
-                }
-            }
-            _ => {}
-        }
+    if parts.is_empty() || parts.len() > 4 {
+        return None;
     }
 
-    // Second pass (still sequential to respect proximity) for offsets/explicit lengths.
-    let mut last_axis: Option<Axis> = None;
-    for comp in components.iter().take(4) {
-        match comp {
-            PropertyValue::Keyword(kw) => {
-                last_axis = match kw.as_str() {
-                    "left" | "right" => Some(Axis::Horizontal),
-                    "top" | "bottom" => Some(Axis::Vertical),
-                    "center" => last_axis,
-                    _ => last_axis,
-                };
-            }
-            PropertyValue::Length(l) => {
-                let len = *l;
-                let handled = if let Some(axis) = last_axis {
-                    let target = match axis {
-                        Axis::Horizontal => &mut x,
-                        Axis::Vertical => &mut y,
-                    };
-                    if let Some(ref mut comp) = target {
-                        if comp.from_keyword && comp.offset.is_none() {
-                            let mut adjusted = len;
-                            if (comp.alignment - 1.0).abs() < 1e-6 {
-                                adjusted.value = -adjusted.value;
-                            }
-                            comp.offset = Some(adjusted);
-                            true
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
+    let mut x: Option<BackgroundPositionComponent> = None;
+    let mut y: Option<BackgroundPositionComponent> = None;
 
-                if handled {
-                    continue;
+    match parts.len() {
+        1 => {
+            match parts[0] {
+                Part::Keyword(AxisKind::Horizontal, align) => {
+                    x = Some(component_from_keyword(align, None));
+                    y = Some(component_from_keyword(0.5, None));
                 }
-
-                if x.is_none() {
-                    x = Some(TempComponent {
-                        alignment: 0.0,
-                        offset: Some(len),
-                        from_keyword: false,
-                    });
-                    last_axis = Some(Axis::Horizontal);
-                } else if y.is_none() {
-                    y = Some(TempComponent {
-                        alignment: 0.0,
-                        offset: Some(len),
-                        from_keyword: false,
-                    });
-                    last_axis = Some(Axis::Vertical);
+                Part::Keyword(AxisKind::Vertical, align) => {
+                    y = Some(component_from_keyword(align, None));
+                    x = Some(component_from_keyword(0.5, None));
+                }
+                Part::Keyword(AxisKind::Either, align) => {
+                    x = Some(component_from_keyword(align, None));
+                    y = Some(component_from_keyword(align, None));
+                }
+                Part::Offset(len) => {
+                    x = Some(component_from_keyword(0.0, Some(len)));
+                    y = Some(component_from_keyword(0.5, None));
                 }
             }
-            PropertyValue::Percentage(p) => {
-                let len = Length::percent(*p);
-                let handled = if let Some(axis) = last_axis {
-                    let target = match axis {
-                        Axis::Horizontal => &mut x,
-                        Axis::Vertical => &mut y,
-                    };
-                    if let Some(ref mut comp) = target {
-                        if comp.from_keyword && comp.offset.is_none() {
-                            let mut adjusted = len;
-                            if (comp.alignment - 1.0).abs() < 1e-6 {
-                                adjusted.value = -adjusted.value;
-                            }
-                            comp.offset = Some(adjusted);
-                            true
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
-
-                if handled {
-                    continue;
-                }
-
-                if x.is_none() {
-                    x = Some(TempComponent {
-                        alignment: 0.0,
-                        offset: Some(len),
-                        from_keyword: false,
-                    });
-                    last_axis = Some(Axis::Horizontal);
-                } else if y.is_none() {
-                    y = Some(TempComponent {
-                        alignment: 0.0,
-                        offset: Some(len),
-                        from_keyword: false,
-                    });
-                    last_axis = Some(Axis::Vertical);
-                }
-            }
-            PropertyValue::Number(n) if *n == 0.0 => {
-                let len = Length::px(0.0);
-                let handled = if let Some(axis) = last_axis {
-                    let target = match axis {
-                        Axis::Horizontal => &mut x,
-                        Axis::Vertical => &mut y,
-                    };
-                    if let Some(ref mut comp) = target {
-                        if comp.from_keyword && comp.offset.is_none() {
-                            comp.offset = Some(len);
-                            true
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
-
-                if handled {
-                    continue;
-                }
-
-                if x.is_none() {
-                    x = Some(TempComponent {
-                        alignment: 0.0,
-                        offset: Some(len),
-                        from_keyword: false,
-                    });
-                    last_axis = Some(Axis::Horizontal);
-                } else if y.is_none() {
-                    y = Some(TempComponent {
-                        alignment: 0.0,
-                        offset: Some(len),
-                        from_keyword: false,
-                    });
-                    last_axis = Some(Axis::Vertical);
-                }
-            }
-            _ => {}
         }
+        2 => {
+            // Two-value syntax: first is horizontal, second vertical; if order is vertical+horizontal, swap.
+            let (first, second) = (&parts[0], &parts[1]);
+
+            let first_is_vertical = matches!(first, Part::Keyword(AxisKind::Vertical, _));
+            let second_is_horizontal = matches!(second, Part::Keyword(AxisKind::Horizontal, _));
+            if first_is_vertical && second_is_horizontal {
+                y = component_from_single(first, AxisKind::Vertical);
+                x = component_from_single(second, AxisKind::Horizontal);
+            } else {
+                x = component_from_single(first, AxisKind::Horizontal)
+                    .or_else(|| component_from_single(second, AxisKind::Horizontal));
+                y = component_from_single(second, AxisKind::Vertical)
+                    .or_else(|| component_from_single(first, AxisKind::Vertical));
+            }
+            if x.is_none() {
+                x = Some(component_from_keyword(0.5, None));
+            }
+            if y.is_none() {
+                y = Some(component_from_keyword(0.5, None));
+            }
+        }
+        3 => {
+            // One axis has keyword + offset, the other a single component.
+            let a = &parts[0];
+            let b = &parts[1];
+            let c = &parts[2];
+
+            // Horizontal pair first
+            if matches!(a, Part::Keyword(AxisKind::Horizontal | AxisKind::Either, _)) && matches!(b, Part::Offset(_)) {
+                if let Part::Keyword(_, align) = a {
+                    x = Some(component_from_keyword(*align, Some(match b { Part::Offset(l) => *l, _ => unreachable!() })));
+                } else if let Part::Offset(_) = a {
+                    // unreachable
+                }
+                y = component_from_single(c, AxisKind::Vertical);
+            }
+
+            // Vertical pair first
+            if x.is_none() && matches!(a, Part::Keyword(AxisKind::Vertical | AxisKind::Either, _)) && matches!(b, Part::Offset(_)) {
+                if let Part::Keyword(_, align) = a {
+                    y = Some(component_from_keyword(*align, Some(match b { Part::Offset(l) => *l, _ => unreachable!() })));
+                }
+                x = component_from_single(c, AxisKind::Horizontal);
+            }
+        }
+        4 => {
+            let a = &parts[0];
+            let b = &parts[1];
+            let c = &parts[2];
+            let d = &parts[3];
+
+            // horizontal pair then vertical pair
+            if matches!(a, Part::Keyword(AxisKind::Horizontal | AxisKind::Either, _))
+                && matches!(b, Part::Offset(_))
+                && matches!(c, Part::Keyword(AxisKind::Vertical | AxisKind::Either, _))
+                && matches!(d, Part::Offset(_))
+            {
+                if let Part::Keyword(_, align) = a {
+                    x = Some(component_from_keyword(*align, Some(match b { Part::Offset(l) => *l, _ => unreachable!() })));
+                }
+                if let Part::Keyword(_, align) = c {
+                    y = Some(component_from_keyword(*align, Some(match d { Part::Offset(l) => *l, _ => unreachable!() })));
+                }
+            } else if matches!(a, Part::Keyword(AxisKind::Vertical | AxisKind::Either, _))
+                && matches!(b, Part::Offset(_))
+                && matches!(c, Part::Keyword(AxisKind::Horizontal | AxisKind::Either, _))
+                && matches!(d, Part::Offset(_))
+            {
+                if let Part::Keyword(_, align) = a {
+                    y = Some(component_from_keyword(*align, Some(match b { Part::Offset(l) => *l, _ => unreachable!() })));
+                }
+                if let Part::Keyword(_, align) = c {
+                    x = Some(component_from_keyword(*align, Some(match d { Part::Offset(l) => *l, _ => unreachable!() })));
+                }
+            }
+        }
+        _ => {}
     }
 
-    let x = x.unwrap_or(TempComponent {
-        alignment: 0.5,
-        offset: None,
-        from_keyword: true,
-    });
-    let y = y.unwrap_or(TempComponent {
-        alignment: 0.5,
-        offset: None,
-        from_keyword: true,
-    });
+    let x = x.unwrap_or_else(|| component_from_keyword(0.5, None));
+    let y = y.unwrap_or_else(|| component_from_keyword(0.5, None));
 
-    Some(BackgroundPosition::Position {
-        x: BackgroundPositionComponent {
-            alignment: x.alignment,
-            offset: x.offset.unwrap_or_else(|| Length::px(0.0)),
-        },
-        y: BackgroundPositionComponent {
-            alignment: y.alignment,
-            offset: y.offset.unwrap_or_else(|| Length::px(0.0)),
-        },
-    })
+    Some(BackgroundPosition::Position { x, y })
 }
 
 fn parse_text_decoration_line(value: &PropertyValue) -> Option<TextDecorationLine> {
@@ -4744,6 +4694,149 @@ mod tests {
         assert!((y.alignment - 0.0).abs() < 0.01);
         assert!(x.offset.is_zero());
         assert!(y.offset.is_zero());
+    }
+
+    #[test]
+    fn background_position_two_value_second_length_is_vertical() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-position".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("left".to_string()),
+                    PropertyValue::Percentage(20.0),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
+        assert!((x.alignment - 0.0).abs() < 0.01);
+        assert!(x.offset.is_zero());
+        assert!((y.alignment - 0.0).abs() < 0.01);
+        assert_eq!(y.offset, Length::percent(20.0));
+    }
+
+    #[test]
+    fn background_position_two_keywords_swapped_axes() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-position".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("top".to_string()),
+                    PropertyValue::Keyword("right".to_string()),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
+        assert!((x.alignment - 1.0).abs() < 0.01);
+        assert!(x.offset.is_zero());
+        assert!((y.alignment - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn background_position_three_values_horizontal_pair() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-position".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("left".to_string()),
+                    PropertyValue::Length(Length::px(10.0)),
+                    PropertyValue::Keyword("bottom".to_string()),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
+        assert!((x.alignment - 0.0).abs() < 0.01);
+        assert_eq!(x.offset, Length::px(10.0));
+        assert!((y.alignment - 1.0).abs() < 0.01);
+        assert!(y.offset.is_zero());
+    }
+
+    #[test]
+    fn background_position_three_values_vertical_pair() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-position".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("bottom".to_string()),
+                    PropertyValue::Length(Length::px(5.0)),
+                    PropertyValue::Keyword("right".to_string()),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
+        assert!((y.alignment - 1.0).abs() < 0.01);
+        assert_eq!(y.offset, Length::px(-5.0));
+        assert!((x.alignment - 1.0).abs() < 0.01);
+        assert!(x.offset.is_zero());
+    }
+
+    #[test]
+    fn background_position_four_values() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-position".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("right".to_string()),
+                    PropertyValue::Length(Length::px(20.0)),
+                    PropertyValue::Keyword("bottom".to_string()),
+                    PropertyValue::Length(Length::px(10.0)),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
+        assert!((x.alignment - 1.0).abs() < 0.01);
+        assert_eq!(x.offset, Length::px(-20.0));
+        assert!((y.alignment - 1.0).abs() < 0.01);
+        assert_eq!(y.offset, Length::px(-10.0));
+    }
+
+    #[test]
+    fn background_position_four_values_vertical_first() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-position".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("top".to_string()),
+                    PropertyValue::Length(Length::px(10.0)),
+                    PropertyValue::Keyword("left".to_string()),
+                    PropertyValue::Length(Length::px(5.0)),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
+        assert!((y.alignment - 0.0).abs() < 0.01);
+        assert_eq!(y.offset, Length::px(10.0));
+        assert!((x.alignment - 0.0).abs() < 0.01);
+        assert_eq!(x.offset, Length::px(5.0));
     }
 
     #[test]
