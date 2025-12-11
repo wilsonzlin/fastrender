@@ -997,7 +997,19 @@ impl DisplayListBuilder {
             FragmentContent::Replaced { replaced_type, .. } => {
                 let sources: Vec<&str> = match replaced_type {
                     ReplacedType::Image { .. } => {
-                        vec![replaced_type.image_source_for_scale(self.device_pixel_ratio, Some(rect.width()))]
+                        let media_ctx = self
+                            .viewport
+                            .map(|(w, h)| crate::style::media::MediaContext::screen(w, h)
+                                .with_device_pixel_ratio(self.device_pixel_ratio));
+                        vec![replaced_type.image_source_for_context(
+                            crate::tree::box_tree::ImageSelectionContext {
+                                scale: self.device_pixel_ratio,
+                                slot_width: Some(rect.width()),
+                                viewport: self.viewport.map(|(w, h)| crate::geometry::Size::new(w, h)),
+                                media_context: media_ctx.as_ref(),
+                                font_size: fragment.style.as_deref().map(|s| s.font_size),
+                            },
+                        )]
                     }
                     ReplacedType::Video { src, poster } => {
                         let mut list = Vec::new();
@@ -2298,6 +2310,7 @@ mod tests {
             ReplacedType::Image {
                 src: src.to_string(),
                 alt: None,
+                sizes: None,
                 srcset: Vec::new(),
             },
         )
@@ -2866,6 +2879,7 @@ mod tests {
                 replaced_type: ReplacedType::Image {
                     src: "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E".to_string(),
                     alt: None,
+                    sizes: None,
                     srcset: Vec::new(),
                 },
             },
@@ -2907,6 +2921,7 @@ mod tests {
                 replaced_type: ReplacedType::Image {
                     src: "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E".to_string(),
                     alt: None,
+                    sizes: None,
                     srcset: Vec::new(),
                 },
             },
@@ -2936,6 +2951,7 @@ mod tests {
                 replaced_type: ReplacedType::Image {
                     src: "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E".to_string(),
                     alt: None,
+                    sizes: None,
                     srcset: Vec::new(),
                 },
             },
@@ -2963,6 +2979,7 @@ mod tests {
                 replaced_type: ReplacedType::Image {
                     src: String::new(),
                     alt: Some("alt text".to_string()),
+                    sizes: None,
                     srcset: Vec::new(),
                 },
             },
@@ -2987,6 +3004,7 @@ mod tests {
             ReplacedType::Image {
                 src: String::new(),
                 alt: None,
+                sizes: None,
                 srcset: Vec::new(),
             },
         );

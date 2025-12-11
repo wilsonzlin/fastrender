@@ -614,7 +614,7 @@ impl FastRender {
         let mut box_tree = generate_box_tree(&styled_tree);
 
         // Resolve intrinsic sizes for replaced elements using the image cache
-        self.resolve_replaced_intrinsic_sizes(&mut box_tree.root);
+        self.resolve_replaced_intrinsic_sizes(&mut box_tree.root, Size::new(width as f32, height as f32));
 
         // Update layout engine config for this viewport
         let config = LayoutConfig::for_viewport(Size::new(width as f32, height as f32));
@@ -715,10 +715,10 @@ impl FastRender {
     }
 
     /// Populate intrinsic sizes for replaced elements (e.g., images) using the image cache.
-    fn resolve_replaced_intrinsic_sizes(&self, node: &mut BoxNode) {
+    fn resolve_replaced_intrinsic_sizes(&self, node: &mut BoxNode, viewport: Size) {
         if let BoxType::Marker(marker_box) = &mut node.box_type {
             if let MarkerContent::Image(replaced) = &mut marker_box.content {
-                self.resolve_intrinsic_for_replaced(replaced, node.style.as_ref(), None);
+                self.resolve_intrinsic_for_replaced(replaced, node.style.as_ref(), None, viewport);
             }
         }
 
@@ -727,15 +727,21 @@ impl FastRender {
                 ReplacedType::Image { alt, .. } => alt.clone(),
                 _ => None,
             };
-            self.resolve_intrinsic_for_replaced(replaced_box, node.style.as_ref(), alt.as_deref());
+            self.resolve_intrinsic_for_replaced(replaced_box, node.style.as_ref(), alt.as_deref(), viewport);
         }
 
         for child in &mut node.children {
-            self.resolve_replaced_intrinsic_sizes(child);
+            self.resolve_replaced_intrinsic_sizes(child, viewport);
         }
     }
 
-    fn resolve_intrinsic_for_replaced(&self, replaced_box: &mut ReplacedBox, style: &ComputedStyle, alt: Option<&str>) {
+    fn resolve_intrinsic_for_replaced(
+        &self,
+        replaced_box: &mut ReplacedBox,
+        style: &ComputedStyle,
+        alt: Option<&str>,
+        viewport: Size,
+    ) {
         let replaced_type_snapshot = replaced_box.replaced_type.clone();
         match replaced_type_snapshot {
             ReplacedType::Image { src, alt: stored_alt, .. } => {
@@ -744,10 +750,20 @@ impl FastRender {
                 let mut have_resource_dimensions = false;
 
                 let chosen_src = if (needs_intrinsic || needs_ratio) && !src.is_empty() {
+                    let media_ctx =
+                        crate::style::media::MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(
+                            self.device_pixel_ratio,
+                        );
                     Some(
                         replaced_box
                             .replaced_type
-                            .image_source_for_scale(self.device_pixel_ratio, None)
+                            .image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
+                                scale: self.device_pixel_ratio,
+                                slot_width: None,
+                                viewport: Some(viewport),
+                                media_context: Some(&media_ctx),
+                                font_size: Some(style.font_size),
+                            })
                             .to_string(),
                     )
                 } else {
@@ -1222,13 +1238,14 @@ mod tests {
             ReplacedType::Image {
                 src: String::new(),
                 alt: Some(alt_text.to_string()),
+                sizes: None,
                 srcset: Vec::new(),
             },
             None,
             None,
         );
 
-        renderer.resolve_replaced_intrinsic_sizes(&mut node);
+        renderer.resolve_replaced_intrinsic_sizes(&mut node, Size::new(800.0, 600.0));
         let replaced = match node.box_type {
             BoxType::Replaced(ref r) => r,
             _ => panic!("not replaced"),
@@ -1292,7 +1309,7 @@ mod tests {
             None,
         );
 
-        renderer.resolve_replaced_intrinsic_sizes(&mut node);
+        renderer.resolve_replaced_intrinsic_sizes(&mut node, Size::new(800.0, 600.0));
         let replaced = match node.box_type {
             BoxType::Replaced(ref r) => r,
             _ => panic!("not replaced"),
@@ -1323,7 +1340,7 @@ mod tests {
             None,
         );
 
-        renderer.resolve_replaced_intrinsic_sizes(&mut node);
+        renderer.resolve_replaced_intrinsic_sizes(&mut node, Size::new(800.0, 600.0));
         let replaced = match node.box_type {
             BoxType::Replaced(ref r) => r,
             _ => panic!("not replaced"),
@@ -1351,7 +1368,7 @@ mod tests {
             None,
             None,
         );
-        renderer.resolve_replaced_intrinsic_sizes(&mut embed_node);
+        renderer.resolve_replaced_intrinsic_sizes(&mut embed_node, Size::new(800.0, 600.0));
         let embed_replaced = match embed_node.box_type {
             BoxType::Replaced(ref r) => r,
             _ => panic!("not replaced"),
@@ -1373,7 +1390,7 @@ mod tests {
             None,
             None,
         );
-        renderer.resolve_replaced_intrinsic_sizes(&mut object_node);
+        renderer.resolve_replaced_intrinsic_sizes(&mut object_node, Size::new(800.0, 600.0));
         let object_replaced = match object_node.box_type {
             BoxType::Replaced(ref r) => r,
             _ => panic!("not replaced"),

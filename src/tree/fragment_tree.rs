@@ -875,6 +875,7 @@ mod tests {
             ReplacedType::Image {
                 src: "test.png".to_string(),
                 alt: None,
+                sizes: None,
                 srcset: Vec::new(),
             },
         );

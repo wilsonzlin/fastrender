@@ -23,7 +23,7 @@
 
 use crate::css::types::ColorStop;
 use crate::error::{RenderError, Result};
-use crate::geometry::{Point, Rect};
+use crate::geometry::{Point, Rect, Size};
 use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem;
@@ -2109,7 +2109,15 @@ impl Painter {
         // Try to render actual content for images and SVG
         match replaced_type {
             ReplacedType::Image { alt, .. } => {
-                let chosen_src = replaced_type.image_source_for_scale(self.scale, Some(content_rect.width()));
+                let media_ctx =
+                    crate::style::media::MediaContext::screen(self.css_width, self.css_height).with_device_pixel_ratio(self.scale);
+                let chosen_src = replaced_type.image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
+                    scale: self.scale,
+                    slot_width: Some(content_rect.width()),
+                    viewport: Some(Size::new(self.css_width, self.css_height)),
+                    media_context: Some(&media_ctx),
+                    font_size: style.map(|s| s.font_size),
+                });
                 if self.paint_image_from_src(
                     chosen_src,
                     style,
@@ -5181,6 +5189,7 @@ mod tests {
                 replaced_type: ReplacedType::Image {
                     src: String::new(),
                     alt: Some("alt".to_string()),
+                    sizes: None,
                     srcset: Vec::new(),
                 },
                 box_id: None,
@@ -5281,6 +5290,7 @@ mod tests {
         let replaced = ReplacedType::Image {
             src: red.clone(),
             alt: None,
+            sizes: None,
             srcset: vec![
                 SrcsetCandidate {
                     url: red.clone(),
@@ -5321,6 +5331,7 @@ mod tests {
         let replaced = ReplacedType::Image {
             src: red.clone(),
             alt: None,
+            sizes: None,
             srcset: vec![
                 SrcsetCandidate {
                     url: red.clone(),

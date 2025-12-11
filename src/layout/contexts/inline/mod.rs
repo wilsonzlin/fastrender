@@ -3915,6 +3915,7 @@ mod tests {
                 replaced_type: ReplacedType::Image {
                     src: String::new(),
                     alt: None,
+                    sizes: None,
                     srcset: Vec::new(),
                 },
                 intrinsic_size: Some(Size::new(10.0, 10.0)),
@@ -3976,6 +3977,7 @@ mod tests {
                 replaced_type: ReplacedType::Image {
                     src: String::new(),
                     alt: None,
+                    sizes: None,
                     srcset: Vec::new(),
                 },
                 intrinsic_size: Some(Size::new(10.0, 10.0)),
@@ -4017,6 +4019,7 @@ mod tests {
             ReplacedType::Image {
                 src: String::new(),
                 alt: None,
+                sizes: None,
                 srcset: Vec::new(),
             },
             Some(Size::new(50.0, 20.0)),

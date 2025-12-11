@@ -2278,6 +2278,7 @@ mod tests {
             ReplacedType::Image {
                 src: String::new(),
                 alt: None,
+                sizes: None,
                 srcset: Vec::new(),
             },
             Arc::new(ComputedStyle::default()),

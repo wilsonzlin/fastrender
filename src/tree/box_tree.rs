@@ -121,6 +121,17 @@ pub struct SrcsetCandidate {
     pub descriptor: SrcsetDescriptor,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SizesEntry {
+    pub media: Option<Vec<crate::style::media::MediaQuery>>,
+    pub length: crate::style::values::Length,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SizesList {
+    pub entries: Vec<SizesEntry>,
+}
+
 /// Types of replaced elements
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReplacedType {
@@ -132,6 +143,8 @@ pub enum ReplacedType {
         alt: Option<String>,
         /// Srcset candidates for density-aware selection
         srcset: Vec<SrcsetCandidate>,
+        /// Sizes attribute values for width-descriptor selection
+        sizes: Option<SizesList>,
     },
 
     /// Video element
@@ -170,34 +183,53 @@ pub enum ReplacedType {
     },
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ImageSelectionContext<'a> {
+    pub scale: f32,
+    pub slot_width: Option<f32>,
+    pub viewport: Option<crate::geometry::Size>,
+    pub media_context: Option<&'a crate::style::media::MediaContext>,
+    pub font_size: Option<f32>,
+}
+
 impl ReplacedType {
     /// Selects the best image source for the given device scale and slot width.
     ///
     /// Returns the authored `src` when no better candidate exists.
-    pub fn image_source_for_scale<'a>(&'a self, scale: f32, slot_width: Option<f32>) -> &'a str {
+    pub fn image_source_for_context<'a>(&'a self, ctx: ImageSelectionContext<'_>) -> &'a str {
         match self {
-            ReplacedType::Image { src, srcset, .. } => {
-                if srcset.is_empty() || !scale.is_finite() || scale <= 0.0 {
+            ReplacedType::Image { src, srcset, sizes, .. } => {
+                if srcset.is_empty() || !ctx.scale.is_finite() || ctx.scale <= 0.0 {
                     return src;
                 }
+
+                let effective_slot_width = ctx.slot_width.or_else(|| {
+                    let viewport = ctx.viewport?;
+                    if let (Some(sizes_list), Some(media_ctx)) = (sizes, ctx.media_context) {
+                        Some(sizes_list.evaluate(media_ctx, viewport, ctx.font_size.unwrap_or(16.0)))
+                    } else {
+                        Some(viewport.width)
+                    }
+                });
+
                 // Pick the smallest density >= scale; if none, the largest below.
                 let mut best: Option<(&SrcsetCandidate, f32)> = None;
                 for candidate in srcset {
-                    let density = candidate.density_for_slot(slot_width);
+                    let density = candidate.density_for_slot(effective_slot_width);
                     if let Some(density) = density {
                         if density <= 0.0 || !density.is_finite() {
                             continue;
                         }
                         match best {
-                            Some((_, current_density)) if current_density >= scale => {
-                                if density >= scale && density < current_density {
+                            Some((_, current_density)) if current_density >= ctx.scale => {
+                                if density >= ctx.scale && density < current_density {
                                     best = Some((candidate, density));
                                 }
                             }
                             Some((_, current_density)) => {
-                                if density >= scale {
+                                if density >= ctx.scale {
                                     best = Some((candidate, density));
-                                } else if current_density < scale && density > current_density {
+                                } else if current_density < ctx.scale && density > current_density {
                                     best = Some((candidate, density));
                                 }
                             }
@@ -224,6 +256,41 @@ impl SrcsetCandidate {
                 Some(w as f32 / slot)
             }
         }
+    }
+}
+
+impl SizesList {
+    pub fn evaluate(&self, media_ctx: &crate::style::media::MediaContext, viewport: crate::geometry::Size, font_size: f32) -> f32 {
+        for entry in &self.entries {
+            let media_matches = entry
+                .media
+                .as_ref()
+                .map(|q| media_ctx.evaluate_list(q))
+                .unwrap_or(true);
+            if media_matches {
+                return resolve_sizes_length(entry.length, viewport, font_size);
+            }
+        }
+
+        // Spec fallback is the last entry; guard with 100vw fallback.
+        resolve_sizes_length(
+            crate::style::values::Length::new(100.0, crate::style::values::LengthUnit::Vw),
+            viewport,
+            font_size,
+        )
+    }
+}
+
+fn resolve_sizes_length(length: crate::style::values::Length, viewport: crate::geometry::Size, font_size: f32) -> f32 {
+    use crate::style::values::LengthUnit;
+    match length.unit {
+        LengthUnit::Percent => length.resolve_against(viewport.width),
+        LengthUnit::Vw | LengthUnit::Vh | LengthUnit::Vmin | LengthUnit::Vmax => {
+            length.resolve_with_viewport(viewport.width, viewport.height)
+        }
+        LengthUnit::Em | LengthUnit::Rem => font_size * length.value,
+        _ if length.unit.is_absolute() => length.to_px(),
+        _ => length.resolve_against(viewport.width),
     }
 }
 
@@ -711,6 +778,9 @@ impl BoxTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::Size;
+    use crate::style::media::MediaContext;
+    use crate::style::values::{Length, LengthUnit};
     use crate::style::display::FormattingContextType;
 
     fn default_style() -> Arc<ComputedStyle> {
@@ -752,6 +822,7 @@ mod tests {
             ReplacedType::Image {
                 src: "image.png".to_string(),
                 alt: None,
+                sizes: None,
                 srcset: Vec::new(),
             },
             Some(Size::new(100.0, 50.0)),
@@ -870,6 +941,7 @@ mod tests {
             ReplacedType::Image {
                 src: "img.png".to_string(),
                 alt: None,
+                sizes: None,
                 srcset: Vec::new(),
             },
             None,
@@ -955,5 +1027,41 @@ mod tests {
         assert_eq!(format!("{}", text), "Text");
         assert_eq!(format!("{}", anon_block), "AnonymousBlock");
         assert_eq!(format!("{}", anon_inline), "AnonymousInline");
+    }
+
+    #[test]
+    fn image_source_prefers_width_descriptor_with_sizes() {
+        let img = ReplacedType::Image {
+            src: "fallback".to_string(),
+            alt: None,
+            srcset: vec![
+                SrcsetCandidate {
+                    url: "100w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(100),
+                },
+                SrcsetCandidate {
+                    url: "300w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(300),
+                },
+            ],
+            sizes: Some(SizesList {
+                entries: vec![SizesEntry {
+                    media: None,
+                    length: Length::new(50.0, LengthUnit::Vw),
+                }],
+            }),
+        };
+
+        let viewport = Size::new(200.0, 100.0);
+        let media_ctx = MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(2.0);
+        let chosen = img.image_source_for_context(ImageSelectionContext {
+            scale: 2.0,
+            slot_width: None,
+            viewport: Some(viewport),
+            media_context: Some(&media_ctx),
+            font_size: Some(16.0),
+        });
+
+        assert_eq!(chosen, "300w");
     }
 }

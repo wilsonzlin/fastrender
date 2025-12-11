@@ -522,6 +522,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "img".into(),
                 alt: None,
+                sizes: None,
                 srcset: Vec::new(),
             },
             intrinsic_size: Some(Size::new(640.0, 480.0)),
@@ -540,6 +541,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "".to_string(),
                 alt: None,
+                sizes: None,
                 srcset: Vec::new(),
             },
             intrinsic_size: None,
@@ -560,6 +562,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "".to_string(),
                 alt: None,
+                sizes: None,
                 srcset: Vec::new(),
             },
             intrinsic_size: Some(Size::new(120.0, 0.0)),
@@ -581,6 +584,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "".to_string(),
                 alt: None,
+                sizes: None,
                 srcset: Vec::new(),
             },
             intrinsic_size: None,
@@ -599,6 +603,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "".to_string(),
                 alt: None,
+                sizes: None,
                 srcset: Vec::new(),
             },
             intrinsic_size: Some(Size::new(120.0, 0.0)),
@@ -617,6 +622,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "".to_string(),
                 alt: None,
+                sizes: None,
                 srcset: Vec::new(),
             },
             intrinsic_size: Some(Size::new(0.0, 80.0)),
@@ -638,6 +644,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "img".into(),
                 alt: None,
+                sizes: None,
                 srcset: Vec::new(),
             },
             intrinsic_size: Some(Size::new(100.0, 50.0)),
@@ -658,6 +665,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "".to_string(),
                 alt: None,
+                sizes: None,
                 srcset: Vec::new(),
             },
             intrinsic_size: Some(Size::new(100.0, 50.0)),
@@ -679,6 +687,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "img".into(),
                 alt: None,
+                sizes: None,
                 srcset: Vec::new(),
             },
             intrinsic_size: Some(Size::new(200.0, 200.0)),
@@ -705,6 +714,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "img".into(),
                 alt: None,
+                sizes: None,
                 srcset: Vec::new(),
             },
             intrinsic_size: Some(Size::new(120.0, 80.0)),
@@ -731,6 +741,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "img".into(),
                 alt: None,
+                sizes: None,
                 srcset: Vec::new(),
             },
             intrinsic_size: Some(Size::new(300.0, 150.0)),

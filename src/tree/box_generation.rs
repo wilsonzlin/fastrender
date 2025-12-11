@@ -15,7 +15,8 @@ use crate::style::types::{ListStyleType, TextTransform};
 use crate::style::ComputedStyle;
 use crate::tree::anonymous::AnonymousBoxCreator;
 use crate::tree::box_tree::{
-    BoxNode, BoxTree, BoxType, MarkerContent, ReplacedBox, ReplacedType, SrcsetCandidate, SrcsetDescriptor,
+    BoxNode, BoxTree, BoxType, MarkerContent, ReplacedBox, ReplacedType, SizesEntry, SizesList, SrcsetCandidate,
+    SrcsetDescriptor,
 };
 use crate::tree::debug::DebugInfo;
 use std::sync::Arc;
@@ -266,7 +267,7 @@ impl DOMNode {
         let poster = self.poster.clone().filter(|s| !s.is_empty());
 
         match tag.as_str() {
-            "img" => Some(ReplacedType::Image { src, alt, srcset }),
+            "img" => Some(ReplacedType::Image { src, alt, srcset, sizes: None }),
             "video" => Some(ReplacedType::Video { src, poster }),
             "canvas" => Some(ReplacedType::Canvas),
             "svg" => Some(ReplacedType::Svg { content: src }),
@@ -314,6 +315,75 @@ fn parse_srcset(attr: &str) -> Vec<SrcsetCandidate> {
             })
         })
         .collect()
+}
+
+fn parse_sizes(attr: &str) -> Option<SizesList> {
+    use crate::style::media::MediaQuery;
+    use crate::style::values::{Length, LengthUnit};
+
+    fn parse_length(value: &str) -> Option<Length> {
+        let s = value.trim();
+        if s == "0" {
+            return Some(Length::px(0.0));
+        }
+        let units: &[(&str, fn(f32) -> Length)] = &[
+            ("rem", |v| Length::rem(v)),
+            ("em", |v| Length::em(v)),
+            ("vw", |v| Length::new(v, LengthUnit::Vw)),
+            ("vh", |v| Length::new(v, LengthUnit::Vh)),
+            ("vmin", |v| Length::new(v, LengthUnit::Vmin)),
+            ("vmax", |v| Length::new(v, LengthUnit::Vmax)),
+            ("px", |v| Length::px(v)),
+            ("pt", |v| Length::pt(v)),
+            ("pc", |v| Length::pc(v)),
+            ("in", |v| Length::inches(v)),
+            ("cm", |v| Length::cm(v)),
+            ("mm", |v| Length::mm(v)),
+            ("q", |v| Length::q(v)),
+            ("ex", |v| Length::ex(v)),
+            ("ch", |v| Length::ch(v)),
+            ("%", |v| Length::percent(v)),
+        ];
+        for (suffix, ctor) in units {
+            if let Some(raw) = s.strip_suffix(suffix) {
+                if let Ok(val) = raw.trim().parse::<f32>() {
+                    return Some(ctor(val));
+                }
+            }
+        }
+        None
+    }
+
+    let mut entries = Vec::new();
+    for item in attr.split(',') {
+        let trimmed = item.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut parts = trimmed.rsplitn(2, char::is_whitespace);
+        let length_part = parts.next().map(str::trim);
+        let media_part = parts.next().map(str::trim);
+        let length = match length_part.and_then(parse_length) {
+            Some(l) => l,
+            None => continue,
+        };
+
+        let media = match media_part {
+            Some(cond) if !cond.is_empty() => match MediaQuery::parse_list(cond) {
+                Ok(list) => Some(list),
+                Err(_) => None,
+            },
+            _ => None,
+        };
+
+        entries.push(SizesEntry { media, length });
+    }
+
+    if entries.is_empty() {
+        None
+    } else {
+        Some(SizesList { entries })
+    }
 }
 
 /// Configuration for box generation
@@ -1184,15 +1254,16 @@ fn create_pseudo_element_box(
             ContentItem::NoCloseQuote => context.pop_quote(),
             ContentItem::Url(url) => {
                 flush_text(&mut text_buf, &pseudo_style, &mut children);
-                let replaced = ReplacedBox {
-                    replaced_type: ReplacedType::Image {
-                        src: url.clone(),
-                        alt: None,
-                        srcset: Vec::new(),
-                    },
-                    intrinsic_size: None,
-                    aspect_ratio: None,
-                };
+                    let replaced = ReplacedBox {
+                        replaced_type: ReplacedType::Image {
+                            src: url.clone(),
+                            alt: None,
+                            sizes: None,
+                            srcset: Vec::new(),
+                        },
+                        intrinsic_size: None,
+                        aspect_ratio: None,
+                    };
                 children.push(BoxNode {
                     box_type: BoxType::Replaced(replaced),
                     style: pseudo_style.clone(),
@@ -1325,6 +1396,7 @@ fn marker_content_from_style(
                 replaced_type: ReplacedType::Image {
                     src,
                     alt: None,
+                    sizes: None,
                     srcset: Vec::new(),
                 },
                 intrinsic_size: None,
@@ -1341,6 +1413,7 @@ fn marker_content_from_style(
                 replaced_type: ReplacedType::Image {
                     src: url.clone(),
                     alt: None,
+                    sizes: None,
                     srcset: Vec::new(),
                 },
                 intrinsic_size: None,
@@ -1476,10 +1549,12 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
     let alt = styled.node.get_attribute("alt").filter(|s| !s.is_empty());
     let poster = styled.node.get_attribute("poster").filter(|s| !s.is_empty());
     let srcset_attr = styled.node.get_attribute("srcset");
+    let sizes_attr = styled.node.get_attribute("sizes");
     let srcset = srcset_attr
         .as_ref()
         .map(|s| parse_srcset(s))
         .unwrap_or_default();
+    let sizes = sizes_attr.as_ref().and_then(|s| parse_sizes(s));
     let data_attr = styled.node.get_attribute("data").unwrap_or_default();
 
     // Determine replaced type
@@ -1488,6 +1563,7 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
             src,
             alt,
             srcset,
+            sizes,
         },
         "video" => ReplacedType::Video { src, poster },
         "canvas" => ReplacedType::Canvas,
@@ -1498,6 +1574,7 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
         _ => ReplacedType::Image {
             src,
             alt,
+            sizes: None,
             srcset: Vec::new(),
         },
     };
@@ -2305,6 +2382,7 @@ mod tests {
             ReplacedType::Image {
                 src: "test.png".to_string(),
                 alt: None,
+                sizes: None,
                 srcset: Vec::new(),
             },
             Some(Size::new(100.0, 100.0)),
