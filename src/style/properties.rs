@@ -3068,13 +3068,8 @@ fn parse_css_color_value<'i, 't>(input: &mut Parser<'i, 't>) -> Result<FilterCol
         return Ok(FilterColor::CurrentColor);
     }
 
-    let parsed = csscolorparser::parse(&raw).map_err(|_| location.new_custom_error(()))?;
-    Ok(FilterColor::Color(Rgba::new(
-        (parsed.r * 255.0).round().clamp(0.0, 255.0) as u8,
-        (parsed.g * 255.0).round().clamp(0.0, 255.0) as u8,
-        (parsed.b * 255.0).round().clamp(0.0, 255.0) as u8,
-        parsed.a as f32,
-    )))
+    let parsed = crate::style::color::Color::parse(&raw).map_err(|_| location.new_custom_error(()))?;
+    Ok(FilterColor::Color(parsed.to_rgba(Rgba::BLACK)))
 }
 
 fn parse_drop_shadow<'i, 't>(input: &mut Parser<'i, 't>) -> Result<FilterFunction, cssparser::ParseError<'i, ()>> {

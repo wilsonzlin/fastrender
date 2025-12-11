@@ -3,7 +3,7 @@
 //! Parses individual CSS property values.
 
 use super::types::PropertyValue;
-use crate::style::color::Rgba;
+use crate::style::color::{Color, Rgba};
 use crate::style::values::{Length, LengthUnit};
 use cssparser::{Parser, ParserInput, Token};
 
@@ -74,13 +74,11 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
             | "border-bottom-color"
             | "border-left-color"
     ) {
-        if let Ok(color) = csscolorparser::parse(value_str) {
-            return Some(PropertyValue::Color(Rgba::new(
-                (color.r * 255.0) as u8,
-                (color.g * 255.0) as u8,
-                (color.b * 255.0) as u8,
-                color.a as f32,
-            )));
+        if let Ok(color) = Color::parse(value_str) {
+            return match color {
+                Color::CurrentColor => Some(PropertyValue::Keyword("currentColor".to_string())),
+                _ => Some(PropertyValue::Color(color.to_rgba(Rgba::BLACK))),
+            };
         }
     }
 
@@ -188,17 +186,14 @@ fn parse_simple_value(value_str: &str) -> Option<PropertyValue> {
         return Some(PropertyValue::Number(num));
     }
 
-    csscolorparser::parse(value_str)
-        .ok()
-        .map(|color| {
-            PropertyValue::Color(Rgba::new(
-                (color.r * 255.0) as u8,
-                (color.g * 255.0) as u8,
-                (color.b * 255.0) as u8,
-                color.a as f32,
-            ))
-        })
-        .or_else(|| Some(PropertyValue::Keyword(value_str.to_string())))
+    if let Ok(color) = Color::parse(value_str) {
+        return match color {
+            Color::CurrentColor => Some(PropertyValue::Keyword("currentColor".to_string())),
+            _ => Some(PropertyValue::Color(color.to_rgba(Rgba::BLACK))),
+        };
+    }
+
+    Some(PropertyValue::Keyword(value_str.to_string()))
 }
 
 fn parse_gradient(value: &str) -> Option<PropertyValue> {

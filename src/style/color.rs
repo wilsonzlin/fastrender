@@ -492,8 +492,9 @@ impl Color {
     ///
     /// Supports:
     /// - Hex: #RGB, #RRGGBB, #RGBA, #RRGGBBAA
-    /// - RGB: rgb(r, g, b), rgba(r, g, b, a)
-    /// - HSL: hsl(h, s%, l%), hsla(h, s%, l%, a)
+    /// - RGB: rgb()/rgba() with comma- or space-separated components, optional slash alpha, number or percentage channels
+    /// - HSL: hsl()/hsla() with commas or spaces, optional slash alpha, hue angles deg/rad/grad/turn
+    /// - HWB: hwb() with hue angle, whiteness/blackness percentages, optional slash alpha
     /// - Named colors: red, blue, etc.
     /// - Special: transparent, currentColor
     ///
@@ -531,6 +532,11 @@ impl Color {
         // HSL/HSLA functions
         if s.starts_with("hsl(") || s.starts_with("hsla(") {
             return parse_hsl(s);
+        }
+
+        // HWB function
+        if s.starts_with("hwb(") {
+            return parse_hwb(s);
         }
 
         // Named colors
@@ -634,89 +640,183 @@ fn parse_hex(s: &str) -> Result<Color, ColorParseError> {
     Ok(Color::Rgba(Rgba::new(r, g, b, a)))
 }
 
-/// Parse rgb() or rgba() function
-fn parse_rgb(s: &str) -> Result<Color, ColorParseError> {
-    let is_rgba = s.starts_with("rgba");
-    let start = if is_rgba { 5 } else { 4 };
+    /// Parse rgb() or rgba() function (modern syntax)
+    fn parse_rgb(s: &str) -> Result<Color, ColorParseError> {
+        let inner = s
+            .split_once('(')
+            .and_then(|(_, rest)| rest.rsplit_once(')').map(|(body, _)| body))
+            .ok_or_else(|| ColorParseError::InvalidFormat(s.to_string()))?;
 
-    let end = s
-        .find(')')
+        let mut input = cssparser::ParserInput::new(inner);
+        let mut parser = cssparser::Parser::new(&mut input);
+
+        let mut channels = Vec::new();
+        let mut comma_syntax = false;
+
+        channels.push(parse_rgb_channel(&mut parser)?);
+        if parser.try_parse(|p| p.expect_comma()).is_ok() {
+            comma_syntax = true;
+        }
+
+        channels.push(parse_rgb_channel(&mut parser)?);
+        if comma_syntax && parser.try_parse(|p| p.expect_comma()).is_err() {
+            return Err(ColorParseError::InvalidFormat(s.to_string()));
+        }
+        channels.push(parse_rgb_channel(&mut parser)?);
+
+        let mut alpha = 1.0;
+        if comma_syntax {
+            if parser.try_parse(|p| p.expect_comma()).is_ok() {
+                alpha = parse_alpha_component(&mut parser)?;
+            }
+        } else if parser.try_parse(|p| p.expect_delim('/')).is_ok() {
+            alpha = parse_alpha_component(&mut parser)?;
+        }
+
+        if channels.len() != 3 {
+            return Err(ColorParseError::InvalidFormat(s.to_string()));
+        }
+
+        Ok(Color::Rgba(Rgba::new(channels[0], channels[1], channels[2], alpha)))
+    }
+
+    /// Parse hsl() or hsla() function (modern syntax)
+    fn parse_hsl(s: &str) -> Result<Color, ColorParseError> {
+        let inner = s
+            .split_once('(')
+            .and_then(|(_, rest)| rest.rsplit_once(')').map(|(body, _)| body))
+            .ok_or_else(|| ColorParseError::InvalidFormat(s.to_string()))?;
+
+        let mut input = cssparser::ParserInput::new(inner);
+        let mut parser = cssparser::Parser::new(&mut input);
+
+        let mut comma_syntax = false;
+        let h = parse_hue_component(&mut parser)?;
+        if parser.try_parse(|p| p.expect_comma()).is_ok() {
+            comma_syntax = true;
+        }
+        let s_val = parse_percentage_component(&mut parser)?;
+        if comma_syntax && parser.try_parse(|p| p.expect_comma()).is_err() {
+            return Err(ColorParseError::InvalidFormat(s.to_string()));
+        }
+        let l_val = parse_percentage_component(&mut parser)?;
+
+        let mut alpha = 1.0;
+        if comma_syntax {
+            if parser.try_parse(|p| p.expect_comma()).is_ok() {
+                alpha = parse_alpha_component(&mut parser)?;
+            }
+        } else if parser.try_parse(|p| p.expect_delim('/')).is_ok() {
+            alpha = parse_alpha_component(&mut parser)?;
+        }
+
+        Ok(Color::Hsla(Hsla::new(h, s_val * 100.0, l_val * 100.0, alpha)))
+    }
+
+    /// Parse hwb() function
+fn parse_hwb(s: &str) -> Result<Color, ColorParseError> {
+    let inner = s
+        .split_once('(')
+        .and_then(|(_, rest)| rest.rsplit_once(')').map(|(body, _)| body))
         .ok_or_else(|| ColorParseError::InvalidFormat(s.to_string()))?;
-    let inner = &s[start..end];
 
-    let parts: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
+        let mut input = cssparser::ParserInput::new(inner);
+        let mut parser = cssparser::Parser::new(&mut input);
 
-    if parts.len() < 3 || (is_rgba && parts.len() < 4) {
-        return Err(ColorParseError::InvalidFormat(s.to_string()));
-    }
+        let h = parse_hue_component(&mut parser)?;
+        let w = parse_percentage_component(&mut parser)?;
+        let b = parse_percentage_component(&mut parser)?;
+        let mut alpha = 1.0;
+        if parser.try_parse(|p| p.expect_delim('/')).is_ok() {
+            alpha = parse_alpha_component(&mut parser)?;
+        }
 
-    let r = parse_color_component(parts[0])?;
-    let g = parse_color_component(parts[1])?;
-    let b = parse_color_component(parts[2])?;
-    let a = if parts.len() >= 4 {
-        parts[3]
-            .parse::<f32>()
-            .map_err(|_| ColorParseError::InvalidComponent(parts[3].to_string()))?
-    } else {
-        1.0
+    Ok(Color::Rgba(hwb_to_rgba(h, w, b, alpha)))
+}
+
+/// Parse an RGB channel (number or percentage) clamped to 0-255.
+fn parse_rgb_channel(parser: &mut cssparser::Parser<'_, '_>) -> Result<u8, ColorParseError> {
+    use cssparser::Token;
+    let token = parser.next().map_err(|_| ColorParseError::InvalidFormat("rgb".to_string()))?;
+    let value = match token {
+        Token::Number { value, .. } => value.clamp(0.0, 255.0),
+        Token::Percentage { unit_value, .. } => (unit_value * 255.0).clamp(0.0, 255.0),
+        _ => return Err(ColorParseError::InvalidComponent(format!("{:?}", token))),
     };
-
-    Ok(Color::Rgba(Rgba::new(r, g, b, a)))
+    Ok(value.round() as u8)
 }
 
-/// Parse hsl() or hsla() function
-fn parse_hsl(s: &str) -> Result<Color, ColorParseError> {
-    let is_hsla = s.starts_with("hsla");
-    let start = if is_hsla { 5 } else { 4 };
-
-    let end = s
-        .find(')')
-        .ok_or_else(|| ColorParseError::InvalidFormat(s.to_string()))?;
-    let inner = &s[start..end];
-
-    let parts: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
-
-    if parts.len() < 3 || (is_hsla && parts.len() < 4) {
-        return Err(ColorParseError::InvalidFormat(s.to_string()));
-    }
-
-    let h = parts[0]
-        .parse::<f32>()
-        .map_err(|_| ColorParseError::InvalidComponent(parts[0].to_string()))?;
-    let s = parse_percentage(parts[1])?;
-    let l = parse_percentage(parts[2])?;
-    let a = if parts.len() >= 4 {
-        parts[3]
-            .parse::<f32>()
-            .map_err(|_| ColorParseError::InvalidComponent(parts[3].to_string()))?
-    } else {
-        1.0
+fn parse_alpha_component(parser: &mut cssparser::Parser<'_, '_>) -> Result<f32, ColorParseError> {
+    use cssparser::Token;
+    let token = parser
+        .next()
+        .map_err(|_| ColorParseError::InvalidFormat("alpha".to_string()))?;
+    let value = match token {
+        Token::Number { value, .. } => *value,
+        Token::Percentage { unit_value, .. } => unit_value * 1.0,
+        _ => return Err(ColorParseError::InvalidComponent(format!("{:?}", token))),
     };
-
-    Ok(Color::Hsla(Hsla::new(h, s, l, a)))
+    Ok(value.clamp(0.0, 1.0))
 }
 
-/// Parse color component (0-255 or 0-100%)
-fn parse_color_component(s: &str) -> Result<u8, ColorParseError> {
-    if let Some(percent_str) = s.strip_suffix('%') {
-        let percent = percent_str
-            .parse::<f32>()
-            .map_err(|_| ColorParseError::InvalidComponent(s.to_string()))?;
-        Ok((percent / 100.0 * 255.0).round() as u8)
-    } else {
-        s.parse::<u8>()
-            .map_err(|_| ColorParseError::InvalidComponent(s.to_string()))
+fn parse_hue_component(parser: &mut cssparser::Parser<'_, '_>) -> Result<f32, ColorParseError> {
+    let token = parser.next().map_err(|_| ColorParseError::InvalidFormat("hue".to_string()))?;
+    parse_hue_token(&token)
+}
+
+fn parse_hue_token(token: &cssparser::Token) -> Result<f32, ColorParseError> {
+    match token {
+        cssparser::Token::Dimension { value, ref unit, .. } => {
+            let unit = unit.as_ref().to_ascii_lowercase();
+            let degrees = match unit.as_str() {
+                "deg" => *value,
+                "grad" => *value * 0.9,
+                "turn" => *value * 360.0,
+                "rad" => *value * (180.0 / std::f32::consts::PI),
+                _ => return Err(ColorParseError::InvalidComponent(unit)),
+            };
+            Ok(normalize_hue(degrees))
+        }
+        cssparser::Token::Number { value, .. } => Ok(normalize_hue(*value)),
+        other => Err(ColorParseError::InvalidComponent(format!("{:?}", other))),
     }
 }
 
-/// Parse percentage (0-100%)
-fn parse_percentage(s: &str) -> Result<f32, ColorParseError> {
-    let percent_str = s
-        .strip_suffix('%')
-        .ok_or_else(|| ColorParseError::InvalidComponent(s.to_string()))?;
-    percent_str
-        .parse::<f32>()
-        .map_err(|_| ColorParseError::InvalidComponent(s.to_string()))
+fn parse_percentage_component(parser: &mut cssparser::Parser<'_, '_>) -> Result<f32, ColorParseError> {
+    use cssparser::Token;
+    let token = parser
+        .next()
+        .map_err(|_| ColorParseError::InvalidFormat("percentage".to_string()))?;
+    match token {
+        Token::Percentage { unit_value, .. } => Ok(unit_value.clamp(0.0, 1.0)),
+        other => Err(ColorParseError::InvalidComponent(format!("{:?}", other))),
+    }
+}
+
+fn normalize_hue(mut h: f32) -> f32 {
+    h %= 360.0;
+    if h < 0.0 {
+        h += 360.0;
+    }
+    h
+}
+
+fn hwb_to_rgba(h: f32, whiteness: f32, blackness: f32, alpha: f32) -> Rgba {
+    let mut w = whiteness.clamp(0.0, 1.0);
+    let mut b = blackness.clamp(0.0, 1.0);
+    if w + b > 1.0 {
+        let sum = w + b;
+        w /= sum;
+        b /= sum;
+    }
+
+    let v = 1.0 - b;
+    let s = if v == 0.0 { 0.0 } else { 1.0 - w / v };
+    let l = v * (1.0 - s / 2.0);
+    let sat = if l == 0.0 || l == 1.0 { 0.0 } else { (v - l) / l.min(1.0 - l) };
+
+    let hsla = Hsla::new(h, sat * 100.0, l * 100.0, alpha);
+    hsla.to_rgba()
 }
 
 /// Parse named color (all 147 CSS named colors)
@@ -778,7 +878,7 @@ fn parse_named_color(s: &str) -> Option<Rgba> {
         "goldenrod" => Some(Rgba::rgb(218, 165, 32)),
         "gray" => Some(Rgba::rgb(128, 128, 128)),
         "grey" => Some(Rgba::rgb(128, 128, 128)),
-        "green" => Some(Rgba::GREEN),
+        "green" => Some(Rgba::rgb(0, 128, 0)),
         "greenyellow" => Some(Rgba::rgb(173, 255, 47)),
         "honeydew" => Some(Rgba::rgb(240, 255, 240)),
         "hotpink" => Some(Rgba::rgb(255, 105, 180)),
@@ -1050,11 +1150,30 @@ mod tests {
         assert_eq!(color.to_rgba(Rgba::BLACK), Rgba::RED);
     }
 
+    #[test]
+    fn test_parse_rgb_modern_syntax_with_slash_alpha() {
+        let color = Color::parse("rgb(10% 20% 30% / 0.5)").unwrap();
+        assert_eq!(color.to_rgba(Rgba::BLACK), Rgba::new(26, 51, 77, 0.5));
+
+        let color = Color::parse("rgb(255 0 0 / 50%)").unwrap();
+        assert_eq!(color.to_rgba(Rgba::BLACK), Rgba::new(255, 0, 0, 0.5));
+    }
+
     // HSL parsing tests
     #[test]
     fn test_parse_hsl() {
         let color = Color::parse("hsl(0, 100%, 50%)").unwrap();
         assert_eq!(color.to_rgba(Rgba::BLACK), Rgba::RED);
+    }
+
+    #[test]
+    fn test_parse_hsl_modern_syntax_and_hwb() {
+        let color = Color::parse("hsl(120 100% 50% / 25%)").unwrap();
+        assert_eq!(color.to_rgba(Rgba::BLACK), Rgba::new(0, 255, 0, 0.25));
+
+        let hwb = Color::parse("hwb(90 40% 10% / 0.5)").unwrap();
+        let rgba = hwb.to_rgba(Rgba::BLACK);
+        assert_eq!(rgba.a, 0.5);
     }
 
     #[test]
@@ -1107,7 +1226,8 @@ mod tests {
     fn test_parse_invalid() {
         assert!(Color::parse("invalid").is_err());
         assert!(Color::parse("#xyz").is_err());
-        assert!(Color::parse("rgb(300, 0, 0)").is_err());
+        let clamped = Color::parse("rgb(300, 0, 0)").unwrap().to_rgba(Rgba::BLACK);
+        assert_eq!(clamped, Rgba::new(255, 0, 0, 1.0));
     }
 
     // Display tests
