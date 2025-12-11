@@ -135,6 +135,13 @@ impl DisplayListBuilder {
         self
     }
 
+    /// Updates the base URL on the underlying image cache.
+    pub fn set_base_url(&mut self, base_url: impl Into<String>) {
+        if let Some(cache) = self.image_cache.as_mut() {
+            cache.set_base_url(base_url);
+        }
+    }
+
     /// Sets the font context for shaping text into the display list.
     pub fn with_font_context(mut self, font_ctx: FontContext) -> Self {
         self.font_ctx = font_ctx;
