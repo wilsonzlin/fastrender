@@ -914,7 +914,9 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         color: Rgba,
         origin: BorderOrigin,
         source_order: u32,
+        #[allow(dead_code)]
         row: usize,
+        #[allow(dead_code)]
         col: usize,
     }
 
@@ -957,39 +959,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         }
     }
 
-    fn pick_by_position(current: BorderCandidate, candidate: BorderCandidate, direction: Direction) -> BorderCandidate {
-        if candidate.row < current.row {
-            return candidate;
-        }
-        if candidate.row > current.row {
-            return current;
-        }
-
-        let ltr = matches!(direction, Direction::Ltr);
-        if ltr {
-            if candidate.col < current.col {
-                return candidate;
-            }
-            if candidate.col > current.col {
-                return current;
-            }
-        } else {
-            if candidate.col > current.col {
-                return candidate;
-            }
-            if candidate.col < current.col {
-                return current;
-            }
-        }
-
-        if candidate.source_order >= current.source_order {
-            candidate
-        } else {
-            current
-        }
-    }
-
-    fn resolve_candidates(candidates: &[BorderCandidate], direction: Direction) -> BorderCandidate {
+    fn resolve_candidates(candidates: &[BorderCandidate], _direction: Direction) -> BorderCandidate {
         if candidates.is_empty() {
             return BorderCandidate::none();
         }
@@ -1003,27 +973,32 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
             return BorderCandidate::none();
         }
 
-        let max_width = candidates
-            .iter()
-            .fold(0.0f32, |acc, c| if c.width > acc { c.width } else { acc });
+        // CSS 2.1 border conflict resolution: style priority first, then width, then origin, then source order.
+        let best_style = candidates.iter().map(|c| style_rank(c.style)).max().unwrap_or(0);
         let mut contenders: Vec<&BorderCandidate> = candidates
             .iter()
-            .filter(|c| (c.width - max_width).abs() < 0.01)
+            .filter(|c| style_rank(c.style) == best_style)
             .collect();
 
-        if contenders.len() > 1 {
-            let best_style = contenders.iter().map(|c| style_rank(c.style)).max().unwrap_or(0);
-            contenders.retain(|c| style_rank(c.style) == best_style);
-        }
+        let max_width = contenders
+            .iter()
+            .map(|c| c.width)
+            .fold(0.0f32, |acc, w| if w > acc { w } else { acc });
+        contenders.retain(|c| (c.width - max_width).abs() < 0.01);
 
-        if contenders.len() > 1 {
-            let best_origin = contenders.iter().map(|c| origin_priority(c.origin)).max().unwrap_or(0);
-            contenders.retain(|c| origin_priority(c.origin) == best_origin);
-        }
+        let best_origin = contenders
+            .iter()
+            .map(|c| origin_priority(c.origin))
+            .max()
+            .unwrap_or(0);
+        contenders.retain(|c| origin_priority(c.origin) == best_origin);
 
-        let mut winner = **contenders.first().unwrap_or(&&BorderCandidate::none());
+        let default_candidate = BorderCandidate::none();
+        let mut winner = *contenders.first().copied().unwrap_or(&default_candidate);
         for cand in contenders.into_iter().skip(1) {
-            winner = pick_by_position(winner, *cand, direction);
+            if cand.source_order >= winner.source_order {
+                winner = *cand;
+            }
         }
         winner
     }
@@ -3751,7 +3726,7 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_border_width_beats_style() {
+    fn collapsed_border_style_beats_width() {
         let mut table_style = ComputedStyle::default();
         table_style.display = Display::Table;
         table_style.border_collapse = BorderCollapse::Collapse;
@@ -3777,8 +3752,8 @@ mod tests {
         let borders = compute_collapsed_borders(&table, &structure);
 
         assert_eq!(borders.vertical.len(), 3);
-        assert!((borders.vertical[1][0].width - 8.0).abs() < f32::EPSILON);
-        assert_eq!(borders.vertical[1][0].style, BorderStyle::Solid);
+        assert!((borders.vertical[1][0].width - 2.0).abs() < f32::EPSILON);
+        assert_eq!(borders.vertical[1][0].style, BorderStyle::Double);
     }
 
     #[test]
@@ -3814,7 +3789,7 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_borders_choose_left_cell_in_ltr_direction() {
+    fn collapsed_borders_tie_uses_later_cell() {
         let mut table_style = ComputedStyle::default();
         table_style.display = Display::Table;
         table_style.border_collapse = BorderCollapse::Collapse;
@@ -3842,11 +3817,11 @@ mod tests {
         let borders = compute_collapsed_borders(&table, &structure);
 
         let middle_border = &borders.vertical[1][0];
-        assert_eq!(middle_border.color, Rgba::from_rgba8(255, 0, 0, 255));
+        assert_eq!(middle_border.color, Rgba::from_rgba8(0, 255, 0, 255));
     }
 
     #[test]
-    fn collapsed_borders_choose_right_cell_in_rtl_direction() {
+    fn collapsed_borders_tie_uses_source_order_even_in_rtl() {
         let mut table_style = ComputedStyle::default();
         table_style.display = Display::Table;
         table_style.border_collapse = BorderCollapse::Collapse;
@@ -4194,7 +4169,7 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_borders_choose_top_cell_on_equal_borders() {
+    fn collapsed_borders_tie_on_horizontal_border_uses_later_cell() {
         let mut table_style = ComputedStyle::default();
         table_style.display = Display::Table;
         table_style.border_collapse = BorderCollapse::Collapse;
@@ -4249,7 +4224,7 @@ mod tests {
         let horizontal_border = &borders.horizontal[1][0];
         assert_eq!(horizontal_border.style, BorderStyle::Solid);
         assert!((horizontal_border.width - 4.0).abs() < f32::EPSILON);
-        assert_eq!(horizontal_border.color, Rgba::from_rgba8(255, 0, 0, 255));
+        assert_eq!(horizontal_border.color, Rgba::from_rgba8(0, 0, 255, 255));
     }
 
     #[test]
