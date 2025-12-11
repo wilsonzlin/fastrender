@@ -39,11 +39,13 @@
 pub mod baseline;
 pub mod line_builder;
 
-use crate::geometry::{Rect, Size};
+use crate::geometry::{Point, Rect, Size};
 use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
+use crate::layout::absolute_positioning::{AbsoluteLayout, AbsoluteLayoutInput, resolve_positioned_style};
 use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::line_builder::InlineBoxItem;
+use crate::layout::contexts::positioned::ContainingBlock;
 use crate::layout::float_context::FloatContext;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::inline::float_integration::InlineFloatIntegration;
@@ -197,7 +199,8 @@ impl InlineFormattingContext {
         available_height: Option<f32>,
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let base_direction = box_node.style.direction;
-        self.collect_inline_items_with_base(box_node, available_width, available_height, base_direction)
+        let mut positioned = Vec::new();
+        self.collect_inline_items_with_base(box_node, available_width, available_height, base_direction, &mut positioned)
     }
 
     /// Collects inline items with an explicit base direction for bidi shaping.
@@ -207,6 +210,7 @@ impl InlineFormattingContext {
         available_width: f32,
         available_height: Option<f32>,
         base_direction: crate::style::types::Direction,
+        positioned_children: &mut Vec<BoxNode>,
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let mut pending_space: Option<PendingSpace> = None;
         self.collect_inline_items_internal(
@@ -215,6 +219,7 @@ impl InlineFormattingContext {
             available_height,
             &mut pending_space,
             base_direction,
+            positioned_children,
         )
     }
 
@@ -225,6 +230,7 @@ impl InlineFormattingContext {
         available_height: Option<f32>,
         pending_space: &mut Option<PendingSpace>,
         base_direction: crate::style::types::Direction,
+        positioned_children: &mut Vec<BoxNode>,
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let mut items = Vec::new();
 
@@ -232,6 +238,13 @@ impl InlineFormattingContext {
             if let Some(space) = pending_space.take() {
                 let space_item = self.create_collapsed_space_item(&space.style, space.allow_soft_wrap)?;
                 items.push(space_item);
+            }
+            if matches!(
+                child.style.position,
+                crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
+            ) {
+                positioned_children.push(child.clone());
+                continue;
             }
             match &child.box_type {
                 BoxType::Text(text_box) => {
@@ -389,6 +402,7 @@ impl InlineFormattingContext {
                         available_height,
                         pending_space,
                         base_direction,
+                        positioned_children,
                     )?;
                     let fallback_metrics = self.compute_strut_metrics(&child.style);
                     let metrics = compute_inline_box_metrics(
@@ -1651,7 +1665,14 @@ impl InlineFormattingContext {
         }
 
         let base_direction = resolve_base_direction_for_box(box_node);
-        let items = match self.collect_inline_items_with_base(box_node, f32::INFINITY, None, base_direction) {
+        let mut positioned = Vec::new();
+        let items = match self.collect_inline_items_with_base(
+            box_node,
+            f32::INFINITY,
+            None,
+            base_direction,
+            &mut positioned,
+        ) {
             Ok(items) => items,
             Err(_) => return 0.0,
         };
@@ -2983,8 +3004,14 @@ impl InlineFormattingContext {
         let base_direction = resolve_base_direction_for_box(box_node);
 
         // Collect inline items
-        let items =
-            self.collect_inline_items_with_base(box_node, available_inline, available_height, base_direction)?;
+        let mut positioned_children = Vec::new();
+        let items = self.collect_inline_items_with_base(
+            box_node,
+            available_inline,
+            available_height,
+            base_direction,
+            &mut positioned_children,
+        )?;
 
         let indent_value = resolve_length_with_percentage_inline(
             style.text_indent.length,
@@ -3169,6 +3196,105 @@ impl InlineFormattingContext {
                 bounds = Rect::from_xywh(0.0, 0.0, w, h);
             }
             _ => {}
+        }
+
+        // Position out-of-flow abs/fixed children against the containing block.
+        if !positioned_children.is_empty() {
+            let padding_left = resolve_length_for_width(
+                style.padding_left,
+                available_inline,
+                style,
+                &self.font_context,
+                self.viewport_size,
+            );
+            let _padding_right = resolve_length_for_width(
+                style.padding_right,
+                available_inline,
+                style,
+                &self.font_context,
+                self.viewport_size,
+            );
+            let padding_top =
+                resolve_length_for_width(style.padding_top, available_inline, style, &self.font_context, self.viewport_size);
+            let _padding_bottom = resolve_length_for_width(
+                style.padding_bottom,
+                available_inline,
+                style,
+                &self.font_context,
+                self.viewport_size,
+            );
+            let border_left = resolve_length_for_width(
+                style.border_left_width,
+                available_inline,
+                style,
+                &self.font_context,
+                self.viewport_size,
+            );
+            let border_right = resolve_length_for_width(
+                style.border_right_width,
+                available_inline,
+                style,
+                &self.font_context,
+                self.viewport_size,
+            );
+            let border_top = resolve_length_for_width(
+                style.border_top_width,
+                available_inline,
+                style,
+                &self.font_context,
+                self.viewport_size,
+            );
+            let border_bottom = resolve_length_for_width(
+                style.border_bottom_width,
+                available_inline,
+                style,
+                &self.font_context,
+                self.viewport_size,
+            );
+
+            let padding_origin = Point::new(border_left + padding_left, border_top + padding_top);
+            let padding_rect = Rect::new(
+                padding_origin,
+                Size::new(
+                    bounds.width() - border_left - border_right,
+                    bounds.height() - border_top - border_bottom,
+                ),
+            );
+            let cb = if style.position.is_positioned() {
+                ContainingBlock::with_viewport(padding_rect, self.viewport_size)
+            } else {
+                self.nearest_positioned_cb
+            };
+
+            let abs = AbsoluteLayout::new();
+            for child in positioned_children {
+                let mut layout_child = child.clone();
+                let mut child_style = (*layout_child.style).clone();
+                child_style.position = crate::style::position::Position::Static;
+                layout_child.style = Arc::new(child_style);
+
+                let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
+                    self.font_context.clone(),
+                    self.viewport_size,
+                    cb,
+                );
+                let fc_type = layout_child
+                    .formatting_context()
+                    .unwrap_or(crate::style::display::FormattingContextType::Block);
+                let fc = factory.create(fc_type);
+                let child_constraints = LayoutConstraints::new(
+                    AvailableSpace::Definite(cb.rect.size.width),
+                    AvailableSpace::Definite(cb.rect.size.height),
+                );
+                let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
+                let positioned_style =
+                    resolve_positioned_style(&child.style, &cb, self.viewport_size, &self.font_context);
+                let input =
+                    AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, cb.rect.origin);
+                let result = abs.layout_absolute(&input, &cb)?;
+                child_fragment.bounds = Rect::new(result.position, result.size);
+                merged_children.push(child_fragment);
+            }
         }
 
         Ok(FragmentNode::new_block(bounds, merged_children))
