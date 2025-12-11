@@ -1992,19 +1992,10 @@ impl TableFormattingContext {
     }
 
     /// Percentages on columns rely on a definite table width. If the table width
-    /// is indefinite (auto/max-content/min-content with no containing inline size),
-    /// treat percentage constraints as auto so intrinsic sizing isn't forced to zero.
-    fn normalize_percentage_constraints(
-        &self,
-        constraints: &mut [ColumnConstraints],
-        table_width: Option<f32>,
-        available_width: &AvailableSpace,
-    ) {
-        if table_width.is_some() {
-            return;
-        }
-
-        if matches!(available_width, AvailableSpace::Definite(_)) {
+    /// is not specified, treat percentage constraints as auto so intrinsic sizing
+    /// isn't forced by an unrelated containing block.
+    fn normalize_percentage_constraints(&self, constraints: &mut [ColumnConstraints], percent_base: Option<f32>) {
+        if percent_base.is_some() {
             return;
         }
 
@@ -2089,12 +2080,17 @@ impl TableFormattingContext {
             if cell.colspan == 1 {
                 if let Some(width) = &cell_box.style.width {
                     match width.unit {
-                        LengthUnit::Percent => {
+                        LengthUnit::Percent if percent_base.is_some() => {
                             let col = &mut constraints[cell.col];
                             col.set_percentage(width.value);
                             col.min_width = col.min_width.max(min_w);
                             col.max_width = col.max_width.max(max_w);
                             continue;
+                        }
+                        LengthUnit::Percent => {
+                            let col = &mut constraints[cell.col];
+                            col.min_width = col.min_width.max(min_w);
+                            col.max_width = col.max_width.max(max_w);
                         }
                         _ => {
                             let px = width.to_px().max(min_w);
@@ -2115,8 +2111,10 @@ impl TableFormattingContext {
                 let end = (cell.col + cell.colspan).min(constraints.len());
                 if let Some(width) = &cell_box.style.width {
                     if let LengthUnit::Percent = width.unit {
-                        // Split percentage across spanned columns so the span consumes its share of the table width.
-                        distribute_spanning_percentage(constraints, start, end, width.value);
+                        if percent_base.is_some() {
+                            // Split percentage across spanned columns so the span consumes its share of the table width.
+                            distribute_spanning_percentage(constraints, start, end, width.value);
+                        }
                     }
                 }
                 let target_min = specified_width.map(|w| min_w.max(w)).unwrap_or(min_w);
@@ -2136,9 +2134,10 @@ impl TableFormattingContext {
                         constraint.fixed_width = Some(px.max(constraint.min_width));
                         constraint.is_flexible = false;
                     }
-                    SpecifiedWidth::Percent(pct) => {
+                    SpecifiedWidth::Percent(pct) if percent_base.is_some() => {
                         constraint.set_percentage(pct);
                     }
+                    SpecifiedWidth::Percent(_) => {}
                     SpecifiedWidth::Auto => {}
                 }
             }
@@ -2290,9 +2289,11 @@ impl FormattingContext for TableFormattingContext {
         let min_width = resolve_opt_length_against(box_node.style.min_width.as_ref(), font_size, containing_width);
         let max_width = resolve_opt_length_against(box_node.style.max_width.as_ref(), font_size, containing_width);
 
+        // Table width for sizing; percentages on columns are only honored when the table has an explicit width.
         let table_width = specified_width
             .or(containing_width)
             .map(|w| clamp_to_min_max(w, min_width, max_width));
+        let percent_base_width = specified_width.map(|w| clamp_to_min_max(w, min_width, max_width));
         // Table padding and borders (ignored for box sizing under collapsed model per CSS 2.1),
         // but we still track outer borders for percentage-height resolution.
         let resolve_abs = |l: &crate::style::values::Length| match l.unit {
@@ -2409,14 +2410,10 @@ impl FormattingContext for TableFormattingContext {
             } else {
                 border_h
             };
-        let percent_base = match (table_width, constraints.available_width) {
-            (Some(w), _) => Some((w - spacing - edge_consumption).max(0.0)),
-            (None, AvailableSpace::Definite(w)) => Some((w - spacing - edge_consumption).max(0.0)),
-            _ => None,
-        };
+        let percent_base = percent_base_width.map(|w| (w - spacing - edge_consumption).max(0.0));
 
         self.populate_column_constraints(box_node, &structure, &mut column_constraints, mode, percent_base);
-        self.normalize_percentage_constraints(&mut column_constraints, table_width, &constraints.available_width);
+        self.normalize_percentage_constraints(&mut column_constraints, percent_base);
 
         let min_content_sum: f32 = column_constraints.iter().map(|c| c.min_width).sum();
         let max_content_sum: f32 = column_constraints.iter().map(|c| c.max_width).sum();
@@ -4228,6 +4225,65 @@ mod tests {
     }
 
     #[test]
+    fn percentage_columns_are_ignored_when_table_width_auto() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut left_style = ComputedStyle::default();
+        left_style.display = Display::TableCell;
+        left_style.width = Some(Length::new(80.0, LengthUnit::Percent));
+
+        let mut right_style = ComputedStyle::default();
+        right_style.display = Display::TableCell;
+
+        let left = BoxNode::new_block(Arc::new(left_style), FormattingContextType::Block, vec![]);
+        let right = BoxNode::new_block(Arc::new(right_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(
+            Arc::new(ComputedStyle {
+                display: Display::TableRow,
+                ..ComputedStyle::default()
+            }),
+            FormattingContextType::Block,
+            vec![left, right],
+        );
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let fc = TableFormattingContext::new();
+        let fragment = fc
+            .layout(
+                &table,
+                &LayoutConstraints::new(AvailableSpace::Definite(100.0), AvailableSpace::Indefinite),
+            )
+            .expect("layout");
+
+        fn collect_cell_widths(node: &FragmentNode, widths: &mut Vec<f32>) {
+            if node
+                .style
+                .as_ref()
+                .map(|s| s.display == Display::TableCell)
+                .unwrap_or(false)
+            {
+                widths.push(node.bounds.width());
+            }
+            for child in &node.children {
+                collect_cell_widths(child, widths);
+            }
+        }
+
+        let mut widths = Vec::new();
+        collect_cell_widths(&fragment, &mut widths);
+        assert_eq!(widths.len(), 2);
+        // Percent width is ignored when table width is auto; distribution should be roughly even.
+        assert!(
+            (45.0..55.0).contains(&widths[0]),
+            "expected first column to ignore percentage and share space: {:?}",
+            widths
+        );
+    }
+
+    #[test]
     fn test_fixed_layout_uses_first_row_only() {
         // First row specifies widths; second row should not affect fixed layout distribution.
         let mut table_style = ComputedStyle::default();
@@ -5675,7 +5731,7 @@ mod tests {
         ];
         let tfc = TableFormattingContext::new();
         // Percentages should remain authored even when over 100%.
-        tfc.normalize_percentage_constraints(&mut constraints, Some(200.0), &AvailableSpace::Definite(200.0));
+        tfc.normalize_percentage_constraints(&mut constraints, Some(200.0));
 
         let sum: f32 = constraints.iter().filter_map(|c| c.percentage).sum();
         assert!((sum - 120.0).abs() < 0.01);
@@ -6039,7 +6095,7 @@ mod tests {
         ];
 
         let tfc = TableFormattingContext::new();
-        tfc.normalize_percentage_constraints(&mut constraints, None, &AvailableSpace::MaxContent);
+        tfc.normalize_percentage_constraints(&mut constraints, None);
 
         assert!(constraints.iter().all(|c| c.percentage.is_none()));
         assert!(constraints.iter().all(|c| c.is_flexible));
