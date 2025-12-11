@@ -62,6 +62,9 @@ pub struct DOMNode {
 
     /// Alternative text for replaced elements (e.g., <img alt="...">)
     pub alt: Option<String>,
+
+    /// Poster image for video elements
+    pub poster: Option<String>,
 }
 
 impl DOMNode {
@@ -77,6 +80,7 @@ impl DOMNode {
             intrinsic_size: None,
             src: None,
             alt: None,
+            poster: None,
         }
     }
 
@@ -92,6 +96,7 @@ impl DOMNode {
             intrinsic_size: None,
             src: None,
             alt: None,
+            poster: None,
         }
     }
 
@@ -134,6 +139,7 @@ impl DOMNode {
             intrinsic_size,
             src: Some(src.into()),
             alt: None,
+            poster: None,
         }
     }
 
@@ -152,6 +158,12 @@ impl DOMNode {
     /// Sets the alt text (builder pattern)
     pub fn with_alt(mut self, alt: impl Into<String>) -> Self {
         self.alt = Some(alt.into());
+        self
+    }
+
+    /// Sets poster (builder pattern)
+    pub fn with_poster(mut self, poster: impl Into<String>) -> Self {
+        self.poster = Some(poster.into());
         self
     }
 
@@ -238,10 +250,11 @@ impl DOMNode {
         let tag = self.tag_name.as_ref()?;
         let src = self.src.clone().unwrap_or_default();
         let alt = self.alt.clone().filter(|s| !s.is_empty());
+        let poster = self.poster.clone().filter(|s| !s.is_empty());
 
         match tag.as_str() {
             "img" => Some(ReplacedType::Image { src, alt }),
-            "video" => Some(ReplacedType::Video { src }),
+            "video" => Some(ReplacedType::Video { src, poster }),
             "canvas" => Some(ReplacedType::Canvas),
             "svg" => Some(ReplacedType::Svg { content: src }),
             "iframe" => Some(ReplacedType::Iframe { src }),
@@ -893,50 +906,52 @@ use crate::style::cascade::StyledNode;
 pub fn generate_box_tree(styled: &StyledNode) -> BoxTree {
     let mut counters = CounterManager::new();
     counters.enter_scope();
-    let root = generate_box_node_from_styled(styled, &mut counters);
+    let mut roots = generate_boxes_for_styled(styled, &mut counters, true);
     counters.leave_scope();
+    let root = match roots.len() {
+        0 => BoxNode::new_block(
+            Arc::new(ComputedStyle::default()),
+            FormattingContextType::Block,
+            Vec::new(),
+        ),
+        1 => roots.remove(0),
+        _ => BoxNode::new_anonymous_block(Arc::new(ComputedStyle::default()), roots),
+    };
     BoxTree { root }
 }
 
-/// Recursively generates BoxNode from StyledNode
-fn generate_box_node_from_styled(styled: &StyledNode, counters: &mut CounterManager) -> BoxNode {
+/// Recursively generates BoxNodes from a StyledNode, honoring display: contents by
+/// splicing grandchildren into the parent’s child list rather than creating a box.
+fn generate_boxes_for_styled(styled: &StyledNode, counters: &mut CounterManager, _is_root: bool) -> Vec<BoxNode> {
     if let Some(text) = styled.node.text_content() {
-        if !text.trim().is_empty() {
+        if !text.is_empty() {
             let style = Arc::new(styled.styles.clone());
-            return BoxNode::new_text(style, text.to_string());
+            return vec![BoxNode::new_text(style, text.to_string())];
         }
     }
 
     counters.enter_scope();
-    let node = generate_box_node_from_styled_in_scope(styled, counters);
-    counters.leave_scope();
-    node
-}
-
-fn generate_box_node_from_styled_in_scope(styled: &StyledNode, counters: &mut CounterManager) -> BoxNode {
-    let style = Arc::new(styled.styles.clone());
-
     apply_counter_properties_from_style(styled, counters);
 
-    // Check if this is display: none
+    // display:none suppresses box generation entirely.
     if styled.styles.display == Display::None {
-        // Create an empty block (will have no effect on layout)
-        return BoxNode::new_block(style, FormattingContextType::Block, vec![]);
+        counters.leave_scope();
+        return Vec::new();
     }
 
-    // Check for replaced elements (images, etc.)
+    // Replaced elements short-circuit to a single replaced box unless they're display: contents.
     if let Some(tag) = styled.node.tag_name() {
-        if is_replaced_element(tag) {
-            return create_replaced_box_from_styled(styled, style);
+        if is_replaced_element(tag) && styled.styles.display != Display::Contents {
+            counters.leave_scope();
+            let box_node = create_replaced_box_from_styled(styled, Arc::new(styled.styles.clone()));
+            return vec![attach_debug_info(box_node, styled)];
         }
     }
 
-    // Generate children
-    let mut children: Vec<BoxNode> = styled
-        .children
-        .iter()
-        .map(|child| generate_box_node_from_styled(child, counters))
-        .collect();
+    let mut children: Vec<BoxNode> = Vec::new();
+    for child in &styled.children {
+        children.extend(generate_boxes_for_styled(child, counters, false));
+    }
 
     // Generate ::before pseudo-element box if styles exist
     if let Some(before_styles) = &styled.before_styles {
@@ -958,7 +973,13 @@ fn generate_box_node_from_styled_in_scope(styled: &StyledNode, counters: &mut Co
         }
     }
 
-    // Determine box type based on display
+    // display: contents contributes its children directly.
+    if styled.styles.display == Display::Contents {
+        counters.leave_scope();
+        return children;
+    }
+
+    let style = Arc::new(styled.styles.clone());
     let fc_type = styled
         .styles
         .display
@@ -966,14 +987,29 @@ fn generate_box_node_from_styled_in_scope(styled: &StyledNode, counters: &mut Co
         .unwrap_or(FormattingContextType::Block);
 
     let box_node = match styled.styles.display {
-        Display::Block | Display::Flex | Display::Grid | Display::Table => BoxNode::new_block(style, fc_type, children),
+        Display::Block | Display::FlowRoot | Display::ListItem => BoxNode::new_block(style, fc_type, children),
         Display::Inline => BoxNode::new_inline(style, children),
         Display::InlineBlock => BoxNode::new_inline_block(style, fc_type, children),
-        Display::None => BoxNode::new_block(style, FormattingContextType::Block, vec![]),
-        _ => BoxNode::new_block(style, fc_type, children),
+        Display::Flex | Display::InlineFlex => BoxNode::new_block(style, FormattingContextType::Flex, children),
+        Display::Grid | Display::InlineGrid => BoxNode::new_block(style, FormattingContextType::Grid, children),
+        Display::Table | Display::InlineTable => BoxNode::new_block(style, FormattingContextType::Table, children),
+        // Table-internal boxes (simplified for Wave 2)
+        Display::TableRow
+        | Display::TableCell
+        | Display::TableRowGroup
+        | Display::TableHeaderGroup
+        | Display::TableFooterGroup
+        | Display::TableColumn
+        | Display::TableColumnGroup
+        | Display::TableCaption => BoxNode::new_block(style, FormattingContextType::Block, children),
+        Display::None | Display::Contents => unreachable!("handled above"),
     };
 
-    // Add debug info with tag name for table element identification
+    counters.leave_scope();
+    vec![attach_debug_info(box_node, styled)]
+}
+
+fn attach_debug_info(mut box_node: BoxNode, styled: &StyledNode) -> BoxNode {
     if let Some(tag) = styled.node.tag_name() {
         // Extract colspan and rowspan for table cells
         let colspan = styled
@@ -996,10 +1032,10 @@ fn generate_box_node_from_styled_in_scope(styled: &StyledNode, counters: &mut Co
             .map(|c| c.split_whitespace().map(|s| s.to_string()).collect())
             .unwrap_or_default();
 
-        box_node.with_debug_info(DebugInfo::new(Some(tag.to_string()), id, classes).with_spans(colspan, rowspan))
-    } else {
-        box_node
+        box_node =
+            box_node.with_debug_info(DebugInfo::new(Some(tag.to_string()), id, classes).with_spans(colspan, rowspan));
     }
+    box_node
 }
 
 /// Creates a box for a pseudo-element (::before or ::after)
@@ -1189,12 +1225,13 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
     // Get src attribute if available
     let src = styled.node.get_attribute("src").unwrap_or_default();
     let alt = styled.node.get_attribute("alt").filter(|s| !s.is_empty());
+    let poster = styled.node.get_attribute("poster").filter(|s| !s.is_empty());
     let data_attr = styled.node.get_attribute("data").unwrap_or_default();
 
     // Determine replaced type
     let replaced_type = match tag.to_lowercase().as_str() {
         "img" => ReplacedType::Image { src, alt },
-        "video" => ReplacedType::Video { src },
+        "video" => ReplacedType::Video { src, poster },
         "canvas" => ReplacedType::Canvas,
         "svg" => ReplacedType::Svg { content: String::new() },
         "iframe" => ReplacedType::Iframe { src },
@@ -1866,6 +1903,55 @@ mod tests {
         }
     }
 
+    #[test]
+    fn display_contents_splices_children_into_parent() {
+        let mut root = styled_element("div");
+        root.styles.display = Display::Block;
+
+        let mut contents = styled_element("section");
+        contents.styles.display = Display::Contents;
+
+        let mut child1 = styled_element("p");
+        child1.styles.display = Display::Block;
+        let mut child2 = styled_element("p");
+        child2.styles.display = Display::Block;
+
+        contents.children = vec![child1, child2];
+        root.children = vec![contents];
+
+        let tree = generate_box_tree(&root);
+        assert_eq!(tree.root.children.len(), 2, "contents element should not create a box");
+        let tags: Vec<_> = tree
+            .root
+            .children
+            .iter()
+            .filter_map(|c| c.debug_info.as_ref().and_then(|d| d.tag_name.clone()))
+            .collect();
+        assert_eq!(tags, vec!["p".to_string(), "p".to_string()]);
+    }
+
+    #[test]
+    fn whitespace_text_nodes_are_preserved() {
+        let mut root = styled_element("div");
+        root.styles.display = Display::Block;
+        let mut child = styled_element("span");
+        child.styles.display = Display::Inline;
+        child.node = dom::DomNode {
+            node_type: dom::DomNodeType::Text {
+                content: "   ".to_string(),
+            },
+            children: vec![],
+        };
+        root.children = vec![child];
+
+        let tree = generate_box_tree(&root);
+        assert_eq!(tree.root.children.len(), 1);
+        assert!(
+            tree.root.children[0].is_text(),
+            "whitespace text should produce a text box"
+        );
+    }
+
     // =============================================================================
     // Utility Method Tests
     // =============================================================================
@@ -1964,6 +2050,7 @@ mod tests {
             style.clone(),
             ReplacedType::Video {
                 src: "test.mp4".to_string(),
+                poster: None,
             },
             None,
             None,

@@ -6,6 +6,9 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- `<video>` replaced elements now carry the `poster` attribute; intrinsic sizing uses the poster image when no explicit dimensions are provided, and both the painter and display-list builder render the poster before falling back to placeholders. Added unit tests for poster-driven intrinsic size, display-list decoding, and paint output.
+- Styled-tree box generation now honors `display: contents`: contents elements no longer create boxes; their ::before/::after/marker boxes are spliced into the parent child list, matching DOM-path behavior. Added a regression to ensure children are adopted instead of wrapping.
+- Text nodes are no longer dropped when they contain only whitespace; box generation now preserves whitespace-only text boxes so whitespace is handled by layout/white-space instead of being stripped.
 - Flex/grid formatting contexts now pass computed `aspect-ratio` through to Taffy (via the `aspect_ratio` field) and grid containers forward `align-items`, so flex/grid items derive missing dimensions from authored ratios. Added regressions for flex (width↔height) and grid items (height from width and width from height) to lock the behavior.
 - CSS alignment properties now flow through to layout: `align-self`/`justify-self` are parsed (auto → fallback) and mapped onto Taffy for flex and grid items, and `justify-items` is inherited and forwarded for grids. Added flex/grid regressions to verify align-self overrides parent alignment and justify-items/justify-self position grid items correctly.
 - Alignment parsing now accepts the full start/end family (`start`/`end`/`self-start`/`self-end`) plus left/right/normal and maps them to Taffy’s start/end variants; align/justify self handle `auto` correctly. A parsing regression locks the start/self-end/right/auto/center combinations.
