@@ -6,7 +6,7 @@
 use fastrender::css::types::{BoxShadow, ColorStop};
 use fastrender::geometry::{Point, Rect};
 use fastrender::style::types::{BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle};
-use fastrender::Rgba;
+use fastrender::{Color, Rgba};
 use fastrender::{
     BlendMode, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FillRoundedRectItem,
     GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem,
@@ -141,11 +141,11 @@ fn fragment_background_gradient_emits_linear_gradient() {
             angle: 0.0,
             stops: vec![
                 ColorStop {
-                    color: Rgba::RED,
+                    color: Color::Rgba(Rgba::RED),
                     position: Some(0.0),
                 },
                 ColorStop {
-                    color: Rgba::BLUE,
+                    color: Color::Rgba(Rgba::BLUE),
                     position: Some(1.0),
                 },
             ],

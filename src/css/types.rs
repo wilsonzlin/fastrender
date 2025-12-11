@@ -2,7 +2,7 @@
 //!
 //! Core types for representing CSS stylesheets, rules, and values.
 
-use crate::style::color::Rgba;
+use crate::style::color::{Color, Rgba};
 use crate::style::media::{MediaContext, MediaQuery};
 use crate::style::values::Length;
 use cssparser::ToCss;
@@ -196,7 +196,7 @@ pub struct TextShadow {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColorStop {
-    pub color: Rgba,
+    pub color: Color,
     pub position: Option<f32>,
 }
 

@@ -487,7 +487,7 @@ impl DisplayListBuilder {
         }
     }
 
-    fn normalize_color_stops(stops: &[ColorStop]) -> Vec<(f32, Rgba)> {
+    fn normalize_color_stops(stops: &[ColorStop], current_color: Rgba) -> Vec<(f32, Rgba)> {
         if stops.is_empty() {
             return Vec::new();
         }
@@ -495,13 +495,13 @@ impl DisplayListBuilder {
         let mut positions: Vec<Option<f32>> = stops.iter().map(|s| s.position).collect();
         if positions.iter().all(|p| p.is_none()) {
             if stops.len() == 1 {
-                return vec![(0.0, stops[0].color)];
+                return vec![(0.0, stops[0].color.to_rgba(current_color))];
             }
             let denom = (stops.len() - 1) as f32;
             return stops
                 .iter()
                 .enumerate()
-                .map(|(i, s)| (i as f32 / denom, s.color))
+                .map(|(i, s)| (i as f32 / denom, s.color.to_rgba(current_color)))
                 .collect();
         }
 
@@ -542,7 +542,7 @@ impl DisplayListBuilder {
             let pos = pos_opt.unwrap_or(prev);
             let clamped = pos.max(prev).clamp(0.0, 1.0);
             prev = clamped;
-            output.push((clamped, stops[idx].color));
+            output.push((clamped, stops[idx].color.to_rgba(current_color)));
         }
 
         output
@@ -1133,7 +1133,7 @@ impl DisplayListBuilder {
 
         match bg {
             BackgroundImage::LinearGradient { angle, stops } => {
-                let resolved = Self::normalize_color_stops(stops);
+                let resolved = Self::normalize_color_stops(stops, style.color);
                 if !resolved.is_empty() {
                     let rad = angle.to_radians();
                     let dx = rad.sin();
@@ -1153,7 +1153,7 @@ impl DisplayListBuilder {
                 }
             }
             BackgroundImage::RepeatingLinearGradient { angle, stops } => {
-                let resolved = Self::normalize_color_stops(stops);
+                let resolved = Self::normalize_color_stops(stops, style.color);
                 if !resolved.is_empty() {
                     let rad = angle.to_radians();
                     let dx = rad.sin();
@@ -1173,7 +1173,7 @@ impl DisplayListBuilder {
                 }
             }
             BackgroundImage::RadialGradient { stops } => {
-                let resolved = Self::normalize_color_stops(stops);
+                let resolved = Self::normalize_color_stops(stops, style.color);
                 if !resolved.is_empty() {
                     let cx = origin_rect.x() + origin_rect.width() / 2.0;
                     let cy = origin_rect.y() + origin_rect.height() / 2.0;
@@ -1192,7 +1192,7 @@ impl DisplayListBuilder {
                 }
             }
             BackgroundImage::RepeatingRadialGradient { stops } => {
-                let resolved = Self::normalize_color_stops(stops);
+                let resolved = Self::normalize_color_stops(stops, style.color);
                 if !resolved.is_empty() {
                     let cx = origin_rect.x() + origin_rect.width() / 2.0;
                     let cy = origin_rect.y() + origin_rect.height() / 2.0;
@@ -2216,7 +2216,7 @@ mod tests {
     use super::*;
     use crate::image_loader::ImageCache;
     use crate::paint::stacking::{StackingContext, StackingContextReason};
-    use crate::style::color::Rgba;
+    use crate::style::color::{Color, Rgba};
     use crate::style::display::Display;
     use crate::style::position::Position;
     use crate::style::types::{
@@ -2485,11 +2485,11 @@ mod tests {
                 angle: 0.0,
                 stops: vec![
                     crate::css::types::ColorStop {
-                        color: Rgba::RED,
+                        color: Color::Rgba(Rgba::RED),
                         position: Some(0.0),
                     },
                     crate::css::types::ColorStop {
-                        color: Rgba::RED,
+                        color: Color::Rgba(Rgba::RED),
                         position: Some(1.0),
                     },
                 ],

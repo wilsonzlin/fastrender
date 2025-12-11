@@ -34,6 +34,8 @@ use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::stacking::creates_stacking_context;
 use crate::paint::text_shadow::{resolve_text_shadows, PathBounds, ResolvedTextShadow};
 use crate::style::color::Rgba;
+#[cfg(test)]
+use crate::style::color::Color;
 use crate::style::display::Display;
 use crate::style::position::Position;
 use crate::style::types::{
@@ -1041,7 +1043,7 @@ impl Painter {
 
         match bg {
             BackgroundImage::LinearGradient { angle, stops } => {
-                let resolved = normalize_color_stops(stops);
+                let resolved = normalize_color_stops(stops, style.color);
                 self.paint_linear_gradient(
                     origin_rect,
                     clip_rect,
@@ -1053,7 +1055,7 @@ impl Painter {
                 );
             }
             BackgroundImage::RadialGradient { stops } => {
-                let resolved = normalize_color_stops(stops);
+                let resolved = normalize_color_stops(stops, style.color);
                 self.paint_radial_gradient(
                     origin_rect,
                     clip_rect,
@@ -1064,7 +1066,7 @@ impl Painter {
                 );
             }
             BackgroundImage::RepeatingLinearGradient { angle, stops } => {
-                let resolved = normalize_color_stops(stops);
+                let resolved = normalize_color_stops(stops, style.color);
                 self.paint_linear_gradient(
                     origin_rect,
                     clip_rect,
@@ -1076,7 +1078,7 @@ impl Painter {
                 );
             }
             BackgroundImage::RepeatingRadialGradient { stops } => {
-                let resolved = normalize_color_stops(stops);
+                let resolved = normalize_color_stops(stops, style.color);
                 self.paint_radial_gradient(
                     origin_rect,
                     clip_rect,
@@ -3996,7 +3998,7 @@ fn resolve_background_offset(
     }
 }
 
-fn normalize_color_stops(stops: &[ColorStop]) -> Vec<(f32, Rgba)> {
+fn normalize_color_stops(stops: &[ColorStop], current_color: Rgba) -> Vec<(f32, Rgba)> {
     if stops.is_empty() {
         return Vec::new();
     }
@@ -4004,13 +4006,13 @@ fn normalize_color_stops(stops: &[ColorStop]) -> Vec<(f32, Rgba)> {
     let mut positions: Vec<Option<f32>> = stops.iter().map(|s| s.position).collect();
     if positions.iter().all(|p| p.is_none()) {
         if stops.len() == 1 {
-            return vec![(0.0, stops[0].color)];
+            return vec![(0.0, stops[0].color.to_rgba(current_color))];
         }
         let denom = (stops.len() - 1) as f32;
         return stops
             .iter()
             .enumerate()
-            .map(|(i, s)| (i as f32 / denom, s.color))
+            .map(|(i, s)| (i as f32 / denom, s.color.to_rgba(current_color)))
             .collect();
     }
 
@@ -4051,11 +4053,11 @@ fn normalize_color_stops(stops: &[ColorStop]) -> Vec<(f32, Rgba)> {
         let pos = pos_opt.unwrap_or(prev);
         let clamped = pos.max(prev).clamp(0.0, 1.0);
         prev = clamped;
-        output.push((clamped, stops[idx].color));
-    }
+            output.push((clamped, stops[idx].color.to_rgba(current_color)));
+        }
 
-    output
-}
+        output
+    }
 
 fn gradient_stops(stops: &[(f32, Rgba)]) -> Vec<tiny_skia::GradientStop> {
     stops
@@ -4772,11 +4774,11 @@ mod tests {
                 angle: 90.0,
                 stops: vec![
                     crate::css::types::ColorStop {
-                        color: Rgba::RED,
+                        color: Color::Rgba(Rgba::RED),
                         position: Some(0.0),
                     },
                     crate::css::types::ColorStop {
-                        color: Rgba::BLUE,
+                        color: Color::Rgba(Rgba::BLUE),
                         position: Some(1.0),
                     },
                 ],
@@ -4795,6 +4797,24 @@ mod tests {
     }
 
     #[test]
+    fn normalize_color_stops_resolves_current_color() {
+        let stops = vec![
+            crate::css::types::ColorStop {
+                color: Color::CurrentColor,
+                position: Some(0.0),
+            },
+            crate::css::types::ColorStop {
+                color: Color::Rgba(Rgba::BLUE),
+                position: Some(1.0),
+            },
+        ];
+        let resolved = normalize_color_stops(&stops, Rgba::new(10, 20, 30, 1.0));
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved[0].1, Rgba::new(10, 20, 30, 1.0));
+        assert_eq!(resolved[1].1, Rgba::BLUE);
+    }
+
+    #[test]
     fn paints_repeating_linear_gradient_background() {
         let mut style = ComputedStyle::default();
         style.set_background_layers(vec![BackgroundLayer {
@@ -4802,11 +4822,11 @@ mod tests {
                 angle: 0.0,
                 stops: vec![
                     crate::css::types::ColorStop {
-                        color: Rgba::RED,
+                        color: Color::Rgba(Rgba::RED),
                         position: Some(0.0),
                     },
                     crate::css::types::ColorStop {
-                        color: Rgba::BLUE,
+                        color: Color::Rgba(Rgba::BLUE),
                         position: Some(0.5),
                     },
                 ],
@@ -4842,11 +4862,11 @@ mod tests {
                 angle: 90.0,
                 stops: vec![
                     crate::css::types::ColorStop {
-                        color: Rgba::RED,
+                        color: Color::Rgba(Rgba::RED),
                         position: Some(0.0),
                     },
                     crate::css::types::ColorStop {
-                        color: Rgba::BLUE,
+                        color: Color::Rgba(Rgba::BLUE),
                         position: Some(1.0),
                     },
                 ],
@@ -4880,11 +4900,11 @@ mod tests {
                 angle: 0.0,
                 stops: vec![
                     crate::css::types::ColorStop {
-                        color: Rgba::RED,
+                        color: Color::Rgba(Rgba::RED),
                         position: Some(0.0),
                     },
                     crate::css::types::ColorStop {
-                        color: Rgba::RED,
+                        color: Color::Rgba(Rgba::RED),
                         position: Some(1.0),
                     },
                 ],
@@ -5157,11 +5177,11 @@ mod tests {
                     angle: 0.0,
                     stops: vec![
                         crate::css::types::ColorStop {
-                            color: Rgba::new(255, 255, 0, 1.0),
+                            color: Color::Rgba(Rgba::new(255, 255, 0, 1.0)),
                             position: Some(0.0),
                         },
                         crate::css::types::ColorStop {
-                            color: Rgba::new(255, 255, 0, 1.0),
+                            color: Color::Rgba(Rgba::new(255, 255, 0, 1.0)),
                             position: Some(1.0),
                         },
                     ],

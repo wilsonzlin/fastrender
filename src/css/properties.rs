@@ -119,13 +119,11 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
                 parts.push(gradient);
             } else if let Some(v) = parse_simple_value(&token) {
                 parts.push(v);
-            } else if let Ok(color) = csscolorparser::parse(&token) {
-                parts.push(PropertyValue::Color(Rgba::new(
-                    (color.r * 255.0) as u8,
-                    (color.g * 255.0) as u8,
-                    (color.b * 255.0) as u8,
-                    color.a as f32,
-                )));
+            } else if let Ok(color) = Color::parse(&token) {
+                match color {
+                    Color::CurrentColor => parts.push(PropertyValue::Keyword("currentColor".to_string())),
+                    _ => parts.push(PropertyValue::Color(color.to_rgba(Rgba::BLACK))),
+                }
             } else {
                 parts.push(PropertyValue::Keyword(token));
             }
@@ -363,18 +361,10 @@ fn parse_color_stop(token: &str) -> Option<crate::css::types::ColorStop> {
     }
 
     let (color_part, position_part) = split_color_and_position(trimmed);
-    let color = csscolorparser::parse(color_part).ok()?;
+    let color = Color::parse(color_part).ok()?;
     let position = position_part.and_then(parse_stop_position);
 
-    Some(crate::css::types::ColorStop {
-        color: Rgba::new(
-            (color.r * 255.0) as u8,
-            (color.g * 255.0) as u8,
-            (color.b * 255.0) as u8,
-            color.a as f32,
-        ),
-        position,
-    })
+    Some(crate::css::types::ColorStop { color, position })
 }
 
 fn split_color_and_position(token: &str) -> (&str, Option<&str>) {
@@ -427,6 +417,7 @@ fn parse_stop_position(token: &str) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::color::Color;
 
     #[test]
     fn parses_space_separated_values_into_multiple() {
@@ -504,6 +495,30 @@ mod tests {
         assert_eq!(stops.len(), 2);
         assert_eq!(stops[0].position, Some(0.10));
         assert_eq!(stops[1].position, Some(0.60));
+    }
+
+    #[test]
+    fn gradients_accept_currentcolor_and_modern_colors() {
+        let value = "linear-gradient(currentColor 10%, hwb(120 20% 10% / 0.5) 90%)";
+        let PropertyValue::LinearGradient { stops, .. } =
+            parse_property_value("background-image", value).expect("gradient")
+        else {
+            panic!("expected linear gradient");
+        };
+
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].position, Some(0.10));
+        assert!(matches!(stops[0].color, Color::CurrentColor));
+
+        match stops[1].color {
+            Color::Rgba(c) => assert!((c.a - 0.5).abs() < 1e-6),
+            Color::Hsla(h) => {
+                let c = h.to_rgba();
+                assert!((c.a - 0.5).abs() < 1e-6);
+            }
+            Color::CurrentColor => panic!("second stop should not be currentColor"),
+        }
+        assert_eq!(stops[1].position, Some(0.90));
     }
 
     #[test]

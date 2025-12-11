@@ -169,6 +169,14 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         _ => return,
     };
 
+    let resolve_color_value = |value: &PropertyValue| -> Option<Rgba> {
+        match value {
+            PropertyValue::Color(c) => Some(*c),
+            PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentcolor") => Some(styles.color),
+            _ => None,
+        }
+    };
+
     match decl.property.as_str() {
         // Display
         "display" => {
@@ -402,7 +410,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
 
         // Border color
         "border-color" => {
-            if let PropertyValue::Color(c) = resolved_value {
+            if let Some(c) = resolve_color_value(&resolved_value) {
                 styles.border_top_color = c;
                 styles.border_right_color = c;
                 styles.border_bottom_color = c;
@@ -410,22 +418,22 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
             }
         }
         "border-top-color" => {
-            if let PropertyValue::Color(c) = resolved_value {
+            if let Some(c) = resolve_color_value(&resolved_value) {
                 styles.border_top_color = c;
             }
         }
         "border-right-color" => {
-            if let PropertyValue::Color(c) = resolved_value {
+            if let Some(c) = resolve_color_value(&resolved_value) {
                 styles.border_right_color = c;
             }
         }
         "border-bottom-color" => {
-            if let PropertyValue::Color(c) = resolved_value {
+            if let Some(c) = resolve_color_value(&resolved_value) {
                 styles.border_bottom_color = c;
             }
         }
         "border-left-color" => {
-            if let PropertyValue::Color(c) = resolved_value {
+            if let Some(c) = resolve_color_value(&resolved_value) {
                 styles.border_left_color = c;
             }
         }
@@ -1734,12 +1742,12 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
 
         // Color
         "color" => {
-            if let PropertyValue::Color(c) = resolved_value {
+            if let Some(c) = resolve_color_value(&resolved_value) {
                 styles.color = c;
             }
         }
         "background-color" => {
-            if let PropertyValue::Color(c) = resolved_value {
+            if let Some(c) = resolve_color_value(&resolved_value) {
                 styles.background_color = c;
             }
         }
@@ -1873,7 +1881,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
             let layers = split_layers(&tokens);
             let mut parsed_layers = Vec::new();
             for layer_tokens in layers {
-                if let Some(parsed) = parse_background_shorthand(&layer_tokens) {
+                if let Some(parsed) = parse_background_shorthand(&layer_tokens, styles.color) {
                     parsed_layers.push(parsed);
                 }
             }
@@ -6688,7 +6696,7 @@ struct BackgroundShorthand {
     clip: Option<BackgroundBox>,
 }
 
-fn parse_background_shorthand(tokens: &[PropertyValue]) -> Option<BackgroundShorthand> {
+fn parse_background_shorthand(tokens: &[PropertyValue], current_color: Rgba) -> Option<BackgroundShorthand> {
     if tokens.is_empty() {
         return None;
     }
@@ -6750,6 +6758,12 @@ fn parse_background_shorthand(tokens: &[PropertyValue]) -> Option<BackgroundShor
                 shorthand.color = Some(*c);
                 idx += 1;
                 continue;
+            } else if let PropertyValue::Keyword(kw) = token {
+                if kw.eq_ignore_ascii_case("currentcolor") {
+                    shorthand.color = Some(current_color);
+                    idx += 1;
+                    continue;
+                }
             }
         }
 
