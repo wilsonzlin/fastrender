@@ -6,8 +6,9 @@
 use fastrender::css::types::{BoxShadow, ColorStop};
 use fastrender::geometry::{Point, Rect};
 use fastrender::style::types::{
-    BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle,
+    BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle, Containment,
 };
+use fastrender::style::values::Length;
 use fastrender::{Color, Rgba};
 use fastrender::{
     BlendMode, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FillRoundedRectItem,
@@ -1141,6 +1142,54 @@ fn test_stacking_context() {
     assert_eq!(list.len(), 3);
     assert!(list.items()[0].is_stack_operation());
     assert!(list.items()[2].is_stack_operation());
+}
+
+#[test]
+fn paint_containment_clips_stacking_context() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.containment = Containment::with_flags(false, false, false, false, true);
+    style.border_top_width = Length::px(2.0);
+    style.border_right_width = Length::px(2.0);
+    style.border_bottom_width = Length::px(2.0);
+    style.border_left_width = Length::px(2.0);
+    style.border_top_left_radius = Length::px(5.0);
+    style.border_top_right_radius = Length::px(5.0);
+    style.border_bottom_right_radius = Length::px(5.0);
+    style.border_bottom_left_radius = Length::px(5.0);
+
+    let fragment = fastrender::FragmentNode::new_block_styled(
+        Rect::from_xywh(10.0, 20.0, 50.0, 30.0),
+        vec![],
+        Arc::new(style),
+    );
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new()
+        .build_with_stacking_tree(&fragment);
+    let items = list.items();
+
+    let clip_start = items
+        .iter()
+        .position(|item| matches!(item, DisplayItem::PushClip(_)))
+        .expect("paint containment should push a clip");
+    let clip_end = items
+        .iter()
+        .rposition(|item| matches!(item, DisplayItem::PopClip))
+        .expect("paint containment should pop a clip");
+
+    assert!(clip_end > clip_start, "clip should wrap the stacking context");
+    let stacking_idx = items
+        .iter()
+        .position(|item| matches!(item, DisplayItem::PushStackingContext(_)))
+        .expect("stacking context should be present");
+    assert!(stacking_idx > clip_start && stacking_idx < clip_end);
+
+    match &items[clip_start] {
+        DisplayItem::PushClip(ClipItem { rect, radii }) => {
+            assert_eq!(*rect, Rect::from_xywh(12.0, 22.0, 46.0, 26.0));
+            assert_eq!(*radii, Some(BorderRadii::uniform(3.0)));
+        }
+        other => panic!("expected PushClip, got {:?}", other),
+    }
 }
 
 // ============================================================================

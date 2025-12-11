@@ -318,22 +318,23 @@ impl DisplayListBuilder {
             .unwrap_or(Point::ZERO);
         let descendant_offset = Point::new(offset.x + context_origin.x, offset.y + context_origin.y);
 
-        let mix_blend_mode = context
-            .fragments
-            .iter()
-            .find_map(|f| f.style.as_deref())
+        let root_fragment = context.fragments.first();
+        let root_style = root_fragment.and_then(|f| f.style.as_deref());
+        let paint_contained = root_style.map(|s| s.containment.paint).unwrap_or(false);
+        let context_bounds = Rect::from_xywh(
+            context.bounds.x() + offset.x,
+            context.bounds.y() + offset.y,
+            context.bounds.width(),
+            context.bounds.height(),
+        );
+
+        let mix_blend_mode = root_style
             .map(|s| Self::convert_blend_mode(s.mix_blend_mode))
             .unwrap_or(BlendMode::Normal);
-        let is_isolated = context
-            .fragments
-            .iter()
-            .find_map(|f| f.style.as_deref())
+        let is_isolated = root_style
             .map(|s| matches!(s.isolation, Isolation::Isolate) || !s.backdrop_filter.is_empty())
             .unwrap_or(false);
-        let (filters, backdrop_filters, radii) = context
-            .fragments
-            .first()
-            .and_then(|f| f.style.as_deref())
+        let (filters, backdrop_filters, radii) = root_style
             .map(|style| {
                 (
                     Self::resolve_filters(&style.filter, style),
@@ -342,29 +343,37 @@ impl DisplayListBuilder {
                 )
             })
             .unwrap_or((Vec::new(), Vec::new(), crate::paint::display_list::BorderRadii::ZERO));
-        let transform = context
-            .fragments
-            .first()
-            .and_then(|f| f.style.as_deref())
-            .and_then(|style| Self::build_transform(style, context.bounds));
-        let paint_contained = context
-            .fragments
-            .iter()
-            .find_map(|f| f.style.as_deref())
-            .map(|s| s.containment.paint)
-            .unwrap_or(false);
+        let transform = root_style.and_then(|style| Self::build_transform(style, context.bounds));
 
+        let mut pushed_clip = false;
         if paint_contained {
-            self.list.push(DisplayItem::PushClip(ClipItem {
-                rect: context.bounds,
-                radii: None,
-            }));
+            let clip = root_fragment
+                .and_then(|fragment| {
+                    let style = root_style?;
+                    let rect = Rect::new(
+                        Point::new(fragment.bounds.origin.x + offset.x, fragment.bounds.origin.y + offset.y),
+                        fragment.bounds.size,
+                    );
+                    let rects = Self::background_rects(rect, style);
+                    let radii = Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox);
+                    Some(ClipItem {
+                        rect: rects.padding,
+                        radii: if radii.is_zero() { None } else { Some(radii) },
+                    })
+                })
+                .unwrap_or(ClipItem {
+                    rect: context_bounds,
+                    radii: None,
+                });
+
+            self.list.push(DisplayItem::PushClip(clip));
+            pushed_clip = true;
         }
 
         self.list.push(DisplayItem::PushStackingContext(StackingContextItem {
             z_index: context.z_index,
             creates_stacking_context: true,
-            bounds: context.bounds,
+            bounds: context_bounds,
             mix_blend_mode,
             is_isolated,
             transform,
@@ -392,7 +401,7 @@ impl DisplayListBuilder {
         }
 
         self.list.push(DisplayItem::PopStackingContext);
-        if paint_contained {
+        if pushed_clip {
             self.list.push(DisplayItem::PopClip);
         }
     }
