@@ -1082,10 +1082,10 @@ impl BlendModeExt for BlendMode {
             BlendMode::SoftLight => SkiaBlendMode::SoftLight,
             BlendMode::Difference => SkiaBlendMode::Difference,
             BlendMode::Exclusion => SkiaBlendMode::Exclusion,
-            // Additional blend modes map to SourceOver (normal) for now
-            BlendMode::Hue | BlendMode::Saturation | BlendMode::Color | BlendMode::Luminosity => {
-                SkiaBlendMode::SourceOver
-            }
+            BlendMode::Hue => SkiaBlendMode::Hue,
+            BlendMode::Saturation => SkiaBlendMode::Saturation,
+            BlendMode::Color => SkiaBlendMode::Color,
+            BlendMode::Luminosity => SkiaBlendMode::Luminosity,
         }
     }
 }

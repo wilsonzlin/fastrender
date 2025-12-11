@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Canvas blend mode conversion now maps Hue/Saturation/Color/Luminosity to tiny-skia equivalents so PushBlendMode honors the full CSS set; regression asserts `color` blend preserves destination luminance while keeping source hue.
 - `unicode-bidi: plaintext` no longer forces the entire paragraph to first-strong when only inline isolates are present; bidi reordering keeps the paragraph base direction while FSI/PDI isolates handle inline plaintext content. Added a regression for inline plaintext followed by LTR text.
 - Var() resolution is property-aware: the resolver now parses substituted values using the destination property grammar (e.g., background layers keep commas/gradients) instead of a generic parser that flattened complex values.
 - Invalid var() references now drop declarations per spec: `resolve_var_for_property` reports unresolved/not-found/recursion cases and `apply_declaration` ignores the declaration when a var() can’t be resolved, preventing bogus values from entering computed styles.

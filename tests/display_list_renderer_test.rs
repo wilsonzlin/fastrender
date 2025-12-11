@@ -96,3 +96,39 @@ fn drop_shadow_filter_renders_shadow() {
     // Original content stays blue.
     assert_eq!(pixel(&pixmap, 0, 0), (0, 0, 255, 255));
 }
+
+#[test]
+fn color_blend_mode_uses_destination_luminance() {
+    use fastrender::paint::display_list::{BlendMode, BlendModeItem};
+
+    let renderer = DisplayListRenderer::new(2, 2, Rgba::WHITE, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    // Destination: mid-gray.
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+        color: Rgba::from_rgba8(128, 128, 128, 255),
+    }));
+    // Apply color blend with vivid red source: hue/saturation from source, luminance from destination.
+    list.push(DisplayItem::PushBlendMode(BlendModeItem {
+        mode: BlendMode::Color,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+        color: Rgba::RED,
+    }));
+    list.push(DisplayItem::PopBlendMode);
+
+    let pixmap = renderer.render(&list).unwrap();
+    let (r, g, b, a) = pixel(&pixmap, 0, 0);
+    assert_eq!(a, 255);
+    // Color blend should keep destination luminance (~128) while adopting the source hue/saturation.
+    let luminance = 0.3 * r as f32 + 0.59 * g as f32 + 0.11 * b as f32;
+    assert!(
+        (luminance - 128.0).abs() < 1.0,
+        "expected destination luminance preserved (~128), got {luminance}"
+    );
+    assert!(
+        r > 200 && g < 100 && b < 100 && (g as i16 - b as i16).abs() <= 1,
+        "expected hue/saturation from red source, got ({r},{g},{b})"
+    );
+}
