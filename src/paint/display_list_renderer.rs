@@ -9,8 +9,8 @@ use crate::geometry::Point;
 use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::canvas::Canvas;
 use crate::paint::display_list::{
-    BlendMode, BorderItem, BorderSide, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FontId,
-    ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem, StrokeRectItem, TextEmphasis, TextItem,
+    BlendMode, BorderItem, BorderSide, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem,
+    FontId, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem, StrokeRectItem, TextEmphasis, TextItem,
     TransformItem,
 };
 use crate::paint::rasterize::{render_box_shadow, BoxShadow};
@@ -248,6 +248,13 @@ impl DisplayListRenderer {
         let blend_mode = self.canvas.blend_mode();
         let rect = item.rect;
 
+        let mut pushed_clip = false;
+        if item.radii.has_radius() {
+            self.canvas.save();
+            self.canvas.set_clip_with_radii(rect, Some(item.radii));
+            pushed_clip = true;
+        }
+
         let edges: [(_, _, _, _); 4] = [
             (
                 BorderEdge::Top,
@@ -283,6 +290,10 @@ impl DisplayListRenderer {
 
         for (edge, side, (x1, y1), (x2, y2)) in edges {
             self.render_border_edge(edge, x1, y1, x2, y2, side, blend_mode, opacity, clip.as_ref(), transform);
+        }
+
+        if pushed_clip {
+            self.canvas.restore();
         }
     }
 
