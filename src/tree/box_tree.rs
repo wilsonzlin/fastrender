@@ -154,6 +154,11 @@ pub enum ReplacedType {
         /// Poster image URL or data URI
         poster: Option<String>,
     },
+    /// Audio element
+    Audio {
+        /// Source URL
+        src: String,
+    },
 
     /// Canvas element
     Canvas,
@@ -203,7 +208,9 @@ impl ReplacedType {
                     return src;
                 }
 
-                let has_width_descriptors = srcset.iter().any(|c| matches!(c.descriptor, SrcsetDescriptor::Width(_)));
+                let has_width_descriptors = srcset
+                    .iter()
+                    .any(|c| matches!(c.descriptor, SrcsetDescriptor::Width(_)));
 
                 let effective_slot_width = ctx.slot_width.or_else(|| {
                     let viewport = ctx.viewport?;
@@ -264,15 +271,16 @@ impl SrcsetCandidate {
 }
 
 impl SizesList {
-    pub fn evaluate(&self, media_ctx: &crate::style::media::MediaContext, viewport: crate::geometry::Size, font_size: f32) -> f32 {
+    pub fn evaluate(
+        &self,
+        media_ctx: &crate::style::media::MediaContext,
+        viewport: crate::geometry::Size,
+        font_size: f32,
+    ) -> f32 {
         let mut last = None;
         for entry in &self.entries {
             last = Some(entry.length);
-            let media_matches = entry
-                .media
-                .as_ref()
-                .map(|q| media_ctx.evaluate_list(q))
-                .unwrap_or(true);
+            let media_matches = entry.media.as_ref().map(|q| media_ctx.evaluate_list(q)).unwrap_or(true);
             if media_matches {
                 return resolve_sizes_length(entry.length, viewport, font_size);
             }
@@ -788,9 +796,9 @@ impl BoxTree {
 mod tests {
     use super::*;
     use crate::geometry::Size;
+    use crate::style::display::FormattingContextType;
     use crate::style::media::MediaContext;
     use crate::style::values::{Length, LengthUnit};
-    use crate::style::display::FormattingContextType;
 
     fn default_style() -> Arc<ComputedStyle> {
         Arc::new(ComputedStyle::default())
@@ -1092,7 +1100,9 @@ mod tests {
             sizes: Some(SizesList {
                 entries: vec![
                     SizesEntry {
-                        media: Some(vec![crate::style::media::MediaQuery::parse("(max-width: 10px)").unwrap()]),
+                        media: Some(vec![
+                            crate::style::media::MediaQuery::parse("(max-width: 10px)").unwrap()
+                        ]),
                         length: Length::new(50.0, LengthUnit::Vw),
                     },
                     SizesEntry {

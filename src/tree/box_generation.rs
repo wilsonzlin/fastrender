@@ -1572,7 +1572,7 @@ fn list_item_count(styled: &StyledNode) -> usize {
 pub fn is_replaced_element(tag: &str) -> bool {
     matches!(
         tag.to_lowercase().as_str(),
-        "img" | "video" | "canvas" | "svg" | "iframe" | "embed" | "object"
+        "img" | "video" | "canvas" | "svg" | "iframe" | "embed" | "object" | "audio"
     )
 }
 
@@ -1599,6 +1599,7 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
             sizes,
         },
         "video" => ReplacedType::Video { src, poster },
+        "audio" => ReplacedType::Audio { src },
         "canvas" => ReplacedType::Canvas,
         "svg" => ReplacedType::Svg { content: String::new() },
         "iframe" => ReplacedType::Iframe { src },
@@ -1636,6 +1637,10 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
             | ReplacedType::Object { .. } => {
                 intrinsic_size = Some(Size::new(300.0, 150.0));
                 aspect_ratio = Some(2.0);
+            }
+            ReplacedType::Audio { .. } => {
+                intrinsic_size = Some(Size::new(300.0, 32.0));
+                aspect_ratio = Some(300.0 / 32.0);
             }
             _ => {}
         }
@@ -2161,6 +2166,35 @@ mod tests {
 
         let div = DOMNode::new_element("div", style, vec![]);
         assert!(div.replaced_type().is_none());
+    }
+
+    #[test]
+    fn audio_generates_replaced_box_with_fallback_size() {
+        let html = "<html><body><audio src=\"sound.mp3\"></audio></body></html>";
+        let dom = crate::dom::parse_html(html).expect("parse");
+        let styled = crate::style::cascade::apply_styles(&dom, &crate::css::types::StyleSheet::new());
+        let box_tree = generate_box_tree(&styled);
+
+        fn find_audio(node: &BoxNode, out: &mut Vec<ReplacedBox>) {
+            if let BoxType::Replaced(repl) = &node.box_type {
+                if matches!(repl.replaced_type, ReplacedType::Audio { .. }) {
+                    out.push(repl.clone());
+                }
+            }
+            for child in &node.children {
+                find_audio(child, out);
+            }
+        }
+
+        let mut audios = Vec::new();
+        find_audio(&box_tree.root, &mut audios);
+        assert_eq!(audios.len(), 1, "expected one audio replaced box");
+        let audio = &audios[0];
+        assert_eq!(
+            audio.intrinsic_size,
+            Some(Size::new(300.0, 32.0)),
+            "audio should get default UA size when none provided"
+        );
     }
 
     #[test]

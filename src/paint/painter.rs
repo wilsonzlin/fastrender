@@ -991,7 +991,11 @@ impl Painter {
                             clip_rect.width(),
                             clip_rect.height(),
                         );
-                        apply_clip_mask_rect(&mut clip_pixmap, self.device_rect(local_clip), self.device_radii(clip_radii));
+                        apply_clip_mask_rect(
+                            &mut clip_pixmap,
+                            self.device_rect(local_clip),
+                            self.device_radii(clip_radii),
+                        );
                     }
                     base_painter.pixmap.draw_pixmap(
                         0,
@@ -1034,8 +1038,7 @@ impl Painter {
                     );
                 }
 
-                let mut final_transform =
-                    self.device_transform(transform).unwrap_or_else(Transform::identity);
+                let mut final_transform = self.device_transform(transform).unwrap_or_else(Transform::identity);
                 final_transform = final_transform.pre_concat(Transform::from_translate(
                     self.device_length(offset.x),
                     self.device_length(offset.y),
@@ -1093,8 +1096,7 @@ impl Painter {
             return;
         }
 
-        let color_clip_radii =
-            self.device_radii(resolve_clip_radii(style, &rects, color_clip_layer.clip));
+        let color_clip_radii = self.device_radii(resolve_clip_radii(style, &rects, color_clip_layer.clip));
 
         if style.background_color.alpha_u8() > 0 {
             let _ = fill_rounded_rect(
@@ -2109,8 +2111,8 @@ impl Painter {
         // Try to render actual content for images and SVG
         match replaced_type {
             ReplacedType::Image { alt, .. } => {
-                let media_ctx =
-                    crate::style::media::MediaContext::screen(self.css_width, self.css_height).with_device_pixel_ratio(self.scale);
+                let media_ctx = crate::style::media::MediaContext::screen(self.css_width, self.css_height)
+                    .with_device_pixel_ratio(self.scale);
                 let chosen_src = replaced_type.image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
                     scale: self.scale,
                     slot_width: Some(content_rect.width()),
@@ -2405,6 +2407,7 @@ impl Painter {
         // Optional label to hint the missing resource type
         let label = match replaced_type {
             ReplacedType::Video { .. } => Some("video"),
+            ReplacedType::Audio { .. } => Some("audio"),
             ReplacedType::Iframe { .. } => Some("iframe"),
             ReplacedType::Canvas => Some("canvas"),
             ReplacedType::Embed { .. } => Some("embed"),
@@ -4577,14 +4580,9 @@ pub fn paint_tree(tree: &FragmentTree, width: u32, height: u32, background: Rgba
 }
 
 /// Paints a fragment tree at the given device scale.
-pub fn paint_tree_scaled(
-    tree: &FragmentTree,
-    width: u32,
-    height: u32,
-    background: Rgba,
-    scale: f32,
-) -> Result<Pixmap> {
-    let painter = Painter::with_resources_scaled(width, height, background, FontContext::new(), ImageCache::new(), scale)?;
+pub fn paint_tree_scaled(tree: &FragmentTree, width: u32, height: u32, background: Rgba, scale: f32) -> Result<Pixmap> {
+    let painter =
+        Painter::with_resources_scaled(width, height, background, FontContext::new(), ImageCache::new(), scale)?;
     painter.paint(tree)
 }
 
@@ -4650,8 +4648,8 @@ mod tests {
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
     use crate::text::font_loader::FontContext;
-    use crate::Position;
     use crate::tree::box_tree::{SrcsetCandidate, SrcsetDescriptor};
+    use crate::Position;
     use std::sync::Arc;
 
     fn make_empty_tree() -> FragmentTree {
@@ -5304,15 +5302,8 @@ mod tests {
         };
 
         let style = ComputedStyle::default();
-        let mut painter = Painter::with_resources_scaled(
-            2,
-            2,
-            Rgba::WHITE,
-            FontContext::new(),
-            ImageCache::new(),
-            2.0,
-        )
-        .expect("painter");
+        let mut painter = Painter::with_resources_scaled(2, 2, Rgba::WHITE, FontContext::new(), ImageCache::new(), 2.0)
+            .expect("painter");
         painter.paint_replaced(&replaced, Some(&style), 0.0, 0.0, 1.0, 1.0);
 
         let px = painter.pixmap.pixel(0, 0).unwrap();
@@ -5345,15 +5336,9 @@ mod tests {
         };
 
         let style = ComputedStyle::default();
-        let mut painter = Painter::with_resources_scaled(
-            120,
-            20,
-            Rgba::WHITE,
-            FontContext::new(),
-            ImageCache::new(),
-            2.0,
-        )
-        .expect("painter");
+        let mut painter =
+            Painter::with_resources_scaled(120, 20, Rgba::WHITE, FontContext::new(), ImageCache::new(), 2.0)
+                .expect("painter");
 
         painter.paint_replaced(&replaced, Some(&style), 0.0, 0.0, 100.0, 10.0);
 
@@ -6027,15 +6012,9 @@ mod tests {
 
     #[test]
     fn filters_expand_clip_under_radii() {
-        let mut painter = Painter::with_resources_scaled(
-            4,
-            4,
-            Rgba::TRANSPARENT,
-            FontContext::new(),
-            ImageCache::new(),
-            1.0,
-        )
-        .unwrap();
+        let mut painter =
+            Painter::with_resources_scaled(4, 4, Rgba::TRANSPARENT, FontContext::new(), ImageCache::new(), 1.0)
+                .unwrap();
         painter.fill_background();
 
         let mut style = ComputedStyle::default();
