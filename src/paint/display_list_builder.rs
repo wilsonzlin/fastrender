@@ -32,10 +32,10 @@ use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::paint::display_list::{
-    BlendMode, BorderItem, BorderSide, ClipItem, DisplayItem, DisplayList, EmphasisMark, EmphasisText, FillRectItem,
-    FontId, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem,
-    OpacityItem, RadialGradientItem, StackingContextItem, StrokeRectItem, TextEmphasis, TextItem, TextShadowItem,
-    Transform2D,
+    BlendMode, BorderItem, BorderSide, BoxShadowItem, ClipItem, DisplayItem, DisplayList, EmphasisMark, EmphasisText,
+    FillRectItem, FontId, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem,
+    LinearGradientItem, OpacityItem, RadialGradientItem, StackingContextItem, StrokeRectItem, TextEmphasis, TextItem,
+    TextShadowItem, Transform2D,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
@@ -197,7 +197,9 @@ impl DisplayListBuilder {
         );
 
         if let Some(style) = fragment.style.as_deref() {
+            self.emit_box_shadows_from_style(absolute_rect, style, false);
             self.emit_background_from_style(absolute_rect, style);
+            self.emit_box_shadows_from_style(absolute_rect, style, true);
             self.emit_border_from_style(absolute_rect, style);
         }
 
@@ -1252,6 +1254,37 @@ impl DisplayListBuilder {
 
         if pushed_clip {
             self.list.push(DisplayItem::PopClip);
+        }
+    }
+
+    fn emit_box_shadows_from_style(&mut self, rect: Rect, style: &ComputedStyle, inset: bool) {
+        if style.box_shadow.is_empty() {
+            return;
+        }
+        let rects = Self::background_rects(rect, style);
+        let outer_radii = Self::border_radii(rect, style).clamped(rect.width(), rect.height());
+        let inner_radii = Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox);
+        let base_rect = if inset { rects.padding } else { rects.border };
+
+        for shadow in &style.box_shadow {
+            if shadow.inset != inset {
+                continue;
+            }
+            let offset_x = Self::resolve_length_for_paint(&shadow.offset_x, style.font_size, rect.width());
+            let offset_y = Self::resolve_length_for_paint(&shadow.offset_y, style.font_size, rect.width());
+            let blur = Self::resolve_length_for_paint(&shadow.blur_radius, style.font_size, rect.width()).max(0.0);
+            let spread =
+                Self::resolve_length_for_paint(&shadow.spread_radius, style.font_size, rect.width()).max(-1e6);
+
+            self.list.push(DisplayItem::BoxShadow(BoxShadowItem {
+                rect: base_rect,
+                radii: if inset { inner_radii } else { outer_radii },
+                offset: Point::new(offset_x, offset_y),
+                blur_radius: blur,
+                spread_radius: spread,
+                color: shadow.color,
+                inset,
+            }));
         }
     }
 

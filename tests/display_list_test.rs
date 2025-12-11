@@ -11,7 +11,7 @@ use fastrender::{
     OpacityItem, PaintTextItem as TextItem, RadialGradientItem, StrokeRectItem, StrokeRoundedRectItem, Transform2D,
     TransformItem,
 };
-use fastrender::css::types::ColorStop;
+use fastrender::css::types::{BoxShadow, ColorStop};
 use fastrender::style::types::{BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle};
 use std::sync::Arc;
 
@@ -193,6 +193,48 @@ fn fragment_background_image_emits_image_item() {
     let image = image.expect("background image should emit an image item");
     assert_eq!(image.dest_rect.width(), 1.0);
     assert_eq!(image.dest_rect.height(), 1.0);
+}
+
+#[test]
+fn fragment_box_shadow_emits_items() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.box_shadow = vec![
+        BoxShadow {
+            offset_x: fastrender::style::values::Length::px(2.0),
+            offset_y: fastrender::style::values::Length::px(3.0),
+            blur_radius: fastrender::style::values::Length::px(4.0),
+            spread_radius: fastrender::style::values::Length::px(1.0),
+            color: Rgba::BLACK,
+            inset: false,
+        },
+        BoxShadow {
+            offset_x: fastrender::style::values::Length::px(-1.0),
+            offset_y: fastrender::style::values::Length::px(-2.0),
+            blur_radius: fastrender::style::values::Length::px(0.0),
+            spread_radius: fastrender::style::values::Length::px(0.0),
+            color: Rgba::RED,
+            inset: true,
+        },
+    ];
+
+    let fragment =
+        fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    let shadows: Vec<_> = list
+        .items()
+        .iter()
+        .filter_map(|i| {
+            if let DisplayItem::BoxShadow(s) = i {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(shadows.len(), 2, "expected inset and outset shadows");
+    assert!(shadows.iter().any(|s| !s.inset && s.offset == Point::new(2.0, 3.0)));
+    assert!(shadows.iter().any(|s| s.inset && s.color == Rgba::RED));
 }
 
 #[test]
