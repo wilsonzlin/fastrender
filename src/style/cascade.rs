@@ -956,6 +956,47 @@ mod tests {
     }
 
     #[test]
+    fn marker_rejects_alignment_and_indent_declarations() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "ul".to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            }],
+        };
+
+        let stylesheet = parse_stylesheet(
+            r#"
+            li::marker {
+                text-align: center;
+                text-indent: 40px;
+            }
+        "#,
+        )
+        .unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        let li = styled.children.first().expect("li");
+        let marker = li.marker_styles.as_ref().expect("marker styles");
+
+        assert!(
+            matches!(marker.text_align, crate::style::types::TextAlign::Start),
+            "text-align should be ignored on ::marker"
+        );
+        assert_eq!(
+            marker.text_indent,
+            crate::style::types::TextIndent::default(),
+            "text-indent should be ignored on ::marker"
+        );
+    }
+
+    #[test]
     fn font_weight_relative_keywords_follow_css_fonts_table() {
         assert_eq!(child_font_weight("font-weight: 50;", "font-weight: bolder;"), 400);
         assert_eq!(child_font_weight("font-weight: 50;", "font-weight: lighter;"), 50);
@@ -1291,9 +1332,6 @@ fn marker_allows_property(property: &str) -> bool {
             | "letter-spacing"
             | "word-spacing"
             | "text-transform"
-            | "text-align"
-            | "text-align-last"
-            | "text-justify"
             | "text-emphasis"
             | "text-emphasis-style"
             | "text-emphasis-color"
@@ -1301,12 +1339,12 @@ fn marker_allows_property(property: &str) -> bool {
             | "text-decoration-skip-ink"
             | "text-underline-position"
             | "text-underline-offset"
-            | "text-orientation"
-            | "writing-mode"
+            | "text-decoration"
+            | "text-decoration-line"
+            | "text-decoration-style"
+            | "text-decoration-color"
+            | "text-decoration-thickness"
+            | "text-shadow"
             | "line-break"
-            | "word-break"
-            | "overflow-wrap"
-            | "hyphens"
-            | "tab-size"
     )
 }
