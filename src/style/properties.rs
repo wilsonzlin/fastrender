@@ -48,6 +48,9 @@ fn split_layers(tokens: &[PropertyValue]) -> Vec<Vec<PropertyValue>> {
 
 fn parse_background_image_value(value: &PropertyValue) -> Option<BackgroundImage> {
     match value {
+        PropertyValue::Keyword(kw) if kw.to_ascii_lowercase().starts_with("image-set(") => {
+            parse_image_set(kw)
+        }
         PropertyValue::Url(url) => Some(BackgroundImage::Url(url.clone())),
         PropertyValue::LinearGradient { angle, stops } => Some(BackgroundImage::LinearGradient {
             angle: *angle,
@@ -64,6 +67,284 @@ fn parse_background_image_value(value: &PropertyValue) -> Option<BackgroundImage
         PropertyValue::Keyword(kw) if kw == "none" => Some(BackgroundImage::None),
         _ => None,
     }
+}
+
+fn parse_image_set_resolution(token: &str) -> Option<f32> {
+    let lower = token.trim().to_ascii_lowercase();
+    if let Some(rest) = lower.strip_suffix("x") {
+        return rest.parse::<f32>().ok().filter(|v| *v > 0.0);
+    }
+    if let Some(rest) = lower.strip_suffix("dppx") {
+        return rest.parse::<f32>().ok().filter(|v| *v > 0.0);
+    }
+    if let Some(rest) = lower.strip_suffix("dpi") {
+        return rest
+            .parse::<f32>()
+            .ok()
+            .filter(|v| *v > 0.0)
+            .map(|dpi| dpi / 96.0);
+    }
+    if let Some(rest) = lower.strip_suffix("dpcm") {
+        return rest
+            .parse::<f32>()
+            .ok()
+            .filter(|v| *v > 0.0)
+            .map(|dpcm| (dpcm * 2.54) / 96.0);
+    }
+    None
+}
+
+fn split_image_set_candidates(inner: &str) -> Vec<String> {
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut brace = 0usize;
+    let mut current = String::new();
+    let mut parts = Vec::new();
+    let mut in_string: Option<char> = None;
+    let mut chars = inner.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if let Some(quote) = in_string {
+            current.push(ch);
+            if ch == '\\' {
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                }
+                continue;
+            }
+            if ch == quote {
+                in_string = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' => {
+                in_string = Some(ch);
+                current.push(ch);
+            }
+            '(' => {
+                paren += 1;
+                current.push(ch);
+            }
+            ')' => {
+                if paren > 0 {
+                    paren -= 1;
+                }
+                current.push(ch);
+            }
+            '[' => {
+                bracket += 1;
+                current.push(ch);
+            }
+            ']' => {
+                if bracket > 0 {
+                    bracket -= 1;
+                }
+                current.push(ch);
+            }
+            '{' => {
+                brace += 1;
+                current.push(ch);
+            }
+            '}' => {
+                if brace > 0 {
+                    brace -= 1;
+                }
+                current.push(ch);
+            }
+            ',' if paren == 0 && bracket == 0 && brace == 0 => {
+                if !current.trim().is_empty() {
+                    parts.push(current.trim().to_string());
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if !current.trim().is_empty() {
+        parts.push(current.trim().to_string());
+    }
+
+    parts
+}
+
+fn parse_image_set(text: &str) -> Option<BackgroundImage> {
+    let trimmed = text.trim();
+    if !trimmed.to_ascii_lowercase().starts_with("image-set(") {
+        return None;
+    }
+
+    let start = trimmed.find('(')?;
+    let mut depth = 0usize;
+    let mut end = None;
+    for (idx, ch) in trimmed.char_indices().skip(start) {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                if depth > 0 {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(idx);
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let end_idx = end?;
+    if !trimmed[end_idx + 1..].trim().is_empty() {
+        return None;
+    }
+    let inner = trimmed.get(start + 1..end_idx)?.trim();
+    let mut candidates = Vec::new();
+
+    for candidate in split_image_set_candidates(inner) {
+        let tokens = tokenize_image_set_candidate(&candidate);
+        if tokens.is_empty() {
+            continue;
+        }
+        let image_token = &tokens[0];
+        let image = if image_token.trim().to_ascii_lowercase().starts_with("url(")
+            && image_token.trim().ends_with(')')
+        {
+            let trimmed = image_token.trim();
+            let open = trimmed.find('(').unwrap_or(0);
+            let inner = trimmed
+                .get(open + 1..trimmed.len() - 1)
+                .unwrap_or("")
+                .trim()
+                .trim_matches(|c| c == '"' || c == '\'')
+                .to_string();
+            Some(BackgroundImage::Url(inner))
+        } else {
+            crate::css::properties::parse_property_value("background-image", image_token)
+                .and_then(|prop| parse_background_image_value(&prop))
+        };
+        let Some(image) = image else { continue };
+
+        let mut density = 1.0;
+        for token in tokens.iter().skip(1) {
+            if let Some(res) = parse_image_set_resolution(token) {
+                density = res;
+            }
+        }
+        candidates.push((image, density));
+    }
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let desired = 1.0;
+    let mut best_ge: Option<(BackgroundImage, f32)> = None;
+    let mut best_lt: Option<(BackgroundImage, f32)> = None;
+
+    for (image, density) in candidates {
+        if !density.is_finite() || density <= 0.0 {
+            continue;
+        }
+        if density >= desired {
+            let replace = best_ge
+                .as_ref()
+                .map(|(_, d)| density < *d)
+                .unwrap_or(true);
+            if replace {
+                best_ge = Some((image, density));
+            }
+        } else {
+            let replace = best_lt.as_ref().map(|(_, d)| density > *d).unwrap_or(true);
+            if replace {
+                best_lt = Some((image, density));
+            }
+        }
+    }
+
+    if let Some((image, _)) = best_ge {
+        Some(image)
+    } else if let Some((image, _)) = best_lt {
+        Some(image)
+    } else {
+        None
+    }
+}
+
+fn tokenize_image_set_candidate(value_str: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut paren = 0;
+    let mut bracket = 0;
+    let mut brace = 0;
+    let mut in_string: Option<char> = None;
+    let mut chars = value_str.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if let Some(quote) = in_string {
+            current.push(ch);
+            if ch == '\\' {
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                }
+                continue;
+            }
+            if ch == quote {
+                in_string = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' => {
+                in_string = Some(ch);
+                current.push(ch);
+            }
+            '(' => {
+                paren += 1;
+                current.push(ch);
+            }
+            ')' => {
+                if paren > 0 {
+                    paren -= 1;
+                }
+                current.push(ch);
+            }
+            '[' => {
+                bracket += 1;
+                current.push(ch);
+            }
+            ']' => {
+                if bracket > 0 {
+                    bracket -= 1;
+                }
+                current.push(ch);
+            }
+            '{' => {
+                brace += 1;
+                current.push(ch);
+            }
+            '}' => {
+                if brace > 0 {
+                    brace -= 1;
+                }
+                current.push(ch);
+            }
+            ch if ch.is_whitespace() && paren == 0 && bracket == 0 && brace == 0 => {
+                if !current.trim().is_empty() {
+                    tokens.push(current.trim().to_string());
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if !current.trim().is_empty() {
+        tokens.push(current.trim().to_string());
+    }
+    tokens
 }
 
 fn content_value_from_property(value: &PropertyValue) -> Option<ContentValue> {
@@ -6188,6 +6469,68 @@ mod tests {
         let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
         assert!((x.alignment - 0.0).abs() < 0.01);
         assert!((y.alignment - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn background_image_image_set_picks_1x_candidate() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-image".to_string(),
+                value: PropertyValue::Keyword(
+                    "image-set(url(\"low.png\") 1x, url(\"retina.png\") 2x)".to_string(),
+                ),
+                raw_value: String::new(),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+
+        let layer = &style.background_layers[0];
+        assert!(matches!(
+            layer.image,
+            Some(BackgroundImage::Url(ref url)) if url == "low.png"
+        ));
+    }
+
+    #[test]
+    fn background_image_image_set_uses_best_available_resolution() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-image".to_string(),
+                value: PropertyValue::Keyword("image-set(url(\"hi.png\") 192dpi)".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert!(matches!(
+            style.background_layers[0].image,
+            Some(BackgroundImage::Url(ref url)) if url == "hi.png"
+        ));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-image".to_string(),
+                value: PropertyValue::Keyword(
+                    "image-set(url(\"smaller.png\") 0.5x, url(\"bigger.png\") 0.75x)".to_string(),
+                ),
+                raw_value: String::new(),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert!(matches!(
+            style.background_layers[0].image,
+            Some(BackgroundImage::Url(ref url)) if url == "bigger.png"
+        ));
     }
 
     #[test]
