@@ -46,6 +46,7 @@ fn make_text(x: f32, y: f32, color: Rgba) -> DisplayItem {
         synthetic_bold: 0.0,
         synthetic_oblique: 0.0,
         emphasis: None,
+        decorations: Vec::new(),
     })
 }
 

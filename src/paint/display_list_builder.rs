@@ -32,10 +32,11 @@ use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::paint::display_list::{
-    BlendMode, BlendModeItem, BorderItem, BorderSide, BoxShadowItem, ClipItem, DisplayItem, DisplayList, EmphasisMark,
-    EmphasisText, FillRectItem, FontId, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality,
-    ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem, ResolvedFilter, StackingContextItem,
-    StrokeRectItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
+    BlendMode, BlendModeItem, BorderItem, BorderSide, BoxShadowItem, ClipItem, DecorationPaint, DecorationStroke,
+    DisplayItem, DisplayList, EmphasisMark, EmphasisText, FillRectItem, FontId, GlyphInstance, GradientSpread,
+    GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem,
+    ResolvedFilter, StackingContextItem, StrokeRectItem, TextDecorationItem, TextEmphasis, TextItem, TextShadowItem,
+    Transform2D,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
@@ -44,7 +45,8 @@ use crate::style::color::Rgba;
 use crate::style::types::{
     BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeatKeyword,
     BackgroundSize, BackgroundSizeComponent, BackgroundSizeKeyword, ImageRendering, Isolation, MixBlendMode, ObjectFit,
-    TextEmphasisPosition, TextEmphasisStyle,
+    ResolvedTextDecoration, TextDecorationLine, TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness,
+    TextEmphasisPosition, TextEmphasisStyle, TextUnderlineOffset, TextUnderlinePosition,
 };
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
@@ -875,17 +877,16 @@ impl DisplayListBuilder {
                     return;
                 }
 
-                let color = fragment.style.as_deref().map(|s| s.color).unwrap_or(Rgba::BLACK);
-                let shadows = Self::text_shadows_from_style(fragment.style.as_deref());
+                let style_opt = fragment.style.as_deref();
+                let color = style_opt.map(|s| s.color).unwrap_or(Rgba::BLACK);
+                let shadows = Self::text_shadows_from_style(style_opt);
                 let baseline = rect.origin.y + baseline_offset;
                 let start_x = rect.origin.x;
 
-                if let Some(runs) = shaped {
-                    self.emit_shaped_runs(runs, color, baseline, start_x, &shadows, fragment.style.as_deref());
-                    return;
-                }
-
-                if let Some(style) = fragment.style.as_deref() {
+                let mut shaped_storage: Option<Vec<ShapedRun>> = None;
+                let runs_ref: Option<&[ShapedRun]> = if let Some(runs) = shaped {
+                    Some(runs.as_slice())
+                } else if let Some(style) = style_opt {
                     if let Ok(mut runs) = self.shaper.shape(text, style, &self.font_ctx) {
                         InlineTextItem::apply_spacing_to_runs(
                             &mut runs,
@@ -893,37 +894,48 @@ impl DisplayListBuilder {
                             style.letter_spacing,
                             style.word_spacing,
                         );
-                        self.emit_shaped_runs(&runs, color, baseline, start_x, &shadows, Some(style));
-                        return;
+                        shaped_storage = Some(runs);
                     }
+                    shaped_storage.as_deref()
+                } else {
+                    None
+                };
+
+                if let Some(runs) = runs_ref {
+                    self.emit_shaped_runs(runs, color, baseline, start_x, &shadows, style_opt);
+                } else {
+                    // Fallback: naive glyphs when shaping fails or no style is present
+                    let font_size = style_opt.map(|s| s.font_size).unwrap_or(16.0);
+                    let char_width = font_size * 0.6;
+                    let glyphs: Vec<GlyphInstance> = text
+                        .chars()
+                        .enumerate()
+                        .map(|(i, _c)| GlyphInstance {
+                            glyph_id: i as u32,
+                            offset: Point::new(i as f32 * char_width, 0.0),
+                            advance: char_width,
+                        })
+                        .collect();
+                    let advance_width = text.len() as f32 * char_width;
+
+                    self.list.push(DisplayItem::Text(TextItem {
+                        origin: Point::new(start_x, baseline),
+                        glyphs,
+                        color,
+                        shadows: shadows.clone(),
+                        font_size,
+                        advance_width,
+                        font_id: None,
+                        synthetic_bold: 0.0,
+                        synthetic_oblique: 0.0,
+                        emphasis: None,
+                        decorations: Vec::new(),
+                    }));
                 }
 
-                // Fallback: naive glyphs when shaping fails or no style is present
-                let font_size = fragment.style.as_deref().map(|s| s.font_size).unwrap_or(16.0);
-                let char_width = font_size * 0.6;
-                let glyphs: Vec<GlyphInstance> = text
-                    .chars()
-                    .enumerate()
-                    .map(|(i, _c)| GlyphInstance {
-                        glyph_id: i as u32,
-                        offset: Point::new(i as f32 * char_width, 0.0),
-                        advance: char_width,
-                    })
-                    .collect();
-                let advance_width = text.len() as f32 * char_width;
-
-                self.list.push(DisplayItem::Text(TextItem {
-                    origin: Point::new(start_x, baseline),
-                    glyphs,
-                    color,
-                    shadows,
-                    font_size,
-                    advance_width,
-                    font_id: None,
-                    synthetic_bold: 0.0,
-                    synthetic_oblique: 0.0,
-                    emphasis: None,
-                }));
+                if let Some(style) = style_opt {
+                    self.emit_text_decorations(style, runs_ref, rect.x(), rect.width(), baseline);
+                }
             }
 
             FragmentContent::Replaced { replaced_type, .. } => {
@@ -1486,10 +1498,310 @@ impl DisplayListBuilder {
                 synthetic_bold: run.synthetic_bold,
                 synthetic_oblique: run.synthetic_oblique,
                 emphasis,
+                decorations: Vec::new(),
             }));
 
             pen_x += run.advance;
         }
+    }
+
+    fn emit_text_decorations(
+        &mut self,
+        style: &ComputedStyle,
+        runs: Option<&[ShapedRun]>,
+        line_start: f32,
+        line_width: f32,
+        baseline_y: f32,
+    ) {
+        if line_width <= 0.0 {
+            return;
+        }
+
+        let decorations = if !style.applied_text_decorations.is_empty() {
+            style.applied_text_decorations.clone()
+        } else if !style.text_decoration.lines.is_empty() {
+            vec![ResolvedTextDecoration {
+                decoration: style.text_decoration.clone(),
+                skip_ink: style.text_decoration_skip_ink,
+                underline_offset: style.text_underline_offset,
+                underline_position: style.text_underline_position,
+            }]
+        } else {
+            Vec::new()
+        };
+        if decorations.is_empty() {
+            return;
+        }
+
+        let Some(metrics) = self.decoration_metrics(runs, style) else {
+            return;
+        };
+
+        let mut paints = Vec::new();
+        let mut min_y = f32::INFINITY;
+        let mut max_y = f32::NEG_INFINITY;
+
+        for deco in decorations {
+            let decoration_color = deco.decoration.color.unwrap_or(style.color);
+            if decoration_color.alpha_u8() == 0 {
+                continue;
+            }
+
+            let used_thickness = match deco.decoration.thickness {
+                TextDecorationThickness::Auto => None,
+                TextDecorationThickness::FromFont => None,
+                TextDecorationThickness::Length(l) => {
+                    let unit = l.unit;
+                    let resolved = if unit == LengthUnit::Percent {
+                        l.resolve_against(style.font_size)
+                    } else if unit.is_font_relative() {
+                        l.resolve_with_font_size(style.font_size)
+                    } else if unit.is_viewport_relative() {
+                        match self.viewport {
+                            Some((vw, vh)) => l.resolve_with_viewport(vw, vh),
+                            None => l.to_px(),
+                        }
+                    } else {
+                        l.to_px()
+                    };
+                    Some(resolved)
+                }
+            };
+
+            let underline_offset = self.resolve_underline_offset_value(deco.underline_offset, style);
+            let mut paint = DecorationPaint {
+                style: deco.decoration.style,
+                color: decoration_color,
+                underline: None,
+                overline: None,
+                line_through: None,
+            };
+
+            if deco.decoration.lines.contains(TextDecorationLine::UNDERLINE) {
+                let thickness = used_thickness.unwrap_or(metrics.underline_thickness);
+                let center = baseline_y
+                    - self.underline_position(&metrics, deco.underline_position, underline_offset, thickness);
+                let segments = if matches!(deco.skip_ink, TextDecorationSkipInk::Auto | TextDecorationSkipInk::All) {
+                    runs.map(|r| {
+                        self.build_underline_segments(
+                            r,
+                            line_start,
+                            line_width,
+                            center,
+                            thickness,
+                            baseline_y,
+                            deco.skip_ink,
+                        )
+                    })
+                } else {
+                    None
+                };
+                paint.underline = Some(DecorationStroke {
+                    center,
+                    thickness,
+                    segments,
+                });
+                let half_extent = Self::stroke_half_extent(deco.decoration.style, thickness);
+                min_y = min_y.min(center - half_extent);
+                max_y = max_y.max(center + half_extent);
+            }
+            if deco.decoration.lines.contains(TextDecorationLine::OVERLINE) {
+                let thickness = used_thickness.unwrap_or(metrics.underline_thickness);
+                let center = baseline_y - metrics.ascent;
+                paint.overline = Some(DecorationStroke {
+                    center,
+                    thickness,
+                    segments: None,
+                });
+                let half_extent = Self::stroke_half_extent(deco.decoration.style, thickness);
+                min_y = min_y.min(center - half_extent);
+                max_y = max_y.max(center + half_extent);
+            }
+            if deco.decoration.lines.contains(TextDecorationLine::LINE_THROUGH) {
+                let thickness = used_thickness.unwrap_or(metrics.strike_thickness);
+                let center = baseline_y - metrics.strike_pos;
+                paint.line_through = Some(DecorationStroke {
+                    center,
+                    thickness,
+                    segments: None,
+                });
+                let half_extent = Self::stroke_half_extent(deco.decoration.style, thickness);
+                min_y = min_y.min(center - half_extent);
+                max_y = max_y.max(center + half_extent);
+            }
+
+            if paint.underline.is_some() || paint.overline.is_some() || paint.line_through.is_some() {
+                paints.push(paint);
+            }
+        }
+
+        if paints.is_empty() {
+            return;
+        }
+
+        let bounds = Rect::from_xywh(line_start, min_y, line_width, (max_y - min_y).max(0.0));
+        self.list.push(DisplayItem::TextDecoration(TextDecorationItem {
+            bounds,
+            line_start,
+            line_width,
+            decorations: paints,
+        }));
+    }
+
+    fn stroke_half_extent(style: TextDecorationStyle, thickness: f32) -> f32 {
+        match style {
+            TextDecorationStyle::Double => thickness * 2.5,
+            TextDecorationStyle::Wavy => thickness * 2.0,
+            _ => thickness * 0.5,
+        }
+    }
+
+    fn resolve_underline_offset_value(&self, offset: TextUnderlineOffset, style: &ComputedStyle) -> f32 {
+        match offset {
+            TextUnderlineOffset::Auto => 0.0,
+            TextUnderlineOffset::Length(l) => {
+                if l.unit == LengthUnit::Percent {
+                    l.resolve_against(style.font_size)
+                } else if l.unit.is_font_relative() {
+                    l.resolve_with_font_size(style.font_size)
+                } else if l.unit.is_viewport_relative() {
+                    match self.viewport {
+                        Some((vw, vh)) => l.resolve_with_viewport(vw, vh),
+                        None => l.to_px(),
+                    }
+                } else if l.unit.is_absolute() {
+                    l.to_px()
+                } else {
+                    l.value * style.font_size
+                }
+            }
+        }
+    }
+
+    fn underline_position(
+        &self,
+        metrics: &DecorationMetrics,
+        position: TextUnderlinePosition,
+        offset: f32,
+        thickness: f32,
+    ) -> f32 {
+        let under_base = -metrics.descent - thickness * 0.5;
+        let base = match position {
+            TextUnderlinePosition::Auto | TextUnderlinePosition::FromFont => metrics.underline_pos,
+            TextUnderlinePosition::Under | TextUnderlinePosition::UnderLeft | TextUnderlinePosition::UnderRight => {
+                metrics.underline_pos.min(under_base)
+            }
+            TextUnderlinePosition::Left | TextUnderlinePosition::Right => metrics.underline_pos,
+        };
+
+        metrics.underline_position_with_offset(base, offset)
+    }
+
+    fn decoration_metrics(&self, runs: Option<&[ShapedRun]>, style: &ComputedStyle) -> Option<DecorationMetrics> {
+        let mut metrics_source = runs.and_then(|rs| {
+            rs.iter()
+                .find_map(|run| run.font.metrics().ok().map(|m| (m, run.font_size)))
+        });
+
+        if metrics_source.is_none() {
+            let italic = matches!(style.font_style, crate::style::types::FontStyle::Italic);
+            let oblique = matches!(style.font_style, crate::style::types::FontStyle::Oblique(_));
+            let stretch = crate::text::font_db::FontStretch::from_percentage(style.font_stretch.to_percentage());
+            metrics_source = self
+                .font_ctx
+                .get_font_full(
+                    &style.font_family,
+                    style.font_weight.to_u16(),
+                    if italic {
+                        crate::text::font_db::FontStyle::Italic
+                    } else if oblique {
+                        crate::text::font_db::FontStyle::Oblique
+                    } else {
+                        crate::text::font_db::FontStyle::Normal
+                    },
+                    stretch,
+                )
+                .or_else(|| self.font_ctx.get_sans_serif())
+                .and_then(|font| font.metrics().ok().map(|m| (m, style.font_size)));
+        }
+
+        if let Some((metrics, size)) = metrics_source {
+            let scale = size / (metrics.units_per_em as f32);
+
+            let underline_pos = metrics.underline_position as f32 * scale;
+            let underline_thickness = (metrics.underline_thickness as f32 * scale).max(1.0);
+            let descent = (metrics.descent as f32 * scale).abs();
+            let strike_pos = metrics
+                .strikeout_position
+                .map(|p| p as f32 * scale)
+                .unwrap_or_else(|| metrics.ascent as f32 * scale * 0.3);
+            let strike_thickness = metrics
+                .strikeout_thickness
+                .map(|t| t as f32 * scale)
+                .unwrap_or(underline_thickness);
+            let ascent = metrics.ascent as f32 * scale;
+
+            Some(DecorationMetrics {
+                underline_pos,
+                underline_thickness,
+                strike_pos,
+                strike_thickness,
+                ascent,
+                descent,
+            })
+        } else {
+            // Fallback heuristic metrics when we cannot obtain font metrics.
+            let size = style.font_size.max(1.0);
+            let ascent = size * 0.8;
+            let descent = size - ascent;
+            let underline_thickness = (size * 0.05).max(1.0);
+            let underline_pos = descent * 0.5;
+            let strike_pos = ascent * 0.4;
+
+            Some(DecorationMetrics {
+                underline_pos,
+                underline_thickness,
+                strike_pos,
+                strike_thickness: underline_thickness,
+                ascent,
+                descent,
+            })
+        }
+    }
+
+    fn build_underline_segments(
+        &self,
+        runs: &[ShapedRun],
+        line_start: f32,
+        line_width: f32,
+        center: f32,
+        thickness: f32,
+        baseline_y: f32,
+        skip_ink: TextDecorationSkipInk,
+    ) -> Vec<(f32, f32)> {
+        if line_width <= 0.0 {
+            return Vec::new();
+        }
+
+        let band_half = (thickness * 0.5).abs();
+        let band_top = center - band_half;
+        let band_bottom = center + band_half;
+        let mut exclusions = collect_underline_exclusions(
+            runs,
+            line_start,
+            baseline_y,
+            band_top,
+            band_bottom,
+            skip_ink == TextDecorationSkipInk::All,
+        );
+
+        let mut segments = subtract_intervals((line_start, line_start + line_width), &mut exclusions);
+        if segments.is_empty() && skip_ink != TextDecorationSkipInk::All {
+            // Never drop the underline entirely when skipping ink; fall back to a full span.
+            segments.push((line_start, line_start + line_width));
+        }
+
+        segments
     }
 
     fn glyphs_from_run(&self, run: &ShapedRun, origin_x: f32, baseline_y: f32) -> Vec<GlyphInstance> {
@@ -1766,6 +2078,7 @@ impl DisplayListBuilder {
             synthetic_bold: 0.0,
             synthetic_oblique: 0.0,
             emphasis: None,
+            decorations: Vec::new(),
         }));
         true
     }
@@ -1790,6 +2103,104 @@ impl DisplayListBuilder {
     }
 }
 
+#[derive(Debug, Clone)]
+struct DecorationMetrics {
+    underline_pos: f32,
+    underline_thickness: f32,
+    strike_pos: f32,
+    strike_thickness: f32,
+    ascent: f32,
+    descent: f32,
+}
+
+impl DecorationMetrics {
+    fn underline_position_with_offset(&self, base: f32, offset: f32) -> f32 {
+        let direction = if base >= 0.0 { 1.0 } else { -1.0 };
+        base + offset * direction
+    }
+}
+
+fn collect_underline_exclusions(
+    runs: &[ShapedRun],
+    line_start: f32,
+    baseline_y: f32,
+    band_top: f32,
+    band_bottom: f32,
+    skip_all: bool,
+) -> Vec<(f32, f32)> {
+    let mut intervals = Vec::new();
+    let tolerance = 0.5;
+
+    let mut pen_x = line_start;
+    for run in runs {
+        let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        let units_per_em = face.units_per_em() as f32;
+        if units_per_em == 0.0 {
+            continue;
+        }
+        let scale = run.font_size / units_per_em;
+        let run_origin = if run.direction.is_rtl() {
+            pen_x + run.advance
+        } else {
+            pen_x
+        };
+
+        for glyph in &run.glyphs {
+            let glyph_x = match run.direction {
+                crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset,
+                _ => run_origin + glyph.x_offset,
+            };
+            let glyph_y = baseline_y - glyph.y_offset;
+            if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
+                let left = glyph_x + bbox.x_min as f32 * scale - tolerance;
+                let right = glyph_x + bbox.x_max as f32 * scale + tolerance;
+                let top = glyph_y - bbox.y_max as f32 * scale - tolerance;
+                let bottom = glyph_y - bbox.y_min as f32 * scale + tolerance;
+
+                if skip_all || (bottom >= band_top && top <= band_bottom) {
+                    intervals.push((left, right));
+                }
+            }
+        }
+
+        pen_x += run.advance;
+    }
+
+    intervals
+}
+
+fn subtract_intervals(total: (f32, f32), exclusions: &mut Vec<(f32, f32)>) -> Vec<(f32, f32)> {
+    exclusions.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut start = total.0;
+    let mut allowed = Vec::new();
+
+    for &(ex_start, ex_end) in exclusions.iter() {
+        if ex_end <= start {
+            continue;
+        }
+        if ex_start > total.1 {
+            break;
+        }
+        let seg_end = ex_start.min(total.1);
+        if seg_end > start {
+            allowed.push((start, seg_end));
+        }
+        start = ex_end.max(start);
+        if start >= total.1 {
+            break;
+        }
+    }
+
+    if start < total.1 {
+        allowed.push((start, total.1));
+    }
+
+    allowed
+}
+
 impl Default for DisplayListBuilder {
     fn default() -> Self {
         Self::new()
@@ -1808,7 +2219,9 @@ mod tests {
     use crate::style::color::Rgba;
     use crate::style::display::Display;
     use crate::style::position::Position;
-    use crate::style::types::{BackgroundImage, BackgroundLayer, BackgroundRepeat, ImageRendering, MixBlendMode};
+    use crate::style::types::{
+        BackgroundImage, BackgroundLayer, BackgroundRepeat, ImageRendering, MixBlendMode, TextDecorationLine,
+    };
     use crate::style::ComputedStyle;
     use crate::tree::box_tree::ReplacedType;
 
@@ -1865,6 +2278,26 @@ mod tests {
         } else {
             panic!("Expected Text item");
         }
+    }
+
+    #[test]
+    fn builder_emits_text_decorations() {
+        let mut style = ComputedStyle::default();
+        style.text_decoration.lines = TextDecorationLine::UNDERLINE;
+        style.text_decoration.color = Some(Rgba::BLACK);
+        let fragment = FragmentNode::new_text_styled(
+            Rect::from_xywh(0.0, 0.0, 50.0, 16.0),
+            "Hi".to_string(),
+            12.0,
+            Arc::new(style),
+        );
+
+        let builder = DisplayListBuilder::new();
+        let list = builder.build(&fragment);
+        assert!(
+            list.items().iter().any(|i| matches!(i, DisplayItem::TextDecoration(_))),
+            "display list should include text decoration items"
+        );
     }
 
     #[test]

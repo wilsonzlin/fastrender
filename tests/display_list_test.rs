@@ -383,6 +383,7 @@ fn test_text_item() {
         synthetic_bold: 0.0,
         synthetic_oblique: 0.0,
         emphasis: None,
+        decorations: Vec::new(),
     }));
 
     if let DisplayItem::Text(item) = &list.items()[0] {
@@ -956,6 +957,7 @@ fn test_complex_display_list() {
         synthetic_bold: 0.0,
         synthetic_oblique: 0.0,
         emphasis: None,
+        decorations: Vec::new(),
     }));
 
     // Border

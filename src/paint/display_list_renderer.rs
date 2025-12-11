@@ -17,7 +17,8 @@ use crate::paint::rasterize::{fill_rounded_rect, render_box_shadow, BoxShadow};
 use crate::paint::text_shadow::PathBounds;
 use crate::style::color::Rgba;
 use crate::style::types::{
-    BorderStyle as CssBorderStyle, TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
+    BorderStyle as CssBorderStyle, TextDecorationStyle, TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape,
+    TextEmphasisStyle,
 };
 use crate::text::font_db::{FontStretch, FontStyle as DbFontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
@@ -806,6 +807,7 @@ impl DisplayListRenderer {
             DisplayItem::LinearGradient(item) => self.render_linear_gradient(item),
             DisplayItem::RadialGradient(item) => self.render_radial_gradient(item),
             DisplayItem::Border(item) => self.render_border(item),
+            DisplayItem::TextDecoration(item) => self.render_text_decoration(item)?,
             DisplayItem::Text(item) => self.render_text(item)?,
             DisplayItem::Image(item) => self.render_image(item)?,
             DisplayItem::BoxShadow(item) => self.render_box_shadow(item),
@@ -941,6 +943,187 @@ impl DisplayListRenderer {
         if let Some(emphasis) = &item.emphasis {
             self.render_emphasis(emphasis)?;
         }
+        Ok(())
+    }
+
+    fn render_text_decoration(&mut self, item: &crate::paint::display_list::TextDecorationItem) -> Result<()> {
+        if item.decorations.is_empty() || item.line_width <= 0.0 {
+            return Ok(());
+        }
+
+        let clip = self.canvas.clip_mask().cloned();
+        let transform = self.canvas.transform();
+        let blend_mode = self.canvas.blend_mode();
+        let pixmap = self.canvas.pixmap_mut();
+
+        let draw_solid_line =
+            |pixmap: &mut Pixmap, paint: &tiny_skia::Paint, start: f32, len: f32, center: f32, thickness: f32| {
+                if thickness <= 0.0 || len <= 0.0 {
+                    return;
+                }
+                if let Some(rect) = tiny_skia::Rect::from_xywh(start, center - thickness * 0.5, len, thickness) {
+                    let path = PathBuilder::from_rect(rect);
+                    pixmap.fill_path(&path, paint, tiny_skia::FillRule::Winding, transform, clip.as_ref());
+                }
+            };
+
+        let draw_stroked_line = |pixmap: &mut Pixmap,
+                                 paint: &tiny_skia::Paint,
+                                 start: f32,
+                                 len: f32,
+                                 center: f32,
+                                 thickness: f32,
+                                 dash: Option<Vec<f32>>,
+                                 round: bool| {
+            let mut path = PathBuilder::new();
+            path.move_to(start, center);
+            path.line_to(start + len, center);
+            let Some(path) = path.finish() else { return };
+
+            let mut stroke = Stroke::default();
+            stroke.width = thickness;
+            stroke.line_cap = if round {
+                tiny_skia::LineCap::Round
+            } else {
+                tiny_skia::LineCap::Butt
+            };
+            if let Some(arr) = dash {
+                stroke.dash = tiny_skia::StrokeDash::new(arr, 0.0);
+            }
+
+            pixmap.stroke_path(&path, paint, &stroke, transform, clip.as_ref());
+        };
+
+        let draw_wavy_line =
+            |pixmap: &mut Pixmap, paint: &tiny_skia::Paint, start: f32, len: f32, center: f32, thickness: f32| {
+                if thickness <= 0.0 || len <= 0.0 {
+                    return;
+                }
+                let wavelength = (thickness * 4.0).max(6.0);
+                let amplitude = (thickness * 0.75).max(thickness * 0.5);
+
+                let mut path = PathBuilder::new();
+                path.move_to(start, center);
+                let mut cursor = start;
+                let mut up = true;
+                while cursor < start + len {
+                    let end = (cursor + wavelength).min(start + len);
+                    let mid = cursor + (end - cursor) * 0.5;
+                    let control_y = if up { center - amplitude } else { center + amplitude };
+                    path.quad_to(mid, control_y, end, center);
+                    cursor = end;
+                    up = !up;
+                }
+
+                if let Some(path) = path.finish() {
+                    let mut stroke = Stroke::default();
+                    stroke.width = thickness.max(0.5);
+                    stroke.line_cap = tiny_skia::LineCap::Round;
+                    pixmap.stroke_path(&path, paint, &stroke, transform, clip.as_ref());
+                }
+            };
+
+        let render_line = |pixmap: &mut Pixmap,
+                           paint: &tiny_skia::Paint,
+                           style: TextDecorationStyle,
+                           start: f32,
+                           len: f32,
+                           center: f32,
+                           thickness: f32| match style {
+            TextDecorationStyle::Solid => draw_solid_line(pixmap, paint, start, len, center, thickness),
+            TextDecorationStyle::Double => {
+                let line_thickness = (thickness * 0.7).max(0.5);
+                let gap = line_thickness.max(thickness * 0.6);
+                draw_solid_line(pixmap, paint, start, len, center - (gap * 0.5), line_thickness);
+                draw_solid_line(pixmap, paint, start, len, center + (gap * 0.5), line_thickness);
+            }
+            TextDecorationStyle::Dotted => {
+                draw_stroked_line(
+                    pixmap,
+                    paint,
+                    start,
+                    len,
+                    center,
+                    thickness,
+                    Some(vec![thickness, thickness]),
+                    true,
+                );
+            }
+            TextDecorationStyle::Dashed => {
+                draw_stroked_line(
+                    pixmap,
+                    paint,
+                    start,
+                    len,
+                    center,
+                    thickness,
+                    Some(vec![3.0 * thickness, thickness]),
+                    false,
+                );
+            }
+            TextDecorationStyle::Wavy => draw_wavy_line(pixmap, paint, start, len, center, thickness),
+        };
+
+        for deco in &item.decorations {
+            let mut paint = tiny_skia::Paint::default();
+            paint.anti_alias = true;
+            let alpha = (deco.color.a * 255.0).round().clamp(0.0, 255.0) as u8;
+            paint.set_color_rgba8(deco.color.r, deco.color.g, deco.color.b, alpha);
+            paint.blend_mode = blend_mode;
+
+            if let Some(underline) = &deco.underline {
+                if let Some(segments) = &underline.segments {
+                    for (start, end) in segments {
+                        let len = end - start;
+                        if len <= 0.0 {
+                            continue;
+                        }
+                        render_line(
+                            pixmap,
+                            &paint,
+                            deco.style,
+                            *start,
+                            len,
+                            underline.center,
+                            underline.thickness,
+                        );
+                    }
+                } else {
+                    render_line(
+                        pixmap,
+                        &paint,
+                        deco.style,
+                        item.line_start,
+                        item.line_width,
+                        underline.center,
+                        underline.thickness,
+                    );
+                }
+            }
+            if let Some(overline) = &deco.overline {
+                render_line(
+                    pixmap,
+                    &paint,
+                    deco.style,
+                    item.line_start,
+                    item.line_width,
+                    overline.center,
+                    overline.thickness,
+                );
+            }
+            if let Some(strike) = &deco.line_through {
+                render_line(
+                    pixmap,
+                    &paint,
+                    deco.style,
+                    item.line_start,
+                    item.line_width,
+                    strike.center,
+                    strike.thickness,
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -1423,9 +1606,9 @@ mod tests {
     use super::*;
     use crate::geometry::{Point, Rect};
     use crate::paint::display_list::{
-        BoxShadowItem, DisplayItem, DisplayList, FillRectItem, GlyphInstance, GradientSpread, GradientStop, ImageData,
-        ImageFilterQuality, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem, TextEmphasis, TextItem,
-        TextShadowItem, Transform2D,
+        BoxShadowItem, DecorationPaint, DecorationStroke, DisplayItem, DisplayList, FillRectItem, GlyphInstance,
+        GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, OpacityItem,
+        RadialGradientItem, TextDecorationItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
     };
     use crate::style::color::Rgba;
     use crate::style::types::{TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle};
@@ -1555,6 +1738,33 @@ mod tests {
         assert_eq!(pixel(&pixmap, 0, 0), (0, 255, 0, 255));
         // Bottom-left pixel should come from yellow.
         assert_eq!(pixel(&pixmap, 0, 3), (255, 255, 0, 255));
+    }
+
+    #[test]
+    fn renders_text_decoration_items() {
+        let mut list = DisplayList::new();
+        list.push(DisplayItem::TextDecoration(TextDecorationItem {
+            bounds: Rect::from_xywh(0.0, 0.0, 20.0, 10.0),
+            line_start: 2.0,
+            line_width: 16.0,
+            decorations: vec![DecorationPaint {
+                style: TextDecorationStyle::Solid,
+                color: Rgba::from_rgba8(255, 0, 0, 255),
+                underline: Some(DecorationStroke {
+                    center: 5.0,
+                    thickness: 2.0,
+                    segments: None,
+                }),
+                overline: None,
+                line_through: None,
+            }],
+        }));
+
+        let pixmap = DisplayListRenderer::new(20, 10, Rgba::WHITE, FontContext::new())
+            .expect("renderer")
+            .render(&list)
+            .expect("rendered");
+        assert_eq!(pixel(&pixmap, 10, 5), (255, 0, 0, 255));
     }
 
     #[test]
@@ -1697,6 +1907,7 @@ mod tests {
             synthetic_bold: 0.0,
             synthetic_oblique: 0.0,
             emphasis: None,
+            decorations: Vec::new(),
         }));
 
         let renderer = DisplayListRenderer::new(80, 40, Rgba::WHITE, font_ctx).expect("renderer");
@@ -1740,6 +1951,7 @@ mod tests {
                 }],
                 text: None,
             }),
+            decorations: Vec::new(),
         }));
 
         let renderer = DisplayListRenderer::new(40, 40, Rgba::WHITE, FontContext::new()).expect("renderer");

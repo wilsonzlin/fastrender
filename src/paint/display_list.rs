@@ -38,7 +38,9 @@
 
 use crate::geometry::{Point, Rect, Size};
 use crate::style::color::Rgba;
-use crate::style::types::{BorderStyle as CssBorderStyle, TextEmphasisPosition, TextEmphasisStyle};
+use crate::style::types::{
+    BorderStyle as CssBorderStyle, ResolvedTextDecoration, TextEmphasisPosition, TextEmphasisStyle,
+};
 use crate::text::font_db::{FontStretch, FontStyle};
 use std::fmt;
 use std::sync::Arc;
@@ -83,6 +85,9 @@ pub enum DisplayItem {
 
     /// Draw CSS borders with per-side styles
     Border(BorderItem),
+
+    /// Draw text decorations for an inline fragment
+    TextDecoration(TextDecorationItem),
 
     /// Begin a clip region
     PushClip(ClipItem),
@@ -138,6 +143,7 @@ impl DisplayItem {
             DisplayItem::RadialGradient(item) => Some(item.rect),
             DisplayItem::Border(item) => Some(item.rect),
             DisplayItem::PushClip(item) => Some(item.rect),
+            DisplayItem::TextDecoration(item) => Some(item.bounds),
             // Stack operations don't have bounds
             DisplayItem::PopClip
             | DisplayItem::PushOpacity(_)
@@ -401,6 +407,13 @@ pub struct TextItem {
 
     /// Optional emphasis marks to render for this run.
     pub emphasis: Option<TextEmphasis>,
+
+    /// Decorations to paint for this run's fragment.
+    ///
+    /// Decorations are emitted as separate display items; this field is unused by text rendering
+    /// but kept for forward compatibility.
+    #[allow(dead_code)]
+    pub decorations: Vec<ResolvedTextDecoration>,
 }
 
 /// A single glyph instance for rendering
@@ -466,6 +479,38 @@ pub struct FontId {
 
     /// Font stretch (percentage of normal width)
     pub stretch: FontStretch,
+}
+
+/// A resolved text decoration set to paint over a fragment.
+#[derive(Debug, Clone)]
+pub struct TextDecorationItem {
+    /// Bounding box for culling/optimization
+    pub bounds: Rect,
+    /// Line start position for decorations
+    pub line_start: f32,
+    /// Total width available for the decoration
+    pub line_width: f32,
+    /// Decorations to paint
+    pub decorations: Vec<DecorationPaint>,
+}
+
+/// Paint data for a single resolved decoration (underline/overline/line-through).
+#[derive(Debug, Clone)]
+pub struct DecorationPaint {
+    pub style: crate::style::types::TextDecorationStyle,
+    pub color: Rgba,
+    pub underline: Option<DecorationStroke>,
+    pub overline: Option<DecorationStroke>,
+    pub line_through: Option<DecorationStroke>,
+}
+
+/// Geometry for one decoration stroke.
+#[derive(Debug, Clone)]
+pub struct DecorationStroke {
+    pub center: f32,
+    pub thickness: f32,
+    /// Optional carved segments for underline skip-ink handling.
+    pub segments: Option<Vec<(f32, f32)>>,
 }
 
 // ============================================================================

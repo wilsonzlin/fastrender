@@ -207,6 +207,9 @@ impl DisplayListOptimizer {
             DisplayItem::FillRoundedRect(item) => item.color.a == 0.0,
             DisplayItem::StrokeRoundedRect(item) => item.color.a == 0.0,
             DisplayItem::Text(item) => item.color.a == 0.0,
+            DisplayItem::TextDecoration(item) => item.decorations.iter().all(|d| {
+                d.color.a == 0.0 || (d.underline.is_none() && d.overline.is_none() && d.line_through.is_none())
+            }),
             DisplayItem::BoxShadow(item) => item.color.a == 0.0,
             DisplayItem::PushOpacity(item) => item.opacity <= 0.0,
             _ => false,
@@ -530,6 +533,7 @@ impl DisplayListOptimizer {
                 item.advance_width,
                 item.font_size,
             )),
+            DisplayItem::TextDecoration(item) => Some(item.bounds),
             DisplayItem::Image(i) => Some(i.dest_rect),
             DisplayItem::BoxShadow(i) => {
                 if i.inset {
