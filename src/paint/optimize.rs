@@ -259,6 +259,7 @@ impl DisplayListOptimizer {
         let mut active_transform_depth = 0usize;
         let mut context_stack: Vec<ContextRecord> = Vec::new();
         let mut active_effect_contexts = 0usize;
+        let mut skip_clip_depth = 0usize;
 
         for item in items {
             let mut include_item = false;
@@ -295,6 +296,7 @@ impl DisplayListOptimizer {
                         transform_active: active_transform_depth > 0,
                         has_transform,
                         has_effects: effects,
+                        clipped_by_clip: skip_clip_depth > 0,
                     });
                     include_item = true;
                 }
@@ -309,13 +311,15 @@ impl DisplayListOptimizer {
                         }
                         let keep = if record.transform_active {
                             true
+                        } else if record.clipped_by_clip {
+                            false
                         } else {
                             let ctx_bounds = self.stacking_context_bounds(&record.item, record.bounds);
                             viewport.intersects(ctx_bounds)
                         };
                         if keep {
                             if let Some(parent) = context_stack.last_mut() {
-                                if !parent.transform_active {
+                                if !parent.transform_active && !parent.clipped_by_clip {
                                     let ctx_bounds = self.stacking_context_bounds(&record.item, record.bounds);
                                     parent.bounds = Some(match parent.bounds {
                                         Some(b) => b.union(ctx_bounds),
@@ -329,12 +333,34 @@ impl DisplayListOptimizer {
                         }
                     }
                 }
+                DisplayItem::PushClip(clip) => {
+                    if skip_clip_depth == 0 && active_effect_contexts == 0 && active_transform_depth == 0 {
+                        if !viewport.intersects(clip.rect) {
+                            skip_clip_depth += 1;
+                            include_item = false;
+                        } else {
+                            include_item = true;
+                        }
+                    } else {
+                        include_item = true;
+                    }
+                }
+                DisplayItem::PopClip => {
+                    if skip_clip_depth > 0 {
+                        skip_clip_depth -= 1;
+                        include_item = false;
+                    } else {
+                        include_item = true;
+                    }
+                }
                 _ => {}
             }
 
             let force_active = active_transform_depth > 0 || active_effect_contexts > 0;
 
-            if !include_item {
+            if skip_clip_depth > 0 {
+                include_item = false;
+            } else if !include_item {
                 if force_active {
                     include_item = true;
                 } else {
@@ -360,13 +386,13 @@ impl DisplayListOptimizer {
 
             if include_item {
                 result.push(item.clone());
-                if active_transform_depth == 0 {
+                if active_transform_depth == 0 && skip_clip_depth == 0 {
                     if item_bounds.is_none() {
                         item_bounds = self.item_bounds(result.last().unwrap());
                     }
                     if let Some(bounds) = item_bounds {
                         if let Some(context) = context_stack.last_mut() {
-                            if !context.transform_active {
+                            if !context.transform_active && !context.clipped_by_clip {
                                 context.bounds = Some(match context.bounds {
                                     Some(b) => b.union(bounds),
                                     None => bounds,
@@ -658,6 +684,7 @@ struct ContextRecord {
     transform_active: bool,
     has_transform: bool,
     has_effects: bool,
+    clipped_by_clip: bool,
 }
 
 impl Default for DisplayListOptimizer {
