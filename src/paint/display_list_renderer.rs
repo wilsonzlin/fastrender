@@ -872,13 +872,6 @@ impl DisplayListRenderer {
                     );
                 }
 
-                let (out_l, out_t, out_r, out_b) = filter_outset(&item.filters);
-                let expanded_bounds = Rect::from_xywh(
-                    item.bounds.x() - out_l,
-                    item.bounds.y() - out_t,
-                    item.bounds.width() + out_l + out_r,
-                    item.bounds.height() + out_t + out_b,
-                );
                 let needs_layer = item.is_isolated
                     || !matches!(item.mix_blend_mode, crate::paint::display_list::BlendMode::Normal)
                     || !item.filters.is_empty()
@@ -890,9 +883,6 @@ impl DisplayListRenderer {
                         map_blend_mode(item.mix_blend_mode)
                     };
                     self.canvas.push_layer_with_blend(1.0, Some(blend))?;
-                    if !item.filters.is_empty() {
-                        self.canvas.set_clip_with_radii(expanded_bounds, Some(item.radii));
-                    }
                 } else {
                     self.canvas.save();
                 }
