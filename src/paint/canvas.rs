@@ -116,6 +116,7 @@ struct LayerRecord {
     state_stack: Vec<CanvasState>,
     current_state: CanvasState,
     opacity: f32,
+    composite_blend: Option<SkiaBlendMode>,
 }
 
 // ============================================================================
@@ -326,6 +327,11 @@ impl Canvas {
 
     /// Pushes a new offscreen layer for grouped compositing (e.g., opacity).
     pub fn push_layer(&mut self, opacity: f32) -> Result<()> {
+        self.push_layer_with_blend(opacity, None)
+    }
+
+    /// Pushes a new offscreen layer with an explicit composite blend mode.
+    pub fn push_layer_with_blend(&mut self, opacity: f32, blend: Option<SkiaBlendMode>) -> Result<()> {
         let new_pixmap =
             Pixmap::new(self.pixmap.width(), self.pixmap.height()).ok_or_else(|| RenderError::InvalidParameters {
                 message: "Failed to create layer pixmap".into(),
@@ -336,8 +342,12 @@ impl Canvas {
             state_stack: self.state_stack.clone(),
             current_state: self.current_state.clone(),
             opacity: opacity.clamp(0.0, 1.0),
+            composite_blend: blend,
         };
         self.layer_stack.push(record);
+        // Painting inside the layer should start from a neutral state.
+        self.current_state.opacity = 1.0;
+        self.current_state.blend_mode = SkiaBlendMode::SourceOver;
         Ok(())
     }
 
@@ -356,7 +366,7 @@ impl Canvas {
 
         let mut paint = PixmapPaint::default();
         paint.opacity = (record.opacity * self.current_state.opacity).clamp(0.0, 1.0);
-        paint.blend_mode = self.current_state.blend_mode;
+        paint.blend_mode = record.composite_blend.unwrap_or(self.current_state.blend_mode);
         let clip = self.current_state.clip_mask.clone();
         let transform = self.current_state.transform;
 

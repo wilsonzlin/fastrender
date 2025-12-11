@@ -916,6 +916,12 @@ pub struct StackingContextItem {
 
     /// Bounds of the stacking context
     pub bounds: Rect,
+
+    /// mix-blend-mode applied when compositing this stacking context
+    pub mix_blend_mode: BlendMode,
+
+    /// Whether the stacking context is isolated from backdrop blending
+    pub is_isolated: bool,
 }
 
 // ============================================================================

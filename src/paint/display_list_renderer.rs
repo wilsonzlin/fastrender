@@ -9,7 +9,7 @@ use crate::geometry::Point;
 use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::canvas::Canvas;
 use crate::paint::display_list::{
-    BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FontId, ImageItem, LinearGradientItem,
+    BlendMode, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FontId, ImageItem, LinearGradientItem,
     OpacityItem, RadialGradientItem, StrokeRectItem, TextEmphasis, TextItem, TransformItem,
 };
 use crate::paint::rasterize::{render_box_shadow, BoxShadow};
@@ -24,10 +24,31 @@ use tiny_skia::{
     SpreadMode, Transform,
 };
 
+fn map_blend_mode(mode: BlendMode) -> tiny_skia::BlendMode {
+    match mode {
+        BlendMode::Normal => tiny_skia::BlendMode::SourceOver,
+        BlendMode::Multiply => tiny_skia::BlendMode::Multiply,
+        BlendMode::Screen => tiny_skia::BlendMode::Screen,
+        BlendMode::Overlay => tiny_skia::BlendMode::Overlay,
+        BlendMode::Darken => tiny_skia::BlendMode::Darken,
+        BlendMode::Lighten => tiny_skia::BlendMode::Lighten,
+        BlendMode::ColorDodge => tiny_skia::BlendMode::ColorDodge,
+        BlendMode::ColorBurn => tiny_skia::BlendMode::ColorBurn,
+        BlendMode::HardLight => tiny_skia::BlendMode::HardLight,
+        BlendMode::SoftLight => tiny_skia::BlendMode::SoftLight,
+        BlendMode::Difference => tiny_skia::BlendMode::Difference,
+        BlendMode::Exclusion => tiny_skia::BlendMode::Exclusion,
+        BlendMode::Hue | BlendMode::Saturation | BlendMode::Color | BlendMode::Luminosity => {
+            tiny_skia::BlendMode::SourceOver
+        }
+    }
+}
+
 /// Renders a display list into a pixmap using the provided font context.
 pub struct DisplayListRenderer {
     canvas: Canvas,
     font_ctx: FontContext,
+    stacking_layers: Vec<bool>,
 }
 
 impl DisplayListRenderer {
@@ -36,6 +57,7 @@ impl DisplayListRenderer {
         Ok(Self {
             canvas: Canvas::new(width, height, background)?,
             font_ctx,
+            stacking_layers: Vec::new(),
         })
     }
 
@@ -196,8 +218,29 @@ impl DisplayListRenderer {
             DisplayItem::Text(item) => self.render_text(item)?,
             DisplayItem::Image(item) => self.render_image(item)?,
             DisplayItem::BoxShadow(item) => self.render_box_shadow(item),
-            DisplayItem::PushStackingContext(_) => self.canvas.save(),
-            DisplayItem::PopStackingContext => self.canvas.restore(),
+            DisplayItem::PushStackingContext(item) => {
+                let needs_layer =
+                    item.is_isolated || !matches!(item.mix_blend_mode, crate::paint::display_list::BlendMode::Normal);
+                if needs_layer {
+                    let blend = if item.is_isolated {
+                        tiny_skia::BlendMode::SourceOver
+                    } else {
+                        map_blend_mode(item.mix_blend_mode)
+                    };
+                    self.canvas.push_layer_with_blend(1.0, Some(blend))?;
+                } else {
+                    self.canvas.save();
+                }
+                self.stacking_layers.push(needs_layer);
+            }
+            DisplayItem::PopStackingContext => {
+                let needs_layer = self.stacking_layers.pop().unwrap_or(false);
+                if needs_layer {
+                    self.canvas.pop_layer()?;
+                } else {
+                    self.canvas.restore();
+                }
+            }
             DisplayItem::PushClip(clip) => self.push_clip(clip),
             DisplayItem::PopClip => self.pop_clip(),
             DisplayItem::PushOpacity(OpacityItem { opacity }) => {
@@ -1102,6 +1145,8 @@ mod tests {
                 z_index: 0,
                 creates_stacking_context: true,
                 bounds: Rect::from_xywh(0.0, 0.0, 6.0, 6.0),
+                mix_blend_mode: crate::paint::display_list::BlendMode::Normal,
+                is_isolated: false,
             },
         ));
         list.push(DisplayItem::PushClip(ClipItem {
@@ -1124,6 +1169,34 @@ mod tests {
         let pixmap = renderer.render(&list).unwrap();
         // Pixel inside outer clip but outside inner clip should be blue (second fill) not red.
         assert_eq!(pixel(&pixmap, 1, 1), (0, 0, 255, 255));
+    }
+
+    #[test]
+    fn stacking_context_blends_as_group() {
+        let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
+        let mut list = DisplayList::new();
+        list.push(DisplayItem::PushStackingContext(
+            crate::paint::display_list::StackingContextItem {
+                z_index: 0,
+                creates_stacking_context: true,
+                bounds: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+                mix_blend_mode: crate::paint::display_list::BlendMode::Multiply,
+                is_isolated: false,
+            },
+        ));
+        list.push(DisplayItem::FillRect(FillRectItem {
+            rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+            color: Rgba::rgb(255, 0, 0),
+        }));
+        list.push(DisplayItem::FillRect(FillRectItem {
+            rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+            color: Rgba::rgb(0, 255, 0),
+        }));
+        list.push(DisplayItem::PopStackingContext);
+
+        let pixmap = renderer.render(&list).unwrap();
+        // Without grouping, the second rect would multiply against the first and go black.
+        assert_eq!(pixel(&pixmap, 0, 0), (0, 255, 0, 255));
     }
 
     #[test]

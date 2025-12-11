@@ -32,13 +32,14 @@ use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::paint::display_list::{
     BlendMode, ClipItem, DisplayItem, DisplayList, EmphasisMark, EmphasisText, FillRectItem, FontId, GlyphInstance,
-    ImageData, ImageFilterQuality, ImageItem, OpacityItem, StrokeRectItem, TextEmphasis, TextItem, TextShadowItem,
+    ImageData, ImageFilterQuality, ImageItem, OpacityItem, StackingContextItem, StrokeRectItem, TextEmphasis, TextItem,
+    TextShadowItem,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::style::color::Rgba;
-use crate::style::types::{ImageRendering, ObjectFit, TextEmphasisPosition, TextEmphasisStyle};
+use crate::style::types::{ImageRendering, MixBlendMode, ObjectFit, TextEmphasisPosition, TextEmphasisStyle};
 use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStretch, FontStyle, ScaledMetrics};
 use crate::text::font_loader::FontContext;
@@ -275,6 +276,27 @@ impl DisplayListBuilder {
             .unwrap_or(Point::ZERO);
         let descendant_offset = Point::new(offset.x + context_origin.x, offset.y + context_origin.y);
 
+        let mix_blend_mode = context
+            .fragments
+            .iter()
+            .find_map(|f| f.style.as_deref())
+            .map(|s| Self::convert_blend_mode(s.mix_blend_mode))
+            .unwrap_or(BlendMode::Normal);
+        let is_isolated = context
+            .fragments
+            .iter()
+            .find_map(|f| f.style.as_deref())
+            .map(|s| matches!(s.isolation, crate::style::types::Isolation::Isolate))
+            .unwrap_or(false);
+
+        self.list.push(DisplayItem::PushStackingContext(StackingContextItem {
+            z_index: context.z_index,
+            creates_stacking_context: true,
+            bounds: context.bounds,
+            mix_blend_mode,
+            is_isolated,
+        }));
+
         for child in neg {
             self.build_stacking_context(child, descendant_offset);
         }
@@ -291,6 +313,29 @@ impl DisplayListBuilder {
 
         for child in pos {
             self.build_stacking_context(child, descendant_offset);
+        }
+
+        self.list.push(DisplayItem::PopStackingContext);
+    }
+
+    fn convert_blend_mode(mode: MixBlendMode) -> BlendMode {
+        match mode {
+            MixBlendMode::Normal => BlendMode::Normal,
+            MixBlendMode::Multiply => BlendMode::Multiply,
+            MixBlendMode::Screen => BlendMode::Screen,
+            MixBlendMode::Overlay => BlendMode::Overlay,
+            MixBlendMode::Darken => BlendMode::Darken,
+            MixBlendMode::Lighten => BlendMode::Lighten,
+            MixBlendMode::ColorDodge => BlendMode::ColorDodge,
+            MixBlendMode::ColorBurn => BlendMode::ColorBurn,
+            MixBlendMode::HardLight => BlendMode::HardLight,
+            MixBlendMode::SoftLight => BlendMode::SoftLight,
+            MixBlendMode::Difference => BlendMode::Difference,
+            MixBlendMode::Exclusion => BlendMode::Exclusion,
+            MixBlendMode::Hue => BlendMode::Hue,
+            MixBlendMode::Saturation => BlendMode::Saturation,
+            MixBlendMode::Color => BlendMode::Color,
+            MixBlendMode::Luminosity => BlendMode::Luminosity,
         }
     }
 

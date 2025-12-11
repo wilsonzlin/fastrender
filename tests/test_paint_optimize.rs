@@ -825,6 +825,8 @@ fn test_stacking_context_preserved() {
         z_index: 1,
         creates_stacking_context: true,
         bounds: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+        mix_blend_mode: BlendMode::Normal,
+        is_isolated: false,
     }));
     list.push(make_fill_rect(0.0, 0.0, 100.0, 100.0, Rgba::RED));
     list.push(DisplayItem::PopStackingContext);

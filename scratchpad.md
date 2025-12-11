@@ -7,6 +7,7 @@
 
 ## Recent changes (this branch)
 - Display list renderer now treats opacity groups as isolated layers: `PushOpacity` renders into an offscreen canvas and composites back, so overlapping content in the group stays uniformly translucent instead of darkening with multiple primitives. Added a regression to lock the grouped compositing.
+- Display list stacking contexts now carry mix-blend-mode and isolation flags: builder emits push/pop for stacking contexts with those properties, and the renderer composites them via offscreen layers with the correct blend (or SourceOver for isolates). Added a regression to ensure blended content groups before applying the blend.
 - Display list builder now initializes an `ImageCache` by default so replaced images decode even when callers forget to opt in; added a regression (`default_builder_decodes_images_without_explicit_cache`) that data-URL SVGs render as image items rather than placeholders.
 - Display list images now carry sampling quality; builder maps `image-rendering: pixelated/crisp-edges` to nearest-neighbor and renderer honors the quality, with a regression covering nearest vs. linear resampling.
 - Display list renderer now respects `ImageItem::src_rect`, cropping the source before scaling; regression covers sprite-like cropping to ensure sub-rectangles map to the destination instead of the full image.
