@@ -698,6 +698,49 @@ fn set_length_with_order(target: &mut Option<Length>, order_slot: &mut i32, valu
     *order_slot = order;
 }
 
+#[derive(Debug, Clone, Copy)]
+enum PhysicalCorner {
+    TopLeft,
+    TopRight,
+    BottomRight,
+    BottomLeft,
+}
+
+fn set_corner_radius(styles: &mut ComputedStyle, corner: PhysicalCorner, value: Option<Length>, order: i32) {
+    let order_slot = match corner {
+        PhysicalCorner::TopLeft => &mut styles.logical.corner_orders.top_left,
+        PhysicalCorner::TopRight => &mut styles.logical.corner_orders.top_right,
+        PhysicalCorner::BottomRight => &mut styles.logical.corner_orders.bottom_right,
+        PhysicalCorner::BottomLeft => &mut styles.logical.corner_orders.bottom_left,
+    };
+    if order < *order_slot {
+        return;
+    }
+    match corner {
+        PhysicalCorner::TopLeft => {
+            if let Some(v) = value {
+                styles.border_top_left_radius = v;
+            }
+        }
+        PhysicalCorner::TopRight => {
+            if let Some(v) = value {
+                styles.border_top_right_radius = v;
+            }
+        }
+        PhysicalCorner::BottomRight => {
+            if let Some(v) = value {
+                styles.border_bottom_right_radius = v;
+            }
+        }
+        PhysicalCorner::BottomLeft => {
+            if let Some(v) = value {
+                styles.border_bottom_left_radius = v;
+            }
+        }
+    }
+    *order_slot = order;
+}
+
 fn set_axis_dimension(styles: &mut ComputedStyle, axis: crate::style::LogicalAxis, value: Option<Length>, order: i32) {
     let is_horizontal = match axis {
         crate::style::LogicalAxis::Inline => inline_axis_is_horizontal(styles.writing_mode),
@@ -1847,30 +1890,82 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         // Border radius
         "border-radius" => {
             if let Some(len) = extract_length(&resolved_value) {
-                styles.border_top_left_radius = len;
-                styles.border_top_right_radius = len;
-                styles.border_bottom_left_radius = len;
-                styles.border_bottom_right_radius = len;
+                set_corner_radius(styles, PhysicalCorner::TopLeft, Some(len), order);
+                set_corner_radius(styles, PhysicalCorner::TopRight, Some(len), order);
+                set_corner_radius(styles, PhysicalCorner::BottomLeft, Some(len), order);
+                set_corner_radius(styles, PhysicalCorner::BottomRight, Some(len), order);
             }
         }
         "border-top-left-radius" => {
             if let Some(len) = extract_length(&resolved_value) {
-                styles.border_top_left_radius = len;
+                set_corner_radius(styles, PhysicalCorner::TopLeft, Some(len), order);
             }
         }
         "border-top-right-radius" => {
             if let Some(len) = extract_length(&resolved_value) {
-                styles.border_top_right_radius = len;
+                set_corner_radius(styles, PhysicalCorner::TopRight, Some(len), order);
             }
         }
         "border-bottom-left-radius" => {
             if let Some(len) = extract_length(&resolved_value) {
-                styles.border_bottom_left_radius = len;
+                set_corner_radius(styles, PhysicalCorner::BottomLeft, Some(len), order);
             }
         }
         "border-bottom-right-radius" => {
             if let Some(len) = extract_length(&resolved_value) {
-                styles.border_bottom_right_radius = len;
+                set_corner_radius(styles, PhysicalCorner::BottomRight, Some(len), order);
+            }
+        }
+        "border-start-start-radius" => {
+            if let Some(len) = extract_length(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderCorner {
+                        block_start: true,
+                        inline_start: true,
+                        value: Some(len),
+                    },
+                    order,
+                );
+            }
+        }
+        "border-start-end-radius" => {
+            if let Some(len) = extract_length(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderCorner {
+                        block_start: true,
+                        inline_start: false,
+                        value: Some(len),
+                    },
+                    order,
+                );
+            }
+        }
+        "border-end-start-radius" => {
+            if let Some(len) = extract_length(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderCorner {
+                        block_start: false,
+                        inline_start: true,
+                        value: Some(len),
+                    },
+                    order,
+                );
+            }
+        }
+        "border-end-end-radius" => {
+            if let Some(len) = extract_length(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderCorner {
+                        block_start: false,
+                        inline_start: false,
+                        value: Some(len),
+                    },
+                    order,
+                );
             }
         }
 
@@ -8788,6 +8883,30 @@ fn sides_for_axis(
     }
 }
 
+fn corner_from_logical_sides(
+    block_side: crate::style::PhysicalSide,
+    inline_side: crate::style::PhysicalSide,
+) -> Option<PhysicalCorner> {
+    let vertical = match (block_side, inline_side) {
+        (crate::style::PhysicalSide::Top, _) | (crate::style::PhysicalSide::Bottom, _) => Some(block_side),
+        (_, crate::style::PhysicalSide::Top) | (_, crate::style::PhysicalSide::Bottom) => Some(inline_side),
+        _ => None,
+    }?;
+    let horizontal = match (block_side, inline_side) {
+        (crate::style::PhysicalSide::Left, _) | (crate::style::PhysicalSide::Right, _) => Some(block_side),
+        (_, crate::style::PhysicalSide::Left) | (_, crate::style::PhysicalSide::Right) => Some(inline_side),
+        _ => None,
+    }?;
+
+    match (vertical, horizontal) {
+        (crate::style::PhysicalSide::Top, crate::style::PhysicalSide::Left) => Some(PhysicalCorner::TopLeft),
+        (crate::style::PhysicalSide::Top, crate::style::PhysicalSide::Right) => Some(PhysicalCorner::TopRight),
+        (crate::style::PhysicalSide::Bottom, crate::style::PhysicalSide::Left) => Some(PhysicalCorner::BottomLeft),
+        (crate::style::PhysicalSide::Bottom, crate::style::PhysicalSide::Right) => Some(PhysicalCorner::BottomRight),
+        _ => None,
+    }
+}
+
 pub fn resolve_pending_logical_properties(styles: &mut ComputedStyle) {
     if styles.logical.pending.is_empty() {
         return;
@@ -8881,6 +9000,17 @@ pub fn resolve_pending_logical_properties(styles: &mut ComputedStyle) {
                 }
                 if let Some(v) = end {
                     set_inset_side(styles, end_side, v, pending_prop.order);
+                }
+            }
+            crate::style::LogicalProperty::BorderCorner {
+                block_start,
+                inline_start,
+                value,
+            } => {
+                let block_side = if block_start { block_sides.0 } else { block_sides.1 };
+                let inline_side = if inline_start { inline_sides.0 } else { inline_sides.1 };
+                if let Some(corner) = corner_from_logical_sides(block_side, inline_side) {
+                    set_corner_radius(styles, corner, value, pending_prop.order);
                 }
             }
         }

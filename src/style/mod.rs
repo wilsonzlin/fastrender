@@ -75,6 +75,25 @@ impl Default for SideOrders {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct CornerOrders {
+    pub top_left: i32,
+    pub top_right: i32,
+    pub bottom_right: i32,
+    pub bottom_left: i32,
+}
+
+impl Default for CornerOrders {
+    fn default() -> Self {
+        Self {
+            top_left: -1,
+            top_right: -1,
+            bottom_right: -1,
+            bottom_left: -1,
+        }
+    }
+}
+
 /// Logical axis for start/end mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogicalAxis {
@@ -133,6 +152,11 @@ pub enum LogicalProperty {
         start: Option<Rgba>,
         end: Option<Rgba>,
     },
+    BorderCorner {
+        block_start: bool,
+        inline_start: bool,
+        value: Option<Length>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -151,6 +175,7 @@ pub struct LogicalState {
     pub border_style_orders: SideOrders,
     pub border_color_orders: SideOrders,
     pub inset_orders: SideOrders,
+    pub corner_orders: CornerOrders,
     pub width_order: i32,
     pub height_order: i32,
     pub min_width_order: i32,
@@ -170,6 +195,7 @@ impl Default for LogicalState {
             border_style_orders: SideOrders::default(),
             border_color_orders: SideOrders::default(),
             inset_orders: SideOrders::default(),
+            corner_orders: CornerOrders::default(),
             width_order: -1,
             height_order: -1,
             min_width_order: -1,

@@ -184,3 +184,39 @@ fn logical_inset_maps_to_physical_sides() {
     assert_eq!(style.top, Some(Length::px(5.0)));
     assert_eq!(style.left, Some(Length::px(7.0)));
 }
+
+#[test]
+fn logical_border_radius_maps_corners() {
+    let mut style = ComputedStyle::default();
+    style.direction = Direction::Rtl;
+    apply_declaration(
+        &mut style,
+        &decl("border-start-start-radius", PropertyValue::Length(Length::px(9.0))),
+        16.0,
+        16.0,
+    );
+    apply_declaration(
+        &mut style,
+        &decl("border-end-end-radius", PropertyValue::Length(Length::px(4.0))),
+        16.0,
+        16.0,
+    );
+    resolve_pending_logical_properties(&mut style);
+    // RTL inline-start maps to right, block-start maps to top.
+    assert_eq!(style.border_top_right_radius, Length::px(9.0));
+    // block-end with rtl inline-end -> bottom-left
+    assert_eq!(style.border_bottom_left_radius, Length::px(4.0));
+
+    // Vertical writing: inline axis vertical, block axis horizontal.
+    let mut vertical = ComputedStyle::default();
+    vertical.writing_mode = WritingMode::VerticalRl;
+    apply_declaration(
+        &mut vertical,
+        &decl("border-start-end-radius", PropertyValue::Length(Length::px(3.0))),
+        16.0,
+        16.0,
+    );
+    resolve_pending_logical_properties(&mut vertical);
+    // block-start -> right, inline-end -> bottom in vertical-rl
+    assert_eq!(vertical.border_bottom_right_radius, Length::px(3.0));
+}
