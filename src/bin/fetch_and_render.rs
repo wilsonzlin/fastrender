@@ -669,6 +669,38 @@ mod tests {
         let decoded = decode_html_bytes(&encoded, Some("text/html; charset=shift_jis"));
         assert!(decoded.contains('デ'), "decoded text should include kana: {}", decoded);
     }
+
+    #[test]
+    fn decode_html_uses_meta_charset() {
+        let mut encoded = encoding_rs::WINDOWS_1252.encode(
+            "<html><head><meta charset=\"windows-1252\"></head><body>\u{00a3}</body></html>",
+        )
+        .0;
+        let decoded = decode_html_bytes(&encoded, None);
+        assert!(
+            decoded.contains('£'),
+            "decoded text should contain pound sign when meta declares charset: {}",
+            decoded
+        );
+
+        encoded = encoding_rs::SHIFT_JIS.encode(
+            "<html><head><meta charset='shift_jis'></head><body>デ</body></html>",
+        )
+        .0;
+        let decoded = decode_html_bytes(&encoded, None);
+        assert!(
+            decoded.contains('デ'),
+            "decoded text should contain kana when meta declares charset: {}",
+            decoded
+        );
+    }
+
+    #[test]
+    fn decode_html_defaults_to_windows_1252() {
+        let bytes = vec![0xA3]; // U+00A3 in Windows-1252
+        let decoded = decode_html_bytes(&bytes, None);
+        assert_eq!(decoded, "£");
+    }
 }
 
 fn main() -> Result<()> {
