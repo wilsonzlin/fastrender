@@ -5218,6 +5218,122 @@ mod tests {
     }
 
     #[test]
+    fn background_layers_paint_top_to_bottom() {
+        let mut style = ComputedStyle::default();
+
+        let top = BackgroundLayer {
+            image: Some(BackgroundImage::LinearGradient {
+                angle: 0.0,
+                stops: vec![
+                    crate::css::types::ColorStop {
+                        color: Color::Rgba(Rgba::from_rgba8(0, 255, 0, 128)),
+                        position: Some(0.0),
+                    },
+                    crate::css::types::ColorStop {
+                        color: Color::Rgba(Rgba::from_rgba8(0, 255, 0, 128)),
+                        position: Some(1.0),
+                    },
+                ],
+            }),
+            ..BackgroundLayer::default()
+        };
+        let bottom = BackgroundLayer {
+            image: Some(BackgroundImage::LinearGradient {
+                angle: 0.0,
+                stops: vec![
+                    crate::css::types::ColorStop {
+                        color: Color::Rgba(Rgba::BLUE),
+                        position: Some(0.0),
+                    },
+                    crate::css::types::ColorStop {
+                        color: Color::Rgba(Rgba::BLUE),
+                        position: Some(1.0),
+                    },
+                ],
+            }),
+            ..BackgroundLayer::default()
+        };
+        style.set_background_layers(vec![top, bottom]);
+
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
+        let tree = FragmentTree::new(fragment);
+        let pixmap = paint_tree(&tree, 10, 10, Rgba::WHITE).expect("paint");
+
+        let center = color_at(&pixmap, 5, 5);
+        // Top (semi-transparent green) over opaque blue yields roughly 50/50 mix.
+        assert!(
+            center.1 > 110 && center.1 < 150 && center.2 > 110 && center.2 < 150 && center.0 == 0,
+            "expected blended green-over-blue, got {:?}",
+            center
+        );
+    }
+
+    #[test]
+    fn background_layers_use_per_layer_clips() {
+        let mut style = ComputedStyle::default();
+        style.padding_left = Length::px(4.0);
+        style.padding_right = Length::px(4.0);
+        style.padding_top = Length::px(4.0);
+        style.padding_bottom = Length::px(4.0);
+
+        let top = BackgroundLayer {
+            image: Some(BackgroundImage::LinearGradient {
+                angle: 0.0,
+                stops: vec![
+                    crate::css::types::ColorStop {
+                        color: Color::Rgba(Rgba::GREEN),
+                        position: Some(0.0),
+                    },
+                    crate::css::types::ColorStop {
+                        color: Color::Rgba(Rgba::GREEN),
+                        position: Some(1.0),
+                    },
+                ],
+            }),
+            clip: crate::style::types::BackgroundBox::ContentBox,
+            ..BackgroundLayer::default()
+        };
+        let bottom = BackgroundLayer {
+            image: Some(BackgroundImage::LinearGradient {
+                angle: 0.0,
+                stops: vec![
+                    crate::css::types::ColorStop {
+                        color: Color::Rgba(Rgba::BLUE),
+                        position: Some(0.0),
+                    },
+                    crate::css::types::ColorStop {
+                        color: Color::Rgba(Rgba::BLUE),
+                        position: Some(1.0),
+                    },
+                ],
+            }),
+            clip: crate::style::types::BackgroundBox::BorderBox,
+            ..BackgroundLayer::default()
+        };
+        style.set_background_layers(vec![top, bottom]);
+
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
+        let tree = FragmentTree::new(fragment);
+        let pixmap = paint_tree(&tree, 20, 20, Rgba::WHITE).expect("paint");
+
+        // Padding area should see only the border-box layer (blue).
+        let padding_px = color_at(&pixmap, 1, 1);
+        assert!(
+            padding_px.2 > 200 && padding_px.1 < 50,
+            "expected blue in padding area, got {:?}",
+            padding_px
+        );
+
+        // Content area should be covered by the content-clipped top layer (green).
+        let content_px = color_at(&pixmap, 10, 10);
+        assert!(
+            content_px.1 > 200 && content_px.2 < 50,
+            "expected green in content area, got {:?}",
+            content_px
+        );
+    }
+
+    #[test]
     fn outline_draws_outside_box() {
         let mut style = ComputedStyle::default();
         style.background_color = Rgba::BLUE;
