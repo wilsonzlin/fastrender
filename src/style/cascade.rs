@@ -1034,6 +1034,28 @@ mod tests {
             crate::style::types::TextIndent::default(),
             "text-indent should be ignored on ::marker"
         );
+
+        let stylesheet = parse_stylesheet(
+            r#"
+            li::marker {
+                text-decoration: underline;
+                text-shadow: 1px 1px red;
+            }
+        "#,
+        )
+        .unwrap();
+        let styled = apply_styles(&dom, &stylesheet);
+        let li = styled.children.first().expect("li");
+        let marker = li.marker_styles.as_ref().expect("marker styles");
+
+        assert!(
+            marker.applied_text_decorations.is_empty(),
+            "non-inherited text decorations should not be applied to ::marker"
+        );
+        assert!(
+            marker.text_shadow.is_empty(),
+            "text-shadow should not apply to ::marker"
+        );
     }
 
     #[test]
@@ -1376,19 +1398,10 @@ fn marker_allows_property(property: &str) -> bool {
             | "letter-spacing"
             | "word-spacing"
             | "text-transform"
-            | "text-emphasis"
-            | "text-emphasis-style"
-            | "text-emphasis-color"
-            | "text-emphasis-position"
-            | "text-decoration-skip-ink"
-            | "text-underline-position"
-            | "text-underline-offset"
-            | "text-decoration"
-            | "text-decoration-line"
-            | "text-decoration-style"
-            | "text-decoration-color"
-            | "text-decoration-thickness"
-            | "text-shadow"
             | "line-break"
+            | "word-break"
+            | "overflow-wrap"
+            | "hyphens"
+            | "tab-size"
     )
 }
