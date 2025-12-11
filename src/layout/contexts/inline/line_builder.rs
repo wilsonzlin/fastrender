@@ -1633,12 +1633,7 @@ fn reorder_paragraph(
     for line in lines.iter() {
         let mut leaves = Vec::new();
         for positioned in &line.items {
-            flatten_positioned_item(
-                positioned,
-                &mut Vec::new(),
-                &mut box_counter,
-                &mut leaves,
-            );
+            flatten_positioned_item(positioned, &mut Vec::new(), &mut box_counter, &mut leaves);
         }
         line_leaves.push(leaves);
     }
@@ -2283,6 +2278,7 @@ mod tests {
             ReplacedType::Image {
                 src: String::new(),
                 alt: None,
+                srcset: Vec::new(),
             },
             Arc::new(ComputedStyle::default()),
             0.0,

@@ -93,9 +93,21 @@ fn lab_to_xyz_d50(l: f32, a: f32, b: f32) -> (f32, f32, f32) {
     let fx3 = fx * fx * fx;
     let fz3 = fz * fz * fz;
 
-    let xr = if fx3 > EPSILON { fx3 } else { (116.0 * fx - 16.0) / KAPPA };
-    let yr = if l > KAPPA * EPSILON { ((l + 16.0) / 116.0).powi(3) } else { l / KAPPA };
-    let zr = if fz3 > EPSILON { fz3 } else { (116.0 * fz - 16.0) / KAPPA };
+    let xr = if fx3 > EPSILON {
+        fx3
+    } else {
+        (116.0 * fx - 16.0) / KAPPA
+    };
+    let yr = if l > KAPPA * EPSILON {
+        ((l + 16.0) / 116.0).powi(3)
+    } else {
+        l / KAPPA
+    };
+    let zr = if fz3 > EPSILON {
+        fz3
+    } else {
+        (116.0 * fz - 16.0) / KAPPA
+    };
 
     (xr * XN, yr * YN, zr * ZN)
 }
@@ -111,9 +123,21 @@ fn xyz_d50_to_lab(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
     let yr = y / YN;
     let zr = z / ZN;
 
-    let fx = if xr > EPSILON { xr.cbrt() } else { (KAPPA * xr + 16.0) / 116.0 };
-    let fy = if yr > EPSILON { yr.cbrt() } else { (KAPPA * yr + 16.0) / 116.0 };
-    let fz = if zr > EPSILON { zr.cbrt() } else { (KAPPA * zr + 16.0) / 116.0 };
+    let fx = if xr > EPSILON {
+        xr.cbrt()
+    } else {
+        (KAPPA * xr + 16.0) / 116.0
+    };
+    let fy = if yr > EPSILON {
+        yr.cbrt()
+    } else {
+        (KAPPA * yr + 16.0) / 116.0
+    };
+    let fz = if zr > EPSILON {
+        zr.cbrt()
+    } else {
+        (KAPPA * zr + 16.0) / 116.0
+    };
 
     let l = (116.0 * fy - 16.0).max(0.0);
     let a = 500.0 * (fx - fy);
@@ -598,7 +622,10 @@ pub enum Color {
     Hsla(Hsla),
 
     /// Interpolated color mix
-    Mix { components: [(Box<Color>, f32); 2], space: ColorMixSpace },
+    Mix {
+        components: [(Box<Color>, f32); 2],
+        space: ColorMixSpace,
+    },
 
     /// Special keyword: currentColor
     /// Uses the current value of the 'color' property
@@ -834,96 +861,96 @@ fn parse_hex(s: &str) -> Result<Color, ColorParseError> {
     Ok(Color::Rgba(Rgba::new(r, g, b, a)))
 }
 
-    /// Parse rgb() or rgba() function (modern syntax)
-    fn parse_rgb(s: &str) -> Result<Color, ColorParseError> {
-        let inner = s
-            .split_once('(')
-            .and_then(|(_, rest)| rest.rsplit_once(')').map(|(body, _)| body))
-            .ok_or_else(|| ColorParseError::InvalidFormat(s.to_string()))?;
+/// Parse rgb() or rgba() function (modern syntax)
+fn parse_rgb(s: &str) -> Result<Color, ColorParseError> {
+    let inner = s
+        .split_once('(')
+        .and_then(|(_, rest)| rest.rsplit_once(')').map(|(body, _)| body))
+        .ok_or_else(|| ColorParseError::InvalidFormat(s.to_string()))?;
 
-        let mut input = cssparser::ParserInput::new(inner);
-        let mut parser = cssparser::Parser::new(&mut input);
+    let mut input = cssparser::ParserInput::new(inner);
+    let mut parser = cssparser::Parser::new(&mut input);
 
-        let mut channels = Vec::new();
-        let mut comma_syntax = false;
+    let mut channels = Vec::new();
+    let mut comma_syntax = false;
 
-        channels.push(parse_rgb_channel(&mut parser)?);
-        if parser.try_parse(|p| p.expect_comma()).is_ok() {
-            comma_syntax = true;
-        }
-
-        channels.push(parse_rgb_channel(&mut parser)?);
-        if comma_syntax && parser.try_parse(|p| p.expect_comma()).is_err() {
-            return Err(ColorParseError::InvalidFormat(s.to_string()));
-        }
-        channels.push(parse_rgb_channel(&mut parser)?);
-
-        let mut alpha = 1.0;
-        if comma_syntax {
-            if parser.try_parse(|p| p.expect_comma()).is_ok() {
-                alpha = parse_alpha_component(&mut parser)?;
-            }
-        } else if parser.try_parse(|p| p.expect_delim('/')).is_ok() {
-            alpha = parse_alpha_component(&mut parser)?;
-        }
-
-        if channels.len() != 3 {
-            return Err(ColorParseError::InvalidFormat(s.to_string()));
-        }
-
-        Ok(Color::Rgba(Rgba::new(channels[0], channels[1], channels[2], alpha)))
+    channels.push(parse_rgb_channel(&mut parser)?);
+    if parser.try_parse(|p| p.expect_comma()).is_ok() {
+        comma_syntax = true;
     }
 
-    /// Parse hsl() or hsla() function (modern syntax)
-    fn parse_hsl(s: &str) -> Result<Color, ColorParseError> {
-        let inner = s
-            .split_once('(')
-            .and_then(|(_, rest)| rest.rsplit_once(')').map(|(body, _)| body))
-            .ok_or_else(|| ColorParseError::InvalidFormat(s.to_string()))?;
+    channels.push(parse_rgb_channel(&mut parser)?);
+    if comma_syntax && parser.try_parse(|p| p.expect_comma()).is_err() {
+        return Err(ColorParseError::InvalidFormat(s.to_string()));
+    }
+    channels.push(parse_rgb_channel(&mut parser)?);
 
-        let mut input = cssparser::ParserInput::new(inner);
-        let mut parser = cssparser::Parser::new(&mut input);
-
-        let mut comma_syntax = false;
-        let h = parse_hue_component(&mut parser)?;
+    let mut alpha = 1.0;
+    if comma_syntax {
         if parser.try_parse(|p| p.expect_comma()).is_ok() {
-            comma_syntax = true;
-        }
-        let s_val = parse_percentage_component(&mut parser)?;
-        if comma_syntax && parser.try_parse(|p| p.expect_comma()).is_err() {
-            return Err(ColorParseError::InvalidFormat(s.to_string()));
-        }
-        let l_val = parse_percentage_component(&mut parser)?;
-
-        let mut alpha = 1.0;
-        if comma_syntax {
-            if parser.try_parse(|p| p.expect_comma()).is_ok() {
-                alpha = parse_alpha_component(&mut parser)?;
-            }
-        } else if parser.try_parse(|p| p.expect_delim('/')).is_ok() {
             alpha = parse_alpha_component(&mut parser)?;
         }
-
-        Ok(Color::Hsla(Hsla::new(h, s_val * 100.0, l_val * 100.0, alpha)))
+    } else if parser.try_parse(|p| p.expect_delim('/')).is_ok() {
+        alpha = parse_alpha_component(&mut parser)?;
     }
 
-    /// Parse hwb() function
+    if channels.len() != 3 {
+        return Err(ColorParseError::InvalidFormat(s.to_string()));
+    }
+
+    Ok(Color::Rgba(Rgba::new(channels[0], channels[1], channels[2], alpha)))
+}
+
+/// Parse hsl() or hsla() function (modern syntax)
+fn parse_hsl(s: &str) -> Result<Color, ColorParseError> {
+    let inner = s
+        .split_once('(')
+        .and_then(|(_, rest)| rest.rsplit_once(')').map(|(body, _)| body))
+        .ok_or_else(|| ColorParseError::InvalidFormat(s.to_string()))?;
+
+    let mut input = cssparser::ParserInput::new(inner);
+    let mut parser = cssparser::Parser::new(&mut input);
+
+    let mut comma_syntax = false;
+    let h = parse_hue_component(&mut parser)?;
+    if parser.try_parse(|p| p.expect_comma()).is_ok() {
+        comma_syntax = true;
+    }
+    let s_val = parse_percentage_component(&mut parser)?;
+    if comma_syntax && parser.try_parse(|p| p.expect_comma()).is_err() {
+        return Err(ColorParseError::InvalidFormat(s.to_string()));
+    }
+    let l_val = parse_percentage_component(&mut parser)?;
+
+    let mut alpha = 1.0;
+    if comma_syntax {
+        if parser.try_parse(|p| p.expect_comma()).is_ok() {
+            alpha = parse_alpha_component(&mut parser)?;
+        }
+    } else if parser.try_parse(|p| p.expect_delim('/')).is_ok() {
+        alpha = parse_alpha_component(&mut parser)?;
+    }
+
+    Ok(Color::Hsla(Hsla::new(h, s_val * 100.0, l_val * 100.0, alpha)))
+}
+
+/// Parse hwb() function
 fn parse_hwb(s: &str) -> Result<Color, ColorParseError> {
     let inner = s
         .split_once('(')
         .and_then(|(_, rest)| rest.rsplit_once(')').map(|(body, _)| body))
         .ok_or_else(|| ColorParseError::InvalidFormat(s.to_string()))?;
 
-        let mut input = cssparser::ParserInput::new(inner);
-        let mut parser = cssparser::Parser::new(&mut input);
+    let mut input = cssparser::ParserInput::new(inner);
+    let mut parser = cssparser::Parser::new(&mut input);
 
-        let h = parse_hue_component(&mut parser)?;
-        let w = parse_percentage_component(&mut parser)?;
-        let b = parse_percentage_component(&mut parser)?;
-        let mut alpha = 1.0;
-        if parser.try_parse(|p| p.expect_delim('/')).is_ok() {
-            alpha = parse_alpha_component(&mut parser)?;
-        }
+    let h = parse_hue_component(&mut parser)?;
+    let w = parse_percentage_component(&mut parser)?;
+    let b = parse_percentage_component(&mut parser)?;
+    let mut alpha = 1.0;
+    if parser.try_parse(|p| p.expect_delim('/')).is_ok() {
+        alpha = parse_alpha_component(&mut parser)?;
+    }
 
     Ok(Color::Rgba(hwb_to_rgba(h, w, b, alpha)))
 }
@@ -931,7 +958,9 @@ fn parse_hwb(s: &str) -> Result<Color, ColorParseError> {
 /// Parse an RGB channel (number or percentage) clamped to 0-255.
 fn parse_rgb_channel(parser: &mut cssparser::Parser<'_, '_>) -> Result<u8, ColorParseError> {
     use cssparser::Token;
-    let token = parser.next().map_err(|_| ColorParseError::InvalidFormat("rgb".to_string()))?;
+    let token = parser
+        .next()
+        .map_err(|_| ColorParseError::InvalidFormat("rgb".to_string()))?;
     let value = match token {
         Token::Number { value, .. } => value.clamp(0.0, 255.0),
         Token::Percentage { unit_value, .. } => (unit_value * 255.0).clamp(0.0, 255.0),
@@ -954,7 +983,9 @@ fn parse_alpha_component(parser: &mut cssparser::Parser<'_, '_>) -> Result<f32, 
 }
 
 fn parse_hue_component(parser: &mut cssparser::Parser<'_, '_>) -> Result<f32, ColorParseError> {
-    let token = parser.next().map_err(|_| ColorParseError::InvalidFormat("hue".to_string()))?;
+    let token = parser
+        .next()
+        .map_err(|_| ColorParseError::InvalidFormat("hue".to_string()))?;
     parse_hue_token(&token)
 }
 
@@ -1007,7 +1038,11 @@ fn hwb_to_rgba(h: f32, whiteness: f32, blackness: f32, alpha: f32) -> Rgba {
     let v = 1.0 - b;
     let s = if v == 0.0 { 0.0 } else { 1.0 - w / v };
     let l = v * (1.0 - s / 2.0);
-    let sat = if l == 0.0 || l == 1.0 { 0.0 } else { (v - l) / l.min(1.0 - l) };
+    let sat = if l == 0.0 || l == 1.0 {
+        0.0
+    } else {
+        (v - l) / l.min(1.0 - l)
+    };
 
     let hsla = Hsla::new(h, sat * 100.0, l * 100.0, alpha);
     hsla.to_rgba()
@@ -1286,9 +1321,15 @@ fn decode_rec2020(v: f32) -> f32 {
     }
 }
 
-fn color_function_to_rgba(space: ColorFunctionSpace, channels: &[ColorChannelValue], alpha: f32) -> Result<Rgba, ColorParseError> {
+fn color_function_to_rgba(
+    space: ColorFunctionSpace,
+    channels: &[ColorChannelValue],
+    alpha: f32,
+) -> Result<Rgba, ColorParseError> {
     if channels.len() != 3 {
-        return Err(ColorParseError::InvalidFormat("color() requires three channels".to_string()));
+        return Err(ColorParseError::InvalidFormat(
+            "color() requires three channels".to_string(),
+        ));
     }
 
     let alpha = alpha.clamp(0.0, 1.0);
@@ -1443,7 +1484,6 @@ fn color_function_to_rgba(space: ColorFunctionSpace, channels: &[ColorChannelVal
     }
 }
 
-
 fn parse_color_mix(input: &str) -> Result<Color, ColorParseError> {
     let inner = input
         .strip_prefix("color-mix(")
@@ -1459,7 +1499,9 @@ fn parse_color_mix(input: &str) -> Result<Color, ColorParseError> {
         if !matches!(iter.next(), Some(tok) if tok.eq_ignore_ascii_case("in")) {
             return Err(ColorParseError::InvalidFormat(input.to_string()));
         }
-        let name = iter.next().ok_or_else(|| ColorParseError::InvalidFormat(input.to_string()))?;
+        let name = iter
+            .next()
+            .ok_or_else(|| ColorParseError::InvalidFormat(input.to_string()))?;
         if iter.next().is_some() {
             return Err(ColorParseError::InvalidFormat(input.to_string()));
         }
@@ -2082,13 +2124,17 @@ mod tests {
         let gray = Color::parse("oklab(50% 0 0)").unwrap().to_rgba(Rgba::BLACK);
         assert!(gray.r > 0 && gray.g > 0 && gray.b > 0);
 
-        let oklch = Color::parse("oklch(60% 0.1 40deg / 0.25)").unwrap().to_rgba(Rgba::BLACK);
+        let oklch = Color::parse("oklch(60% 0.1 40deg / 0.25)")
+            .unwrap()
+            .to_rgba(Rgba::BLACK);
         assert!((oklch.a - 0.25).abs() < 1e-6);
     }
 
     #[test]
     fn color_mix_accepts_lab_spaces() {
-        let mixed = Color::parse("color-mix(in lab, red 75%, red)").unwrap().to_rgba(Rgba::BLACK);
+        let mixed = Color::parse("color-mix(in lab, red 75%, red)")
+            .unwrap()
+            .to_rgba(Rgba::BLACK);
         assert_eq!(mixed.r, 255);
         assert_eq!(mixed.g, 0);
         assert_eq!(mixed.b, 0);
@@ -2096,7 +2142,9 @@ mod tests {
 
     #[test]
     fn color_mix_accepts_oklch_space() {
-        let mixed = Color::parse("color-mix(in oklch, red, blue)").unwrap().to_rgba(Rgba::BLACK);
+        let mixed = Color::parse("color-mix(in oklch, red, blue)")
+            .unwrap()
+            .to_rgba(Rgba::BLACK);
         assert!(mixed.r > 0 && mixed.b > 0);
     }
 
@@ -2123,7 +2171,9 @@ mod tests {
         assert_eq!(c.b, 0);
         assert!((c.a - 0.5).abs() < 1e-6);
 
-        let p3 = Color::parse("color(display-p3 0.5 0.4 0.3)").unwrap().to_rgba(Rgba::BLACK);
+        let p3 = Color::parse("color(display-p3 0.5 0.4 0.3)")
+            .unwrap()
+            .to_rgba(Rgba::BLACK);
         assert!(p3.r > 0 && p3.g > 0 && p3.b > 0);
     }
 
@@ -2133,7 +2183,9 @@ mod tests {
         let lab_direct = Color::parse("lab(50% 10 -5)").unwrap().to_rgba(Rgba::BLACK);
         assert_eq!(lab, lab_direct);
 
-        let lch = Color::parse("color(lch 60% 30 200deg / 0.25)").unwrap().to_rgba(Rgba::BLACK);
+        let lch = Color::parse("color(lch 60% 30 200deg / 0.25)")
+            .unwrap()
+            .to_rgba(Rgba::BLACK);
         let lch_direct = Color::parse("lch(60% 30 200deg / 0.25)").unwrap().to_rgba(Rgba::BLACK);
         assert_eq!(lch, lch_direct);
     }
@@ -2144,7 +2196,9 @@ mod tests {
         let oklab_direct = Color::parse("oklab(60% 0.1 -0.05)").unwrap().to_rgba(Rgba::BLACK);
         assert_eq!(oklab, oklab_direct);
 
-        let oklch = Color::parse("color(oklch 70% 0.1 45deg / 0.4)").unwrap().to_rgba(Rgba::BLACK);
+        let oklch = Color::parse("color(oklch 70% 0.1 45deg / 0.4)")
+            .unwrap()
+            .to_rgba(Rgba::BLACK);
         let oklch_direct = Color::parse("oklch(70% 0.1 45deg / 0.4)").unwrap().to_rgba(Rgba::BLACK);
         assert_eq!(oklch, oklch_direct);
     }
@@ -2155,7 +2209,9 @@ mod tests {
         assert_eq!(gray_a98.r, gray_a98.g);
         assert_eq!(gray_a98.g, gray_a98.b);
 
-        let gray_prophoto = Color::parse("color(prophoto-rgb 50% 50% 50%)").unwrap().to_rgba(Rgba::BLACK);
+        let gray_prophoto = Color::parse("color(prophoto-rgb 50% 50% 50%)")
+            .unwrap()
+            .to_rgba(Rgba::BLACK);
         assert_eq!(gray_prophoto.r, gray_prophoto.g);
         assert_eq!(gray_prophoto.g, gray_prophoto.b);
 
@@ -2166,11 +2222,15 @@ mod tests {
     #[test]
     fn parses_color_function_xyz_spaces() {
         // D65 white point for sRGB
-        let white_d65 = Color::parse("color(xyz-d65 0.95047 1 1.08883)").unwrap().to_rgba(Rgba::BLACK);
+        let white_d65 = Color::parse("color(xyz-d65 0.95047 1 1.08883)")
+            .unwrap()
+            .to_rgba(Rgba::BLACK);
         assert!(white_d65.r >= 254 && white_d65.g >= 254 && white_d65.b >= 254);
 
         // D50 white point should also map to near-white after adaptation
-        let white_d50 = Color::parse("color(xyz-d50 0.96422 1 0.82521)").unwrap().to_rgba(Rgba::BLACK);
+        let white_d50 = Color::parse("color(xyz-d50 0.96422 1 0.82521)")
+            .unwrap()
+            .to_rgba(Rgba::BLACK);
         assert!(white_d50.r >= 254 && white_d50.g >= 254 && white_d50.b >= 252);
     }
 

@@ -40,8 +40,8 @@ pub mod baseline;
 pub mod line_builder;
 
 use crate::geometry::{Point, Rect, Size};
+use crate::layout::absolute_positioning::{resolve_positioned_style, AbsoluteLayout, AbsoluteLayoutInput};
 use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
-use crate::layout::absolute_positioning::{AbsoluteLayout, AbsoluteLayoutInput, resolve_positioned_style};
 use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::line_builder::InlineBoxItem;
@@ -107,7 +107,9 @@ impl InlineFormattingContext {
             font_context: FontContext::new(),
             default_hyphenator: Hyphenator::new("en-us").ok(),
             viewport_size: crate::geometry::Size::new(800.0, 600.0),
-            nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock::viewport(crate::geometry::Size::new(800.0, 600.0)),
+            nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock::viewport(
+                crate::geometry::Size::new(800.0, 600.0),
+            ),
         }
     }
 
@@ -200,7 +202,13 @@ impl InlineFormattingContext {
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let base_direction = box_node.style.direction;
         let mut positioned = Vec::new();
-        self.collect_inline_items_with_base(box_node, available_width, available_height, base_direction, &mut positioned)
+        self.collect_inline_items_with_base(
+            box_node,
+            available_width,
+            available_height,
+            base_direction,
+            &mut positioned,
+        )
     }
 
     /// Collects inline items with an explicit base direction for bidi shaping.
@@ -1650,31 +1658,33 @@ impl InlineFormattingContext {
     fn calculate_intrinsic_width(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> f32 {
         let style = &box_node.style;
         if style.containment.size || style.containment.inline_size {
-            let edges = resolve_length_for_width(style.padding_left, 0.0, style, &self.font_context, self.viewport_size)
-                + resolve_length_for_width(style.padding_right, 0.0, style, &self.font_context, self.viewport_size)
-                + resolve_length_for_width(style.border_left_width, 0.0, style, &self.font_context, self.viewport_size)
-                + resolve_length_for_width(
-                    style.border_right_width,
-                    0.0,
-                    style,
-                    &self.font_context,
-                    self.viewport_size,
-                );
+            let edges =
+                resolve_length_for_width(style.padding_left, 0.0, style, &self.font_context, self.viewport_size)
+                    + resolve_length_for_width(style.padding_right, 0.0, style, &self.font_context, self.viewport_size)
+                    + resolve_length_for_width(
+                        style.border_left_width,
+                        0.0,
+                        style,
+                        &self.font_context,
+                        self.viewport_size,
+                    )
+                    + resolve_length_for_width(
+                        style.border_right_width,
+                        0.0,
+                        style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
             return edges;
         }
 
         let base_direction = resolve_base_direction_for_box(box_node);
         let mut positioned = Vec::new();
-        let items = match self.collect_inline_items_with_base(
-            box_node,
-            f32::INFINITY,
-            None,
-            base_direction,
-            &mut positioned,
-        ) {
-            Ok(items) => items,
-            Err(_) => return 0.0,
-        };
+        let items =
+            match self.collect_inline_items_with_base(box_node, f32::INFINITY, None, base_direction, &mut positioned) {
+                Ok(items) => items,
+                Err(_) => return 0.0,
+            };
         let indent_value = resolve_length_with_percentage_inline(
             style.text_indent.length,
             None,
@@ -3163,57 +3173,60 @@ impl InlineFormattingContext {
 
         // Create fragments
         let paragraph_info = compute_paragraph_line_flags(&lines);
-        let static_position = if let (Some(first_line), Some((is_last_line, _))) =
-            (lines.first(), paragraph_info.first())
-        {
-            let indent_raw = if indent_applies_first { indent_value } else { 0.0 };
-            let indent_offset = if matches!(first_line.resolved_direction, crate::style::types::Direction::Rtl) {
-                -indent_raw
+        let static_position =
+            if let (Some(first_line), Some((is_last_line, _))) = (lines.first(), paragraph_info.first()) {
+                let indent_raw = if indent_applies_first { indent_value } else { 0.0 };
+                let indent_offset = if matches!(first_line.resolved_direction, crate::style::types::Direction::Rtl) {
+                    -indent_raw
+                } else {
+                    indent_raw
+                };
+                let mut base_align = map_text_align(style.text_align, first_line.resolved_direction);
+                let resolved_justify = resolve_auto_text_justify(style.text_justify, &first_line.items);
+                if matches!(base_align, TextAlign::Justify) && matches!(resolved_justify, TextJustify::None) {
+                    base_align = map_text_align(TextAlign::Start, first_line.resolved_direction);
+                }
+                let mut effective_align = resolve_text_align_for_line(
+                    base_align,
+                    style.text_align_last,
+                    first_line.resolved_direction,
+                    *is_last_line,
+                );
+                let has_justify = has_justify_opportunities(&first_line.items, resolved_justify);
+                if matches!(effective_align, TextAlign::Justify)
+                    && (matches!(resolved_justify, TextJustify::None) || !has_justify)
+                {
+                    effective_align = map_text_align(TextAlign::Start, first_line.resolved_direction);
+                }
+                let usable_width = if first_line.available_width > 0.0 {
+                    first_line.available_width
+                } else {
+                    first_line.width
+                };
+                let total_width: f32 = first_line.items.iter().map(|p| p.item.width()).sum();
+                let extra_space = (usable_width - total_width).max(0.0);
+                let lead = match effective_align {
+                    TextAlign::Right => extra_space,
+                    TextAlign::Center => extra_space * 0.5,
+                    _ => 0.0,
+                };
+                let cursor = if matches!(first_line.resolved_direction, crate::style::types::Direction::Rtl) {
+                    first_line.left_offset + indent_offset + lead + total_width
+                } else {
+                    first_line.left_offset + indent_offset + lead
+                };
+                let start_x = if matches!(first_line.resolved_direction, crate::style::types::Direction::Rtl) {
+                    cursor - total_width
+                } else {
+                    cursor
+                };
+                // Anchor static position to the hypothetical inline box origin: start of the line and
+                // the strut baseline offset applied to the line's baseline.
+                let start_y = first_line.y_offset + first_line.baseline - strut_metrics.baseline_offset;
+                Point::new(start_x, start_y)
             } else {
-                indent_raw
+                Point::ZERO
             };
-            let mut base_align = map_text_align(style.text_align, first_line.resolved_direction);
-            let resolved_justify = resolve_auto_text_justify(style.text_justify, &first_line.items);
-            if matches!(base_align, TextAlign::Justify) && matches!(resolved_justify, TextJustify::None) {
-                base_align = map_text_align(TextAlign::Start, first_line.resolved_direction);
-            }
-            let mut effective_align =
-                resolve_text_align_for_line(base_align, style.text_align_last, first_line.resolved_direction, *is_last_line);
-            let has_justify = has_justify_opportunities(&first_line.items, resolved_justify);
-            if matches!(effective_align, TextAlign::Justify)
-                && (matches!(resolved_justify, TextJustify::None) || !has_justify)
-            {
-                effective_align = map_text_align(TextAlign::Start, first_line.resolved_direction);
-            }
-            let usable_width = if first_line.available_width > 0.0 {
-                first_line.available_width
-            } else {
-                first_line.width
-            };
-            let total_width: f32 = first_line.items.iter().map(|p| p.item.width()).sum();
-            let extra_space = (usable_width - total_width).max(0.0);
-            let lead = match effective_align {
-                TextAlign::Right => extra_space,
-                TextAlign::Center => extra_space * 0.5,
-                _ => 0.0,
-            };
-            let cursor = if matches!(first_line.resolved_direction, crate::style::types::Direction::Rtl) {
-                first_line.left_offset + indent_offset + lead + total_width
-            } else {
-                first_line.left_offset + indent_offset + lead
-            };
-            let start_x = if matches!(first_line.resolved_direction, crate::style::types::Direction::Rtl) {
-                cursor - total_width
-            } else {
-                cursor
-            };
-            // Anchor static position to the hypothetical inline box origin: start of the line and
-            // the strut baseline offset applied to the line's baseline.
-            let start_y = first_line.y_offset + first_line.baseline - strut_metrics.baseline_offset;
-            Point::new(start_x, start_y)
-        } else {
-            Point::ZERO
-        };
         let lines_empty = lines.is_empty();
 
         let children = self.create_fragments(
@@ -3271,8 +3284,13 @@ impl InlineFormattingContext {
                 &self.font_context,
                 self.viewport_size,
             );
-            let padding_top =
-                resolve_length_for_width(style.padding_top, available_inline, style, &self.font_context, self.viewport_size);
+            let padding_top = resolve_length_for_width(
+                style.padding_top,
+                available_inline,
+                style,
+                &self.font_context,
+                self.viewport_size,
+            );
             let _padding_bottom = resolve_length_for_width(
                 style.padding_bottom,
                 available_inline,
@@ -3351,8 +3369,7 @@ impl InlineFormattingContext {
                 let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
                 let positioned_style =
                     resolve_positioned_style(&child.style, &cb, self.viewport_size, &self.font_context);
-                let input =
-                    AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, static_position);
+                let input = AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, static_position);
                 let result = abs.layout_absolute(&input, &cb)?;
                 child_fragment.bounds = Rect::new(result.position, result.size);
                 merged_children.push(child_fragment);
@@ -3898,6 +3915,7 @@ mod tests {
                 replaced_type: ReplacedType::Image {
                     src: String::new(),
                     alt: None,
+                    srcset: Vec::new(),
                 },
                 intrinsic_size: Some(Size::new(10.0, 10.0)),
                 aspect_ratio: Some(1.0),
@@ -3958,6 +3976,7 @@ mod tests {
                 replaced_type: ReplacedType::Image {
                     src: String::new(),
                     alt: None,
+                    srcset: Vec::new(),
                 },
                 intrinsic_size: Some(Size::new(10.0, 10.0)),
                 aspect_ratio: Some(1.0),
@@ -3998,6 +4017,7 @@ mod tests {
             ReplacedType::Image {
                 src: String::new(),
                 alt: None,
+                srcset: Vec::new(),
             },
             Some(Size::new(50.0, 20.0)),
             Some(50.0 / 20.0),

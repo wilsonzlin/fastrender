@@ -90,11 +90,7 @@ impl FormattingContextFactory {
     /// font caches with paint and callers.
     pub fn with_font_context(font_context: FontContext) -> Self {
         let viewport_size = crate::geometry::Size::new(800.0, 600.0);
-        Self::with_font_context_viewport_and_cb(
-            font_context,
-            viewport_size,
-            ContainingBlock::viewport(viewport_size),
-        )
+        Self::with_font_context_viewport_and_cb(font_context, viewport_size, ContainingBlock::viewport(viewport_size))
     }
 
     /// Creates a factory wired to a specific font context and viewport size, allowing layout to share

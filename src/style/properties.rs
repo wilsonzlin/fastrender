@@ -23,6 +23,28 @@ use crate::style::values::{Length, LengthUnit};
 use crate::style::var_resolution::{resolve_var_for_property, VarResolutionResult};
 use crate::style::ComputedStyle;
 use cssparser::{Parser, ParserInput, Token};
+use std::cell::Cell;
+
+thread_local! {
+    static IMAGE_SET_DPR: Cell<f32> = Cell::new(1.0);
+}
+
+/// Executes a closure with the image-set selection density overridden.
+/// Restores the previous value afterward.
+pub fn with_image_set_dpr<T>(dpr: f32, f: impl FnOnce() -> T) -> T {
+    IMAGE_SET_DPR.with(|cell| {
+        let prev = cell.get();
+        let clamped = if dpr.is_finite() && dpr > 0.0 { dpr } else { 1.0 };
+        cell.set(clamped);
+        let result = f();
+        cell.set(prev);
+        result
+    })
+}
+
+fn current_image_set_dpr() -> f32 {
+    IMAGE_SET_DPR.with(|cell| cell.get())
+}
 
 fn split_layers(tokens: &[PropertyValue]) -> Vec<Vec<PropertyValue>> {
     let mut layers = Vec::new();
@@ -48,9 +70,7 @@ fn split_layers(tokens: &[PropertyValue]) -> Vec<Vec<PropertyValue>> {
 
 fn parse_background_image_value(value: &PropertyValue) -> Option<BackgroundImage> {
     match value {
-        PropertyValue::Keyword(kw) if kw.to_ascii_lowercase().starts_with("image-set(") => {
-            parse_image_set(kw)
-        }
+        PropertyValue::Keyword(kw) if kw.to_ascii_lowercase().starts_with("image-set(") => parse_image_set(kw),
         PropertyValue::Url(url) => Some(BackgroundImage::Url(url.clone())),
         PropertyValue::LinearGradient { angle, stops } => Some(BackgroundImage::LinearGradient {
             angle: *angle,
@@ -78,11 +98,7 @@ fn parse_image_set_resolution(token: &str) -> Option<f32> {
         return rest.parse::<f32>().ok().filter(|v| *v > 0.0);
     }
     if let Some(rest) = lower.strip_suffix("dpi") {
-        return rest
-            .parse::<f32>()
-            .ok()
-            .filter(|v| *v > 0.0)
-            .map(|dpi| dpi / 96.0);
+        return rest.parse::<f32>().ok().filter(|v| *v > 0.0).map(|dpi| dpi / 96.0);
     }
     if let Some(rest) = lower.strip_suffix("dpcm") {
         return rest
@@ -208,8 +224,7 @@ pub(crate) fn parse_image_set(text: &str) -> Option<BackgroundImage> {
             continue;
         }
         let image_token = &tokens[0];
-        let image = if image_token.trim().to_ascii_lowercase().starts_with("url(")
-            && image_token.trim().ends_with(')')
+        let image = if image_token.trim().to_ascii_lowercase().starts_with("url(") && image_token.trim().ends_with(')')
         {
             let trimmed = image_token.trim();
             let open = trimmed.find('(').unwrap_or(0);
@@ -239,7 +254,7 @@ pub(crate) fn parse_image_set(text: &str) -> Option<BackgroundImage> {
         return None;
     }
 
-    let desired = 1.0;
+    let desired = current_image_set_dpr();
     let mut best_ge: Option<(BackgroundImage, f32)> = None;
     let mut best_lt: Option<(BackgroundImage, f32)> = None;
 
@@ -248,10 +263,7 @@ pub(crate) fn parse_image_set(text: &str) -> Option<BackgroundImage> {
             continue;
         }
         if density >= desired {
-            let replace = best_ge
-                .as_ref()
-                .map(|(_, d)| density < *d)
-                .unwrap_or(true);
+            let replace = best_ge.as_ref().map(|(_, d)| density < *d).unwrap_or(true);
             if replace {
                 best_ge = Some((image, density));
             }
@@ -547,7 +559,9 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
     // Handle CSS Custom Properties (--*)
     if decl.property.starts_with("--") {
         // Preserve the raw custom property value verbatim.
-        styles.custom_properties.insert(decl.property.clone(), decl.raw_value.clone());
+        styles
+            .custom_properties
+            .insert(decl.property.clone(), decl.raw_value.clone());
         return;
     }
 
@@ -4580,12 +4594,11 @@ fn parse_list_style_position(value: &PropertyValue) -> Option<ListStylePosition>
 fn parse_list_style_image(value: &PropertyValue) -> Option<ListStyleImage> {
     match value {
         PropertyValue::Keyword(kw) if kw == "none" => Some(ListStyleImage::None),
-        PropertyValue::Keyword(kw) if kw.to_ascii_lowercase().starts_with("image-set(") => {
-            parse_image_set(kw).and_then(|img| match img {
+        PropertyValue::Keyword(kw) if kw.to_ascii_lowercase().starts_with("image-set(") => parse_image_set(kw)
+            .and_then(|img| match img {
                 BackgroundImage::Url(url) => Some(ListStyleImage::Url(url)),
                 _ => None,
-            })
-        }
+            }),
         PropertyValue::Url(url) => Some(ListStyleImage::Url(url.clone())),
         _ => None,
     }
@@ -6350,9 +6363,7 @@ mod tests {
             &Declaration {
                 property: "cursor".to_string(),
                 value: PropertyValue::Multiple(vec![
-                    PropertyValue::Keyword(
-                        "image-set(url(\"c1.cur\") 1x, url(\"c2.cur\") 2x)".to_string()
-                    ),
+                    PropertyValue::Keyword("image-set(url(\"c1.cur\") 1x, url(\"c2.cur\") 2x)".to_string()),
                     PropertyValue::Keyword(",".to_string()),
                     PropertyValue::Keyword("crosshair".to_string()),
                 ]),
@@ -6385,10 +6396,7 @@ mod tests {
             16.0,
         );
 
-        assert_eq!(
-            style.list_style_image,
-            ListStyleImage::Url("marker-1x.png".to_string())
-        );
+        assert_eq!(style.list_style_image, ListStyleImage::Url("marker-1x.png".to_string()));
     }
 
     #[test]
@@ -6695,9 +6703,7 @@ mod tests {
             &mut style,
             &Declaration {
                 property: "background-image".to_string(),
-                value: PropertyValue::Keyword(
-                    "image-set(url(\"low.png\") 1x, url(\"retina.png\") 2x)".to_string(),
-                ),
+                value: PropertyValue::Keyword("image-set(url(\"low.png\") 1x, url(\"retina.png\") 2x)".to_string()),
                 raw_value: String::new(),
                 important: false,
             },
@@ -6709,6 +6715,29 @@ mod tests {
         assert!(matches!(
             layer.image,
             Some(BackgroundImage::Url(ref url)) if url == "low.png"
+        ));
+    }
+
+    #[test]
+    fn background_image_image_set_honors_device_pixel_ratio() {
+        let mut style = ComputedStyle::default();
+        with_image_set_dpr(2.0, || {
+            apply_declaration(
+                &mut style,
+                &Declaration {
+                    property: "background-image".to_string(),
+                    value: PropertyValue::Keyword("image-set(url(\"low.png\") 1x, url(\"retina.png\") 2x)".to_string()),
+                    raw_value: String::new(),
+                    important: false,
+                },
+                16.0,
+                16.0,
+            );
+        });
+
+        assert!(matches!(
+            style.background_layers[0].image,
+            Some(BackgroundImage::Url(ref url)) if url == "retina.png"
         ));
     }
 
@@ -6758,9 +6787,7 @@ mod tests {
             &Declaration {
                 property: "background".to_string(),
                 value: PropertyValue::Multiple(vec![
-                    PropertyValue::Keyword(
-                        "image-set(url(\"one-x.png\") 1x, url(\"two-x.png\") 2x)".to_string(),
-                    ),
+                    PropertyValue::Keyword("image-set(url(\"one-x.png\") 1x, url(\"two-x.png\") 2x)".to_string()),
                     PropertyValue::Keyword("no-repeat".to_string()),
                 ]),
                 raw_value: String::new(),

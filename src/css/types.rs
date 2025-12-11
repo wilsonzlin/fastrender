@@ -164,10 +164,20 @@ pub enum PropertyValue {
     BoxShadow(Vec<BoxShadow>),
     TextShadow(Vec<TextShadow>),
     Transform(Vec<Transform>),
-    LinearGradient { angle: f32, stops: Vec<ColorStop> },
-    RadialGradient { stops: Vec<ColorStop> },
-    RepeatingLinearGradient { angle: f32, stops: Vec<ColorStop> },
-    RepeatingRadialGradient { stops: Vec<ColorStop> },
+    LinearGradient {
+        angle: f32,
+        stops: Vec<ColorStop>,
+    },
+    RadialGradient {
+        stops: Vec<ColorStop>,
+    },
+    RepeatingLinearGradient {
+        angle: f32,
+        stops: Vec<ColorStop>,
+    },
+    RepeatingRadialGradient {
+        stops: Vec<ColorStop>,
+    },
     /// Raw custom property value (stored unparsed)
     Custom(String),
 }

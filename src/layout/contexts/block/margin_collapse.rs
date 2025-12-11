@@ -353,8 +353,8 @@ pub fn establishes_bfc(style: &ComputedStyle) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::values::Length;
     use crate::style::display::Display;
+    use crate::style::values::Length;
 
     // ==========================================================================
     // CollapsibleMargin Tests

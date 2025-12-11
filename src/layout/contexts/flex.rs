@@ -26,10 +26,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::geometry::{Point, Rect, Size};
+use crate::layout::absolute_positioning::{resolve_positioned_style, AbsoluteLayout, AbsoluteLayoutInput};
 use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutConstraints};
-use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
-use crate::layout::absolute_positioning::{AbsoluteLayout, AbsoluteLayoutInput, resolve_positioned_style};
 use crate::layout::contexts::positioned::ContainingBlock;
+use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::display::Display;
 use crate::style::types::{
     AlignContent, AlignItems, AspectRatio, BoxSizing, Direction, FlexBasis, FlexDirection, FlexWrap, JustifyContent,
@@ -149,8 +149,7 @@ impl FormattingContext for FlexFormattingContext {
 
         // Phase 1: Build Taffy tree from in-flow children
         let mut node_map: HashMap<*const BoxNode, NodeId> = HashMap::new();
-        let root_node =
-            self.build_taffy_tree_children(&mut taffy_tree, box_node, &in_flow_children, &mut node_map)?;
+        let root_node = self.build_taffy_tree_children(&mut taffy_tree, box_node, &in_flow_children, &mut node_map)?;
 
         // Phase 2: Compute layout using Taffy
         let available_space = self.constraints_to_available_space(constraints);
@@ -164,12 +163,36 @@ impl FormattingContext for FlexFormattingContext {
         // Phase 4: Position out-of-flow abs/fixed children against this flex container.
         if !positioned_children.is_empty() {
             let abs = AbsoluteLayout::new();
-            let padding_left = self.resolve_length_for_width(box_node.style.padding_left, constraints.width().unwrap_or(0.0), &box_node.style);
-            let padding_top = self.resolve_length_for_width(box_node.style.padding_top, constraints.width().unwrap_or(0.0), &box_node.style);
-            let border_left = self.resolve_length_for_width(box_node.style.border_left_width, constraints.width().unwrap_or(0.0), &box_node.style);
-            let border_top = self.resolve_length_for_width(box_node.style.border_top_width, constraints.width().unwrap_or(0.0), &box_node.style);
-            let border_right = self.resolve_length_for_width(box_node.style.border_right_width, constraints.width().unwrap_or(0.0), &box_node.style);
-            let border_bottom = self.resolve_length_for_width(box_node.style.border_bottom_width, constraints.width().unwrap_or(0.0), &box_node.style);
+            let padding_left = self.resolve_length_for_width(
+                box_node.style.padding_left,
+                constraints.width().unwrap_or(0.0),
+                &box_node.style,
+            );
+            let padding_top = self.resolve_length_for_width(
+                box_node.style.padding_top,
+                constraints.width().unwrap_or(0.0),
+                &box_node.style,
+            );
+            let border_left = self.resolve_length_for_width(
+                box_node.style.border_left_width,
+                constraints.width().unwrap_or(0.0),
+                &box_node.style,
+            );
+            let border_top = self.resolve_length_for_width(
+                box_node.style.border_top_width,
+                constraints.width().unwrap_or(0.0),
+                &box_node.style,
+            );
+            let border_right = self.resolve_length_for_width(
+                box_node.style.border_right_width,
+                constraints.width().unwrap_or(0.0),
+                &box_node.style,
+            );
+            let border_bottom = self.resolve_length_for_width(
+                box_node.style.border_bottom_width,
+                constraints.width().unwrap_or(0.0),
+                &box_node.style,
+            );
 
             let padding_origin = Point::new(border_left + padding_left, border_top + padding_top);
             let padding_size = Size::new(
@@ -196,7 +219,9 @@ impl FormattingContext for FlexFormattingContext {
                 style.position = crate::style::position::Position::Static;
                 layout_child.style = Arc::new(style);
 
-                let fc_type = layout_child.formatting_context().unwrap_or(crate::style::display::FormattingContextType::Block);
+                let fc_type = layout_child
+                    .formatting_context()
+                    .unwrap_or(crate::style::display::FormattingContextType::Block);
                 let fc = factory.create(fc_type);
                 let child_constraints = LayoutConstraints::new(
                     CrateAvailableSpace::Definite(padding_rect.size.width),
@@ -204,7 +229,8 @@ impl FormattingContext for FlexFormattingContext {
                 );
                 let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
 
-                let positioned_style = resolve_positioned_style(&child.style, &cb, self.viewport_size, &self.font_context);
+                let positioned_style =
+                    resolve_positioned_style(&child.style, &cb, self.viewport_size, &self.font_context);
                 let static_pos = padding_origin;
                 let input = AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, static_pos);
                 let result = abs.layout_absolute(&input, &cb)?;
@@ -911,8 +937,7 @@ mod tests {
         abs_style.height = Some(Length::px(10.0));
 
         let abs_child = BoxNode::new_block(Arc::new(abs_style), FormattingContextType::Block, vec![]);
-        let container =
-            BoxNode::new_block(Arc::new(container_style), FormattingContextType::Flex, vec![abs_child]);
+        let container = BoxNode::new_block(Arc::new(container_style), FormattingContextType::Flex, vec![abs_child]);
 
         let fc = FlexFormattingContext::with_viewport(Size::new(200.0, 200.0));
         let constraints = LayoutConstraints::definite(100.0, 100.0);
@@ -941,8 +966,7 @@ mod tests {
         abs_style.height = Some(Length::px(6.0));
 
         let abs_child = BoxNode::new_block(Arc::new(abs_style), FormattingContextType::Block, vec![]);
-        let container =
-            BoxNode::new_block(Arc::new(container_style), FormattingContextType::Flex, vec![abs_child]);
+        let container = BoxNode::new_block(Arc::new(container_style), FormattingContextType::Flex, vec![abs_child]);
 
         let cb_rect = Rect::from_xywh(20.0, 30.0, 150.0, 150.0);
         let viewport = Size::new(300.0, 300.0);

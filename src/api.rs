@@ -63,9 +63,10 @@ use crate::image_output::{encode_image, OutputFormat};
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem;
 use crate::layout::engine::{LayoutConfig, LayoutEngine};
-use crate::paint::painter::paint_tree_with_resources;
-use crate::style::cascade::apply_styles_with_target;
+use crate::paint::painter::paint_tree_with_resources_scaled;
+use crate::style::cascade::apply_styles_with_media_and_target;
 use crate::style::color::Rgba;
+use crate::style::media::MediaContext;
 use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStretch, FontStyle as DbFontStyle, ScaledMetrics};
 use crate::text::font_loader::FontContext;
@@ -136,6 +137,15 @@ pub struct FastRender {
     /// Default background color for rendering
     background_color: Rgba,
 
+    /// Default viewport width for render()
+    default_width: u32,
+
+    /// Default viewport height for render()
+    default_height: u32,
+
+    /// Device pixel ratio used for media queries and resolution-dependent resources
+    device_pixel_ratio: f32,
+
     /// Base URL used for resolving links/targets
     base_url: Option<String>,
 }
@@ -144,6 +154,9 @@ impl std::fmt::Debug for FastRender {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FastRender")
             .field("background_color", &self.background_color)
+            .field("default_width", &self.default_width)
+            .field("default_height", &self.default_height)
+            .field("device_pixel_ratio", &self.device_pixel_ratio)
             .field("base_url", &self.base_url)
             .finish_non_exhaustive()
     }
@@ -173,6 +186,9 @@ pub struct FastRenderConfig {
     /// Default viewport height (used when not specified)
     pub default_height: u32,
 
+    /// Device pixel ratio used for media queries and resolution-dependent resources
+    pub device_pixel_ratio: f32,
+
     /// Base URL used to resolve relative resource references (images, CSS)
     pub base_url: Option<String>,
 }
@@ -183,6 +199,7 @@ impl Default for FastRenderConfig {
             background_color: Rgba::WHITE,
             default_width: 800,
             default_height: 600,
+            device_pixel_ratio: 1.0,
             base_url: None,
         }
     }
@@ -251,6 +268,12 @@ impl FastRenderBuilder {
         self
     }
 
+    /// Sets the device pixel ratio used for media queries and image-set selection.
+    pub fn device_pixel_ratio(mut self, dpr: f32) -> Self {
+        self.config.device_pixel_ratio = dpr;
+        self
+    }
+
     /// Builds the FastRender instance
     pub fn build(self) -> Result<FastRender> {
         FastRender::with_config(self.config)
@@ -291,6 +314,12 @@ impl FastRenderConfig {
     pub fn with_default_viewport(mut self, width: u32, height: u32) -> Self {
         self.default_width = width;
         self.default_height = height;
+        self
+    }
+
+    /// Sets the device pixel ratio used for media queries and image-set selection.
+    pub fn with_device_pixel_ratio(mut self, dpr: f32) -> Self {
+        self.device_pixel_ratio = dpr;
         self
     }
 
@@ -401,6 +430,9 @@ impl FastRender {
             layout_engine,
             image_cache,
             background_color: config.background_color,
+            default_width: config.default_width,
+            default_height: config.default_height,
+            device_pixel_ratio: config.device_pixel_ratio,
             base_url: config.base_url.clone(),
         })
     }
@@ -574,7 +606,9 @@ impl FastRender {
 
         // Apply styles to create styled tree
         let target_fragment = self.current_target_fragment();
-        let styled_tree = apply_styles_with_target(dom, &stylesheet, target_fragment.as_deref());
+        let media_ctx =
+            MediaContext::screen(width as f32, height as f32).with_device_pixel_ratio(self.device_pixel_ratio);
+        let styled_tree = apply_styles_with_media_and_target(dom, &stylesheet, &media_ctx, target_fragment.as_deref());
 
         // Generate box tree
         let mut box_tree = generate_box_tree(&styled_tree);
@@ -622,13 +656,14 @@ impl FastRender {
     /// let pixmap = renderer.paint(&fragment_tree, 800, 600)?;
     /// ```
     pub fn paint(&self, fragment_tree: &FragmentTree, width: u32, height: u32) -> Result<Pixmap> {
-        paint_tree_with_resources(
+        paint_tree_with_resources_scaled(
             fragment_tree,
             width,
             height,
             self.background_color,
             self.font_context.clone(),
             self.image_cache.clone(),
+            self.device_pixel_ratio,
         )
     }
 
@@ -702,7 +737,7 @@ impl FastRender {
 
     fn resolve_intrinsic_for_replaced(&self, replaced_box: &mut ReplacedBox, style: &ComputedStyle, alt: Option<&str>) {
         match &mut replaced_box.replaced_type {
-            ReplacedType::Image { src, alt: stored_alt } => {
+            ReplacedType::Image { src, alt: stored_alt, .. } => {
                 let needs_intrinsic = replaced_box.intrinsic_size.is_none();
                 let needs_ratio = replaced_box.aspect_ratio.is_none();
                 let mut have_resource_dimensions = false;
@@ -915,7 +950,7 @@ impl FastRender {
     ///
     /// Uses the viewport size configured in `FastRenderConfig` (default: 800x600).
     pub fn render(&mut self, html: &str) -> Result<Vec<u8>> {
-        self.render_to_png(html, 800, 600)
+        self.render_to_png(html, self.default_width, self.default_height)
     }
 }
 
@@ -935,8 +970,17 @@ mod tests {
     use super::*;
     use crate::layout::contexts::inline::line_builder::TextItem;
     use crate::text::pipeline::ShapingPipeline;
+    use crate::tree::fragment_tree::{FragmentContent, FragmentTree};
     use crate::ComputedStyle;
+    use image::load_from_memory;
     use std::sync::Arc;
+
+    fn text_color_for(tree: &FragmentTree, needle: &str) -> Option<Rgba> {
+        tree.iter_fragments().find_map(|frag| match &frag.content {
+            FragmentContent::Text { text, .. } if text.contains(needle) => frag.style.as_ref().map(|s| s.color),
+            _ => None,
+        })
+    }
 
     // =========================================================================
     // Creation Tests (these should always pass)
@@ -992,6 +1036,7 @@ mod tests {
         assert_eq!(config.background_color.r, 100);
         assert_eq!(config.default_width, 1920);
         assert_eq!(config.default_height, 1080);
+        assert!((config.device_pixel_ratio - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -1013,6 +1058,71 @@ mod tests {
         let renderer = FastRender::new().unwrap();
         let _layout_engine = renderer.layout_engine();
         // Just verify we can access it
+    }
+
+    #[test]
+    fn builder_sets_device_pixel_ratio() {
+        let renderer = FastRender::builder()
+            .device_pixel_ratio(2.0)
+            .build()
+            .expect("renderer with custom dpr");
+        assert!((renderer.device_pixel_ratio - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn render_scales_output_for_device_pixel_ratio() {
+        let mut renderer = FastRender::builder()
+            .viewport_size(50, 30)
+            .device_pixel_ratio(2.0)
+            .build()
+            .unwrap();
+        let png = renderer.render("<div></div>").unwrap();
+        let image = load_from_memory(&png).unwrap();
+        assert_eq!(image.width(), 100);
+        assert_eq!(image.height(), 60);
+    }
+
+    #[test]
+    fn render_scales_output_for_fractional_device_pixel_ratio() {
+        let mut renderer = FastRender::builder()
+            .viewport_size(40, 10)
+            .device_pixel_ratio(1.5)
+            .build()
+            .unwrap();
+        let png = renderer.render("<div></div>").unwrap();
+        let image = load_from_memory(&png).unwrap();
+        assert_eq!(image.width(), 60);
+        assert_eq!(image.height(), 15);
+    }
+
+    #[test]
+    fn layout_document_uses_viewport_for_media_queries() {
+        let mut renderer = FastRender::new().unwrap();
+        let html = r#"
+            <style>
+                @media (max-width: 600px) { body { color: rgb(255, 0, 0); } }
+                @media (min-width: 601px) { body { color: rgb(0, 0, 255); } }
+            </style>
+            <body>hi</body>
+        "#;
+        let dom = renderer.parse_html(html).unwrap();
+
+        let small = renderer.layout_document(&dom, 500, 800).unwrap();
+        let small_color = text_color_for(&small, "hi").expect("color for small viewport");
+        assert_eq!(small_color, Rgba::rgb(255, 0, 0));
+
+        let large = renderer.layout_document(&dom, 800, 800).unwrap();
+        let large_color = text_color_for(&large, "hi").expect("color for large viewport");
+        assert_eq!(large_color, Rgba::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn render_uses_configured_default_viewport() {
+        let mut renderer = FastRender::builder().viewport_size(320, 240).build().unwrap();
+        let png = renderer.render("<div></div>").unwrap();
+        let image = load_from_memory(&png).unwrap();
+        assert_eq!(image.width(), 320);
+        assert_eq!(image.height(), 240);
     }
 
     // =========================================================================
@@ -1100,6 +1210,7 @@ mod tests {
             ReplacedType::Image {
                 src: String::new(),
                 alt: Some(alt_text.to_string()),
+                srcset: Vec::new(),
             },
             None,
             None,

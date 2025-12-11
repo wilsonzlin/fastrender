@@ -1058,9 +1058,10 @@ mod tests {
         let layout = PositionedLayout::new();
 
         let mut style = default_style();
-        style.will_change = crate::style::types::WillChange::Hints(vec![crate::style::types::WillChangeHint::Property(
-            "opacity".into(),
-        )]);
+        style.will_change =
+            crate::style::types::WillChange::Hints(vec![crate::style::types::WillChangeHint::Property(
+                "opacity".into(),
+            )]);
 
         assert!(layout.creates_stacking_context(&style));
     }

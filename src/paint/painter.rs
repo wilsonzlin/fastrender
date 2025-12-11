@@ -2108,9 +2108,10 @@ impl Painter {
 
         // Try to render actual content for images and SVG
         match replaced_type {
-            ReplacedType::Image { src, alt } => {
+            ReplacedType::Image { alt, .. } => {
+                let chosen_src = replaced_type.image_source_for_scale(self.scale);
                 if self.paint_image_from_src(
-                    src,
+                    chosen_src,
                     style,
                     content_rect.x(),
                     content_rect.y(),
@@ -4642,6 +4643,7 @@ mod tests {
     use crate::style::ComputedStyle;
     use crate::text::font_loader::FontContext;
     use crate::Position;
+    use crate::tree::box_tree::SrcsetCandidate;
     use std::sync::Arc;
 
     fn make_empty_tree() -> FragmentTree {
@@ -5179,6 +5181,7 @@ mod tests {
                 replaced_type: ReplacedType::Image {
                     src: String::new(),
                     alt: Some("alt".to_string()),
+                    srcset: Vec::new(),
                 },
                 box_id: None,
             },
@@ -5261,6 +5264,52 @@ mod tests {
             color_at(&pixmap, 5, 5),
             (0, 255, 0, 255),
             "poster content should paint instead of placeholder"
+        );
+    }
+
+    fn svg_data_url(color: &str) -> String {
+        format!(
+            "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'><rect width='1' height='1' fill='{color}'/></svg>"
+        )
+    }
+
+    #[test]
+    fn srcset_chooses_best_density_for_device_scale() {
+        let red = svg_data_url("red");
+        let blue = svg_data_url("blue");
+
+        let replaced = ReplacedType::Image {
+            src: red.clone(),
+            alt: None,
+            srcset: vec![
+                SrcsetCandidate {
+                    url: red.clone(),
+                    density: 1.0,
+                },
+                SrcsetCandidate {
+                    url: blue.clone(),
+                    density: 2.0,
+                },
+            ],
+        };
+
+        let style = ComputedStyle::default();
+        let mut painter = Painter::with_resources_scaled(
+            2,
+            2,
+            Rgba::WHITE,
+            FontContext::new(),
+            ImageCache::new(),
+            2.0,
+        )
+        .expect("painter");
+        painter.paint_replaced(&replaced, Some(&style), 0.0, 0.0, 1.0, 1.0);
+
+        let px = painter.pixmap.pixel(0, 0).unwrap();
+        assert_eq!(
+            (px.red(), px.green(), px.blue()),
+            (0, 0, 255),
+            "2x density should pick the blue candidate at scale 2.0"
         );
     }
 

@@ -53,8 +53,8 @@ use crate::layout::utils::{content_size_from_box_sizing, resolve_offset_for_posi
 use crate::style::computed::PositionedStyle;
 use crate::style::position::Position;
 use crate::style::values::LengthOrAuto;
-use crate::text::font_loader::FontContext;
 use crate::style::ComputedStyle;
+use crate::text::font_loader::FontContext;
 use crate::tree::fragment_tree::FragmentNode;
 
 use super::contexts::positioned::ContainingBlock;
@@ -166,7 +166,12 @@ impl AbsoluteLayout {
         style: &ComputedStyle,
         containing_block: &ContainingBlock,
     ) -> PositionedStyle {
-        resolve_positioned_style(style, containing_block, containing_block.viewport_size(), &self.font_context)
+        resolve_positioned_style(
+            style,
+            containing_block,
+            containing_block.viewport_size(),
+            &self.font_context,
+        )
     }
 
     /// Performs complete absolute layout calculation

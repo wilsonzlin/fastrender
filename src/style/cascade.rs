@@ -14,7 +14,7 @@ use crate::style::defaults::{get_default_styles_for_element, parse_color_attribu
 use crate::style::display::Display;
 use crate::style::grid::finalize_grid_placement;
 use crate::style::media::MediaContext;
-use crate::style::properties::apply_declaration;
+use crate::style::properties::{apply_declaration, with_image_set_dpr};
 use crate::style::{normalize_language_tag, ComputedStyle};
 use selectors::context::{QuirksMode, SelectorCaches};
 use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
@@ -137,7 +137,9 @@ pub fn apply_styles_with_media_and_target(
     }
 
     with_target_fragment(target_fragment, || {
-        apply_styles_internal(dom, &all_rules, &ComputedStyle::default(), 16.0)
+        with_image_set_dpr(media_ctx.device_pixel_ratio, || {
+            apply_styles_internal(dom, &all_rules, &ComputedStyle::default(), 16.0)
+        })
     })
 }
 
@@ -487,7 +489,6 @@ mod tests {
     use crate::css::types::StyleSheet;
     use crate::dom::DomNodeType;
     use crate::style::color::Rgba;
-    use crate::style::CursorKeyword;
     use crate::style::computed::Visibility;
     use crate::style::display::Display;
     use crate::style::float::Float;
@@ -495,6 +496,7 @@ mod tests {
         LineBreak, ListStylePosition, ListStyleType, TextCombineUpright, TextDecorationLine, TextUnderlineOffset,
         TextUnderlinePosition, UnicodeBidi, WhiteSpace, WillChange, WillChangeHint,
     };
+    use crate::style::CursorKeyword;
 
     fn element_with_style(style: &str) -> DomNode {
         DomNode {
@@ -606,6 +608,27 @@ mod tests {
         assert!(matches!(
             styled.styles.unicode_bidi,
             crate::style::types::UnicodeBidi::Normal
+        ));
+    }
+
+    #[test]
+    fn image_set_selection_uses_media_context_dpr() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let stylesheet =
+            parse_stylesheet("div { background-image: image-set(url(\"lo.png\") 1x, url(\"hi.png\") 2x); }").unwrap();
+        let media = MediaContext::screen(800.0, 600.0).with_device_pixel_ratio(2.0);
+        let styled = apply_styles_with_media(&dom, &stylesheet, &media);
+
+        assert!(matches!(
+            styled.styles.background_layers.get(0).and_then(|l| l.image.as_ref()),
+            Some(crate::style::types::BackgroundImage::Url(url)) if url == "hi.png"
         ));
     }
 

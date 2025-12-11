@@ -417,8 +417,8 @@ pub fn is_valid_custom_property_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::values::LengthUnit;
     use crate::style::values::Length;
+    use crate::style::values::LengthUnit;
 
     fn make_props(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs
@@ -566,7 +566,10 @@ mod tests {
         if let VarResolutionResult::Resolved(PropertyValue::Multiple(list)) = resolved {
             assert_eq!(list.len(), 3); // url, comma token, gradient
             assert!(matches!(list[0], PropertyValue::Url(ref u) if u == "image.png"));
-            assert!(matches!(list[2], PropertyValue::LinearGradient { .. } | PropertyValue::RepeatingLinearGradient { .. }));
+            assert!(matches!(
+                list[2],
+                PropertyValue::LinearGradient { .. } | PropertyValue::RepeatingLinearGradient { .. }
+            ));
         } else {
             panic!("Expected Multiple for background layers, got {:?}", resolved);
         }

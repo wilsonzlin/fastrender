@@ -43,6 +43,7 @@ use taffy::tree::{NodeId as TaffyNodeId, TaffyTree};
 use crate::geometry::Rect;
 use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutConstraints};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
+use crate::layout::utils::resolve_font_relative_length;
 use crate::style::display::Display as CssDisplay;
 use crate::style::grid::validate_area_rectangles;
 use crate::style::types::{
@@ -52,7 +53,6 @@ use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
-use crate::layout::utils::resolve_font_relative_length;
 
 #[derive(Clone, Copy)]
 enum Axis {
@@ -957,10 +957,16 @@ impl FormattingContext for GridFormattingContext {
 
         // Position out-of-flow children against the appropriate containing block.
         if !positioned_children.is_empty() {
-            let padding_left =
-                self.resolve_length_for_width(box_node.style.padding_left, constraints.width().unwrap_or(0.0), &box_node.style);
-            let padding_top =
-                self.resolve_length_for_width(box_node.style.padding_top, constraints.width().unwrap_or(0.0), &box_node.style);
+            let padding_left = self.resolve_length_for_width(
+                box_node.style.padding_left,
+                constraints.width().unwrap_or(0.0),
+                &box_node.style,
+            );
+            let padding_top = self.resolve_length_for_width(
+                box_node.style.padding_top,
+                constraints.width().unwrap_or(0.0),
+                &box_node.style,
+            );
             let border_left = self.resolve_length_for_width(
                 box_node.style.border_left_width,
                 constraints.width().unwrap_or(0.0),
@@ -1002,13 +1008,15 @@ impl FormattingContext for GridFormattingContext {
                 style.position = crate::style::position::Position::Static;
                 layout_child.style = Arc::new(style);
 
-                let factory = crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
-                    self.font_context.clone(),
-                    self.viewport_size,
-                    cb,
-                );
-                let fc_type =
-                    layout_child.formatting_context().unwrap_or(crate::style::display::FormattingContextType::Block);
+                let factory =
+                    crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
+                        self.font_context.clone(),
+                        self.viewport_size,
+                        cb,
+                    );
+                let fc_type = layout_child
+                    .formatting_context()
+                    .unwrap_or(crate::style::display::FormattingContextType::Block);
                 let fc = factory.create(fc_type);
                 let child_constraints = LayoutConstraints::new(
                     CrateAvailableSpace::Definite(padding_rect.size.width),
@@ -1016,11 +1024,18 @@ impl FormattingContext for GridFormattingContext {
                 );
                 let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
 
-                let positioned_style =
-                    crate::layout::absolute_positioning::resolve_positioned_style(&child.style, &cb, self.viewport_size, &self.font_context);
+                let positioned_style = crate::layout::absolute_positioning::resolve_positioned_style(
+                    &child.style,
+                    &cb,
+                    self.viewport_size,
+                    &self.font_context,
+                );
                 let static_pos = padding_origin;
-                let input =
-                    crate::layout::absolute_positioning::AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, static_pos);
+                let input = crate::layout::absolute_positioning::AbsoluteLayoutInput::new(
+                    positioned_style,
+                    child_fragment.bounds.size,
+                    static_pos,
+                );
                 let result = abs.layout_absolute(&input, &cb)?;
                 child_fragment.bounds = crate::geometry::Rect::new(result.position, result.size);
                 fragment.children.push(child_fragment);
@@ -1176,7 +1191,8 @@ mod tests {
         let viewport = crate::geometry::Size::new(300.0, 300.0);
         let cb_rect = crate::geometry::Rect::from_xywh(20.0, 30.0, 150.0, 150.0);
         let cb = crate::layout::contexts::positioned::ContainingBlock::with_viewport(cb_rect, viewport);
-        let fc = GridFormattingContext::with_viewport_and_cb(viewport, cb, crate::text::font_loader::FontContext::new());
+        let fc =
+            GridFormattingContext::with_viewport_and_cb(viewport, cb, crate::text::font_loader::FontContext::new());
         let constraints = LayoutConstraints::definite(100.0, 100.0);
         let fragment = fc.layout(&grid, &constraints).unwrap();
 

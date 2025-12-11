@@ -98,7 +98,10 @@ impl LengthUnit {
     /// assert!(!LengthUnit::Em.is_absolute());
     /// ```
     pub fn is_absolute(self) -> bool {
-        matches!(self, Self::Px | Self::Pt | Self::Pc | Self::In | Self::Cm | Self::Mm | Self::Q)
+        matches!(
+            self,
+            Self::Px | Self::Pt | Self::Pc | Self::In | Self::Cm | Self::Mm | Self::Q
+        )
     }
 
     /// Returns true if this is a font-relative unit (em, rem, ex, ch)

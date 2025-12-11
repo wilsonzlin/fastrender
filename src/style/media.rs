@@ -1008,6 +1008,12 @@ impl MediaContext {
         }
     }
 
+    /// Returns a new context with the given device pixel ratio.
+    pub fn with_device_pixel_ratio(mut self, dpr: f32) -> Self {
+        self.device_pixel_ratio = if dpr.is_finite() && dpr > 0.0 { dpr } else { 1.0 };
+        self
+    }
+
     /// Creates a print context with given dimensions
     ///
     /// Sets defaults for printing:
@@ -1079,9 +1085,8 @@ impl MediaContext {
     }
 
     /// Sets the device pixel ratio
-    pub fn with_dpr(mut self, dpr: f32) -> Self {
-        self.device_pixel_ratio = dpr;
-        self
+    pub fn with_dpr(self, dpr: f32) -> Self {
+        self.with_device_pixel_ratio(dpr)
     }
 
     /// Sets the color scheme preference

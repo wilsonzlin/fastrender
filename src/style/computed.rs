@@ -607,7 +607,8 @@ impl PositionedStyle {
     /// Returns true if this element creates a stacking context
     ///
     pub fn creates_stacking_context(&self) -> bool {
-        if (self.is_positioned() && self.z_index.is_some()) || matches!(self.position, Position::Fixed | Position::Sticky)
+        if (self.is_positioned() && self.z_index.is_some())
+            || matches!(self.position, Position::Fixed | Position::Sticky)
         {
             return true;
         }
@@ -945,7 +946,9 @@ mod tests {
         assert!(style.creates_stacking_context());
 
         style = PositionedStyle::default();
-        style.filter.push(FilterFunction::Blur(crate::style::values::Length::px(2.0)));
+        style
+            .filter
+            .push(FilterFunction::Blur(crate::style::values::Length::px(2.0)));
         assert!(style.creates_stacking_context());
 
         style = PositionedStyle::default();
@@ -957,9 +960,7 @@ mod tests {
         assert!(style.creates_stacking_context());
 
         style = PositionedStyle::default();
-        style.will_change = WillChange::Hints(vec![crate::style::types::WillChangeHint::Property(
-            "transform".into(),
-        )]);
+        style.will_change = WillChange::Hints(vec![crate::style::types::WillChangeHint::Property("transform".into())]);
         assert!(style.creates_stacking_context());
 
         style = PositionedStyle::default();

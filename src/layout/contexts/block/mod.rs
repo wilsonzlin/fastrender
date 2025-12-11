@@ -31,15 +31,14 @@ use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
 use crate::layout::contexts::block::width::MarginValue;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::InlineFormattingContext;
-use crate::layout::float_context::{FloatContext, FloatSide};
 use crate::layout::contexts::positioned::{ContainingBlock, PositionedLayout};
+use crate::layout::float_context::{FloatContext, FloatSide};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::utils::{
     border_size_from_box_sizing, compute_replaced_size, content_size_from_box_sizing, resolve_font_relative_length,
     resolve_length_with_percentage,
 };
 use crate::style::display::FormattingContextType;
-use std::sync::Arc;
 use crate::style::float::Float;
 use crate::style::position::Position;
 use crate::style::values::Length;
@@ -47,6 +46,7 @@ use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::tree::box_tree::{BoxNode, BoxType, ReplacedBox};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
+use std::sync::Arc;
 
 use margin_collapse::MarginCollapseContext;
 use width::compute_block_width;
@@ -103,11 +103,7 @@ impl BlockFormattingContext {
     /// Creates a new BlockFormattingContext
     pub fn new() -> Self {
         let viewport = crate::geometry::Size::new(800.0, 600.0);
-        Self::with_font_context_viewport_and_cb(
-            FontContext::new(),
-            viewport,
-            ContainingBlock::viewport(viewport),
-        )
+        Self::with_font_context_viewport_and_cb(FontContext::new(), viewport, ContainingBlock::viewport(viewport))
     }
 
     /// Creates a BlockFormattingContext backed by a specific font context so text
@@ -444,7 +440,7 @@ impl BlockFormattingContext {
             self.viewport_size,
         );
         // Check for border/padding that prevents margin collapse with first child
-            let parent_has_top_separation = resolve_length_for_width(
+        let parent_has_top_separation = resolve_length_for_width(
             parent.style.border_top_width,
             containing_width,
             &parent.style,
@@ -733,8 +729,11 @@ impl BlockFormattingContext {
                         self.viewport_size,
                         &self.font_context,
                     );
-                    fragment = PositionedLayout::new()
-                        .apply_relative_positioning(&fragment, &positioned_style, &relative_cb)?;
+                    fragment = PositionedLayout::new().apply_relative_positioning(
+                        &fragment,
+                        &positioned_style,
+                        &relative_cb,
+                    )?;
                 }
                 fragments.push(fragment);
                 continue;
@@ -782,8 +781,11 @@ impl BlockFormattingContext {
                         self.viewport_size,
                         &self.font_context,
                     );
-                    fragment = PositionedLayout::new()
-                        .apply_relative_positioning(&fragment, &positioned_style, &relative_cb)?;
+                    fragment = PositionedLayout::new().apply_relative_positioning(
+                        &fragment,
+                        &positioned_style,
+                        &relative_cb,
+                    )?;
                 }
                 fragments.push(fragment);
             } else {
@@ -998,7 +1000,12 @@ impl FormattingContext for BlockFormattingContext {
             let abs = crate::layout::absolute_positioning::AbsoluteLayout::new();
             let parent_padding_cb = ContainingBlock::with_viewport(padding_rect, self.viewport_size);
 
-            for PositionedCandidate { node: child, source, static_position } in positioned_children {
+            for PositionedCandidate {
+                node: child,
+                source,
+                static_position,
+            } in positioned_children
+            {
                 let cb = match source {
                     ContainingBlockSource::ParentPadding => parent_padding_cb,
                     ContainingBlockSource::Explicit(cb) => cb,
@@ -1009,12 +1016,14 @@ impl FormattingContext for BlockFormattingContext {
                     cb,
                 );
                 // Layout the child as if it were in normal flow to obtain its intrinsic size.
-            let mut layout_child = child.clone();
-            let mut style = (*layout_child.style).clone();
-            style.position = Position::Static;
-            layout_child.style = Arc::new(style);
+                let mut layout_child = child.clone();
+                let mut style = (*layout_child.style).clone();
+                style.position = Position::Static;
+                layout_child.style = Arc::new(style);
 
-                let fc_type = layout_child.formatting_context().unwrap_or(FormattingContextType::Block);
+                let fc_type = layout_child
+                    .formatting_context()
+                    .unwrap_or(FormattingContextType::Block);
                 let fc = factory.create(fc_type);
                 let child_constraints = LayoutConstraints::new(
                     AvailableSpace::Definite(padding_size.width),
@@ -1062,8 +1071,8 @@ impl FormattingContext for BlockFormattingContext {
                 self.viewport_size,
                 &self.font_context,
             );
-            fragment = PositionedLayout::new()
-                .apply_relative_positioning(&fragment, &positioned_style, &containing_block)?;
+            fragment =
+                PositionedLayout::new().apply_relative_positioning(&fragment, &positioned_style, &containing_block)?;
         }
 
         Ok(fragment)
@@ -1269,8 +1278,8 @@ mod tests {
     use crate::layout::contexts::inline::InlineFormattingContext;
     use crate::layout::formatting_context::IntrinsicSizingMode;
     use crate::style::display::Display;
-    use crate::style::position::Position;
     use crate::style::display::FormattingContextType;
+    use crate::style::position::Position;
     use crate::style::types::{ListStylePosition, ListStyleType};
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
@@ -1356,8 +1365,7 @@ mod tests {
         relative_style.width = Some(Length::px(100.0));
         relative_style.height = Some(Length::px(40.0));
 
-        let child =
-            BoxNode::new_block(Arc::new(relative_style), FormattingContextType::Block, vec![]);
+        let child = BoxNode::new_block(Arc::new(relative_style), FormattingContextType::Block, vec![]);
         let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![child]);
         let constraints = LayoutConstraints::definite(300.0, 200.0);
 
@@ -1381,8 +1389,7 @@ mod tests {
         relative_style.width = Some(Length::px(40.0));
         relative_style.height = Some(Length::px(10.0));
 
-        let child =
-            BoxNode::new_block(Arc::new(relative_style), FormattingContextType::Block, vec![]);
+        let child = BoxNode::new_block(Arc::new(relative_style), FormattingContextType::Block, vec![]);
         let mut root_style = ComputedStyle::default();
         root_style.display = Display::Block;
         root_style.height = Some(Length::px(120.0));
@@ -1395,7 +1402,6 @@ mod tests {
         assert_eq!(child_fragment.bounds.x(), 100.0);
         assert_eq!(child_fragment.bounds.y(), 30.0);
     }
-
 
     #[test]
     fn percentage_height_uses_definite_containing_block() {

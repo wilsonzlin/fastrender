@@ -9,15 +9,15 @@ use fastrender::style::types::{
     BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle, Containment,
 };
 use fastrender::style::values::Length;
+use fastrender::tree::box_tree::ReplacedType;
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode};
-use fastrender::{Color, ComputedStyle, Rgba};
 use fastrender::{
     BlendMode, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FillRoundedRectItem,
     GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem,
     OpacityItem, PaintTextItem as TextItem, RadialGradientItem, StrokeRectItem, StrokeRoundedRectItem, Transform2D,
     TransformItem,
 };
-use fastrender::tree::box_tree::ReplacedType;
+use fastrender::{Color, ComputedStyle, Rgba};
 use std::sync::Arc;
 
 // ============================================================================
@@ -1159,14 +1159,10 @@ fn paint_containment_clips_stacking_context() {
     style.border_bottom_right_radius = Length::px(5.0);
     style.border_bottom_left_radius = Length::px(5.0);
 
-    let fragment = fastrender::FragmentNode::new_block_styled(
-        Rect::from_xywh(10.0, 20.0, 50.0, 30.0),
-        vec![],
-        Arc::new(style),
-    );
+    let fragment =
+        fastrender::FragmentNode::new_block_styled(Rect::from_xywh(10.0, 20.0, 50.0, 30.0), vec![], Arc::new(style));
 
-    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new()
-        .build_with_stacking_tree(&fragment);
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build_with_stacking_tree(&fragment);
     let items = list.items();
 
     let clip_start = items

@@ -522,6 +522,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "img".into(),
                 alt: None,
+                srcset: Vec::new(),
             },
             intrinsic_size: Some(Size::new(640.0, 480.0)),
             aspect_ratio: None,
@@ -539,6 +540,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "".to_string(),
                 alt: None,
+                srcset: Vec::new(),
             },
             intrinsic_size: None,
             aspect_ratio: Some(2.0),
@@ -558,6 +560,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "".to_string(),
                 alt: None,
+                srcset: Vec::new(),
             },
             intrinsic_size: Some(Size::new(120.0, 0.0)),
             aspect_ratio: Some(2.0),
@@ -578,6 +581,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "".to_string(),
                 alt: None,
+                srcset: Vec::new(),
             },
             intrinsic_size: None,
             aspect_ratio: None,
@@ -595,6 +599,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "".to_string(),
                 alt: None,
+                srcset: Vec::new(),
             },
             intrinsic_size: Some(Size::new(120.0, 0.0)),
             aspect_ratio: None,
@@ -612,6 +617,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "".to_string(),
                 alt: None,
+                srcset: Vec::new(),
             },
             intrinsic_size: Some(Size::new(0.0, 80.0)),
             aspect_ratio: None,
@@ -632,6 +638,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "img".into(),
                 alt: None,
+                srcset: Vec::new(),
             },
             intrinsic_size: Some(Size::new(100.0, 50.0)),
             aspect_ratio: Some(2.0),
@@ -651,6 +658,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "".to_string(),
                 alt: None,
+                srcset: Vec::new(),
             },
             intrinsic_size: Some(Size::new(100.0, 50.0)),
             aspect_ratio: Some(2.0),
@@ -671,6 +679,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "img".into(),
                 alt: None,
+                srcset: Vec::new(),
             },
             intrinsic_size: Some(Size::new(200.0, 200.0)),
             aspect_ratio: None,
@@ -696,6 +705,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "img".into(),
                 alt: None,
+                srcset: Vec::new(),
             },
             intrinsic_size: Some(Size::new(120.0, 80.0)),
             aspect_ratio: Some(1.5),
@@ -721,6 +731,7 @@ mod tests {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
                 src: "img".into(),
                 alt: None,
+                srcset: Vec::new(),
             },
             intrinsic_size: Some(Size::new(300.0, 150.0)),
             aspect_ratio: Some(2.0),

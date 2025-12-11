@@ -70,6 +70,7 @@ pub struct DisplayListBuilder {
     viewport: Option<(f32, f32)>,
     font_ctx: FontContext,
     shaper: ShapingPipeline,
+    device_pixel_ratio: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -111,6 +112,7 @@ impl DisplayListBuilder {
             viewport: None,
             font_ctx: FontContext::new(),
             shaper: ShapingPipeline::new(),
+            device_pixel_ratio: 1.0,
         }
     }
 
@@ -122,6 +124,7 @@ impl DisplayListBuilder {
             viewport: None,
             font_ctx: FontContext::new(),
             shaper: ShapingPipeline::new(),
+            device_pixel_ratio: 1.0,
         }
     }
 
@@ -146,6 +149,17 @@ impl DisplayListBuilder {
     pub fn with_font_context(mut self, font_ctx: FontContext) -> Self {
         self.font_ctx = font_ctx;
         self
+    }
+
+    /// Sets the device pixel ratio for density selection (e.g., srcset/image-set).
+    pub fn with_device_pixel_ratio(mut self, dpr: f32) -> Self {
+        self.device_pixel_ratio = if dpr.is_finite() && dpr > 0.0 { dpr } else { 1.0 };
+        self
+    }
+
+    /// Updates the device pixel ratio in place.
+    pub fn set_device_pixel_ratio(&mut self, dpr: f32) {
+        self.device_pixel_ratio = if dpr.is_finite() && dpr > 0.0 { dpr } else { 1.0 };
     }
 
     /// Sets the viewport size for resolving viewport-relative units (vw/vh) in object-position.
@@ -982,7 +996,7 @@ impl DisplayListBuilder {
 
             FragmentContent::Replaced { replaced_type, .. } => {
                 let sources: Vec<&str> = match replaced_type {
-                    ReplacedType::Image { src, .. } => vec![src.as_str()],
+                    ReplacedType::Image { .. } => vec![replaced_type.image_source_for_scale(self.device_pixel_ratio)],
                     ReplacedType::Video { src, poster } => {
                         let mut list = Vec::new();
                         if let Some(p) = poster.as_deref() {
@@ -2282,6 +2296,7 @@ mod tests {
             ReplacedType::Image {
                 src: src.to_string(),
                 alt: None,
+                srcset: Vec::new(),
             },
         )
     }
@@ -2588,7 +2603,9 @@ mod tests {
 
         let mut style = ComputedStyle::default();
         style.set_background_layers(vec![BackgroundLayer {
-            image: Some(BackgroundImage::Url(path.file_name().unwrap().to_str().unwrap().to_string())),
+            image: Some(BackgroundImage::Url(
+                path.file_name().unwrap().to_str().unwrap().to_string(),
+            )),
             repeat: BackgroundRepeat::no_repeat(),
             ..BackgroundLayer::default()
         }]);
@@ -2847,6 +2864,7 @@ mod tests {
                 replaced_type: ReplacedType::Image {
                     src: "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E".to_string(),
                     alt: None,
+                    srcset: Vec::new(),
                 },
             },
             children: vec![],
@@ -2887,6 +2905,7 @@ mod tests {
                 replaced_type: ReplacedType::Image {
                     src: "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E".to_string(),
                     alt: None,
+                    srcset: Vec::new(),
                 },
             },
             children: vec![],
@@ -2915,6 +2934,7 @@ mod tests {
                 replaced_type: ReplacedType::Image {
                     src: "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E".to_string(),
                     alt: None,
+                    srcset: Vec::new(),
                 },
             },
             children: vec![],
@@ -2941,6 +2961,7 @@ mod tests {
                 replaced_type: ReplacedType::Image {
                     src: String::new(),
                     alt: Some("alt text".to_string()),
+                    srcset: Vec::new(),
                 },
             },
             children: vec![],
@@ -2964,6 +2985,7 @@ mod tests {
             ReplacedType::Image {
                 src: String::new(),
                 alt: None,
+                srcset: Vec::new(),
             },
         );
         let builder = DisplayListBuilder::new();

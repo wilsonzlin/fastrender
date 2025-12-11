@@ -14,7 +14,7 @@ use crate::style::display::{Display, FormattingContextType};
 use crate::style::types::{ListStyleType, TextTransform};
 use crate::style::ComputedStyle;
 use crate::tree::anonymous::AnonymousBoxCreator;
-use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, MarkerContent, ReplacedBox, ReplacedType};
+use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, MarkerContent, ReplacedBox, ReplacedType, SrcsetCandidate};
 use crate::tree::debug::DebugInfo;
 use std::sync::Arc;
 
@@ -63,6 +63,9 @@ pub struct DOMNode {
     /// Alternative text for replaced elements (e.g., <img alt="...">)
     pub alt: Option<String>,
 
+    /// Srcset candidates for replaced elements
+    pub srcset: Option<String>,
+
     /// Poster image for video elements
     pub poster: Option<String>,
 }
@@ -80,6 +83,7 @@ impl DOMNode {
             intrinsic_size: None,
             src: None,
             alt: None,
+            srcset: None,
             poster: None,
         }
     }
@@ -96,6 +100,7 @@ impl DOMNode {
             intrinsic_size: None,
             src: None,
             alt: None,
+            srcset: None,
             poster: None,
         }
     }
@@ -139,6 +144,7 @@ impl DOMNode {
             intrinsic_size,
             src: Some(src.into()),
             alt: None,
+            srcset: None,
             poster: None,
         }
     }
@@ -250,10 +256,15 @@ impl DOMNode {
         let tag = self.tag_name.as_ref()?;
         let src = self.src.clone().unwrap_or_default();
         let alt = self.alt.clone().filter(|s| !s.is_empty());
+        let srcset = self
+            .srcset
+            .as_ref()
+            .map(|v| parse_srcset(v))
+            .unwrap_or_default();
         let poster = self.poster.clone().filter(|s| !s.is_empty());
 
         match tag.as_str() {
-            "img" => Some(ReplacedType::Image { src, alt }),
+            "img" => Some(ReplacedType::Image { src, alt, srcset }),
             "video" => Some(ReplacedType::Video { src, poster }),
             "canvas" => Some(ReplacedType::Canvas),
             "svg" => Some(ReplacedType::Svg { content: src }),
@@ -261,6 +272,35 @@ impl DOMNode {
             _ => None,
         }
     }
+}
+
+fn parse_srcset(attr: &str) -> Vec<SrcsetCandidate> {
+    attr.split(',')
+        .filter_map(|candidate| {
+            let trimmed = candidate.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            let mut parts = trimmed.split_whitespace();
+            let url = parts.next()?.to_string();
+            let mut density = 1.0;
+            if let Some(desc) = parts.next() {
+                let d = desc.trim();
+                if let Some(raw) = d.strip_suffix('x') {
+                    if let Ok(val) = raw.parse::<f32>() {
+                        density = val;
+                    }
+                } else if let Some(raw) = d.strip_suffix("dppx") {
+                    if let Ok(val) = raw.parse::<f32>() {
+                        density = val;
+                    }
+                } else if d.ends_with('w') {
+                    // Width descriptors require sizes; without it, fall back to default density.
+                }
+            }
+            Some(SrcsetCandidate { url, density })
+        })
+        .collect()
 }
 
 /// Configuration for box generation
@@ -1135,6 +1175,7 @@ fn create_pseudo_element_box(
                     replaced_type: ReplacedType::Image {
                         src: url.clone(),
                         alt: None,
+                        srcset: Vec::new(),
                     },
                     intrinsic_size: None,
                     aspect_ratio: None,
@@ -1268,7 +1309,11 @@ fn marker_content_from_style(
         }
         if let Some(src) = image {
             let replaced = ReplacedBox {
-                replaced_type: ReplacedType::Image { src, alt: None },
+                replaced_type: ReplacedType::Image {
+                    src,
+                    alt: None,
+                    srcset: Vec::new(),
+                },
                 intrinsic_size: None,
                 aspect_ratio: None,
             };
@@ -1283,6 +1328,7 @@ fn marker_content_from_style(
                 replaced_type: ReplacedType::Image {
                     src: url.clone(),
                     alt: None,
+                    srcset: Vec::new(),
                 },
                 intrinsic_size: None,
                 aspect_ratio: None,
@@ -1416,18 +1462,31 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
     let src = styled.node.get_attribute("src").unwrap_or_default();
     let alt = styled.node.get_attribute("alt").filter(|s| !s.is_empty());
     let poster = styled.node.get_attribute("poster").filter(|s| !s.is_empty());
+    let srcset_attr = styled.node.get_attribute("srcset");
+    let srcset = srcset_attr
+        .as_ref()
+        .map(|s| parse_srcset(s))
+        .unwrap_or_default();
     let data_attr = styled.node.get_attribute("data").unwrap_or_default();
 
     // Determine replaced type
     let replaced_type = match tag.to_lowercase().as_str() {
-        "img" => ReplacedType::Image { src, alt },
+        "img" => ReplacedType::Image {
+            src,
+            alt,
+            srcset,
+        },
         "video" => ReplacedType::Video { src, poster },
         "canvas" => ReplacedType::Canvas,
         "svg" => ReplacedType::Svg { content: String::new() },
         "iframe" => ReplacedType::Iframe { src },
         "embed" => ReplacedType::Embed { src },
         "object" => ReplacedType::Object { data: data_attr },
-        _ => ReplacedType::Image { src, alt },
+        _ => ReplacedType::Image {
+            src,
+            alt,
+            srcset: Vec::new(),
+        },
     };
 
     // Get intrinsic size from attributes when provided
@@ -2233,6 +2292,7 @@ mod tests {
             ReplacedType::Image {
                 src: "test.png".to_string(),
                 alt: None,
+                srcset: Vec::new(),
             },
             Some(Size::new(100.0, 100.0)),
             Some(1.0),

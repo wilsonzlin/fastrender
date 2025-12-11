@@ -590,7 +590,8 @@ mod tests {
 
     #[test]
     fn tokenize_background_ignores_commas_in_functions() {
-        let value = "linear-gradient(to right, color-mix(in srgb, red 30%, blue) 20%, green 80%), url(\"foo.png\") no-repeat";
+        let value =
+            "linear-gradient(to right, color-mix(in srgb, red 30%, blue) 20%, green 80%), url(\"foo.png\") no-repeat";
         let parsed = parse_property_value("background", value).expect("background");
         let PropertyValue::Multiple(parts) = parsed else {
             panic!("expected layered background tokens");
@@ -652,22 +653,10 @@ mod tests {
     fn parses_min_max_clamp_lengths() {
         assert_eq!(parse_length("min(10px, 20px)").unwrap(), Length::px(10.0));
         assert_eq!(parse_length("max(10px, 20px)").unwrap(), Length::px(20.0));
-        assert_eq!(
-            parse_length("clamp(10px, 5px, 15px)").unwrap(),
-            Length::px(10.0)
-        );
-        assert_eq!(
-            parse_length("clamp(10px, 12px, 15px)").unwrap(),
-            Length::px(12.0)
-        );
-        assert_eq!(
-            parse_length("clamp(10px, 30px, 15px)").unwrap(),
-            Length::px(15.0)
-        );
-        assert_eq!(
-            parse_length("min(10%, 20%)").unwrap(),
-            Length::percent(10.0)
-        );
+        assert_eq!(parse_length("clamp(10px, 5px, 15px)").unwrap(), Length::px(10.0));
+        assert_eq!(parse_length("clamp(10px, 12px, 15px)").unwrap(), Length::px(12.0));
+        assert_eq!(parse_length("clamp(10px, 30px, 15px)").unwrap(), Length::px(15.0));
+        assert_eq!(parse_length("min(10%, 20%)").unwrap(), Length::percent(10.0));
     }
 }
 
@@ -685,7 +674,11 @@ pub fn parse_length(s: &str) -> Option<Length> {
     }
 
     let lower = s.to_ascii_lowercase();
-    if lower.starts_with("calc(") || lower.starts_with("min(") || lower.starts_with("max(") || lower.starts_with("clamp(") {
+    if lower.starts_with("calc(")
+        || lower.starts_with("min(")
+        || lower.starts_with("max(")
+        || lower.starts_with("clamp(")
+    {
         if let Some(len) = parse_function_length(s) {
             return Some(len);
         }
@@ -728,21 +721,19 @@ struct CalcComponent {
 fn parse_function_length(input: &str) -> Option<Length> {
     let mut parser_input = ParserInput::new(input);
     let mut parser = Parser::new(&mut parser_input);
-    let result = parser.parse_entirely(|p| {
-        match p.next()? {
-            Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => p.parse_nested_block(parse_calc_sum),
-            Token::Function(ref name) if name.eq_ignore_ascii_case("min") => {
-                p.parse_nested_block(|block| parse_min_max(block, MathFn::Min))
-            }
-            Token::Function(ref name) if name.eq_ignore_ascii_case("max") => {
-                p.parse_nested_block(|block| parse_min_max(block, MathFn::Max))
-            }
-            Token::Function(ref name) if name.eq_ignore_ascii_case("clamp") => p.parse_nested_block(parse_clamp),
-            _ => Err(cssparser::ParseError {
-                kind: cssparser::ParseErrorKind::Custom(()),
-                location: p.current_source_location(),
-            }),
+    let result = parser.parse_entirely(|p| match p.next()? {
+        Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => p.parse_nested_block(parse_calc_sum),
+        Token::Function(ref name) if name.eq_ignore_ascii_case("min") => {
+            p.parse_nested_block(|block| parse_min_max(block, MathFn::Min))
         }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("max") => {
+            p.parse_nested_block(|block| parse_min_max(block, MathFn::Max))
+        }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("clamp") => p.parse_nested_block(parse_clamp),
+        _ => Err(cssparser::ParseError {
+            kind: cssparser::ParseErrorKind::Custom(()),
+            location: p.current_source_location(),
+        }),
     });
 
     match result {
@@ -771,15 +762,13 @@ fn calc_component_to_length(component: CalcComponent) -> Option<Length> {
 fn parse_calc_sum<'i, 't>(input: &mut Parser<'i, 't>) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
     let mut left = parse_calc_product(input)?;
     loop {
-        let op = match input.try_parse(|p| {
-            match p.next()? {
-                Token::Delim('+') => Ok(1.0),
-                Token::Delim('-') => Ok(-1.0),
-                _ => Err(cssparser::ParseError {
-                    kind: cssparser::ParseErrorKind::Custom(()),
-                    location: p.current_source_location(),
-                }),
-            }
+        let op = match input.try_parse(|p| match p.next()? {
+            Token::Delim('+') => Ok(1.0),
+            Token::Delim('-') => Ok(-1.0),
+            _ => Err(cssparser::ParseError {
+                kind: cssparser::ParseErrorKind::Custom(()),
+                location: p.current_source_location(),
+            }),
         }) {
             Ok(sign) => sign,
             Err(_) => break,
@@ -790,20 +779,16 @@ fn parse_calc_sum<'i, 't>(input: &mut Parser<'i, 't>) -> Result<CalcComponent, c
     Ok(left)
 }
 
-fn parse_calc_product<'i, 't>(
-    input: &mut Parser<'i, 't>,
-) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
+fn parse_calc_product<'i, 't>(input: &mut Parser<'i, 't>) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
     let mut left = parse_calc_factor(input)?;
     loop {
-        let op = match input.try_parse(|p| {
-            match p.next()? {
-                Token::Delim('*') => Ok('*'),
-                Token::Delim('/') => Ok('/'),
-                _ => Err(cssparser::ParseError {
-                    kind: cssparser::ParseErrorKind::Custom(()),
-                    location: p.current_source_location(),
-                }),
-            }
+        let op = match input.try_parse(|p| match p.next()? {
+            Token::Delim('*') => Ok('*'),
+            Token::Delim('/') => Ok('/'),
+            _ => Err(cssparser::ParseError {
+                kind: cssparser::ParseErrorKind::Custom(()),
+                location: p.current_source_location(),
+            }),
         }) {
             Ok(op) => op,
             Err(_) => break,
@@ -814,12 +799,13 @@ fn parse_calc_product<'i, 't>(
     Ok(left)
 }
 
-fn parse_calc_factor<'i, 't>(
-    input: &mut Parser<'i, 't>,
-) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
+fn parse_calc_factor<'i, 't>(input: &mut Parser<'i, 't>) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
     let token = input.next()?;
     match token {
-        Token::Number { value, .. } => Ok(CalcComponent { value: *value, unit: None }),
+        Token::Number { value, .. } => Ok(CalcComponent {
+            value: *value,
+            unit: None,
+        }),
         Token::Dimension { value, ref unit, .. } => {
             let unit = unit.as_ref().to_ascii_lowercase();
             let unit = match unit.as_str() {
@@ -854,18 +840,14 @@ fn parse_calc_factor<'i, 't>(
             value: *unit_value * 100.0,
             unit: Some(LengthUnit::Percent),
         }),
-        Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
-            input.parse_nested_block(parse_calc_sum)
-        }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => input.parse_nested_block(parse_calc_sum),
         Token::Function(ref name) if name.eq_ignore_ascii_case("min") => {
             input.parse_nested_block(|block| parse_min_max(block, MathFn::Min))
         }
         Token::Function(ref name) if name.eq_ignore_ascii_case("max") => {
             input.parse_nested_block(|block| parse_min_max(block, MathFn::Max))
         }
-        Token::Function(ref name) if name.eq_ignore_ascii_case("clamp") => {
-            input.parse_nested_block(parse_clamp)
-        }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("clamp") => input.parse_nested_block(parse_clamp),
         Token::ParenthesisBlock => input.parse_nested_block(parse_calc_sum),
         Token::Delim('+') => parse_calc_factor(input),
         Token::Delim('-') => {

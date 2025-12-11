@@ -27,15 +27,15 @@
 //! - HTML 5.2 Section 4.9: Tabular data
 
 use crate::geometry::{Point, Rect};
-use crate::layout::absolute_positioning::{AbsoluteLayout, AbsoluteLayoutInput, resolve_positioned_style};
+use crate::layout::absolute_positioning::{resolve_positioned_style, AbsoluteLayout, AbsoluteLayoutInput};
 use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
 use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::factory::FormattingContextFactory;
+use crate::layout::contexts::positioned::ContainingBlock;
 use crate::layout::contexts::table::column_distribution::{
     distribute_spanning_cell_width, distribute_spanning_percentage, ColumnConstraints, ColumnDistributor,
     DistributionMode,
 };
-use crate::layout::contexts::positioned::ContainingBlock;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::color::Rgba;
 use crate::style::computed::Visibility;
@@ -2383,8 +2383,7 @@ impl FormattingContext for TableFormattingContext {
                 let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
                 let positioned_style =
                     resolve_positioned_style(&child.style, &cb, self.viewport_size, self.factory.font_context());
-                let input =
-                    AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, cb.rect.origin);
+                let input = AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, cb.rect.origin);
                 let result = abs.layout_absolute(&input, &cb)?;
                 child_fragment.bounds = Rect::new(result.position, result.size);
                 fragment.children.push(child_fragment);
@@ -2406,7 +2405,10 @@ impl FormattingContext for TableFormattingContext {
                     let padding_origin = Point::new(border_left + pad_left, border_top + pad_top);
                     let padding_rect = Rect::new(
                         padding_origin,
-                        crate::geometry::Size::new(width - border_left - border_right, height - border_top - border_bottom),
+                        crate::geometry::Size::new(
+                            width - border_left - border_right,
+                            height - border_top - border_bottom,
+                        ),
                     );
                     ContainingBlock::with_viewport(padding_rect, self.viewport_size)
                 } else {
@@ -3519,13 +3521,13 @@ mod tests {
     use crate::style::computed::Visibility;
     use crate::style::display::Display;
     use crate::style::display::FormattingContextType;
+    use crate::style::position::Position;
     use crate::style::types::{BorderCollapse, BorderStyle, CaptionSide, Direction, TableLayout, VerticalAlign};
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
+    use crate::text::font_loader::FontContext;
     use crate::tree::debug::DebugInfo;
     use std::sync::Arc;
-    use crate::style::position::Position;
-    use crate::text::font_loader::FontContext;
 
     fn create_test_style() -> Arc<ComputedStyle> {
         Arc::new(ComputedStyle::default())
@@ -5217,8 +5219,7 @@ mod tests {
         let viewport = crate::geometry::Size::new(400.0, 400.0);
         let cb_rect = crate::geometry::Rect::from_xywh(30.0, 40.0, 200.0, 200.0);
         let cb = ContainingBlock::with_viewport(cb_rect, viewport);
-        let factory =
-            FormattingContextFactory::with_font_context_viewport_and_cb(FontContext::new(), viewport, cb);
+        let factory = FormattingContextFactory::with_font_context_viewport_and_cb(FontContext::new(), viewport, cb);
         let fc = TableFormattingContext::with_factory(factory);
 
         let constraints = LayoutConstraints::definite(120.0, 120.0);

@@ -365,7 +365,9 @@ mod tests {
         let base_url = format!("file://{}", dir.display());
         cache.set_base_url(base_url);
 
-        let image = cache.load(path.file_name().unwrap().to_str().unwrap()).expect("load via base");
+        let image = cache
+            .load(path.file_name().unwrap().to_str().unwrap())
+            .expect("load via base");
         assert_eq!(image.width(), 1);
         assert_eq!(image.height(), 1);
     }
