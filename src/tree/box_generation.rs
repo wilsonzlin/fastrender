@@ -2009,6 +2009,40 @@ mod tests {
     }
 
     #[test]
+    fn fallback_marker_resets_box_model_but_inherits_color() {
+        let mut li_style = ComputedStyle::default();
+        li_style.display = Display::ListItem;
+        li_style.color = crate::style::color::Rgba::RED;
+        li_style.padding_left = crate::style::values::Length::px(20.0);
+        li_style.margin_left = Some(crate::style::values::Length::px(10.0));
+
+        let styled = StyledNode {
+            node: dom::DomNode {
+                node_type: dom::DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            },
+            styles: li_style,
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children: vec![],
+        };
+
+        let tree = generate_box_tree(&styled);
+        let marker = match tree.root.children.first().expect("marker").box_type {
+            BoxType::Marker(_) => tree.root.children.first().unwrap(),
+            _ => panic!("expected marker as first child"),
+        };
+        assert_eq!(marker.style.color, crate::style::color::Rgba::RED);
+        assert!(marker.style.padding_left.is_zero());
+        assert!(marker.style.margin_left.unwrap().is_zero());
+        assert_eq!(marker.style.background_color, crate::style::color::Rgba::TRANSPARENT);
+    }
+
+    #[test]
     fn test_validate_box_tree_valid() {
         let style = default_style();
 
