@@ -125,6 +125,16 @@ impl DisplayListBuilder {
         }
     }
 
+    /// Sets the base URL used for resolving relative image URLs when decoding backgrounds/replaced elements.
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        let url = base_url.into();
+        self.image_cache = self.image_cache.take().map(|mut cache| {
+            cache.set_base_url(url);
+            cache
+        });
+        self
+    }
+
     /// Sets the font context for shaping text into the display list.
     pub fn with_font_context(mut self, font_ctx: FontContext) -> Self {
         self.font_ctx = font_ctx;
@@ -2224,6 +2234,7 @@ mod tests {
     };
     use crate::style::ComputedStyle;
     use crate::tree::box_tree::ReplacedType;
+    use std::path::PathBuf;
 
     fn create_block_fragment(x: f32, y: f32, width: f32, height: f32) -> FragmentNode {
         FragmentNode::new_block(Rect::from_xywh(x, y, width, height), vec![])
@@ -2522,6 +2533,41 @@ mod tests {
         assert!(
             push_idx.unwrap() < gradient_idx.unwrap() && gradient_idx.unwrap() < pop_idx.unwrap(),
             "blend mode should wrap background layer"
+        );
+    }
+
+    #[test]
+    fn background_url_resolves_relative_to_base() {
+        // Create a 1x1 PNG on disk.
+        let mut path: PathBuf = std::env::temp_dir();
+        path.push(format!(
+            "fastrender_dl_base_url_{}_{}.png",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let img = image::RgbaImage::from_raw(1, 1, vec![0, 0, 0, 255]).expect("raw rgba");
+        img.save(&path).expect("write png");
+
+        let dir = path.parent().unwrap().to_path_buf();
+        let base_url = format!("file://{}", dir.display());
+
+        let mut style = ComputedStyle::default();
+        style.set_background_layers(vec![BackgroundLayer {
+            image: Some(BackgroundImage::Url(path.file_name().unwrap().to_str().unwrap().to_string())),
+            repeat: BackgroundRepeat::no_repeat(),
+            ..BackgroundLayer::default()
+        }]);
+
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
+        let list = DisplayListBuilder::new().with_base_url(base_url).build(&fragment);
+
+        // Expect one image item in the list (background image decoded).
+        assert!(
+            list.items().iter().any(|item| matches!(item, DisplayItem::Image(_))),
+            "background image should decode via base URL"
         );
     }
 

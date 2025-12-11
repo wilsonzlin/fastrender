@@ -11,6 +11,7 @@
 - Backdrop filters in the display-list renderer now expand by filter outsets so blur/drop-shadow samples include pixels outside the element bounds; masked copy-back ensures the effect remains clipped to the element. Added a regression for blur sampling outside the filtered region.
 - Blend-mode regressions now check HSL component preservation (hue/saturation/luminance) instead of exact RGB matches to allow for tiny-skia rounding while still enforcing the CSS compositing semantics.
 - Image cache resolves relative URLs against the configured base URL; added a regression that loads a file:// PNG via base URL resolution.
+- Display-list builder exposes a base-URL setter and now resolves background image URLs against the configured base; regression covers loading a relative PNG through the base URL.
 - Added HSL reference helpers and blend-mode regressions (hue/saturation/color/luminosity) in the display-list renderer to ensure advanced blend modes follow the CSS compositing definitions.
 - Canvas blend mode conversion now maps Hue/Saturation/Color/Luminosity to tiny-skia equivalents so PushBlendMode honors the full CSS set; regression asserts `color` blend preserves destination luminance while keeping source hue.
 - `unicode-bidi: plaintext` no longer forces the entire paragraph to first-strong when only inline isolates are present; bidi reordering keeps the paragraph base direction while FSI/PDI isolates handle inline plaintext content. Added a regression for inline plaintext followed by LTR text.
