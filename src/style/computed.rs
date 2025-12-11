@@ -23,11 +23,15 @@
 //! assert_eq!(style.font_size, 16.0); // Default font size
 //! ```
 
+use crate::css::types::Transform;
 use crate::geometry::EdgeOffsets;
 use crate::style::color::{Color, Rgba};
 use crate::style::display::Display;
 use crate::style::position::Position;
-use crate::style::types::{BoxSizing, FontSizeAdjust, FontStretch, TextAlignLast, TextIndent, TextJustify};
+use crate::style::types::{
+    BoxSizing, FilterFunction, FontSizeAdjust, FontStretch, Isolation, MixBlendMode, Overflow, TextAlignLast,
+    TextIndent, TextJustify, WillChange,
+};
 use crate::style::values::{Length, LengthOrAuto};
 
 /// Computed CSS styles for an element
@@ -187,6 +191,54 @@ pub struct PositionedStyle {
     /// Initial: 1.0
     /// Range: 0.0 to 1.0
     pub opacity: f32,
+
+    /// CSS filters
+    ///
+    /// CSS: `filter`
+    /// Initial: none
+    pub filter: Vec<FilterFunction>,
+
+    /// Backdrop filters
+    ///
+    /// CSS: `backdrop-filter`
+    /// Initial: none
+    pub backdrop_filter: Vec<FilterFunction>,
+
+    /// Mix blend mode
+    ///
+    /// CSS: `mix-blend-mode`
+    /// Initial: normal
+    pub mix_blend_mode: MixBlendMode,
+
+    /// Isolation
+    ///
+    /// CSS: `isolation`
+    /// Initial: auto
+    pub isolation: Isolation,
+
+    /// Will-change hints
+    ///
+    /// CSS: `will-change`
+    /// Initial: auto
+    pub will_change: WillChange,
+
+    /// Transforms
+    ///
+    /// CSS: `transform`
+    /// Initial: none
+    pub transform: Vec<Transform>,
+
+    /// Overflow on the x axis
+    ///
+    /// CSS: `overflow-x`
+    /// Initial: visible
+    pub overflow_x: Overflow,
+
+    /// Overflow on the y axis
+    ///
+    /// CSS: `overflow-y`
+    /// Initial: visible
+    pub overflow_y: Overflow,
 
     // ===== COLORS =====
     /// Text color
@@ -448,6 +500,14 @@ impl Default for PositionedStyle {
             display: Display::Inline,
             visibility: Visibility::Visible,
             opacity: 1.0,
+            filter: Vec::new(),
+            backdrop_filter: Vec::new(),
+            mix_blend_mode: MixBlendMode::Normal,
+            isolation: Isolation::Auto,
+            will_change: WillChange::default(),
+            transform: Vec::new(),
+            overflow_x: Overflow::Visible,
+            overflow_y: Overflow::Visible,
 
             // Color defaults
             color: Color::Rgba(Rgba::BLACK),
@@ -540,9 +600,48 @@ impl PositionedStyle {
     /// Returns true if this element creates a stacking context
     ///
     pub fn creates_stacking_context(&self) -> bool {
-        (self.is_positioned() && self.z_index.is_some())
-            || matches!(self.position, Position::Fixed | Position::Sticky)
-            || self.opacity < 1.0
+        if (self.is_positioned() && self.z_index.is_some()) || matches!(self.position, Position::Fixed | Position::Sticky)
+        {
+            return true;
+        }
+
+        if self.opacity < 1.0 {
+            return true;
+        }
+
+        if !self.transform.is_empty() {
+            return true;
+        }
+
+        if !self.filter.is_empty() || !self.backdrop_filter.is_empty() {
+            return true;
+        }
+
+        if !matches!(self.mix_blend_mode, crate::style::types::MixBlendMode::Normal) {
+            return true;
+        }
+
+        if matches!(self.isolation, crate::style::types::Isolation::Isolate) {
+            return true;
+        }
+
+        if self.will_change.creates_stacking_context() {
+            return true;
+        }
+
+        if self.is_positioned()
+            && (matches!(
+                self.overflow_x,
+                Overflow::Hidden | Overflow::Scroll | Overflow::Auto | Overflow::Clip
+            ) || matches!(
+                self.overflow_y,
+                Overflow::Hidden | Overflow::Scroll | Overflow::Auto | Overflow::Clip
+            ))
+        {
+            return true;
+        }
+
+        false
     }
 
     // === Display Helpers ===
@@ -828,6 +927,33 @@ mod tests {
 
         style = PositionedStyle::default();
         style.opacity = 0.5;
+        assert!(style.creates_stacking_context());
+
+        style = PositionedStyle::default();
+        style.transform.push(Transform::Rotate(0.5));
+        assert!(style.creates_stacking_context());
+
+        style = PositionedStyle::default();
+        style.filter.push(FilterFunction::Blur(crate::style::values::Length::px(2.0)));
+        assert!(style.creates_stacking_context());
+
+        style = PositionedStyle::default();
+        style.mix_blend_mode = MixBlendMode::Multiply;
+        assert!(style.creates_stacking_context());
+
+        style = PositionedStyle::default();
+        style.isolation = Isolation::Isolate;
+        assert!(style.creates_stacking_context());
+
+        style = PositionedStyle::default();
+        style.will_change = WillChange::Hints(vec![crate::style::types::WillChangeHint::Property(
+            "transform".into(),
+        )]);
+        assert!(style.creates_stacking_context());
+
+        style = PositionedStyle::default();
+        style.position = Position::Absolute;
+        style.overflow_x = Overflow::Hidden;
         assert!(style.creates_stacking_context());
     }
 

@@ -623,19 +623,7 @@ impl PositionedLayout {
     ///
     /// True if the element creates a stacking context
     pub fn creates_stacking_context(&self, style: &PositionedStyle) -> bool {
-        // Positioned with z-index
-        if style.position.is_positioned() && style.z_index.is_some() {
-            return true;
-        }
-
-        // Opacity < 1
-        if style.opacity < 1.0 {
-            return true;
-        }
-
-        // TODO: Add transform, filter, isolation checks when those properties are available
-
-        false
+        style.creates_stacking_context()
     }
 }
 
@@ -1048,6 +1036,30 @@ mod tests {
 
         let mut style = default_style();
         style.opacity = 0.5;
+
+        assert!(layout.creates_stacking_context(&style));
+    }
+
+    #[test]
+    fn test_creates_stacking_context_transform() {
+        let layout = PositionedLayout::new();
+
+        let mut style = default_style();
+        style
+            .transform
+            .push(crate::css::types::Transform::Rotate(std::f32::consts::FRAC_PI_2));
+
+        assert!(layout.creates_stacking_context(&style));
+    }
+
+    #[test]
+    fn test_creates_stacking_context_will_change() {
+        let layout = PositionedLayout::new();
+
+        let mut style = default_style();
+        style.will_change = crate::style::types::WillChange::Hints(vec![crate::style::types::WillChangeHint::Property(
+            "opacity".into(),
+        )]);
 
         assert!(layout.creates_stacking_context(&style));
     }
