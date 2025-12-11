@@ -3202,7 +3202,12 @@ impl InlineFormattingContext {
             } else {
                 first_line.left_offset + indent_offset + lead
             };
-            Point::new(cursor, first_line.y_offset)
+            let start_x = if matches!(first_line.resolved_direction, crate::style::types::Direction::Rtl) {
+                cursor - total_width
+            } else {
+                cursor
+            };
+            Point::new(start_x, first_line.y_offset)
         } else {
             Point::ZERO
         };
@@ -5727,6 +5732,45 @@ mod tests {
             positioned_fragment.bounds.y() >= -0.1 && positioned_fragment.bounds.y() <= 0.1,
             "static position should anchor to first line top; got {}",
             positioned_fragment.bounds.y()
+        );
+    }
+
+    #[test]
+    fn absolute_child_static_position_respects_rtl_alignment() {
+        let mut root_style = ComputedStyle::default();
+        root_style.direction = crate::style::types::Direction::Rtl;
+        root_style.text_align = TextAlign::Start; // maps to right in RTL
+        root_style.font_size = 16.0;
+
+        let mut ib_style = ComputedStyle::default();
+        ib_style.display = Display::InlineBlock;
+        ib_style.width = Some(Length::px(20.0));
+        let inline_block = BoxNode::new_inline_block(Arc::new(ib_style), FormattingContextType::Block, vec![]);
+
+        let positioned_style = {
+            let mut style = ComputedStyle::default();
+            style.position = crate::style::position::Position::Absolute;
+            style.width = Some(Length::px(5.0));
+            style.height = Some(Length::px(5.0));
+            Arc::new(style)
+        };
+        let positioned = BoxNode::new_inline(positioned_style, vec![]);
+
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![positioned, inline_block],
+        );
+        let constraints = LayoutConstraints::definite_width(100.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        let positioned_fragment = fragment.children.last().expect("positioned fragment");
+        // text-align right with 20px inline-block in 100px box -> start at 80px.
+        assert!(
+            (positioned_fragment.bounds.x() - 80.0).abs() < 0.1,
+            "RTL start alignment should place static position at right-aligned start; got {}",
+            positioned_fragment.bounds.x()
         );
     }
 
