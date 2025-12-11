@@ -74,6 +74,7 @@ csscolorparser = "0.6"
 # URL handling
 url = "2.5"
 urlencoding = "2.1"
+encoding_rs = "0.8"
 
 # Error handling
 thiserror = "1.0"

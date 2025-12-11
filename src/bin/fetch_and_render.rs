@@ -3,6 +3,7 @@
 #![allow(clippy::len_zero)]
 
 use fastrender::{Error, FastRender, Result};
+use fastrender::css::encoding::decode_css_bytes;
 use std::env;
 use std::collections::HashSet;
 use std::path::Path;
@@ -12,7 +13,8 @@ fn fetch_url(url: &str) -> Result<String> {
     // Handle file:// URLs
     if url.starts_with("file://") {
         let path = url.strip_prefix("file://").unwrap();
-        return std::fs::read_to_string(path).map_err(|e| Error::Io(e));
+        let bytes = std::fs::read(path).map_err(Error::Io)?;
+        return Ok(decode_css_bytes(&bytes, None));
     }
 
     // Configure agent with timeout for ureq 3.x
@@ -26,12 +28,18 @@ fn fetch_url(url: &str) -> Result<String> {
         .call()
         .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
-    let body = response
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
+
+    let bytes = response
         .body_mut()
-        .read_to_string()
+        .read_to_vec()
         .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
-    Ok(body)
+    Ok(decode_css_bytes(&bytes, content_type.as_deref()))
 }
 
 fn resolve_href(base: &str, href: &str) -> Option<String> {

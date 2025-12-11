@@ -55,6 +55,7 @@
 //! instance per thread.
 
 use crate::css::parser::extract_css;
+use crate::css::encoding::decode_css_bytes;
 use crate::css::types::CssImportLoader;
 use crate::dom::{self, DomNode};
 use crate::error::{Error, RenderError, Result};
@@ -1047,10 +1048,7 @@ impl CssImportLoader for CssImportFetcher {
                     ))
                 })?;
                 let bytes = std::fs::read(&path).map_err(Error::Io)?;
-                Ok(match String::from_utf8(bytes) {
-                    Ok(s) => s,
-                    Err(e) => String::from_utf8_lossy(&e.into_bytes()).into_owned(),
-                })
+                Ok(decode_css_bytes(&bytes, None))
             }
             _ => {
                 let config = ureq::Agent::config_builder()
@@ -1063,15 +1061,18 @@ impl CssImportLoader for CssImportFetcher {
                     .call()
                     .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
 
+                let content_type = response
+                    .headers()
+                    .get("content-type")
+                    .and_then(|h| h.to_str().ok())
+                    .map(|s| s.to_string());
+
                 let bytes = response
                     .body_mut()
                     .read_to_vec()
                     .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
 
-                Ok(match String::from_utf8(bytes) {
-                    Ok(s) => s,
-                    Err(e) => String::from_utf8_lossy(&e.into_bytes()).into_owned(),
-                })
+                Ok(decode_css_bytes(&bytes, content_type.as_deref()))
             }
         }
     }
@@ -1095,16 +1096,19 @@ fn decode_data_url_to_string(data_url: &str) -> Result<String> {
 
     let header = header.trim_start_matches("data:");
     let mut is_base64 = false;
-    let mut charset: Option<&str> = None;
-    for segment in header.split(';') {
+    let mut charset: Option<String> = None;
+    let mut mime: Option<String> = None;
+    for (idx, segment) in header.split(';').enumerate() {
         let seg = segment.trim();
-        if seg.is_empty() || seg.contains('/') {
+        if seg.is_empty() {
             continue;
         }
         if seg.eq_ignore_ascii_case("base64") {
             is_base64 = true;
-        } else if let Some(cs) = seg.strip_prefix("charset=") {
-            charset = Some(cs.trim());
+        } else if seg.to_ascii_lowercase().starts_with("charset=") {
+            charset = seg.split_once('=').map(|(_, v)| v.trim().to_string());
+        } else if idx == 0 && seg.contains('/') {
+            mime = Some(seg.to_string());
         }
     }
 
@@ -1117,24 +1121,14 @@ fn decode_data_url_to_string(data_url: &str) -> Result<String> {
         percent_decode_bytes(payload)?
     };
 
-    decode_bytes_with_charset(&bytes, charset)
-}
+    let content_type = match (mime, charset) {
+        (Some(m), Some(cs)) => Some(format!("{};charset={}", m, cs)),
+        (Some(m), None) => Some(m),
+        (None, Some(cs)) => Some(format!("text/plain;charset={}", cs)),
+        (None, None) => None,
+    };
 
-fn decode_bytes_with_charset(bytes: &[u8], charset: Option<&str>) -> Result<String> {
-    let prefer_utf8 = charset
-        .map(|cs| cs.eq_ignore_ascii_case("utf-8") || cs.eq_ignore_ascii_case("utf8"))
-        .unwrap_or(true);
-
-    if prefer_utf8 {
-        return String::from_utf8(bytes.to_vec())
-            .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::InvalidData, format!("Invalid UTF-8 in data URL: {}", e))));
-    }
-
-    if let Ok(text) = String::from_utf8(bytes.to_vec()) {
-        return Ok(text);
-    }
-
-    Ok(bytes.iter().map(|b| char::from(*b)).collect())
+    Ok(decode_css_bytes(&bytes, content_type.as_deref()))
 }
 
 fn percent_decode_bytes(input: &str) -> Result<Vec<u8>> {

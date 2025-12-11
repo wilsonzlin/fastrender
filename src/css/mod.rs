@@ -6,4 +6,5 @@
 pub mod parser;
 pub mod properties;
 pub mod selectors;
+pub mod encoding;
 pub mod types;
