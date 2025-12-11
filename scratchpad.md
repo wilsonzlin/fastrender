@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Display list regression added for video replaced elements: builder now covered by a test that writes a temporary PNG poster and asserts the display list uses it for `ReplacedType::Video`, cleaning up the temp file afterward.
 - FormattingContextFactory now carries the nearest positioned containing block and threads it into block/inline/flex/grid contexts; flex and newly updated grid contexts lay out out-of-flow abs/fixed children against the inherited containing block when the container itself isn’t positioned, and new regressions cover ancestor CB fallback for both flex and grid.
 - Table formatting context now inherits the nearest positioned containing block and positions out-of-flow abs/fixed children accordingly; positioned tables use their padding box as the CB, and empty tables still lay out positioned descendants. Added a regression for CB inheritance through table layout.
 - Inline formatting context now drops out-of-flow abs/fixed children from line building and places them after layout against the inherited containing block (or the inline’s padding box when positioned), matching block/flex/grid behavior.
@@ -500,7 +501,7 @@
 6. Lists/markers:
    - Implement ::marker property restrictions and inside positioning geometry; round out counter style coverage and marker inheritance edge cases.
 7. Positioning:
-   - Propagate positioned containing blocks through table FC and any remaining formatting contexts; derive static positions from hypothetical in-flow placement even when padding box height is unresolved.
+   - Propagate positioned containing blocks through any remaining formatting contexts; derive static positions from hypothetical in-flow placement even when padding box height is unresolved.
 
 ## Notes
 - Current table code uses `InlineFormattingContext` for cell intrinsic widths; this fails for block/table/replaced content—needs a per-context intrinsic measurement.

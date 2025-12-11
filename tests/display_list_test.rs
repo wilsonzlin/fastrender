@@ -9,13 +9,15 @@ use fastrender::style::types::{
     BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle, Containment,
 };
 use fastrender::style::values::Length;
-use fastrender::{Color, Rgba};
+use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode};
+use fastrender::{Color, ComputedStyle, Rgba};
 use fastrender::{
     BlendMode, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FillRoundedRectItem,
     GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem,
     OpacityItem, PaintTextItem as TextItem, RadialGradientItem, StrokeRectItem, StrokeRoundedRectItem, Transform2D,
     TransformItem,
 };
+use fastrender::tree::box_tree::ReplacedType;
 use std::sync::Arc;
 
 // ============================================================================
@@ -1190,6 +1192,49 @@ fn paint_containment_clips_stacking_context() {
         }
         other => panic!("expected PushClip, got {:?}", other),
     }
+}
+
+#[test]
+fn video_replaced_element_uses_poster_image_in_display_list() {
+    // Create a tiny PNG poster on disk so the display list builder can decode it.
+    let mut poster_path = std::env::temp_dir();
+    poster_path.push(format!(
+        "fastrender_dl_video_poster_{}.png",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut img = image::RgbaImage::new(1, 1);
+    img.put_pixel(0, 0, image::Rgba([0, 0, 0, 0]));
+    img.save(&poster_path).expect("poster image saved");
+
+    let replaced_type = ReplacedType::Video {
+        src: "unused".to_string(),
+        poster: Some(poster_path.to_string_lossy().to_string()),
+    };
+    let style = Arc::new(ComputedStyle::default());
+    let fragment = FragmentNode::new_with_style(
+        Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+        FragmentContent::Replaced {
+            replaced_type: replaced_type.clone(),
+            box_id: None,
+        },
+        vec![],
+        style,
+    );
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    let image = list.items().iter().find_map(|item| {
+        if let DisplayItem::Image(img) = item {
+            Some(img)
+        } else {
+            None
+        }
+    });
+    let image = image.expect("video replaced element should emit an image from poster");
+    assert_eq!(image.dest_rect, Rect::from_xywh(0.0, 0.0, 10.0, 10.0));
+    let _ = std::fs::remove_file(&poster_path);
 }
 
 // ============================================================================
