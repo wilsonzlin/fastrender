@@ -2109,7 +2109,7 @@ impl Painter {
         // Try to render actual content for images and SVG
         match replaced_type {
             ReplacedType::Image { alt, .. } => {
-                let chosen_src = replaced_type.image_source_for_scale(self.scale);
+                let chosen_src = replaced_type.image_source_for_scale(self.scale, Some(content_rect.width()));
                 if self.paint_image_from_src(
                     chosen_src,
                     style,
@@ -4643,7 +4643,7 @@ mod tests {
     use crate::style::ComputedStyle;
     use crate::text::font_loader::FontContext;
     use crate::Position;
-    use crate::tree::box_tree::SrcsetCandidate;
+    use crate::tree::box_tree::{SrcsetCandidate, SrcsetDescriptor};
     use std::sync::Arc;
 
     fn make_empty_tree() -> FragmentTree {
@@ -5284,11 +5284,11 @@ mod tests {
             srcset: vec![
                 SrcsetCandidate {
                     url: red.clone(),
-                    density: 1.0,
+                    descriptor: SrcsetDescriptor::Density(1.0),
                 },
                 SrcsetCandidate {
                     url: blue.clone(),
-                    density: 2.0,
+                    descriptor: SrcsetDescriptor::Density(2.0),
                 },
             ],
         };
@@ -5310,6 +5310,47 @@ mod tests {
             (px.red(), px.green(), px.blue()),
             (0, 0, 255),
             "2x density should pick the blue candidate at scale 2.0"
+        );
+    }
+
+    #[test]
+    fn srcset_width_descriptor_uses_slot_width() {
+        let red = svg_data_url("red");
+        let blue = svg_data_url("blue");
+
+        let replaced = ReplacedType::Image {
+            src: red.clone(),
+            alt: None,
+            srcset: vec![
+                SrcsetCandidate {
+                    url: red.clone(),
+                    descriptor: SrcsetDescriptor::Width(100),
+                },
+                SrcsetCandidate {
+                    url: blue.clone(),
+                    descriptor: SrcsetDescriptor::Width(300),
+                },
+            ],
+        };
+
+        let style = ComputedStyle::default();
+        let mut painter = Painter::with_resources_scaled(
+            120,
+            20,
+            Rgba::WHITE,
+            FontContext::new(),
+            ImageCache::new(),
+            2.0,
+        )
+        .expect("painter");
+
+        painter.paint_replaced(&replaced, Some(&style), 0.0, 0.0, 100.0, 10.0);
+
+        let px = painter.pixmap.pixel(100, 10).unwrap();
+        assert_eq!(
+            (px.red(), px.green(), px.blue()),
+            (0, 0, 255),
+            "with 100px slot at DPR=2, the 300w candidate (density 3) should be chosen"
         );
     }
 

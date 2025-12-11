@@ -14,7 +14,9 @@ use crate::style::display::{Display, FormattingContextType};
 use crate::style::types::{ListStyleType, TextTransform};
 use crate::style::ComputedStyle;
 use crate::tree::anonymous::AnonymousBoxCreator;
-use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, MarkerContent, ReplacedBox, ReplacedType, SrcsetCandidate};
+use crate::tree::box_tree::{
+    BoxNode, BoxTree, BoxType, MarkerContent, ReplacedBox, ReplacedType, SrcsetCandidate, SrcsetDescriptor,
+};
 use crate::tree::debug::DebugInfo;
 use std::sync::Arc;
 
@@ -283,22 +285,33 @@ fn parse_srcset(attr: &str) -> Vec<SrcsetCandidate> {
             }
             let mut parts = trimmed.split_whitespace();
             let url = parts.next()?.to_string();
-            let mut density = 1.0;
-            if let Some(desc) = parts.next() {
+            let mut descriptor: Option<SrcsetDescriptor> = None;
+
+            for desc in parts {
+                if descriptor.is_some() {
+                    // Multiple descriptors are invalid; ignore this candidate.
+                    return None;
+                }
                 let d = desc.trim();
                 if let Some(raw) = d.strip_suffix('x') {
                     if let Ok(val) = raw.parse::<f32>() {
-                        density = val;
+                        descriptor = Some(SrcsetDescriptor::Density(val));
                     }
                 } else if let Some(raw) = d.strip_suffix("dppx") {
                     if let Ok(val) = raw.parse::<f32>() {
-                        density = val;
+                        descriptor = Some(SrcsetDescriptor::Density(val));
                     }
-                } else if d.ends_with('w') {
-                    // Width descriptors require sizes; without it, fall back to default density.
+                } else if let Some(raw) = d.strip_suffix('w') {
+                    if let Ok(val) = raw.parse::<u32>() {
+                        descriptor = Some(SrcsetDescriptor::Width(val));
+                    }
                 }
             }
-            Some(SrcsetCandidate { url, density })
+
+            Some(SrcsetCandidate {
+                url,
+                descriptor: descriptor.unwrap_or(SrcsetDescriptor::Density(1.0)),
+            })
         })
         .collect()
 }

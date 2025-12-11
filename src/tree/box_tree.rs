@@ -110,9 +110,15 @@ pub struct ReplacedBox {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum SrcsetDescriptor {
+    Density(f32),
+    Width(u32),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct SrcsetCandidate {
     pub url: String,
-    pub density: f32,
+    pub descriptor: SrcsetDescriptor,
 }
 
 /// Types of replaced elements
@@ -165,40 +171,58 @@ pub enum ReplacedType {
 }
 
 impl ReplacedType {
-    /// Selects the best image source for the given device scale.
+    /// Selects the best image source for the given device scale and slot width.
     ///
     /// Returns the authored `src` when no better candidate exists.
-    pub fn image_source_for_scale<'a>(&'a self, scale: f32) -> &'a str {
+    pub fn image_source_for_scale<'a>(&'a self, scale: f32, slot_width: Option<f32>) -> &'a str {
         match self {
             ReplacedType::Image { src, srcset, .. } => {
                 if srcset.is_empty() || !scale.is_finite() || scale <= 0.0 {
                     return src;
                 }
                 // Pick the smallest density >= scale; if none, the largest below.
-                let mut best: Option<&SrcsetCandidate> = None;
+                let mut best: Option<(&SrcsetCandidate, f32)> = None;
                 for candidate in srcset {
-                    if candidate.density <= 0.0 || !candidate.density.is_finite() {
-                        continue;
-                    }
-                    match best {
-                        Some(current) if current.density >= scale => {
-                            if candidate.density >= scale && candidate.density < current.density {
-                                best = Some(candidate);
-                            }
+                    let density = candidate.density_for_slot(slot_width);
+                    if let Some(density) = density {
+                        if density <= 0.0 || !density.is_finite() {
+                            continue;
                         }
-                        Some(current) => {
-                            if candidate.density >= scale {
-                                best = Some(candidate);
-                            } else if current.density < scale && candidate.density > current.density {
-                                best = Some(candidate);
+                        match best {
+                            Some((_, current_density)) if current_density >= scale => {
+                                if density >= scale && density < current_density {
+                                    best = Some((candidate, density));
+                                }
                             }
+                            Some((_, current_density)) => {
+                                if density >= scale {
+                                    best = Some((candidate, density));
+                                } else if current_density < scale && density > current_density {
+                                    best = Some((candidate, density));
+                                }
+                            }
+                            None => best = Some((candidate, density)),
                         }
-                        None => best = Some(candidate),
                     }
                 }
-                best.map(|c| c.url.as_str()).unwrap_or(src)
+                best.map(|(c, _)| c.url.as_str()).unwrap_or(src)
             }
             _ => "",
+        }
+    }
+}
+
+impl SrcsetCandidate {
+    pub fn density_for_slot(&self, slot_width: Option<f32>) -> Option<f32> {
+        match self.descriptor {
+            SrcsetDescriptor::Density(d) => Some(d),
+            SrcsetDescriptor::Width(w) => {
+                let slot = slot_width?;
+                if slot <= 0.0 || !slot.is_finite() {
+                    return None;
+                }
+                Some(w as f32 / slot)
+            }
         }
     }
 }

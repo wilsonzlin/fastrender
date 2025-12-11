@@ -996,7 +996,9 @@ impl DisplayListBuilder {
 
             FragmentContent::Replaced { replaced_type, .. } => {
                 let sources: Vec<&str> = match replaced_type {
-                    ReplacedType::Image { .. } => vec![replaced_type.image_source_for_scale(self.device_pixel_ratio)],
+                    ReplacedType::Image { .. } => {
+                        vec![replaced_type.image_source_for_scale(self.device_pixel_ratio, Some(rect.width()))]
+                    }
                     ReplacedType::Video { src, poster } => {
                         let mut list = Vec::new();
                         if let Some(p) = poster.as_deref() {

@@ -736,14 +736,26 @@ impl FastRender {
     }
 
     fn resolve_intrinsic_for_replaced(&self, replaced_box: &mut ReplacedBox, style: &ComputedStyle, alt: Option<&str>) {
-        match &mut replaced_box.replaced_type {
+        let replaced_type_snapshot = replaced_box.replaced_type.clone();
+        match replaced_type_snapshot {
             ReplacedType::Image { src, alt: stored_alt, .. } => {
                 let needs_intrinsic = replaced_box.intrinsic_size.is_none();
                 let needs_ratio = replaced_box.aspect_ratio.is_none();
                 let mut have_resource_dimensions = false;
 
-                if (needs_intrinsic || needs_ratio) && !src.is_empty() {
-                    if let Ok(image) = self.image_cache.load(src) {
+                let chosen_src = if (needs_intrinsic || needs_ratio) && !src.is_empty() {
+                    Some(
+                        replaced_box
+                            .replaced_type
+                            .image_source_for_scale(self.device_pixel_ratio, None)
+                            .to_string(),
+                    )
+                } else {
+                    None
+                };
+
+                if let Some(chosen_src) = chosen_src {
+                    if let Ok(image) = self.image_cache.load(&chosen_src) {
                         let (w, h) = image.dimensions();
                         if w > 0 && h > 0 {
                             let size = Size::new(w as f32, h as f32);
@@ -810,9 +822,9 @@ impl FastRender {
                 if needs_intrinsic || needs_ratio {
                     // Inline SVG content can be rendered directly; otherwise try to load via URL/data URI.
                     let image = if content.trim_start().starts_with('<') {
-                        self.image_cache.render_svg(content)
+                        self.image_cache.render_svg(&content)
                     } else if !content.is_empty() {
-                        self.image_cache.load(content)
+                        self.image_cache.load(&content)
                     } else {
                         Err(crate::error::Error::Image(crate::error::ImageError::LoadFailed {
                             url: "svg".to_string(),
@@ -839,9 +851,9 @@ impl FastRender {
                 let needs_ratio = replaced_box.aspect_ratio.is_none();
                 if (needs_intrinsic || needs_ratio) && !src.is_empty() {
                     let image = if src.trim_start().starts_with('<') {
-                        self.image_cache.render_svg(src)
+                        self.image_cache.render_svg(&src)
                     } else {
-                        self.image_cache.load(src)
+                        self.image_cache.load(&src)
                     };
                     if let Ok(image) = image {
                         let (w, h) = image.dimensions();
