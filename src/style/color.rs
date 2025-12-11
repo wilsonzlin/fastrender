@@ -1492,13 +1492,36 @@ fn parse_mix_component(component: &str) -> Result<(Color, Option<f32>), ColorPar
 
 fn split_top_level_commas(input: &str) -> Vec<&str> {
     let mut parts = Vec::new();
-    let mut depth = 0i32;
+    let mut paren = 0i32;
+    let mut bracket = 0i32;
+    let mut brace = 0i32;
     let mut start = 0usize;
+    let mut in_string: Option<char> = None;
+    let mut escape = false;
     for (idx, ch) in input.char_indices() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if ch == '\\' {
+            escape = true;
+            continue;
+        }
+        if let Some(q) = in_string {
+            if ch == q {
+                in_string = None;
+            }
+            continue;
+        }
         match ch {
-            '(' => depth += 1,
-            ')' => depth -= 1,
-            ',' if depth == 0 => {
+            '"' | '\'' => in_string = Some(ch),
+            '(' => paren += 1,
+            ')' => paren -= 1,
+            '[' => bracket += 1,
+            ']' => bracket -= 1,
+            '{' => brace += 1,
+            '}' => brace -= 1,
+            ',' if paren == 0 && bracket == 0 && brace == 0 => {
                 parts.push(input[start..idx].trim());
                 start = idx + 1;
             }
@@ -2149,6 +2172,15 @@ mod tests {
         // D50 white point should also map to near-white after adaptation
         let white_d50 = Color::parse("color(xyz-d50 0.96422 1 0.82521)").unwrap().to_rgba(Rgba::BLACK);
         assert!(white_d50.r >= 254 && white_d50.g >= 254 && white_d50.b >= 252);
+    }
+
+    #[test]
+    fn split_top_level_commas_respects_strings_and_brackets() {
+        let parts = super::split_top_level_commas("foo('a, b'), bar[baz,qux], color-mix(in srgb, red, blue)");
+        assert_eq!(parts.len(), 3);
+        assert!(parts[0].contains("a, b"));
+        assert!(parts[1].starts_with("bar["));
+        assert!(parts[2].starts_with("color-mix"));
     }
 
     // Error tests

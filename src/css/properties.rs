@@ -10,27 +10,69 @@ use cssparser::{Parser, ParserInput, Token};
 fn tokenize_property_value(value_str: &str, allow_commas: bool) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
-    let mut depth = 0usize;
+    let mut paren = 0i32;
+    let mut bracket = 0i32;
+    let mut brace = 0i32;
+    let mut in_string: Option<char> = None;
+    let mut escape = false;
+
     for ch in value_str.chars() {
+        if escape {
+            current.push(ch);
+            escape = false;
+            continue;
+        }
+        if ch == '\\' {
+            current.push(ch);
+            escape = true;
+            continue;
+        }
+
+        if let Some(q) = in_string {
+            current.push(ch);
+            if ch == q {
+                in_string = None;
+            }
+            continue;
+        }
+
         match ch {
+            '"' | '\'' => {
+                in_string = Some(ch);
+                current.push(ch);
+            }
             '(' => {
-                depth += 1;
+                paren += 1;
                 current.push(ch);
             }
             ')' => {
-                if depth > 0 {
-                    depth -= 1;
-                }
+                paren -= 1;
                 current.push(ch);
             }
-            ',' if allow_commas && depth == 0 => {
+            '[' => {
+                bracket += 1;
+                current.push(ch);
+            }
+            ']' => {
+                bracket -= 1;
+                current.push(ch);
+            }
+            '{' => {
+                brace += 1;
+                current.push(ch);
+            }
+            '}' => {
+                brace -= 1;
+                current.push(ch);
+            }
+            ',' if allow_commas && paren == 0 && bracket == 0 && brace == 0 => {
                 if !current.trim().is_empty() {
                     tokens.push(current.trim().to_string());
                 }
                 tokens.push(",".to_string());
                 current.clear();
             }
-            ch if ch.is_whitespace() && depth == 0 => {
+            ch if ch.is_whitespace() && paren == 0 && bracket == 0 && brace == 0 => {
                 if !current.trim().is_empty() {
                     tokens.push(current.trim().to_string());
                 }
@@ -281,13 +323,37 @@ fn parse_radial_gradient(value: &str, repeating: bool) -> Option<PropertyValue> 
 
 fn split_top_level_commas(input: &str) -> Vec<&str> {
     let mut parts = Vec::new();
-    let mut depth = 0i32;
+    let mut paren = 0i32;
+    let mut bracket = 0i32;
+    let mut brace = 0i32;
     let mut start = 0usize;
+    let mut in_string: Option<char> = None;
+    let mut escape = false;
+
     for (i, ch) in input.char_indices() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if ch == '\\' {
+            escape = true;
+            continue;
+        }
+        if let Some(q) = in_string {
+            if ch == q {
+                in_string = None;
+            }
+            continue;
+        }
         match ch {
-            '(' => depth += 1,
-            ')' => depth -= 1,
-            ',' if depth == 0 => {
+            '"' | '\'' => in_string = Some(ch),
+            '(' => paren += 1,
+            ')' => paren -= 1,
+            '[' => bracket += 1,
+            ']' => bracket -= 1,
+            '{' => brace += 1,
+            '}' => brace -= 1,
+            ',' if paren == 0 && bracket == 0 && brace == 0 => {
                 parts.push(input[start..i].trim());
                 start = i + 1;
             }
@@ -520,6 +586,19 @@ mod tests {
             Color::Mix { .. } => panic!("second stop should not be a mix"),
         }
         assert_eq!(stops[1].position, Some(0.90));
+    }
+
+    #[test]
+    fn tokenize_background_ignores_commas_in_functions() {
+        let value = "linear-gradient(to right, color-mix(in srgb, red 30%, blue) 20%, green 80%), url(\"foo.png\") no-repeat";
+        let parsed = parse_property_value("background", value).expect("background");
+        let PropertyValue::Multiple(parts) = parsed else {
+            panic!("expected layered background tokens");
+        };
+        assert!(matches!(parts[0], PropertyValue::LinearGradient { .. }));
+        assert!(matches!(parts[1], PropertyValue::Keyword(ref k) if k == ","));
+        assert!(matches!(parts[2], PropertyValue::Url(ref u) if u == "foo.png"));
+        assert!(matches!(parts[3], PropertyValue::Keyword(ref k) if k.eq_ignore_ascii_case("no-repeat")));
     }
 
     #[test]
