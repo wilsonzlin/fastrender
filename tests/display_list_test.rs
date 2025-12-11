@@ -48,6 +48,31 @@ fn test_display_list_from_items() {
     assert_eq!(list.len(), 2);
 }
 
+#[test]
+fn fragment_opacity_wraps_display_items() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.opacity = 0.5;
+    style.color = Rgba::BLACK;
+    let fragment = fastrender::FragmentNode {
+        bounds: Rect::from_xywh(0.0, 0.0, 20.0, 10.0),
+        content: fastrender::FragmentContent::Text {
+            text: "hi".to_string(),
+            baseline_offset: 8.0,
+            shaped: None,
+            box_id: None,
+        },
+        children: vec![],
+        style: Some(Arc::new(style)),
+    };
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    let items = list.items();
+    assert_eq!(items.len(), 3, "opacity should wrap content");
+    assert!(matches!(items[0], DisplayItem::PushOpacity(_)));
+    assert!(matches!(items[1], DisplayItem::Text(_)));
+    assert!(matches!(items[2], DisplayItem::PopOpacity));
+}
+
 // ============================================================================
 // FillRect Tests
 // ============================================================================

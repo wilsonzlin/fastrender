@@ -173,6 +173,12 @@ impl DisplayListBuilder {
             }
         }
 
+        let opacity = fragment.style.as_deref().map(|s| s.opacity).unwrap_or(1.0);
+        let push_opacity = opacity < 1.0 - f32::EPSILON;
+        if push_opacity {
+            self.push_opacity(opacity);
+        }
+
         let absolute_rect = Rect::new(
             Point::new(fragment.bounds.origin.x + offset.x, fragment.bounds.origin.y + offset.y),
             fragment.bounds.size,
@@ -196,6 +202,10 @@ impl DisplayListBuilder {
         if let Some(style) = fragment.style.as_deref() {
             self.emit_outline(absolute_rect, style);
         }
+
+        if push_opacity {
+            self.pop_opacity();
+        }
     }
 
     /// Recursively builds display items with clipping support
@@ -204,6 +214,12 @@ impl DisplayListBuilder {
             if !matches!(style.visibility, crate::style::computed::Visibility::Visible) {
                 return;
             }
+        }
+
+        let opacity = fragment.style.as_deref().map(|s| s.opacity).unwrap_or(1.0);
+        let push_opacity = opacity < 1.0 - f32::EPSILON;
+        if push_opacity {
+            self.push_opacity(opacity);
         }
 
         let absolute_rect = Rect::new(
@@ -238,6 +254,10 @@ impl DisplayListBuilder {
 
         if let Some(style) = fragment.style.as_deref() {
             self.emit_outline(absolute_rect, style);
+        }
+
+        if push_opacity {
+            self.pop_opacity();
         }
     }
 
