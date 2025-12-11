@@ -19,6 +19,8 @@ use crate::tree::box_tree::{
     SrcsetDescriptor,
 };
 use crate::tree::debug::DebugInfo;
+use crate::style::values::{Length, LengthUnit};
+use cssparser::{Parser, ParserInput, Token};
 use std::sync::Arc;
 
 /// Simplified DOM node representation
@@ -319,40 +321,6 @@ fn parse_srcset(attr: &str) -> Vec<SrcsetCandidate> {
 
 fn parse_sizes(attr: &str) -> Option<SizesList> {
     use crate::style::media::MediaQuery;
-    use crate::style::values::{Length, LengthUnit};
-
-    fn parse_length(value: &str) -> Option<Length> {
-        let s = value.trim();
-        if s == "0" {
-            return Some(Length::px(0.0));
-        }
-        let units: &[(&str, fn(f32) -> Length)] = &[
-            ("rem", |v| Length::rem(v)),
-            ("em", |v| Length::em(v)),
-            ("vw", |v| Length::new(v, LengthUnit::Vw)),
-            ("vh", |v| Length::new(v, LengthUnit::Vh)),
-            ("vmin", |v| Length::new(v, LengthUnit::Vmin)),
-            ("vmax", |v| Length::new(v, LengthUnit::Vmax)),
-            ("px", |v| Length::px(v)),
-            ("pt", |v| Length::pt(v)),
-            ("pc", |v| Length::pc(v)),
-            ("in", |v| Length::inches(v)),
-            ("cm", |v| Length::cm(v)),
-            ("mm", |v| Length::mm(v)),
-            ("q", |v| Length::q(v)),
-            ("ex", |v| Length::ex(v)),
-            ("ch", |v| Length::ch(v)),
-            ("%", |v| Length::percent(v)),
-        ];
-        for (suffix, ctor) in units {
-            if let Some(raw) = s.strip_suffix(suffix) {
-                if let Ok(val) = raw.trim().parse::<f32>() {
-                    return Some(ctor(val));
-                }
-            }
-        }
-        None
-    }
 
     let mut entries = Vec::new();
     for item in attr.split(',') {
@@ -363,7 +331,7 @@ fn parse_sizes(attr: &str) -> Option<SizesList> {
         let mut parts = trimmed.rsplitn(2, char::is_whitespace);
         let length_part = parts.next().map(str::trim);
         let media_part = parts.next().map(str::trim);
-        let length = match length_part.and_then(parse_length) {
+        let length = match length_part.and_then(parse_sizes_length) {
             Some(l) => l,
             None => continue,
         };
@@ -383,6 +351,61 @@ fn parse_sizes(attr: &str) -> Option<SizesList> {
         None
     } else {
         Some(SizesList { entries })
+    }
+}
+
+fn parse_sizes_length(value: &str) -> Option<Length> {
+    use crate::css::properties::{parse_calc_function_length, parse_clamp_function_length, parse_min_max_function_length};
+    use crate::css::properties::MathFn;
+
+    let mut input = ParserInput::new(value);
+    let mut parser = Parser::new(&mut input);
+
+    let parsed = match parser.next() {
+        Ok(Token::Dimension { value, ref unit, .. }) => {
+            let unit = unit.as_ref().to_ascii_lowercase();
+            match unit.as_str() {
+                "px" => Some(Length::px(*value)),
+                "em" => Some(Length::em(*value)),
+                "rem" => Some(Length::rem(*value)),
+                "ex" => Some(Length::ex(*value)),
+                "ch" => Some(Length::ch(*value)),
+                "pt" => Some(Length::pt(*value)),
+                "pc" => Some(Length::pc(*value)),
+                "in" => Some(Length::inches(*value)),
+                "cm" => Some(Length::cm(*value)),
+                "mm" => Some(Length::mm(*value)),
+                "q" => Some(Length::q(*value)),
+                "vw" => Some(Length::new(*value, LengthUnit::Vw)),
+                "vh" => Some(Length::new(*value, LengthUnit::Vh)),
+                "vmin" => Some(Length::new(*value, LengthUnit::Vmin)),
+                "vmax" => Some(Length::new(*value, LengthUnit::Vmax)),
+                _ => None,
+            }
+        }
+        Ok(Token::Function(ref name)) if name.eq_ignore_ascii_case("calc") => {
+            parse_calc_function_length(&mut parser).ok()
+        }
+        Ok(Token::Function(ref name)) if name.eq_ignore_ascii_case("min") => {
+            parse_min_max_function_length(&mut parser, MathFn::Min).ok()
+        }
+        Ok(Token::Function(ref name)) if name.eq_ignore_ascii_case("max") => {
+            parse_min_max_function_length(&mut parser, MathFn::Max).ok()
+        }
+        Ok(Token::Function(ref name)) if name.eq_ignore_ascii_case("clamp") => {
+            parse_clamp_function_length(&mut parser).ok()
+        }
+        Ok(Token::Percentage { unit_value, .. }) => Some(Length::percent(*unit_value * 100.0)),
+        Ok(Token::Number { value, .. }) if *value == 0.0 => Some(Length::px(0.0)),
+        Err(_) => None,
+        _ => None,
+    }?;
+
+    parser.skip_whitespace();
+    if parser.is_exhausted() {
+        Some(parsed)
+    } else {
+        None
     }
 }
 
