@@ -626,7 +626,8 @@ impl ColumnDistributor {
                 .iter()
                 .map(|(_, pct)| (pct / 100.0) * available_width)
                 .sum();
-            let percent_scale = if requested_percent > 0.0 && requested_percent > percent_budget && percent_budget > 0.0 {
+            let percent_scale = if requested_percent > 0.0 && requested_percent > percent_budget && percent_budget > 0.0
+            {
                 percent_budget / requested_percent
             } else {
                 1.0

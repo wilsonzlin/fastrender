@@ -349,6 +349,15 @@ pub enum CounterStyle {
     /// Decimal with leading zeros (01, 02, ...)
     DecimalLeadingZero,
 
+    /// Uppercase Armenian numerals (Ա, Բ, Գ, ...)
+    Armenian,
+
+    /// Lowercase Armenian numerals (ա, բ, գ, ...)
+    LowerArmenian,
+
+    /// Georgian numerals (ა, ბ, გ, ...)
+    Georgian,
+
     /// Lowercase Roman numerals (i, ii, iii, ...)
     LowerRoman,
 
@@ -393,6 +402,9 @@ impl CounterStyle {
         match self {
             CounterStyle::Decimal => value.to_string(),
             CounterStyle::DecimalLeadingZero => format!("{:02}", value),
+            CounterStyle::Armenian => format_additive(value, ARMENIAN_UPPER, 9999),
+            CounterStyle::LowerArmenian => format_additive(value, ARMENIAN_LOWER, 9999),
+            CounterStyle::Georgian => format_additive(value, GEORGIAN_SYMBOLS, 19999),
             CounterStyle::LowerRoman => to_roman(value).to_lowercase(),
             CounterStyle::UpperRoman => to_roman(value),
             CounterStyle::LowerAlpha => to_alpha(value, false),
@@ -420,6 +432,9 @@ impl CounterStyle {
         match s.trim().to_lowercase().as_str() {
             "decimal" => Some(CounterStyle::Decimal),
             "decimal-leading-zero" => Some(CounterStyle::DecimalLeadingZero),
+            "armenian" | "upper-armenian" => Some(CounterStyle::Armenian),
+            "lower-armenian" => Some(CounterStyle::LowerArmenian),
+            "georgian" => Some(CounterStyle::Georgian),
             "lower-roman" => Some(CounterStyle::LowerRoman),
             "upper-roman" => Some(CounterStyle::UpperRoman),
             "lower-alpha" | "lower-latin" => Some(CounterStyle::LowerAlpha),
@@ -445,6 +460,9 @@ impl fmt::Display for CounterStyle {
         let s = match self {
             CounterStyle::Decimal => "decimal",
             CounterStyle::DecimalLeadingZero => "decimal-leading-zero",
+            CounterStyle::Armenian => "armenian",
+            CounterStyle::LowerArmenian => "lower-armenian",
+            CounterStyle::Georgian => "georgian",
             CounterStyle::LowerRoman => "lower-roman",
             CounterStyle::UpperRoman => "upper-roman",
             CounterStyle::LowerAlpha => "lower-alpha",
@@ -457,6 +475,139 @@ impl fmt::Display for CounterStyle {
         };
         write!(f, "{}", s)
     }
+}
+
+const ARMENIAN_UPPER: &[(i32, &str)] = &[
+    (9000, "Ք"),
+    (8000, "Փ"),
+    (7000, "Ւ"),
+    (6000, "Ց"),
+    (5000, "Ր"),
+    (4000, "Տ"),
+    (3000, "Վ"),
+    (2000, "Ս"),
+    (1000, "Ռ"),
+    (900, "Ջ"),
+    (800, "Պ"),
+    (700, "Չ"),
+    (600, "Ո"),
+    (500, "Շ"),
+    (400, "Ն"),
+    (300, "Յ"),
+    (200, "Մ"),
+    (100, "Ճ"),
+    (90, "Ղ"),
+    (80, "Ձ"),
+    (70, "Հ"),
+    (60, "Կ"),
+    (50, "Ծ"),
+    (40, "Խ"),
+    (30, "Լ"),
+    (20, "Ի"),
+    (10, "Ժ"),
+    (9, "Թ"),
+    (8, "Ը"),
+    (7, "Է"),
+    (6, "Զ"),
+    (5, "Ե"),
+    (4, "Դ"),
+    (3, "Գ"),
+    (2, "Բ"),
+    (1, "Ա"),
+];
+
+const ARMENIAN_LOWER: &[(i32, &str)] = &[
+    (9000, "ք"),
+    (8000, "փ"),
+    (7000, "ւ"),
+    (6000, "ց"),
+    (5000, "ր"),
+    (4000, "տ"),
+    (3000, "վ"),
+    (2000, "ս"),
+    (1000, "ռ"),
+    (900, "ջ"),
+    (800, "պ"),
+    (700, "չ"),
+    (600, "ո"),
+    (500, "շ"),
+    (400, "ն"),
+    (300, "յ"),
+    (200, "մ"),
+    (100, "ճ"),
+    (90, "ղ"),
+    (80, "ձ"),
+    (70, "հ"),
+    (60, "կ"),
+    (50, "ծ"),
+    (40, "խ"),
+    (30, "լ"),
+    (20, "ի"),
+    (10, "ժ"),
+    (9, "թ"),
+    (8, "ը"),
+    (7, "է"),
+    (6, "զ"),
+    (5, "ե"),
+    (4, "դ"),
+    (3, "գ"),
+    (2, "բ"),
+    (1, "ա"),
+];
+
+const GEORGIAN_SYMBOLS: &[(i32, &str)] = &[
+    (10000, "ჵ"),
+    (9000, "ჰ"),
+    (8000, "ჯ"),
+    (7000, "ჴ"),
+    (6000, "ხ"),
+    (5000, "ჭ"),
+    (4000, "წ"),
+    (3000, "ძ"),
+    (2000, "ც"),
+    (1000, "ჩ"),
+    (900, "შ"),
+    (800, "ყ"),
+    (700, "ღ"),
+    (600, "ქ"),
+    (500, "ფ"),
+    (400, "ჳ"),
+    (300, "ტ"),
+    (200, "ს"),
+    (100, "რ"),
+    (90, "ჟ"),
+    (80, "პ"),
+    (70, "ო"),
+    (60, "ჲ"),
+    (50, "ნ"),
+    (40, "მ"),
+    (30, "ლ"),
+    (20, "კ"),
+    (10, "ი"),
+    (9, "თ"),
+    (8, "ჱ"),
+    (7, "ზ"),
+    (6, "ვ"),
+    (5, "ე"),
+    (4, "დ"),
+    (3, "გ"),
+    (2, "ბ"),
+    (1, "ა"),
+];
+
+fn format_additive(mut n: i32, symbols: &[(i32, &str)], max: i32) -> String {
+    if n <= 0 || n > max {
+        return n.to_string();
+    }
+
+    let mut result = String::new();
+    for (value, glyph) in symbols {
+        while n >= *value {
+            result.push_str(glyph);
+            n -= *value;
+        }
+    }
+    result
 }
 
 /// Converts a number to Roman numerals
@@ -1248,6 +1399,25 @@ mod tests {
     }
 
     #[test]
+    fn test_counter_style_armenian_variants() {
+        assert_eq!(CounterStyle::Armenian.format(1), "Ա");
+        assert_eq!(CounterStyle::Armenian.format(1492), "ՌՆՂԲ");
+        assert_eq!(CounterStyle::LowerArmenian.format(58), "ծը");
+        assert_eq!(CounterStyle::LowerArmenian.format(1492), "ռնղբ");
+        assert_eq!(CounterStyle::Armenian.format(0), "0");
+        assert_eq!(CounterStyle::Armenian.format(10000), "10000");
+    }
+
+    #[test]
+    fn test_counter_style_georgian() {
+        assert_eq!(CounterStyle::Georgian.format(1), "ა");
+        assert_eq!(CounterStyle::Georgian.format(24), "კდ");
+        assert_eq!(CounterStyle::Georgian.format(19999), "ჵჰშჟთ");
+        assert_eq!(CounterStyle::Georgian.format(0), "0");
+        assert_eq!(CounterStyle::Georgian.format(20000), "20000");
+    }
+
+    #[test]
     fn test_counter_style_markers() {
         assert_eq!(CounterStyle::Disc.format(1), "•");
         assert_eq!(CounterStyle::Circle.format(1), "◦");
@@ -1261,6 +1431,10 @@ mod tests {
         assert_eq!(CounterStyle::parse("lower-roman"), Some(CounterStyle::LowerRoman));
         assert_eq!(CounterStyle::parse("upper-alpha"), Some(CounterStyle::UpperAlpha));
         assert_eq!(CounterStyle::parse("lower-latin"), Some(CounterStyle::LowerAlpha));
+        assert_eq!(CounterStyle::parse("armenian"), Some(CounterStyle::Armenian));
+        assert_eq!(CounterStyle::parse("upper-armenian"), Some(CounterStyle::Armenian));
+        assert_eq!(CounterStyle::parse("lower-armenian"), Some(CounterStyle::LowerArmenian));
+        assert_eq!(CounterStyle::parse("georgian"), Some(CounterStyle::Georgian));
         assert_eq!(CounterStyle::parse("unknown"), None);
     }
 

@@ -1722,7 +1722,13 @@ pub fn calculate_auto_layout_widths(structure: &mut TableStructure, available_wi
                 let extra = cell.max_width - current_max;
                 let weights: Vec<f32> = structure.columns[span_start..span_end]
                     .iter()
-                    .map(|c| c.max_width.is_finite().then_some(c.max_width).unwrap_or(c.min_width).max(0.0))
+                    .map(|c| {
+                        c.max_width
+                            .is_finite()
+                            .then_some(c.max_width)
+                            .unwrap_or(c.min_width)
+                            .max(0.0)
+                    })
                     .collect();
                 let weight_sum: f32 = weights.iter().sum();
                 let default_weight = if weight_sum == 0.0 {
@@ -1865,7 +1871,11 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
                 })
                 .collect();
             let has_auto = !auto_rows.is_empty();
-            let targets: Vec<usize> = if has_auto { auto_rows.clone() } else { (span_start..span_end).collect() };
+            let targets: Vec<usize> = if has_auto {
+                auto_rows.clone()
+            } else {
+                (span_start..span_end).collect()
+            };
             if !targets.is_empty() {
                 let non_target_sum: f32 = (span_start..span_end)
                     .filter(|idx| !targets.contains(idx))
@@ -1873,11 +1883,7 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
                     .sum();
                 let remaining = (span_height - non_target_sum).max(0.0);
                 let base_sum: f32 = targets.iter().map(|r| row_floor(&structure.rows[*r])).sum();
-                let total_weight = if base_sum > 0.0 {
-                    base_sum
-                } else {
-                    targets.len() as f32
-                };
+                let total_weight = if base_sum > 0.0 { base_sum } else { targets.len() as f32 };
 
                 for &r in &targets {
                     let base = row_floor(&structure.rows[r]);
@@ -2528,7 +2534,11 @@ impl FormattingContext for TableFormattingContext {
                     })
                     .collect();
                 let has_auto = !auto_rows.is_empty();
-                let targets: Vec<usize> = if has_auto { auto_rows.clone() } else { (span_start..span_end).collect() };
+                let targets: Vec<usize> = if has_auto {
+                    auto_rows.clone()
+                } else {
+                    (span_start..span_end).collect()
+                };
                 if !targets.is_empty() {
                     let non_target_sum: f32 = (span_start..span_end)
                         .filter(|idx| !targets.contains(idx))
@@ -4211,7 +4221,8 @@ mod tests {
             DistributionMode::Fixed,
             Some(available_content),
         );
-        let distribution = ColumnDistributor::new(DistributionMode::Fixed).distribute(&column_constraints, available_content);
+        let distribution =
+            ColumnDistributor::new(DistributionMode::Fixed).distribute(&column_constraints, available_content);
         let fragment = tfc.layout(&table, &constraints).expect("table layout");
 
         // Expect first column to take ~50% of available space regardless of second row width.

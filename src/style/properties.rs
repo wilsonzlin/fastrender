@@ -3758,6 +3758,9 @@ fn parse_list_style_type(value: &PropertyValue) -> Option<ListStyleType> {
             "upper-roman" => Some(ListStyleType::UpperRoman),
             "lower-alpha" | "lower-latin" => Some(ListStyleType::LowerAlpha),
             "upper-alpha" | "upper-latin" => Some(ListStyleType::UpperAlpha),
+            "armenian" | "upper-armenian" => Some(ListStyleType::Armenian),
+            "lower-armenian" => Some(ListStyleType::LowerArmenian),
+            "georgian" => Some(ListStyleType::Georgian),
             "lower-greek" => Some(ListStyleType::LowerGreek),
             "none" => Some(ListStyleType::None),
             _ => None,
@@ -5005,6 +5008,30 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert_eq!(style.list_style_type, ListStyleType::LowerGreek);
+
+        let decl = Declaration {
+            property: "list-style-type".to_string(),
+            value: PropertyValue::Keyword("armenian".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.list_style_type, ListStyleType::Armenian);
+
+        let decl = Declaration {
+            property: "list-style-type".to_string(),
+            value: PropertyValue::Keyword("lower-armenian".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.list_style_type, ListStyleType::LowerArmenian);
+
+        let decl = Declaration {
+            property: "list-style-type".to_string(),
+            value: PropertyValue::Keyword("georgian".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.list_style_type, ListStyleType::Georgian);
     }
 
     #[test]

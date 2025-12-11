@@ -1122,6 +1122,9 @@ pub enum ListStyleType {
     UpperRoman,
     LowerAlpha,
     UpperAlpha,
+    Armenian,
+    LowerArmenian,
+    Georgian,
     LowerGreek,
     None,
 }

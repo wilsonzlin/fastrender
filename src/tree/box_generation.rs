@@ -2215,6 +2215,61 @@ mod tests {
     }
 
     #[test]
+    fn markers_support_armenian_and_georgian_styles() {
+        let generator = BoxGenerator::new();
+
+        let mut armenian_style = ComputedStyle::default();
+        armenian_style.display = Display::ListItem;
+        armenian_style.list_style_type = ListStyleType::Armenian;
+        let armenian_style = Arc::new(armenian_style);
+
+        let armenian_list = DOMNode::new_element(
+            "ol",
+            style_with_display(Display::Block),
+            vec![DOMNode::new_element(
+                "li",
+                armenian_style.clone(),
+                vec![DOMNode::new_text("item", armenian_style.clone())],
+            )],
+        );
+        let armenian_tree = generator.generate(&armenian_list).unwrap();
+        if let BoxType::Marker(marker_box) = &armenian_tree.root.children[0].children[0].box_type {
+            if let MarkerContent::Text(text) = &marker_box.content {
+                assert_eq!(text, "Ա ");
+            } else {
+                panic!("expected armenian marker text");
+            }
+        } else {
+            panic!("expected armenian marker");
+        }
+
+        let mut georgian_style = ComputedStyle::default();
+        georgian_style.display = Display::ListItem;
+        georgian_style.list_style_type = ListStyleType::Georgian;
+        let georgian_style = Arc::new(georgian_style);
+
+        let georgian_list = DOMNode::new_element(
+            "ol",
+            style_with_display(Display::Block),
+            vec![DOMNode::new_element(
+                "li",
+                georgian_style.clone(),
+                vec![DOMNode::new_text("item", georgian_style.clone())],
+            )],
+        );
+        let georgian_tree = generator.generate(&georgian_list).unwrap();
+        if let BoxType::Marker(marker_box) = &georgian_tree.root.children[0].children[0].box_type {
+            if let MarkerContent::Text(text) = &marker_box.content {
+                assert_eq!(text, "ა ");
+            } else {
+                panic!("expected georgian marker text");
+            }
+        } else {
+            panic!("expected georgian marker");
+        }
+    }
+
+    #[test]
     fn list_counters_respect_resets_and_custom_increments() {
         let generator = BoxGenerator::new();
 
@@ -2391,6 +2446,9 @@ fn list_marker_text(list_style: ListStyleType, counters: &CounterManager) -> Str
         ListStyleType::UpperRoman => counters.format("list-item", CounterStyle::UpperRoman),
         ListStyleType::LowerAlpha => counters.format("list-item", CounterStyle::LowerAlpha),
         ListStyleType::UpperAlpha => counters.format("list-item", CounterStyle::UpperAlpha),
+        ListStyleType::Armenian => counters.format("list-item", CounterStyle::Armenian),
+        ListStyleType::LowerArmenian => counters.format("list-item", CounterStyle::LowerArmenian),
+        ListStyleType::Georgian => counters.format("list-item", CounterStyle::Georgian),
         ListStyleType::LowerGreek => counters.format("list-item", CounterStyle::LowerGreek),
     };
 

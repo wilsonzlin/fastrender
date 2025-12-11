@@ -10,9 +10,7 @@ use crate::css::parser::{parse_declarations, parse_stylesheet};
 use crate::css::selectors::{PseudoElement, TextDirection};
 use crate::css::types::{Declaration, StyleRule, StyleSheet};
 use crate::dom::{resolve_first_strong_direction, with_target_fragment, DomNode, ElementRef};
-use crate::style::defaults::{
-    get_default_styles_for_element, parse_color_attribute, parse_dimension_attribute,
-};
+use crate::style::defaults::{get_default_styles_for_element, parse_color_attribute, parse_dimension_attribute};
 use crate::style::display::Display;
 use crate::style::grid::finalize_grid_placement;
 use crate::style::media::MediaContext;
@@ -1476,11 +1474,7 @@ mod tests {
     }
 }
 
-fn find_matching_rules(
-    node: &DomNode,
-    rules: &[CascadeRule<'_>],
-    ancestors: &[&DomNode],
-) -> Vec<MatchedRule> {
+fn find_matching_rules(node: &DomNode, rules: &[CascadeRule<'_>], ancestors: &[&DomNode]) -> Vec<MatchedRule> {
     let mut matches = Vec::new();
 
     // Build ElementRef chain with proper parent links

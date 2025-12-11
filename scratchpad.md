@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Added additive counter styles for Armenian (upper + lower) and Georgian: `list-style-type`/`counter()` parsing accepts the new keywords, markers format using the additive alphabets with decimal fallback outside the allowed ranges, and tests cover formatting/markers. Updated the over-100% percentage column regression to expect normalized percentages rather than overflowing widths.
 - Selector parsing now uses cssparser’s full An+B micro-syntax and supports :nth-of-type/:nth-last-of-type plus :first/last/only-of-type and :empty. DOM matching filters siblings by type, honors :empty only when no element/text children are present (whitespace text now prevents :empty), and new unit tests cover nth parsing and pseudo-class matching.
 - Added :lang() pseudo support: parser accepts language ranges (comma-separated), ToCss serializes lists, and DOM matching inherits lang/xml:lang down the ancestor chain with prefix + wildcard matching. Tests cover inheritance, prefix matches, and list disjunction.
 - Added :dir() and :any-link pseudos: :dir() parses ltr/rtl and matches inherited dir/xml:dir attributes (defaulting to ltr, ignores auto); :any-link matches anchors with href like :link. Tests cover direction inheritance and any-link behavior.

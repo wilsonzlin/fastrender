@@ -60,9 +60,7 @@ pub fn resolve_first_strong_direction(node: &DomNode) -> Option<TextDirection> {
                 for ch in content.chars() {
                     match bidi_class(ch) {
                         unicode_bidi::BidiClass::L => return Some(TextDirection::Ltr),
-                        unicode_bidi::BidiClass::R | unicode_bidi::BidiClass::AL => {
-                            return Some(TextDirection::Rtl)
-                        }
+                        unicode_bidi::BidiClass::R | unicode_bidi::BidiClass::AL => return Some(TextDirection::Rtl),
                         _ => {}
                     }
                 }

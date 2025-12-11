@@ -181,10 +181,11 @@ fn test_percentage_width_exceeds_100() {
 
     let result = distributor.distribute(&columns, 400.0);
 
-    // Both should get 60% of 400 = 240 each
-    assert!((result.widths[0] - 240.0).abs() < 0.01);
-    assert!((result.widths[1] - 240.0).abs() < 0.01);
-    assert!(result.is_over_constrained || result.total_width > 400.0);
+    // Percentages are normalized down when they exceed 100% in total.
+    assert!((result.widths[0] - 200.0).abs() < 0.01);
+    assert!((result.widths[1] - 200.0).abs() < 0.01);
+    assert!(!result.is_over_constrained);
+    assert!((result.total_width - 400.0).abs() < 0.01);
 }
 
 #[test]
