@@ -11,7 +11,6 @@ use crate::style::content::CounterStyle;
 use crate::style::counters::{CounterManager, CounterSet};
 use crate::style::display::{Display, FormattingContextType};
 use crate::style::types::{ListStyleType, TextTransform};
-use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::tree::anonymous::AnonymousBoxCreator;
 use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, MarkerContent, ReplacedBox, ReplacedType};
@@ -700,7 +699,7 @@ impl BoxGenerator {
         if let Some(content) = marker_content {
             let mut marker_style = (*style).clone();
             marker_style.display = Display::Inline;
-            reset_marker_box_edges(&mut marker_style);
+            crate::style::cascade::reset_marker_box_properties(&mut marker_style);
             marker_style.list_style_type = ListStyleType::None;
             marker_style.list_style_image = crate::style::types::ListStyleImage::None;
             marker_style.text_transform = TextTransform::none();
@@ -1081,10 +1080,13 @@ fn create_marker_box(styled: &StyledNode, counters: &CounterManager) -> Option<B
     // Prefer authored ::marker styles; fall back to the originating style when absent.
     let mut marker_style = styled.marker_styles.clone().unwrap_or_else(|| styled.styles.clone());
     // ::marker boxes are inline and should not carry layout-affecting edges from the list item.
+    crate::style::cascade::reset_marker_box_properties(&mut marker_style);
     marker_style.display = Display::Inline;
-    reset_marker_box_edges(&mut marker_style);
 
     let content = marker_content_from_style(&marker_style, counters)?;
+    marker_style.list_style_type = ListStyleType::None;
+    marker_style.list_style_image = crate::style::types::ListStyleImage::None;
+    marker_style.text_transform = TextTransform::none();
 
     Some(BoxNode::new_marker(Arc::new(marker_style), content))
 }
@@ -1118,62 +1120,6 @@ fn marker_content_from_style(style: &ComputedStyle, counters: &CounterManager) -
     } else {
         Some(MarkerContent::Text(text))
     }
-}
-
-fn reset_marker_box_edges(style: &mut ComputedStyle) {
-    style.margin_top = Some(Length::px(0.0));
-    style.margin_bottom = Some(Length::px(0.0));
-    style.margin_left = Some(Length::px(0.0));
-
-    style.padding_top = Length::px(0.0);
-    style.padding_right = Length::px(0.0);
-    style.padding_bottom = Length::px(0.0);
-    style.padding_left = Length::px(0.0);
-
-    style.border_top_width = Length::px(0.0);
-    style.border_right_width = Length::px(0.0);
-    style.border_bottom_width = Length::px(0.0);
-    style.border_left_width = Length::px(0.0);
-
-    style.border_top_style = crate::style::types::BorderStyle::None;
-    style.border_right_style = crate::style::types::BorderStyle::None;
-    style.border_bottom_style = crate::style::types::BorderStyle::None;
-    style.border_left_style = crate::style::types::BorderStyle::None;
-
-    style.border_top_color = crate::style::color::Rgba::TRANSPARENT;
-    style.border_right_color = crate::style::color::Rgba::TRANSPARENT;
-    style.border_bottom_color = crate::style::color::Rgba::TRANSPARENT;
-    style.border_left_color = crate::style::color::Rgba::TRANSPARENT;
-    style.border_top_left_radius = Length::px(0.0);
-    style.border_top_right_radius = Length::px(0.0);
-    style.border_bottom_left_radius = Length::px(0.0);
-    style.border_bottom_right_radius = Length::px(0.0);
-
-    style.background_color = crate::style::color::Rgba::TRANSPARENT;
-    style.background_image = None;
-    style.background_size = crate::style::types::BackgroundSize::Explicit(
-        crate::style::types::BackgroundSizeComponent::Auto,
-        crate::style::types::BackgroundSizeComponent::Auto,
-    );
-    style.background_position = crate::style::types::BackgroundPosition::Position {
-        x: crate::style::types::BackgroundPositionComponent {
-            alignment: 0.0,
-            offset: Length::px(0.0),
-        },
-        y: crate::style::types::BackgroundPositionComponent {
-            alignment: 0.0,
-            offset: Length::px(0.0),
-        },
-    };
-    style.background_repeat = crate::style::types::BackgroundRepeat::repeat();
-    style.background_origin = crate::style::types::BackgroundBox::PaddingBox;
-    style.background_clip = crate::style::types::BackgroundBox::BorderBox;
-
-    style.box_shadow.clear();
-    style.text_shadow.clear();
-    style.filter.clear();
-    style.backdrop_filter.clear();
-    style.transform.clear();
 }
 
 fn apply_counter_properties_from_style(styled: &StyledNode, counters: &mut CounterManager) {

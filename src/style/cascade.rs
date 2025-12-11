@@ -803,6 +803,39 @@ mod tests {
     }
 
     #[test]
+    fn marker_style_inherits_from_list_item_not_parent() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), "color: blue;".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "ul".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "li".to_string(),
+                        attributes: vec![("style".to_string(), "color: red;".to_string())],
+                    },
+                    children: vec![],
+                }],
+            }],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        let ul = styled.children.first().expect("ul");
+        let li = ul.children.first().expect("li");
+        let marker = li.marker_styles.as_ref().expect("marker styles");
+        assert_eq!(
+            marker.color,
+            Rgba::RED,
+            "marker should inherit color from list item, not its parent"
+        );
+    }
+
+    #[test]
     fn font_weight_relative_keywords_follow_css_fonts_table() {
         assert_eq!(child_font_weight("font-weight: 50;", "font-weight: bolder;"), 400);
         assert_eq!(child_font_weight("font-weight: 50;", "font-weight: lighter;"), 50);
@@ -1006,10 +1039,10 @@ fn compute_marker_styles(
     node: &DomNode,
     rules: &[&StyleRule],
     ancestors: &[&DomNode],
-    parent_styles: &ComputedStyle,
+    list_item_styles: &ComputedStyle,
     root_font_size: f32,
 ) -> Option<ComputedStyle> {
-    if parent_styles.display != Display::ListItem {
+    if list_item_styles.display != Display::ListItem {
         return None;
     }
 
@@ -1017,17 +1050,17 @@ fn compute_marker_styles(
 
     let mut styles = ComputedStyle::default();
     styles.display = Display::Inline;
-    inherit_styles(&mut styles, parent_styles);
+    inherit_styles(&mut styles, list_item_styles);
 
     for (_specificity, declarations) in matching_rules {
         for decl in declarations {
             if marker_allows_property(&decl.property) {
-                apply_declaration(&mut styles, &decl, parent_styles.font_size, root_font_size);
+                apply_declaration(&mut styles, &decl, list_item_styles.font_size, root_font_size);
             }
         }
     }
-    resolve_relative_font_weight(&mut styles, parent_styles);
-    propagate_text_decorations(&mut styles, parent_styles);
+    resolve_relative_font_weight(&mut styles, list_item_styles);
+    propagate_text_decorations(&mut styles, list_item_styles);
 
     reset_marker_box_properties(&mut styles);
     styles.display = Display::Inline;
@@ -1035,7 +1068,7 @@ fn compute_marker_styles(
     Some(styles)
 }
 
-fn reset_marker_box_properties(styles: &mut ComputedStyle) {
+pub(crate) fn reset_marker_box_properties(styles: &mut ComputedStyle) {
     let defaults = ComputedStyle::default();
     styles.position = defaults.position;
     styles.top = None;
