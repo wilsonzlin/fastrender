@@ -1148,6 +1148,11 @@ fn parse_color_function(input: &str) -> Result<Color, ColorParseError> {
         "lch" => ColorFunctionSpace::Lch,
         "oklab" => ColorFunctionSpace::Oklab,
         "oklch" => ColorFunctionSpace::Oklch,
+        "a98-rgb" => ColorFunctionSpace::A98Rgb,
+        "prophoto-rgb" => ColorFunctionSpace::ProphotoRgb,
+        "rec2020" | "rec-2020" => ColorFunctionSpace::Rec2020,
+        "xyz" | "xyz-d65" => ColorFunctionSpace::XyzD65,
+        "xyz-d50" => ColorFunctionSpace::XyzD50,
         _ => return Err(ColorParseError::InvalidComponent(space_name)),
     };
 
@@ -1204,6 +1209,11 @@ enum ColorFunctionSpace {
     Lch,
     Oklab,
     Oklch,
+    A98Rgb,
+    ProphotoRgb,
+    Rec2020,
+    XyzD50,
+    XyzD65,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1220,10 +1230,59 @@ fn display_p3_to_xyz_d65(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     (x, y, z)
 }
 
+fn a98_rgb_to_xyz_d65(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    // Adobe RGB (1998) linear to XYZ (D65)
+    let x = 0.5766690 * r + 0.1855582 * g + 0.1882286 * b;
+    let y = 0.2973450 * r + 0.6273636 * g + 0.0752915 * b;
+    let z = 0.0270314 * r + 0.0706889 * g + 0.9913375 * b;
+    (x, y, z)
+}
+
+fn prophoto_rgb_to_xyz_d50(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    // ROMM/ProPhoto RGB linear to XYZ (D50)
+    let x = 0.7976749 * r + 0.1351917 * g + 0.0313534 * b;
+    let y = 0.2880402 * r + 0.7118741 * g + 0.0000857 * b;
+    let z = 0.0000000 * r + 0.0000000 * g + 0.8252100 * b;
+    (x, y, z)
+}
+
+fn rec2020_to_xyz_d65(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    // ITU-R BT.2020 linear to XYZ (D65)
+    let x = 0.6369580 * r + 0.1446170 * g + 0.1688810 * b;
+    let y = 0.2627000 * r + 0.6779980 * g + 0.0593020 * b;
+    let z = 0.0000000 * r + 0.0280730 * g + 1.0609850 * b;
+    (x, y, z)
+}
+
 fn channel_value(channel: &ColorChannelValue) -> f32 {
     match channel {
         ColorChannelValue::Number(v) => *v,
         ColorChannelValue::Percentage(p) => *p,
+    }
+}
+
+fn decode_a98_rgb(v: f32) -> f32 {
+    let sign = if v < 0.0 { -1.0 } else { 1.0 };
+    sign * v.abs().powf(563.0 / 256.0)
+}
+
+fn decode_prophoto_rgb(v: f32) -> f32 {
+    let sign = if v < 0.0 { -1.0 } else { 1.0 };
+    let abs = v.abs();
+    if abs < 16.0 / 512.0 {
+        sign * abs / 16.0
+    } else {
+        sign * abs.powf(1.8)
+    }
+}
+
+fn decode_rec2020(v: f32) -> f32 {
+    let sign = if v < 0.0 { -1.0 } else { 1.0 };
+    let abs = v.abs();
+    if abs < 0.08145 {
+        sign * abs / 4.5
+    } else {
+        sign * ((abs + 0.099) / 1.099).powf(1.0 / 0.45)
     }
 }
 
@@ -1252,6 +1311,71 @@ fn color_function_to_rgba(space: ColorFunctionSpace, channels: &[ColorChannelVal
             let g = srgb_to_linear_value(channel_value(&channels[1]));
             let b = srgb_to_linear_value(channel_value(&channels[2]));
             let (x, y, z) = display_p3_to_xyz_d65(r, g, b);
+            let (rs, gs, bs) = xyz_d65_to_linear_rgb(x, y, z);
+            Ok(Rgba::new(
+                linear_to_srgb_component(rs),
+                linear_to_srgb_component(gs),
+                linear_to_srgb_component(bs),
+                alpha,
+            ))
+        }
+        ColorFunctionSpace::A98Rgb => {
+            let r = decode_a98_rgb(channel_value(&channels[0]));
+            let g = decode_a98_rgb(channel_value(&channels[1]));
+            let b = decode_a98_rgb(channel_value(&channels[2]));
+            let (x, y, z) = a98_rgb_to_xyz_d65(r, g, b);
+            let (rs, gs, bs) = xyz_d65_to_linear_rgb(x, y, z);
+            Ok(Rgba::new(
+                linear_to_srgb_component(rs),
+                linear_to_srgb_component(gs),
+                linear_to_srgb_component(bs),
+                alpha,
+            ))
+        }
+        ColorFunctionSpace::ProphotoRgb => {
+            let r = decode_prophoto_rgb(channel_value(&channels[0]));
+            let g = decode_prophoto_rgb(channel_value(&channels[1]));
+            let b = decode_prophoto_rgb(channel_value(&channels[2]));
+            let (x_d50, y_d50, z_d50) = prophoto_rgb_to_xyz_d50(r, g, b);
+            let (x, y, z) = xyz_d50_to_d65(x_d50, y_d50, z_d50);
+            let (rs, gs, bs) = xyz_d65_to_linear_rgb(x, y, z);
+            Ok(Rgba::new(
+                linear_to_srgb_component(rs),
+                linear_to_srgb_component(gs),
+                linear_to_srgb_component(bs),
+                alpha,
+            ))
+        }
+        ColorFunctionSpace::Rec2020 => {
+            let r = decode_rec2020(channel_value(&channels[0]));
+            let g = decode_rec2020(channel_value(&channels[1]));
+            let b = decode_rec2020(channel_value(&channels[2]));
+            let (x, y, z) = rec2020_to_xyz_d65(r, g, b);
+            let (rs, gs, bs) = xyz_d65_to_linear_rgb(x, y, z);
+            Ok(Rgba::new(
+                linear_to_srgb_component(rs),
+                linear_to_srgb_component(gs),
+                linear_to_srgb_component(bs),
+                alpha,
+            ))
+        }
+        ColorFunctionSpace::XyzD65 => {
+            let x = channel_value(&channels[0]);
+            let y = channel_value(&channels[1]);
+            let z = channel_value(&channels[2]);
+            let (rs, gs, bs) = xyz_d65_to_linear_rgb(x, y, z);
+            Ok(Rgba::new(
+                linear_to_srgb_component(rs),
+                linear_to_srgb_component(gs),
+                linear_to_srgb_component(bs),
+                alpha,
+            ))
+        }
+        ColorFunctionSpace::XyzD50 => {
+            let x_d50 = channel_value(&channels[0]);
+            let y_d50 = channel_value(&channels[1]);
+            let z_d50 = channel_value(&channels[2]);
+            let (x, y, z) = xyz_d50_to_d65(x_d50, y_d50, z_d50);
             let (rs, gs, bs) = xyz_d65_to_linear_rgb(x, y, z);
             Ok(Rgba::new(
                 linear_to_srgb_component(rs),
@@ -2000,6 +2124,31 @@ mod tests {
         let oklch = Color::parse("color(oklch 70% 0.1 45deg / 0.4)").unwrap().to_rgba(Rgba::BLACK);
         let oklch_direct = Color::parse("oklch(70% 0.1 45deg / 0.4)").unwrap().to_rgba(Rgba::BLACK);
         assert_eq!(oklch, oklch_direct);
+    }
+
+    #[test]
+    fn parses_color_function_extra_rgb_spaces() {
+        let gray_a98 = Color::parse("color(a98-rgb 0.5 0.5 0.5)").unwrap().to_rgba(Rgba::BLACK);
+        assert_eq!(gray_a98.r, gray_a98.g);
+        assert_eq!(gray_a98.g, gray_a98.b);
+
+        let gray_prophoto = Color::parse("color(prophoto-rgb 50% 50% 50%)").unwrap().to_rgba(Rgba::BLACK);
+        assert_eq!(gray_prophoto.r, gray_prophoto.g);
+        assert_eq!(gray_prophoto.g, gray_prophoto.b);
+
+        let green_rec2020 = Color::parse("color(rec2020 0 1 0)").unwrap().to_rgba(Rgba::BLACK);
+        assert!(green_rec2020.g > green_rec2020.r && green_rec2020.g > green_rec2020.b);
+    }
+
+    #[test]
+    fn parses_color_function_xyz_spaces() {
+        // D65 white point for sRGB
+        let white_d65 = Color::parse("color(xyz-d65 0.95047 1 1.08883)").unwrap().to_rgba(Rgba::BLACK);
+        assert!(white_d65.r >= 254 && white_d65.g >= 254 && white_d65.b >= 254);
+
+        // D50 white point should also map to near-white after adaptation
+        let white_d50 = Color::parse("color(xyz-d50 0.96422 1 0.82521)").unwrap().to_rgba(Rgba::BLACK);
+        assert!(white_d50.r >= 254 && white_d50.g >= 254 && white_d50.b >= 252);
     }
 
     // Error tests
