@@ -9,19 +9,22 @@ use crate::geometry::Point;
 use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::canvas::Canvas;
 use crate::paint::display_list::{
-    BlendMode, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FontId, ImageItem, LinearGradientItem,
-    OpacityItem, RadialGradientItem, StrokeRectItem, TextEmphasis, TextItem, TransformItem,
+    BlendMode, BorderItem, BorderSide, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FontId,
+    ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem, StrokeRectItem, TextEmphasis, TextItem,
+    TransformItem,
 };
 use crate::paint::rasterize::{render_box_shadow, BoxShadow};
 use crate::paint::text_shadow::PathBounds;
 use crate::style::color::Rgba;
-use crate::style::types::{TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle};
+use crate::style::types::{
+    BorderStyle as CssBorderStyle, TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
+};
 use crate::text::font_db::{FontStretch, FontStyle as DbFontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
 use crate::text::shaper::GlyphPosition;
 use tiny_skia::{
-    GradientStop as SkiaGradientStop, LinearGradient, PathBuilder, Pixmap, Point as SkiaPoint, RadialGradient,
-    SpreadMode, Transform,
+    GradientStop as SkiaGradientStop, LinearGradient, Mask, PathBuilder, Pixmap, Point as SkiaPoint, RadialGradient,
+    SpreadMode, Stroke, StrokeDash, Transform,
 };
 
 fn map_blend_mode(mode: BlendMode) -> tiny_skia::BlendMode {
@@ -42,6 +45,111 @@ fn map_blend_mode(mode: BlendMode) -> tiny_skia::BlendMode {
             tiny_skia::BlendMode::SourceOver
         }
     }
+}
+
+fn shade_color(color: &Rgba, factor: f32) -> Rgba {
+    let clamp = |v: f32| v.max(0.0).min(255.0) as u8;
+    let r = clamp(color.r as f32 * factor);
+    let g = clamp(color.g as f32 * factor);
+    let b = clamp(color.b as f32 * factor);
+    Rgba::new(r, g, b, color.a)
+}
+
+#[derive(Copy, Clone)]
+enum EdgeOrientation {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Copy, Clone)]
+enum BorderEdge {
+    Top,
+    Right,
+    Bottom,
+    Left,
+}
+
+impl BorderEdge {
+    fn orientation(self) -> EdgeOrientation {
+        match self {
+            BorderEdge::Top | BorderEdge::Bottom => EdgeOrientation::Horizontal,
+            BorderEdge::Left | BorderEdge::Right => EdgeOrientation::Vertical,
+        }
+    }
+
+    fn parallel_lines(
+        &self,
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        offset: f32,
+    ) -> (Option<tiny_skia::Path>, Option<tiny_skia::Path>) {
+        match self.orientation() {
+            EdgeOrientation::Horizontal => {
+                let mut first = PathBuilder::new();
+                first.move_to(x1, y1 - offset);
+                first.line_to(x2, y2 - offset);
+
+                let mut second = PathBuilder::new();
+                second.move_to(x1, y1 + offset);
+                second.line_to(x2, y2 + offset);
+
+                (first.finish(), second.finish())
+            }
+            EdgeOrientation::Vertical => {
+                let mut first = PathBuilder::new();
+                first.move_to(x1 - offset, y1);
+                first.line_to(x2 - offset, y2);
+
+                let mut second = PathBuilder::new();
+                second.move_to(x1 + offset, y1);
+                second.line_to(x2 + offset, y2);
+
+                (first.finish(), second.finish())
+            }
+        }
+    }
+
+    fn groove_ridge_colors(self, base: &Rgba, style: CssBorderStyle) -> (Rgba, Rgba) {
+        let lighten = |c: &Rgba| shade_color(c, 1.25);
+        let darken = |c: &Rgba| shade_color(c, 0.75);
+
+        let (first_light, second_light) = match style {
+            CssBorderStyle::Groove => (false, true),
+            CssBorderStyle::Ridge => (true, false),
+            _ => (false, false),
+        };
+
+        let (first, second) = match self {
+            BorderEdge::Top | BorderEdge::Left => (first_light, second_light),
+            BorderEdge::Right | BorderEdge::Bottom => (!first_light, !second_light),
+        };
+
+        (
+            if first { lighten(base) } else { darken(base) },
+            if second { lighten(base) } else { darken(base) },
+        )
+    }
+
+    fn inset_outset_color(self, base: &Rgba, style: CssBorderStyle) -> Rgba {
+        match style {
+            CssBorderStyle::Inset => match self {
+                BorderEdge::Top | BorderEdge::Left => shade_color(base, 0.75),
+                BorderEdge::Right | BorderEdge::Bottom => shade_color(base, 1.25),
+            },
+            CssBorderStyle::Outset => match self {
+                BorderEdge::Top | BorderEdge::Left => shade_color(base, 1.25),
+                BorderEdge::Right | BorderEdge::Bottom => shade_color(base, 0.75),
+            },
+            _ => *base,
+        }
+    }
+}
+
+fn set_paint_color(paint: &mut tiny_skia::Paint, color: &Rgba, opacity: f32) {
+    let alpha = (color.a * opacity * 255.0).round().clamp(0.0, 255.0) as u8;
+    paint.set_color_rgba8(color.r, color.g, color.b, alpha);
 }
 
 /// Renders a display list into a pixmap using the provided font context.
@@ -127,6 +235,158 @@ impl DisplayListRenderer {
         self.canvas
             .pixmap_mut()
             .fill_path(&path, &paint, tiny_skia::FillRule::Winding, transform, clip.as_ref());
+    }
+
+    fn render_border(&mut self, item: &BorderItem) {
+        let opacity = self.canvas.opacity().clamp(0.0, 1.0);
+        if opacity <= 0.0 {
+            return;
+        }
+
+        let transform = self.canvas.transform();
+        let clip = self.canvas.clip_mask().cloned();
+        let blend_mode = self.canvas.blend_mode();
+        let rect = item.rect;
+
+        let edges: [(_, _, _, _); 4] = [
+            (
+                BorderEdge::Top,
+                &item.top,
+                (rect.x(), rect.y() + item.top.width * 0.5),
+                (rect.x() + rect.width(), rect.y() + item.top.width * 0.5),
+            ),
+            (
+                BorderEdge::Right,
+                &item.right,
+                (rect.x() + rect.width() - item.right.width * 0.5, rect.y()),
+                (
+                    rect.x() + rect.width() - item.right.width * 0.5,
+                    rect.y() + rect.height(),
+                ),
+            ),
+            (
+                BorderEdge::Bottom,
+                &item.bottom,
+                (rect.x(), rect.y() + rect.height() - item.bottom.width * 0.5),
+                (
+                    rect.x() + rect.width(),
+                    rect.y() + rect.height() - item.bottom.width * 0.5,
+                ),
+            ),
+            (
+                BorderEdge::Left,
+                &item.left,
+                (rect.x() + item.left.width * 0.5, rect.y()),
+                (rect.x() + item.left.width * 0.5, rect.y() + rect.height()),
+            ),
+        ];
+
+        for (edge, side, (x1, y1), (x2, y2)) in edges {
+            self.render_border_edge(edge, x1, y1, x2, y2, side, blend_mode, opacity, clip.as_ref(), transform);
+        }
+    }
+
+    fn render_border_edge(
+        &mut self,
+        edge: BorderEdge,
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        side: &BorderSide,
+        blend_mode: tiny_skia::BlendMode,
+        opacity: f32,
+        clip: Option<&Mask>,
+        transform: Transform,
+    ) {
+        if side.width <= 0.0
+            || matches!(side.style, CssBorderStyle::None | CssBorderStyle::Hidden)
+            || side.color.is_transparent()
+        {
+            return;
+        }
+
+        let mut paint = tiny_skia::Paint::default();
+        set_paint_color(&mut paint, &side.color, opacity);
+        paint.blend_mode = blend_mode;
+        paint.anti_alias = true;
+
+        let mut stroke = Stroke::default();
+        stroke.width = side.width;
+        stroke.line_cap = match side.style {
+            CssBorderStyle::Dotted => tiny_skia::LineCap::Round,
+            _ => tiny_skia::LineCap::Butt,
+        };
+
+        match side.style {
+            CssBorderStyle::Dotted => {
+                stroke.dash = StrokeDash::new(vec![side.width, side.width], 0.0);
+            }
+            CssBorderStyle::Dashed => {
+                stroke.dash = StrokeDash::new(vec![3.0 * side.width, side.width], 0.0);
+            }
+            _ => {}
+        }
+
+        let mut path = PathBuilder::new();
+        path.move_to(x1, y1);
+        path.line_to(x2, y2);
+        let Some(base_path) = path.finish() else {
+            return;
+        };
+
+        let pixmap = self.canvas.pixmap_mut();
+
+        match side.style {
+            CssBorderStyle::Double => {
+                let third = side.width / 3.0;
+                let offset = third + third * 0.5;
+
+                let (outer_path, inner_path) = edge.parallel_lines(x1, y1, x2, y2, offset);
+
+                let mut inner_stroke = stroke.clone();
+                inner_stroke.width = third;
+                stroke.width = third;
+
+                if let Some(outer) = outer_path {
+                    pixmap.stroke_path(&outer, &paint, &stroke, transform, clip);
+                }
+                if let Some(inner) = inner_path {
+                    pixmap.stroke_path(&inner, &paint, &inner_stroke, transform, clip);
+                }
+            }
+            CssBorderStyle::Groove | CssBorderStyle::Ridge => {
+                let half = side.width / 2.0;
+                let offset = half * 0.5;
+                let (first_path, second_path) = edge.parallel_lines(x1, y1, x2, y2, offset);
+
+                let mut first_paint = paint.clone();
+                let mut second_paint = paint.clone();
+                let mut first_stroke = stroke.clone();
+                let mut second_stroke = stroke.clone();
+                first_stroke.width = half;
+                second_stroke.width = half;
+
+                let (first_color, second_color) = edge.groove_ridge_colors(&side.color, side.style);
+                set_paint_color(&mut first_paint, &first_color, opacity);
+                set_paint_color(&mut second_paint, &second_color, opacity);
+
+                if let Some(first) = first_path {
+                    pixmap.stroke_path(&first, &first_paint, &first_stroke, transform, clip);
+                }
+                if let Some(second) = second_path {
+                    pixmap.stroke_path(&second, &second_paint, &second_stroke, transform, clip);
+                }
+            }
+            CssBorderStyle::Inset | CssBorderStyle::Outset => {
+                let shaded = edge.inset_outset_color(&side.color, side.style);
+                set_paint_color(&mut paint, &shaded, opacity);
+                pixmap.stroke_path(&base_path, &paint, &stroke, transform, clip);
+            }
+            _ => {
+                pixmap.stroke_path(&base_path, &paint, &stroke, transform, clip);
+            }
+        }
     }
 
     fn convert_stops(
@@ -215,6 +475,7 @@ impl DisplayListRenderer {
                 .stroke_rounded_rect(item.rect, item.radii, item.color, item.width),
             DisplayItem::LinearGradient(item) => self.render_linear_gradient(item),
             DisplayItem::RadialGradient(item) => self.render_radial_gradient(item),
+            DisplayItem::Border(item) => self.render_border(item),
             DisplayItem::Text(item) => self.render_text(item)?,
             DisplayItem::Image(item) => self.render_image(item)?,
             DisplayItem::BoxShadow(item) => self.render_box_shadow(item),

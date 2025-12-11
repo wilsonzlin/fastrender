@@ -38,7 +38,7 @@
 
 use crate::geometry::{Point, Rect, Size};
 use crate::style::color::Rgba;
-use crate::style::types::{TextEmphasisPosition, TextEmphasisStyle};
+use crate::style::types::{BorderStyle as CssBorderStyle, TextEmphasisPosition, TextEmphasisStyle};
 use crate::text::font_db::{FontStretch, FontStyle};
 use std::fmt;
 use std::sync::Arc;
@@ -80,6 +80,9 @@ pub enum DisplayItem {
 
     /// Draw a radial gradient
     RadialGradient(RadialGradientItem),
+
+    /// Draw CSS borders with per-side styles
+    Border(BorderItem),
 
     /// Begin a clip region
     PushClip(ClipItem),
@@ -133,6 +136,7 @@ impl DisplayItem {
             }
             DisplayItem::LinearGradient(item) => Some(item.rect),
             DisplayItem::RadialGradient(item) => Some(item.rect),
+            DisplayItem::Border(item) => Some(item.rect),
             DisplayItem::PushClip(item) => Some(item.rect),
             // Stack operations don't have bounds
             DisplayItem::PopClip
@@ -624,6 +628,41 @@ pub enum GradientSpread {
     Pad,
     Repeat,
     Reflect,
+}
+
+/// CSS border with per-side styles/colors/widths.
+#[derive(Debug, Clone)]
+pub struct BorderItem {
+    /// Border rectangle (outer border box)
+    pub rect: Rect,
+
+    /// Top border side
+    pub top: BorderSide,
+
+    /// Right border side
+    pub right: BorderSide,
+
+    /// Bottom border side
+    pub bottom: BorderSide,
+
+    /// Left border side
+    pub left: BorderSide,
+
+    /// Border corner radii (currently informational)
+    pub radii: BorderRadii,
+}
+
+/// One border side definition.
+#[derive(Debug, Clone)]
+pub struct BorderSide {
+    /// Stroke width in CSS px after resolution
+    pub width: f32,
+
+    /// Border style
+    pub style: CssBorderStyle,
+
+    /// Border color
+    pub color: Rgba,
 }
 
 // ============================================================================

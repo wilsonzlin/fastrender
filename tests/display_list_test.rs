@@ -12,7 +12,7 @@ use fastrender::{
     TransformItem,
 };
 use fastrender::css::types::ColorStop;
-use fastrender::style::types::{BackgroundImage, BackgroundLayer, BackgroundRepeat};
+use fastrender::style::types::{BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle};
 use std::sync::Arc;
 
 // ============================================================================
@@ -95,7 +95,44 @@ fn fragment_uniform_border_emits_stroke() {
     assert!(list
         .items()
         .iter()
-        .any(|i| matches!(i, DisplayItem::StrokeRect(_) | DisplayItem::StrokeRoundedRect(_))));
+        .any(|i| matches!(i, DisplayItem::StrokeRect(_) | DisplayItem::StrokeRoundedRect(_) | DisplayItem::Border(_))));
+}
+
+#[test]
+fn fragment_mixed_borders_emit_border_item() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.border_top_width = fastrender::style::values::Length::px(1.0);
+    style.border_right_width = fastrender::style::values::Length::px(2.0);
+    style.border_bottom_width = fastrender::style::values::Length::px(0.0);
+    style.border_left_width = fastrender::style::values::Length::px(3.0);
+    style.border_top_style = BorderStyle::Dotted;
+    style.border_right_style = BorderStyle::Dashed;
+    style.border_bottom_style = BorderStyle::Solid;
+    style.border_left_style = BorderStyle::Double;
+    style.border_top_color = Rgba::RED;
+    style.border_right_color = Rgba::BLUE;
+    style.border_left_color = Rgba::GREEN;
+    style.border_bottom_color = Rgba::TRANSPARENT;
+
+    let fragment =
+        fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    let border = list.items().iter().find_map(|i| {
+        if let DisplayItem::Border(b) = i {
+            Some(b)
+        } else {
+            None
+        }
+    });
+
+    let border = border.expect("expected border item");
+    assert_eq!(border.top.style, BorderStyle::Dotted);
+    assert_eq!(border.right.style, BorderStyle::Dashed);
+    assert_eq!(border.left.style, BorderStyle::Double);
+    assert_eq!(border.top.width, 1.0);
+    assert_eq!(border.right.width, 2.0);
+    assert_eq!(border.left.width, 3.0);
 }
 
 #[test]

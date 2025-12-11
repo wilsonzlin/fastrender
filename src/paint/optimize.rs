@@ -308,6 +308,15 @@ impl DisplayListOptimizer {
                     let shadow_bounds = i.rect.inflate(i.blur_radius + i.spread_radius);
                     viewport.intersects(shadow_bounds)
                 }
+                DisplayItem::Border(b) => {
+                    let max_w = b
+                        .top
+                        .width
+                        .max(b.right.width)
+                        .max(b.bottom.width)
+                        .max(b.left.width);
+                    viewport.intersects(b.rect.inflate(max_w * 0.5))
+                }
                 DisplayItem::LinearGradient(i) => viewport.intersects(i.rect),
                 DisplayItem::RadialGradient(i) => viewport.intersects(i.rect),
 

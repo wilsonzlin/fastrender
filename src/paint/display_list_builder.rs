@@ -32,9 +32,10 @@ use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::paint::display_list::{
-    BlendMode, ClipItem, DisplayItem, DisplayList, EmphasisMark, EmphasisText, FillRectItem, FontId, GlyphInstance,
-    GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, OpacityItem,
-    RadialGradientItem, StackingContextItem, StrokeRectItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
+    BlendMode, BorderItem, BorderSide, ClipItem, DisplayItem, DisplayList, EmphasisMark, EmphasisText, FillRectItem,
+    FontId, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem,
+    OpacityItem, RadialGradientItem, StackingContextItem, StrokeRectItem, TextEmphasis, TextItem, TextShadowItem,
+    Transform2D,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
@@ -730,6 +731,10 @@ impl DisplayListBuilder {
         )
     }
 
+    fn border_side_visible(side: &BorderSide) -> bool {
+        side.width > 0.0 && Self::border_style_visible(side.style) && !side.color.is_transparent()
+    }
+
     fn build_transform(style: &ComputedStyle, bounds: Rect) -> Option<Transform2D> {
         if style.transform.is_empty() {
             return None;
@@ -1251,50 +1256,53 @@ impl DisplayListBuilder {
     }
 
     fn emit_border_from_style(&mut self, rect: Rect, style: &ComputedStyle) {
-        // Only emit when all sides share the same solid color/width.
-        let border_style = style.border_top_style;
         let widths = (
             Self::resolve_length_for_paint(&style.border_top_width, style.font_size, rect.width()),
             Self::resolve_length_for_paint(&style.border_right_width, style.font_size, rect.width()),
             Self::resolve_length_for_paint(&style.border_bottom_width, style.font_size, rect.width()),
             Self::resolve_length_for_paint(&style.border_left_width, style.font_size, rect.width()),
         );
-        if !(Self::border_style_visible(border_style)
-            && border_style == style.border_right_style
-            && border_style == style.border_bottom_style
-            && border_style == style.border_left_style)
-        {
-            return;
-        }
-        if (widths.0 - widths.1).abs() > f32::EPSILON
-            || (widths.0 - widths.2).abs() > f32::EPSILON
-            || (widths.0 - widths.3).abs() > f32::EPSILON
-        {
-            return;
-        }
-        let width = widths.0;
-        if width <= 0.0 {
-            return;
-        }
 
-        let color = style.border_top_color;
-        if color.is_transparent() {
+        let sides = (
+            BorderSide {
+                width: widths.0,
+                style: style.border_top_style,
+                color: style.border_top_color,
+            },
+            BorderSide {
+                width: widths.1,
+                style: style.border_right_style,
+                color: style.border_right_color,
+            },
+            BorderSide {
+                width: widths.2,
+                style: style.border_bottom_style,
+                color: style.border_bottom_color,
+            },
+            BorderSide {
+                width: widths.3,
+                style: style.border_left_style,
+                color: style.border_left_color,
+            },
+        );
+
+        let any_visible = Self::border_side_visible(&sides.0)
+            || Self::border_side_visible(&sides.1)
+            || Self::border_side_visible(&sides.2)
+            || Self::border_side_visible(&sides.3);
+        if !any_visible {
             return;
         }
 
         let radii = Self::border_radii(rect, style).clamped(rect.width(), rect.height());
-        if radii.is_zero() {
-            self.emit_border(rect, width, color);
-        } else {
-            self.list.push(DisplayItem::StrokeRoundedRect(
-                crate::paint::display_list::StrokeRoundedRectItem {
-                    rect,
-                    color,
-                    width,
-                    radii,
-                },
-            ));
-        }
+        self.list.push(DisplayItem::Border(BorderItem {
+            rect,
+            top: sides.0,
+            right: sides.1,
+            bottom: sides.2,
+            left: sides.3,
+            radii,
+        }));
     }
 
     fn emit_outline(&mut self, rect: Rect, style: &ComputedStyle) {
