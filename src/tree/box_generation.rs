@@ -1145,6 +1145,12 @@ fn generate_boxes_for_styled(styled: &StyledNode, counters: &mut CounterManager,
 
     // Replaced elements short-circuit to a single replaced box unless they're display: contents.
     if let Some(tag) = styled.node.tag_name() {
+        // Non-rendered elements: <source>, <track> never create boxes.
+        if matches!(tag.to_ascii_lowercase().as_str(), "source" | "track") {
+            counters.leave_scope();
+            return Vec::new();
+        }
+
         if is_replaced_element(tag) && styled.styles.display != Display::Contents {
             // The <object> element falls back to its nested content when no data URI is provided.
             // In that case we should not generate a replaced box, allowing the children to render normally.
