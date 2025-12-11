@@ -12,6 +12,7 @@ use crate::style::content::{ContentContext, ContentItem, ContentValue, CounterSt
 use crate::style::counters::{CounterManager, CounterSet};
 use crate::style::display::{Display, FormattingContextType};
 use crate::style::types::{ListStyleType, TextTransform};
+use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
 use crate::tree::anonymous::AnonymousBoxCreator;
 use crate::tree::box_tree::{
@@ -19,7 +20,6 @@ use crate::tree::box_tree::{
     SrcsetDescriptor,
 };
 use crate::tree::debug::DebugInfo;
-use crate::style::values::{Length, LengthUnit};
 use cssparser::{Parser, ParserInput, Token};
 use std::sync::Arc;
 
@@ -261,15 +261,16 @@ impl DOMNode {
         let tag = self.tag_name.as_ref()?;
         let src = self.src.clone().unwrap_or_default();
         let alt = self.alt.clone().filter(|s| !s.is_empty());
-        let srcset = self
-            .srcset
-            .as_ref()
-            .map(|v| parse_srcset(v))
-            .unwrap_or_default();
+        let srcset = self.srcset.as_ref().map(|v| parse_srcset(v)).unwrap_or_default();
         let poster = self.poster.clone().filter(|s| !s.is_empty());
 
         match tag.as_str() {
-            "img" => Some(ReplacedType::Image { src, alt, srcset, sizes: None }),
+            "img" => Some(ReplacedType::Image {
+                src,
+                alt,
+                srcset,
+                sizes: None,
+            }),
             "video" => Some(ReplacedType::Video { src, poster }),
             "canvas" => Some(ReplacedType::Canvas),
             "svg" => Some(ReplacedType::Svg { content: src }),
@@ -355,8 +356,10 @@ fn parse_sizes(attr: &str) -> Option<SizesList> {
 }
 
 fn parse_sizes_length(value: &str) -> Option<Length> {
-    use crate::css::properties::{parse_calc_function_length, parse_clamp_function_length, parse_min_max_function_length};
     use crate::css::properties::MathFn;
+    use crate::css::properties::{
+        parse_calc_function_length, parse_clamp_function_length, parse_min_max_function_length,
+    };
 
     let mut input = ParserInput::new(value);
     let mut parser = Parser::new(&mut input);
@@ -1103,9 +1106,19 @@ fn generate_boxes_for_styled(styled: &StyledNode, counters: &mut CounterManager,
     // Replaced elements short-circuit to a single replaced box unless they're display: contents.
     if let Some(tag) = styled.node.tag_name() {
         if is_replaced_element(tag) && styled.styles.display != Display::Contents {
-            counters.leave_scope();
-            let box_node = create_replaced_box_from_styled(styled, Arc::new(styled.styles.clone()));
-            return vec![attach_debug_info(box_node, styled)];
+            // The <object> element falls back to its nested content when no data URI is provided.
+            // In that case we should not generate a replaced box, allowing the children to render normally.
+            if !tag.eq_ignore_ascii_case("object")
+                || styled
+                    .node
+                    .get_attribute("data")
+                    .map(|d| !d.is_empty())
+                    .unwrap_or(false)
+            {
+                counters.leave_scope();
+                let box_node = create_replaced_box_from_styled(styled, Arc::new(styled.styles.clone()));
+                return vec![attach_debug_info(box_node, styled)];
+            }
         }
     }
 
@@ -1277,16 +1290,16 @@ fn create_pseudo_element_box(
             ContentItem::NoCloseQuote => context.pop_quote(),
             ContentItem::Url(url) => {
                 flush_text(&mut text_buf, &pseudo_style, &mut children);
-                    let replaced = ReplacedBox {
-                        replaced_type: ReplacedType::Image {
-                            src: url.clone(),
-                            alt: None,
-                            sizes: None,
-                            srcset: Vec::new(),
-                        },
-                        intrinsic_size: None,
-                        aspect_ratio: None,
-                    };
+                let replaced = ReplacedBox {
+                    replaced_type: ReplacedType::Image {
+                        src: url.clone(),
+                        alt: None,
+                        sizes: None,
+                        srcset: Vec::new(),
+                    },
+                    intrinsic_size: None,
+                    aspect_ratio: None,
+                };
                 children.push(BoxNode {
                     box_type: BoxType::Replaced(replaced),
                     style: pseudo_style.clone(),
@@ -1573,10 +1586,7 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
     let poster = styled.node.get_attribute("poster").filter(|s| !s.is_empty());
     let srcset_attr = styled.node.get_attribute("srcset");
     let sizes_attr = styled.node.get_attribute("sizes");
-    let srcset = srcset_attr
-        .as_ref()
-        .map(|s| parse_srcset(s))
-        .unwrap_or_default();
+    let srcset = srcset_attr.as_ref().map(|s| parse_srcset(s)).unwrap_or_default();
     let sizes = sizes_attr.as_ref().and_then(|s| parse_sizes(s));
     let data_attr = styled.node.get_attribute("data").unwrap_or_default();
 
@@ -2151,6 +2161,50 @@ mod tests {
 
         let div = DOMNode::new_element("div", style, vec![]);
         assert!(div.replaced_type().is_none());
+    }
+
+    #[test]
+    fn object_without_data_renders_children_instead_of_replacement() {
+        // When <object> lacks a data attribute, it should fall back to its children.
+        let html = "<html><body><object><p id=\"fallback\">hi</p></object></body></html>";
+        let dom = crate::dom::parse_html(html).expect("parse");
+        let styled = crate::style::cascade::apply_styles(&dom, &crate::css::types::StyleSheet::new());
+        let box_tree = generate_box_tree(&styled);
+
+        fn count_object_replacements(node: &BoxNode) -> usize {
+            let mut count = 0;
+            if let BoxType::Replaced(repl) = &node.box_type {
+                if matches!(repl.replaced_type, ReplacedType::Object { .. }) {
+                    count += 1;
+                }
+            }
+            for child in &node.children {
+                count += count_object_replacements(child);
+            }
+            count
+        }
+
+        fn collect_text(node: &BoxNode, out: &mut Vec<String>) {
+            if let BoxType::Text(text) = &node.box_type {
+                out.push(text.text.clone());
+            }
+            for child in &node.children {
+                collect_text(child, out);
+            }
+        }
+
+        assert_eq!(
+            count_object_replacements(&box_tree.root),
+            0,
+            "object without data should render fallback content"
+        );
+
+        let mut texts = Vec::new();
+        collect_text(&box_tree.root, &mut texts);
+        assert!(
+            texts.iter().any(|t| t.contains("hi")),
+            "fallback text from object children should be present"
+        );
     }
 
     #[test]
