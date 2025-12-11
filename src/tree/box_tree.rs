@@ -261,7 +261,9 @@ impl SrcsetCandidate {
 
 impl SizesList {
     pub fn evaluate(&self, media_ctx: &crate::style::media::MediaContext, viewport: crate::geometry::Size, font_size: f32) -> f32 {
+        let mut last = None;
         for entry in &self.entries {
+            last = Some(entry.length);
             let media_matches = entry
                 .media
                 .as_ref()
@@ -272,12 +274,15 @@ impl SizesList {
             }
         }
 
-        // Spec fallback is the last entry; guard with 100vw fallback.
-        resolve_sizes_length(
-            crate::style::values::Length::new(100.0, crate::style::values::LengthUnit::Vw),
-            viewport,
-            font_size,
-        )
+        if let Some(len) = last {
+            resolve_sizes_length(len, viewport, font_size)
+        } else {
+            resolve_sizes_length(
+                crate::style::values::Length::new(100.0, crate::style::values::LengthUnit::Vw),
+                viewport,
+                font_size,
+            )
+        }
     }
 }
 
@@ -1063,5 +1068,47 @@ mod tests {
         });
 
         assert_eq!(chosen, "300w");
+    }
+
+    #[test]
+    fn sizes_default_to_last_entry_when_no_media_match() {
+        let img = ReplacedType::Image {
+            src: "fallback".to_string(),
+            alt: None,
+            srcset: vec![
+                SrcsetCandidate {
+                    url: "100w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(100),
+                },
+                SrcsetCandidate {
+                    url: "400w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(400),
+                },
+            ],
+            sizes: Some(SizesList {
+                entries: vec![
+                    SizesEntry {
+                        media: Some(vec![crate::style::media::MediaQuery::parse("(max-width: 10px)").unwrap()]),
+                        length: Length::new(50.0, LengthUnit::Vw),
+                    },
+                    SizesEntry {
+                        media: None,
+                        length: Length::px(300.0),
+                    },
+                ],
+            }),
+        };
+
+        let viewport = Size::new(1200.0, 800.0);
+        let media_ctx = MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(1.0);
+        let chosen = img.image_source_for_context(ImageSelectionContext {
+            scale: 1.0,
+            slot_width: None,
+            viewport: Some(viewport),
+            media_context: Some(&media_ctx),
+            font_size: Some(16.0),
+        });
+
+        assert_eq!(chosen, "400w", "last sizes entry (300px) should drive selection");
     }
 }
