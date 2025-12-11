@@ -338,6 +338,8 @@ impl CounterScope {
 pub struct CounterManager {
     /// Stack of counter scopes
     scopes: Vec<CounterScope>,
+    /// Default increment for the `list-item` counter in the current scope (e.g., `reversed` lists).
+    list_item_increments: Vec<i32>,
 }
 
 impl CounterManager {
@@ -346,6 +348,7 @@ impl CounterManager {
         Self {
             // Start with a root scope for implicit counters
             scopes: vec![CounterScope::new()],
+            list_item_increments: vec![1],
         }
     }
 
@@ -356,6 +359,9 @@ impl CounterManager {
     /// in parent scopes.
     pub fn enter_scope(&mut self) {
         self.scopes.push(CounterScope::new());
+        // Inherit the current list-item increment for the new scope
+        let inherited = *self.list_item_increments.last().unwrap_or(&1);
+        self.list_item_increments.push(inherited);
     }
 
     /// Leaves the current scope (when leaving an element)
@@ -365,6 +371,9 @@ impl CounterManager {
     pub fn leave_scope(&mut self) {
         if self.scopes.len() > 1 {
             self.scopes.pop();
+        }
+        if self.list_item_increments.len() > 1 {
+            self.list_item_increments.pop();
         }
     }
 
@@ -657,6 +666,22 @@ impl CounterManager {
     pub fn reset(&mut self) {
         self.scopes.clear();
         self.scopes.push(CounterScope::new());
+        self.list_item_increments.clear();
+        self.list_item_increments.push(1);
+    }
+
+    /// Returns the default increment applied to `list-item` when no explicit counter-increment is authored.
+    pub fn list_item_increment(&self) -> i32 {
+        *self.list_item_increments.last().unwrap_or(&1)
+    }
+
+    /// Overrides the default `list-item` increment in the current scope (e.g., for reversed lists).
+    pub fn set_list_item_increment(&mut self, value: i32) {
+        if let Some(last) = self.list_item_increments.last_mut() {
+            *last = value;
+        } else {
+            self.list_item_increments.push(value);
+        }
     }
 }
 
