@@ -1793,6 +1793,52 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 styles.rebuild_background_layers();
             }
         }
+        "background-position-x" => {
+            if let Some(xs) = parse_layer_list(&resolved_value, parse_background_position_component_x) {
+                styles.ensure_background_lists();
+                let default = match BackgroundLayer::default().position {
+                    BackgroundPosition::Position { x, .. } => x,
+                };
+                let layer_count = xs.len().max(styles.background_positions.len()).max(1);
+                let mut positions = Vec::with_capacity(layer_count);
+                for idx in 0..layer_count {
+                    let source_idx = styles.background_positions.len().saturating_sub(1).min(idx);
+                    let source = styles
+                        .background_positions
+                        .get(source_idx)
+                        .cloned()
+                        .unwrap_or(BackgroundLayer::default().position.clone());
+                    let x_comp = xs.get(idx).cloned().unwrap_or_else(|| xs.last().copied().unwrap_or(default));
+                    let BackgroundPosition::Position { y, .. } = source;
+                    positions.push(BackgroundPosition::Position { x: x_comp, y });
+                }
+                styles.background_positions = positions;
+                styles.rebuild_background_layers();
+            }
+        }
+        "background-position-y" => {
+            if let Some(ys) = parse_layer_list(&resolved_value, parse_background_position_component_y) {
+                styles.ensure_background_lists();
+                let default = match BackgroundLayer::default().position {
+                    BackgroundPosition::Position { y, .. } => y,
+                };
+                let layer_count = ys.len().max(styles.background_positions.len()).max(1);
+                let mut positions = Vec::with_capacity(layer_count);
+                for idx in 0..layer_count {
+                    let source_idx = styles.background_positions.len().saturating_sub(1).min(idx);
+                    let source = styles
+                        .background_positions
+                        .get(source_idx)
+                        .cloned()
+                        .unwrap_or(BackgroundLayer::default().position.clone());
+                    let y_comp = ys.get(idx).cloned().unwrap_or_else(|| ys.last().copied().unwrap_or(default));
+                    let BackgroundPosition::Position { x, .. } = source;
+                    positions.push(BackgroundPosition::Position { x, y: y_comp });
+                }
+                styles.background_positions = positions;
+                styles.rebuild_background_layers();
+            }
+        }
         "background-attachment" => {
             let parse = |value: &PropertyValue| match value {
                 PropertyValue::Keyword(kw) => match kw.as_str() {
@@ -3316,6 +3362,72 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
     Some(BackgroundPosition::Position { x, y })
 }
 
+fn parse_background_position_component_x(value: &PropertyValue) -> Option<BackgroundPositionComponent> {
+    match value {
+        PropertyValue::Keyword(kw) => match kw.as_str() {
+            "left" => Some(BackgroundPositionComponent {
+                alignment: 0.0,
+                offset: Length::px(0.0),
+            }),
+            "right" => Some(BackgroundPositionComponent {
+                alignment: 1.0,
+                offset: Length::px(0.0),
+            }),
+            "center" => Some(BackgroundPositionComponent {
+                alignment: 0.5,
+                offset: Length::px(0.0),
+            }),
+            _ => None,
+        },
+        PropertyValue::Length(len) => Some(BackgroundPositionComponent {
+            alignment: 0.0,
+            offset: *len,
+        }),
+        PropertyValue::Percentage(p) => Some(BackgroundPositionComponent {
+            alignment: 0.0,
+            offset: Length::percent(*p),
+        }),
+        PropertyValue::Number(n) if *n == 0.0 => Some(BackgroundPositionComponent {
+            alignment: 0.0,
+            offset: Length::px(0.0),
+        }),
+        _ => None,
+    }
+}
+
+fn parse_background_position_component_y(value: &PropertyValue) -> Option<BackgroundPositionComponent> {
+    match value {
+        PropertyValue::Keyword(kw) => match kw.as_str() {
+            "top" => Some(BackgroundPositionComponent {
+                alignment: 0.0,
+                offset: Length::px(0.0),
+            }),
+            "bottom" => Some(BackgroundPositionComponent {
+                alignment: 1.0,
+                offset: Length::px(0.0),
+            }),
+            "center" => Some(BackgroundPositionComponent {
+                alignment: 0.5,
+                offset: Length::px(0.0),
+            }),
+            _ => None,
+        },
+        PropertyValue::Length(len) => Some(BackgroundPositionComponent {
+            alignment: 0.0,
+            offset: *len,
+        }),
+        PropertyValue::Percentage(p) => Some(BackgroundPositionComponent {
+            alignment: 0.0,
+            offset: Length::percent(*p),
+        }),
+        PropertyValue::Number(n) if *n == 0.0 => Some(BackgroundPositionComponent {
+            alignment: 0.0,
+            offset: Length::px(0.0),
+        }),
+        _ => None,
+    }
+}
+
 fn parse_text_decoration_line(value: &PropertyValue) -> Option<TextDecorationLine> {
     let components: Vec<&PropertyValue> = match value {
         PropertyValue::Multiple(values) if !values.is_empty() => values.iter().collect(),
@@ -4837,6 +4949,96 @@ mod tests {
         assert_eq!(y.offset, Length::px(10.0));
         assert!((x.alignment - 0.0).abs() < 0.01);
         assert_eq!(x.offset, Length::px(5.0));
+    }
+
+    #[test]
+    fn background_position_x_and_y_longhands_merge_layers() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-image".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Url("a.png".to_string()),
+                    PropertyValue::Keyword(",".to_string()),
+                    PropertyValue::Url("b.png".to_string()),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-position-y".to_string(),
+                value: PropertyValue::Keyword("bottom".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-position-x".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("left".to_string()),
+                    PropertyValue::Keyword(",".to_string()),
+                    PropertyValue::Percentage(20.0),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+
+        let BackgroundPosition::Position { x: x0, y: y0 } = style.background_layers[0].position;
+        assert!((x0.alignment - 0.0).abs() < 0.01);
+        assert!(x0.offset.is_zero());
+        assert!((y0.alignment - 1.0).abs() < 0.01);
+
+        let BackgroundPosition::Position { x: x1, y: y1 } = style.background_layers[1].position;
+        assert_eq!(x1.offset, Length::percent(20.0));
+        assert!((x1.alignment - 0.0).abs() < 0.01);
+        assert!((y1.alignment - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn background_position_y_longhand_repeats_for_layers() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-image".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Url("a.png".to_string()),
+                    PropertyValue::Keyword(",".to_string()),
+                    PropertyValue::Url("b.png".to_string()),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-position-y".to_string(),
+                value: PropertyValue::Percentage(10.0),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+
+        let BackgroundPosition::Position { y: y0, .. } = style.background_layers[0].position;
+        let BackgroundPosition::Position { y: y1, .. } = style.background_layers[1].position;
+        assert_eq!(y0.offset, Length::percent(10.0));
+        assert_eq!(y1.offset, Length::percent(10.0));
     }
 
     #[test]
