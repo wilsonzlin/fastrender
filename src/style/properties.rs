@@ -4466,6 +4466,12 @@ fn parse_list_style_position(value: &PropertyValue) -> Option<ListStylePosition>
 fn parse_list_style_image(value: &PropertyValue) -> Option<ListStyleImage> {
     match value {
         PropertyValue::Keyword(kw) if kw == "none" => Some(ListStyleImage::None),
+        PropertyValue::Keyword(kw) if kw.to_ascii_lowercase().starts_with("image-set(") => {
+            parse_image_set(kw).and_then(|img| match img {
+                BackgroundImage::Url(url) => Some(ListStyleImage::Url(url)),
+                _ => None,
+            })
+        }
         PropertyValue::Url(url) => Some(ListStyleImage::Url(url.clone())),
         _ => None,
     }
@@ -6172,6 +6178,29 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert_eq!(style.list_style_type, ListStyleType::Georgian);
+    }
+
+    #[test]
+    fn list_style_image_accepts_image_set() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "list-style-image".to_string(),
+                value: PropertyValue::Keyword(
+                    "image-set(url(\"marker-1x.png\") 1x, url(\"marker-2x.png\") 2x)".to_string(),
+                ),
+                raw_value: String::new(),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(
+            style.list_style_image,
+            ListStyleImage::Url("marker-1x.png".to_string())
+        );
     }
 
     #[test]
