@@ -6563,6 +6563,34 @@ mod tests {
     }
 
     #[test]
+    fn background_shorthand_accepts_image_set() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword(
+                        "image-set(url(\"one-x.png\") 1x, url(\"two-x.png\") 2x)".to_string(),
+                    ),
+                    PropertyValue::Keyword("no-repeat".to_string()),
+                ]),
+                raw_value: String::new(),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+
+        let layer = &style.background_layers[0];
+        assert!(matches!(
+            layer.image,
+            Some(BackgroundImage::Url(ref url)) if url == "one-x.png"
+        ));
+        assert_eq!(layer.repeat, BackgroundRepeat::no_repeat());
+    }
+
+    #[test]
     fn background_blend_mode_repeats_and_truncates() {
         let mut style = ComputedStyle::default();
         apply_declaration(
@@ -7421,6 +7449,13 @@ fn parse_background_shorthand(tokens: &[PropertyValue], current_color: Rgba) -> 
                     shorthand.image = Some(BackgroundImage::RepeatingRadialGradient { stops: stops.clone() });
                     idx += 1;
                     continue;
+                }
+                PropertyValue::Keyword(kw) if kw.to_ascii_lowercase().starts_with("image-set(") => {
+                    if let Some(img) = parse_image_set(kw) {
+                        shorthand.image = Some(img);
+                        idx += 1;
+                        continue;
+                    }
                 }
                 PropertyValue::Keyword(kw) if kw == "none" => {
                     shorthand.image = None;
