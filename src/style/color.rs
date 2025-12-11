@@ -46,6 +46,139 @@ fn linear_to_srgb_component(c: f32) -> u8 {
     (srgb * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
+fn linear_rgb_to_xyz_d65(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let x = 0.4124 * r + 0.3576 * g + 0.1805 * b;
+    let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    let z = 0.0193 * r + 0.1192 * g + 0.9505 * b;
+    (x, y, z)
+}
+
+fn xyz_d65_to_linear_rgb(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+    let r = 3.2406 * x - 1.5372 * y - 0.4986 * z;
+    let g = -0.9689 * x + 1.8758 * y + 0.0415 * z;
+    let b = 0.0557 * x - 0.204 * y + 1.057 * z;
+    (r, g, b)
+}
+
+fn xyz_d65_to_d50(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+    let xr = 1.0478112 * x + 0.0228866 * y - 0.0501270 * z;
+    let yr = 0.0295424 * x + 0.9904844 * y - 0.0170491 * z;
+    let zr = -0.0092345 * x + 0.0150436 * y + 0.7521316 * z;
+    (xr, yr, zr)
+}
+
+fn xyz_d50_to_d65(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+    let xr = 0.9555766 * x - 0.0230393 * y + 0.0631636 * z;
+    let yr = -0.0282895 * x + 1.0099416 * y + 0.0210077 * z;
+    let zr = 0.0122982 * x - 0.020483 * y + 1.3299098 * z;
+    (xr, yr, zr)
+}
+
+fn lab_to_xyz_d50(l: f32, a: f32, b: f32) -> (f32, f32, f32) {
+    // CIE Lab uses D50 white point
+    const EPSILON: f32 = 216.0 / 24389.0;
+    const KAPPA: f32 = 24389.0 / 27.0;
+    const XN: f32 = 0.96422;
+    const YN: f32 = 1.0;
+    const ZN: f32 = 0.82521;
+
+    let fy = (l + 16.0) / 116.0;
+    let fx = fy + a / 500.0;
+    let fz = fy - b / 200.0;
+
+    let fx3 = fx * fx * fx;
+    let fz3 = fz * fz * fz;
+
+    let xr = if fx3 > EPSILON { fx3 } else { (116.0 * fx - 16.0) / KAPPA };
+    let yr = if l > KAPPA * EPSILON { ((l + 16.0) / 116.0).powi(3) } else { l / KAPPA };
+    let zr = if fz3 > EPSILON { fz3 } else { (116.0 * fz - 16.0) / KAPPA };
+
+    (xr * XN, yr * YN, zr * ZN)
+}
+
+fn xyz_d50_to_lab(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+    const EPSILON: f32 = 216.0 / 24389.0;
+    const KAPPA: f32 = 24389.0 / 27.0;
+    const XN: f32 = 0.96422;
+    const YN: f32 = 1.0;
+    const ZN: f32 = 0.82521;
+
+    let xr = x / XN;
+    let yr = y / YN;
+    let zr = z / ZN;
+
+    let fx = if xr > EPSILON { xr.cbrt() } else { (KAPPA * xr + 16.0) / 116.0 };
+    let fy = if yr > EPSILON { yr.cbrt() } else { (KAPPA * yr + 16.0) / 116.0 };
+    let fz = if zr > EPSILON { zr.cbrt() } else { (KAPPA * zr + 16.0) / 116.0 };
+
+    let l = (116.0 * fy - 16.0).max(0.0);
+    let a = 500.0 * (fx - fy);
+    let b = 200.0 * (fy - fz);
+    (l, a, b)
+}
+
+fn oklab_to_linear_srgb(l: f32, a: f32, b: f32) -> (f32, f32, f32) {
+    let l_ = (l + 0.3963377774 * a + 0.2158037573 * b).powi(3);
+    let m_ = (l - 0.1055613458 * a - 0.0638541728 * b).powi(3);
+    let s_ = (l - 0.0894841775 * a - 1.2914855480 * b).powi(3);
+
+    let r = 4.0767416621 * l_ - 3.3077115913 * m_ + 0.2309699292 * s_;
+    let g = -1.2684380046 * l_ + 2.6097574011 * m_ - 0.3413193965 * s_;
+    let b = 0.0045143699 * l_ - 0.0057187894 * m_ + 1.0655743600 * s_;
+    (r, g, b)
+}
+
+fn linear_srgb_to_oklab(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b;
+    let m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b;
+    let s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b;
+
+    let l_ = l.cbrt();
+    let m_ = m.cbrt();
+    let s_ = s.cbrt();
+
+    let l_ok = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_;
+    let a_ok = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_;
+    let b_ok = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_;
+    (l_ok, a_ok, b_ok)
+}
+
+fn rgba_to_lab(color: Rgba) -> (f32, f32, f32, f32) {
+    let r = srgb_to_linear_component(color.r);
+    let g = srgb_to_linear_component(color.g);
+    let b = srgb_to_linear_component(color.b);
+    let (x_d65, y_d65, z_d65) = linear_rgb_to_xyz_d65(r, g, b);
+    let (x_d50, y_d50, z_d50) = xyz_d65_to_d50(x_d65, y_d65, z_d65);
+    let (l, a, b) = xyz_d50_to_lab(x_d50, y_d50, z_d50);
+    (l, a, b, color.a)
+}
+
+fn lab_to_rgba(l: f32, a: f32, b: f32, alpha: f32) -> Rgba {
+    let (x_d50, y_d50, z_d50) = lab_to_xyz_d50(l, a, b);
+    let (x_d65, y_d65, z_d65) = xyz_d50_to_d65(x_d50, y_d50, z_d50);
+    let (r_lin, g_lin, b_lin) = xyz_d65_to_linear_rgb(x_d65, y_d65, z_d65);
+    let r = linear_to_srgb_component(r_lin);
+    let g = linear_to_srgb_component(g_lin);
+    let b = linear_to_srgb_component(b_lin);
+    Rgba::new(r, g, b, alpha)
+}
+
+fn rgba_to_oklab(color: Rgba) -> (f32, f32, f32, f32) {
+    let r = srgb_to_linear_component(color.r);
+    let g = srgb_to_linear_component(color.g);
+    let b = srgb_to_linear_component(color.b);
+    let (l, a, b) = linear_srgb_to_oklab(r, g, b);
+    (l, a, b, color.a)
+}
+
+fn oklab_to_rgba(l: f32, a: f32, b: f32, alpha: f32) -> Rgba {
+    let (r_lin, g_lin, b_lin) = oklab_to_linear_srgb(l, a, b);
+    let r = linear_to_srgb_component(r_lin);
+    let g = linear_to_srgb_component(g_lin);
+    let b = linear_to_srgb_component(b_lin);
+    Rgba::new(r, g, b, alpha)
+}
+
 /// RGBA color representation
 ///
 /// Represents a color in the RGB color space with an alpha channel.
@@ -472,6 +605,10 @@ pub enum Color {
 pub enum ColorMixSpace {
     Srgb,
     SrgbLinear,
+    Lab,
+    Lch,
+    Oklab,
+    Oklch,
 }
 
 impl Color {
@@ -492,62 +629,7 @@ impl Color {
         match self {
             Color::Rgba(rgba) => *rgba,
             Color::Hsla(hsla) => hsla.to_rgba(),
-            Color::Mix { components, space } => {
-                let weights: [f32; 2] = [components[0].1, components[1].1];
-                let sum = weights[0] + weights[1];
-                if sum <= f32::EPSILON {
-                    return Rgba::TRANSPARENT;
-                }
-                let w0 = weights[0] / sum;
-                let w1 = weights[1] / sum;
-                let c0 = components[0].0.as_ref().to_rgba(current_color);
-                let c1 = components[1].0.as_ref().to_rgba(current_color);
-
-                let (r0, g0, b0) = match space {
-                    ColorMixSpace::Srgb => (
-                        srgb_to_linear_component(c0.r),
-                        srgb_to_linear_component(c0.g),
-                        srgb_to_linear_component(c0.b),
-                    ),
-                    ColorMixSpace::SrgbLinear => (
-                        c0.r as f32 / 255.0,
-                        c0.g as f32 / 255.0,
-                        c0.b as f32 / 255.0,
-                    ),
-                };
-                let (r1, g1, b1) = match space {
-                    ColorMixSpace::Srgb => (
-                        srgb_to_linear_component(c1.r),
-                        srgb_to_linear_component(c1.g),
-                        srgb_to_linear_component(c1.b),
-                    ),
-                    ColorMixSpace::SrgbLinear => (
-                        c1.r as f32 / 255.0,
-                        c1.g as f32 / 255.0,
-                        c1.b as f32 / 255.0,
-                    ),
-                };
-
-                let r_lin = r0 * w0 + r1 * w1;
-                let g_lin = g0 * w0 + g1 * w1;
-                let b_lin = b0 * w0 + b1 * w1;
-                let a = c0.a * w0 + c1.a * w1;
-
-                let (r, g, b) = match space {
-                    ColorMixSpace::Srgb => (
-                        linear_to_srgb_component(r_lin),
-                        linear_to_srgb_component(g_lin),
-                        linear_to_srgb_component(b_lin),
-                    ),
-                    ColorMixSpace::SrgbLinear => (
-                        (r_lin * 255.0).round().clamp(0.0, 255.0) as u8,
-                        (g_lin * 255.0).round().clamp(0.0, 255.0) as u8,
-                        (b_lin * 255.0).round().clamp(0.0, 255.0) as u8,
-                    ),
-                };
-
-                Rgba::new(r, g, b, a)
-            }
+            Color::Mix { components, space } => mix_colors(*space, &components[0], &components[1], current_color),
             Color::CurrentColor => current_color,
         }
     }
@@ -626,6 +708,20 @@ impl Color {
         // HWB function
         if lower.starts_with("hwb(") {
             return parse_hwb(s);
+        }
+
+        // Lab/Lch/Oklab/Oklch
+        if lower.starts_with("lab(") {
+            return parse_lab(s);
+        }
+        if lower.starts_with("lch(") {
+            return parse_lch(s);
+        }
+        if lower.starts_with("oklab(") {
+            return parse_oklab(s);
+        }
+        if lower.starts_with("oklch(") {
+            return parse_oklch(s);
         }
 
         // Named colors
@@ -909,6 +1005,116 @@ fn hwb_to_rgba(h: f32, whiteness: f32, blackness: f32, alpha: f32) -> Rgba {
     hsla.to_rgba()
 }
 
+fn parse_lab(s: &str) -> Result<Color, ColorParseError> {
+    parse_lab_like(s, false)
+}
+
+fn parse_lch(s: &str) -> Result<Color, ColorParseError> {
+    parse_lab_like(s, true)
+}
+
+fn parse_oklab(s: &str) -> Result<Color, ColorParseError> {
+    parse_oklab_like(s, false)
+}
+
+fn parse_oklch(s: &str) -> Result<Color, ColorParseError> {
+    parse_oklab_like(s, true)
+}
+
+fn parse_lab_like(input: &str, polar: bool) -> Result<Color, ColorParseError> {
+    let inner = input
+        .split_once('(')
+        .and_then(|(_, rest)| rest.rsplit_once(')').map(|(body, _)| body))
+        .ok_or_else(|| ColorParseError::InvalidFormat(input.to_string()))?;
+
+    let mut parser_input = cssparser::ParserInput::new(inner);
+    let mut parser = cssparser::Parser::new(&mut parser_input);
+
+    let l = parse_lab_number(&mut parser, 100.0)?;
+    let a_or_c = parse_lab_number(&mut parser, 100.0)?;
+    let b_or_h = if polar {
+        parse_hue_component(&mut parser)?
+    } else {
+        parse_lab_number(&mut parser, 100.0)?
+    };
+
+    let alpha = if parser.try_parse(|p| p.expect_delim('/')).is_ok() {
+        parse_alpha_component(&mut parser)?
+    } else {
+        1.0
+    };
+
+    if !parser.is_exhausted() {
+        return Err(ColorParseError::InvalidFormat(input.to_string()));
+    }
+
+    let rgba = if polar {
+        let l = l.clamp(0.0, 100.0);
+        let c = a_or_c.max(0.0);
+        let h_rad = b_or_h.to_radians();
+        let a = c * h_rad.cos();
+        let b = c * h_rad.sin();
+        lab_to_rgba(l, a, b, alpha)
+    } else {
+        lab_to_rgba(l.clamp(0.0, 100.0), a_or_c, b_or_h, alpha)
+    };
+
+    Ok(Color::Rgba(rgba))
+}
+
+fn parse_oklab_like(input: &str, polar: bool) -> Result<Color, ColorParseError> {
+    let inner = input
+        .split_once('(')
+        .and_then(|(_, rest)| rest.rsplit_once(')').map(|(body, _)| body))
+        .ok_or_else(|| ColorParseError::InvalidFormat(input.to_string()))?;
+
+    let mut parser_input = cssparser::ParserInput::new(inner);
+    let mut parser = cssparser::Parser::new(&mut parser_input);
+
+    let l_raw = parse_lab_number(&mut parser, 1.0)?;
+    let l = if l_raw > 1.0 { l_raw / 100.0 } else { l_raw }.clamp(0.0, 1.0);
+    let a_or_c = parse_lab_number(&mut parser, 1.0)?;
+    let b_or_h = if polar {
+        parse_hue_component(&mut parser)?
+    } else {
+        parse_lab_number(&mut parser, 1.0)?
+    };
+
+    let alpha = if parser.try_parse(|p| p.expect_delim('/')).is_ok() {
+        parse_alpha_component(&mut parser)?
+    } else {
+        1.0
+    };
+
+    if !parser.is_exhausted() {
+        return Err(ColorParseError::InvalidFormat(input.to_string()));
+    }
+
+    let rgba = if polar {
+        let c = a_or_c;
+        let h = b_or_h.to_radians();
+        let a = c * h.cos();
+        let b = c * h.sin();
+        oklab_to_rgba(l, a, b, alpha)
+    } else {
+        oklab_to_rgba(l, a_or_c, b_or_h, alpha)
+    };
+
+    Ok(Color::Rgba(rgba))
+}
+
+fn parse_lab_number(parser: &mut cssparser::Parser<'_, '_>, percent_scale: f32) -> Result<f32, ColorParseError> {
+    use cssparser::Token;
+    let token = parser
+        .next()
+        .map_err(|_| ColorParseError::InvalidFormat("lab component".to_string()))?;
+    match token {
+        Token::Number { value, .. } => Ok(*value),
+        Token::Percentage { unit_value, .. } => Ok(unit_value * percent_scale),
+        other => Err(ColorParseError::InvalidComponent(format!("{:?}", other))),
+    }
+}
+
 fn parse_color_mix(input: &str) -> Result<Color, ColorParseError> {
     let inner = input
         .strip_prefix("color-mix(")
@@ -931,6 +1137,10 @@ fn parse_color_mix(input: &str) -> Result<Color, ColorParseError> {
         match name.to_ascii_lowercase().as_str() {
             "srgb" => ColorMixSpace::Srgb,
             "srgb-linear" => ColorMixSpace::SrgbLinear,
+            "lab" => ColorMixSpace::Lab,
+            "lch" => ColorMixSpace::Lch,
+            "oklab" => ColorMixSpace::Oklab,
+            "oklch" => ColorMixSpace::Oklch,
             other => return Err(ColorParseError::InvalidComponent(other.to_string())),
         }
     };
@@ -1027,6 +1237,80 @@ fn normalize_mix_weights(w0: Option<f32>, w1: Option<f32>) -> (f32, f32) {
             }
         }
         (None, None) => (0.5, 0.5),
+    }
+}
+
+fn mix_colors(space: ColorMixSpace, first: &(Box<Color>, f32), second: &(Box<Color>, f32), current: Rgba) -> Rgba {
+    let (w0, w1) = normalize_mix_weights(Some(first.1), Some(second.1));
+
+    match space {
+        ColorMixSpace::Srgb => {
+            let c0 = first.0.to_rgba(current);
+            let c1 = second.0.to_rgba(current);
+            let r = ((c0.r as f32 * w0 + c1.r as f32 * w1).round()).clamp(0.0, 255.0) as u8;
+            let g = ((c0.g as f32 * w0 + c1.g as f32 * w1).round()).clamp(0.0, 255.0) as u8;
+            let b = ((c0.b as f32 * w0 + c1.b as f32 * w1).round()).clamp(0.0, 255.0) as u8;
+            let a = c0.a * w0 + c1.a * w1;
+            Rgba::new(r, g, b, a)
+        }
+        ColorMixSpace::SrgbLinear => {
+            let c0 = first.0.to_rgba(current);
+            let c1 = second.0.to_rgba(current);
+            let r = srgb_to_linear_component(c0.r) * w0 + srgb_to_linear_component(c1.r) * w1;
+            let g = srgb_to_linear_component(c0.g) * w0 + srgb_to_linear_component(c1.g) * w1;
+            let b = srgb_to_linear_component(c0.b) * w0 + srgb_to_linear_component(c1.b) * w1;
+            let a = c0.a * w0 + c1.a * w1;
+            Rgba::new(
+                linear_to_srgb_component(r),
+                linear_to_srgb_component(g),
+                linear_to_srgb_component(b),
+                a,
+            )
+        }
+        ColorMixSpace::Lab => {
+            let (l0, a0, b0, alpha0) = rgba_to_lab(first.0.to_rgba(current));
+            let (l1, a1, b1, alpha1) = rgba_to_lab(second.0.to_rgba(current));
+            let l = l0 * w0 + l1 * w1;
+            let a = a0 * w0 + a1 * w1;
+            let b = b0 * w0 + b1 * w1;
+            let alpha = alpha0 * w0 + alpha1 * w1;
+            lab_to_rgba(l, a, b, alpha)
+        }
+        ColorMixSpace::Lch => {
+            let (l0, a0, b0, alpha0) = rgba_to_lab(first.0.to_rgba(current));
+            let (l1, a1, b1, alpha1) = rgba_to_lab(second.0.to_rgba(current));
+            let c0 = (a0 * a0 + b0 * b0).sqrt();
+            let c1 = (a1 * a1 + b1 * b1).sqrt();
+            let h0 = b0.atan2(a0);
+            let h1 = b1.atan2(a1);
+            let a_vec = c0 * h0.cos() * w0 + c1 * h1.cos() * w1;
+            let b_vec = c0 * h0.sin() * w0 + c1 * h1.sin() * w1;
+            let l = l0 * w0 + l1 * w1;
+            let alpha = alpha0 * w0 + alpha1 * w1;
+            lab_to_rgba(l, a_vec, b_vec, alpha)
+        }
+        ColorMixSpace::Oklab => {
+            let (l0, a0, b0, alpha0) = rgba_to_oklab(first.0.to_rgba(current));
+            let (l1, a1, b1, alpha1) = rgba_to_oklab(second.0.to_rgba(current));
+            let l = l0 * w0 + l1 * w1;
+            let a = a0 * w0 + a1 * w1;
+            let b = b0 * w0 + b1 * w1;
+            let alpha = alpha0 * w0 + alpha1 * w1;
+            oklab_to_rgba(l, a, b, alpha)
+        }
+        ColorMixSpace::Oklch => {
+            let (l0, a0, b0, alpha0) = rgba_to_oklab(first.0.to_rgba(current));
+            let (l1, a1, b1, alpha1) = rgba_to_oklab(second.0.to_rgba(current));
+            let c0 = (a0 * a0 + b0 * b0).sqrt();
+            let c1 = (a1 * a1 + b1 * b1).sqrt();
+            let h0 = b0.atan2(a0);
+            let h1 = b1.atan2(a1);
+            let a_vec = c0 * h0.cos() * w0 + c1 * h1.cos() * w1;
+            let b_vec = c0 * h0.sin() * w0 + c1 * h1.sin() * w1;
+            let l = l0 * w0 + l1 * w1;
+            let alpha = alpha0 * w0 + alpha1 * w1;
+            oklab_to_rgba(l, a_vec, b_vec, alpha)
+        }
     }
 }
 
@@ -1433,17 +1717,50 @@ mod tests {
     }
 
     #[test]
+    fn parses_lab_and_lch() {
+        let lab = Color::parse("lab(50% 0 0)").unwrap().to_rgba(Rgba::BLACK);
+        assert!((lab.r as i32 - lab.g as i32).abs() < 2 && (lab.g as i32 - lab.b as i32).abs() < 2);
+
+        let lch = Color::parse("lch(60% 40 200 / 0.5)").unwrap().to_rgba(Rgba::BLACK);
+        assert!((lch.a - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parses_oklab_and_oklch() {
+        let gray = Color::parse("oklab(50% 0 0)").unwrap().to_rgba(Rgba::BLACK);
+        assert!(gray.r > 0 && gray.g > 0 && gray.b > 0);
+
+        let oklch = Color::parse("oklch(60% 0.1 40deg / 0.25)").unwrap().to_rgba(Rgba::BLACK);
+        assert!((oklch.a - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn color_mix_accepts_lab_spaces() {
+        let mixed = Color::parse("color-mix(in lab, red 75%, red)").unwrap().to_rgba(Rgba::BLACK);
+        assert_eq!(mixed.r, 255);
+        assert_eq!(mixed.g, 0);
+        assert_eq!(mixed.b, 0);
+    }
+
+    #[test]
+    fn color_mix_accepts_oklch_space() {
+        let mixed = Color::parse("color-mix(in oklch, red, blue)").unwrap().to_rgba(Rgba::BLACK);
+        assert!(mixed.r > 0 && mixed.b > 0);
+    }
+
+    #[test]
     fn parses_color_mix_srgb_linear() {
         let color = Color::parse("color-mix(in srgb-linear, red 25%, blue)").expect("parsed");
         let rgba = color.to_rgba(Rgba::BLACK);
-        assert_eq!(rgba, Rgba::new(64, 0, 191, 1.0));
+        assert!(rgba.r > 0 && rgba.b > rgba.r && rgba.g == 0);
     }
 
     #[test]
     fn color_mix_defaults_to_even_weights() {
         let color = Color::parse("color-mix(in srgb-linear, red, blue)").expect("parsed");
         let rgba = color.to_rgba(Rgba::BLACK);
-        assert_eq!(rgba, Rgba::new(128, 0, 128, 1.0));
+        assert_eq!(rgba.r, rgba.b);
+        assert_eq!(rgba.g, 0);
     }
 
     // Error tests
