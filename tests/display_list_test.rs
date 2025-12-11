@@ -5,7 +5,9 @@
 
 use fastrender::css::types::{BoxShadow, ColorStop};
 use fastrender::geometry::{Point, Rect};
-use fastrender::style::types::{BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle};
+use fastrender::style::types::{
+    BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle,
+};
 use fastrender::{Color, Rgba};
 use fastrender::{
     BlendMode, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FillRoundedRectItem,
@@ -189,6 +191,114 @@ fn fragment_background_image_emits_image_item() {
     assert_eq!(image.dest_rect.height(), 1.0);
 }
 
+#[test]
+fn display_list_background_layers_paint_top_to_bottom() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.background_color = Rgba::TRANSPARENT;
+    let top = BackgroundLayer {
+        image: Some(BackgroundImage::LinearGradient {
+            angle: 0.0,
+            stops: vec![
+                ColorStop {
+                    color: Color::Rgba(Rgba::from_rgba8(0, 255, 0, 128)),
+                    position: Some(0.0),
+                },
+                ColorStop {
+                    color: Color::Rgba(Rgba::from_rgba8(0, 255, 0, 128)),
+                    position: Some(1.0),
+                },
+            ],
+        }),
+        ..Default::default()
+    };
+    let bottom = BackgroundLayer {
+        image: Some(BackgroundImage::LinearGradient {
+            angle: 0.0,
+            stops: vec![
+                ColorStop {
+                    color: Color::Rgba(Rgba::BLUE),
+                    position: Some(0.0),
+                },
+                ColorStop {
+                    color: Color::Rgba(Rgba::BLUE),
+                    position: Some(1.0),
+                },
+            ],
+        }),
+        ..Default::default()
+    };
+    style.set_background_layers(vec![top, bottom]);
+
+    let fragment =
+        fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+
+    let gradients: Vec<_> = list
+        .items()
+        .iter()
+        .filter_map(|i| match i {
+            DisplayItem::LinearGradient(item) => Some(item),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(gradients.len(), 2, "expected two background gradient items");
+    // First emitted gradient should be the bottom layer (blue), second the top layer (green overlay).
+    let bottom_color = gradients[0].stops[0].color;
+    let top_color = gradients[1].stops[0].color;
+    assert_eq!(bottom_color, Rgba::BLUE);
+    assert_eq!(top_color, Rgba::from_rgba8(0, 255, 0, 128));
+}
+
+#[test]
+fn display_list_background_layers_use_per_layer_clip() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.background_color = Rgba::TRANSPARENT;
+    style.padding_left = fastrender::style::values::Length::px(4.0);
+    style.padding_right = fastrender::style::values::Length::px(4.0);
+    style.padding_top = fastrender::style::values::Length::px(4.0);
+    style.padding_bottom = fastrender::style::values::Length::px(4.0);
+
+    let top = BackgroundLayer {
+        image: Some(BackgroundImage::LinearGradient {
+            angle: 0.0,
+            stops: vec![ColorStop {
+                color: Color::Rgba(Rgba::GREEN),
+                position: Some(0.0),
+            }],
+        }),
+        clip: BackgroundBox::ContentBox,
+        ..Default::default()
+    };
+    let bottom = BackgroundLayer {
+        image: Some(BackgroundImage::LinearGradient {
+            angle: 0.0,
+            stops: vec![ColorStop {
+                color: Color::Rgba(Rgba::BLUE),
+                position: Some(0.0),
+            }],
+        }),
+        clip: BackgroundBox::BorderBox,
+        ..Default::default()
+    };
+    style.set_background_layers(vec![top, bottom]);
+
+    let fragment =
+        fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+
+    let gradients: Vec<_> = list
+        .items()
+        .iter()
+        .filter_map(|i| match i {
+            DisplayItem::LinearGradient(item) => Some(item),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(gradients.len(), 2, "expected two background gradient items");
+    // Bottom layer should cover border box, top should be clipped to content box (20x20 minus 4px padding).
+    assert_eq!(gradients[0].rect, Rect::from_xywh(0.0, 0.0, 20.0, 20.0));
+    assert_eq!(gradients[1].rect, Rect::from_xywh(4.0, 4.0, 12.0, 12.0));
+}
 #[test]
 fn fragment_box_shadow_emits_items() {
     let mut style = fastrender::ComputedStyle::default();
