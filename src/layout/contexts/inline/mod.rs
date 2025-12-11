@@ -1279,7 +1279,7 @@ impl InlineFormattingContext {
         for (idx, line) in lines.into_iter().enumerate() {
             let line_y = start_y + line.y_offset;
             let line_direction = line.resolved_direction;
-            let (is_last_line, is_single_line) = paragraph_info[idx];
+            let (is_last_line, _is_single_line) = paragraph_info[idx];
             let line_width = if line.available_width > 0.0 {
                 line.available_width
             } else if idx == 0 {
@@ -1312,7 +1312,6 @@ impl InlineFormattingContext {
                 text_align_last,
                 line_direction,
                 is_last_line,
-                is_single_line,
             );
             let justify_probe_items =
                 if matches!(effective_align, TextAlign::Justify) && !matches!(resolved_justify, TextJustify::None) {
@@ -3298,7 +3297,6 @@ fn resolve_text_align_for_line(
     text_align_last: crate::style::types::TextAlignLast,
     direction: crate::style::types::Direction,
     is_last_line: bool,
-    is_single_line: bool,
 ) -> TextAlign {
     if !is_last_line {
         return text_align;
@@ -3317,11 +3315,7 @@ fn resolve_text_align_for_line(
     match text_align_last {
         crate::style::types::TextAlignLast::Auto => {
             if matches!(text_align, TextAlign::Justify) {
-                if is_single_line {
-                    text_align
-                } else {
-                    map_text_align(TextAlign::Start, direction)
-                }
+                map_text_align(TextAlign::Start, direction)
             } else {
                 text_align
             }
@@ -5108,7 +5102,7 @@ mod tests {
     }
 
     #[test]
-    fn text_align_last_auto_justifies_single_line_when_align_is_justify() {
+    fn text_align_last_auto_start_aligns_single_line_even_when_align_is_justify() {
         let mut root_style = ComputedStyle::default();
         root_style.font_size = 16.0;
         root_style.text_align = TextAlign::Justify;
@@ -5129,12 +5123,13 @@ mod tests {
         let fragment = ifc.layout(&root, &constraints).expect("layout");
         assert_eq!(fragment.children.len(), 1, "single-line paragraph expected");
         let line = fragment.children.first().unwrap();
-        assert!(line.children.len() >= 2, "justification should keep multiple fragments");
+        let first_child = line.children.first().unwrap();
+        assert!(first_child.bounds.x() < 1.0, "last-line auto should start-align even on single-line justify");
         let last_child = line.children.last().unwrap();
         let right_edge = last_child.bounds.x() + last_child.bounds.width();
         assert!(
-            right_edge > constraints.width().unwrap() * 0.8,
-            "single-line auto+justify should still justify; right_edge={}, width={}",
+            right_edge < constraints.width().unwrap() * 0.8,
+            "single-line auto+justify should not stretch to the end; right_edge={}, width={}",
             right_edge,
             constraints.width().unwrap()
         );
