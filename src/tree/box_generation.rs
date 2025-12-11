@@ -6,6 +6,7 @@
 //! CSS Specification: CSS 2.1 Section 9.2 - Box Generation
 //! <https://www.w3.org/TR/CSS21/visuren.html#box-gen>
 
+use crate::dom::{DomNode, DomNodeType};
 use crate::geometry::Size;
 use crate::style::content::{ContentContext, ContentItem, ContentValue, CounterStyle};
 use crate::style::counters::{CounterManager, CounterSet};
@@ -695,7 +696,22 @@ impl BoxGenerator {
     /// Prepends a marker box for list items based on list-style-* properties
     fn attach_list_marker(&self, mut list_item: BoxNode, counters: &CounterManager) -> BoxNode {
         let style = list_item.style.clone();
-        let marker_content = marker_content_from_style(&style, counters);
+        let dummy_dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "li".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let dummy_styled = StyledNode {
+            node: dummy_dom,
+            styles: (*style).clone(),
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children: vec![],
+        };
+        let marker_content = marker_content_from_style(&dummy_styled, &style, counters);
         if let Some(content) = marker_content {
             let mut marker_style = (*style).clone();
             marker_style.display = Display::Inline;
@@ -1044,7 +1060,8 @@ fn create_pseudo_element_box(
     pseudo_name: &str,
     counters: &CounterManager,
 ) -> Option<BoxNode> {
-    if matches!(styles.content_value, ContentValue::None | ContentValue::Normal) {
+    let content_value = effective_content_value(styles);
+    if matches!(content_value, ContentValue::None | ContentValue::Normal) {
         return None;
     }
 
@@ -1070,7 +1087,7 @@ fn create_pseudo_element_box(
         }
     };
 
-    let items = match &styles.content_value {
+    let items = match &content_value {
         ContentValue::Items(items) => items,
         _ => return None,
     };
@@ -1169,7 +1186,7 @@ fn create_marker_box(styled: &StyledNode, counters: &CounterManager) -> Option<B
     crate::style::cascade::reset_marker_box_properties(&mut marker_style);
     marker_style.display = Display::Inline;
 
-    let content = marker_content_from_style(&marker_style, counters)?;
+    let content = marker_content_from_style(styled, &marker_style, counters)?;
     marker_style.list_style_type = ListStyleType::None;
     marker_style.list_style_image = crate::style::types::ListStyleImage::None;
     marker_style.text_transform = TextTransform::none();
@@ -1177,12 +1194,87 @@ fn create_marker_box(styled: &StyledNode, counters: &CounterManager) -> Option<B
     Some(BoxNode::new_marker(Arc::new(marker_style), content))
 }
 
-fn marker_content_from_style(style: &ComputedStyle, counters: &CounterManager) -> Option<MarkerContent> {
-    if !style.content.is_empty() && style.content != "normal" {
-        if style.content == "none" {
-            return None;
+fn marker_content_from_style(
+    styled: &StyledNode,
+    style: &ComputedStyle,
+    counters: &CounterManager,
+) -> Option<MarkerContent> {
+    let content_value = effective_content_value(style);
+    if matches!(content_value, ContentValue::None) || style.content == "none" {
+        return None;
+    }
+
+    if !matches!(content_value, ContentValue::Normal | ContentValue::None) {
+        let mut context = ContentContext::new();
+        for (name, value) in styled.node.attributes_iter() {
+            context.set_attribute(name, value);
         }
-        return Some(MarkerContent::Text(style.content.clone()));
+        for (name, stack) in counters.snapshot() {
+            context.set_counter_stack(&name, stack);
+        }
+        context.set_quotes(style.quotes.clone());
+
+        let mut text = String::new();
+        let mut image: Option<String> = None;
+
+        if let ContentValue::Items(items) = &content_value {
+            for item in items {
+                match item {
+                    ContentItem::String(s) => text.push_str(s),
+                    ContentItem::Attr { name, fallback, .. } => {
+                        if let Some(val) = context.get_attribute(name) {
+                            text.push_str(&val);
+                        } else if let Some(fb) = fallback {
+                            text.push_str(fb);
+                        }
+                    }
+                    ContentItem::Counter { name, style } => {
+                        let value = context.get_counter(name);
+                        let formatted = style.unwrap_or(CounterStyle::Decimal).format(value);
+                        text.push_str(&formatted);
+                    }
+                    ContentItem::Counters { name, separator, style } => {
+                        let values = context.get_counters(name);
+                        if values.is_empty() {
+                            text.push('0');
+                        } else {
+                            let formatted: Vec<String> = values
+                                .iter()
+                                .map(|v| style.unwrap_or(CounterStyle::Decimal).format(*v))
+                                .collect();
+                            text.push_str(&formatted.join(separator));
+                        }
+                    }
+                    ContentItem::OpenQuote => {
+                        text.push_str(context.open_quote());
+                        context.push_quote();
+                    }
+                    ContentItem::CloseQuote => {
+                        text.push_str(context.close_quote());
+                        context.pop_quote();
+                    }
+                    ContentItem::NoOpenQuote => context.push_quote(),
+                    ContentItem::NoCloseQuote => context.pop_quote(),
+                    ContentItem::Url(url) => {
+                        // If the author supplies multiple URLs we take the last; mixed text+image returns text.
+                        image = Some(url.clone());
+                    }
+                }
+            }
+        }
+
+        if !text.is_empty() {
+            return Some(MarkerContent::Text(text));
+        }
+        if let Some(src) = image {
+            let replaced = ReplacedBox {
+                replaced_type: ReplacedType::Image { src, alt: None },
+                intrinsic_size: None,
+                aspect_ratio: None,
+            };
+            return Some(MarkerContent::Image(replaced));
+        }
+        return None;
     }
 
     match &style.list_style_image {
@@ -1205,6 +1297,24 @@ fn marker_content_from_style(style: &ComputedStyle, counters: &CounterManager) -
         None
     } else {
         Some(MarkerContent::Text(text))
+    }
+}
+
+/// Derive an effective `content` value that falls back to the legacy `content`
+/// string when structured parsing has not populated `content_value`.
+fn effective_content_value(style: &ComputedStyle) -> ContentValue {
+    match &style.content_value {
+        ContentValue::Normal => {
+            let raw = style.content.trim();
+            if raw.is_empty() || raw.eq_ignore_ascii_case("normal") {
+                ContentValue::Normal
+            } else if raw.eq_ignore_ascii_case("none") {
+                ContentValue::None
+            } else {
+                ContentValue::Items(vec![ContentItem::String(style.content.clone())])
+            }
+        }
+        other => other.clone(),
     }
 }
 
@@ -2340,6 +2450,54 @@ mod tests {
             }
         } else {
             panic!("expected replaced child");
+        }
+    }
+
+    #[test]
+    fn marker_content_resolves_structured_content() {
+        use crate::dom::DomNodeType;
+        use crate::style::content::{ContentItem, ContentValue};
+
+        let mut marker_style = ComputedStyle::default();
+        marker_style.content_value = ContentValue::Items(vec![
+            ContentItem::String("[".to_string()),
+            ContentItem::Counter {
+                name: "item".to_string(),
+                style: Some(CounterStyle::LowerRoman),
+            },
+            ContentItem::String("]".to_string()),
+        ]);
+
+        let base_style = ComputedStyle::default();
+        let styled = StyledNode {
+            node: dom::DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            },
+            styles: base_style,
+            before_styles: None,
+            after_styles: None,
+            marker_styles: Some(marker_style),
+            children: vec![],
+        };
+
+        let mut counters = CounterManager::new();
+        counters.enter_scope();
+        counters.apply_reset(&CounterSet::single("item", 2));
+        counters.apply_increment(&CounterSet::single("item", 1));
+
+        let marker_box = create_marker_box(&styled, &counters).expect("marker");
+        counters.leave_scope();
+
+        match marker_box.box_type {
+            BoxType::Marker(marker) => match marker.content {
+                MarkerContent::Text(t) => assert_eq!(t, "[iii]"),
+                _ => panic!("expected text marker"),
+            },
+            _ => panic!("expected marker box"),
         }
     }
 

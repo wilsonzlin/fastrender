@@ -437,7 +437,7 @@ impl Default for ComputedStyle {
             custom_properties: HashMap::new(),
 
             content: String::new(),
-            content_value: crate::style::content::ContentValue::None,
+            content_value: crate::style::content::ContentValue::Normal,
             quotes: crate::style::content::default_quotes(),
         }
     }
