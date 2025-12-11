@@ -351,10 +351,12 @@ mod tests {
     use crate::css::types::StyleSheet;
     use crate::dom::DomNodeType;
     use crate::style::color::Rgba;
+    use crate::style::computed::Visibility;
     use crate::style::display::Display;
     use crate::style::float::Float;
     use crate::style::types::{
-        LineBreak, ListStylePosition, ListStyleType, TextDecorationLine, TextUnderlineOffset, TextUnderlinePosition,
+        LineBreak, ListStylePosition, ListStyleType, TextCombineUpright, TextDecorationLine, TextUnderlineOffset,
+        TextUnderlinePosition,
     };
 
     fn element_with_style(style: &str) -> DomNode {
@@ -836,6 +838,124 @@ mod tests {
     }
 
     #[test]
+    fn marker_rule_cannot_override_list_style_type_or_image() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "ul".to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: vec![("style".to_string(), "list-style-type: decimal;".to_string())],
+                },
+                children: vec![],
+            }],
+        };
+
+        let stylesheet = parse_stylesheet(
+            r#"
+            li::marker {
+                list-style-type: square;
+                list-style-image: url(bullet.png);
+            }
+        "#,
+        )
+        .unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        let li = styled.children.first().expect("li");
+        let marker = li.marker_styles.as_ref().expect("marker styles");
+        // list-style declarations on ::marker are ignored; marker retains the list-item value.
+        assert!(
+            matches!(marker.list_style_type, ListStyleType::Decimal),
+            "marker should ignore list-style-type on ::marker"
+        );
+        assert!(
+            matches!(marker.list_style_image, crate::style::types::ListStyleImage::None),
+            "marker should ignore list-style-image on ::marker"
+        );
+    }
+
+    #[test]
+    fn marker_allows_text_combine_and_typography_but_ignores_non_text_box_properties() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "ul".to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: vec![("style".to_string(), "letter-spacing: 0px;".to_string())],
+                },
+                children: vec![],
+            }],
+        };
+
+        let stylesheet = parse_stylesheet(
+            r#"
+            li::marker {
+                text-combine-upright: all;
+                letter-spacing: 2px;
+                visibility: hidden;
+            }
+        "#,
+        )
+        .unwrap();
+
+        let media_ctx = MediaContext::screen(1200.0, 800.0);
+        let rule_refs: Vec<&StyleRule> = stylesheet.collect_style_rules(&media_ctx);
+        assert_eq!(rule_refs.len(), 1, "should collect the authored li::marker rule");
+        let ancestors: Vec<&DomNode> = vec![&dom]; // ul ancestor for the li
+        let element_ref = build_element_ref_chain(&dom.children[0], &ancestors);
+        let mut caches = SelectorCaches::default();
+        let mut context = MatchingContext::new(
+            MatchingMode::ForStatelessPseudoElement,
+            None,
+            &mut caches,
+            QuirksMode::NoQuirks,
+            selectors::matching::NeedsSelectorFlags::No,
+            selectors::matching::MatchingForInvalidation::No,
+        );
+        let selector = rule_refs[0]
+            .selectors
+            .slice()
+            .first()
+            .expect("selector in rule");
+        assert!(
+            matches_selector(selector, 0, None, &element_ref, &mut context),
+            "selector should match the originating element"
+        );
+        let marker_matches =
+            find_pseudo_element_rules(&dom.children[0], &rule_refs, &ancestors, &PseudoElement::Marker);
+        assert_eq!(marker_matches.len(), 1, "marker rules should match li::marker");
+
+        let styled = apply_styles(&dom, &stylesheet);
+        let li = styled.children.first().expect("li");
+        let marker = li.marker_styles.as_ref().expect("marker styles");
+
+        assert!(
+            marker_allows_property("text-combine-upright"),
+            "filter should allow text-combine-upright"
+        );
+        assert!(
+            (marker.letter_spacing - 2.0).abs() < f32::EPSILON,
+            "letter-spacing should apply to marker contents (got {})",
+            marker.letter_spacing
+        );
+        assert_eq!(
+            marker.text_combine_upright,
+            TextCombineUpright::All,
+            "text-combine-upright should be honored on ::marker"
+        );
+        assert!(
+            matches!(marker.visibility, Visibility::Visible),
+            "non-text properties like visibility should be ignored for marker boxes"
+        );
+    }
+
+    #[test]
     fn font_weight_relative_keywords_follow_css_fonts_table() {
         assert_eq!(child_font_weight("font-weight: 50;", "font-weight: bolder;"), 400);
         assert_eq!(child_font_weight("font-weight: 50;", "font-weight: lighter;"), 50);
@@ -923,7 +1043,7 @@ fn find_pseudo_element_rules(
     // Create selector caches and matching context
     let mut caches = SelectorCaches::default();
     let mut context = MatchingContext::new(
-        MatchingMode::Normal,
+        MatchingMode::ForStatelessPseudoElement,
         None,
         &mut caches,
         QuirksMode::NoQuirks,
@@ -938,11 +1058,14 @@ fn find_pseudo_element_rules(
         for selector in rule.selectors.slice().iter() {
             // Only consider selectors with the matching pseudo-element
             if let Some(selector_pseudo) = selector.pseudo_element() {
-                if selector_pseudo == pseudo && matches_selector(selector, 0, None, &element_ref, &mut context) {
-                    matched = true;
-                    let spec = selector.specificity();
-                    if spec > max_specificity {
-                        max_specificity = spec;
+                if selector_pseudo == pseudo {
+                    let result = matches_selector(selector, 0, None, &element_ref, &mut context);
+                    if result {
+                        matched = true;
+                        let spec = selector.specificity();
+                        if spec > max_specificity {
+                            max_specificity = spec;
+                        }
                     }
                 }
             }
@@ -1064,7 +1187,6 @@ fn compute_marker_styles(
 
     reset_marker_box_properties(&mut styles);
     styles.display = Display::Inline;
-    styles.text_transform = crate::style::types::TextTransform::none();
     Some(styles)
 }
 
@@ -1135,21 +1257,6 @@ pub(crate) fn reset_marker_box_properties(styles: &mut ComputedStyle) {
     styles.overflow_x = defaults.overflow_x;
     styles.overflow_y = defaults.overflow_y;
     styles.opacity = defaults.opacity;
-    styles.text_decoration = defaults.text_decoration.clone();
-    styles.text_decoration_line_specified = defaults.text_decoration_line_specified;
-    styles.applied_text_decorations = defaults.applied_text_decorations.clone();
-    styles.text_decoration_skip_ink = defaults.text_decoration_skip_ink;
-    styles.text_underline_offset = defaults.text_underline_offset;
-    styles.text_underline_position = defaults.text_underline_position;
-    styles.text_emphasis_style = defaults.text_emphasis_style.clone();
-    styles.text_emphasis_color = defaults.text_emphasis_color;
-    styles.text_emphasis_position = defaults.text_emphasis_position;
-    styles.text_combine_upright = defaults.text_combine_upright;
-    styles.text_orientation = defaults.text_orientation;
-    styles.text_align = defaults.text_align;
-    styles.text_align_last = defaults.text_align_last;
-    styles.text_indent = defaults.text_indent.clone();
-
     // Markers should not carry table/layout-specific state
     styles.border_spacing_horizontal = defaults.border_spacing_horizontal;
     styles.border_spacing_vertical = defaults.border_spacing_vertical;
@@ -1160,6 +1267,18 @@ pub(crate) fn reset_marker_box_properties(styles: &mut ComputedStyle) {
 fn marker_allows_property(property: &str) -> bool {
     let p = property.to_ascii_lowercase();
 
+    // Marker boxes honor a limited set of box-level properties
+    // (CSS Lists 3 § 3.1.1).
+    if matches!(p.as_str(), "content" | "direction" | "unicode-bidi" | "text-combine-upright") {
+        return true;
+    }
+
+    // Animations/transitions are explicitly permitted.
+    if p.starts_with("animation") || p.starts_with("transition") {
+        return true;
+    }
+
+    // Inheritable text-affecting properties apply to the marker's contents.
     if p.starts_with("font-") {
         return true;
     }
@@ -1167,39 +1286,27 @@ fn marker_allows_property(property: &str) -> bool {
     matches!(
         p.as_str(),
         "color"
-            | "content"
-            | "direction"
-            | "unicode-bidi"
             | "white-space"
             | "line-height"
             | "letter-spacing"
             | "word-spacing"
             | "text-transform"
-            | "text-decoration"
-            | "text-decoration-line"
-            | "text-decoration-style"
-            | "text-decoration-color"
-            | "text-decoration-thickness"
-            | "text-decoration-skip-ink"
-            | "text-underline-position"
-            | "text-underline-offset"
+            | "text-align"
+            | "text-align-last"
+            | "text-justify"
             | "text-emphasis"
             | "text-emphasis-style"
             | "text-emphasis-color"
             | "text-emphasis-position"
-            | "text-shadow"
-            | "list-style-type"
-            | "list-style-image"
-            | "font"
-            | "font-size"
-            | "font-style"
-            | "font-weight"
-            | "font-stretch"
-            | "font-size-adjust"
-            | "font-variant"
-            | "font-feature-settings"
-            | "font-kerning"
-            | "font-synthesis"
+            | "text-decoration-skip-ink"
+            | "text-underline-position"
+            | "text-underline-offset"
+            | "text-orientation"
+            | "writing-mode"
             | "line-break"
+            | "word-break"
+            | "overflow-wrap"
+            | "hyphens"
+            | "tab-size"
     )
 }
