@@ -33,9 +33,9 @@ use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::stacking::creates_stacking_context;
 use crate::paint::text_shadow::{resolve_text_shadows, PathBounds, ResolvedTextShadow};
-use crate::style::color::Rgba;
 #[cfg(test)]
 use crate::style::color::Color;
+use crate::style::color::Rgba;
 use crate::style::display::Display;
 use crate::style::position::Position;
 use crate::style::types::{
@@ -63,6 +63,12 @@ use tiny_skia::{
 pub struct Painter {
     /// The pixmap being painted to
     pixmap: Pixmap,
+    /// CSS-to-device scale factor (device pixel ratio)
+    scale: f32,
+    /// Logical viewport width in CSS px
+    css_width: f32,
+    /// Logical viewport height in CSS px
+    css_height: f32,
     /// Background color
     background: Rgba,
     /// Text shaping pipeline
@@ -292,7 +298,7 @@ impl Painter {
 
     /// Creates a new painter with the given dimensions
     pub fn new(width: u32, height: u32, background: Rgba) -> Result<Self> {
-        Self::with_resources(width, height, background, FontContext::new(), ImageCache::new())
+        Self::with_resources_scaled(width, height, background, FontContext::new(), ImageCache::new(), 1.0)
     }
 
     /// Creates a painter with explicit font and image resources
@@ -303,17 +309,80 @@ impl Painter {
         font_ctx: FontContext,
         image_cache: ImageCache,
     ) -> Result<Self> {
-        let pixmap = Pixmap::new(width, height).ok_or_else(|| RenderError::InvalidParameters {
-            message: format!("Failed to create pixmap {}x{}", width, height),
+        Self::with_resources_scaled(width, height, background, font_ctx, image_cache, 1.0)
+    }
+
+    /// Creates a painter with explicit font/image resources and a device scale.
+    pub fn with_resources_scaled(
+        width: u32,
+        height: u32,
+        background: Rgba,
+        font_ctx: FontContext,
+        image_cache: ImageCache,
+        scale: f32,
+    ) -> Result<Self> {
+        let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+        let device_w = ((width as f32) * scale).round().max(1.0) as u32;
+        let device_h = ((height as f32) * scale).round().max(1.0) as u32;
+        let pixmap = Pixmap::new(device_w, device_h).ok_or_else(|| RenderError::InvalidParameters {
+            message: format!("Failed to create pixmap {}x{}", device_w, device_h),
         })?;
 
         Ok(Self {
             pixmap,
+            scale,
+            css_width: width as f32,
+            css_height: height as f32,
             background,
             shaper: ShapingPipeline::new(),
             font_ctx,
             image_cache,
         })
+    }
+
+    #[inline]
+    fn device_length(&self, value: f32) -> f32 {
+        value * self.scale
+    }
+
+    #[inline]
+    fn device_rect(&self, rect: Rect) -> Rect {
+        Rect::from_xywh(
+            rect.x() * self.scale,
+            rect.y() * self.scale,
+            rect.width() * self.scale,
+            rect.height() * self.scale,
+        )
+    }
+
+    #[inline]
+    fn device_radii(&self, radii: BorderRadii) -> BorderRadii {
+        BorderRadii {
+            top_left: radii.top_left * self.scale,
+            top_right: radii.top_right * self.scale,
+            bottom_right: radii.bottom_right * self.scale,
+            bottom_left: radii.bottom_left * self.scale,
+        }
+    }
+
+    #[inline]
+    fn device_transform(&self, transform: Option<Transform>) -> Option<Transform> {
+        transform.map(|mut t| {
+            t.tx *= self.scale;
+            t.ty *= self.scale;
+            t
+        })
+    }
+
+    #[allow(dead_code)]
+    #[inline]
+    fn device_dimensions(&self, width: f32, height: f32) -> Option<(u32, u32)> {
+        if width <= 0.0 || height <= 0.0 {
+            return None;
+        }
+        let w = ((width * self.scale).round()).max(0.0) as u32;
+        let h = ((height * self.scale).round()).max(0.0) as u32;
+        Some((w, h))
     }
 
     /// Paints a fragment tree and returns the resulting pixmap
@@ -628,12 +697,12 @@ impl Painter {
             .unwrap_or(false);
         let filters = style_ref
             .as_deref()
-            .map(|s| resolve_filters(&s.filter, s))
+            .map(|s| resolve_filters(&s.filter, s, self.scale))
             .unwrap_or_default();
         let has_filters = !filters.is_empty();
         let backdrop_filters = style_ref
             .as_deref()
-            .map(|s| resolve_filters(&s.backdrop_filter, s))
+            .map(|s| resolve_filters(&s.backdrop_filter, s, self.scale))
             .unwrap_or_default();
         let has_backdrop = !backdrop_filters.is_empty();
         let clip = style_ref.and_then(|style| {
@@ -843,8 +912,9 @@ impl Painter {
                 let offset = Point::new(bounds.min_x(), bounds.min_y());
                 let translated = translate_commands(commands, -offset.x, -offset.y);
 
-                let width = bounds.width().ceil().max(0.0);
-                let height = bounds.height().ceil().max(0.0);
+                let device_bounds = self.device_rect(bounds);
+                let width = device_bounds.width().ceil().max(0.0);
+                let height = device_bounds.height().ceil().max(0.0);
                 if width <= 0.0 || height <= 0.0 {
                     return Ok(());
                 }
@@ -855,6 +925,7 @@ impl Painter {
                     context_rect.width(),
                     context_rect.height(),
                 );
+                let device_root_rect = self.device_rect(root_rect);
                 let (mut unclipped, clipped): (Vec<DisplayCommand>, Vec<DisplayCommand>) =
                     translated.into_iter().partition(|cmd| match cmd {
                         DisplayCommand::Outline { .. } => true,
@@ -874,6 +945,9 @@ impl Painter {
 
                 let mut base_painter = Painter {
                     pixmap: layer,
+                    scale: self.scale,
+                    css_width: self.css_width,
+                    css_height: self.css_height,
                     background: Rgba::new(0, 0, 0, 0.0),
                     shaper: ShapingPipeline::new(),
                     font_ctx: self.font_ctx.clone(),
@@ -890,6 +964,9 @@ impl Painter {
                     };
                     let mut clip_painter = Painter {
                         pixmap: clip_layer,
+                        scale: self.scale,
+                        css_width: self.css_width,
+                        css_height: self.css_height,
                         background: Rgba::new(0, 0, 0, 0.0),
                         shaper: ShapingPipeline::new(),
                         font_ctx: self.font_ctx.clone(),
@@ -914,7 +991,7 @@ impl Painter {
                             clip_rect.width(),
                             clip_rect.height(),
                         );
-                        apply_clip_mask_rect(&mut clip_pixmap, local_clip, clip_radii);
+                        apply_clip_mask_rect(&mut clip_pixmap, self.device_rect(local_clip), self.device_radii(clip_radii));
                     }
                     base_painter.pixmap.draw_pixmap(
                         0,
@@ -928,19 +1005,52 @@ impl Painter {
 
                 let mut layer_pixmap = base_painter.pixmap;
                 if !filters.is_empty() {
-                    apply_filters(&mut layer_pixmap, &filters);
+                    apply_filters(&mut layer_pixmap, &filters, self.scale);
                 }
 
-                if !radii.is_zero() {
-                    apply_clip_mask_rect(&mut layer_pixmap, root_rect, radii);
+                let device_radii = self.device_radii(radii);
+                if !radii.is_zero() || !filters.is_empty() {
+                    let (out_l, out_t, out_r, out_b) = filter_outset(&filters);
+                    let device_out_l = self.device_length(out_l);
+                    let device_out_t = self.device_length(out_t);
+                    let device_out_r = self.device_length(out_r);
+                    let device_out_b = self.device_length(out_b);
+                    let clip_rect = Rect::from_xywh(
+                        device_root_rect.x() - device_out_l,
+                        device_root_rect.y() - device_out_t,
+                        device_root_rect.width() + device_out_l + device_out_r,
+                        device_root_rect.height() + device_out_t + device_out_b,
+                    );
+                    let inflate = device_out_l.max(device_out_t).max(device_out_r).max(device_out_b);
+                    let inflated_radii = if inflate > 0.0 {
+                        BorderRadii {
+                            top_left: device_radii.top_left + inflate,
+                            top_right: device_radii.top_right + inflate,
+                            bottom_right: device_radii.bottom_right + inflate,
+                            bottom_left: device_radii.bottom_left + inflate,
+                        }
+                    } else {
+                        device_radii
+                    };
+                    apply_clip_mask_rect(&mut layer_pixmap, clip_rect, inflated_radii);
                 }
 
                 if !backdrop_filters.is_empty() {
-                    apply_backdrop_filters(&mut self.pixmap, &bounds, &backdrop_filters, radii);
+                    apply_backdrop_filters(
+                        &mut self.pixmap,
+                        &device_bounds,
+                        &backdrop_filters,
+                        device_radii,
+                        self.scale,
+                    );
                 }
 
-                let mut final_transform = transform.unwrap_or_else(Transform::identity);
-                final_transform = final_transform.pre_concat(Transform::from_translate(offset.x, offset.y));
+                let mut final_transform =
+                    self.device_transform(transform).unwrap_or_else(Transform::identity);
+                final_transform = final_transform.pre_concat(Transform::from_translate(
+                    self.device_length(offset.x),
+                    self.device_length(offset.y),
+                ));
                 let fallback_blend = if isolated {
                     SkiaBlendMode::SourceOver
                 } else {
@@ -957,7 +1067,7 @@ impl Painter {
                             &transformed,
                             opacity.min(1.0),
                             blend_mode,
-                            Some(bounds),
+                            Some(device_bounds),
                         );
                     } else {
                         let mut paint = PixmapPaint::default();
@@ -981,19 +1091,21 @@ impl Painter {
     /// Paints the background of a fragment
     fn paint_background(&mut self, x: f32, y: f32, width: f32, height: f32, style: &ComputedStyle) {
         let rects = background_rects(x, y, width, height, style);
+        let scaled_rects = self.scale_background_rects(&rects);
         let fallback_layer = BackgroundLayer::default();
         let color_clip_layer = style.background_layers.first().unwrap_or(&fallback_layer);
         let color_clip_rect = match color_clip_layer.clip {
-            crate::style::types::BackgroundBox::BorderBox => rects.border,
-            crate::style::types::BackgroundBox::PaddingBox => rects.padding,
-            crate::style::types::BackgroundBox::ContentBox => rects.content,
+            crate::style::types::BackgroundBox::BorderBox => scaled_rects.border,
+            crate::style::types::BackgroundBox::PaddingBox => scaled_rects.padding,
+            crate::style::types::BackgroundBox::ContentBox => scaled_rects.content,
         };
 
         if color_clip_rect.width() <= 0.0 || color_clip_rect.height() <= 0.0 {
             return;
         }
 
-        let color_clip_radii = resolve_clip_radii(style, &rects, color_clip_layer.clip);
+        let color_clip_radii =
+            self.device_radii(resolve_clip_radii(style, &rects, color_clip_layer.clip));
 
         if style.background_color.alpha_u8() > 0 {
             let _ = fill_rounded_rect(
@@ -1014,6 +1126,14 @@ impl Painter {
         }
     }
 
+    fn scale_background_rects(&self, rects: &BackgroundRects) -> BackgroundRects {
+        BackgroundRects {
+            border: self.device_rect(rects.border),
+            padding: self.device_rect(rects.padding),
+            content: self.device_rect(rects.content),
+        }
+    }
+
     fn paint_background_image_layer(
         &mut self,
         rects: &BackgroundRects,
@@ -1030,14 +1150,14 @@ impl Painter {
         } else {
             layer.clip
         };
-        let clip_rect = match clip_box {
+        let clip_rect_css = match clip_box {
             crate::style::types::BackgroundBox::BorderBox => rects.border,
             crate::style::types::BackgroundBox::PaddingBox => rects.padding,
             crate::style::types::BackgroundBox::ContentBox => rects.content,
         };
         let clip_radii = resolve_clip_radii(style, rects, clip_box);
-        let origin_rect = if layer.attachment == BackgroundAttachment::Fixed {
-            Rect::from_xywh(0.0, 0.0, self.pixmap.width() as f32, self.pixmap.height() as f32)
+        let origin_rect_css = if layer.attachment == BackgroundAttachment::Fixed {
+            Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height)
         } else if is_local {
             match layer.origin {
                 crate::style::types::BackgroundBox::ContentBox => rects.content,
@@ -1051,12 +1171,15 @@ impl Painter {
             }
         };
 
-        if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 {
+        if clip_rect_css.width() <= 0.0 || clip_rect_css.height() <= 0.0 {
             return;
         }
-        if origin_rect.width() <= 0.0 || origin_rect.height() <= 0.0 {
+        if origin_rect_css.width() <= 0.0 || origin_rect_css.height() <= 0.0 {
             return;
         }
+
+        let clip_rect = self.device_rect(clip_rect_css);
+        let clip_radii = self.device_radii(clip_radii);
 
         let clip_mask = if clip_radii.is_zero() {
             None
@@ -1068,8 +1191,8 @@ impl Painter {
             BackgroundImage::LinearGradient { angle, stops } => {
                 let resolved = normalize_color_stops(stops, style.color);
                 self.paint_linear_gradient(
-                    origin_rect,
-                    clip_rect,
+                    origin_rect_css,
+                    clip_rect_css,
                     clip_mask.as_ref(),
                     *angle,
                     &resolved,
@@ -1080,8 +1203,8 @@ impl Painter {
             BackgroundImage::RadialGradient { stops } => {
                 let resolved = normalize_color_stops(stops, style.color);
                 self.paint_radial_gradient(
-                    origin_rect,
-                    clip_rect,
+                    origin_rect_css,
+                    clip_rect_css,
                     clip_mask.as_ref(),
                     &resolved,
                     SpreadMode::Pad,
@@ -1091,8 +1214,8 @@ impl Painter {
             BackgroundImage::RepeatingLinearGradient { angle, stops } => {
                 let resolved = normalize_color_stops(stops, style.color);
                 self.paint_linear_gradient(
-                    origin_rect,
-                    clip_rect,
+                    origin_rect_css,
+                    clip_rect_css,
                     clip_mask.as_ref(),
                     *angle,
                     &resolved,
@@ -1103,8 +1226,8 @@ impl Painter {
             BackgroundImage::RepeatingRadialGradient { stops } => {
                 let resolved = normalize_color_stops(stops, style.color);
                 self.paint_radial_gradient(
-                    origin_rect,
-                    clip_rect,
+                    origin_rect_css,
+                    clip_rect_css,
                     clip_mask.as_ref(),
                     &resolved,
                     SpreadMode::Repeat,
@@ -1133,8 +1256,8 @@ impl Painter {
                 let (mut tile_w, mut tile_h) = compute_background_size(
                     layer,
                     style.font_size,
-                    origin_rect.width(),
-                    origin_rect.height(),
+                    origin_rect_css.width(),
+                    origin_rect_css.height(),
                     img_w,
                     img_h,
                 );
@@ -1145,11 +1268,11 @@ impl Painter {
                 let mut rounded_x = false;
                 let mut rounded_y = false;
                 if layer.repeat.x == BackgroundRepeatKeyword::Round {
-                    tile_w = round_tile_length(origin_rect.width(), tile_w);
+                    tile_w = round_tile_length(origin_rect_css.width(), tile_w);
                     rounded_x = true;
                 }
                 if layer.repeat.y == BackgroundRepeatKeyword::Round {
-                    tile_h = round_tile_length(origin_rect.height(), tile_h);
+                    tile_h = round_tile_length(origin_rect_css.height(), tile_h);
                     rounded_y = true;
                 }
                 if rounded_x ^ rounded_y
@@ -1168,8 +1291,8 @@ impl Painter {
 
                 let (offset_x, offset_y) = resolve_background_offset(
                     layer.position,
-                    origin_rect.width(),
-                    origin_rect.height(),
+                    origin_rect_css.width(),
+                    origin_rect_css.height(),
                     tile_w,
                     tile_h,
                     style.font_size,
@@ -1177,25 +1300,25 @@ impl Painter {
 
                 let positions_x = tile_positions(
                     layer.repeat.x,
-                    origin_rect.x(),
-                    origin_rect.width(),
+                    origin_rect_css.x(),
+                    origin_rect_css.width(),
                     tile_w,
                     offset_x,
-                    clip_rect.min_x(),
-                    clip_rect.max_x(),
+                    clip_rect_css.min_x(),
+                    clip_rect_css.max_x(),
                 );
                 let positions_y = tile_positions(
                     layer.repeat.y,
-                    origin_rect.y(),
-                    origin_rect.height(),
+                    origin_rect_css.y(),
+                    origin_rect_css.height(),
                     tile_h,
                     offset_y,
-                    clip_rect.min_y(),
-                    clip_rect.max_y(),
+                    clip_rect_css.min_y(),
+                    clip_rect_css.max_y(),
                 );
 
-                let max_x = clip_rect.max_x();
-                let max_y = clip_rect.max_y();
+                let max_x = clip_rect_css.max_x();
+                let max_y = clip_rect_css.max_y();
                 let quality = Self::filter_quality_for_image(Some(style));
 
                 for ty in positions_y.iter().copied() {
@@ -1209,7 +1332,7 @@ impl Painter {
                             ty,
                             tile_w,
                             tile_h,
-                            clip_rect,
+                            clip_rect_css,
                             clip_mask.as_ref(),
                             layer.blend_mode,
                             quality,
@@ -1233,6 +1356,9 @@ impl Painter {
         if stops.is_empty() {
             return;
         }
+
+        let gradient_rect = self.device_rect(gradient_rect);
+        let paint_rect = self.device_rect(paint_rect);
 
         let skia_stops = gradient_stops(stops);
         let rad = angle.to_radians();
@@ -1304,6 +1430,9 @@ impl Painter {
         if stops.is_empty() {
             return;
         }
+
+        let gradient_rect = self.device_rect(gradient_rect);
+        let paint_rect = self.device_rect(paint_rect);
 
         let skia_stops = gradient_stops(stops);
         let cx = gradient_rect.x() + gradient_rect.width() / 2.0;
@@ -1379,16 +1508,17 @@ impl Painter {
             return;
         }
 
-        let tile_rect = Rect::from_xywh(tile_x, tile_y, tile_w, tile_h);
-        let Some(intersection) = tile_rect.intersection(clip) else {
+        let tile_rect = self.device_rect(Rect::from_xywh(tile_x, tile_y, tile_w, tile_h));
+        let clip_rect = self.device_rect(clip);
+        let Some(intersection) = tile_rect.intersection(clip_rect) else {
             return;
         };
         if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
             return;
         }
 
-        let scale_x = tile_w / pixmap.width() as f32;
-        let scale_y = tile_h / pixmap.height() as f32;
+        let scale_x = tile_rect.width() / pixmap.width() as f32;
+        let scale_y = tile_rect.height() / pixmap.height() as f32;
         if !scale_x.is_finite() || !scale_y.is_finite() {
             return;
         }
@@ -1399,7 +1529,7 @@ impl Painter {
             SpreadMode::Pad,
             quality,
             1.0,
-            Transform::from_row(scale_x, 0.0, 0.0, scale_y, tile_x, tile_y),
+            Transform::from_row(scale_x, 0.0, 0.0, scale_y, tile_rect.x(), tile_rect.y()),
         );
         paint.anti_alias = false;
 
@@ -1428,10 +1558,15 @@ impl Painter {
     /// Paints the borders of a fragment
     fn paint_borders(&mut self, x: f32, y: f32, width: f32, height: f32, style: &ComputedStyle) {
         // Only paint if there are borders
-        let top = style.border_top_width.to_px();
-        let right = style.border_right_width.to_px();
-        let bottom = style.border_bottom_width.to_px();
-        let left = style.border_left_width.to_px();
+        let top = style.border_top_width.to_px() * self.scale;
+        let right = style.border_right_width.to_px() * self.scale;
+        let bottom = style.border_bottom_width.to_px() * self.scale;
+        let left = style.border_left_width.to_px() * self.scale;
+
+        let x = self.device_length(x);
+        let y = self.device_length(y);
+        let width = self.device_length(width);
+        let height = self.device_length(height);
 
         if top <= 0.0 && right <= 0.0 && bottom <= 0.0 && left <= 0.0 {
             return;
@@ -1614,17 +1749,17 @@ impl Painter {
     }
 
     fn paint_outline(&mut self, x: f32, y: f32, width: f32, height: f32, style: &ComputedStyle) {
-        let ow = style.outline_width.to_px();
+        let ow = style.outline_width.to_px() * self.scale;
         let outline_style = style.outline_style.to_border_style();
         if ow <= 0.0 || matches!(outline_style, CssBorderStyle::None | CssBorderStyle::Hidden) {
             return;
         }
-        let offset = style.outline_offset.to_px();
+        let offset = style.outline_offset.to_px() * self.scale;
         let expand = offset + ow * 0.5;
-        let outer_x = x - expand;
-        let outer_y = y - expand;
-        let outer_w = width + 2.0 * expand;
-        let outer_h = height + 2.0 * expand;
+        let outer_x = self.device_length(x) - expand;
+        let outer_y = self.device_length(y) - expand;
+        let outer_w = self.device_length(width) + 2.0 * expand;
+        let outer_h = self.device_length(height) + 2.0 * expand;
         let (color, invert) = style.outline_color.resolve(style.color);
         let blend_mode = if invert {
             SkiaBlendMode::Difference
@@ -1740,6 +1875,8 @@ impl Painter {
         color: Rgba,
         style: Option<&ComputedStyle>,
     ) {
+        let origin_x = origin_x * self.scale;
+        let baseline_y = baseline_y * self.scale;
         // ttf_parser face
         let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
             Ok(f) => f,
@@ -1747,17 +1884,17 @@ impl Painter {
         };
         let units_per_em = face.units_per_em() as f32;
         let mut scale = run.font_size / units_per_em;
-        scale *= run.scale;
+        scale *= run.scale * self.scale;
 
         let mut glyph_paths = Vec::with_capacity(run.glyphs.len());
         let mut bounds = PathBounds::new();
 
         for glyph in &run.glyphs {
             let glyph_x = match run.direction {
-                crate::text::pipeline::Direction::RightToLeft => origin_x - glyph.x_offset,
-                _ => origin_x + glyph.x_offset,
+                crate::text::pipeline::Direction::RightToLeft => origin_x - glyph.x_offset * self.scale,
+                _ => origin_x + glyph.x_offset * self.scale,
             };
-            let glyph_y = baseline_y - glyph.y_offset;
+            let glyph_y = baseline_y - glyph.y_offset * self.scale;
 
             let glyph_id: u16 = glyph.glyph_id as u16;
 
@@ -1902,11 +2039,15 @@ impl Painter {
 
     fn paint_text_shadows(&mut self, paths: &[tiny_skia::Path], bounds: &PathBounds, shadows: &[ResolvedTextShadow]) {
         for shadow in shadows {
-            let blur_margin = (shadow.blur_radius.abs() * 3.0).ceil();
-            let shadow_min_x = bounds.min_x + shadow.offset_x - blur_margin;
-            let shadow_max_x = bounds.max_x + shadow.offset_x + blur_margin;
-            let shadow_min_y = bounds.min_y + shadow.offset_y - blur_margin;
-            let shadow_max_y = bounds.max_y + shadow.offset_y + blur_margin;
+            let offset_x = shadow.offset_x * self.scale;
+            let offset_y = shadow.offset_y * self.scale;
+            let blur = shadow.blur_radius * self.scale;
+
+            let blur_margin = (blur.abs() * 3.0).ceil();
+            let shadow_min_x = bounds.min_x + offset_x - blur_margin;
+            let shadow_max_x = bounds.max_x + offset_x + blur_margin;
+            let shadow_min_y = bounds.min_y + offset_y - blur_margin;
+            let shadow_max_y = bounds.max_y + offset_y + blur_margin;
 
             let shadow_width = (shadow_max_x - shadow_min_x).ceil().max(0.0) as u32;
             let shadow_height = (shadow_max_y - shadow_min_y).ceil().max(0.0) as u32;
@@ -1929,8 +2070,8 @@ impl Painter {
                 shadow_pixmap.fill_path(path, &paint, tiny_skia::FillRule::EvenOdd, transform, None);
             }
 
-            if shadow.blur_radius > 0.0 {
-                apply_gaussian_blur(&mut shadow_pixmap, shadow.blur_radius);
+            if blur > 0.0 {
+                apply_gaussian_blur(&mut shadow_pixmap, blur);
             }
 
             let dest_x = shadow_min_x.floor() as i32;
@@ -2122,11 +2263,16 @@ impl Painter {
             img_w,
             img_h,
             style.map(|s| s.font_size).unwrap_or(16.0),
-            Some((self.pixmap.width() as f32, self.pixmap.height() as f32)),
+            Some((self.css_width, self.css_height)),
         ) {
             Some(v) => v,
             None => return false,
         };
+
+        let dest_x = self.device_length(dest_x);
+        let dest_y = self.device_length(dest_y);
+        let dest_w = self.device_length(dest_w);
+        let dest_h = self.device_length(dest_h);
 
         let scale_x = dest_w / img_w;
         let scale_y = dest_h / img_h;
@@ -2137,7 +2283,14 @@ impl Painter {
         let mut paint = PixmapPaint::default();
         paint.quality = Self::filter_quality_for_image(style);
 
-        let transform = Transform::from_row(scale_x, 0.0, 0.0, scale_y, x + dest_x, y + dest_y);
+        let transform = Transform::from_row(
+            scale_x,
+            0.0,
+            0.0,
+            scale_y,
+            self.device_length(x) + dest_x,
+            self.device_length(y) + dest_y,
+        );
         self.pixmap.draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);
         true
     }
@@ -2189,11 +2342,16 @@ impl Painter {
             img_w,
             img_h,
             style.map(|s| s.font_size).unwrap_or(16.0),
-            Some((self.pixmap.width() as f32, self.pixmap.height() as f32)),
+            Some((self.css_width, self.css_height)),
         ) {
             Some(v) => v,
             None => return false,
         };
+
+        let dest_x = self.device_length(dest_x);
+        let dest_y = self.device_length(dest_y);
+        let dest_w = self.device_length(dest_w);
+        let dest_h = self.device_length(dest_h);
 
         let scale_x = dest_w / img_w;
         let scale_y = dest_h / img_h;
@@ -2204,7 +2362,14 @@ impl Painter {
         let mut paint = PixmapPaint::default();
         paint.quality = Self::filter_quality_for_image(style);
 
-        let transform = Transform::from_row(scale_x, 0.0, 0.0, scale_y, x + dest_x, y + dest_y);
+        let transform = Transform::from_row(
+            scale_x,
+            0.0,
+            0.0,
+            scale_y,
+            self.device_length(x) + dest_x,
+            self.device_length(y) + dest_y,
+        );
         self.pixmap.draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);
         true
     }
@@ -2214,7 +2379,14 @@ impl Painter {
         paint.set_color_rgba8(200, 200, 200, 255); // Light gray
         paint.anti_alias = true;
 
-        if let Some(sk_rect) = SkiaRect::from_xywh(rect.x(), rect.y(), rect.width(), rect.height()) {
+        let device_rect = self.device_rect(rect);
+
+        if let Some(sk_rect) = SkiaRect::from_xywh(
+            device_rect.x(),
+            device_rect.y(),
+            device_rect.width(),
+            device_rect.height(),
+        ) {
             let path = PathBuilder::from_rect(sk_rect);
             self.pixmap
                 .fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
@@ -2225,7 +2397,7 @@ impl Painter {
             stroke_paint.anti_alias = true;
 
             let stroke = tiny_skia::Stroke {
-                width: 1.0,
+                width: 1.0 * self.scale,
                 ..Default::default()
             };
             self.pixmap
@@ -2369,7 +2541,7 @@ impl Painter {
         offset: crate::style::types::TextUnderlineOffset,
         style: &ComputedStyle,
     ) -> f32 {
-        match offset {
+        let resolved = match offset {
             crate::style::types::TextUnderlineOffset::Auto => 0.0,
             crate::style::types::TextUnderlineOffset::Length(l) => {
                 if l.unit == LengthUnit::Percent {
@@ -2377,14 +2549,15 @@ impl Painter {
                 } else if l.unit.is_font_relative() {
                     l.resolve_with_font_size(style.font_size)
                 } else if l.unit.is_viewport_relative() {
-                    l.resolve_with_viewport(self.pixmap.width() as f32, self.pixmap.height() as f32)
+                    l.resolve_with_viewport(self.css_width, self.css_height)
                 } else if l.unit.is_absolute() {
                     l.to_px()
                 } else {
                     l.value * style.font_size
                 }
             }
-        }
+        };
+        resolved * self.scale
     }
 
     fn underline_position(
@@ -2444,9 +2617,14 @@ impl Painter {
             return;
         }
 
+        let x = self.device_length(x);
+        let baseline_y = self.device_length(baseline_y);
+        let width = self.device_length(width);
+
         let Some(metrics) = self.decoration_metrics(runs, style) else {
             return;
         };
+        let metrics = metrics.scaled(self.scale);
 
         let draw_solid_line =
             |pixmap: &mut Pixmap, paint: &Paint, start: f32, len: f32, center: f32, thickness: f32| {
@@ -2541,11 +2719,11 @@ impl Painter {
                     } else if unit.is_font_relative() {
                         l.resolve_with_font_size(style.font_size)
                     } else if unit.is_viewport_relative() {
-                        l.resolve_with_viewport(self.pixmap.width() as f32, self.pixmap.height() as f32)
+                        l.resolve_with_viewport(self.css_width, self.css_height)
                     } else {
                         l.to_px()
                     };
-                    Some(resolved)
+                    Some(resolved * self.scale)
                 }
             };
 
@@ -2689,6 +2867,7 @@ impl Painter {
             band_top,
             band_bottom,
             skip_ink == TextDecorationSkipInk::All,
+            self.scale,
         );
 
         let mut segments = subtract_intervals((line_start, line_start + line_width), &mut exclusions);
@@ -2714,16 +2893,20 @@ impl Painter {
             return;
         }
 
+        let origin_x = self.device_length(origin_x);
+        let baseline_y = self.device_length(baseline_y);
+
         let Some(metrics) = self.decoration_metrics(Some(runs), style) else {
             return;
         };
+        let metrics = metrics.scaled(self.scale);
 
         let resolved_position = match style.text_emphasis_position {
             crate::style::types::TextEmphasisPosition::Auto => crate::style::types::TextEmphasisPosition::Over,
             other => other,
         };
         let emphasis_color = style.text_emphasis_color.unwrap_or(style.color);
-        let mark_size = (style.font_size * 0.5).max(1.0);
+        let mark_size = (style.font_size * 0.5 * self.scale).max(1.0);
         let gap = mark_size * 0.3;
 
         let center_y = match resolved_position {
@@ -2749,7 +2932,7 @@ impl Painter {
                 let Ok(mark_runs) = self.shaper.shape(s, &mark_style, &self.font_ctx) else {
                     return;
                 };
-                let mark_width: f32 = mark_runs.iter().map(|r| r.advance).sum();
+                let mark_width: f32 = mark_runs.iter().map(|r| r.advance * self.scale).sum();
                 let mark_metrics = crate::layout::contexts::inline::line_builder::TextItem::metrics_from_runs(
                     &mark_runs,
                     mark_style.font_size,
@@ -2758,44 +2941,42 @@ impl Painter {
                 let mut paths = Vec::new();
                 let mut pen_x = 0.0;
                 for run in &mark_runs {
-                    let run_origin = if run.direction.is_rtl() {
-                        pen_x + run.advance
-                    } else {
-                        pen_x
-                    };
+                    let advance = run.advance * self.scale;
+                    let run_origin = if run.direction.is_rtl() { pen_x + advance } else { pen_x };
                     let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
                         Ok(f) => f,
                         Err(_) => continue,
                     };
                     let units_per_em = face.units_per_em() as f32;
-                    let scale = run.font_size / units_per_em;
+                    let scale = (run.font_size / units_per_em) * self.scale;
                     for glyph in &run.glyphs {
                         let glyph_x = match run.direction {
-                            crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset,
-                            _ => run_origin + glyph.x_offset,
+                            crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset * self.scale,
+                            _ => run_origin + glyph.x_offset * self.scale,
                         };
-                        let glyph_y = mark_metrics.baseline_offset;
+                        let glyph_y = mark_metrics.baseline_offset * self.scale;
                         if let Some(path) =
                             Self::build_glyph_path(&face, glyph.glyph_id as u16, glyph_x, glyph_y, scale)
                         {
                             paths.push(path);
                         }
                     }
-                    pen_x += run.advance;
+                    pen_x += advance;
                 }
                 if !paths.is_empty() {
-                    string_mark = Some((paths, mark_width, mark_metrics.ascent + mark_metrics.descent));
+                    string_mark = Some((
+                        paths,
+                        mark_width,
+                        (mark_metrics.ascent + mark_metrics.descent) * self.scale,
+                    ));
                 }
             }
         }
 
         let mut pen_x = origin_x;
         for run in runs {
-            let run_origin = if run.direction.is_rtl() {
-                pen_x + run.advance
-            } else {
-                pen_x
-            };
+            let advance = run.advance * self.scale;
+            let run_origin = if run.direction.is_rtl() { pen_x + advance } else { pen_x };
 
             let mut seen_clusters = std::collections::HashSet::new();
             for glyph in &run.glyphs {
@@ -2812,9 +2993,9 @@ impl Painter {
                 }
                 let mark_center_x = match run.direction {
                     crate::text::pipeline::Direction::RightToLeft => {
-                        run_origin - (glyph.x_offset + glyph.x_advance * 0.5)
+                        run_origin - (glyph.x_offset + glyph.x_advance * 0.5) * self.scale
                     }
-                    _ => run_origin + glyph.x_offset + glyph.x_advance * 0.5,
+                    _ => run_origin + (glyph.x_offset + glyph.x_advance * 0.5) * self.scale,
                 };
 
                 match style.text_emphasis_style {
@@ -2855,7 +3036,7 @@ impl Painter {
                 }
             }
 
-            pen_x += run.advance;
+            pen_x += advance;
         }
     }
 
@@ -3003,6 +3184,17 @@ impl DecorationMetrics {
         let direction = if base >= 0.0 { 1.0 } else { -1.0 };
         base + offset * direction
     }
+
+    fn scaled(self, scale: f32) -> Self {
+        Self {
+            underline_pos: self.underline_pos * scale,
+            underline_thickness: self.underline_thickness * scale,
+            strike_pos: self.strike_pos * scale,
+            strike_thickness: self.strike_thickness * scale,
+            ascent: self.ascent * scale,
+            descent: self.descent * scale,
+        }
+    }
 }
 
 fn collect_underline_exclusions(
@@ -3012,12 +3204,13 @@ fn collect_underline_exclusions(
     band_top: f32,
     band_bottom: f32,
     skip_all: bool,
+    device_scale: f32,
 ) -> Vec<(f32, f32)> {
     let mut intervals = Vec::new();
     // Small inflation to account for antialiasing without swallowing the entire line.
-    let tolerance = 0.5;
+    let tolerance = 0.5 * device_scale;
 
-    let mut pen_x = line_start;
+    let mut pen_x = line_start * device_scale;
     for run in runs {
         let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
             Ok(f) => f,
@@ -3027,19 +3220,17 @@ fn collect_underline_exclusions(
         if units_per_em == 0.0 {
             continue;
         }
-        let scale = run.font_size / units_per_em;
-        let run_origin = if run.direction.is_rtl() {
-            pen_x + run.advance
-        } else {
-            pen_x
-        };
+        let mut scale = run.font_size / units_per_em;
+        scale *= run.scale * device_scale;
+        let advance = run.advance * device_scale;
+        let run_origin = if run.direction.is_rtl() { pen_x + advance } else { pen_x };
 
         for glyph in &run.glyphs {
             let glyph_x = match run.direction {
-                crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset,
-                _ => run_origin + glyph.x_offset,
+                crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset * device_scale,
+                _ => run_origin + glyph.x_offset * device_scale,
             };
-            let glyph_y = baseline_y - glyph.y_offset;
+            let glyph_y = baseline_y - glyph.y_offset * device_scale;
             if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
                 let left = glyph_x + bbox.x_min as f32 * scale - tolerance;
                 let right = glyph_x + bbox.x_max as f32 * scale + tolerance;
@@ -3052,7 +3243,7 @@ fn collect_underline_exclusions(
             }
         }
 
-        pen_x += run.advance;
+        pen_x += advance;
     }
 
     intervals
@@ -3378,7 +3569,7 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
         .collect()
 }
 
-fn resolve_filters(filters: &[FilterFunction], style: &ComputedStyle) -> Vec<ResolvedFilter> {
+fn resolve_filters(filters: &[FilterFunction], style: &ComputedStyle, _scale: f32) -> Vec<ResolvedFilter> {
     filters
         .iter()
         .filter_map(|f| match f {
@@ -3452,10 +3643,10 @@ fn filter_outset(filters: &[ResolvedFilter]) -> (f32, f32, f32, f32) {
     (left.max(0.0), top.max(0.0), right.max(0.0), bottom.max(0.0))
 }
 
-fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter]) {
+fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32) {
     for filter in filters {
         match *filter {
-            ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, radius),
+            ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, radius * scale),
             ResolvedFilter::Brightness(amount) => apply_color_filter(pixmap, |c, a| (scale_color(c, amount), a)),
             ResolvedFilter::Contrast(amount) => apply_color_filter(pixmap, |c, a| (apply_contrast(c, amount), a)),
             ResolvedFilter::Grayscale(amount) => apply_color_filter(pixmap, |c, a| (grayscale(c, amount), a)),
@@ -3470,19 +3661,38 @@ fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter]) {
                 blur_radius,
                 spread,
                 color,
-            } => apply_drop_shadow(pixmap, offset_x, offset_y, blur_radius, spread, color),
+            } => apply_drop_shadow(
+                pixmap,
+                offset_x * scale,
+                offset_y * scale,
+                blur_radius * scale,
+                spread * scale,
+                color,
+            ),
         }
     }
 }
 
-fn apply_backdrop_filters(pixmap: &mut Pixmap, bounds: &Rect, filters: &[ResolvedFilter], radii: BorderRadii) {
+fn apply_backdrop_filters(
+    pixmap: &mut Pixmap,
+    bounds: &Rect,
+    filters: &[ResolvedFilter],
+    radii: BorderRadii,
+    scale: f32,
+) {
     if filters.is_empty() {
         return;
     }
-    let x = bounds.min_x().floor() as i32;
-    let y = bounds.min_y().floor() as i32;
-    let width = bounds.width().ceil() as u32;
-    let height = bounds.height().ceil() as u32;
+    let (out_l, out_t, out_r, out_b) = filter_outset(filters);
+    let device_out_l = out_l * scale;
+    let device_out_t = out_t * scale;
+    let device_out_r = out_r * scale;
+    let device_out_b = out_b * scale;
+
+    let x = (bounds.min_x() - device_out_l).floor() as i32;
+    let y = (bounds.min_y() - device_out_t).floor() as i32;
+    let width = (bounds.width() + device_out_l + device_out_r).ceil() as u32;
+    let height = (bounds.height() + device_out_t + device_out_b).ceil() as u32;
     if width == 0 || height == 0 {
         return;
     }
@@ -3522,15 +3732,26 @@ fn apply_backdrop_filters(pixmap: &mut Pixmap, bounds: &Rect, filters: &[Resolve
         dst_slice.copy_from_slice(src_slice);
     }
 
-    apply_filters(&mut region, filters);
+    apply_filters(&mut region, filters, scale);
     if !radii.is_zero() {
         let local_rect = Rect::from_xywh(
-            bounds.x() - clamped_x as f32,
-            bounds.y() - clamped_y as f32,
-            bounds.width(),
-            bounds.height(),
+            bounds.x() - device_out_l - clamped_x as f32,
+            bounds.y() - device_out_t - clamped_y as f32,
+            bounds.width() + device_out_l + device_out_r,
+            bounds.height() + device_out_t + device_out_b,
         );
-        apply_clip_mask_rect(&mut region, local_rect, radii);
+        let inflate = device_out_l.max(device_out_t).max(device_out_r).max(device_out_b);
+        let inflated_radii = if inflate > 0.0 {
+            BorderRadii {
+                top_left: radii.top_left + inflate,
+                top_right: radii.top_right + inflate,
+                bottom_right: radii.bottom_right + inflate,
+                bottom_left: radii.bottom_left + inflate,
+            }
+        } else {
+            radii
+        };
+        apply_clip_mask_rect(&mut region, local_rect, inflated_radii);
     }
 
     let mut paint = PixmapPaint::default();
@@ -3760,7 +3981,11 @@ fn rgb_to_hsl(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     }
 
     let d = max - min;
-    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
     let h = if (max - r).abs() < f32::EPSILON {
         (g - b) / d + if g < b { 6.0 } else { 0.0 }
     } else if (max - g).abs() < f32::EPSILON {
@@ -3814,13 +4039,7 @@ fn apply_hsl_blend(mode: MixBlendMode, src: (f32, f32, f32), dst: (f32, f32, f32
     }
 }
 
-fn composite_hsl_layer(
-    dest: &mut Pixmap,
-    layer: &Pixmap,
-    opacity: f32,
-    mode: MixBlendMode,
-    area: Option<Rect>,
-) {
+fn composite_hsl_layer(dest: &mut Pixmap, layer: &Pixmap, opacity: f32, mode: MixBlendMode, area: Option<Rect>) {
     if !is_hsl_blend(mode) {
         return;
     }
@@ -3907,8 +4126,7 @@ fn composite_hsl_layer(
             let r = ((out_rgb.0 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
             let g = ((out_rgb.1 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
             let b = ((out_rgb.2 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
-            *dst_px = PremultipliedColorU8::from_rgba(r, g, b, out_a_u8)
-                .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+            *dst_px = PremultipliedColorU8::from_rgba(r, g, b, out_a_u8).unwrap_or(PremultipliedColorU8::TRANSPARENT);
         }
     }
 }
@@ -4281,11 +4499,11 @@ fn normalize_color_stops(stops: &[ColorStop], current_color: Rgba) -> Vec<(f32, 
         let pos = pos_opt.unwrap_or(prev);
         let clamped = pos.max(prev).clamp(0.0, 1.0);
         prev = clamped;
-            output.push((clamped, stops[idx].color.to_rgba(current_color)));
-        }
-
-        output
+        output.push((clamped, stops[idx].color.to_rgba(current_color)));
     }
+
+    output
+}
 
 fn gradient_stops(stops: &[(f32, Rgba)]) -> Vec<tiny_skia::GradientStop> {
     stops
@@ -4368,7 +4586,18 @@ fn tile_positions(
 ///
 /// This is the main entry point for painting.
 pub fn paint_tree(tree: &FragmentTree, width: u32, height: u32, background: Rgba) -> Result<Pixmap> {
-    let painter = Painter::new(width, height, background)?;
+    paint_tree_scaled(tree, width, height, background, 1.0)
+}
+
+/// Paints a fragment tree at the given device scale.
+pub fn paint_tree_scaled(
+    tree: &FragmentTree,
+    width: u32,
+    height: u32,
+    background: Rgba,
+    scale: f32,
+) -> Result<Pixmap> {
+    let painter = Painter::with_resources_scaled(width, height, background, FontContext::new(), ImageCache::new(), scale)?;
     painter.paint(tree)
 }
 
@@ -4381,8 +4610,43 @@ pub fn paint_tree_with_resources(
     font_ctx: FontContext,
     image_cache: ImageCache,
 ) -> Result<Pixmap> {
-    let painter = Painter::with_resources(width, height, background, font_ctx, image_cache)?;
+    paint_tree_with_resources_scaled(tree, width, height, background, font_ctx, image_cache, 1.0)
+}
+
+/// Paints a fragment tree using explicit resources at the provided device scale.
+pub fn paint_tree_with_resources_scaled(
+    tree: &FragmentTree,
+    width: u32,
+    height: u32,
+    background: Rgba,
+    font_ctx: FontContext,
+    image_cache: ImageCache,
+    scale: f32,
+) -> Result<Pixmap> {
+    let painter = Painter::with_resources_scaled(width, height, background, font_ctx, image_cache, scale)?;
     painter.paint(tree)
+}
+
+/// Scales a pixmap by the given device pixel ratio, returning a new pixmap.
+/// This is a coarse fallback for high-DPI outputs; painting should ideally
+/// happen directly at device resolution.
+pub fn scale_pixmap_for_dpr(pixmap: Pixmap, dpr: f32) -> Result<Pixmap> {
+    let dpr = if dpr.is_finite() && dpr > 0.0 { dpr } else { 1.0 };
+    if (dpr - 1.0).abs() < f32::EPSILON {
+        return Ok(pixmap);
+    }
+
+    let new_w = (((pixmap.width() as f32) * dpr).round()).max(1.0) as u32;
+    let new_h = (((pixmap.height() as f32) * dpr).round()).max(1.0) as u32;
+    let mut target = Pixmap::new(new_w, new_h).ok_or_else(|| RenderError::InvalidParameters {
+        message: "Failed to allocate scaled pixmap".to_string(),
+    })?;
+
+    let mut paint = PixmapPaint::default();
+    paint.quality = FilterQuality::Bilinear;
+    let transform = Transform::from_scale(dpr, dpr);
+    target.draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);
+    Ok(target)
 }
 
 #[cfg(test)]
@@ -4443,7 +4707,9 @@ mod tests {
             actual.2 as f32 / 255.0,
         );
         assert!(
-            hue_delta(h, expected_hsl.0) <= tol_h && (s - expected_hsl.1).abs() <= tol_s && (l - expected_hsl.2).abs() <= tol_l,
+            hue_delta(h, expected_hsl.0) <= tol_h
+                && (s - expected_hsl.1).abs() <= tol_s
+                && (l - expected_hsl.2).abs() <= tol_l,
             "{context}: expected hsl {:?}, got hsl ({h:.3},{s:.3},{l:.3})",
             expected_hsl
         );
@@ -4792,6 +5058,7 @@ mod tests {
             center - thickness * 0.5,
             center + thickness * 0.5,
             false,
+            painter.scale,
         );
         let target = exclusions
             .iter()
@@ -5482,11 +5749,7 @@ mod tests {
         child_style.background_color = Rgba::from_rgba8(src.0, src.1, src.2, 255);
         child_style.mix_blend_mode = MixBlendMode::Hue;
 
-        let child = FragmentNode::new_block_styled(
-            Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
-            vec![],
-            Arc::new(child_style),
-        );
+        let child = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 2.0, 2.0), vec![], Arc::new(child_style));
         let mut root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 2.0, 2.0), vec![child]);
         root.style = Some(Arc::new(root_style));
 
@@ -5528,11 +5791,7 @@ mod tests {
             ..BackgroundLayer::default()
         }]);
 
-        let fragment = FragmentNode::new_block_styled(
-            Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
-            vec![],
-            Arc::new(style),
-        );
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 2.0, 2.0), vec![], Arc::new(style));
         let pixmap = paint_tree(&FragmentTree::new(fragment), 2, 2, Rgba::WHITE).expect("paint");
         let (r, g, b, _) = color_at(&pixmap, 0, 0);
 
@@ -5685,6 +5944,51 @@ mod tests {
         }
         assert!(found_outline, "outline stroke should paint outside the box");
         assert_eq!(color_at(&pixmap, 0, 0), (255, 255, 255, 255));
+    }
+
+    #[test]
+    fn filters_expand_clip_under_radii() {
+        let mut painter = Painter::with_resources_scaled(
+            4,
+            4,
+            Rgba::TRANSPARENT,
+            FontContext::new(),
+            ImageCache::new(),
+            1.0,
+        )
+        .unwrap();
+        painter.fill_background();
+
+        let mut style = ComputedStyle::default();
+        style.background_color = Rgba::RED;
+        let style = Arc::new(style);
+
+        let cmd = DisplayCommand::StackingContext {
+            rect: Rect::from_xywh(1.0, 1.0, 2.0, 2.0),
+            opacity: 1.0,
+            transform: None,
+            blend_mode: MixBlendMode::Normal,
+            isolated: true,
+            filters: vec![ResolvedFilter::Blur(1.0)],
+            backdrop_filters: Vec::new(),
+            radii: BorderRadii::uniform(0.5),
+            clip: None,
+            commands: vec![DisplayCommand::Background {
+                rect: Rect::from_xywh(1.0, 1.0, 2.0, 2.0),
+                style,
+            }],
+        };
+
+        painter.execute_command(cmd).unwrap();
+        let alpha_near = painter.pixmap.pixel(0, 1).unwrap().alpha();
+        assert!(
+            alpha_near > 0,
+            "expected blur spill outside rounded rect; alpha at (0,1) was {alpha_near}"
+        );
+        assert!(
+            alpha_near < 255,
+            "blurred spill should be softer than solid fill; alpha at (0,1) was {alpha_near}"
+        );
     }
 
     #[test]
