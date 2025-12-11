@@ -3163,6 +3163,11 @@ impl InlineFormattingContext {
         };
 
         // Create fragments
+        let static_position = lines
+            .first()
+            .map(|l| Point::new(l.left_offset, l.y_offset))
+            .unwrap_or(Point::ZERO);
+
         let children = self.create_fragments(
             lines,
             0.0,
@@ -3180,6 +3185,7 @@ impl InlineFormattingContext {
 
         // For vertical writing modes, rotate the inline content so the inline axis is vertical and
         // lines advance along the block axis (horizontal).
+        let mut static_position = static_position;
         match style.writing_mode {
             crate::style::types::WritingMode::VerticalRl => {
                 let (w, h) = (bounds.height(), bounds.width());
@@ -3187,6 +3193,7 @@ impl InlineFormattingContext {
                     Self::rotate_fragment_ccw(child, h);
                 }
                 bounds = Rect::from_xywh(0.0, 0.0, w, h);
+                static_position = Point::new(static_position.y, h - static_position.x);
             }
             crate::style::types::WritingMode::VerticalLr => {
                 let (w, h) = (bounds.height(), bounds.width());
@@ -3194,6 +3201,7 @@ impl InlineFormattingContext {
                     Self::rotate_fragment_cw(child, h);
                 }
                 bounds = Rect::from_xywh(0.0, 0.0, w, h);
+                static_position = Point::new(h - static_position.y, static_position.x);
             }
             _ => {}
         }
@@ -3290,7 +3298,7 @@ impl InlineFormattingContext {
                 let positioned_style =
                     resolve_positioned_style(&child.style, &cb, self.viewport_size, &self.font_context);
                 let input =
-                    AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, cb.rect.origin);
+                    AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, static_position);
                 let result = abs.layout_absolute(&input, &cb)?;
                 child_fragment.bounds = Rect::new(result.position, result.size);
                 merged_children.push(child_fragment);
