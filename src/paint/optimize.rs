@@ -255,162 +255,126 @@ impl DisplayListOptimizer {
     /// Cull items outside the viewport
     fn cull_items(&self, items: Vec<DisplayItem>, viewport: Rect) -> Vec<DisplayItem> {
         let mut result = Vec::with_capacity(items.len());
-        let mut stack_depth = 0usize;
-        let mut skip_until_depth: Option<usize> = None;
-        let mut forced_context_stack: Vec<bool> = Vec::new();
-        let mut active_forced_contexts = 0usize;
-        let mut active_transforms = 0usize;
+        let mut transform_stack: Vec<bool> = Vec::new();
+        let mut active_transform_depth = 0usize;
+        let mut context_stack: Vec<ContextRecord> = Vec::new();
+        let mut active_effect_contexts = 0usize;
 
         for item in items {
-            // Track stack depth for push/pop operations
-            let is_push = matches!(
-                item,
-                DisplayItem::PushClip(_)
-                    | DisplayItem::PushOpacity(_)
-                    | DisplayItem::PushTransform(_)
-                    | DisplayItem::PushBlendMode(_)
-                    | DisplayItem::PushStackingContext(_)
-            );
-            let is_pop = matches!(
-                item,
-                DisplayItem::PopClip
-                    | DisplayItem::PopOpacity
-                    | DisplayItem::PopTransform
-                    | DisplayItem::PopBlendMode
-                    | DisplayItem::PopStackingContext
-            );
-
-            if is_push {
-                stack_depth += 1;
-            }
+            let mut include_item = false;
+            let mut item_bounds: Option<Rect> = None;
 
             match &item {
                 DisplayItem::PushTransform(t) => {
-                    if !t.transform.is_identity() {
-                        active_transforms += 1;
+                    let non_identity = !t.transform.is_identity();
+                    transform_stack.push(non_identity);
+                    if non_identity {
+                        active_transform_depth += 1;
                     }
+                    include_item = true;
+                }
+                DisplayItem::PopTransform => {
+                    if transform_stack.pop().unwrap_or(false) && active_transform_depth > 0 {
+                        active_transform_depth -= 1;
+                    }
+                    include_item = true;
                 }
                 DisplayItem::PushStackingContext(sc) => {
-                    let force = !sc.filters.is_empty()
-                        || !sc.backdrop_filters.is_empty()
-                        || sc.transform.map_or(false, |t| !t.is_identity());
-                    forced_context_stack.push(force);
-                    if force {
-                        active_forced_contexts += 1;
+                    let effects = !sc.filters.is_empty() || !sc.backdrop_filters.is_empty();
+                    if effects {
+                        active_effect_contexts += 1;
                     }
-                }
-                _ => {}
-            }
-
-            let force_active = active_transforms > 0 || active_forced_contexts > 0;
-
-            if skip_until_depth.is_none() {
-                match &item {
-                    DisplayItem::PushClip(clip) => {
-                        if !force_active && !viewport.intersects(clip.rect) {
-                            skip_until_depth = Some(stack_depth);
-                        }
+                    let has_transform = sc.transform.map_or(false, |t| !t.is_identity());
+                    if has_transform {
+                        active_transform_depth += 1;
                     }
-                    DisplayItem::PushStackingContext(sc) => {
-                        let bounds = self.stacking_context_bounds(sc);
-                        if !viewport.intersects(bounds) {
-                            skip_until_depth = Some(stack_depth);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-
-            let skipping = skip_until_depth.is_some();
-
-            let mut include_item = false;
-
-            if !skipping {
-                include_item = if force_active {
-                    true
-                } else {
-                    match &item {
-                        // Check bounds for drawable items
-                        DisplayItem::FillRect(i) => viewport.intersects(i.rect),
-                        DisplayItem::StrokeRect(i) => viewport.intersects(i.rect.inflate(i.width / 2.0)),
-                        DisplayItem::FillRoundedRect(i) => viewport.intersects(i.rect),
-                        DisplayItem::StrokeRoundedRect(i) => viewport.intersects(i.rect.inflate(i.width / 2.0)),
-                        DisplayItem::Text(item) => {
-                            let bounds =
-                                Rect::from_xywh(item.origin.x, item.origin.y, item.advance_width, item.font_size);
-                            viewport.intersects(bounds)
-                        }
-                        DisplayItem::Image(i) => viewport.intersects(i.dest_rect),
-                        DisplayItem::BoxShadow(i) => {
-                            if i.inset {
-                                viewport.intersects(i.rect)
-                            } else {
-                                // Outset shadow can extend by spread, blur, and offset.
-                                let blur_outset = i.blur_radius.abs() * 3.0;
-                                let spread = i.spread_radius;
-                                let shadow_rect = Rect::from_xywh(
-                                    i.rect.x() + i.offset.x - spread,
-                                    i.rect.y() + i.offset.y - spread,
-                                    i.rect.width() + spread * 2.0,
-                                    i.rect.height() + spread * 2.0,
-                                )
-                                .inflate(blur_outset);
-                                viewport.intersects(shadow_rect)
-                            }
-                        }
-                        DisplayItem::Border(b) => {
-                            let max_w = b
-                                .top
-                                .width
-                                .max(b.right.width)
-                                .max(b.bottom.width)
-                                .max(b.left.width);
-                            viewport.intersects(b.rect.inflate(max_w * 0.5))
-                        }
-                        DisplayItem::LinearGradient(i) => viewport.intersects(i.rect),
-                        DisplayItem::RadialGradient(i) => viewport.intersects(i.rect),
-                        // Always include pop operations and other push operations
-                        DisplayItem::PushClip(_) => true,
-                        DisplayItem::PopClip
-                        | DisplayItem::PopOpacity
-                        | DisplayItem::PopTransform
-                        | DisplayItem::PopBlendMode
-                        | DisplayItem::PopStackingContext
-                        | DisplayItem::PushOpacity(_)
-                        | DisplayItem::PushTransform(_)
-                        | DisplayItem::PushBlendMode(_)
-                        | DisplayItem::PushStackingContext(_) => true,
-                    }
-                };
-            }
-
-            match &item {
-                DisplayItem::PopTransform => {
-                    if active_transforms > 0 {
-                        active_transforms -= 1;
-                    }
+                    context_stack.push(ContextRecord {
+                        start_index: result.len(),
+                        bounds: None,
+                        item: sc.clone(),
+                        transform_active: active_transform_depth > 0,
+                        has_transform,
+                        has_effects: effects,
+                    });
+                    include_item = true;
                 }
                 DisplayItem::PopStackingContext => {
-                    if let Some(force) = forced_context_stack.pop() {
-                        if force && active_forced_contexts > 0 {
-                            active_forced_contexts -= 1;
+                    include_item = true;
+                    if let Some(record) = context_stack.pop() {
+                        if record.has_transform && active_transform_depth > 0 {
+                            active_transform_depth -= 1;
+                        }
+                        if record.has_effects && active_effect_contexts > 0 {
+                            active_effect_contexts -= 1;
+                        }
+                        let keep = if record.transform_active {
+                            true
+                        } else {
+                            let ctx_bounds = self.stacking_context_bounds(&record.item, record.bounds);
+                            viewport.intersects(ctx_bounds)
+                        };
+                        if keep {
+                            if let Some(parent) = context_stack.last_mut() {
+                                if !parent.transform_active {
+                                    let ctx_bounds = self.stacking_context_bounds(&record.item, record.bounds);
+                                    parent.bounds = Some(match parent.bounds {
+                                        Some(b) => b.union(ctx_bounds),
+                                        None => ctx_bounds,
+                                    });
+                                }
+                            }
+                        } else {
+                            result.truncate(record.start_index);
+                            continue;
                         }
                     }
                 }
                 _ => {}
+            }
+
+            let force_active = active_transform_depth > 0 || active_effect_contexts > 0;
+
+            if !include_item {
+                if force_active {
+                    include_item = true;
+                } else {
+                    item_bounds = self.item_bounds(&item);
+                    include_item = match (item_bounds, &item) {
+                        (Some(bounds), _) => viewport.intersects(bounds),
+                        (None, _) => matches!(
+                            item,
+                            DisplayItem::PushClip(_)
+                                | DisplayItem::PopClip
+                                | DisplayItem::PushOpacity(_)
+                                | DisplayItem::PopOpacity
+                                | DisplayItem::PushTransform(_)
+                                | DisplayItem::PopTransform
+                                | DisplayItem::PushBlendMode(_)
+                                | DisplayItem::PopBlendMode
+                                | DisplayItem::PushStackingContext(_)
+                                | DisplayItem::PopStackingContext
+                        ),
+                    };
+                }
             }
 
             if include_item {
-                result.push(item);
-            }
-
-            if is_pop {
-                if let Some(target_depth) = skip_until_depth {
-                    if stack_depth <= target_depth {
-                        skip_until_depth = None;
+                result.push(item.clone());
+                if active_transform_depth == 0 {
+                    if item_bounds.is_none() {
+                        item_bounds = self.item_bounds(result.last().unwrap());
+                    }
+                    if let Some(bounds) = item_bounds {
+                        if let Some(context) = context_stack.last_mut() {
+                            if !context.transform_active {
+                                context.bounds = Some(match context.bounds {
+                                    Some(b) => b.union(bounds),
+                                    None => bounds,
+                                });
+                            }
+                        }
                     }
                 }
-                stack_depth = stack_depth.saturating_sub(1);
             }
         }
 
@@ -509,7 +473,51 @@ impl DisplayListOptimizer {
         result
     }
 
-    fn stacking_context_bounds(&self, item: &StackingContextItem) -> Rect {
+    fn item_bounds(&self, item: &DisplayItem) -> Option<Rect> {
+        match item {
+            DisplayItem::FillRect(i) => Some(i.rect),
+            DisplayItem::StrokeRect(i) => Some(i.rect.inflate(i.width / 2.0)),
+            DisplayItem::FillRoundedRect(i) => Some(i.rect),
+            DisplayItem::StrokeRoundedRect(i) => Some(i.rect.inflate(i.width / 2.0)),
+            DisplayItem::Text(item) => Some(Rect::from_xywh(
+                item.origin.x,
+                item.origin.y,
+                item.advance_width,
+                item.font_size,
+            )),
+            DisplayItem::Image(i) => Some(i.dest_rect),
+            DisplayItem::BoxShadow(i) => {
+                if i.inset {
+                    Some(i.rect)
+                } else {
+                    let blur_outset = i.blur_radius.abs() * 3.0;
+                    let spread = i.spread_radius;
+                    let shadow_rect = Rect::from_xywh(
+                        i.rect.x() + i.offset.x - spread,
+                        i.rect.y() + i.offset.y - spread,
+                        i.rect.width() + spread * 2.0,
+                        i.rect.height() + spread * 2.0,
+                    )
+                    .inflate(blur_outset);
+                    Some(shadow_rect)
+                }
+            }
+            DisplayItem::Border(b) => {
+                let max_w = b
+                    .top
+                    .width
+                    .max(b.right.width)
+                    .max(b.bottom.width)
+                    .max(b.left.width);
+                Some(b.rect.inflate(max_w * 0.5))
+            }
+            DisplayItem::LinearGradient(i) => Some(i.rect),
+            DisplayItem::RadialGradient(i) => Some(i.rect),
+            _ => None,
+        }
+    }
+
+    fn stacking_context_bounds(&self, item: &StackingContextItem, children: Option<Rect>) -> Rect {
         let (l, t, r, b) = Self::filter_outset(&item.filters);
         let (bl, bt, br, bb) = Self::filter_outset(&item.backdrop_filters);
         let expand_left = l.max(bl);
@@ -517,16 +525,15 @@ impl DisplayListOptimizer {
         let expand_right = r.max(br);
         let expand_bottom = b.max(bb);
 
-        let mut bounds = if expand_left > 0.0 || expand_top > 0.0 || expand_right > 0.0 || expand_bottom > 0.0 {
-            Rect::from_xywh(
-                item.bounds.min_x() - expand_left,
-                item.bounds.min_y() - expand_top,
-                item.bounds.width() + expand_left + expand_right,
-                item.bounds.height() + expand_top + expand_bottom,
-            )
-        } else {
-            item.bounds
-        };
+        let mut bounds = children.unwrap_or(item.bounds);
+        if expand_left > 0.0 || expand_top > 0.0 || expand_right > 0.0 || expand_bottom > 0.0 {
+            bounds = Rect::from_xywh(
+                bounds.min_x() - expand_left,
+                bounds.min_y() - expand_top,
+                bounds.width() + expand_left + expand_right,
+                bounds.height() + expand_top + expand_bottom,
+            );
+        }
 
         if let Some(transform) = item.transform {
             bounds = transform.transform_rect(bounds);
@@ -641,6 +648,16 @@ impl DisplayListOptimizer {
 
         None
     }
+}
+
+#[derive(Clone)]
+struct ContextRecord {
+    start_index: usize,
+    bounds: Option<Rect>,
+    item: StackingContextItem,
+    transform_active: bool,
+    has_transform: bool,
+    has_effects: bool,
 }
 
 impl Default for DisplayListOptimizer {
