@@ -32,15 +32,15 @@ use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, AspectRatio, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer,
     BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxSizing, CaptionSide,
-    Containment, Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting,
-    FontKerning, FontSizeAdjust, FontStretch, FontStyle, FontSynthesis, FontVariant, FontVariantAlternates,
-    FontVariantCaps, FontVariantEastAsian, FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontWeight,
-    GridTrack, HyphensMode, ImageRendering, Isolation, JustifyContent, LineBreak, LineHeight, ListStyleImage,
-    ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow,
-    OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextCombineUpright, TextDecoration,
-    TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextOrientation,
-    TextTransform, TextUnderlineOffset, TextUnderlinePosition, TransformOrigin, UnicodeBidi, VerticalAlign,
-    WhiteSpace, WillChange, WordBreak, WritingMode,
+    Containment, CursorImage, CursorKeyword, Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap,
+    FontFeatureSetting, FontKerning, FontSizeAdjust, FontStretch, FontStyle, FontSynthesis, FontVariant,
+    FontVariantAlternates, FontVariantCaps, FontVariantEastAsian, FontVariantLigatures, FontVariantNumeric,
+    FontVariantPosition, FontWeight, GridTrack, HyphensMode, ImageRendering, Isolation, JustifyContent, LineBreak,
+    LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor,
+    OutlineStyle, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextCombineUpright,
+    TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify,
+    TextOrientation, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TransformOrigin, UnicodeBidi,
+    VerticalAlign, WhiteSpace, WillChange, WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -61,6 +61,10 @@ pub struct ComputedStyle {
     /// Stacking order for positioned elements (`auto` = None)
     pub z_index: Option<i32>,
     pub visibility: Visibility,
+    /// Cursor property (inherited)
+    pub cursor: CursorKeyword,
+    /// Custom cursor images (in order of preference)
+    pub cursor_images: Vec<CursorImage>,
     pub outline_color: OutlineColor,
     pub outline_style: OutlineStyle,
     pub outline_width: Length,
@@ -273,6 +277,8 @@ impl Default for ComputedStyle {
             clear: Clear::None,
             z_index: None,
             visibility: Visibility::Visible,
+            cursor: CursorKeyword::Auto,
+            cursor_images: Vec::new(),
             outline_color: OutlineColor::Invert,
             outline_style: OutlineStyle::None,
             outline_width: Length::px(3.0),

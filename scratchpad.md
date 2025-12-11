@@ -20,6 +20,7 @@
 - `image-set()` is now accepted for `list-style-image`, selecting the best candidate and resolving to a URL just like other image properties; regression added for 1x selection.
 - Background shorthand now recognizes `image-set()` so `background: image-set(...) no-repeat` selects the best candidate and carries the repeat; regression added for shorthand parsing.
 - `content: image-set(...)` now parses and selects the best-density URL for generated content, so image-set works for generated replaced content (pseudos, markers). Regression added to ensure the 1x candidate is chosen.
+- Cursor property now parses keywords and custom cursor images (including `image-set(...)` and hotspots), storing image fallbacks and the final cursor keyword; regressions cover keyword parsing, url+hotspot+fallback, and image-set selection.
 - Blend-mode regressions now check HSL component preservation (hue/saturation/luminance) instead of exact RGB matches to allow for tiny-skia rounding while still enforcing the CSS compositing semantics.
 - `will-change` parses into computed styles (non-inherited); stacking context detection treats hints that would form stacking contexts (transform/opacity/filter/backdrop/mix-blend/etc.) as SC creators. Added cascade + stacking context regression coverage.
 - Display-list renderer now captures `PushBlendMode` into layers and manually composites Hue/Saturation/Color/Luminosity modes via HSL component blending so the advanced blend modes preserve the expected hue/saturation/luminance components (regressions cover the HSL blend expectations).

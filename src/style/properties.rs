@@ -347,6 +347,110 @@ fn tokenize_image_set_candidate(value_str: &str) -> Vec<String> {
     tokens
 }
 
+fn parse_cursor_keyword(kw: &str) -> Option<CursorKeyword> {
+    match kw.to_ascii_lowercase().as_str() {
+        "auto" => Some(CursorKeyword::Auto),
+        "default" => Some(CursorKeyword::Default),
+        "none" => Some(CursorKeyword::None),
+        "context-menu" => Some(CursorKeyword::ContextMenu),
+        "help" => Some(CursorKeyword::Help),
+        "pointer" => Some(CursorKeyword::Pointer),
+        "progress" => Some(CursorKeyword::Progress),
+        "wait" => Some(CursorKeyword::Wait),
+        "cell" => Some(CursorKeyword::Cell),
+        "crosshair" => Some(CursorKeyword::Crosshair),
+        "text" => Some(CursorKeyword::Text),
+        "vertical-text" => Some(CursorKeyword::VerticalText),
+        "alias" => Some(CursorKeyword::Alias),
+        "copy" => Some(CursorKeyword::Copy),
+        "move" => Some(CursorKeyword::Move),
+        "no-drop" => Some(CursorKeyword::NoDrop),
+        "not-allowed" => Some(CursorKeyword::NotAllowed),
+        "grab" => Some(CursorKeyword::Grab),
+        "grabbing" => Some(CursorKeyword::Grabbing),
+        "all-scroll" => Some(CursorKeyword::AllScroll),
+        "col-resize" => Some(CursorKeyword::ColResize),
+        "row-resize" => Some(CursorKeyword::RowResize),
+        "n-resize" => Some(CursorKeyword::NResize),
+        "s-resize" => Some(CursorKeyword::SResize),
+        "e-resize" => Some(CursorKeyword::EResize),
+        "w-resize" => Some(CursorKeyword::WResize),
+        "ne-resize" => Some(CursorKeyword::NeResize),
+        "nw-resize" => Some(CursorKeyword::NwResize),
+        "se-resize" => Some(CursorKeyword::SeResize),
+        "sw-resize" => Some(CursorKeyword::SwResize),
+        "ew-resize" => Some(CursorKeyword::EwResize),
+        "ns-resize" => Some(CursorKeyword::NsResize),
+        "nesw-resize" => Some(CursorKeyword::NeswResize),
+        "nwse-resize" => Some(CursorKeyword::NwseResize),
+        "zoom-in" => Some(CursorKeyword::ZoomIn),
+        "zoom-out" => Some(CursorKeyword::ZoomOut),
+        _ => None,
+    }
+}
+
+fn cursor_hotspot_value(value: &PropertyValue) -> Option<f32> {
+    match value {
+        PropertyValue::Number(n) => Some(*n),
+        PropertyValue::Length(l) => Some(l.to_px()),
+        _ => None,
+    }
+}
+
+fn parse_cursor(value: &PropertyValue) -> Option<(Vec<CursorImage>, CursorKeyword)> {
+    let tokens: Vec<PropertyValue> = match value {
+        PropertyValue::Multiple(list) => list.clone(),
+        other => vec![other.clone()],
+    };
+
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let mut images = Vec::new();
+    let mut fallback: Option<CursorKeyword> = None;
+    let mut idx = 0;
+    while idx < tokens.len() {
+        match &tokens[idx] {
+            PropertyValue::Url(url) => {
+                let mut hotspot = None;
+                if idx + 2 < tokens.len() {
+                    if let (Some(x), Some(y)) = (
+                        cursor_hotspot_value(&tokens[idx + 1]),
+                        cursor_hotspot_value(&tokens[idx + 2]),
+                    ) {
+                        hotspot = Some((x, y));
+                        idx += 2;
+                    }
+                }
+                images.push(CursorImage {
+                    url: url.clone(),
+                    hotspot,
+                });
+            }
+            PropertyValue::Keyword(kw) if kw.to_ascii_lowercase().starts_with("image-set(") => {
+                if let Some(BackgroundImage::Url(url)) = parse_image_set(kw) {
+                    images.push(CursorImage { url, hotspot: None });
+                }
+            }
+            PropertyValue::Keyword(kw) => {
+                if let Some(parsed) = parse_cursor_keyword(kw) {
+                    fallback = Some(parsed);
+                    break;
+                }
+            }
+            _ => {}
+        }
+        idx += 1;
+    }
+
+    if images.is_empty() && fallback.is_none() {
+        return None;
+    }
+
+    Some((images, fallback.unwrap_or(CursorKeyword::Auto)))
+}
+
 fn content_value_from_property(value: &PropertyValue) -> Option<ContentValue> {
     let css_text = match value {
         PropertyValue::String(s) => format!("\"{}\"", s),
@@ -2018,6 +2122,12 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     "sideways-lr" => WritingMode::SidewaysLr,
                     _ => styles.writing_mode,
                 };
+            }
+        }
+        "cursor" => {
+            if let Some((images, keyword)) = parse_cursor(&resolved_value) {
+                styles.cursor_images = images;
+                styles.cursor = keyword;
             }
         }
 
@@ -6178,6 +6288,75 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert_eq!(style.list_style_type, ListStyleType::Georgian);
+    }
+
+    #[test]
+    fn cursor_keyword_parses() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "cursor".to_string(),
+                value: PropertyValue::Keyword("pointer".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.cursor, CursorKeyword::Pointer);
+        assert!(style.cursor_images.is_empty());
+    }
+
+    #[test]
+    fn cursor_allows_custom_image_and_hotspot_with_fallback() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "cursor".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Url("cursor.cur".to_string()),
+                    PropertyValue::Number(5.0),
+                    PropertyValue::Number(7.0),
+                    PropertyValue::Keyword("move".to_string()),
+                ]),
+                raw_value: String::new(),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(style.cursor, CursorKeyword::Move);
+        assert_eq!(style.cursor_images.len(), 1);
+        assert_eq!(style.cursor_images[0].url, "cursor.cur");
+        assert_eq!(style.cursor_images[0].hotspot, Some((5.0, 7.0)));
+    }
+
+    #[test]
+    fn cursor_accepts_image_set_and_fallback_keyword() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "cursor".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword(
+                        "image-set(url(\"c1.cur\") 1x, url(\"c2.cur\") 2x)".to_string()
+                    ),
+                    PropertyValue::Keyword("crosshair".to_string()),
+                ]),
+                raw_value: String::new(),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(style.cursor, CursorKeyword::Crosshair);
+        assert_eq!(style.cursor_images.len(), 1);
+        assert_eq!(style.cursor_images[0].url, "c1.cur");
     }
 
     #[test]

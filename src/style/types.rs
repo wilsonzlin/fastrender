@@ -291,6 +291,62 @@ pub enum Isolation {
     Isolate,
 }
 
+/// Cursor keywords (fallbacks for custom cursor images)
+///
+/// CSS UI Level 4 cursor values (subset relevant to rendering hints)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CursorKeyword {
+    Auto,
+    Default,
+    None,
+    ContextMenu,
+    Help,
+    Pointer,
+    Progress,
+    Wait,
+    Cell,
+    Crosshair,
+    Text,
+    VerticalText,
+    Alias,
+    Copy,
+    Move,
+    NoDrop,
+    NotAllowed,
+    Grab,
+    Grabbing,
+    AllScroll,
+    ColResize,
+    RowResize,
+    NResize,
+    SResize,
+    EResize,
+    WResize,
+    NeResize,
+    NwResize,
+    SeResize,
+    SwResize,
+    EwResize,
+    NsResize,
+    NeswResize,
+    NwseResize,
+    ZoomIn,
+    ZoomOut,
+}
+
+impl Default for CursorKeyword {
+    fn default() -> Self {
+        CursorKeyword::Auto
+    }
+}
+
+/// A custom cursor image with an optional hotspot (x, y) in CSS pixels
+#[derive(Debug, Clone, PartialEq)]
+pub struct CursorImage {
+    pub url: String,
+    pub hotspot: Option<(f32, f32)>,
+}
+
 /// CSS will-change hints
 ///
 /// CSS: `will-change`
