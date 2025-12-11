@@ -752,6 +752,40 @@ mod tests {
     }
 
     #[test]
+    fn align_attribute_maps_on_block_elements() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("align".to_string(), "center".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(
+            styled.styles.text_align,
+            crate::style::types::TextAlign::Center
+        ));
+    }
+
+    #[test]
+    fn center_element_defaults_to_center_alignment() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "center".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(
+            styled.styles.text_align,
+            crate::style::types::TextAlign::Center
+        ));
+    }
+
+    #[test]
     fn text_align_shorthand_resets_text_align_last_to_auto() {
         let dom = element_with_style("text-align-last: right; text-align: center;");
         let styled = apply_styles(&dom, &StyleSheet::new());
@@ -1855,9 +1889,15 @@ fn alignment_presentational_hint(node: &DomNode, order: usize) -> Option<Matched
     let tag = node.tag_name()?.to_ascii_lowercase();
     let mut declarations = String::new();
 
-    if let Some(align) = node.get_attribute("align") {
+    if let Some(align) = node
+        .get_attribute("align")
+        .or_else(|| (tag == "center").then(|| "center".to_string()))
+    {
         if let Some(mapped) = map_align(&align) {
-            if matches!(tag.as_str(), "td" | "th" | "tr" | "table") {
+            if matches!(
+                tag.as_str(),
+                "td" | "th" | "tr" | "table" | "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "center"
+            ) {
                 declarations.push_str(&format!("text-align: {};", mapped));
             }
         }
