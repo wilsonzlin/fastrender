@@ -7,7 +7,7 @@
 //! <https://www.w3.org/TR/CSS21/visuren.html#box-gen>
 
 use crate::geometry::Size;
-use crate::style::content::{ContentContext, ContentGenerator, ContentValue, CounterStyle};
+use crate::style::content::{ContentContext, ContentItem, ContentValue, CounterStyle};
 use crate::style::counters::{CounterManager, CounterSet};
 use crate::style::display::{Display, FormattingContextType};
 use crate::style::types::{ListStyleType, TextTransform};
@@ -1059,13 +1059,84 @@ fn create_pseudo_element_box(
     }
     context.set_quotes(styles.quotes.clone());
 
-    let text = ContentGenerator::new().generate(&styles.content_value, &mut context);
-    if text.is_empty() {
-        return None;
+    // Build children based on content items, supporting both text and replaced content.
+    let mut children: Vec<BoxNode> = Vec::new();
+    let mut text_buf = String::new();
+
+    let flush_text = |buf: &mut String, pseudo_style: &Arc<ComputedStyle>, out: &mut Vec<BoxNode>| {
+        if !buf.is_empty() {
+            out.push(BoxNode::new_text(pseudo_style.clone(), buf.clone()));
+            buf.clear();
+        }
+    };
+
+    let items = match &styles.content_value {
+        ContentValue::Items(items) => items,
+        _ => return None,
+    };
+
+    for item in items {
+        match item {
+            ContentItem::String(s) => text_buf.push_str(s),
+            ContentItem::Attr { name, fallback, .. } => {
+                if let Some(val) = context.get_attribute(name) {
+                    text_buf.push_str(&val);
+                } else if let Some(fb) = fallback {
+                    text_buf.push_str(fb);
+                }
+            }
+            ContentItem::Counter { name, style } => {
+                let value = context.get_counter(name);
+                let formatted = style.unwrap_or(CounterStyle::Decimal).format(value);
+                text_buf.push_str(&formatted);
+            }
+            ContentItem::Counters { name, separator, style } => {
+                let values = context.get_counters(name);
+                if values.is_empty() {
+                    text_buf.push('0');
+                } else {
+                    let formatted: Vec<String> = values
+                        .iter()
+                        .map(|v| style.unwrap_or(CounterStyle::Decimal).format(*v))
+                        .collect();
+                    text_buf.push_str(&formatted.join(separator));
+                }
+            }
+            ContentItem::OpenQuote => {
+                text_buf.push_str(context.open_quote());
+                context.push_quote();
+            }
+            ContentItem::CloseQuote => {
+                text_buf.push_str(context.close_quote());
+                context.pop_quote();
+            }
+            ContentItem::NoOpenQuote => context.push_quote(),
+            ContentItem::NoCloseQuote => context.pop_quote(),
+            ContentItem::Url(url) => {
+                flush_text(&mut text_buf, &pseudo_style, &mut children);
+                let replaced = ReplacedBox {
+                    replaced_type: ReplacedType::Image {
+                        src: url.clone(),
+                        alt: None,
+                    },
+                    intrinsic_size: None,
+                    aspect_ratio: None,
+                };
+                children.push(BoxNode {
+                    box_type: BoxType::Replaced(replaced),
+                    style: pseudo_style.clone(),
+                    children: vec![],
+                    debug_info: None,
+                });
+            }
+        }
     }
 
-    // Create a text box with the content
-    let text_box = BoxNode::new_text(pseudo_style.clone(), text);
+    flush_text(&mut text_buf, &pseudo_style, &mut children);
+
+    if children.is_empty() {
+        return None;
+    }
 
     // Determine the box type based on display property
     let fc_type = styles
@@ -1075,10 +1146,10 @@ fn create_pseudo_element_box(
 
     // Wrap in appropriate box type based on display
     let mut pseudo_box = match styles.display {
-        Display::Block => BoxNode::new_block(pseudo_style.clone(), fc_type, vec![text_box]),
-        Display::Inline | Display::None => BoxNode::new_inline(pseudo_style.clone(), vec![text_box]),
-        Display::InlineBlock => BoxNode::new_inline_block(pseudo_style.clone(), fc_type, vec![text_box]),
-        _ => BoxNode::new_inline(pseudo_style.clone(), vec![text_box]),
+        Display::Block => BoxNode::new_block(pseudo_style.clone(), fc_type, children),
+        Display::Inline | Display::None => BoxNode::new_inline(pseudo_style.clone(), children),
+        Display::InlineBlock => BoxNode::new_inline_block(pseudo_style.clone(), fc_type, children),
+        _ => BoxNode::new_inline(pseudo_style.clone(), children),
     };
 
     // Add debug info to mark this as a pseudo-element
@@ -1248,6 +1319,7 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
 mod tests {
     use super::*;
     use crate::geometry::Size;
+    use crate::style::counters::CounterSet;
     use crate::style::types::CaseTransform;
     use crate::style::types::ListStylePosition;
     use crate::tree::box_tree::{MarkerContent, ReplacedType};
@@ -2205,6 +2277,69 @@ mod tests {
             assert_eq!(text.text, "«hi");
         } else {
             panic!("expected text child");
+        }
+    }
+
+    #[test]
+    fn pseudo_content_supports_attr_counter_and_image() {
+        use crate::dom::DomNodeType;
+        use crate::style::content::{ContentItem, ContentValue};
+
+        let mut before_style = ComputedStyle::default();
+        before_style.content_value = ContentValue::Items(vec![
+            ContentItem::Attr {
+                name: "data-label".to_string(),
+                type_or_unit: None,
+                fallback: Some("fallback".to_string()),
+            },
+            ContentItem::String(": ".to_string()),
+            ContentItem::Counter {
+                name: "item".to_string(),
+                style: Some(CounterStyle::UpperRoman),
+            },
+            ContentItem::String(" ".to_string()),
+            ContentItem::Url("icon.png".to_string()),
+        ]);
+
+        let base_style = ComputedStyle::default();
+        let styled = StyledNode {
+            node: dom::DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "div".to_string(),
+                    attributes: vec![("data-label".to_string(), "hello".to_string())],
+                },
+                children: vec![],
+            },
+            styles: base_style,
+            before_styles: Some(before_style),
+            after_styles: None,
+            marker_styles: None,
+            children: vec![],
+        };
+
+        let mut counters = CounterManager::new();
+        counters.enter_scope();
+        counters.apply_reset(&CounterSet::single("item", 3));
+
+        let before_box =
+            create_pseudo_element_box(&styled, styled.before_styles.as_ref().unwrap(), "before", &counters)
+                .expect("before box");
+        counters.leave_scope();
+
+        // Expect inline container with text + image children
+        assert_eq!(before_box.children.len(), 2);
+        if let BoxType::Text(text) = &before_box.children[0].box_type {
+            assert_eq!(text.text, "hello: III ");
+        } else {
+            panic!("expected text child");
+        }
+        if let BoxType::Replaced(replaced) = &before_box.children[1].box_type {
+            match &replaced.replaced_type {
+                ReplacedType::Image { src, .. } => assert_eq!(src, "icon.png"),
+                _ => panic!("expected image replaced content"),
+            }
+        } else {
+            panic!("expected replaced child");
         }
     }
 
