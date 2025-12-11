@@ -305,8 +305,21 @@ impl DisplayListOptimizer {
                 }
                 DisplayItem::Image(i) => viewport.intersects(i.dest_rect),
                 DisplayItem::BoxShadow(i) => {
-                    let shadow_bounds = i.rect.inflate(i.blur_radius + i.spread_radius);
-                    viewport.intersects(shadow_bounds)
+                    if i.inset {
+                        viewport.intersects(i.rect)
+                    } else {
+                        // Outset shadow can extend by spread, blur, and offset.
+                        let blur_outset = i.blur_radius.abs() * 3.0;
+                        let spread = i.spread_radius;
+                        let shadow_rect = Rect::from_xywh(
+                            i.rect.x() + i.offset.x - spread,
+                            i.rect.y() + i.offset.y - spread,
+                            i.rect.width() + spread * 2.0,
+                            i.rect.height() + spread * 2.0,
+                        )
+                        .inflate(blur_outset);
+                        viewport.intersects(shadow_rect)
+                    }
                 }
                 DisplayItem::Border(b) => {
                     let max_w = b

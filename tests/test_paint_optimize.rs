@@ -580,6 +580,25 @@ fn test_box_shadow_outside_viewport() {
 }
 
 #[test]
+fn test_box_shadow_offset_into_view_kept() {
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::BoxShadow(BoxShadowItem {
+        rect: Rect::from_xywh(-300.0, 0.0, 50.0, 50.0),
+        radii: BorderRadii::ZERO,
+        offset: Point::new(320.0, 0.0),
+        blur_radius: 5.0,
+        spread_radius: 0.0,
+        color: Rgba::new(0, 0, 0, 0.5),
+        inset: false,
+    }));
+
+    let optimizer = DisplayListOptimizer::new();
+    let (optimized, _stats) = optimizer.optimize(list, small_viewport());
+
+    assert_eq!(optimized.len(), 1, "shadow drawn into viewport should remain");
+}
+
+#[test]
 fn test_linear_gradient_culling() {
     let mut list = DisplayList::new();
     list.push(DisplayItem::LinearGradient(LinearGradientItem {

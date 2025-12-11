@@ -411,7 +411,6 @@ pub struct DisplayListRenderer {
 struct StackingRecord {
     needs_layer: bool,
     filters: Vec<ResolvedFilter>,
-    backdrop_filters: Vec<ResolvedFilter>,
     radii: BorderRadii,
     bounds: Rect,
 }
@@ -769,7 +768,6 @@ impl DisplayListRenderer {
                 self.stacking_layers.push(StackingRecord {
                     needs_layer,
                     filters: item.filters.clone(),
-                    backdrop_filters: item.backdrop_filters.clone(),
                     radii: item.radii,
                     bounds: item.bounds,
                 });
@@ -784,7 +782,6 @@ impl DisplayListRenderer {
                 let record = self.stacking_layers.pop().unwrap_or(StackingRecord {
                     needs_layer: false,
                     filters: Vec::new(),
-                    backdrop_filters: Vec::new(),
                     radii: BorderRadii::ZERO,
                     bounds: Rect::ZERO,
                 });
