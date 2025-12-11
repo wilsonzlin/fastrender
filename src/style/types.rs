@@ -871,6 +871,7 @@ pub enum TextAlignLast {
     Right,
     Center,
     Justify,
+    MatchParent,
 }
 
 /// CSS `text-orientation`

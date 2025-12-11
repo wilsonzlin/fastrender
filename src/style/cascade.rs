@@ -101,7 +101,8 @@ fn apply_styles_internal(
 
     // Finalize grid placement - resolve named grid lines
     finalize_grid_placement(&mut styles);
-    resolve_match_parent_text_align(&mut styles, parent_styles);
+    resolve_match_parent_text_align(&mut styles, parent_styles, ancestors.is_empty());
+    resolve_match_parent_text_align_last(&mut styles, parent_styles, ancestors.is_empty());
     resolve_relative_font_weight(&mut styles, parent_styles);
     propagate_text_decorations(&mut styles, parent_styles);
 
@@ -201,7 +202,8 @@ fn apply_styles_internal_with_ancestors(
 
     // Finalize grid placement - resolve named grid lines
     finalize_grid_placement(&mut styles);
-    resolve_match_parent_text_align(&mut styles, parent_styles);
+    resolve_match_parent_text_align(&mut styles, parent_styles, ancestors.is_empty());
+    resolve_match_parent_text_align_last(&mut styles, parent_styles, ancestors.is_empty());
     resolve_relative_font_weight(&mut styles, parent_styles);
     propagate_text_decorations(&mut styles, parent_styles);
 
@@ -308,9 +310,13 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.custom_properties = parent.custom_properties.clone();
 }
 
-fn resolve_match_parent_text_align(styles: &mut ComputedStyle, parent: &ComputedStyle) {
+fn resolve_match_parent_text_align(styles: &mut ComputedStyle, parent: &ComputedStyle, is_root: bool) {
     use crate::style::types::TextAlign;
     if !matches!(styles.text_align, TextAlign::MatchParent) {
+        return;
+    }
+    if is_root {
+        styles.text_align = TextAlign::Start;
         return;
     }
     // Behaves like inherit, but start/end become physical based on the parent's direction.
@@ -337,6 +343,44 @@ fn resolve_match_parent_text_align(styles: &mut ComputedStyle, parent: &Computed
                 TextAlign::Left
             } else {
                 TextAlign::Right
+            }
+        }
+        other => other,
+    };
+}
+
+fn resolve_match_parent_text_align_last(styles: &mut ComputedStyle, parent: &ComputedStyle, is_root: bool) {
+    use crate::style::types::TextAlignLast;
+    if !matches!(styles.text_align_last, TextAlignLast::MatchParent) {
+        return;
+    }
+    if is_root {
+        styles.text_align_last = TextAlignLast::Start;
+        return;
+    }
+    let inherited = match parent.text_align_last {
+        TextAlignLast::MatchParent => {
+            if matches!(parent.direction, crate::style::types::Direction::Rtl) {
+                TextAlignLast::End
+            } else {
+                TextAlignLast::Start
+            }
+        }
+        other => other,
+    };
+    styles.text_align_last = match inherited {
+        TextAlignLast::Start => {
+            if matches!(parent.direction, crate::style::types::Direction::Rtl) {
+                TextAlignLast::Right
+            } else {
+                TextAlignLast::Left
+            }
+        }
+        TextAlignLast::End => {
+            if matches!(parent.direction, crate::style::types::Direction::Rtl) {
+                TextAlignLast::Left
+            } else {
+                TextAlignLast::Right
             }
         }
         other => other,
@@ -700,6 +744,68 @@ mod tests {
         assert!(matches!(
             child.styles.text_align,
             crate::style::types::TextAlign::Center
+        ));
+    }
+
+    #[test]
+    fn text_align_last_match_parent_maps_start_end_using_parent_direction() {
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), "direction: rtl; text-align-last: start;".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "span".to_string(),
+                    attributes: vec![("style".to_string(), "text-align-last: match-parent;".to_string())],
+                },
+                children: vec![],
+            }],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let child = styled.children.first().expect("child");
+        assert!(matches!(
+            child.styles.text_align_last,
+            crate::style::types::TextAlignLast::Right
+        ));
+    }
+
+    #[test]
+    fn text_align_match_parent_sets_last_to_match_parent_and_resolves() {
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), "direction: rtl; text-align-last: start;".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "span".to_string(),
+                    attributes: vec![("style".to_string(), "text-align: match-parent;".to_string())],
+                },
+                children: vec![],
+            }],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let child = styled.children.first().expect("child");
+        assert!(matches!(
+            child.styles.text_align,
+            crate::style::types::TextAlign::Right
+        ));
+        assert!(matches!(
+            child.styles.text_align_last,
+            crate::style::types::TextAlignLast::Right
+        ));
+    }
+
+    #[test]
+    fn root_match_parent_text_align_last_computes_to_start() {
+        let dom = element_with_style("direction: rtl; text-align-last: match-parent;");
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(
+            styled.styles.text_align_last,
+            crate::style::types::TextAlignLast::Start
         ));
     }
 
@@ -1342,6 +1448,8 @@ fn compute_pseudo_element_styles(
             apply_declaration(&mut styles, &decl, parent_styles.font_size, root_font_size);
         }
     }
+    resolve_match_parent_text_align(&mut styles, parent_styles, false);
+    resolve_match_parent_text_align_last(&mut styles, parent_styles, false);
     resolve_relative_font_weight(&mut styles, parent_styles);
     propagate_text_decorations(&mut styles, parent_styles);
 
@@ -1384,6 +1492,8 @@ fn compute_marker_styles(
             }
         }
     }
+    resolve_match_parent_text_align(&mut styles, list_item_styles, false);
+    resolve_match_parent_text_align_last(&mut styles, list_item_styles, false);
     resolve_relative_font_weight(&mut styles, list_item_styles);
     propagate_text_decorations(&mut styles, list_item_styles);
 

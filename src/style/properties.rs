@@ -1332,7 +1332,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     styles.text_align = value;
                     styles.text_align_last = match value {
                         TextAlign::Justify => TextAlignLast::Auto,
-                        TextAlign::MatchParent => TextAlignLast::Auto,
+                        TextAlign::MatchParent => TextAlignLast::MatchParent,
                         _ => TextAlignLast::Auto,
                     };
                     if matches!(value, TextAlign::Justify) && kw.as_str() == "justify-all" {
@@ -1380,6 +1380,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     "right" => TextAlignLast::Right,
                     "center" => TextAlignLast::Center,
                     "justify" => TextAlignLast::Justify,
+                    "match-parent" => TextAlignLast::MatchParent,
                     _ => styles.text_align_last,
                 };
             }

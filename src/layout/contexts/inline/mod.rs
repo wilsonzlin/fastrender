@@ -3309,6 +3309,7 @@ fn resolve_text_align_for_line(
         crate::style::types::TextAlignLast::Right => TextAlign::Right,
         crate::style::types::TextAlignLast::Center => TextAlign::Center,
         crate::style::types::TextAlignLast::Justify => TextAlign::Justify,
+        crate::style::types::TextAlignLast::MatchParent => map_text_align(TextAlign::Start, direction),
         crate::style::types::TextAlignLast::Auto => text_align,
     };
 
