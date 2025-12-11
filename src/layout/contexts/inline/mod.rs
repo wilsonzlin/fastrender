@@ -5784,6 +5784,45 @@ mod tests {
     }
 
     #[test]
+    fn absolute_child_static_position_falls_back_to_padding_for_empty_inline() {
+        let mut inline_style = ComputedStyle::default();
+        inline_style.position = crate::style::position::Position::Relative;
+        inline_style.padding_left = Length::px(12.0);
+        inline_style.padding_top = Length::px(8.0);
+        inline_style.padding_right = Length::px(4.0);
+        inline_style.padding_bottom = Length::px(4.0);
+
+        let mut abs_style = ComputedStyle::default();
+        abs_style.position = crate::style::position::Position::Absolute;
+        abs_style.width = Some(Length::px(6.0));
+        abs_style.height = Some(Length::px(6.0));
+        let positioned = BoxNode::new_inline(Arc::new(abs_style), vec![]);
+
+        let inline = BoxNode::new_inline(Arc::new(inline_style), vec![positioned]);
+        let root = BoxNode::new_block(
+            Arc::new(ComputedStyle::default()),
+            FormattingContextType::Block,
+            vec![inline],
+        );
+        let constraints = LayoutConstraints::definite_width(100.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        let abs_fragment = fragment.children.last().expect("positioned fragment");
+
+        assert!(
+            abs_fragment.bounds.x().abs() < 0.1,
+            "empty inline should fall back to content origin on the inline axis; got {}",
+            abs_fragment.bounds.x()
+        );
+        assert!(
+            (abs_fragment.bounds.y() - 8.0).abs() < 0.1,
+            "empty inline should align static position with its padding start on the block axis; got {}",
+            abs_fragment.bounds.y()
+        );
+    }
+
+    #[test]
     fn text_transform_uppercase_applies_before_layout() {
         let mut style = ComputedStyle::default();
         style.text_transform = TextTransform::with_case(CaseTransform::Uppercase);
