@@ -1277,6 +1277,13 @@ fn parse_function(name: &str, args: &str) -> Option<ContentItem> {
                 };
             Some(ContentItem::Url(url.to_string()))
         }
+        "image-set" => {
+            let full = format!("image-set({})", args);
+            match crate::style::properties::parse_image_set(&full) {
+                Some(crate::style::types::BackgroundImage::Url(url)) => Some(ContentItem::Url(url)),
+                _ => None,
+            }
+        }
 
         _ => None,
     }
@@ -1733,6 +1740,15 @@ mod tests {
         assert_eq!(
             content,
             ContentValue::Items(vec![ContentItem::Url("image.png".to_string())])
+        );
+    }
+
+    #[test]
+    fn test_parse_image_set() {
+        let content = parse_content("image-set(url(\"one.png\") 1x, url(\"two.png\") 2x)").unwrap();
+        assert_eq!(
+            content,
+            ContentValue::Items(vec![ContentItem::Url("one.png".to_string())])
         );
     }
 

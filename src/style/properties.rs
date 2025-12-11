@@ -170,7 +170,7 @@ fn split_image_set_candidates(inner: &str) -> Vec<String> {
     parts
 }
 
-fn parse_image_set(text: &str) -> Option<BackgroundImage> {
+pub(crate) fn parse_image_set(text: &str) -> Option<BackgroundImage> {
     let trimmed = text.trim();
     if !trimmed.to_ascii_lowercase().starts_with("image-set(") {
         return None;
