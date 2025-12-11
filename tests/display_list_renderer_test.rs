@@ -4,6 +4,108 @@ use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::text::font_loader::FontContext;
 use fastrender::Rgba;
 
+fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let r = r as f32 / 255.0;
+    let g = g as f32 / 255.0;
+    let b = b as f32 / 255.0;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) / 2.0;
+
+    if (max - min).abs() < f32::EPSILON {
+        return (0.0, 0.0, l);
+    }
+
+    let d = max - min;
+    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+    let h = if (max - r).abs() < f32::EPSILON {
+        (g - b) / d + if g < b { 6.0 } else { 0.0 }
+    } else if (max - g).abs() < f32::EPSILON {
+        (b - r) / d + 2.0
+    } else {
+        (r - g) / d + 4.0
+    } / 6.0;
+
+    (h, s, l)
+}
+
+fn hue_to_rgb(p: f32, q: f32, t: f32) -> f32 {
+    let mut t = t;
+    if t < 0.0 {
+        t += 1.0;
+    }
+    if t > 1.0 {
+        t -= 1.0;
+    }
+    if t < 1.0 / 6.0 {
+        return p + (q - p) * 6.0 * t;
+    }
+    if t < 1.0 / 2.0 {
+        return q;
+    }
+    if t < 2.0 / 3.0 {
+        return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
+    }
+    p
+}
+
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    if s <= 0.0 {
+        let v = (l * 255.0).round().clamp(0.0, 255.0) as u8;
+        return (v, v, v);
+    }
+
+    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let p = 2.0 * l - q;
+    let r = hue_to_rgb(p, q, h + 1.0 / 3.0);
+    let g = hue_to_rgb(p, q, h);
+    let b = hue_to_rgb(p, q, h - 1.0 / 3.0);
+    (
+        (r * 255.0).round().clamp(0.0, 255.0) as u8,
+        (g * 255.0).round().clamp(0.0, 255.0) as u8,
+        (b * 255.0).round().clamp(0.0, 255.0) as u8,
+    )
+}
+
+fn blend_hue(src: (u8, u8, u8), dst: (u8, u8, u8)) -> (u8, u8, u8) {
+    let (sh, _, _) = rgb_to_hsl(src.0, src.1, src.2);
+    let (_, ds, dl) = rgb_to_hsl(dst.0, dst.1, dst.2);
+    hsl_to_rgb(sh, ds, dl)
+}
+
+fn blend_saturation(src: (u8, u8, u8), dst: (u8, u8, u8)) -> (u8, u8, u8) {
+    let (_, ss, _) = rgb_to_hsl(src.0, src.1, src.2);
+    let (dh, _, dl) = rgb_to_hsl(dst.0, dst.1, dst.2);
+    hsl_to_rgb(dh, ss, dl)
+}
+
+fn blend_color(src: (u8, u8, u8), dst: (u8, u8, u8)) -> (u8, u8, u8) {
+    let (sh, ss, _) = rgb_to_hsl(src.0, src.1, src.2);
+    let (_, _, dl) = rgb_to_hsl(dst.0, dst.1, dst.2);
+    hsl_to_rgb(sh, ss, dl)
+}
+
+fn blend_luminosity(src: (u8, u8, u8), dst: (u8, u8, u8)) -> (u8, u8, u8) {
+    let (_, _, sl) = rgb_to_hsl(src.0, src.1, src.2);
+    let (dh, ds, _) = rgb_to_hsl(dst.0, dst.1, dst.2);
+    hsl_to_rgb(dh, ds, sl)
+}
+
+fn assert_color_close(actual: (u8, u8, u8), expected: (u8, u8, u8), tol: u8) {
+    let diff = (
+        actual.0.abs_diff(expected.0),
+        actual.1.abs_diff(expected.1),
+        actual.2.abs_diff(expected.2),
+    );
+    assert!(
+        diff.0 <= tol && diff.1 <= tol && diff.2 <= tol,
+        "expected {:?}, got {:?} (diff {:?})",
+        expected,
+        actual,
+        diff
+    );
+}
+
 fn pixel(pixmap: &tiny_skia::Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
     let px = pixmap.pixel(x, y).unwrap();
     (px.red(), px.green(), px.blue(), px.alpha())
@@ -121,14 +223,87 @@ fn color_blend_mode_uses_destination_luminance() {
     let pixmap = renderer.render(&list).unwrap();
     let (r, g, b, a) = pixel(&pixmap, 0, 0);
     assert_eq!(a, 255);
-    // Color blend should keep destination luminance (~128) while adopting the source hue/saturation.
-    let luminance = 0.3 * r as f32 + 0.59 * g as f32 + 0.11 * b as f32;
-    assert!(
-        (luminance - 128.0).abs() < 1.0,
-        "expected destination luminance preserved (~128), got {luminance}"
-    );
-    assert!(
-        r > 200 && g < 100 && b < 100 && (g as i16 - b as i16).abs() <= 1,
-        "expected hue/saturation from red source, got ({r},{g},{b})"
-    );
+    let expected = blend_color((255, 0, 0), (128, 128, 128));
+    assert_color_close((r, g, b), expected, 2);
+}
+
+#[test]
+fn hue_blend_mode_uses_source_hue() {
+    use fastrender::paint::display_list::{BlendMode, BlendModeItem};
+
+    let renderer = DisplayListRenderer::new(2, 2, Rgba::WHITE, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    let dst = (30u8, 120u8, 220u8);
+    let src = (200u8, 30u8, 30u8);
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+        color: Rgba::from_rgba8(dst.0, dst.1, dst.2, 255),
+    }));
+    list.push(DisplayItem::PushBlendMode(BlendModeItem {
+        mode: BlendMode::Hue,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+        color: Rgba::from_rgba8(src.0, src.1, src.2, 255),
+    }));
+    list.push(DisplayItem::PopBlendMode);
+
+    let pixmap = renderer.render(&list).unwrap();
+    let (r, g, b, _) = pixel(&pixmap, 0, 0);
+    let expected = blend_hue(src, dst);
+    assert_color_close((r, g, b), expected, 2);
+}
+
+#[test]
+fn saturation_blend_mode_uses_source_saturation() {
+    use fastrender::paint::display_list::{BlendMode, BlendModeItem};
+
+    let renderer = DisplayListRenderer::new(2, 2, Rgba::WHITE, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    let dst = (60u8, 140u8, 200u8);
+    let src = (255u8, 40u8, 200u8);
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+        color: Rgba::from_rgba8(dst.0, dst.1, dst.2, 255),
+    }));
+    list.push(DisplayItem::PushBlendMode(BlendModeItem {
+        mode: BlendMode::Saturation,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+        color: Rgba::from_rgba8(src.0, src.1, src.2, 255),
+    }));
+    list.push(DisplayItem::PopBlendMode);
+
+    let pixmap = renderer.render(&list).unwrap();
+    let (r, g, b, _) = pixel(&pixmap, 0, 0);
+    let expected = blend_saturation(src, dst);
+    assert_color_close((r, g, b), expected, 2);
+}
+
+#[test]
+fn luminosity_blend_mode_uses_source_luminance() {
+    use fastrender::paint::display_list::{BlendMode, BlendModeItem};
+
+    let renderer = DisplayListRenderer::new(2, 2, Rgba::WHITE, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    let dst = (30u8, 200u8, 60u8);
+    let src = (220u8, 40u8, 40u8);
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+        color: Rgba::from_rgba8(dst.0, dst.1, dst.2, 255),
+    }));
+    list.push(DisplayItem::PushBlendMode(BlendModeItem {
+        mode: BlendMode::Luminosity,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+        color: Rgba::from_rgba8(src.0, src.1, src.2, 255),
+    }));
+    list.push(DisplayItem::PopBlendMode);
+
+    let pixmap = renderer.render(&list).unwrap();
+    let (r, g, b, _) = pixel(&pixmap, 0, 0);
+    let expected = blend_luminosity(src, dst);
+    assert_color_close((r, g, b), expected, 2);
 }
