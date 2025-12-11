@@ -1830,13 +1830,12 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
                 } else {
                     auto_rows
                 };
-                let share = if targets.is_empty() {
-                    0.0
-                } else {
-                    extra / targets.len() as f32
-                };
-                for r in targets {
-                    structure.rows[r].min_height += share;
+                if !targets.is_empty() {
+                    let total: f32 = targets.iter().map(|r| row_floor(&structure.rows[*r])).sum();
+                    for r in targets {
+                        let weight = if total > 0.0 { row_floor(&structure.rows[r]) / total } else { 1.0 / (span_end - span_start) as f32 };
+                        structure.rows[r].min_height += extra * weight;
+                    }
                 }
             }
         }
@@ -2474,10 +2473,18 @@ impl FormattingContext for TableFormattingContext {
                         auto_rows
                     };
                     if !targets.is_empty() {
-                        let per_row = extra / targets.len() as f32;
+                        let total: f32 = targets
+                            .iter()
+                            .map(|idx| row_floor(*idx, *row_heights.get(*idx).unwrap_or(&0.0)))
+                            .sum();
                         for idx in targets {
+                            let weight = if total > 0.0 {
+                                row_floor(idx, *row_heights.get(idx).unwrap_or(&0.0)) / total
+                            } else {
+                                1.0 / (span_end - span_start) as f32
+                            };
                             if let Some(row) = row_heights.get_mut(idx) {
-                                *row += per_row;
+                                *row += extra * weight;
                             }
                         }
                     }
@@ -5433,6 +5440,36 @@ mod tests {
 
         assert!((structure.rows[0].computed_height - 100.0).abs() < 0.01);
         assert!((structure.rows[1].computed_height - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn calculate_row_heights_distributes_rowspan_extra_proportionally() {
+        let mut structure = TableStructure::new();
+        structure.row_count = 2;
+        structure.rows = vec![RowInfo::new(0), RowInfo::new(1)];
+        structure.rows[0].min_height = 10.0;
+        structure.rows[1].min_height = 30.0;
+        structure.cells = vec![CellInfo {
+            index: 0,
+            source_row: 0,
+            source_col: 0,
+            row: 0,
+            col: 0,
+            rowspan: 2,
+            colspan: 1,
+            box_index: 0,
+            min_width: 0.0,
+            max_width: 0.0,
+            min_height: 120.0,
+            bounds: Rect::ZERO,
+        }];
+        structure.border_spacing = (0.0, 0.0);
+
+        calculate_row_heights(&mut structure, None);
+
+        // Extra 80 should distribute in 1:3 ratio from initial 10:30 heights → 20/60 split.
+        assert!((structure.rows[0].computed_height - 30.0).abs() < 0.01);
+        assert!((structure.rows[1].computed_height - 90.0).abs() < 0.01);
     }
 
     #[test]
