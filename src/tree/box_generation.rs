@@ -1339,24 +1339,34 @@ fn apply_counter_properties_from_style(styled: &StyledNode, counters: &mut Count
 
     if !applied_default_reset && (is_ol || is_ul) {
         let start = styled.node.get_attribute("start").and_then(|s| s.parse::<i32>().ok());
-        let default_value = if is_ol {
+        let step = counters.list_item_increment();
+        let start_value = if is_ol {
             if reversed {
                 // reversed lists count down; default start is the number of list items
                 let item_count = list_item_count(styled) as i32;
-                let start_value = start.unwrap_or(item_count.max(0));
-                start_value.saturating_add(1)
+                start.unwrap_or(item_count.max(0))
             } else {
-                start.unwrap_or(0).saturating_sub(1)
+                start.unwrap_or(1)
             }
         } else {
             0
         };
+        let default_value = start_value.saturating_sub(step);
         let default_reset = CounterSet::single("list-item", default_value);
         counters.apply_reset(&default_reset);
     }
 
     if let Some(set) = &styled.styles.counters.counter_set {
         counters.apply_set(set);
+    }
+
+    // HTML LI value attribute sets the list-item counter for this item.
+    if tag_name.as_deref() == Some("li") {
+        if let Some(value_attr) = styled.node.get_attribute("value").and_then(|v| v.parse::<i32>().ok()) {
+            let step = counters.list_item_increment();
+            let target = value_attr.saturating_sub(step);
+            counters.apply_set(&CounterSet::single("list-item", target));
+        }
     }
 
     if let Some(increment) = &styled.styles.counters.counter_increment {
@@ -2617,6 +2627,83 @@ mod tests {
     }
 
     #[test]
+    fn ordered_list_defaults_start_at_one() {
+        let mut ol_style = ComputedStyle::default();
+        ol_style.display = Display::Block;
+
+        let mut li_style = ComputedStyle::default();
+        li_style.display = Display::ListItem;
+        li_style.list_style_type = ListStyleType::Decimal;
+
+        let ol_dom = dom::DomNode {
+            node_type: dom::DomNodeType::Element {
+                tag_name: "ol".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let mk_li = |text: &str| StyledNode {
+            node: dom::DomNode {
+                node_type: dom::DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![dom::DomNode {
+                    node_type: dom::DomNodeType::Text {
+                        content: text.to_string(),
+                    },
+                    children: vec![],
+                }],
+            },
+            styles: li_style.clone(),
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children: vec![StyledNode {
+                node: dom::DomNode {
+                    node_type: dom::DomNodeType::Text {
+                        content: text.to_string(),
+                    },
+                    children: vec![],
+                },
+                styles: ComputedStyle::default(),
+                before_styles: None,
+                after_styles: None,
+                marker_styles: None,
+                children: vec![],
+            }],
+        };
+
+        let ol = StyledNode {
+            node: ol_dom,
+            styles: ol_style,
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children: vec![mk_li("one"), mk_li("two"), mk_li("three")],
+        };
+
+        let tree = generate_box_tree(&ol);
+        let markers: Vec<String> = tree
+            .root
+            .children
+            .iter()
+            .filter_map(|li| {
+                li.children.first().and_then(|child| match &child.box_type {
+                    BoxType::Marker(m) => match &m.content {
+                        MarkerContent::Text(t) => Some(t.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+            })
+            .collect();
+
+        assert_eq!(markers, vec!["1 ", "2 ", "3 "]);
+    }
+
+    #[test]
     fn reversed_ordered_list_counts_down() {
         let mut ol_style = ComputedStyle::default();
         ol_style.display = Display::Block;
@@ -2691,6 +2778,164 @@ mod tests {
             .collect();
 
         assert_eq!(markers, vec!["3 ", "2 ", "1 "]);
+    }
+
+    #[test]
+    fn li_value_attribute_sets_counter_for_that_item() {
+        let mut ol_style = ComputedStyle::default();
+        ol_style.display = Display::Block;
+
+        let mut li_style = ComputedStyle::default();
+        li_style.display = Display::ListItem;
+        li_style.list_style_type = ListStyleType::Decimal;
+
+        let ol_dom = dom::DomNode {
+            node_type: dom::DomNodeType::Element {
+                tag_name: "ol".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let mk_li = |text: &str, value: Option<&str>| StyledNode {
+            node: dom::DomNode {
+                node_type: dom::DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: value
+                        .map(|v| vec![("value".to_string(), v.to_string())])
+                        .unwrap_or_else(Vec::new),
+                },
+                children: vec![dom::DomNode {
+                    node_type: dom::DomNodeType::Text {
+                        content: text.to_string(),
+                    },
+                    children: vec![],
+                }],
+            },
+            styles: li_style.clone(),
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children: vec![StyledNode {
+                node: dom::DomNode {
+                    node_type: dom::DomNodeType::Text {
+                        content: text.to_string(),
+                    },
+                    children: vec![],
+                },
+                styles: ComputedStyle::default(),
+                before_styles: None,
+                after_styles: None,
+                marker_styles: None,
+                children: vec![],
+            }],
+        };
+
+        let ol = StyledNode {
+            node: ol_dom,
+            styles: ol_style,
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children: vec![mk_li("one", None), mk_li("two", Some("10")), mk_li("three", None)],
+        };
+
+        let tree = generate_box_tree(&ol);
+        let markers: Vec<String> = tree
+            .root
+            .children
+            .iter()
+            .filter_map(|li| {
+                li.children.first().and_then(|child| match &child.box_type {
+                    BoxType::Marker(m) => match &m.content {
+                        MarkerContent::Text(t) => Some(t.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+            })
+            .collect();
+
+        assert_eq!(markers, vec!["1 ", "10 ", "11 "]);
+    }
+
+    #[test]
+    fn reversed_list_value_attribute_counts_down_from_value() {
+        let mut ol_style = ComputedStyle::default();
+        ol_style.display = Display::Block;
+
+        let mut li_style = ComputedStyle::default();
+        li_style.display = Display::ListItem;
+        li_style.list_style_type = ListStyleType::Decimal;
+
+        let ol_dom = dom::DomNode {
+            node_type: dom::DomNodeType::Element {
+                tag_name: "ol".to_string(),
+                attributes: vec![("reversed".to_string(), "".to_string())],
+            },
+            children: vec![],
+        };
+
+        let mk_li = |text: &str, value: Option<&str>| StyledNode {
+            node: dom::DomNode {
+                node_type: dom::DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: value
+                        .map(|v| vec![("value".to_string(), v.to_string())])
+                        .unwrap_or_else(Vec::new),
+                },
+                children: vec![dom::DomNode {
+                    node_type: dom::DomNodeType::Text {
+                        content: text.to_string(),
+                    },
+                    children: vec![],
+                }],
+            },
+            styles: li_style.clone(),
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children: vec![StyledNode {
+                node: dom::DomNode {
+                    node_type: dom::DomNodeType::Text {
+                        content: text.to_string(),
+                    },
+                    children: vec![],
+                },
+                styles: ComputedStyle::default(),
+                before_styles: None,
+                after_styles: None,
+                marker_styles: None,
+                children: vec![],
+            }],
+        };
+
+        let ol = StyledNode {
+            node: ol_dom,
+            styles: ol_style,
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children: vec![mk_li("one", None), mk_li("two", Some("10")), mk_li("three", None)],
+        };
+
+        let tree = generate_box_tree(&ol);
+        let markers: Vec<String> = tree
+            .root
+            .children
+            .iter()
+            .filter_map(|li| {
+                li.children.first().and_then(|child| match &child.box_type {
+                    BoxType::Marker(m) => match &m.content {
+                        MarkerContent::Text(t) => Some(t.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+            })
+            .collect();
+
+        assert_eq!(markers, vec!["3 ", "10 ", "9 "]);
     }
 
     #[test]
