@@ -52,7 +52,9 @@ use crate::layout::formatting_context::LayoutError;
 use crate::layout::utils::{content_size_from_box_sizing, resolve_offset_for_positioned};
 use crate::style::computed::PositionedStyle;
 use crate::style::position::Position;
+use crate::style::values::LengthOrAuto;
 use crate::text::font_loader::FontContext;
+use crate::style::ComputedStyle;
 use crate::tree::fragment_tree::FragmentNode;
 
 use super::contexts::positioned::ContainingBlock;
@@ -156,6 +158,15 @@ impl AbsoluteLayout {
         Self {
             font_context: FontContext::new(),
         }
+    }
+
+    /// Resolves a computed style into a positioned style using the containing block for percentage bases.
+    pub fn resolve_positioned_style(
+        &self,
+        style: &ComputedStyle,
+        containing_block: &ContainingBlock,
+    ) -> PositionedStyle {
+        resolve_positioned_style(style, containing_block, containing_block.viewport_size(), &self.font_context)
     }
 
     /// Performs complete absolute layout calculation
@@ -1045,4 +1056,81 @@ mod tests {
         assert_eq!(result.position.x, 1_000_000.0);
         assert_eq!(result.position.y, 1_000_000.0);
     }
+}
+
+/// Resolve a computed style into a positioned style with pixel-resolved edges.
+pub fn resolve_positioned_style(
+    style: &ComputedStyle,
+    containing_block: &ContainingBlock,
+    viewport: Size,
+    font_context: &FontContext,
+) -> PositionedStyle {
+    let mut resolved = PositionedStyle::default();
+    resolved.position = style.position;
+    resolved.left = style.left.map_or(LengthOrAuto::Auto, LengthOrAuto::Length);
+    resolved.right = style.right.map_or(LengthOrAuto::Auto, LengthOrAuto::Length);
+    resolved.top = style.top.map_or(LengthOrAuto::Auto, LengthOrAuto::Length);
+    resolved.bottom = style.bottom.map_or(LengthOrAuto::Auto, LengthOrAuto::Length);
+    resolved.width = style.width.map_or(LengthOrAuto::Auto, LengthOrAuto::Length);
+    resolved.height = style.height.map_or(LengthOrAuto::Auto, LengthOrAuto::Length);
+    resolved.box_sizing = style.box_sizing;
+    resolved.aspect_ratio = style.aspect_ratio;
+    resolved.font_family = style.font_family.clone();
+    resolved.font_size = style.font_size;
+    resolved.root_font_size = style.root_font_size;
+    resolved.font_weight = style.font_weight.to_u16();
+    resolved.font_style = match style.font_style {
+        crate::style::types::FontStyle::Normal => crate::style::computed::FontStyle::Normal,
+        crate::style::types::FontStyle::Italic => crate::style::computed::FontStyle::Italic,
+        crate::style::types::FontStyle::Oblique(_) => crate::style::computed::FontStyle::Oblique,
+    };
+    resolved.font_stretch = style.font_stretch;
+    resolved.font_size_adjust = style.font_size_adjust;
+
+    let cb_width = containing_block.width();
+    let cb_height = containing_block.height();
+    let resolve_len = |len: &crate::style::values::Length, base: f32| -> f32 {
+        if len.unit.is_percentage() {
+            len.resolve_against(base)
+        } else if len.unit.is_absolute() {
+            len.to_px()
+        } else if len.unit.is_viewport_relative() {
+            len.resolve_with_viewport(viewport.width, viewport.height)
+        } else {
+            crate::layout::utils::resolve_font_relative_length(*len, style, font_context)
+        }
+    };
+
+    resolved.padding.left = resolve_len(&style.padding_left, cb_width);
+    resolved.padding.right = resolve_len(&style.padding_right, cb_width);
+    resolved.padding.top = resolve_len(&style.padding_top, cb_width);
+    resolved.padding.bottom = resolve_len(&style.padding_bottom, cb_width);
+
+    resolved.border_width.left = resolve_len(&style.border_left_width, cb_width);
+    resolved.border_width.right = resolve_len(&style.border_right_width, cb_width);
+    resolved.border_width.top = resolve_len(&style.border_top_width, cb_width);
+    resolved.border_width.bottom = resolve_len(&style.border_bottom_width, cb_width);
+
+    resolved.margin.left = style
+        .margin_left
+        .as_ref()
+        .map(|l| resolve_len(l, cb_width))
+        .unwrap_or(0.0);
+    resolved.margin.right = style
+        .margin_right
+        .as_ref()
+        .map(|l| resolve_len(l, cb_width))
+        .unwrap_or(0.0);
+    resolved.margin.top = style
+        .margin_top
+        .as_ref()
+        .map(|l| resolve_len(l, cb_height))
+        .unwrap_or(0.0);
+    resolved.margin.bottom = style
+        .margin_bottom
+        .as_ref()
+        .map(|l| resolve_len(l, cb_height))
+        .unwrap_or(0.0);
+
+    resolved
 }

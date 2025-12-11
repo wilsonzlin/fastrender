@@ -26,18 +26,20 @@
 pub mod margin_collapse;
 pub mod width;
 
-use crate::geometry::Rect;
+use crate::geometry::{Point, Rect, Size};
 use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
 use crate::layout::contexts::block::width::MarginValue;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::InlineFormattingContext;
 use crate::layout::float_context::{FloatContext, FloatSide};
+use crate::layout::contexts::positioned::ContainingBlock;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::utils::{
     border_size_from_box_sizing, compute_replaced_size, content_size_from_box_sizing, resolve_font_relative_length,
     resolve_length_with_percentage,
 };
 use crate::style::display::FormattingContextType;
+use std::sync::Arc;
 use crate::style::float::Float;
 use crate::style::position::Position;
 use crate::style::values::Length;
@@ -179,7 +181,7 @@ impl BlockFormattingContext {
         // Check if this child establishes a different formatting context
         let fc_type = child.formatting_context();
 
-        let (child_fragments, content_height) = if let Some(fc_type) = fc_type {
+        let (child_fragments, content_height, _) = if let Some(fc_type) = fc_type {
             if fc_type != FormattingContextType::Block {
                 // Child establishes a non-block FC - use the appropriate FC
                 let factory = FormattingContextFactory::with_font_context_and_viewport(
@@ -193,7 +195,7 @@ impl BlockFormattingContext {
                 let height = child_frag.bounds.height();
 
                 // Return fragment wrapped in vec and height
-                (vec![child_frag], height)
+                (vec![child_frag], height, Vec::new())
             } else {
                 // Block FC - layout children normally
                 self.layout_children(child, &child_constraints)?
@@ -387,13 +389,14 @@ impl BlockFormattingContext {
         &self,
         parent: &BoxNode,
         constraints: &LayoutConstraints,
-    ) -> Result<(Vec<FragmentNode>, f32), LayoutError> {
+    ) -> Result<(Vec<FragmentNode>, f32, Vec<BoxNode>), LayoutError> {
         let mut fragments = Vec::new();
         let mut current_y: f32 = 0.0;
         let mut content_height: f32 = 0.0;
         let mut margin_ctx = MarginCollapseContext::new();
         let mut inline_buffer: Vec<BoxNode> = Vec::new();
         let mut float_ctx = FloatContext::new(constraints.width().unwrap_or(0.0));
+        let mut positioned_children: Vec<BoxNode> = Vec::new();
 
         // Get containing width from constraints
         let containing_width = constraints.width().unwrap_or(0.0);
@@ -463,6 +466,7 @@ impl BlockFormattingContext {
         for child in &parent.children {
             // Skip out-of-flow positioned boxes (absolute/fixed)
             if is_out_of_flow(child) {
+                positioned_children.push(child.clone());
                 continue;
             }
 
@@ -732,7 +736,7 @@ impl BlockFormattingContext {
             .map(|f| f.bottom())
             .fold(content_height, f32::max);
 
-        Ok((fragments, float_bottom))
+        Ok((fragments, float_bottom, positioned_children))
     }
 }
 
@@ -843,7 +847,8 @@ impl FormattingContext for BlockFormattingContext {
             child_height_space,
         );
 
-        let (child_fragments, mut content_height) = self.layout_children(box_node, &child_constraints)?;
+        let (mut child_fragments, mut content_height, positioned_children) =
+            self.layout_children(box_node, &child_constraints)?;
         if style.containment.size {
             content_height = 0.0;
         }
@@ -881,6 +886,60 @@ impl FormattingContext for BlockFormattingContext {
 
         let box_height = border_top + padding_top + height + padding_bottom + border_bottom;
         let box_width = computed_width.total_width();
+
+        // Layout out-of-flow positioned children against this block's padding box.
+        let padding_origin = Point::new(
+            computed_width.border_left + computed_width.padding_left,
+            border_top + padding_top,
+        );
+        let padding_size = Size::new(
+            computed_width.content_width + computed_width.padding_left + computed_width.padding_right,
+            height + padding_top + padding_bottom,
+        );
+        let padding_rect = Rect::new(padding_origin, padding_size);
+
+        if !positioned_children.is_empty() {
+            let factory = FormattingContextFactory::with_font_context_and_viewport(
+                self.font_context.clone(),
+                self.viewport_size,
+            );
+            let abs = crate::layout::absolute_positioning::AbsoluteLayout::new();
+
+            for child in positioned_children {
+                // Layout the child as if it were in normal flow to obtain its intrinsic size.
+                let mut layout_child = child.clone();
+                let mut style = (*layout_child.style).clone();
+                style.position = Position::Static;
+                layout_child.style = Arc::new(style);
+
+                let fc_type = layout_child.formatting_context().unwrap_or(FormattingContextType::Block);
+                let fc = factory.create(fc_type);
+                let child_constraints = LayoutConstraints::new(
+                    AvailableSpace::Definite(padding_size.width),
+                    AvailableSpace::Definite(padding_size.height),
+                );
+                let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
+
+                // Resolve positioned style against the containing block.
+                let positioned_style = crate::layout::absolute_positioning::resolve_positioned_style(
+                    &child.style,
+                    &ContainingBlock::new(padding_rect),
+                    self.viewport_size,
+                    &self.font_context,
+                );
+
+                let static_pos = padding_origin;
+                let input = crate::layout::absolute_positioning::AbsoluteLayoutInput::new(
+                    positioned_style,
+                    child_fragment.bounds.size,
+                    static_pos,
+                );
+
+                let result = abs.layout_absolute(&input, &ContainingBlock::new(padding_rect))?;
+                child_fragment.bounds = Rect::new(result.position, result.size);
+                child_fragments.push(child_fragment);
+            }
+        }
 
         let bounds = Rect::from_xywh(0.0, 0.0, box_width, box_height);
 
@@ -1085,6 +1144,7 @@ mod tests {
     use crate::layout::contexts::inline::InlineFormattingContext;
     use crate::layout::formatting_context::IntrinsicSizingMode;
     use crate::style::display::Display;
+    use crate::style::position::Position;
     use crate::style::display::FormattingContextType;
     use crate::style::types::{ListStylePosition, ListStyleType};
     use crate::style::values::Length;
@@ -1466,5 +1526,35 @@ mod tests {
 
         assert!((max - 12.0).abs() < 0.001);
         assert!((min - 12.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn absolutely_positioned_child_uses_padding_containing_block() {
+        let mut parent_style = ComputedStyle::default();
+        parent_style.display = Display::Block;
+        parent_style.width = Some(Length::px(200.0));
+        parent_style.padding_left = Length::px(10.0);
+        parent_style.padding_top = Length::px(10.0);
+        let mut child_style = ComputedStyle::default();
+        child_style.display = Display::Block;
+        child_style.position = Position::Absolute;
+        child_style.left = Some(Length::px(5.0));
+        child_style.top = Some(Length::px(7.0));
+        child_style.width = Some(Length::px(50.0));
+        child_style.height = Some(Length::px(20.0));
+
+        let child = BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![]);
+        let parent = BoxNode::new_block(Arc::new(parent_style), FormattingContextType::Block, vec![child]);
+
+        let fc = BlockFormattingContext::new();
+        let constraints = LayoutConstraints::definite(300.0, 300.0);
+        let fragment = fc.layout(&parent, &constraints).unwrap();
+
+        assert_eq!(fragment.children.len(), 1);
+        let child_frag = &fragment.children[0];
+        assert_eq!(child_frag.bounds.x(), 15.0);
+        assert_eq!(child_frag.bounds.y(), 17.0);
+        assert_eq!(child_frag.bounds.width(), 50.0);
+        assert_eq!(child_frag.bounds.height(), 20.0);
     }
 }
