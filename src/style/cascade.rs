@@ -1059,6 +1059,57 @@ mod tests {
     }
 
     #[test]
+    fn marker_allows_text_emphasis_properties() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "ul".to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: vec![("style".to_string(), "color: black;".to_string())],
+                },
+                children: vec![],
+            }],
+        };
+
+        let stylesheet = parse_stylesheet(
+            r#"
+            li::marker {
+                text-emphasis-style: open dot;
+                text-emphasis-color: red;
+                text-emphasis-position: under right;
+            }
+        "#,
+        )
+        .unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        let li = styled.children.first().expect("li");
+        let marker = li.marker_styles.as_ref().expect("marker styles");
+
+        assert_eq!(
+            marker.text_emphasis_style,
+            crate::style::types::TextEmphasisStyle::Mark {
+                fill: crate::style::types::TextEmphasisFill::Open,
+                shape: crate::style::types::TextEmphasisShape::Dot
+            },
+            "text-emphasis-style should apply to ::marker"
+        );
+        assert_eq!(
+            marker.text_emphasis_color,
+            Some(Rgba::RED),
+            "text-emphasis-color should apply to ::marker"
+        );
+        assert_eq!(
+            marker.text_emphasis_position,
+            crate::style::types::TextEmphasisPosition::UnderRight,
+            "text-emphasis-position should apply to ::marker"
+        );
+    }
+
+    #[test]
     fn font_weight_relative_keywords_follow_css_fonts_table() {
         assert_eq!(child_font_weight("font-weight: 50;", "font-weight: bolder;"), 400);
         assert_eq!(child_font_weight("font-weight: 50;", "font-weight: lighter;"), 50);
@@ -1398,6 +1449,10 @@ fn marker_allows_property(property: &str) -> bool {
             | "letter-spacing"
             | "word-spacing"
             | "text-transform"
+            | "text-emphasis"
+            | "text-emphasis-style"
+            | "text-emphasis-color"
+            | "text-emphasis-position"
             | "line-break"
             | "word-break"
             | "overflow-wrap"
