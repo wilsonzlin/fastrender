@@ -256,6 +256,9 @@ pub enum PropertyValue {
         stops: Vec<ColorStop>,
     },
     RadialGradient {
+        shape: RadialGradientShape,
+        size: RadialGradientSize,
+        position: GradientPosition,
         stops: Vec<ColorStop>,
     },
     RepeatingLinearGradient {
@@ -263,6 +266,9 @@ pub enum PropertyValue {
         stops: Vec<ColorStop>,
     },
     RepeatingRadialGradient {
+        shape: RadialGradientShape,
+        size: RadialGradientSize,
+        position: GradientPosition,
         stops: Vec<ColorStop>,
     },
     /// Raw custom property value (stored unparsed)
@@ -289,6 +295,33 @@ pub struct TextShadow {
     pub offset_y: Length,
     pub blur_radius: Length,
     pub color: Rgba,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RadialGradientShape {
+    Circle,
+    Ellipse,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RadialGradientSize {
+    ClosestSide,
+    FarthestSide,
+    ClosestCorner,
+    FarthestCorner,
+    Explicit { x: Length, y: Option<Length> },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GradientPositionComponent {
+    pub alignment: f32,
+    pub offset: Length,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GradientPosition {
+    pub x: GradientPositionComponent,
+    pub y: GradientPositionComponent,
 }
 
 #[derive(Debug, Clone, PartialEq)]

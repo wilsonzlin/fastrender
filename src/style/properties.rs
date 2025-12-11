@@ -76,14 +76,50 @@ fn parse_background_image_value(value: &PropertyValue) -> Option<BackgroundImage
             angle: *angle,
             stops: stops.clone(),
         }),
-        PropertyValue::RadialGradient { stops } => Some(BackgroundImage::RadialGradient { stops: stops.clone() }),
+        PropertyValue::RadialGradient {
+            shape,
+            size,
+            position,
+            stops,
+        } => Some(BackgroundImage::RadialGradient {
+            shape: *shape,
+            size: size.clone(),
+            position: BackgroundPosition::Position {
+                x: BackgroundPositionComponent {
+                    alignment: position.x.alignment,
+                    offset: position.x.offset,
+                },
+                y: BackgroundPositionComponent {
+                    alignment: position.y.alignment,
+                    offset: position.y.offset,
+                },
+            },
+            stops: stops.clone(),
+        }),
         PropertyValue::RepeatingLinearGradient { angle, stops } => Some(BackgroundImage::RepeatingLinearGradient {
             angle: *angle,
             stops: stops.clone(),
         }),
-        PropertyValue::RepeatingRadialGradient { stops } => {
-            Some(BackgroundImage::RepeatingRadialGradient { stops: stops.clone() })
-        }
+        PropertyValue::RepeatingRadialGradient {
+            shape,
+            size,
+            position,
+            stops,
+        } => Some(BackgroundImage::RepeatingRadialGradient {
+            shape: *shape,
+            size: size.clone(),
+            position: BackgroundPosition::Position {
+                x: BackgroundPositionComponent {
+                    alignment: position.x.alignment,
+                    offset: position.x.offset,
+                },
+                y: BackgroundPositionComponent {
+                    alignment: position.y.alignment,
+                    offset: position.y.offset,
+                },
+            },
+            stops: stops.clone(),
+        }),
         PropertyValue::Keyword(kw) if kw == "none" => Some(BackgroundImage::None),
         _ => None,
     }
@@ -8684,8 +8720,27 @@ fn parse_background_shorthand(tokens: &[PropertyValue], current_color: Rgba) -> 
                     idx += 1;
                     continue;
                 }
-                PropertyValue::RadialGradient { stops } => {
-                    shorthand.image = Some(BackgroundImage::RadialGradient { stops: stops.clone() });
+                PropertyValue::RadialGradient {
+                    shape,
+                    size,
+                    position,
+                    stops,
+                } => {
+                    shorthand.image = Some(BackgroundImage::RadialGradient {
+                        shape: *shape,
+                        size: size.clone(),
+                        position: BackgroundPosition::Position {
+                            x: BackgroundPositionComponent {
+                                alignment: position.x.alignment,
+                                offset: position.x.offset,
+                            },
+                            y: BackgroundPositionComponent {
+                                alignment: position.y.alignment,
+                                offset: position.y.offset,
+                            },
+                        },
+                        stops: stops.clone(),
+                    });
                     idx += 1;
                     continue;
                 }
@@ -8697,8 +8752,27 @@ fn parse_background_shorthand(tokens: &[PropertyValue], current_color: Rgba) -> 
                     idx += 1;
                     continue;
                 }
-                PropertyValue::RepeatingRadialGradient { stops } => {
-                    shorthand.image = Some(BackgroundImage::RepeatingRadialGradient { stops: stops.clone() });
+                PropertyValue::RepeatingRadialGradient {
+                    shape,
+                    size,
+                    position,
+                    stops,
+                } => {
+                    shorthand.image = Some(BackgroundImage::RepeatingRadialGradient {
+                        shape: *shape,
+                        size: size.clone(),
+                        position: BackgroundPosition::Position {
+                            x: BackgroundPositionComponent {
+                                alignment: position.x.alignment,
+                                offset: position.x.offset,
+                            },
+                            y: BackgroundPositionComponent {
+                                alignment: position.y.alignment,
+                                offset: position.y.offset,
+                            },
+                        },
+                        stops: stops.clone(),
+                    });
                     idx += 1;
                     continue;
                 }

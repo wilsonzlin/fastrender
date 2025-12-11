@@ -2,7 +2,9 @@
 //!
 //! Parses individual CSS property values.
 
-use super::types::PropertyValue;
+use super::types::{
+    GradientPosition, GradientPositionComponent, PropertyValue, RadialGradientShape, RadialGradientSize,
+};
 use crate::style::color::{Color, Rgba};
 use crate::style::values::{Length, LengthUnit};
 use cssparser::{Parser, ParserInput, Token};
@@ -303,8 +305,66 @@ fn parse_radial_gradient(value: &str, repeating: bool) -> Option<PropertyValue> 
         return None;
     }
 
+    let mut shape = RadialGradientShape::Ellipse;
+    let mut size = RadialGradientSize::FarthestCorner;
+    let mut position = GradientPosition {
+        x: GradientPositionComponent {
+            alignment: 0.5,
+            offset: Length::px(0.0),
+        },
+        y: GradientPositionComponent {
+            alignment: 0.5,
+            offset: Length::px(0.0),
+        },
+    };
+
     let mut stops = Vec::new();
-    for part in parts {
+    let mut start_idx = 1;
+    if let Some(cs) = parse_color_stop(parts[0]) {
+        stops.push(cs);
+    } else {
+        start_idx = 1;
+        let lower = parts[0].to_ascii_lowercase();
+        let (prelude, pos_part) = match lower.find(" at ") {
+            Some(idx) => (lower[..idx].trim(), Some(&parts[0][idx + 4..])),
+            None => (parts[0], None),
+        };
+
+        if let Some(pos_str) = pos_part {
+            if let Some(pos) = parse_radial_position(pos_str) {
+                position = pos;
+            }
+        }
+
+        let tokens: Vec<&str> = prelude.split_whitespace().filter(|t| !t.is_empty()).collect();
+        let mut explicit_sizes = Vec::new();
+        for token in tokens {
+            let token_lower = token.to_ascii_lowercase();
+            match token_lower.as_str() {
+                "circle" => shape = RadialGradientShape::Circle,
+                "ellipse" => shape = RadialGradientShape::Ellipse,
+                "closest-side" => size = RadialGradientSize::ClosestSide,
+                "farthest-side" => size = RadialGradientSize::FarthestSide,
+                "closest-corner" => size = RadialGradientSize::ClosestCorner,
+                "farthest-corner" => size = RadialGradientSize::FarthestCorner,
+                _ => {
+                    if let Some(len) = parse_length_token(token) {
+                        explicit_sizes.push(len);
+                    } else {
+                        return None;
+                    }
+                }
+            }
+        }
+
+        if !explicit_sizes.is_empty() {
+            let first = explicit_sizes[0];
+            let second = explicit_sizes.get(1).cloned();
+            size = RadialGradientSize::Explicit { x: first, y: second };
+        }
+    }
+
+    for part in parts.iter().skip(start_idx) {
         if let Some(cs) = parse_color_stop(part) {
             stops.push(cs);
         }
@@ -315,10 +375,170 @@ fn parse_radial_gradient(value: &str, repeating: bool) -> Option<PropertyValue> 
     }
 
     if repeating {
-        Some(PropertyValue::RepeatingRadialGradient { stops })
+        Some(PropertyValue::RepeatingRadialGradient {
+            shape,
+            size,
+            position,
+            stops,
+        })
     } else {
-        Some(PropertyValue::RadialGradient { stops })
+        Some(PropertyValue::RadialGradient {
+            shape,
+            size,
+            position,
+            stops,
+        })
     }
+}
+
+fn parse_length_token(token: &str) -> Option<Length> {
+    match parse_property_value("width", token)? {
+        PropertyValue::Length(l) => Some(l),
+        PropertyValue::Percentage(p) => Some(Length::percent(p)),
+        PropertyValue::Number(n) if n == 0.0 => Some(Length::px(0.0)),
+        _ => None,
+    }
+}
+
+fn parse_radial_position(text: &str) -> Option<GradientPosition> {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum AxisKind {
+        Horizontal,
+        Vertical,
+        Either,
+    }
+
+    #[derive(Clone, Copy)]
+    enum Part {
+        Keyword(AxisKind, f32),
+        Offset(Length),
+    }
+
+    fn classify(value: &PropertyValue) -> Option<Part> {
+        match value {
+            PropertyValue::Keyword(kw) => match kw.to_ascii_lowercase().as_str() {
+                "left" => Some(Part::Keyword(AxisKind::Horizontal, 0.0)),
+                "right" => Some(Part::Keyword(AxisKind::Horizontal, 1.0)),
+                "top" => Some(Part::Keyword(AxisKind::Vertical, 0.0)),
+                "bottom" => Some(Part::Keyword(AxisKind::Vertical, 1.0)),
+                "center" => Some(Part::Keyword(AxisKind::Either, 0.5)),
+                _ => None,
+            },
+            PropertyValue::Length(l) => Some(Part::Offset(*l)),
+            PropertyValue::Percentage(p) => Some(Part::Offset(Length::percent(*p))),
+            PropertyValue::Number(n) if *n == 0.0 => Some(Part::Offset(Length::px(0.0))),
+            _ => None,
+        }
+    }
+
+    fn component_from_keyword(align: f32, offset: Option<Length>) -> GradientPositionComponent {
+        let mut off = offset.unwrap_or_else(|| Length::px(0.0));
+        if (align - 1.0).abs() < 1e-6 {
+            off.value = -off.value;
+        }
+        GradientPositionComponent { alignment: align, offset: off }
+    }
+
+    fn component_from_single(part: &Part, axis: AxisKind) -> Option<GradientPositionComponent> {
+        match (part, axis) {
+            (Part::Keyword(kind, align), _) if *kind == AxisKind::Either => Some(component_from_keyword(*align, None)),
+            (Part::Keyword(kind, align), AxisKind::Horizontal) if *kind == AxisKind::Horizontal => {
+                Some(component_from_keyword(*align, None))
+            }
+            (Part::Keyword(kind, align), AxisKind::Vertical) if *kind == AxisKind::Vertical => {
+                Some(component_from_keyword(*align, None))
+            }
+            (Part::Offset(len), AxisKind::Horizontal | AxisKind::Vertical) => {
+                Some(component_from_keyword(0.0, Some(*len)))
+            }
+            _ => None,
+        }
+    }
+
+    let tokens = tokenize_property_value(text, false);
+    let parsed_tokens: Vec<PropertyValue> = tokens
+        .into_iter()
+        .filter_map(|t| parse_property_value("background-position", &t))
+        .collect();
+    if parsed_tokens.is_empty() {
+        return None;
+    }
+    let parts: Vec<Part> = parsed_tokens.iter().filter_map(classify).collect();
+    if parts.is_empty() || parts.len() > 4 {
+        return None;
+    }
+
+    let mut x: Option<GradientPositionComponent> = None;
+    let mut y: Option<GradientPositionComponent> = None;
+
+    match parts.len() {
+        1 => {
+            x = component_from_single(&parts[0], AxisKind::Horizontal);
+            y = component_from_single(&parts[0], AxisKind::Vertical);
+        }
+        2 => {
+            // First token determines axis, second fills the other.
+            if let Some(cx) = component_from_single(&parts[0], AxisKind::Horizontal) {
+                x = Some(cx);
+                y = component_from_single(&parts[1], AxisKind::Vertical).or_else(|| {
+                    component_from_single(&parts[0], AxisKind::Vertical)
+                });
+            } else if let Some(cy) = component_from_single(&parts[0], AxisKind::Vertical) {
+                y = Some(cy);
+                x = component_from_single(&parts[1], AxisKind::Horizontal).or_else(|| {
+                    component_from_single(&parts[0], AxisKind::Horizontal)
+                });
+            }
+            if x.is_none() && y.is_none() {
+                // Treat as generic x y ordering.
+                x = component_from_single(&parts[0], AxisKind::Horizontal);
+                y = component_from_single(&parts[1], AxisKind::Vertical);
+            }
+        }
+        3 => {
+            // x keyword [offset] y keyword
+            if let Some(cx) = component_from_single(&parts[0], AxisKind::Horizontal) {
+                x = Some(component_from_keyword(cx.alignment, match parts[1] {
+                    Part::Offset(len) => Some(len),
+                    _ => None,
+                }));
+                y = component_from_single(&parts[2], AxisKind::Vertical);
+            } else if let Some(cy) = component_from_single(&parts[0], AxisKind::Vertical) {
+                y = Some(component_from_keyword(cy.alignment, match parts[1] {
+                    Part::Offset(len) => Some(len),
+                    _ => None,
+                }));
+                x = component_from_single(&parts[2], AxisKind::Horizontal);
+            }
+        }
+        4 => {
+            x = component_from_single(&parts[0], AxisKind::Horizontal);
+            y = component_from_single(&parts[2], AxisKind::Vertical);
+            // offsets are parts[1] and parts[3]
+            if let (Some(mut cx), Part::Offset(off)) = (x, parts[1]) {
+                cx.offset = off;
+                if (cx.alignment - 1.0).abs() < 1e-6 {
+                    cx.offset.value = -cx.offset.value;
+                }
+                x = Some(cx);
+            }
+            if let (Some(mut cy), Part::Offset(off)) = (y, parts[3]) {
+                cy.offset = off;
+                if (cy.alignment - 1.0).abs() < 1e-6 {
+                    cy.offset.value = -cy.offset.value;
+                }
+                y = Some(cy);
+            }
+        }
+        _ => {}
+    }
+
+    let x = x?;
+    let y = y.unwrap_or_else(|| GradientPositionComponent {
+        alignment: 0.5,
+        offset: Length::px(0.0),
+    });
+    Some(GradientPosition { x, y })
 }
 
 fn split_top_level_commas(input: &str) -> Vec<&str> {
@@ -529,13 +749,34 @@ mod tests {
     #[test]
     fn parses_radial_gradient() {
         let value = "radial-gradient(red, blue 75%)";
-        let PropertyValue::RadialGradient { stops } =
+        let PropertyValue::RadialGradient { shape, size, position, stops } =
             parse_property_value("background-image", value).expect("gradient")
         else {
             panic!("expected radial gradient");
         };
+        assert!(matches!(shape, RadialGradientShape::Ellipse));
+        assert!(matches!(size, RadialGradientSize::FarthestCorner));
+        assert!((position.x.alignment - 0.5).abs() < 1e-6);
         assert_eq!(stops.len(), 2);
         assert_eq!(stops[1].position, Some(0.75));
+    }
+
+    #[test]
+    fn parses_radial_gradient_with_size_and_position() {
+        let value = "radial-gradient(circle closest-side at 25% 75%, red, blue)";
+        let PropertyValue::RadialGradient { shape, size, position, .. } =
+            parse_property_value("background-image", value).expect("gradient")
+        else {
+            panic!("expected radial gradient");
+        };
+        assert!(matches!(shape, RadialGradientShape::Circle));
+        assert!(matches!(size, RadialGradientSize::ClosestSide));
+        assert_eq!(position.x.alignment, 0.0);
+        assert_eq!(position.y.alignment, 0.0);
+        assert_eq!(position.x.offset.unit, LengthUnit::Percent);
+        assert_eq!(position.x.offset.value, 25.0);
+        assert_eq!(position.y.offset.unit, LengthUnit::Percent);
+        assert_eq!(position.y.offset.value, 75.0);
     }
 
     #[test]
@@ -553,11 +794,14 @@ mod tests {
     #[test]
     fn parses_repeating_radial_gradient() {
         let value = "repeating-radial-gradient(red 10%, blue 60%)";
-        let PropertyValue::RepeatingRadialGradient { stops } =
+        let PropertyValue::RepeatingRadialGradient { shape, size, position, stops } =
             parse_property_value("background-image", value).expect("gradient")
         else {
             panic!("expected repeating radial gradient");
         };
+        assert!(matches!(shape, RadialGradientShape::Ellipse));
+        assert!(matches!(size, RadialGradientSize::FarthestCorner));
+        assert!((position.y.alignment - 0.5).abs() < 1e-6);
         assert_eq!(stops.len(), 2);
         assert_eq!(stops[0].position, Some(0.10));
         assert_eq!(stops[1].position, Some(0.60));

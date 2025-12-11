@@ -41,6 +41,7 @@ use crate::paint::display_list::{
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
 use crate::paint::text_shadow::resolve_text_shadows;
+use crate::css::types::{RadialGradientShape, RadialGradientSize};
 use crate::style::color::Rgba;
 use crate::style::types::{
     BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeatKeyword,
@@ -612,6 +613,91 @@ impl DisplayListBuilder {
                 color: *color,
             })
             .collect()
+    }
+
+    fn radial_geometry(
+        rect: Rect,
+        position: &BackgroundPosition,
+        size: &RadialGradientSize,
+        shape: RadialGradientShape,
+        font_size: f32,
+    ) -> (f32, f32, f32, f32) {
+        let (align_x, off_x, align_y, off_y) = match position {
+            BackgroundPosition::Position { x, y } => {
+                let ox = Self::resolve_length_for_paint(&x.offset, font_size, rect.width());
+                let oy = Self::resolve_length_for_paint(&y.offset, font_size, rect.height());
+                (x.alignment, ox, y.alignment, oy)
+            }
+        };
+        let cx = rect.x() + align_x * rect.width() + off_x;
+        let cy = rect.y() + align_y * rect.height() + off_y;
+
+        let dx_left = (cx - rect.x()).max(0.0);
+        let dx_right = (rect.x() + rect.width() - cx).max(0.0);
+        let dy_top = (cy - rect.y()).max(0.0);
+        let dy_bottom = (rect.y() + rect.height() - cy).max(0.0);
+
+        let (mut rx, mut ry) = match size {
+            RadialGradientSize::ClosestSide => (dx_left.min(dx_right), dy_top.min(dy_bottom)),
+            RadialGradientSize::FarthestSide => (dx_left.max(dx_right), dy_top.max(dy_bottom)),
+            RadialGradientSize::ClosestCorner => {
+                let corners = [
+                    (dx_left, dy_top),
+                    (dx_left, dy_bottom),
+                    (dx_right, dy_top),
+                    (dx_right, dy_bottom),
+                ];
+                let mut best = std::f32::INFINITY;
+                let mut best_pair = (0.0, 0.0);
+                for (dx, dy) in corners {
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    if dist < best {
+                        best = dist;
+                        best_pair = (dx, dy);
+                    }
+                }
+                (best_pair.0 * std::f32::consts::SQRT_2, best_pair.1 * std::f32::consts::SQRT_2)
+            }
+            RadialGradientSize::FarthestCorner => {
+                let corners = [
+                    (dx_left, dy_top),
+                    (dx_left, dy_bottom),
+                    (dx_right, dy_top),
+                    (dx_right, dy_bottom),
+                ];
+                let mut best = -std::f32::INFINITY;
+                let mut best_pair = (0.0, 0.0);
+                for (dx, dy) in corners {
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    if dist > best {
+                        best = dist;
+                        best_pair = (dx, dy);
+                    }
+                }
+                (best_pair.0 * std::f32::consts::SQRT_2, best_pair.1 * std::f32::consts::SQRT_2)
+            }
+            RadialGradientSize::Explicit { x, y } => {
+                let rx = Self::resolve_length_for_paint(x, font_size, rect.width()).max(0.0);
+                let ry = y
+                    .as_ref()
+                    .map(|yy| Self::resolve_length_for_paint(yy, font_size, rect.height()).max(0.0))
+                    .unwrap_or(rx);
+                (rx, ry)
+            }
+        };
+
+        if matches!(shape, RadialGradientShape::Circle) {
+            let r = if matches!(size, RadialGradientSize::ClosestCorner | RadialGradientSize::FarthestCorner) {
+                let avg = (rx * rx + ry * ry) / 2.0;
+                avg.sqrt()
+            } else {
+                rx.min(ry)
+            };
+            rx = r;
+            ry = r;
+        }
+
+        (cx, cy, rx, ry)
     }
 
     fn resolve_filters(filters: &[crate::style::types::FilterFunction], style: &ComputedStyle) -> Vec<ResolvedFilter> {
@@ -1242,13 +1328,16 @@ impl DisplayListBuilder {
                     }));
                 }
             }
-            BackgroundImage::RadialGradient { stops } => {
+            BackgroundImage::RadialGradient {
+                shape,
+                size,
+                position,
+                stops,
+            } => {
                 let resolved = Self::normalize_color_stops(stops, style.color);
                 if !resolved.is_empty() {
-                    let cx = origin_rect.x() + origin_rect.width() / 2.0;
-                    let cy = origin_rect.y() + origin_rect.height() / 2.0;
-                    let radius_x = origin_rect.width() * 0.5 * std::f32::consts::SQRT_2;
-                    let radius_y = origin_rect.height() * 0.5 * std::f32::consts::SQRT_2;
+                    let (cx, cy, radius_x, radius_y) =
+                        Self::radial_geometry(origin_rect, position, size, *shape, style.font_size);
                     let center = Point::new(cx - clip_rect.x(), cy - clip_rect.y());
                     self.list.push(DisplayItem::RadialGradient(RadialGradientItem {
                         rect: clip_rect,
@@ -1259,13 +1348,16 @@ impl DisplayListBuilder {
                     }));
                 }
             }
-            BackgroundImage::RepeatingRadialGradient { stops } => {
+            BackgroundImage::RepeatingRadialGradient {
+                shape,
+                size,
+                position,
+                stops,
+            } => {
                 let resolved = Self::normalize_color_stops(stops, style.color);
                 if !resolved.is_empty() {
-                    let cx = origin_rect.x() + origin_rect.width() / 2.0;
-                    let cy = origin_rect.y() + origin_rect.height() / 2.0;
-                    let radius_x = origin_rect.width() * 0.5 * std::f32::consts::SQRT_2;
-                    let radius_y = origin_rect.height() * 0.5 * std::f32::consts::SQRT_2;
+                    let (cx, cy, radius_x, radius_y) =
+                        Self::radial_geometry(origin_rect, position, size, *shape, style.font_size);
                     let center = Point::new(cx - clip_rect.x(), cy - clip_rect.y());
                     self.list.push(DisplayItem::RadialGradient(RadialGradientItem {
                         rect: clip_rect,

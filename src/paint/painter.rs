@@ -35,6 +35,7 @@ use crate::paint::stacking::creates_stacking_context;
 use crate::paint::text_shadow::{resolve_text_shadows, PathBounds, ResolvedTextShadow};
 #[cfg(test)]
 use crate::style::color::Color;
+use crate::css::types::{RadialGradientShape, RadialGradientSize};
 use crate::style::color::Rgba;
 use crate::style::display::Display;
 use crate::style::position::Position;
@@ -1191,12 +1192,21 @@ impl Painter {
                     layer.blend_mode,
                 );
             }
-            BackgroundImage::RadialGradient { stops } => {
+            BackgroundImage::RadialGradient {
+                shape,
+                size,
+                position,
+                stops,
+            } => {
                 let resolved = normalize_color_stops(stops, style.color);
                 self.paint_radial_gradient(
                     origin_rect_css,
                     clip_rect_css,
                     clip_mask.as_ref(),
+                    position,
+                    size,
+                    *shape,
+                    style.font_size,
                     &resolved,
                     SpreadMode::Pad,
                     layer.blend_mode,
@@ -1214,12 +1224,21 @@ impl Painter {
                     layer.blend_mode,
                 );
             }
-            BackgroundImage::RepeatingRadialGradient { stops } => {
+            BackgroundImage::RepeatingRadialGradient {
+                shape,
+                size,
+                position,
+                stops,
+            } => {
                 let resolved = normalize_color_stops(stops, style.color);
                 self.paint_radial_gradient(
                     origin_rect_css,
                     clip_rect_css,
                     clip_mask.as_ref(),
+                    position,
+                    size,
+                    *shape,
+                    style.font_size,
                     &resolved,
                     SpreadMode::Repeat,
                     layer.blend_mode,
@@ -1414,6 +1433,10 @@ impl Painter {
         gradient_rect: Rect,
         paint_rect: Rect,
         clip_mask: Option<&Mask>,
+        position: &BackgroundPosition,
+        size: &RadialGradientSize,
+        shape: RadialGradientShape,
+        font_size: f32,
         stops: &[(f32, Rgba)],
         spread: SpreadMode,
         blend_mode: MixBlendMode,
@@ -1424,12 +1447,9 @@ impl Painter {
 
         let gradient_rect = self.device_rect(gradient_rect);
         let paint_rect = self.device_rect(paint_rect);
-
         let skia_stops = gradient_stops(stops);
-        let cx = gradient_rect.x() + gradient_rect.width() / 2.0;
-        let cy = gradient_rect.y() + gradient_rect.height() / 2.0;
-        let radius_x = gradient_rect.width() * 0.5 * std::f32::consts::SQRT_2;
-        let radius_y = gradient_rect.height() * 0.5 * std::f32::consts::SQRT_2;
+        let (cx, cy, radius_x, radius_y) =
+            radial_geometry(gradient_rect, position, size, shape, font_size);
         let transform = Transform::from_translate(cx, cy).pre_scale(radius_x, radius_y);
         let Some(shader) = RadialGradient::new(
             tiny_skia::Point::from_xy(0.0, 0.0),
@@ -4499,6 +4519,92 @@ fn normalize_color_stops(stops: &[ColorStop], current_color: Rgba) -> Vec<(f32, 
     output
 }
 
+fn radial_geometry(
+    rect: Rect,
+    position: &BackgroundPosition,
+    size: &RadialGradientSize,
+    shape: RadialGradientShape,
+    font_size: f32,
+) -> (f32, f32, f32, f32) {
+    let (align_x, off_x, align_y, off_y) = match position {
+        BackgroundPosition::Position { x, y } => {
+            let ox = resolve_length_for_paint(&x.offset, font_size, rect.width());
+            let oy = resolve_length_for_paint(&y.offset, font_size, rect.height());
+            (x.alignment, ox, y.alignment, oy)
+        }
+    };
+    let cx = rect.x() + align_x * rect.width() + off_x;
+    let cy = rect.y() + align_y * rect.height() + off_y;
+
+    let dx_left = (cx - rect.x()).max(0.0);
+    let dx_right = (rect.x() + rect.width() - cx).max(0.0);
+    let dy_top = (cy - rect.y()).max(0.0);
+    let dy_bottom = (rect.y() + rect.height() - cy).max(0.0);
+
+    let (mut radius_x, mut radius_y) = match size {
+        RadialGradientSize::ClosestSide => (dx_left.min(dx_right), dy_top.min(dy_bottom)),
+        RadialGradientSize::FarthestSide => (dx_left.max(dx_right), dy_top.max(dy_bottom)),
+        RadialGradientSize::ClosestCorner => {
+            let corners = [
+                (dx_left, dy_top),
+                (dx_left, dy_bottom),
+                (dx_right, dy_top),
+                (dx_right, dy_bottom),
+            ];
+            let mut best = std::f32::INFINITY;
+            let mut best_pair = (0.0, 0.0);
+            for (dx, dy) in corners {
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist < best {
+                    best = dist;
+                    best_pair = (dx, dy);
+                }
+            }
+            (best_pair.0 * std::f32::consts::SQRT_2, best_pair.1 * std::f32::consts::SQRT_2)
+        }
+        RadialGradientSize::FarthestCorner => {
+            let corners = [
+                (dx_left, dy_top),
+                (dx_left, dy_bottom),
+                (dx_right, dy_top),
+                (dx_right, dy_bottom),
+            ];
+            let mut best = -std::f32::INFINITY;
+            let mut best_pair = (0.0, 0.0);
+            for (dx, dy) in corners {
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist > best {
+                    best = dist;
+                    best_pair = (dx, dy);
+                }
+            }
+            (best_pair.0 * std::f32::consts::SQRT_2, best_pair.1 * std::f32::consts::SQRT_2)
+        }
+        RadialGradientSize::Explicit { x, y } => {
+            let rx = resolve_length_for_paint(x, font_size, rect.width()).max(0.0);
+            let ry = y
+                .as_ref()
+                .map(|yy| resolve_length_for_paint(yy, font_size, rect.height()).max(0.0))
+                .unwrap_or(rx);
+            (rx, ry)
+        }
+    };
+
+    if matches!(shape, RadialGradientShape::Circle) {
+        let r = if matches!(size, RadialGradientSize::ClosestCorner | RadialGradientSize::FarthestCorner) {
+            // Corner-based sizes already yield isotropic radii; use hypotenuse distance instead.
+            let r_corner = ((radius_x * radius_x + radius_y * radius_y) / 2.0).sqrt();
+            r_corner
+        } else {
+            radius_x.min(radius_y)
+        };
+        radius_x = r;
+        radius_y = r;
+    }
+
+    (cx, cy, radius_x.max(0.0), radius_y.max(0.0))
+}
+
 fn gradient_stops(stops: &[(f32, Rgba)]) -> Vec<tiny_skia::GradientStop> {
     stops
         .iter()
@@ -5447,6 +5553,18 @@ mod tests {
         let mut style = ComputedStyle::default();
         style.set_background_layers(vec![BackgroundLayer {
             image: Some(BackgroundImage::RadialGradient {
+                shape: RadialGradientShape::Ellipse,
+                size: RadialGradientSize::FarthestCorner,
+                position: BackgroundPosition::Position {
+                    x: crate::style::types::BackgroundPositionComponent {
+                        alignment: 0.5,
+                        offset: Length::px(0.0),
+                    },
+                    y: crate::style::types::BackgroundPositionComponent {
+                        alignment: 0.5,
+                        offset: Length::px(0.0),
+                    },
+                },
                 stops: vec![
                     crate::css::types::ColorStop {
                         color: Color::Rgba(Rgba::RED),
@@ -5481,6 +5599,54 @@ mod tests {
         assert!(
             corner.2 > corner.0,
             "farthest-corner sizing should leave the corner closest to the final stop"
+        );
+    }
+
+    #[test]
+    fn radial_gradient_honors_position() {
+        let mut style = ComputedStyle::default();
+        style.set_background_layers(vec![BackgroundLayer {
+            image: Some(BackgroundImage::RadialGradient {
+                shape: RadialGradientShape::Ellipse,
+                size: RadialGradientSize::FarthestCorner,
+                position: BackgroundPosition::Position {
+                    x: crate::style::types::BackgroundPositionComponent {
+                        alignment: 0.0,
+                        offset: Length::px(0.0),
+                    },
+                    y: crate::style::types::BackgroundPositionComponent {
+                        alignment: 0.0,
+                        offset: Length::px(0.0),
+                    },
+                },
+                stops: vec![
+                    crate::css::types::ColorStop {
+                        color: Color::Rgba(Rgba::RED),
+                        position: Some(0.0),
+                    },
+                    crate::css::types::ColorStop {
+                        color: Color::Rgba(Rgba::BLUE),
+                        position: Some(1.0),
+                    },
+                ],
+            }),
+            ..BackgroundLayer::default()
+        }]);
+
+        let fragment =
+            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
+        let tree = FragmentTree::new(fragment);
+        let pixmap = paint_tree(&tree, 20, 10, Rgba::WHITE).expect("paint");
+
+        let top_left = color_at(&pixmap, 0, 0);
+        assert!(
+            top_left.0 > top_left.2,
+            "top-left should start at the first stop (more red than blue)"
+        );
+        let corner = color_at(&pixmap, 19, 9);
+        assert!(
+            corner.2 > corner.0,
+            "gradient centered at top-left should reach final stop toward far corner"
         );
     }
 

@@ -3,7 +3,7 @@
 //! This module contains all the enum types used in computed styles.
 //! These types represent CSS property values that can be applied to elements.
 
-use crate::css::types::ColorStop;
+use crate::css::types::{ColorStop, RadialGradientShape, RadialGradientSize};
 use crate::style::color::Rgba;
 use crate::style::values::Length;
 pub use crate::text::hyphenation::HyphensMode;
@@ -1460,9 +1460,19 @@ pub enum BackgroundImage {
     None,
     Url(String),
     LinearGradient { angle: f32, stops: Vec<ColorStop> },
-    RadialGradient { stops: Vec<ColorStop> },
+    RadialGradient {
+        shape: RadialGradientShape,
+        size: RadialGradientSize,
+        position: BackgroundPosition,
+        stops: Vec<ColorStop>,
+    },
     RepeatingLinearGradient { angle: f32, stops: Vec<ColorStop> },
-    RepeatingRadialGradient { stops: Vec<ColorStop> },
+    RepeatingRadialGradient {
+        shape: RadialGradientShape,
+        size: RadialGradientSize,
+        position: BackgroundPosition,
+        stops: Vec<ColorStop>,
+    },
 }
 
 /// Background sizing keywords
