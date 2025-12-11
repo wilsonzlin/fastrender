@@ -5,6 +5,7 @@
 use super::types::PropertyValue;
 use crate::style::color::Rgba;
 use crate::style::values::{Length, LengthUnit};
+use cssparser::{Parser, ParserInput, Token};
 
 fn tokenize_property_value(value_str: &str, allow_commas: bool) -> Vec<String> {
     let mut tokens = Vec::new();
@@ -540,6 +541,22 @@ mod tests {
         assert_eq!(parse_length("0"), Some(Length::px(0.0)));
         assert_eq!(parse_length("-0"), Some(Length::px(0.0)));
     }
+
+    #[test]
+    fn parses_calc_length_when_units_match() {
+        let len = parse_length("calc(10px + 5px)").expect("calc length");
+        assert_eq!(len, Length::px(15.0));
+
+        let percent = parse_length("calc(50% - 20%)").expect("calc percent");
+        assert_eq!(percent, Length::percent(30.0));
+    }
+
+    #[test]
+    fn rejects_calc_when_units_incompatible() {
+        assert!(parse_length("calc(10px + 5%)").is_none());
+        assert!(parse_length("calc(10px * 5px)").is_none());
+        assert!(parse_length("calc(10px / 0px)").is_none());
+    }
 }
 
 /// Parse a CSS length value
@@ -552,6 +569,12 @@ pub fn parse_length(s: &str) -> Option<Length> {
     if let Ok(num) = s.parse::<f32>() {
         if num == 0.0 {
             return Some(Length::px(0.0));
+        }
+    }
+
+    if s.to_ascii_lowercase().starts_with("calc(") {
+        if let Some(len) = parse_calc_length(s) {
+            return Some(len);
         }
     }
 
@@ -582,4 +605,218 @@ pub fn parse_length(s: &str) -> Option<Length> {
     }
 
     None
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CalcComponent {
+    value: f32,
+    unit: Option<LengthUnit>,
+}
+
+fn parse_calc_length(input: &str) -> Option<Length> {
+    let mut parser_input = ParserInput::new(input);
+    let mut parser = Parser::new(&mut parser_input);
+    let result = parser.parse_entirely(|p| {
+        p.expect_function_matching("calc")?;
+        p.parse_nested_block(parse_calc_sum)
+    });
+
+    match result {
+        Ok(component) => calc_component_to_length(component),
+        Err(_) => None,
+    }
+}
+
+pub(crate) fn parse_calc_function_length<'i, 't>(
+    input: &mut Parser<'i, 't>,
+) -> Result<Length, cssparser::ParseError<'i, ()>> {
+    let component = input.parse_nested_block(parse_calc_sum)?;
+    calc_component_to_length(component).ok_or(cssparser::ParseError {
+        kind: cssparser::ParseErrorKind::Custom(()),
+        location: input.current_source_location(),
+    })
+}
+
+fn calc_component_to_length(component: CalcComponent) -> Option<Length> {
+    match component.unit {
+        Some(unit) => Some(Length::new(component.value, unit)),
+        None => None,
+    }
+}
+
+fn parse_calc_sum<'i, 't>(input: &mut Parser<'i, 't>) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
+    let mut left = parse_calc_product(input)?;
+    loop {
+        let op = match input.try_parse(|p| {
+            match p.next()? {
+                Token::Delim('+') => Ok(1.0),
+                Token::Delim('-') => Ok(-1.0),
+                _ => Err(cssparser::ParseError {
+                    kind: cssparser::ParseErrorKind::Custom(()),
+                    location: p.current_source_location(),
+                }),
+            }
+        }) {
+            Ok(sign) => sign,
+            Err(_) => break,
+        };
+        let right = parse_calc_product(input)?;
+        left = combine_sum(left, right, op)?;
+    }
+    Ok(left)
+}
+
+fn parse_calc_product<'i, 't>(
+    input: &mut Parser<'i, 't>,
+) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
+    let mut left = parse_calc_factor(input)?;
+    loop {
+        let op = match input.try_parse(|p| {
+            match p.next()? {
+                Token::Delim('*') => Ok('*'),
+                Token::Delim('/') => Ok('/'),
+                _ => Err(cssparser::ParseError {
+                    kind: cssparser::ParseErrorKind::Custom(()),
+                    location: p.current_source_location(),
+                }),
+            }
+        }) {
+            Ok(op) => op,
+            Err(_) => break,
+        };
+        let right = parse_calc_factor(input)?;
+        left = combine_product(left, right, op)?;
+    }
+    Ok(left)
+}
+
+fn parse_calc_factor<'i, 't>(
+    input: &mut Parser<'i, 't>,
+) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
+    let token = input.next()?;
+    match token {
+        Token::Number { value, .. } => Ok(CalcComponent { value: *value, unit: None }),
+        Token::Dimension { value, ref unit, .. } => {
+            let unit = unit.as_ref().to_ascii_lowercase();
+            let unit = match unit.as_str() {
+                "px" => LengthUnit::Px,
+                "em" => LengthUnit::Em,
+                "rem" => LengthUnit::Rem,
+                "ex" => LengthUnit::Ex,
+                "ch" => LengthUnit::Ch,
+                "pt" => LengthUnit::Pt,
+                "pc" => LengthUnit::Pc,
+                "in" => LengthUnit::In,
+                "cm" => LengthUnit::Cm,
+                "mm" => LengthUnit::Mm,
+                "q" => LengthUnit::Q,
+                "vw" => LengthUnit::Vw,
+                "vh" => LengthUnit::Vh,
+                "vmin" => LengthUnit::Vmin,
+                "vmax" => LengthUnit::Vmax,
+                _ => {
+                    return Err(cssparser::ParseError {
+                        kind: cssparser::ParseErrorKind::Custom(()),
+                        location: input.current_source_location(),
+                    })
+                }
+            };
+            Ok(CalcComponent {
+                value: *value,
+                unit: Some(unit),
+            })
+        }
+        Token::Percentage { unit_value, .. } => Ok(CalcComponent {
+            value: *unit_value * 100.0,
+            unit: Some(LengthUnit::Percent),
+        }),
+        Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
+            input.parse_nested_block(parse_calc_sum)
+        }
+        Token::ParenthesisBlock => input.parse_nested_block(parse_calc_sum),
+        Token::Delim('+') => parse_calc_factor(input),
+        Token::Delim('-') => {
+            let inner = parse_calc_factor(input)?;
+            Ok(CalcComponent {
+                value: -inner.value,
+                unit: inner.unit,
+            })
+        }
+        _ => Err(cssparser::ParseError {
+            kind: cssparser::ParseErrorKind::Custom(()),
+            location: input.current_source_location(),
+        }),
+    }
+}
+
+fn combine_sum<'i>(
+    left: CalcComponent,
+    right: CalcComponent,
+    sign: f32,
+) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
+    let right_value = right.value * sign;
+    match (left.unit, right.unit) {
+        (Some(u1), Some(u2)) if u1 == u2 => Ok(CalcComponent {
+            value: left.value + right_value,
+            unit: Some(u1),
+        }),
+        (Some(_), None) if right.value == 0.0 => Ok(left),
+        (None, Some(u2)) if left.value == 0.0 => Ok(CalcComponent {
+            value: right_value,
+            unit: Some(u2),
+        }),
+        _ => Err(cssparser::ParseError {
+            kind: cssparser::ParseErrorKind::Custom(()),
+            location: cssparser::SourceLocation { line: 0, column: 0 },
+        }),
+    }
+}
+
+fn combine_product<'i>(
+    left: CalcComponent,
+    right: CalcComponent,
+    op: char,
+) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
+    match op {
+        '*' => match (left.unit, right.unit) {
+            (Some(_), Some(_)) => Err(cssparser::ParseError {
+                kind: cssparser::ParseErrorKind::Custom(()),
+                location: cssparser::SourceLocation { line: 0, column: 0 },
+            }),
+            (Some(unit), None) => Ok(CalcComponent {
+                value: left.value * right.value,
+                unit: Some(unit),
+            }),
+            (None, Some(unit)) => Ok(CalcComponent {
+                value: left.value * right.value,
+                unit: Some(unit),
+            }),
+            (None, None) => Ok(CalcComponent {
+                value: left.value * right.value,
+                unit: None,
+            }),
+        },
+        '/' => {
+            if right.value == 0.0 {
+                return Err(cssparser::ParseError {
+                    kind: cssparser::ParseErrorKind::Custom(()),
+                    location: cssparser::SourceLocation { line: 0, column: 0 },
+                });
+            }
+            match (left.unit, right.unit) {
+                (_, Some(_)) => Err(cssparser::ParseError {
+                    kind: cssparser::ParseErrorKind::Custom(()),
+                    location: cssparser::SourceLocation { line: 0, column: 0 },
+                }),
+                (unit, None) => Ok(CalcComponent {
+                    value: left.value / right.value,
+                    unit,
+                }),
+            }
+        }
+        _ => Err(cssparser::ParseError {
+            kind: cssparser::ParseErrorKind::Custom(()),
+            location: cssparser::SourceLocation { line: 0, column: 0 },
+        }),
+    }
 }

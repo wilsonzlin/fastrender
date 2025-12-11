@@ -417,6 +417,7 @@ pub fn is_valid_custom_property_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::values::LengthUnit;
     use crate::style::values::Length;
 
     fn make_props(pairs: &[(&str, &str)]) -> HashMap<String, String> {
@@ -535,11 +536,11 @@ mod tests {
         let value = PropertyValue::Keyword("calc(var(--size) + 5px)".to_string());
         let resolved = resolve_var(&value, &props);
 
-        if let PropertyValue::Keyword(kw) = resolved {
-            assert!(kw.contains("calc(10px + 5px)"));
-        } else {
-            panic!("Expected Keyword, got {:?}", resolved);
-        }
+        assert!(
+            matches!(resolved, PropertyValue::Length(len) if (len.value - 15.0).abs() < f32::EPSILON && len.unit == LengthUnit::Px),
+            "Expected resolved calc length, got {:?}",
+            resolved
+        );
     }
 
     #[test]

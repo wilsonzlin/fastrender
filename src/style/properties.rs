@@ -3032,7 +3032,10 @@ fn parse_length_component<'i, 't>(input: &mut Parser<'i, 't>) -> Result<Length, 
             };
             Ok(len)
         }
-        Token::Percentage { unit_value, .. } => Ok(Length::percent(*unit_value)),
+        Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
+            crate::css::properties::parse_calc_function_length(input)
+        }
+        Token::Percentage { unit_value, .. } => Ok(Length::percent(*unit_value * 100.0)),
         Token::Number { value, .. } if *value == 0.0 => Ok(Length::px(0.0)),
         _ => Err(location.new_custom_error(())),
     }
@@ -4309,6 +4312,19 @@ mod tests {
             let len = parse_length_component(&mut parser).expect("length");
             assert_eq!(len.unit, unit, "failed for {}", text);
         }
+    }
+
+    #[test]
+    fn parse_length_component_handles_calc() {
+        let mut input = ParserInput::new("calc(10px + 5px)");
+        let mut parser = Parser::new(&mut input);
+        let len = parse_length_component(&mut parser).expect("calc length");
+        assert_eq!(len, Length::px(15.0));
+
+        let mut input = ParserInput::new("calc(50% - 20%)");
+        let mut parser = Parser::new(&mut input);
+        let len = parse_length_component(&mut parser).expect("calc percent");
+        assert_eq!(len, Length::percent(30.0));
     }
 
     #[test]
