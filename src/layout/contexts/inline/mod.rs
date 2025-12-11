@@ -3214,6 +3214,7 @@ impl InlineFormattingContext {
         } else {
             Point::ZERO
         };
+        let lines_empty = lines.is_empty();
 
         let children = self.create_fragments(
             lines,
@@ -3320,6 +3321,11 @@ impl InlineFormattingContext {
                 ContainingBlock::with_viewport(padding_rect, self.viewport_size)
             } else {
                 self.nearest_positioned_cb
+            };
+            let static_position = if lines_empty && style.position.is_positioned() {
+                padding_origin
+            } else {
+                static_position
             };
 
             let abs = AbsoluteLayout::new();
