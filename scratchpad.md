@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Backdrop filters in the display-list renderer now expand by filter outsets so blur/drop-shadow samples include pixels outside the element bounds; masked copy-back ensures the effect remains clipped to the element. Added a regression for blur sampling outside the filtered region.
 - Added HSL reference helpers and blend-mode regressions (hue/saturation/color/luminosity) in the display-list renderer to ensure advanced blend modes follow the CSS compositing definitions.
 - Canvas blend mode conversion now maps Hue/Saturation/Color/Luminosity to tiny-skia equivalents so PushBlendMode honors the full CSS set; regression asserts `color` blend preserves destination luminance while keeping source hue.
 - `unicode-bidi: plaintext` no longer forces the entire paragraph to first-strong when only inline isolates are present; bidi reordering keeps the paragraph base direction while FSI/PDI isolates handle inline plaintext content. Added a regression for inline plaintext followed by LTR text.

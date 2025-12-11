@@ -307,3 +307,40 @@ fn luminosity_blend_mode_uses_source_luminance() {
     let expected = blend_luminosity(src, dst);
     assert_color_close((r, g, b), expected, 2);
 }
+
+#[test]
+fn backdrop_blur_samples_outside_bounds() {
+    let renderer = DisplayListRenderer::new(6, 1, Rgba::WHITE, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    // Backdrop: blue on the left, red on the right.
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 3.0, 1.0),
+        color: Rgba::BLUE,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(3.0, 0.0, 3.0, 1.0),
+        color: Rgba::RED,
+    }));
+    // Apply a backdrop blur over the red half; the blur should pull in blue from outside the bounds.
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+        z_index: 0,
+        creates_stacking_context: true,
+        bounds: Rect::from_xywh(3.0, 0.0, 3.0, 1.0),
+        mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
+        is_isolated: false,
+        transform: None,
+        filters: Vec::new(),
+        backdrop_filters: vec![ResolvedFilter::Blur(1.0)],
+        radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let pixmap = renderer.render(&list).unwrap();
+    // Pixel just inside the blurred region should pick up some blue from the left half.
+    let (r, g, b, a) = pixel(&pixmap, 3, 0);
+    assert_eq!(a, 255);
+    assert!(
+        b > 0 && r < 255,
+        "expected blur to sample blue neighbor; got ({r},{g},{b})"
+    );
+}

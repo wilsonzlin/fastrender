@@ -177,14 +177,50 @@ fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter]) {
     }
 }
 
+fn filter_outset(filters: &[ResolvedFilter]) -> (f32, f32, f32, f32) {
+    let mut left: f32 = 0.0;
+    let mut top: f32 = 0.0;
+    let mut right: f32 = 0.0;
+    let mut bottom: f32 = 0.0;
+
+    for filter in filters {
+        match *filter {
+            ResolvedFilter::Blur(radius) => {
+                let delta = radius.abs() * 3.0;
+                left = left.max(delta);
+                right = right.max(delta);
+                top = top.max(delta);
+                bottom = bottom.max(delta);
+            }
+            ResolvedFilter::DropShadow {
+                offset_x,
+                offset_y,
+                blur_radius,
+                spread,
+                ..
+            } => {
+                let delta = blur_radius.abs() * 3.0 + spread.max(0.0);
+                left = left.max(delta - offset_x.min(0.0));
+                right = right.max(delta + offset_x.max(0.0));
+                top = top.max(delta - offset_y.min(0.0));
+                bottom = bottom.max(delta + offset_y.max(0.0));
+            }
+            _ => {}
+        }
+    }
+
+    (left.max(0.0), top.max(0.0), right.max(0.0), bottom.max(0.0))
+}
+
 fn apply_backdrop_filters(pixmap: &mut Pixmap, bounds: &Rect, filters: &[ResolvedFilter], radii: BorderRadii) {
     if filters.is_empty() {
         return;
     }
-    let x = bounds.min_x().floor() as i32;
-    let y = bounds.min_y().floor() as i32;
-    let width = bounds.width().ceil() as u32;
-    let height = bounds.height().ceil() as u32;
+    let (out_l, out_t, out_r, out_b) = filter_outset(filters);
+    let x = (bounds.min_x() - out_l).floor() as i32;
+    let y = (bounds.min_y() - out_t).floor() as i32;
+    let width = (bounds.width() + out_l + out_r).ceil() as u32;
+    let height = (bounds.height() + out_t + out_b).ceil() as u32;
     if width == 0 || height == 0 {
         return;
     }
@@ -261,11 +297,25 @@ fn apply_backdrop_filters(pixmap: &mut Pixmap, bounds: &Rect, filters: &[Resolve
         }
     }
 
-    for row in 0..region_h as usize {
-        let dst_idx = (clamped_y as usize + row) * bytes_per_row + clamped_x as usize * 4;
-        let src_idx = row * region_row_bytes;
-        let src = &region.data()[src_idx..src_idx + region_row_bytes];
-        let dst = &mut pixmap.data_mut()[dst_idx..dst_idx + region_row_bytes];
+    let write_x = bounds.min_x().floor().max(clamped_x as f32) as u32;
+    let write_y = bounds.min_y().floor().max(clamped_y as f32) as u32;
+    let write_w = (bounds.width().ceil() as i32)
+        .min(pix_w - write_x as i32)
+        .max(0) as u32;
+    let write_h = (bounds.height().ceil() as i32)
+        .min(pix_h - write_y as i32)
+        .max(0) as u32;
+    if write_w == 0 || write_h == 0 {
+        return;
+    }
+
+    let src_start_x = (write_x as i32 - clamped_x as i32) as u32;
+    let src_start_y = (write_y as i32 - clamped_y as i32) as u32;
+    for row in 0..write_h as usize {
+        let dst_idx = (write_y as usize + row) * bytes_per_row + write_x as usize * 4;
+        let src_idx = ((src_start_y as usize + row) * region_w as usize + src_start_x as usize) * 4;
+        let src = &region.data()[src_idx..src_idx + write_w as usize * 4];
+        let dst = &mut pixmap.data_mut()[dst_idx..dst_idx + write_w as usize * 4];
         dst.copy_from_slice(src);
     }
 }
