@@ -964,6 +964,36 @@ pub struct StackingContextItem {
 
     /// Optional transform applied to this stacking context
     pub transform: Option<Transform2D>,
+
+    /// Resolved filter() list applied to this context
+    pub filters: Vec<ResolvedFilter>,
+
+    /// Resolved backdrop-filter() list applied behind this context
+    pub backdrop_filters: Vec<ResolvedFilter>,
+
+    /// Border radii used for filter/backdrop clipping
+    pub radii: BorderRadii,
+}
+
+/// Resolved filter functions (after length resolution).
+#[derive(Debug, Clone)]
+pub enum ResolvedFilter {
+    Blur(f32),
+    Brightness(f32),
+    Contrast(f32),
+    Grayscale(f32),
+    Sepia(f32),
+    Saturate(f32),
+    HueRotate(f32),
+    Invert(f32),
+    Opacity(f32),
+    DropShadow {
+        offset_x: f32,
+        offset_y: f32,
+        blur_radius: f32,
+        spread: f32,
+        color: Rgba,
+    },
 }
 
 // ============================================================================

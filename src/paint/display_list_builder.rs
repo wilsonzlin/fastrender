@@ -34,8 +34,8 @@ use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::paint::display_list::{
     BlendMode, BorderItem, BorderSide, BoxShadowItem, ClipItem, DisplayItem, DisplayList, EmphasisMark, EmphasisText,
     FillRectItem, FontId, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem,
-    LinearGradientItem, OpacityItem, RadialGradientItem, StackingContextItem, StrokeRectItem, TextEmphasis, TextItem,
-    TextShadowItem, Transform2D,
+    LinearGradientItem, OpacityItem, RadialGradientItem, ResolvedFilter, StackingContextItem, StrokeRectItem,
+    TextEmphasis, TextItem, TextShadowItem, Transform2D,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
@@ -311,6 +311,18 @@ impl DisplayListBuilder {
             .find_map(|f| f.style.as_deref())
             .map(|s| matches!(s.isolation, Isolation::Isolate) || !s.backdrop_filter.is_empty())
             .unwrap_or(false);
+        let (filters, backdrop_filters, radii) = context
+            .fragments
+            .first()
+            .and_then(|f| f.style.as_deref())
+            .map(|style| {
+                (
+                    Self::resolve_filters(&style.filter, style),
+                    Self::resolve_filters(&style.backdrop_filter, style),
+                    Self::resolve_border_radii(Some(style), context.bounds),
+                )
+            })
+            .unwrap_or((Vec::new(), Vec::new(), crate::paint::display_list::BorderRadii::ZERO));
         let transform = context
             .fragments
             .first()
@@ -324,6 +336,9 @@ impl DisplayListBuilder {
             mix_blend_mode,
             is_isolated,
             transform,
+            filters,
+            backdrop_filters,
+            radii,
         }));
 
         for child in neg {
@@ -539,6 +554,47 @@ impl DisplayListBuilder {
                 color: *color,
             })
             .collect()
+    }
+
+    fn resolve_filters(filters: &[crate::style::types::FilterFunction], style: &ComputedStyle) -> Vec<ResolvedFilter> {
+        filters
+            .iter()
+            .filter_map(|f| match f {
+                crate::style::types::FilterFunction::Blur(len) => {
+                    Some(ResolvedFilter::Blur(Self::resolve_filter_length(len, style)))
+                }
+                crate::style::types::FilterFunction::Brightness(v) => Some(ResolvedFilter::Brightness(*v)),
+                crate::style::types::FilterFunction::Contrast(v) => Some(ResolvedFilter::Contrast(*v)),
+                crate::style::types::FilterFunction::Grayscale(v) => Some(ResolvedFilter::Grayscale(*v)),
+                crate::style::types::FilterFunction::Sepia(v) => Some(ResolvedFilter::Sepia(*v)),
+                crate::style::types::FilterFunction::Saturate(v) => Some(ResolvedFilter::Saturate(*v)),
+                crate::style::types::FilterFunction::HueRotate(deg) => Some(ResolvedFilter::HueRotate(*deg)),
+                crate::style::types::FilterFunction::Invert(v) => Some(ResolvedFilter::Invert(*v)),
+                crate::style::types::FilterFunction::Opacity(v) => Some(ResolvedFilter::Opacity(*v)),
+                crate::style::types::FilterFunction::DropShadow(shadow) => {
+                    let color = match shadow.color {
+                        crate::style::types::FilterColor::CurrentColor => style.color,
+                        crate::style::types::FilterColor::Color(c) => c,
+                    };
+                    Some(ResolvedFilter::DropShadow {
+                        offset_x: Self::resolve_filter_length(&shadow.offset_x, style),
+                        offset_y: Self::resolve_filter_length(&shadow.offset_y, style),
+                        blur_radius: Self::resolve_filter_length(&shadow.blur_radius, style),
+                        spread: Self::resolve_filter_length(&shadow.spread, style),
+                        color,
+                    })
+                }
+            })
+            .collect()
+    }
+
+    fn resolve_filter_length(len: &Length, style: &ComputedStyle) -> f32 {
+        match len.unit {
+            LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(style.font_size),
+            LengthUnit::Percent => len.resolve_against(style.font_size),
+            unit if unit.is_absolute() => len.to_px(),
+            _ => 0.0,
+        }
     }
 
     fn compute_background_size(

@@ -5,13 +5,13 @@
 //! paint-time contract while still reusing the shared `FontContext`.
 
 use crate::error::{RenderError, Result};
-use crate::geometry::Point;
+use crate::geometry::{Point, Rect};
 use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::canvas::Canvas;
 use crate::paint::display_list::{
-    BlendMode, BorderItem, BorderSide, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem,
-    FontId, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem, StrokeRectItem, TextEmphasis, TextItem,
-    TransformItem,
+    BlendMode, BorderItem, BorderRadii, BorderSide, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem,
+    FontId, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem, ResolvedFilter, StrokeRectItem,
+    TextEmphasis, TextItem, TransformItem,
 };
 use crate::paint::rasterize::{render_box_shadow, BoxShadow};
 use crate::paint::text_shadow::PathBounds;
@@ -152,11 +152,186 @@ fn set_paint_color(paint: &mut tiny_skia::Paint, color: &Rgba, opacity: f32) {
     paint.set_color_rgba8(color.r, color.g, color.b, alpha);
 }
 
+fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter]) {
+    for filter in filters {
+        match *filter {
+            ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, radius),
+            ResolvedFilter::Brightness(amount) => apply_color_filter(pixmap, |c, a| (scale_color(c, amount), a)),
+            ResolvedFilter::Contrast(amount) => apply_color_filter(pixmap, |c, a| (apply_contrast(c, amount), a)),
+            ResolvedFilter::Grayscale(amount) => apply_color_filter(pixmap, |c, a| (grayscale(c, amount), a)),
+            ResolvedFilter::Sepia(amount) => apply_color_filter(pixmap, |c, a| (sepia(c, amount), a)),
+            ResolvedFilter::Saturate(amount) => apply_color_filter(pixmap, |c, a| (saturate(c, amount), a)),
+            ResolvedFilter::HueRotate(deg) => apply_color_filter(pixmap, |c, a| (hue_rotate(c, deg), a)),
+            ResolvedFilter::Invert(amount) => apply_color_filter(pixmap, |c, a| (invert(c, amount), a)),
+            ResolvedFilter::Opacity(amount) => apply_color_filter(pixmap, |c, a| (c, a * amount)),
+            ResolvedFilter::DropShadow {
+                offset_x,
+                offset_y,
+                blur_radius,
+                spread,
+                color,
+            } => apply_drop_shadow(pixmap, offset_x, offset_y, blur_radius, spread, color),
+        }
+    }
+}
+
+fn apply_backdrop_filters(pixmap: &mut Pixmap, bounds: &Rect, filters: &[ResolvedFilter], _radii: BorderRadii) {
+    if filters.is_empty() {
+        return;
+    }
+    let x = bounds.min_x().floor() as i32;
+    let y = bounds.min_y().floor() as i32;
+    let width = bounds.width().ceil() as u32;
+    let height = bounds.height().ceil() as u32;
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    let pix_w = pixmap.width() as i32;
+    let pix_h = pixmap.height() as i32;
+    if x >= pix_w || y >= pix_h {
+        return;
+    }
+
+    let clamped_x = x.max(0) as u32;
+    let clamped_y = y.max(0) as u32;
+    let max_w = pix_w.saturating_sub(clamped_x as i32).max(0) as u32;
+    let max_h = pix_h.saturating_sub(clamped_y as i32).max(0) as u32;
+    let region_w = width.min(max_w);
+    let region_h = height.min(max_h);
+    if region_w == 0 || region_h == 0 {
+        return;
+    }
+
+    let mut region = match Pixmap::new(region_w, region_h) {
+        Some(p) => p,
+        None => return,
+    };
+
+    let bytes_per_row = pixmap.width() as usize * 4;
+    let region_row_bytes = region_w as usize * 4;
+    let start = (clamped_y as usize * bytes_per_row) + clamped_x as usize * 4;
+    let data = pixmap.data();
+    let dest = region.data_mut();
+
+    for row in 0..region_h as usize {
+        let src_idx = start + row * bytes_per_row;
+        let dst_idx = row * region_row_bytes;
+        dest[dst_idx..dst_idx + region_row_bytes].copy_from_slice(&data[src_idx..src_idx + region_row_bytes]);
+    }
+
+    apply_filters(&mut region, filters);
+
+    for row in 0..region_h as usize {
+        let dst_idx = (clamped_y as usize + row) * bytes_per_row + clamped_x as usize * 4;
+        let src_idx = row * region_row_bytes;
+        let src = &region.data()[src_idx..src_idx + region_row_bytes];
+        let dst = &mut pixmap.data_mut()[dst_idx..dst_idx + region_row_bytes];
+        dst.copy_from_slice(src);
+    }
+}
+
+fn apply_drop_shadow(pixmap: &mut Pixmap, offset_x: f32, offset_y: f32, blur_radius: f32, spread: f32, color: Rgba) {
+    if color.alpha_u8() == 0 {
+        return;
+    }
+    let mut shadow = pixmap.clone();
+    if spread != 0.0 {
+        // Approximate spread by scaling alpha.
+        apply_color_filter(&mut shadow, |_c, a| (_c, (a * (1.0 + spread * 0.01)).clamp(0.0, 1.0)));
+    }
+    apply_gaussian_blur(&mut shadow, blur_radius);
+
+    let transform = Transform::from_translate(offset_x, offset_y);
+    let paint = tiny_skia::PixmapPaint {
+        opacity: 1.0,
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+        ..Default::default()
+    };
+    pixmap.draw_pixmap(0, 0, shadow.as_ref(), &paint, transform, None);
+}
+
+fn apply_color_filter(pixmap: &mut Pixmap, f: impl Fn((u8, u8, u8), f32) -> ((u8, u8, u8), f32)) {
+    for pixel in pixmap.pixels_mut() {
+        let a = pixel.alpha() as f32 / 255.0;
+        let (c, a2) = f((pixel.red(), pixel.green(), pixel.blue()), a);
+        let final_a = (a2 * 255.0).round().clamp(0.0, 255.0) as u8;
+        let premultiply = |v: u8| ((v as f32 * a2).round().clamp(0.0, 255.0)) as u8;
+        *pixel = tiny_skia::PremultipliedColorU8::from_rgba(premultiply(c.0), premultiply(c.1), premultiply(c.2), final_a)
+            .unwrap_or(tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap());
+    }
+}
+
+fn scale_color((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
+    let scale = |v: u8| ((v as f32) * amount).round().clamp(0.0, 255.0) as u8;
+    (scale(r), scale(g), scale(b))
+}
+
+fn apply_contrast((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
+    let factor = (259.0 * (amount + 255.0)) / (255.0 * (259.0 - amount));
+    let adjust = |v: u8| ((factor * (v as f32 - 128.0) + 128.0).round().clamp(0.0, 255.0)) as u8;
+    (adjust(r), adjust(g), adjust(b))
+}
+
+fn grayscale((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
+    let gray = (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32).round().clamp(0.0, 255.0) as u8;
+    let mix = |v: u8| ((v as f32 * (1.0 - amount) + gray as f32 * amount).round().clamp(0.0, 255.0)) as u8;
+    (mix(r), mix(g), mix(b))
+}
+
+fn sepia((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
+    let tr = (0.393 * r as f32 + 0.769 * g as f32 + 0.189 * b as f32).round().clamp(0.0, 255.0);
+    let tg = (0.349 * r as f32 + 0.686 * g as f32 + 0.168 * b as f32).round().clamp(0.0, 255.0);
+    let tb = (0.272 * r as f32 + 0.534 * g as f32 + 0.131 * b as f32).round().clamp(0.0, 255.0);
+    let mix = |orig: u8, target: f32| ((orig as f32 * (1.0 - amount) + target * amount).round().clamp(0.0, 255.0)) as u8;
+    (mix(r, tr), mix(g, tg), mix(b, tb))
+}
+
+fn saturate((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
+    let gray = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
+    let mix = |v: u8| ((gray + (v as f32 - gray) * amount).round().clamp(0.0, 255.0)) as u8;
+    (mix(r), mix(g), mix(b))
+}
+
+fn hue_rotate((r, g, b): (u8, u8, u8), degrees: f32) -> (u8, u8, u8) {
+    let rad = degrees.to_radians();
+    let cos = rad.cos();
+    let sin = rad.sin();
+    let nr = (0.213 + cos * 0.787 - sin * 0.213) * r as f32
+        + (0.715 - cos * 0.715 - sin * 0.715) * g as f32
+        + (0.072 - cos * 0.072 + sin * 0.928) * b as f32;
+    let ng = (0.213 - cos * 0.213 + sin * 0.143) * r as f32
+        + (0.715 + cos * 0.285 + sin * 0.140) * g as f32
+        + (0.072 - cos * 0.072 - sin * 0.283) * b as f32;
+    let nb = (0.213 - cos * 0.213 - sin * 0.787) * r as f32
+        + (0.715 - cos * 0.715 + sin * 0.715) * g as f32
+        + (0.072 + cos * 0.928 + sin * 0.072) * b as f32;
+    (
+        nr.round().clamp(0.0, 255.0) as u8,
+        ng.round().clamp(0.0, 255.0) as u8,
+        nb.round().clamp(0.0, 255.0) as u8,
+    )
+}
+
+fn invert((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
+    let inv = |v: u8| ((255.0 - v as f32) * amount + v as f32 * (1.0 - amount)).round().clamp(0.0, 255.0) as u8;
+    (inv(r), inv(g), inv(b))
+}
+
 /// Renders a display list into a pixmap using the provided font context.
 pub struct DisplayListRenderer {
     canvas: Canvas,
     font_ctx: FontContext,
-    stacking_layers: Vec<bool>,
+    stacking_layers: Vec<StackingRecord>,
+}
+
+#[derive(Debug)]
+struct StackingRecord {
+    needs_layer: bool,
+    filters: Vec<ResolvedFilter>,
+    backdrop_filters: Vec<ResolvedFilter>,
+    radii: BorderRadii,
+    bounds: Rect,
 }
 
 impl DisplayListRenderer {
@@ -491,8 +666,14 @@ impl DisplayListRenderer {
             DisplayItem::Image(item) => self.render_image(item)?,
             DisplayItem::BoxShadow(item) => self.render_box_shadow(item),
             DisplayItem::PushStackingContext(item) => {
-                let needs_layer =
-                    item.is_isolated || !matches!(item.mix_blend_mode, crate::paint::display_list::BlendMode::Normal);
+                if !item.backdrop_filters.is_empty() {
+                    apply_backdrop_filters(self.canvas.pixmap_mut(), &item.bounds, &item.backdrop_filters, item.radii);
+                }
+
+                let needs_layer = item.is_isolated
+                    || !matches!(item.mix_blend_mode, crate::paint::display_list::BlendMode::Normal)
+                    || !item.filters.is_empty()
+                    || !item.backdrop_filters.is_empty();
                 if needs_layer {
                     let blend = if item.is_isolated {
                         tiny_skia::BlendMode::SourceOver
@@ -503,7 +684,13 @@ impl DisplayListRenderer {
                 } else {
                     self.canvas.save();
                 }
-                self.stacking_layers.push(needs_layer);
+                self.stacking_layers.push(StackingRecord {
+                    needs_layer,
+                    filters: item.filters.clone(),
+                    backdrop_filters: item.backdrop_filters.clone(),
+                    radii: item.radii,
+                    bounds: item.bounds,
+                });
 
                 if let Some(matrix) = item.transform {
                     let t = Transform::from_row(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f);
@@ -512,9 +699,25 @@ impl DisplayListRenderer {
                 }
             }
             DisplayItem::PopStackingContext => {
-                let needs_layer = self.stacking_layers.pop().unwrap_or(false);
-                if needs_layer {
-                    self.canvas.pop_layer()?;
+                let record = self.stacking_layers.pop().unwrap_or(StackingRecord {
+                    needs_layer: false,
+                    filters: Vec::new(),
+                    backdrop_filters: Vec::new(),
+                    radii: BorderRadii::ZERO,
+                    bounds: Rect::ZERO,
+                });
+                if record.needs_layer {
+                    if !record.filters.is_empty() {
+                        apply_filters(self.canvas.pixmap_mut(), &record.filters);
+                    }
+                    if !record.radii.is_zero() {
+                        self.canvas.save();
+                        self.canvas.set_clip_with_radii(record.bounds, Some(record.radii));
+                        self.canvas.pop_layer()?;
+                        self.canvas.restore();
+                    } else {
+                        self.canvas.pop_layer()?;
+                    }
                 } else {
                     self.canvas.restore();
                 }
@@ -1426,6 +1629,9 @@ mod tests {
                 mix_blend_mode: crate::paint::display_list::BlendMode::Normal,
                 is_isolated: false,
                 transform: None,
+                filters: Vec::new(),
+                backdrop_filters: Vec::new(),
+                radii: BorderRadii::ZERO,
             },
         ));
         list.push(DisplayItem::PushClip(ClipItem {
@@ -1462,6 +1668,9 @@ mod tests {
                 mix_blend_mode: crate::paint::display_list::BlendMode::Multiply,
                 is_isolated: false,
                 transform: None,
+                filters: Vec::new(),
+                backdrop_filters: Vec::new(),
+                radii: BorderRadii::ZERO,
             },
         ));
         list.push(DisplayItem::FillRect(FillRectItem {

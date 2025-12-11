@@ -828,6 +828,9 @@ fn test_stacking_context_preserved() {
         mix_blend_mode: BlendMode::Normal,
         is_isolated: false,
         transform: None,
+        filters: Vec::new(),
+        backdrop_filters: Vec::new(),
+        radii: BorderRadii::ZERO,
     }));
     list.push(make_fill_rect(0.0, 0.0, 100.0, 100.0, Rgba::RED));
     list.push(DisplayItem::PopStackingContext);

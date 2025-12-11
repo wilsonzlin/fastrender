@@ -1020,6 +1020,9 @@ fn test_stacking_context() {
         mix_blend_mode: BlendMode::Normal,
         is_isolated: false,
         transform: None,
+        filters: Vec::new(),
+        backdrop_filters: Vec::new(),
+        radii: BorderRadii::ZERO,
     }));
 
     list.push(DisplayItem::FillRect(FillRectItem {
