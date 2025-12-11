@@ -47,8 +47,8 @@ use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
 use crate::text::shaper::GlyphPosition;
 use tiny_skia::{
-    BlendMode as SkiaBlendMode, FillRule, Mask, MaskType, Paint, PathBuilder, Pixmap, Rect as SkiaRect, Stroke,
-    Transform,
+    BlendMode as SkiaBlendMode, FillRule, Mask, MaskType, Paint, PathBuilder, Pixmap, PixmapPaint, Rect as SkiaRect,
+    Stroke, Transform,
 };
 
 use super::display_list::{BlendMode, BorderRadii};
@@ -110,6 +110,14 @@ impl Default for CanvasState {
     }
 }
 
+#[derive(Debug)]
+struct LayerRecord {
+    pixmap: Pixmap,
+    state_stack: Vec<CanvasState>,
+    current_state: CanvasState,
+    opacity: f32,
+}
+
 // ============================================================================
 // Canvas
 // ============================================================================
@@ -134,6 +142,8 @@ pub struct Canvas {
     pixmap: Pixmap,
     /// Stack of graphics states
     state_stack: Vec<CanvasState>,
+    /// Stack of offscreen layers for grouped effects
+    layer_stack: Vec<LayerRecord>,
     /// Current graphics state
     current_state: CanvasState,
 }
@@ -176,6 +186,7 @@ impl Canvas {
         let mut canvas = Self {
             pixmap,
             state_stack: Vec::new(),
+            layer_stack: Vec::new(),
             current_state: CanvasState::new(),
         };
 
@@ -311,6 +322,47 @@ impl Canvas {
     #[inline]
     pub fn opacity(&self) -> f32 {
         self.current_state.opacity
+    }
+
+    /// Pushes a new offscreen layer for grouped compositing (e.g., opacity).
+    pub fn push_layer(&mut self, opacity: f32) -> Result<()> {
+        let new_pixmap =
+            Pixmap::new(self.pixmap.width(), self.pixmap.height()).ok_or_else(|| RenderError::InvalidParameters {
+                message: "Failed to create layer pixmap".into(),
+            })?;
+
+        let record = LayerRecord {
+            pixmap: std::mem::replace(&mut self.pixmap, new_pixmap),
+            state_stack: self.state_stack.clone(),
+            current_state: self.current_state.clone(),
+            opacity: opacity.clamp(0.0, 1.0),
+        };
+        self.layer_stack.push(record);
+        Ok(())
+    }
+
+    /// Pops the most recent offscreen layer and composites it into the parent.
+    pub fn pop_layer(&mut self) -> Result<()> {
+        let Some(record) = self.layer_stack.pop() else {
+            return Err(RenderError::InvalidParameters {
+                message: "pop_layer without matching push".into(),
+            }
+            .into());
+        };
+
+        let layer_pixmap = std::mem::replace(&mut self.pixmap, record.pixmap);
+        self.state_stack = record.state_stack;
+        self.current_state = record.current_state;
+
+        let mut paint = PixmapPaint::default();
+        paint.opacity = (record.opacity * self.current_state.opacity).clamp(0.0, 1.0);
+        paint.blend_mode = self.current_state.blend_mode;
+        let clip = self.current_state.clip_mask.clone();
+        let transform = self.current_state.transform;
+
+        self.pixmap
+            .draw_pixmap(0, 0, layer_pixmap.as_ref(), &paint, transform, clip.as_ref());
+        Ok(())
     }
 
     /// Returns the current blend mode.

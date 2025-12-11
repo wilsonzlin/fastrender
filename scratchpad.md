@@ -6,6 +6,14 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Display list renderer now treats opacity groups as isolated layers: `PushOpacity` renders into an offscreen canvas and composites back, so overlapping content in the group stays uniformly translucent instead of darkening with multiple primitives. Added a regression to lock the grouped compositing.
+- Display list builder now initializes an `ImageCache` by default so replaced images decode even when callers forget to opt in; added a regression (`default_builder_decodes_images_without_explicit_cache`) that data-URL SVGs render as image items rather than placeholders.
+- Display list images now carry sampling quality; builder maps `image-rendering: pixelated/crisp-edges` to nearest-neighbor and renderer honors the quality, with a regression covering nearest vs. linear resampling.
+- Display list renderer now respects `ImageItem::src_rect`, cropping the source before scaling; regression covers sprite-like cropping to ensure sub-rectangles map to the destination instead of the full image.
+- Background-repeat `space` now centers a single tile instead of pinning to the start, matching the spec fallback when only one image fits; added a regression to lock the centered placement (offsets still apply).
+- Background properties now keep author lists per longhand and rebuild layers from them; the background-image count defines the layer count, shorter lists repeat their last value, and extra values are dropped. `background:none` and color-only shorthands reset the lists to initials. Painting still clips color to the last layer. Added list-repetition/truncation coverage alongside repeat/size/origin/clip tests.
+- Background color clipping now follows the first layer’s `background-clip` (after list repetition), with a regression ensuring border areas stay unpainted when the top layer clip is padding-box across multiple clip values.
+- Remaining background follow-ups: validate multi-layer painting order/clip per spec and harden comma tokenization for complex values.
 - `<video>` replaced elements now carry the `poster` attribute; intrinsic sizing uses the poster image when no explicit dimensions are provided, and both the painter and display-list builder render the poster before falling back to placeholders. Added unit tests for poster-driven intrinsic size, display-list decoding, and paint output.
 - Styled-tree box generation now honors `display: contents`: contents elements no longer create boxes; their ::before/::after/marker boxes are spliced into the parent child list, matching DOM-path behavior. Added a regression to ensure children are adopted instead of wrapping.
 - Text nodes are no longer dropped when they contain only whitespace; box generation now preserves whitespace-only text boxes so whitespace is handled by layout/white-space instead of being stripped.

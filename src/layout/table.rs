@@ -304,14 +304,17 @@ fn node_has_visible_content(node: &BoxNode) -> bool {
 }
 
 fn cell_is_visually_empty(cell: &BoxNode) -> bool {
-    if cell.style.background_image.is_some() || !cell.style.background_color.is_transparent() {
+    if cell.style.background_layers.iter().any(|l| l.image.is_some()) || !cell.style.background_color.is_transparent() {
         return false;
     }
     !node_has_visible_content(cell)
 }
 
 fn style_paints_background_or_border(style: &ComputedStyle, allow_borders: bool) -> bool {
-    if !style.background_color.is_transparent() || style.background_image.is_some() || !style.box_shadow.is_empty() {
+    if !style.background_color.is_transparent()
+        || style.background_layers.iter().any(|l| l.image.is_some())
+        || !style.box_shadow.is_empty()
+    {
         return true;
     }
     if !allow_borders {
@@ -605,7 +608,9 @@ impl TableStructure {
         }
 
         for cell in self.cells.into_iter() {
-            let Some(new_row) = row_map.get(cell.row).and_then(|m| *m) else { continue; };
+            let Some(new_row) = row_map.get(cell.row).and_then(|m| *m) else {
+                continue;
+            };
             let row_span_end = (cell.row + cell.rowspan).min(row_map.len());
             let mut visible_rows = 0usize;
             for r in cell.row..row_span_end {
@@ -1044,12 +1049,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     let mut horizontal: Vec<Vec<Vec<BorderCandidate>>> =
         vec![vec![Vec::new(); structure.column_count]; structure.row_count + 1];
 
-    let max_source_row = structure
-        .rows
-        .iter()
-        .map(|r| r.source_index)
-        .max()
-        .unwrap_or(0);
+    let max_source_row = structure.rows.iter().map(|r| r.source_index).max().unwrap_or(0);
     let mut source_row_to_visible = if structure.rows.is_empty() {
         Vec::new()
     } else {
@@ -1062,12 +1062,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         source_row_to_visible[row.source_index] = Some(row.index);
     }
 
-    let max_source_col = structure
-        .columns
-        .iter()
-        .map(|c| c.source_index)
-        .max()
-        .unwrap_or(0);
+    let max_source_col = structure.columns.iter().map(|c| c.source_index).max().unwrap_or(0);
     let mut source_col_to_visible = if structure.columns.is_empty() {
         Vec::new()
     } else {
@@ -2111,8 +2106,7 @@ impl TableFormattingContext {
         let mut cloned = cell_box.clone();
         if hide_empty {
             let mut style = (*cloned.style).clone();
-            style.background_color = crate::style::color::Rgba::TRANSPARENT;
-            style.background_image = None;
+            style.reset_background_to_initial();
             style.border_left_width = crate::style::values::Length::px(0.0);
             style.border_right_width = crate::style::values::Length::px(0.0);
             style.border_top_width = crate::style::values::Length::px(0.0);
@@ -2184,12 +2178,7 @@ impl FormattingContext for TableFormattingContext {
             .filter(|child| matches!(child.style.display, Display::TableCaption))
             .collect();
 
-        let max_source_row = structure
-            .rows
-            .iter()
-            .map(|r| r.source_index)
-            .max()
-            .unwrap_or(0);
+        let max_source_row = structure.rows.iter().map(|r| r.source_index).max().unwrap_or(0);
         let mut source_row_to_visible = if structure.rows.is_empty() {
             Vec::new()
         } else {
@@ -2202,12 +2191,7 @@ impl FormattingContext for TableFormattingContext {
             source_row_to_visible[row.source_index] = Some(row.index);
         }
 
-        let max_source_col = structure
-            .columns
-            .iter()
-            .map(|c| c.source_index)
-            .max()
-            .unwrap_or(0);
+        let max_source_col = structure.columns.iter().map(|c| c.source_index).max().unwrap_or(0);
         let mut source_col_to_visible = if structure.columns.is_empty() {
             Vec::new()
         } else {
@@ -2258,17 +2242,17 @@ impl FormattingContext for TableFormattingContext {
         let pad_right = resolve_abs(&box_node.style.padding_right);
         let pad_top = resolve_abs(&box_node.style.padding_top);
         let pad_bottom = resolve_abs(&box_node.style.padding_bottom);
-        let (border_left, border_right, border_top, border_bottom) = if structure.border_collapse == BorderCollapse::Collapse
-        {
-            (0.0, 0.0, 0.0, 0.0)
-        } else {
-            (
-                resolve_abs(&box_node.style.border_left_width),
-                resolve_abs(&box_node.style.border_right_width),
-                resolve_abs(&box_node.style.border_top_width),
-                resolve_abs(&box_node.style.border_bottom_width),
-            )
-        };
+        let (border_left, border_right, border_top, border_bottom) =
+            if structure.border_collapse == BorderCollapse::Collapse {
+                (0.0, 0.0, 0.0, 0.0)
+            } else {
+                (
+                    resolve_abs(&box_node.style.border_left_width),
+                    resolve_abs(&box_node.style.border_right_width),
+                    resolve_abs(&box_node.style.border_top_width),
+                    resolve_abs(&box_node.style.border_bottom_width),
+                )
+            };
         let padding_h = pad_left + pad_right;
         let padding_v = pad_top + pad_bottom;
         let border_h = border_left + border_right;
@@ -2307,11 +2291,12 @@ impl FormattingContext for TableFormattingContext {
             DistributionMode::Auto
         };
         let spacing = structure.total_horizontal_spacing();
-        let edge_consumption = padding_h + if structure.border_collapse == BorderCollapse::Collapse {
-            0.0
-        } else {
-            border_h
-        };
+        let edge_consumption = padding_h
+            + if structure.border_collapse == BorderCollapse::Collapse {
+                0.0
+            } else {
+                border_h
+            };
         let percent_base = match (table_width, constraints.available_width) {
             (Some(w), _) => Some((w - spacing - edge_consumption).max(0.0)),
             (None, AvailableSpace::Definite(w)) => Some((w - spacing - edge_consumption).max(0.0)),
@@ -3289,8 +3274,7 @@ impl FormattingContext for TableFormattingContext {
         let mut wrapper_style = (*box_node.style).clone();
         // Keep transforms/opacity/filters on the wrapper so they apply to both caption and table,
         // but avoid painting an extra background/border around the combined area.
-        wrapper_style.background_color = crate::style::color::Rgba::TRANSPARENT;
-        wrapper_style.background_image = None;
+        wrapper_style.reset_background_to_initial();
         wrapper_style.border_top_width = crate::style::values::Length::px(0.0);
         wrapper_style.border_right_width = crate::style::values::Length::px(0.0);
         wrapper_style.border_bottom_width = crate::style::values::Length::px(0.0);
@@ -3356,9 +3340,9 @@ mod tests {
     use crate::layout::constraints::AvailableSpace;
     use crate::layout::constraints::LayoutConstraints;
     use crate::style::color::Rgba;
+    use crate::style::computed::Visibility;
     use crate::style::display::Display;
     use crate::style::display::FormattingContextType;
-    use crate::style::computed::Visibility;
     use crate::style::types::{BorderCollapse, BorderStyle, CaptionSide, Direction, TableLayout, VerticalAlign};
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
@@ -3820,10 +3804,14 @@ mod tests {
 
         let mut cell_style = ComputedStyle::default();
         cell_style.display = Display::TableCell;
-        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![BoxNode::new_text(
-            Arc::new(ComputedStyle::default()),
-            "data".to_string(),
-        )]);
+        let cell = BoxNode::new_block(
+            Arc::new(cell_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(ComputedStyle::default()),
+                "data".to_string(),
+            )],
+        );
         let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
         let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
 
@@ -4769,9 +4757,8 @@ mod tests {
 
         let mut cell_style = ComputedStyle::default();
         cell_style.display = Display::TableCell;
-        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]).with_debug_info(
-            DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(2, 1),
-        );
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![])
+            .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(2, 1));
         let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
 
         let table = BoxNode::new_block(
@@ -4779,7 +4766,11 @@ mod tests {
             FormattingContextType::Table,
             vec![
                 BoxNode::new_block(Arc::new(col_style.clone()), FormattingContextType::Block, vec![]),
-                BoxNode::new_block(Arc::new(collapsed_col_group_style), FormattingContextType::Block, vec![]),
+                BoxNode::new_block(
+                    Arc::new(collapsed_col_group_style),
+                    FormattingContextType::Block,
+                    vec![],
+                ),
                 row,
             ],
         );
@@ -4810,11 +4801,18 @@ mod tests {
 
         let collapsed_cell = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![]);
         let visible_cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-        let collapsed_row =
-            BoxNode::new_block(Arc::new(collapsed_row_style), FormattingContextType::Block, vec![collapsed_cell]);
+        let collapsed_row = BoxNode::new_block(
+            Arc::new(collapsed_row_style),
+            FormattingContextType::Block,
+            vec![collapsed_cell],
+        );
         let visible_row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![visible_cell]);
 
-        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![collapsed_row, visible_row]);
+        let table = BoxNode::new_block(
+            Arc::new(table_style),
+            FormattingContextType::Table,
+            vec![collapsed_row, visible_row],
+        );
 
         let structure = TableStructure::from_box_tree(&table);
         assert_eq!(structure.row_count, 1);
@@ -4845,9 +4843,8 @@ mod tests {
         let mut cell_style = ComputedStyle::default();
         cell_style.display = Display::TableCell;
 
-        let spanning_cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]).with_debug_info(
-            DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(2, 1),
-        );
+        let spanning_cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![])
+            .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(2, 1));
         let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![spanning_cell]);
 
         let table = BoxNode::new_block(

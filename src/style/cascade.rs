@@ -918,11 +918,7 @@ mod tests {
             selectors::matching::NeedsSelectorFlags::No,
             selectors::matching::MatchingForInvalidation::No,
         );
-        let selector = rule_refs[0]
-            .selectors
-            .slice()
-            .first()
-            .expect("selector in rule");
+        let selector = rule_refs[0].selectors.slice().first().expect("selector in rule");
         assert!(
             matches_selector(selector, 0, None, &element_ref, &mut context),
             "selector should match the originating element"
@@ -1443,12 +1439,14 @@ pub(crate) fn reset_marker_box_properties(styles: &mut ComputedStyle) {
     styles.border_bottom_right_radius = defaults.border_bottom_right_radius;
 
     styles.background_color = defaults.background_color;
-    styles.background_image = defaults.background_image.clone();
-    styles.background_size = defaults.background_size.clone();
-    styles.background_position = defaults.background_position.clone();
-    styles.background_repeat = defaults.background_repeat.clone();
-    styles.background_origin = defaults.background_origin;
-    styles.background_clip = defaults.background_clip;
+    styles.background_images = defaults.background_images.clone();
+    styles.background_positions = defaults.background_positions.clone();
+    styles.background_sizes = defaults.background_sizes.clone();
+    styles.background_repeats = defaults.background_repeats.clone();
+    styles.background_attachments = defaults.background_attachments.clone();
+    styles.background_origins = defaults.background_origins.clone();
+    styles.background_clips = defaults.background_clips.clone();
+    styles.rebuild_background_layers();
     styles.object_fit = defaults.object_fit;
     styles.object_position = defaults.object_position.clone();
 
@@ -1475,7 +1473,10 @@ fn marker_allows_property(property: &str) -> bool {
 
     // Marker boxes honor a limited set of box-level properties
     // (CSS Lists 3 § 3.1.1).
-    if matches!(p.as_str(), "content" | "direction" | "unicode-bidi" | "text-combine-upright") {
+    if matches!(
+        p.as_str(),
+        "content" | "direction" | "unicode-bidi" | "text-combine-upright"
+    ) {
         return true;
     }
 

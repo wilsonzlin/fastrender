@@ -1269,6 +1269,7 @@ pub enum OverflowWrap {
 /// Reference: CSS Backgrounds and Borders Module Level 3
 #[derive(Debug, Clone, PartialEq)]
 pub enum BackgroundImage {
+    None,
     Url(String),
     LinearGradient { angle: f32, stops: Vec<ColorStop> },
     RadialGradient { stops: Vec<ColorStop> },
@@ -1391,6 +1392,41 @@ impl BackgroundRepeat {
         Self {
             x: BackgroundRepeatKeyword::NoRepeat,
             y: BackgroundRepeatKeyword::NoRepeat,
+        }
+    }
+}
+
+/// Single background layer with per-layer properties.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackgroundLayer {
+    pub image: Option<BackgroundImage>,
+    pub position: BackgroundPosition,
+    pub size: BackgroundSize,
+    pub repeat: BackgroundRepeat,
+    pub attachment: BackgroundAttachment,
+    pub origin: BackgroundBox,
+    pub clip: BackgroundBox,
+}
+
+impl Default for BackgroundLayer {
+    fn default() -> Self {
+        Self {
+            image: None,
+            position: BackgroundPosition::Position {
+                x: BackgroundPositionComponent {
+                    alignment: 0.0,
+                    offset: Length::percent(0.0),
+                },
+                y: BackgroundPositionComponent {
+                    alignment: 0.0,
+                    offset: Length::percent(0.0),
+                },
+            },
+            size: BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto),
+            repeat: BackgroundRepeat::repeat(),
+            attachment: BackgroundAttachment::Scroll,
+            origin: BackgroundBox::PaddingBox,
+            clip: BackgroundBox::BorderBox,
         }
     }
 }

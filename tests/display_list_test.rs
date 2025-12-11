@@ -7,8 +7,9 @@ use fastrender::geometry::{Point, Rect};
 use fastrender::Rgba;
 use fastrender::{
     BlendMode, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FillRoundedRectItem,
-    GlyphInstance, GradientSpread, GradientStop, ImageData, ImageItem, LinearGradientItem, OpacityItem,
-    PaintTextItem as TextItem, RadialGradientItem, StrokeRectItem, StrokeRoundedRectItem, Transform2D, TransformItem,
+    GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem,
+    OpacityItem, PaintTextItem as TextItem, RadialGradientItem, StrokeRectItem, StrokeRoundedRectItem, Transform2D,
+    TransformItem,
 };
 use std::sync::Arc;
 
@@ -199,6 +200,7 @@ fn test_image_item() {
     list.push(DisplayItem::Image(ImageItem {
         dest_rect: Rect::from_xywh(10.0, 10.0, 64.0, 64.0),
         image: image_data.clone(),
+        filter_quality: ImageFilterQuality::Linear,
         src_rect: None,
     }));
 
@@ -220,6 +222,7 @@ fn test_image_with_src_rect() {
     let item = ImageItem {
         dest_rect: Rect::from_xywh(0.0, 0.0, 50.0, 50.0),
         image: image_data,
+        filter_quality: ImageFilterQuality::Linear,
         src_rect: Some(Rect::from_xywh(0.0, 0.0, 50.0, 50.0)), // Top-left quadrant
     };
 

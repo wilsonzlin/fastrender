@@ -7,9 +7,9 @@ use fastrender::geometry::{Point, Rect};
 use fastrender::Rgba;
 use fastrender::{
     BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, DisplayListOptimizer,
-    FillRectItem, FillRoundedRectItem, GradientSpread, GradientStop, ImageData, ImageItem, LinearGradientItem,
-    OpacityItem, OptimizationConfig, PaintTextItem as TextItem, RadialGradientItem, StackingContextItem,
-    StrokeRectItem, StrokeRoundedRectItem, Transform2D, TransformItem,
+    FillRectItem, FillRoundedRectItem, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem,
+    LinearGradientItem, OpacityItem, OptimizationConfig, PaintTextItem as TextItem, RadialGradientItem,
+    StackingContextItem, StrokeRectItem, StrokeRoundedRectItem, Transform2D, TransformItem,
 };
 use std::sync::Arc;
 
@@ -53,6 +53,7 @@ fn make_image(x: f32, y: f32, w: f32, h: f32) -> DisplayItem {
     DisplayItem::Image(ImageItem {
         dest_rect: Rect::from_xywh(x, y, w, h),
         image: Arc::new(ImageData::new(1, 1, pixels)),
+        filter_quality: ImageFilterQuality::Linear,
         src_rect: None,
     })
 }

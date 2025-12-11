@@ -723,6 +723,37 @@ impl FastRender {
                     }
                 }
             }
+            ReplacedType::Video { src, poster } => {
+                let needs_intrinsic = replaced_box.intrinsic_size.is_none();
+                let needs_ratio = replaced_box.aspect_ratio.is_none();
+                if needs_intrinsic || needs_ratio {
+                    let candidates = poster
+                        .as_deref()
+                        .into_iter()
+                        .chain(std::iter::once(src.as_str()))
+                        .filter(|s| !s.is_empty());
+                    for candidate in candidates {
+                        let image = if candidate.trim_start().starts_with('<') {
+                            self.image_cache.render_svg(candidate)
+                        } else {
+                            self.image_cache.load(candidate)
+                        };
+                        if let Ok(image) = image {
+                            let (w, h) = image.dimensions();
+                            if w > 0 && h > 0 {
+                                let size = Size::new(w as f32, h as f32);
+                                if needs_intrinsic {
+                                    replaced_box.intrinsic_size = Some(size);
+                                }
+                                if needs_ratio {
+                                    replaced_box.aspect_ratio = Some(size.width / size.height);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
             ReplacedType::Svg { content } => {
                 let needs_intrinsic = replaced_box.intrinsic_size.is_none();
                 let needs_ratio = replaced_box.aspect_ratio.is_none();
@@ -1127,6 +1158,37 @@ mod tests {
             replaced.aspect_ratio,
             Some(20.0 / 12.0),
             "inline svg should populate aspect ratio"
+        );
+    }
+
+    #[test]
+    fn resolve_intrinsic_sizes_use_video_poster() {
+        let renderer = FastRender::new().expect("init renderer");
+        let poster = "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='4'></svg>";
+        let mut node = BoxNode::new_replaced(
+            Arc::new(ComputedStyle::default()),
+            ReplacedType::Video {
+                src: String::new(),
+                poster: Some(poster.to_string()),
+            },
+            None,
+            None,
+        );
+
+        renderer.resolve_replaced_intrinsic_sizes(&mut node);
+        let replaced = match node.box_type {
+            BoxType::Replaced(ref r) => r,
+            _ => panic!("not replaced"),
+        };
+        assert_eq!(
+            replaced.intrinsic_size,
+            Some(Size::new(8.0, 4.0)),
+            "poster resource should set intrinsic size"
+        );
+        assert_eq!(
+            replaced.aspect_ratio,
+            Some(2.0),
+            "poster resource should set aspect ratio"
         );
     }
 

@@ -6,6 +6,44 @@ use super::types::PropertyValue;
 use crate::style::color::Rgba;
 use crate::style::values::{Length, LengthUnit};
 
+fn tokenize_property_value(value_str: &str, allow_commas: bool) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0usize;
+    for ch in value_str.chars() {
+        match ch {
+            '(' => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+                current.push(ch);
+            }
+            ',' if allow_commas && depth == 0 => {
+                if !current.trim().is_empty() {
+                    tokens.push(current.trim().to_string());
+                }
+                tokens.push(",".to_string());
+                current.clear();
+            }
+            ch if ch.is_whitespace() && depth == 0 => {
+                if !current.trim().is_empty() {
+                    tokens.push(current.trim().to_string());
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    if !current.trim().is_empty() {
+        tokens.push(current.trim().to_string());
+    }
+    tokens
+}
+
 /// Parse a CSS property value
 pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyValue> {
     let value_str = value_str.trim();
@@ -16,11 +54,13 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
     // Remove trailing !important if present
     let value_str = value_str.trim_end_matches("!important").trim();
 
-    // Try to parse as color first for color properties
+    let is_background_longhand = property.starts_with("background-") || property == "background";
+    let allow_commas = is_background_longhand;
+
+    // Try to parse as color first for color properties (exclude shorthand background so we can parse layers)
     if matches!(
         property,
         "color"
-            | "background"
             | "background-color"
             | "border-color"
             | "border-top-color"
@@ -43,12 +83,22 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
         return Some(gradient);
     }
 
-    // Try to parse as a space-separated list first
-    let tokens: Vec<&str> = value_str.split_whitespace().collect();
+    // Tokenize respecting commas (for background layering) and spaces.
+    let tokens: Vec<String> = tokenize_property_value(value_str, allow_commas);
     if tokens.len() > 1
         && matches!(
             property,
-            "object-position" | "border-spacing" | "background-position" | "transform-origin" | "background"
+            "object-position"
+                | "border-spacing"
+                | "background-position"
+                | "transform-origin"
+                | "background"
+                | "background-image"
+                | "background-repeat"
+                | "background-size"
+                | "background-attachment"
+                | "background-origin"
+                | "background-clip"
         )
     {
         let mut parts = Vec::new();
@@ -57,11 +107,23 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
                 parts.push(PropertyValue::Keyword("/".to_string()));
                 continue;
             }
-            if let Some(v) = parse_simple_value(token) {
+            if token == "," {
+                parts.push(PropertyValue::Keyword(",".to_string()));
+                continue;
+            }
+            if let Some(v) = parse_simple_value(&token) {
                 parts.push(v);
+            } else if let Some(gradient) = parse_gradient(&token) {
+                parts.push(gradient);
+            } else if let Ok(color) = csscolorparser::parse(&token) {
+                parts.push(PropertyValue::Color(Rgba::new(
+                    (color.r * 255.0) as u8,
+                    (color.g * 255.0) as u8,
+                    (color.b * 255.0) as u8,
+                    color.a as f32,
+                )));
             } else {
-                parts.clear();
-                break;
+                parts.push(PropertyValue::Keyword(token));
             }
         }
         if !parts.is_empty() {

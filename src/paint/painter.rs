@@ -37,9 +37,9 @@ use crate::style::color::Rgba;
 use crate::style::display::Display;
 use crate::style::position::Position;
 use crate::style::types::{
-    BackgroundAttachment, BackgroundImage, BackgroundPosition, BackgroundRepeatKeyword, BackgroundSize,
-    BackgroundSizeComponent, BackgroundSizeKeyword, BorderStyle as CssBorderStyle, ImageRendering, ObjectFit,
-    TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
+    BackgroundAttachment, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeatKeyword,
+    BackgroundSize, BackgroundSizeComponent, BackgroundSizeKeyword, BorderStyle as CssBorderStyle, ImageRendering,
+    ObjectFit, TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
 };
 use crate::style::types::{FilterColor, FilterFunction, MixBlendMode, Overflow};
 use crate::style::values::{Length, LengthUnit};
@@ -695,7 +695,8 @@ impl Painter {
     ) {
         let Some(style) = fragment.style.clone() else { return };
 
-        let has_background = style.background_color.alpha_u8() > 0 || style.background_image.is_some();
+        let has_background =
+            style.background_color.alpha_u8() > 0 || style.background_layers.iter().any(|l| l.image.is_some());
         if has_background {
             items.push(DisplayCommand::Background {
                 rect: abs_bounds,
@@ -955,45 +956,54 @@ impl Painter {
     /// Paints the background of a fragment
     fn paint_background(&mut self, x: f32, y: f32, width: f32, height: f32, style: &ComputedStyle) {
         let rects = background_rects(x, y, width, height, style);
-        let clip = match style.background_clip {
+        let fallback_layer = BackgroundLayer::default();
+        let color_clip_layer = style.background_layers.first().unwrap_or(&fallback_layer);
+        let color_clip_rect = match color_clip_layer.clip {
             crate::style::types::BackgroundBox::BorderBox => rects.border,
             crate::style::types::BackgroundBox::PaddingBox => rects.padding,
             crate::style::types::BackgroundBox::ContentBox => rects.content,
         };
 
-        if clip.width() <= 0.0 || clip.height() <= 0.0 {
+        if color_clip_rect.width() <= 0.0 || color_clip_rect.height() <= 0.0 {
             return;
         }
 
-        let clip_radii = resolve_clip_radii(style, &rects, style.background_clip);
+        let color_clip_radii = resolve_clip_radii(style, &rects, color_clip_layer.clip);
 
         if style.background_color.alpha_u8() > 0 {
             let _ = fill_rounded_rect(
                 &mut self.pixmap,
-                clip.x(),
-                clip.y(),
-                clip.width(),
-                clip.height(),
-                &clip_radii,
+                color_clip_rect.x(),
+                color_clip_rect.y(),
+                color_clip_rect.width(),
+                color_clip_rect.height(),
+                &color_clip_radii,
                 style.background_color,
             );
         }
 
-        if style.background_image.is_some() {
-            self.paint_background_image(&rects, style);
+        for layer in style.background_layers.iter().rev() {
+            if let Some(image) = &layer.image {
+                self.paint_background_image_layer(&rects, style, layer, image);
+            }
         }
     }
 
-    fn paint_background_image(&mut self, rects: &BackgroundRects, style: &ComputedStyle) {
-        let Some(bg) = &style.background_image else { return };
-        let is_local = style.background_attachment == BackgroundAttachment::Local;
+    fn paint_background_image_layer(
+        &mut self,
+        rects: &BackgroundRects,
+        style: &ComputedStyle,
+        layer: &BackgroundLayer,
+        bg: &BackgroundImage,
+    ) {
+        let is_local = layer.attachment == BackgroundAttachment::Local;
         let clip_box = if is_local {
-            match style.background_clip {
+            match layer.clip {
                 crate::style::types::BackgroundBox::ContentBox => crate::style::types::BackgroundBox::ContentBox,
                 _ => crate::style::types::BackgroundBox::PaddingBox,
             }
         } else {
-            style.background_clip
+            layer.clip
         };
         let clip_rect = match clip_box {
             crate::style::types::BackgroundBox::BorderBox => rects.border,
@@ -1001,15 +1011,15 @@ impl Painter {
             crate::style::types::BackgroundBox::ContentBox => rects.content,
         };
         let clip_radii = resolve_clip_radii(style, rects, clip_box);
-        let origin_rect = if style.background_attachment == BackgroundAttachment::Fixed {
+        let origin_rect = if layer.attachment == BackgroundAttachment::Fixed {
             Rect::from_xywh(0.0, 0.0, self.pixmap.width() as f32, self.pixmap.height() as f32)
         } else if is_local {
-            match style.background_origin {
+            match layer.origin {
                 crate::style::types::BackgroundBox::ContentBox => rects.content,
                 _ => rects.padding,
             }
         } else {
-            match style.background_origin {
+            match layer.origin {
                 crate::style::types::BackgroundBox::BorderBox => rects.border,
                 crate::style::types::BackgroundBox::PaddingBox => rects.padding,
                 crate::style::types::BackgroundBox::ContentBox => rects.content,
@@ -1066,6 +1076,9 @@ impl Painter {
                     SpreadMode::Repeat,
                 );
             }
+            BackgroundImage::None => {
+                return;
+            }
             BackgroundImage::Url(src) => {
                 let image = match self.image_cache.load(src) {
                     Ok(img) => img,
@@ -1082,25 +1095,31 @@ impl Painter {
                     return;
                 }
 
-                let (mut tile_w, mut tile_h) =
-                    compute_background_size(style, origin_rect.width(), origin_rect.height(), img_w, img_h);
+                let (mut tile_w, mut tile_h) = compute_background_size(
+                    layer,
+                    style.font_size,
+                    origin_rect.width(),
+                    origin_rect.height(),
+                    img_w,
+                    img_h,
+                );
                 if tile_w <= 0.0 || tile_h <= 0.0 {
                     return;
                 }
 
                 let mut rounded_x = false;
                 let mut rounded_y = false;
-                if style.background_repeat.x == BackgroundRepeatKeyword::Round {
+                if layer.repeat.x == BackgroundRepeatKeyword::Round {
                     tile_w = round_tile_length(origin_rect.width(), tile_w);
                     rounded_x = true;
                 }
-                if style.background_repeat.y == BackgroundRepeatKeyword::Round {
+                if layer.repeat.y == BackgroundRepeatKeyword::Round {
                     tile_h = round_tile_length(origin_rect.height(), tile_h);
                     rounded_y = true;
                 }
                 if rounded_x ^ rounded_y
                     && matches!(
-                        style.background_size,
+                        layer.size,
                         BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
                     )
                 {
@@ -1113,7 +1132,7 @@ impl Painter {
                 }
 
                 let (offset_x, offset_y) = resolve_background_offset(
-                    style.background_position,
+                    layer.position,
                     origin_rect.width(),
                     origin_rect.height(),
                     tile_w,
@@ -1122,7 +1141,7 @@ impl Painter {
                 );
 
                 let positions_x = tile_positions(
-                    style.background_repeat.x,
+                    layer.repeat.x,
                     origin_rect.x(),
                     origin_rect.width(),
                     tile_w,
@@ -1131,7 +1150,7 @@ impl Painter {
                     clip_rect.max_x(),
                 );
                 let positions_y = tile_positions(
-                    style.background_repeat.y,
+                    layer.repeat.y,
                     origin_rect.y(),
                     origin_rect.height(),
                     tile_h,
@@ -1911,7 +1930,31 @@ impl Painter {
                     return;
                 }
             }
-            ReplacedType::Iframe { src } | ReplacedType::Video { src } => {
+            ReplacedType::Iframe { src } => {
+                if self.paint_image_from_src(
+                    src,
+                    style,
+                    content_rect.x(),
+                    content_rect.y(),
+                    content_rect.width(),
+                    content_rect.height(),
+                ) {
+                    return;
+                }
+            }
+            ReplacedType::Video { src, poster } => {
+                if let Some(poster_src) = poster.as_deref() {
+                    if self.paint_image_from_src(
+                        poster_src,
+                        style,
+                        content_rect.x(),
+                        content_rect.y(),
+                        content_rect.width(),
+                        content_rect.height(),
+                    ) {
+                        return;
+                    }
+                }
                 if self.paint_image_from_src(
                     src,
                     style,
@@ -3825,7 +3868,14 @@ fn resolve_length_for_paint(len: &Length, font_size: f32, percentage_base: f32) 
     }
 }
 
-fn compute_background_size(style: &ComputedStyle, area_w: f32, area_h: f32, img_w: f32, img_h: f32) -> (f32, f32) {
+fn compute_background_size(
+    layer: &BackgroundLayer,
+    font_size: f32,
+    area_w: f32,
+    area_h: f32,
+    img_w: f32,
+    img_h: f32,
+) -> (f32, f32) {
     let natural_w = if img_w > 0.0 { Some(img_w) } else { None };
     let natural_h = if img_h > 0.0 { Some(img_h) } else { None };
     let ratio = if img_w > 0.0 && img_h > 0.0 {
@@ -3833,9 +3883,8 @@ fn compute_background_size(style: &ComputedStyle, area_w: f32, area_h: f32, img_
     } else {
         None
     };
-    let font_size = style.font_size;
 
-    match style.background_size {
+    match layer.size {
         BackgroundSize::Keyword(BackgroundSizeKeyword::Cover) => {
             if let (Some(w), Some(h)) = (natural_w, natural_h) {
                 let scale = (area_w / w).max(area_h / h);
@@ -4050,7 +4099,9 @@ fn tile_positions(
                 }
                 positions
             } else {
-                vec![area_start + offset]
+                // When fewer than two tiles fit, center the single tile per CSS Backgrounds 3.
+                let centered = area_start + offset + (area_len - tile_len) * 0.5;
+                vec![centered]
             }
         }
     }
@@ -4084,7 +4135,7 @@ mod tests {
     use crate::geometry::Rect;
     use crate::image_loader::ImageCache;
     use crate::paint::display_list::BorderRadii;
-    use crate::style::types::{BackgroundAttachment, Isolation, OutlineColor, OutlineStyle, Overflow};
+    use crate::style::types::{BackgroundAttachment, BackgroundBox, Isolation, OutlineColor, OutlineStyle, Overflow};
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
     use crate::text::font_loader::FontContext;
@@ -4619,21 +4670,52 @@ mod tests {
     }
 
     #[test]
+    fn paints_video_poster_image_content() {
+        let poster =
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"><rect width=\"8\" height=\"8\" fill=\"lime\"/></svg>";
+        let style = Arc::new(ComputedStyle::default());
+        let fragment = FragmentNode::new_with_style(
+            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+            FragmentContent::Replaced {
+                replaced_type: ReplacedType::Video {
+                    src: String::new(),
+                    poster: Some(poster.to_string()),
+                },
+                box_id: None,
+            },
+            vec![],
+            style,
+        );
+        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 12.0, 12.0), vec![fragment]);
+        let tree = FragmentTree::new(root);
+
+        let pixmap = paint_tree(&tree, 12, 12, Rgba::WHITE).expect("paint video poster");
+        assert_eq!(
+            color_at(&pixmap, 5, 5),
+            (0, 255, 0, 255),
+            "poster content should paint instead of placeholder"
+        );
+    }
+
+    #[test]
     fn paints_linear_gradient_background() {
         let mut style = ComputedStyle::default();
-        style.background_image = Some(BackgroundImage::LinearGradient {
-            angle: 90.0,
-            stops: vec![
-                crate::css::types::ColorStop {
-                    color: Rgba::RED,
-                    position: Some(0.0),
-                },
-                crate::css::types::ColorStop {
-                    color: Rgba::BLUE,
-                    position: Some(1.0),
-                },
-            ],
-        });
+        style.set_background_layers(vec![BackgroundLayer {
+            image: Some(BackgroundImage::LinearGradient {
+                angle: 90.0,
+                stops: vec![
+                    crate::css::types::ColorStop {
+                        color: Rgba::RED,
+                        position: Some(0.0),
+                    },
+                    crate::css::types::ColorStop {
+                        color: Rgba::BLUE,
+                        position: Some(1.0),
+                    },
+                ],
+            }),
+            ..BackgroundLayer::default()
+        }]);
 
         let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
         let tree = FragmentTree::new(fragment);
@@ -4648,19 +4730,22 @@ mod tests {
     #[test]
     fn paints_repeating_linear_gradient_background() {
         let mut style = ComputedStyle::default();
-        style.background_image = Some(BackgroundImage::RepeatingLinearGradient {
-            angle: 0.0,
-            stops: vec![
-                crate::css::types::ColorStop {
-                    color: Rgba::RED,
-                    position: Some(0.0),
-                },
-                crate::css::types::ColorStop {
-                    color: Rgba::BLUE,
-                    position: Some(0.5),
-                },
-            ],
-        });
+        style.set_background_layers(vec![BackgroundLayer {
+            image: Some(BackgroundImage::RepeatingLinearGradient {
+                angle: 0.0,
+                stops: vec![
+                    crate::css::types::ColorStop {
+                        color: Rgba::RED,
+                        position: Some(0.0),
+                    },
+                    crate::css::types::ColorStop {
+                        color: Rgba::BLUE,
+                        position: Some(0.5),
+                    },
+                ],
+            }),
+            ..BackgroundLayer::default()
+        }]);
 
         let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
         let tree = FragmentTree::new(fragment);
@@ -4685,20 +4770,23 @@ mod tests {
     #[test]
     fn background_attachment_fixed_anchors_to_viewport() {
         let mut style = ComputedStyle::default();
-        style.background_image = Some(BackgroundImage::LinearGradient {
-            angle: 90.0,
-            stops: vec![
-                crate::css::types::ColorStop {
-                    color: Rgba::RED,
-                    position: Some(0.0),
-                },
-                crate::css::types::ColorStop {
-                    color: Rgba::BLUE,
-                    position: Some(1.0),
-                },
-            ],
-        });
-        style.background_attachment = BackgroundAttachment::Fixed;
+        style.set_background_layers(vec![BackgroundLayer {
+            image: Some(BackgroundImage::LinearGradient {
+                angle: 90.0,
+                stops: vec![
+                    crate::css::types::ColorStop {
+                        color: Rgba::RED,
+                        position: Some(0.0),
+                    },
+                    crate::css::types::ColorStop {
+                        color: Rgba::BLUE,
+                        position: Some(1.0),
+                    },
+                ],
+            }),
+            attachment: BackgroundAttachment::Fixed,
+            ..BackgroundLayer::default()
+        }]);
 
         // Gradient anchors to viewport: samples at successive x positions diverge even though elements have their own origins.
         let style_arc = Arc::new(style);
@@ -4720,20 +4808,23 @@ mod tests {
     #[test]
     fn background_attachment_local_uses_scrollable_overflow_area() {
         let mut style = ComputedStyle::default();
-        style.background_image = Some(BackgroundImage::LinearGradient {
-            angle: 0.0,
-            stops: vec![
-                crate::css::types::ColorStop {
-                    color: Rgba::RED,
-                    position: Some(0.0),
-                },
-                crate::css::types::ColorStop {
-                    color: Rgba::RED,
-                    position: Some(1.0),
-                },
-            ],
-        });
-        style.background_attachment = BackgroundAttachment::Local;
+        style.set_background_layers(vec![BackgroundLayer {
+            image: Some(BackgroundImage::LinearGradient {
+                angle: 0.0,
+                stops: vec![
+                    crate::css::types::ColorStop {
+                        color: Rgba::RED,
+                        position: Some(0.0),
+                    },
+                    crate::css::types::ColorStop {
+                        color: Rgba::RED,
+                        position: Some(1.0),
+                    },
+                ],
+            }),
+            attachment: BackgroundAttachment::Local,
+            ..BackgroundLayer::default()
+        }]);
         style.overflow_x = Overflow::Scroll;
         style.overflow_y = Overflow::Scroll;
         style.border_top_width = Length::px(2.0);
@@ -4758,6 +4849,35 @@ mod tests {
         assert_eq!(color_at(&pixmap, 1, 1), (255, 255, 255, 255));
         // Padding box should still paint the background image.
         assert_eq!(color_at(&pixmap, 6, 6), (255, 0, 0, 255));
+    }
+
+    #[test]
+    fn background_color_uses_first_layer_clip_value() {
+        let mut style = ComputedStyle::default();
+        style.background_color = Rgba::RED;
+        style.background_images = vec![None, None];
+        style.background_clips = vec![BackgroundBox::PaddingBox, BackgroundBox::BorderBox];
+        style.rebuild_background_layers();
+        style.border_top_width = Length::px(2.0);
+        style.border_right_width = Length::px(2.0);
+        style.border_bottom_width = Length::px(2.0);
+        style.border_left_width = Length::px(2.0);
+        style.border_top_style = CssBorderStyle::Solid;
+        style.border_right_style = CssBorderStyle::Solid;
+        style.border_bottom_style = CssBorderStyle::Solid;
+        style.border_left_style = CssBorderStyle::Solid;
+        style.border_top_color = Rgba::WHITE;
+        style.border_right_color = Rgba::WHITE;
+        style.border_bottom_color = Rgba::WHITE;
+        style.border_left_color = Rgba::WHITE;
+
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 12.0, 12.0), vec![], Arc::new(style));
+        let tree = FragmentTree::new(fragment);
+        let pixmap = paint_tree(&tree, 12, 12, Rgba::WHITE).expect("paint");
+
+        // Color should be clipped to the first layer's clip (padding-box), leaving border white.
+        assert_eq!(color_at(&pixmap, 1, 1), (255, 255, 255, 255));
+        assert_eq!(color_at(&pixmap, 3, 3), (255, 0, 0, 255));
     }
 
     #[test]
@@ -4872,10 +4992,10 @@ mod tests {
 
     #[test]
     fn background_cover_scales_to_fill() {
-        let mut style = ComputedStyle::default();
-        style.background_size = BackgroundSize::Keyword(BackgroundSizeKeyword::Cover);
-        let (tw, th) = compute_background_size(&style, 200.0, 100.0, 50.0, 50.0);
-        let (ox, oy) = resolve_background_offset(style.background_position, 200.0, 100.0, tw, th, style.font_size);
+        let mut layer = BackgroundLayer::default();
+        layer.size = BackgroundSize::Keyword(BackgroundSizeKeyword::Cover);
+        let (tw, th) = compute_background_size(&layer, 16.0, 200.0, 100.0, 50.0, 50.0);
+        let (ox, oy) = resolve_background_offset(layer.position, 200.0, 100.0, tw, th, 16.0);
         assert!((tw - 200.0).abs() < 0.01);
         assert!((th - 200.0).abs() < 0.01);
         assert!((ox - 0.0).abs() < 0.01);
@@ -4884,19 +5004,21 @@ mod tests {
 
     #[test]
     fn background_position_alignment_and_offsets_resolve_against_available_space() {
-        let mut style = ComputedStyle::default();
-        style.background_position = BackgroundPosition::Position {
-            x: crate::style::types::BackgroundPositionComponent {
-                alignment: 1.0,
-                offset: Length::px(-10.0),
+        let layer = BackgroundLayer {
+            position: BackgroundPosition::Position {
+                x: crate::style::types::BackgroundPositionComponent {
+                    alignment: 1.0,
+                    offset: Length::px(-10.0),
+                },
+                y: crate::style::types::BackgroundPositionComponent {
+                    alignment: 1.0,
+                    offset: Length::percent(-20.0),
+                },
             },
-            y: crate::style::types::BackgroundPositionComponent {
-                alignment: 1.0,
-                offset: Length::percent(-20.0),
-            },
+            ..BackgroundLayer::default()
         };
 
-        let (ox, oy) = resolve_background_offset(style.background_position, 100.0, 60.0, 20.0, 10.0, style.font_size);
+        let (ox, oy) = resolve_background_offset(layer.position, 100.0, 60.0, 20.0, 10.0, 16.0);
         // available_x = 80; 1 * 80 - 10 = 70
         // available_y = 50; 1 * 50 - 20%*50 = 40
         assert!((ox - 70.0).abs() < 0.01);
@@ -4905,24 +5027,24 @@ mod tests {
 
     #[test]
     fn background_size_single_dimension_auto_uses_intrinsic_ratio() {
-        let mut style = ComputedStyle::default();
-        style.background_size = BackgroundSize::Explicit(
+        let mut layer = BackgroundLayer::default();
+        layer.size = BackgroundSize::Explicit(
             BackgroundSizeComponent::Auto,
             BackgroundSizeComponent::Length(Length::px(25.0)),
         );
-        let (tw, th) = compute_background_size(&style, 200.0, 100.0, 100.0, 50.0);
+        let (tw, th) = compute_background_size(&layer, 16.0, 200.0, 100.0, 100.0, 50.0);
         assert!((tw - 50.0).abs() < 0.01);
         assert!((th - 25.0).abs() < 0.01);
     }
 
     #[test]
     fn background_size_auto_auto_uses_intrinsic_size_or_falls_back() {
-        let style = ComputedStyle::default();
-        let (tw, th) = compute_background_size(&style, 120.0, 80.0, 30.0, 10.0);
+        let layer = BackgroundLayer::default();
+        let (tw, th) = compute_background_size(&layer, 16.0, 120.0, 80.0, 30.0, 10.0);
         assert!((tw - 30.0).abs() < 0.01);
         assert!((th - 10.0).abs() < 0.01);
 
-        let (tw, th) = compute_background_size(&style, 50.0, 60.0, 0.0, 0.0);
+        let (tw, th) = compute_background_size(&layer, 16.0, 50.0, 60.0, 0.0, 0.0);
         assert!((tw - 50.0).abs() < 0.01);
         assert!((th - 60.0).abs() < 0.01);
     }
@@ -4934,6 +5056,22 @@ mod tests {
         assert!((positions[0] - 0.0).abs() < 1e-4);
         assert!((positions[1] - 35.0).abs() < 1e-3);
         assert!((positions[2] - 70.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn background_repeat_space_centers_single_tile() {
+        let positions = tile_positions(BackgroundRepeatKeyword::Space, 10.0, 40.0, 30.0, 0.0, 0.0, 100.0);
+        assert_eq!(positions, vec![15.0]); // 10 + (40-30)/2
+
+        let with_offset = tile_positions(BackgroundRepeatKeyword::Space, 0.0, 40.0, 30.0, 5.0, 0.0, 100.0);
+        assert_eq!(with_offset, vec![10.0]); // centered (5) plus offset (5)
+    }
+
+    #[test]
+    fn background_repeat_space_centers_oversized_tile() {
+        // Tile larger than area => still center it.
+        let positions = tile_positions(BackgroundRepeatKeyword::Space, 0.0, 20.0, 30.0, 0.0, 0.0, 100.0);
+        assert_eq!(positions, vec![-5.0]); // (20-30)/2
     }
 
     #[test]

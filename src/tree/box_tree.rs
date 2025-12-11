@@ -124,6 +124,8 @@ pub enum ReplacedType {
     Video {
         /// Source URL
         src: String,
+        /// Poster image URL or data URI
+        poster: Option<String>,
     },
 
     /// Canvas element

@@ -23,6 +23,111 @@ use crate::style::var_resolution::resolve_var;
 use crate::style::ComputedStyle;
 use cssparser::{Parser, ParserInput, Token};
 
+fn split_layers(tokens: &[PropertyValue]) -> Vec<Vec<PropertyValue>> {
+    let mut layers = Vec::new();
+    let mut current = Vec::new();
+    for token in tokens {
+        if matches!(token, PropertyValue::Keyword(k) if k == ",") {
+            if !current.is_empty() {
+                layers.push(current.clone());
+                current.clear();
+            }
+        } else {
+            current.push(token.clone());
+        }
+    }
+    if !current.is_empty() {
+        layers.push(current);
+    }
+    if layers.is_empty() {
+        layers.push(Vec::new());
+    }
+    layers
+}
+
+fn parse_background_image_value(value: &PropertyValue) -> Option<BackgroundImage> {
+    match value {
+        PropertyValue::Url(url) => Some(BackgroundImage::Url(url.clone())),
+        PropertyValue::LinearGradient { angle, stops } => Some(BackgroundImage::LinearGradient {
+            angle: *angle,
+            stops: stops.clone(),
+        }),
+        PropertyValue::RadialGradient { stops } => Some(BackgroundImage::RadialGradient { stops: stops.clone() }),
+        PropertyValue::RepeatingLinearGradient { angle, stops } => Some(BackgroundImage::RepeatingLinearGradient {
+            angle: *angle,
+            stops: stops.clone(),
+        }),
+        PropertyValue::RepeatingRadialGradient { stops } => {
+            Some(BackgroundImage::RepeatingRadialGradient { stops: stops.clone() })
+        }
+        PropertyValue::Keyword(kw) if kw == "none" => Some(BackgroundImage::None),
+        _ => None,
+    }
+}
+
+fn parse_background_image_list(value: &PropertyValue) -> Option<Vec<Option<BackgroundImage>>> {
+    match value {
+        PropertyValue::Multiple(tokens)
+            if tokens
+                .iter()
+                .any(|t| matches!(t, PropertyValue::Keyword(k) if k == ",")) =>
+        {
+            let mut images = Vec::new();
+            for layer_tokens in split_layers(tokens) {
+                let candidate = if layer_tokens.len() == 1 {
+                    parse_background_image_value(&layer_tokens[0])
+                } else {
+                    parse_background_image_value(&PropertyValue::Multiple(layer_tokens.clone()))
+                };
+                match candidate {
+                    Some(BackgroundImage::None) => images.push(None),
+                    Some(img) => images.push(Some(img)),
+                    None => return None,
+                }
+            }
+            if images.is_empty() {
+                None
+            } else {
+                Some(images)
+            }
+        }
+        _ => parse_background_image_value(value).map(|img| match img {
+            BackgroundImage::None => vec![None],
+            other => vec![Some(other)],
+        }),
+    }
+}
+
+fn parse_layer_list<T>(value: &PropertyValue, parse: impl Fn(&PropertyValue) -> Option<T>) -> Option<Vec<T>> {
+    match value {
+        PropertyValue::Multiple(tokens)
+            if tokens
+                .iter()
+                .any(|t| matches!(t, PropertyValue::Keyword(k) if k == ",")) =>
+        {
+            let mut items = Vec::new();
+            for layer_tokens in split_layers(tokens) {
+                let parsed = if layer_tokens.len() == 1 {
+                    parse(&layer_tokens[0])
+                } else {
+                    parse(&PropertyValue::Multiple(layer_tokens.clone()))
+                };
+                if let Some(item) = parsed {
+                    items.push(item);
+                } else {
+                    return None;
+                }
+            }
+            if items.is_empty() {
+                None
+            } else {
+                Some(items)
+            }
+        }
+        _ => parse(value).map(|v| vec![v]),
+    }
+}
+
 pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_font_size: f32, root_font_size: f32) {
     // Handle CSS Custom Properties (--*)
     if decl.property.starts_with("--") {
@@ -1637,126 +1742,108 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         }
 
         // Background
-        "background-image" => match &resolved_value {
-            PropertyValue::Url(url) => {
-                styles.background_image = Some(BackgroundImage::Url(url.clone()));
+        "background-image" => {
+            if let Some(images) = parse_background_image_list(&resolved_value) {
+                styles.background_images = images;
+                styles.rebuild_background_layers();
             }
-            PropertyValue::LinearGradient { angle, stops } => {
-                styles.background_image = Some(BackgroundImage::LinearGradient {
-                    angle: *angle,
-                    stops: stops.clone(),
-                });
-            }
-            PropertyValue::RadialGradient { stops } => {
-                styles.background_image = Some(BackgroundImage::RadialGradient { stops: stops.clone() });
-            }
-            PropertyValue::RepeatingLinearGradient { angle, stops } => {
-                styles.background_image = Some(BackgroundImage::RepeatingLinearGradient {
-                    angle: *angle,
-                    stops: stops.clone(),
-                });
-            }
-            PropertyValue::RepeatingRadialGradient { stops } => {
-                styles.background_image = Some(BackgroundImage::RepeatingRadialGradient { stops: stops.clone() });
-            }
-            PropertyValue::Keyword(kw) if kw == "none" => {
-                styles.background_image = None;
-            }
-            _ => {}
-        },
+        }
         "background-size" => {
-            if let Some(size) = parse_background_size(&resolved_value) {
-                styles.background_size = size;
+            if let Some(sizes) = parse_layer_list(&resolved_value, parse_background_size) {
+                styles.background_sizes = sizes;
+                styles.rebuild_background_layers();
             }
         }
         "background-repeat" => {
-            if let Some(rep) = parse_background_repeat(&resolved_value) {
-                styles.background_repeat = rep;
+            if let Some(repeats) = parse_layer_list(&resolved_value, parse_background_repeat) {
+                styles.background_repeats = repeats;
+                styles.rebuild_background_layers();
             }
         }
         "background-position" => {
-            if let Some(pos) = parse_background_position(&resolved_value) {
-                styles.background_position = pos;
+            if let Some(positions) = parse_layer_list(&resolved_value, parse_background_position) {
+                styles.background_positions = positions;
+                styles.rebuild_background_layers();
             }
         }
         "background-attachment" => {
-            if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.background_attachment = match kw.as_str() {
-                    "scroll" => BackgroundAttachment::Scroll,
-                    "fixed" => BackgroundAttachment::Fixed,
-                    "local" => BackgroundAttachment::Local,
-                    _ => styles.background_attachment,
-                };
+            let parse = |value: &PropertyValue| match value {
+                PropertyValue::Keyword(kw) => match kw.as_str() {
+                    "scroll" => Some(BackgroundAttachment::Scroll),
+                    "fixed" => Some(BackgroundAttachment::Fixed),
+                    "local" => Some(BackgroundAttachment::Local),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(attachments) = parse_layer_list(&resolved_value, parse) {
+                styles.background_attachments = attachments;
+                styles.rebuild_background_layers();
             }
         }
         "background-origin" => {
-            if let Some(origin) = parse_background_box(&resolved_value) {
-                styles.background_origin = origin;
+            if let Some(origins) = parse_layer_list(&resolved_value, parse_background_box) {
+                styles.background_origins = origins;
+                styles.rebuild_background_layers();
             }
         }
         "background-clip" => {
-            if let Some(clip) = parse_background_box(&resolved_value) {
-                styles.background_clip = clip;
+            if let Some(clips) = parse_layer_list(&resolved_value, parse_background_box) {
+                styles.background_clips = clips;
+                styles.rebuild_background_layers();
             }
         }
 
-        // Shorthand: background (treat as background-color for now)
+        // Shorthand: background
         "background" => {
-            let mut reset_background_fields = || {
-                styles.background_color = Rgba::TRANSPARENT;
-                styles.background_image = None;
-                styles.background_repeat = BackgroundRepeat::repeat();
-                styles.background_position = BackgroundPosition::Position {
-                    x: crate::style::types::BackgroundPositionComponent {
-                        alignment: 0.0,
-                        offset: Length::px(0.0),
-                    },
-                    y: crate::style::types::BackgroundPositionComponent {
-                        alignment: 0.0,
-                        offset: Length::px(0.0),
-                    },
-                };
-                styles.background_size =
-                    BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto);
-                styles.background_attachment = BackgroundAttachment::Scroll;
-                styles.background_origin = BackgroundBox::PaddingBox;
-                styles.background_clip = BackgroundBox::BorderBox;
-            };
-
             let tokens: Vec<PropertyValue> = match resolved_value {
                 PropertyValue::Multiple(ref parts) => parts.clone(),
                 _ => vec![resolved_value.clone()],
             };
 
-            if !tokens.is_empty() {
-                reset_background_fields();
-                if let Some(parsed) = parse_background_shorthand(&tokens) {
-                    if let Some(color) = parsed.color {
-                        styles.background_color = color;
-                    }
-                    if let Some(image) = parsed.image {
-                        styles.background_image = Some(image);
-                    }
-                    if let Some(rep) = parsed.repeat {
-                        styles.background_repeat = rep;
-                    }
-                    if let Some(pos) = parsed.position {
-                        styles.background_position = pos;
-                    }
-                    if let Some(size) = parsed.size {
-                        styles.background_size = size;
-                    }
-                    if let Some(att) = parsed.attachment {
-                        styles.background_attachment = att;
-                    }
-                    if let Some(origin) = parsed.origin {
-                        styles.background_origin = origin;
-                    }
-                    if let Some(clip) = parsed.clip {
-                        styles.background_clip = clip;
-                    }
+            if tokens.is_empty() {
+                return;
+            }
+
+            let layers = split_layers(&tokens);
+            let mut parsed_layers = Vec::new();
+            for layer_tokens in layers {
+                if let Some(parsed) = parse_background_shorthand(&layer_tokens) {
+                    parsed_layers.push(parsed);
                 }
             }
+            if parsed_layers.is_empty() {
+                return;
+            }
+
+            styles.background_color = parsed_layers.last().and_then(|p| p.color).unwrap_or(Rgba::TRANSPARENT);
+
+            let mut layers = Vec::new();
+            for parsed in parsed_layers {
+                let mut layer = BackgroundLayer::default();
+                layer.image = parsed.image;
+                if let Some(rep) = parsed.repeat {
+                    layer.repeat = rep;
+                }
+                if let Some(pos) = parsed.position {
+                    layer.position = pos;
+                }
+                if let Some(size) = parsed.size {
+                    layer.size = size;
+                }
+                if let Some(att) = parsed.attachment {
+                    layer.attachment = att;
+                }
+                if let Some(origin) = parsed.origin {
+                    layer.origin = origin;
+                }
+                if let Some(clip) = parsed.clip {
+                    layer.clip = clip;
+                }
+                layers.push(layer);
+            }
+            styles.set_background_layers(layers);
+            styles.rebuild_background_layers();
         }
 
         // Visual effects
@@ -4571,7 +4658,7 @@ mod tests {
         };
 
         apply_declaration(&mut style, &decl, 16.0, 16.0);
-        let BackgroundPosition::Position { x, y } = style.background_position;
+        let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
         assert!((x.alignment - 0.0).abs() < 0.01);
         assert!((y.alignment - 0.0).abs() < 0.01);
         assert!(x.offset.is_zero());
@@ -4592,7 +4679,7 @@ mod tests {
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
-        let BackgroundPosition::Position { x, y } = style.background_position;
+        let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
         assert!((x.alignment - 1.0).abs() < 0.01);
         assert!((y.alignment - 1.0).abs() < 0.01);
         assert!((x.offset.value + 10.0).abs() < 0.01 && x.offset.unit == LengthUnit::Percent);
@@ -4613,7 +4700,7 @@ mod tests {
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
-        let BackgroundPosition::Position { x, y } = style.background_position;
+        let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
         assert!((x.alignment - 1.0).abs() < 0.01);
         assert!((y.alignment - 0.0).abs() < 0.01);
         assert!((x.offset.value + 10.0).abs() < 0.01 && x.offset.unit == LengthUnit::Px);
@@ -4626,7 +4713,7 @@ mod tests {
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
-        let BackgroundPosition::Position { x, y } = style.background_position;
+        let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
         assert!((x.alignment - 0.5).abs() < 0.01);
         assert!(x.offset.is_zero());
         assert!((y.alignment - 0.0).abs() < 0.01);
@@ -5016,24 +5103,27 @@ mod tests {
     #[test]
     fn background_shorthand_resets_unspecified_fields() {
         let mut style = ComputedStyle::default();
-        style.background_repeat = BackgroundRepeat::repeat_x();
-        style.background_attachment = BackgroundAttachment::Fixed;
-        style.background_position = BackgroundPosition::Position {
-            x: crate::style::types::BackgroundPositionComponent {
-                alignment: 1.0,
-                offset: Length::px(5.0),
+        style.set_background_layers(vec![BackgroundLayer {
+            repeat: BackgroundRepeat::repeat_x(),
+            attachment: BackgroundAttachment::Fixed,
+            position: BackgroundPosition::Position {
+                x: crate::style::types::BackgroundPositionComponent {
+                    alignment: 1.0,
+                    offset: Length::px(5.0),
+                },
+                y: crate::style::types::BackgroundPositionComponent {
+                    alignment: 1.0,
+                    offset: Length::px(5.0),
+                },
             },
-            y: crate::style::types::BackgroundPositionComponent {
-                alignment: 1.0,
-                offset: Length::px(5.0),
-            },
-        };
-        style.background_size = BackgroundSize::Explicit(
-            BackgroundSizeComponent::Length(Length::px(10.0)),
-            BackgroundSizeComponent::Auto,
-        );
-        style.background_origin = BackgroundBox::ContentBox;
-        style.background_clip = BackgroundBox::ContentBox;
+            size: BackgroundSize::Explicit(
+                BackgroundSizeComponent::Length(Length::px(10.0)),
+                BackgroundSizeComponent::Auto,
+            ),
+            origin: BackgroundBox::ContentBox,
+            clip: BackgroundBox::ContentBox,
+            ..BackgroundLayer::default()
+        }]);
 
         let decl = Declaration {
             property: "background".to_string(),
@@ -5053,32 +5143,135 @@ mod tests {
         apply_declaration(&mut style, &decl, 16.0, 16.0);
 
         assert_eq!(style.background_color, Rgba::RED);
-        assert!(matches!(style.background_image, Some(BackgroundImage::Url(ref s)) if s == "example.png"));
-        assert_eq!(style.background_repeat, BackgroundRepeat::no_repeat());
-        let BackgroundPosition::Position { x, y } = style.background_position;
+        let layer = &style.background_layers[0];
+        assert!(matches!(layer.image, Some(BackgroundImage::Url(ref s)) if s == "example.png"));
+        assert_eq!(layer.repeat, BackgroundRepeat::no_repeat());
+        let BackgroundPosition::Position { x, y } = layer.position;
         assert!((x.alignment - 1.0).abs() < 0.01);
         assert!(x.offset.is_zero());
         assert!((y.alignment - 0.5).abs() < 0.01);
         assert!(y.offset.is_zero());
-        assert_eq!(
-            style.background_size,
-            BackgroundSize::Keyword(BackgroundSizeKeyword::Contain)
+        assert_eq!(layer.size, BackgroundSize::Keyword(BackgroundSizeKeyword::Contain));
+        assert_eq!(layer.attachment, BackgroundAttachment::Fixed);
+        assert_eq!(layer.origin, BackgroundBox::ContentBox);
+        assert_eq!(layer.clip, BackgroundBox::PaddingBox);
+    }
+
+    #[test]
+    fn background_longhand_lists_expand_layers() {
+        let mut style = ComputedStyle::default();
+        // Two images
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-image".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Url("a.png".to_string()),
+                    PropertyValue::Keyword(",".to_string()),
+                    PropertyValue::Url("b.png".to_string()),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
         );
-        assert_eq!(style.background_attachment, BackgroundAttachment::Fixed);
-        assert_eq!(style.background_origin, BackgroundBox::ContentBox);
-        assert_eq!(style.background_clip, BackgroundBox::PaddingBox);
+        assert_eq!(style.background_layers.len(), 2);
+        // Only one size provided; values repeat across layers
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-size".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Length(Length::px(10.0)),
+                    PropertyValue::Length(Length::px(20.0)),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(
+            style.background_layers[0].size,
+            BackgroundSize::Explicit(
+                BackgroundSizeComponent::Length(Length::px(10.0)),
+                BackgroundSizeComponent::Length(Length::px(20.0))
+            )
+        );
+        assert_eq!(
+            style.background_layers[1].size,
+            BackgroundSize::Explicit(
+                BackgroundSizeComponent::Length(Length::px(10.0)),
+                BackgroundSizeComponent::Length(Length::px(20.0))
+            )
+        );
+        // Two repeats; both layers updated
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-repeat".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("no-repeat".to_string()),
+                    PropertyValue::Keyword(",".to_string()),
+                    PropertyValue::Keyword("space".to_string()),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.background_layers[0].repeat, BackgroundRepeat::no_repeat());
+        assert_eq!(style.background_layers[1].repeat.x, BackgroundRepeatKeyword::Space);
+    }
+
+    #[test]
+    fn background_longhand_extra_values_drop_with_single_image_layer() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-image".to_string(),
+                value: PropertyValue::Url("one.png".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        // Two positions, but only one image -> second is ignored for layer construction
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-position".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("left".to_string()),
+                    PropertyValue::Keyword("top".to_string()),
+                    PropertyValue::Keyword(",".to_string()),
+                    PropertyValue::Keyword("right".to_string()),
+                    PropertyValue::Keyword("bottom".to_string()),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.background_layers.len(), 1);
+        let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
+        assert!((x.alignment - 0.0).abs() < 0.01);
+        assert!((y.alignment - 0.0).abs() < 0.01);
     }
 
     #[test]
     fn background_shorthand_color_only_resets_to_initials() {
         let mut style = ComputedStyle::default();
-        style.background_repeat = BackgroundRepeat::repeat_x();
-        style.background_origin = BackgroundBox::ContentBox;
-        style.background_clip = BackgroundBox::ContentBox;
-        style.background_size = BackgroundSize::Explicit(
-            BackgroundSizeComponent::Length(Length::px(12.0)),
-            BackgroundSizeComponent::Auto,
-        );
+        style.set_background_layers(vec![BackgroundLayer {
+            repeat: BackgroundRepeat::repeat_x(),
+            origin: BackgroundBox::ContentBox,
+            clip: BackgroundBox::ContentBox,
+            size: BackgroundSize::Explicit(
+                BackgroundSizeComponent::Length(Length::px(12.0)),
+                BackgroundSizeComponent::Auto,
+            ),
+            ..BackgroundLayer::default()
+        }]);
 
         let decl = Declaration {
             property: "background".to_string(),
@@ -5088,27 +5281,31 @@ mod tests {
         apply_declaration(&mut style, &decl, 16.0, 16.0);
 
         assert_eq!(style.background_color, Rgba::RED);
-        assert!(style.background_image.is_none());
-        assert_eq!(style.background_repeat, BackgroundRepeat::repeat());
-        let BackgroundPosition::Position { x, y } = style.background_position;
+        assert!(style.background_layers.first().and_then(|l| l.image.as_ref()).is_none());
+        let layer = &style.background_layers[0];
+        assert_eq!(layer.repeat, BackgroundRepeat::repeat());
+        let BackgroundPosition::Position { x, y } = layer.position;
         assert!(x.offset.is_zero() && (x.alignment - 0.0).abs() < 0.01);
         assert!(y.offset.is_zero() && (y.alignment - 0.0).abs() < 0.01);
         assert_eq!(
-            style.background_size,
+            layer.size,
             BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
         );
-        assert_eq!(style.background_attachment, BackgroundAttachment::Scroll);
-        assert_eq!(style.background_origin, BackgroundBox::PaddingBox);
-        assert_eq!(style.background_clip, BackgroundBox::BorderBox);
+        assert_eq!(layer.attachment, BackgroundAttachment::Scroll);
+        assert_eq!(layer.origin, BackgroundBox::PaddingBox);
+        assert_eq!(layer.clip, BackgroundBox::BorderBox);
     }
 
     #[test]
     fn background_shorthand_none_resets_and_clears_image() {
         let mut style = ComputedStyle::default();
         style.background_color = Rgba::RED;
-        style.background_image = Some(BackgroundImage::Url("foo.png".to_string()));
-        style.background_repeat = BackgroundRepeat::repeat_x();
-        style.background_origin = BackgroundBox::ContentBox;
+        style.set_background_layers(vec![BackgroundLayer {
+            image: Some(BackgroundImage::Url("foo.png".to_string())),
+            repeat: BackgroundRepeat::repeat_x(),
+            origin: BackgroundBox::ContentBox,
+            ..BackgroundLayer::default()
+        }]);
 
         let decl = Declaration {
             property: "background".to_string(),
@@ -5118,10 +5315,12 @@ mod tests {
         apply_declaration(&mut style, &decl, 16.0, 16.0);
 
         assert_eq!(style.background_color, Rgba::TRANSPARENT);
-        assert!(style.background_image.is_none());
-        assert_eq!(style.background_repeat, BackgroundRepeat::repeat());
-        assert_eq!(style.background_origin, BackgroundBox::PaddingBox);
-        assert_eq!(style.background_clip, BackgroundBox::BorderBox);
+        assert_eq!(style.background_layers.len(), 1);
+        let layer = &style.background_layers[0];
+        assert!(layer.image.is_none());
+        assert_eq!(layer.repeat, BackgroundRepeat::repeat());
+        assert_eq!(layer.origin, BackgroundBox::PaddingBox);
+        assert_eq!(layer.clip, BackgroundBox::BorderBox);
     }
 
     #[test]
@@ -5133,8 +5332,8 @@ mod tests {
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
-        assert_eq!(style.background_repeat.x, BackgroundRepeatKeyword::Space);
-        assert_eq!(style.background_repeat.y, BackgroundRepeatKeyword::Space);
+        assert_eq!(style.background_layers[0].repeat.x, BackgroundRepeatKeyword::Space);
+        assert_eq!(style.background_layers[0].repeat.y, BackgroundRepeatKeyword::Space);
 
         let decl = Declaration {
             property: "background-repeat".to_string(),
@@ -5142,8 +5341,8 @@ mod tests {
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
-        assert_eq!(style.background_repeat.x, BackgroundRepeatKeyword::Repeat);
-        assert_eq!(style.background_repeat.y, BackgroundRepeatKeyword::NoRepeat);
+        assert_eq!(style.background_layers[0].repeat.x, BackgroundRepeatKeyword::Repeat);
+        assert_eq!(style.background_layers[0].repeat.y, BackgroundRepeatKeyword::NoRepeat);
 
         let decl = Declaration {
             property: "background-repeat".to_string(),
@@ -5154,8 +5353,8 @@ mod tests {
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
-        assert_eq!(style.background_repeat.x, BackgroundRepeatKeyword::Space);
-        assert_eq!(style.background_repeat.y, BackgroundRepeatKeyword::Round);
+        assert_eq!(style.background_layers[0].repeat.x, BackgroundRepeatKeyword::Space);
+        assert_eq!(style.background_layers[0].repeat.y, BackgroundRepeatKeyword::Round);
     }
 
     #[test]
@@ -5168,7 +5367,7 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert_eq!(
-            style.background_size,
+            style.background_layers[0].size,
             BackgroundSize::Explicit(
                 BackgroundSizeComponent::Length(Length::px(25.0)),
                 BackgroundSizeComponent::Auto
@@ -5185,7 +5384,7 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert_eq!(
-            style.background_size,
+            style.background_layers[0].size,
             BackgroundSize::Explicit(
                 BackgroundSizeComponent::Auto,
                 BackgroundSizeComponent::Length(Length::percent(50.0))
@@ -5199,7 +5398,7 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert_eq!(
-            style.background_size,
+            style.background_layers[0].size,
             BackgroundSize::Keyword(BackgroundSizeKeyword::Contain)
         );
     }
@@ -5240,7 +5439,7 @@ mod tests {
             important: false,
         };
         apply_declaration(&mut style, &origin_decl, 16.0, 16.0);
-        assert_eq!(style.background_origin, BackgroundBox::ContentBox);
+        assert_eq!(style.background_layers[0].origin, BackgroundBox::ContentBox);
 
         let clip_decl = Declaration {
             property: "background-clip".to_string(),
@@ -5248,7 +5447,7 @@ mod tests {
             important: false,
         };
         apply_declaration(&mut style, &clip_decl, 16.0, 16.0);
-        assert_eq!(style.background_clip, BackgroundBox::PaddingBox);
+        assert_eq!(style.background_layers[0].clip, BackgroundBox::PaddingBox);
     }
 
     #[test]

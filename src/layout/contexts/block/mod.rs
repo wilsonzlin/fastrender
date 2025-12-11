@@ -698,8 +698,8 @@ impl BlockFormattingContext {
             &mut current_y,
             &mut content_height,
             &mut margin_ctx,
-                    &mut float_ctx,
-                )?;
+            &mut float_ctx,
+        )?;
 
         // Resolve any trailing margins
         let trailing_margin = margin_ctx.pending_margin();

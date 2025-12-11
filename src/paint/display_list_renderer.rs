@@ -201,12 +201,10 @@ impl DisplayListRenderer {
             DisplayItem::PushClip(clip) => self.push_clip(clip),
             DisplayItem::PopClip => self.pop_clip(),
             DisplayItem::PushOpacity(OpacityItem { opacity }) => {
-                self.canvas.save();
-                let combined = (self.canvas.opacity() * *opacity).clamp(0.0, 1.0);
-                self.canvas.set_opacity(combined);
+                self.canvas.push_layer(*opacity)?;
             }
             DisplayItem::PopOpacity => {
-                self.canvas.restore();
+                self.canvas.pop_layer()?;
             }
             DisplayItem::PushTransform(transform) => self.push_transform(transform),
             DisplayItem::PopTransform => {
@@ -628,6 +626,7 @@ impl DisplayListRenderer {
         let paint = tiny_skia::PixmapPaint {
             opacity: self.canvas.opacity(),
             blend_mode: self.canvas.blend_mode(),
+            quality: item.filter_quality.into(),
             ..Default::default()
         };
 
@@ -717,7 +716,34 @@ impl DisplayListRenderer {
         }
 
         let size = tiny_skia::IntSize::from_wh(item.image.width, item.image.height)?;
-        Pixmap::from_vec(data, size)
+        let full = Pixmap::from_vec(data, size)?;
+
+        if let Some(src) = item.src_rect {
+            let src_x = src.x().max(0.0).floor() as u32;
+            let src_y = src.y().max(0.0).floor() as u32;
+            let src_w = src.width().ceil() as u32;
+            let src_h = src.height().ceil() as u32;
+            if src_w == 0 || src_h == 0 {
+                return None;
+            }
+            let max_x = item.image.width.saturating_sub(src_x);
+            let max_y = item.image.height.saturating_sub(src_y);
+            let crop_w = src_w.min(max_x);
+            let crop_h = src_h.min(max_y);
+            if crop_w == 0 || crop_h == 0 {
+                return None;
+            }
+            let mut cropped = Pixmap::new(crop_w, crop_h)?;
+            for row in 0..crop_h {
+                let src_index = ((src_y + row) * item.image.width + src_x) as usize * 4;
+                let dst_index = (row * crop_w) as usize * 4;
+                cropped.data_mut()[dst_index..dst_index + (crop_w as usize * 4)]
+                    .copy_from_slice(&full.data()[src_index..src_index + (crop_w as usize * 4)]);
+            }
+            Some(cropped)
+        } else {
+            Some(full)
+        }
     }
 }
 
@@ -726,11 +752,13 @@ mod tests {
     use super::*;
     use crate::geometry::{Point, Rect};
     use crate::paint::display_list::{
-        BoxShadowItem, DisplayItem, DisplayList, FillRectItem, GlyphInstance, GradientSpread, GradientStop,
-        LinearGradientItem, RadialGradientItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
+        BoxShadowItem, DisplayItem, DisplayList, FillRectItem, GlyphInstance, GradientSpread, GradientStop, ImageData,
+        ImageFilterQuality, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem, TextEmphasis, TextItem,
+        TextShadowItem, Transform2D,
     };
     use crate::style::color::Rgba;
     use crate::style::types::{TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle};
+    use std::sync::Arc;
 
     fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let idx = ((y * pixmap.width() + x) * 4) as usize;
@@ -792,6 +820,70 @@ mod tests {
         let pixmap = renderer.render(&list).unwrap();
         assert_eq!(pixel(&pixmap, 10, 0), (255, 0, 0, 255));
         assert_eq!(pixel(&pixmap, 0, 0), (0, 255, 0, 255));
+    }
+
+    #[test]
+    fn image_filter_quality_respects_sampling_mode() {
+        let pixels = vec![
+            255, 0, 0, 255, // red
+            0, 0, 255, 255, // blue
+        ];
+        let image = Arc::new(ImageData::new(2, 1, pixels));
+
+        let render_with_quality = |quality: ImageFilterQuality| {
+            let mut list = DisplayList::new();
+            list.push(DisplayItem::Image(ImageItem {
+                dest_rect: Rect::from_xywh(0.0, 0.0, 4.0, 1.0),
+                image: image.clone(),
+                filter_quality: quality,
+                src_rect: None,
+            }));
+            DisplayListRenderer::new(4, 1, Rgba::WHITE, FontContext::new())
+                .unwrap()
+                .render(&list)
+                .unwrap()
+        };
+
+        let nearest = render_with_quality(ImageFilterQuality::Nearest);
+        let linear = render_with_quality(ImageFilterQuality::Linear);
+
+        assert_eq!(pixel(&nearest, 0, 0), (255, 0, 0, 255));
+        assert_eq!(pixel(&nearest, 1, 0), (255, 0, 0, 255));
+
+        let blended = pixel(&linear, 1, 0);
+        assert!(
+            blended.0 < 255 && blended.2 < 255,
+            "expected interpolation with linear sampling"
+        );
+    }
+
+    #[test]
+    fn image_src_rect_is_cropped_before_scaling() {
+        let pixels = vec![
+            255, 0, 0, 255, // red
+            0, 255, 0, 255, // green
+            0, 0, 255, 255, // blue
+            255, 255, 0, 255, // yellow
+        ];
+        let image = Arc::new(ImageData::new(2, 2, pixels));
+
+        let mut list = DisplayList::new();
+        list.push(DisplayItem::Image(ImageItem {
+            dest_rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+            image: image.clone(),
+            filter_quality: ImageFilterQuality::Nearest,
+            src_rect: Some(Rect::from_xywh(1.0, 0.0, 1.0, 2.0)), // right column (green/yellow)
+        }));
+
+        let pixmap = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new())
+            .unwrap()
+            .render(&list)
+            .unwrap();
+
+        // Top-left pixel should come from the cropped source's first row: green.
+        assert_eq!(pixel(&pixmap, 0, 0), (0, 255, 0, 255));
+        // Bottom-left pixel should come from yellow.
+        assert_eq!(pixel(&pixmap, 0, 3), (255, 255, 0, 255));
     }
 
     #[test]
@@ -1032,5 +1124,28 @@ mod tests {
         let pixmap = renderer.render(&list).unwrap();
         // Pixel inside outer clip but outside inner clip should be blue (second fill) not red.
         assert_eq!(pixel(&pixmap, 1, 1), (0, 0, 255, 255));
+    }
+
+    #[test]
+    fn opacity_groups_composite_as_layers() {
+        let renderer = DisplayListRenderer::new(8, 8, Rgba::WHITE, FontContext::new()).unwrap();
+        let mut list = DisplayList::new();
+        list.push(DisplayItem::PushOpacity(OpacityItem { opacity: 0.5 }));
+        list.push(DisplayItem::FillRect(FillRectItem {
+            rect: Rect::from_xywh(0.0, 0.0, 6.0, 6.0),
+            color: Rgba::rgb(255, 0, 0),
+        }));
+        list.push(DisplayItem::FillRect(FillRectItem {
+            rect: Rect::from_xywh(3.0, 3.0, 6.0, 6.0),
+            color: Rgba::rgb(255, 0, 0),
+        }));
+        list.push(DisplayItem::PopOpacity);
+
+        let pixmap = renderer.render(&list).unwrap();
+        let single = pixel(&pixmap, 1, 1);
+        let overlap = pixel(&pixmap, 4, 4);
+
+        assert_eq!(single, overlap, "opacity should apply once across the group");
+        assert_eq!(single, (255, 128, 128, 255));
     }
 }

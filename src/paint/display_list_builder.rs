@@ -32,13 +32,13 @@ use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::paint::display_list::{
     BlendMode, ClipItem, DisplayItem, DisplayList, EmphasisMark, EmphasisText, FillRectItem, FontId, GlyphInstance,
-    ImageData, ImageItem, OpacityItem, StrokeRectItem, TextEmphasis, TextItem, TextShadowItem,
+    ImageData, ImageFilterQuality, ImageItem, OpacityItem, StrokeRectItem, TextEmphasis, TextItem, TextShadowItem,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::style::color::Rgba;
-use crate::style::types::{ObjectFit, TextEmphasisPosition, TextEmphasisStyle};
+use crate::style::types::{ImageRendering, ObjectFit, TextEmphasisPosition, TextEmphasisStyle};
 use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStretch, FontStyle, ScaledMetrics};
 use crate::text::font_loader::FontContext;
@@ -93,7 +93,7 @@ impl DisplayListBuilder {
     pub fn new() -> Self {
         Self {
             list: DisplayList::new(),
-            image_cache: None,
+            image_cache: Some(ImageCache::new()),
             viewport: None,
             font_ctx: FontContext::new(),
             shaper: ShapingPipeline::new(),
@@ -351,16 +351,24 @@ impl DisplayListBuilder {
             }
 
             FragmentContent::Replaced { replaced_type, .. } => {
-                let source = match replaced_type {
-                    ReplacedType::Image { src, .. } => src.as_str(),
-                    ReplacedType::Svg { content } => content.as_str(),
-                    ReplacedType::Embed { src } => src.as_str(),
-                    ReplacedType::Object { data } => data.as_str(),
-                    ReplacedType::Iframe { src } | ReplacedType::Video { src } => src.as_str(),
-                    _ => "",
+                let sources: Vec<&str> = match replaced_type {
+                    ReplacedType::Image { src, .. } => vec![src.as_str()],
+                    ReplacedType::Video { src, poster } => {
+                        let mut list = Vec::new();
+                        if let Some(p) = poster.as_deref() {
+                            list.push(p);
+                        }
+                        list.push(src.as_str());
+                        list
+                    }
+                    ReplacedType::Svg { content } => vec![content.as_str()],
+                    ReplacedType::Embed { src } => vec![src.as_str()],
+                    ReplacedType::Object { data } => vec![data.as_str()],
+                    ReplacedType::Iframe { src } => vec![src.as_str()],
+                    _ => Vec::new(),
                 };
 
-                if let Some(image) = self.decode_image(source) {
+                if let Some(image) = sources.iter().filter_map(|s| self.decode_image(s)).next() {
                     let (dest_x, dest_y, dest_w, dest_h) = {
                         let (fit, position, font_size) = if let Some(style) = fragment.style.as_deref() {
                             (style.object_fit, style.object_position, style.font_size)
@@ -385,6 +393,7 @@ impl DisplayListBuilder {
                     self.list.push(DisplayItem::Image(ImageItem {
                         dest_rect,
                         image: Arc::new(image),
+                        filter_quality: Self::image_filter_quality(fragment.style.as_deref()),
                         src_rect: None,
                     }));
                     return;
@@ -815,6 +824,13 @@ impl DisplayListBuilder {
         let rgba = image.to_rgba8();
         Some(ImageData::new(w, h, rgba.into_raw()))
     }
+
+    fn image_filter_quality(style: Option<&ComputedStyle>) -> ImageFilterQuality {
+        match style.map(|s| s.image_rendering) {
+            Some(ImageRendering::CrispEdges) | Some(ImageRendering::Pixelated) => ImageFilterQuality::Nearest,
+            _ => ImageFilterQuality::Linear,
+        }
+    }
 }
 
 impl Default for DisplayListBuilder {
@@ -834,6 +850,7 @@ mod tests {
     use crate::paint::stacking::{StackingContext, StackingContextReason};
     use crate::style::display::Display;
     use crate::style::position::Position;
+    use crate::style::types::ImageRendering;
     use crate::style::ComputedStyle;
     use crate::tree::box_tree::ReplacedType;
 
@@ -906,6 +923,22 @@ mod tests {
 
         assert_eq!(list.len(), 1);
         assert!(matches!(list.items()[0], DisplayItem::Image(_)));
+    }
+
+    #[test]
+    fn default_builder_decodes_images_without_explicit_cache() {
+        // 1x1 blue inline SVG
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="blue"/></svg>"#;
+        let fragment = create_image_fragment(0.0, 0.0, 10.0, 10.0, svg);
+
+        let list = DisplayListBuilder::new().build(&fragment);
+
+        assert_eq!(list.len(), 1, "image content should decode instead of placeholder");
+        let DisplayItem::Image(img) = &list.items()[0] else {
+            panic!("expected image display item");
+        };
+        assert_eq!(img.image.width, 1);
+        assert_eq!(img.image.height, 1);
     }
 
     #[test]
@@ -1354,6 +1387,30 @@ mod tests {
     }
 
     #[test]
+    fn image_rendering_pixelated_sets_nearest_filter_quality() {
+        let mut style = ComputedStyle::default();
+        style.image_rendering = ImageRendering::Pixelated;
+        let fragment = FragmentNode {
+            bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+            content: FragmentContent::Replaced {
+                box_id: None,
+                replaced_type: ReplacedType::Image {
+                    src: "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E".to_string(),
+                    alt: None,
+                },
+            },
+            children: vec![],
+            style: Some(Arc::new(style)),
+        };
+
+        let list = DisplayListBuilder::new().build(&fragment);
+        let DisplayItem::Image(img) = &list.items()[0] else {
+            panic!("Expected image item");
+        };
+        assert_eq!(img.filter_quality, ImageFilterQuality::Nearest);
+    }
+
+    #[test]
     fn alt_text_emitted_when_image_missing() {
         let mut style = ComputedStyle::default();
         style.color = Rgba::BLACK;
@@ -1403,7 +1460,10 @@ mod tests {
     fn non_image_replaced_uses_labeled_placeholder() {
         let fragment = FragmentNode::new_replaced(
             Rect::from_xywh(0.0, 0.0, 40.0, 20.0),
-            ReplacedType::Video { src: String::new() },
+            ReplacedType::Video {
+                src: String::new(),
+                poster: None,
+            },
         );
         let builder = DisplayListBuilder::new();
         let list = builder.build(&fragment);
@@ -1412,5 +1472,22 @@ mod tests {
         assert!(matches!(list.items()[0], DisplayItem::FillRect(_)));
         assert!(matches!(list.items()[1], DisplayItem::StrokeRect(_)));
         assert!(matches!(list.items()[2], DisplayItem::Text(_)));
+    }
+
+    #[test]
+    fn video_poster_decodes_before_placeholder() {
+        let poster = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"2\"><rect width=\"4\" height=\"2\" fill=\"red\"/></svg>";
+        let fragment = FragmentNode::new_replaced(
+            Rect::from_xywh(0.0, 0.0, 40.0, 20.0),
+            ReplacedType::Video {
+                src: String::new(),
+                poster: Some(poster.to_string()),
+            },
+        );
+        let builder = DisplayListBuilder::with_image_cache(ImageCache::new());
+        let list = builder.build(&fragment);
+
+        assert_eq!(list.len(), 1, "poster image should render as content");
+        assert!(matches!(list.items()[0], DisplayItem::Image(_)));
     }
 }

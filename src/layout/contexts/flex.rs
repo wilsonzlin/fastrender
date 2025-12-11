@@ -190,13 +190,12 @@ impl FlexFormattingContext {
             // Create children first (not root)
             let mut taffy_children = Vec::with_capacity(box_node.children.len());
             for child in &box_node.children {
-                let next_containing_flex = if is_root
-                    || matches!(box_node.style.display, Display::Flex | Display::InlineFlex)
-                {
-                    Some(&box_node.style)
-                } else {
-                    None
-                };
+                let next_containing_flex =
+                    if is_root || matches!(box_node.style.display, Display::Flex | Display::InlineFlex) {
+                        Some(&box_node.style)
+                    } else {
+                        None
+                    };
                 let child_node = self.build_taffy_tree_inner(
                     taffy_tree,
                     child,
@@ -516,13 +515,25 @@ impl FlexFormattingContext {
         }
     }
 
-    fn justify_content_to_taffy(&self, justify: JustifyContent, axis_positive: bool) -> Option<taffy::style::JustifyContent> {
+    fn justify_content_to_taffy(
+        &self,
+        justify: JustifyContent,
+        axis_positive: bool,
+    ) -> Option<taffy::style::JustifyContent> {
         Some(match justify {
             JustifyContent::FlexStart => {
-                if axis_positive { taffy::style::JustifyContent::FlexStart } else { taffy::style::JustifyContent::FlexEnd }
+                if axis_positive {
+                    taffy::style::JustifyContent::FlexStart
+                } else {
+                    taffy::style::JustifyContent::FlexEnd
+                }
             }
             JustifyContent::FlexEnd => {
-                if axis_positive { taffy::style::JustifyContent::FlexEnd } else { taffy::style::JustifyContent::FlexStart }
+                if axis_positive {
+                    taffy::style::JustifyContent::FlexEnd
+                } else {
+                    taffy::style::JustifyContent::FlexStart
+                }
             }
             JustifyContent::Center => taffy::style::JustifyContent::Center,
             JustifyContent::SpaceBetween => taffy::style::JustifyContent::SpaceBetween,
@@ -534,10 +545,18 @@ impl FlexFormattingContext {
     fn align_items_to_taffy(&self, align: AlignItems, axis_positive: bool) -> Option<taffy::style::AlignItems> {
         Some(match align {
             AlignItems::Start | AlignItems::SelfStart => {
-                if axis_positive { taffy::style::AlignItems::Start } else { taffy::style::AlignItems::End }
+                if axis_positive {
+                    taffy::style::AlignItems::Start
+                } else {
+                    taffy::style::AlignItems::End
+                }
             }
             AlignItems::End | AlignItems::SelfEnd => {
-                if axis_positive { taffy::style::AlignItems::End } else { taffy::style::AlignItems::Start }
+                if axis_positive {
+                    taffy::style::AlignItems::End
+                } else {
+                    taffy::style::AlignItems::Start
+                }
             }
             AlignItems::FlexStart => taffy::style::AlignItems::FlexStart,
             AlignItems::FlexEnd => taffy::style::AlignItems::FlexEnd,
@@ -554,10 +573,18 @@ impl FlexFormattingContext {
     fn align_content_to_taffy(&self, align: AlignContent, axis_positive: bool) -> Option<taffy::style::AlignContent> {
         Some(match align {
             AlignContent::FlexStart => {
-                if axis_positive { taffy::style::AlignContent::FlexStart } else { taffy::style::AlignContent::FlexEnd }
+                if axis_positive {
+                    taffy::style::AlignContent::FlexStart
+                } else {
+                    taffy::style::AlignContent::FlexEnd
+                }
             }
             AlignContent::FlexEnd => {
-                if axis_positive { taffy::style::AlignContent::FlexEnd } else { taffy::style::AlignContent::FlexStart }
+                if axis_positive {
+                    taffy::style::AlignContent::FlexEnd
+                } else {
+                    taffy::style::AlignContent::FlexStart
+                }
             }
             AlignContent::Center => taffy::style::AlignContent::Center,
             AlignContent::SpaceBetween => taffy::style::AlignContent::SpaceBetween,
@@ -921,11 +948,7 @@ mod tests {
 
         let item = BoxNode::new_block(Arc::new(item_style), FormattingContextType::Block, vec![]);
 
-        let container = BoxNode::new_block(
-            Arc::new(container_style),
-            FormattingContextType::Flex,
-            vec![item],
-        );
+        let container = BoxNode::new_block(Arc::new(container_style), FormattingContextType::Flex, vec![item]);
 
         let constraints = LayoutConstraints::definite(100.0, 100.0);
         let fragment = fc.layout(&container, &constraints).unwrap();
@@ -991,8 +1014,7 @@ mod tests {
         let child1 = BoxNode::new_block(create_item_style(10.0, 10.0), FormattingContextType::Block, vec![]);
         let child2 = BoxNode::new_block(create_item_style(10.0, 10.0), FormattingContextType::Block, vec![]);
 
-        let container =
-            BoxNode::new_block(Arc::new(style), FormattingContextType::Flex, vec![child1, child2]);
+        let container = BoxNode::new_block(Arc::new(style), FormattingContextType::Flex, vec![child1, child2]);
 
         let constraints = LayoutConstraints::definite(100.0, 100.0);
         let fragment = fc.layout(&container, &constraints).unwrap();
@@ -1071,11 +1093,7 @@ mod tests {
         item_style.aspect_ratio = AspectRatio::Ratio(2.0);
         let item = BoxNode::new_block(Arc::new(item_style), FormattingContextType::Block, vec![]);
 
-        let container = BoxNode::new_block(
-            Arc::new(container_style),
-            FormattingContextType::Flex,
-            vec![item],
-        );
+        let container = BoxNode::new_block(Arc::new(container_style), FormattingContextType::Flex, vec![item]);
 
         let constraints = LayoutConstraints::definite(200.0, 200.0);
         let fragment = fc.layout(&container, &constraints).unwrap();
@@ -1097,11 +1115,7 @@ mod tests {
         item_style.aspect_ratio = AspectRatio::Ratio(3.0);
         let item = BoxNode::new_block(Arc::new(item_style), FormattingContextType::Block, vec![]);
 
-        let container = BoxNode::new_block(
-            Arc::new(container_style),
-            FormattingContextType::Flex,
-            vec![item],
-        );
+        let container = BoxNode::new_block(Arc::new(container_style), FormattingContextType::Flex, vec![item]);
 
         let constraints = LayoutConstraints::definite(300.0, 200.0);
         let fragment = fc.layout(&container, &constraints).unwrap();

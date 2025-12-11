@@ -42,6 +42,7 @@ use crate::style::types::{TextEmphasisPosition, TextEmphasisStyle};
 use crate::text::font_db::{FontStretch, FontStyle};
 use std::fmt;
 use std::sync::Arc;
+use tiny_skia::FilterQuality;
 
 // ============================================================================
 // Display Item Types
@@ -476,9 +477,28 @@ pub struct ImageItem {
     /// Image data
     pub image: Arc<ImageData>,
 
+    /// Sampling quality to apply when scaling
+    pub filter_quality: ImageFilterQuality,
+
     /// Source rectangle (for sprite sheets, etc.)
     /// If None, uses the entire image
     pub src_rect: Option<Rect>,
+}
+
+/// Sampling quality for raster images
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageFilterQuality {
+    Nearest,
+    Linear,
+}
+
+impl From<ImageFilterQuality> for FilterQuality {
+    fn from(q: ImageFilterQuality) -> Self {
+        match q {
+            ImageFilterQuality::Nearest => FilterQuality::Nearest,
+            ImageFilterQuality::Linear => FilterQuality::Bilinear,
+        }
+    }
 }
 
 /// Image data for rendering

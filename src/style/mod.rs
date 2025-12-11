@@ -30,17 +30,17 @@ use display::Display;
 use position::Position;
 use std::collections::HashMap;
 use types::{
-    AlignContent, AlignItems, AspectRatio, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundPosition,
-    BackgroundPositionComponent, BackgroundRepeat, BackgroundSize, BackgroundSizeComponent, BorderCollapse,
-    BorderStyle, BoxSizing, CaptionSide, Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap,
-    FontFeatureSetting, FontKerning, FontSizeAdjust, FontStretch, FontStyle, FontSynthesis, FontVariant,
-    FontVariantAlternates, FontVariantCaps, FontVariantEastAsian, FontVariantLigatures, FontVariantNumeric,
-    FontVariantPosition, FontWeight, GridTrack, HyphensMode, ImageRendering, Isolation, JustifyContent, LineBreak,
-    LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
-    OutlineColor, OutlineStyle, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast,
-    TextCombineUpright, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent,
-    TextJustify, TextOrientation, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TransformOrigin,
-    UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak, WritingMode,
+    AlignContent, AlignItems, AspectRatio, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer,
+    BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxSizing, CaptionSide,
+    Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting, FontKerning,
+    FontSizeAdjust, FontStretch, FontStyle, FontSynthesis, FontVariant, FontVariantAlternates, FontVariantCaps,
+    FontVariantEastAsian, FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontWeight, GridTrack,
+    HyphensMode, ImageRendering, Isolation, JustifyContent, LineBreak, LineHeight, ListStyleImage, ListStylePosition,
+    ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowWrap,
+    TabSize, TableLayout, TextAlign, TextAlignLast, TextCombineUpright, TextDecoration, TextDecorationSkipInk,
+    TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextTransform,
+    TextUnderlineOffset, TextUnderlinePosition, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
+    WritingMode,
 };
 use values::Length;
 
@@ -208,13 +208,15 @@ pub struct ComputedStyle {
     // Color and background
     pub color: Rgba,
     pub background_color: Rgba,
-    pub background_image: Option<BackgroundImage>,
-    pub background_size: BackgroundSize,
-    pub background_position: BackgroundPosition,
-    pub background_attachment: BackgroundAttachment,
-    pub background_repeat: BackgroundRepeat,
-    pub background_origin: BackgroundBox,
-    pub background_clip: BackgroundBox,
+    /// Author-specified background values (lists preserved for layer repetition rules)
+    pub background_images: Vec<Option<BackgroundImage>>,
+    pub background_positions: Vec<BackgroundPosition>,
+    pub background_sizes: Vec<BackgroundSize>,
+    pub background_repeats: Vec<BackgroundRepeat>,
+    pub background_attachments: Vec<BackgroundAttachment>,
+    pub background_origins: Vec<BackgroundBox>,
+    pub background_clips: Vec<BackgroundBox>,
+    pub background_layers: Vec<BackgroundLayer>,
     pub object_fit: ObjectFit,
     pub object_position: ObjectPosition,
     pub image_rendering: ImageRendering,
@@ -250,6 +252,7 @@ pub struct ComputedStyle {
 
 impl Default for ComputedStyle {
     fn default() -> Self {
+        let default_layer = BackgroundLayer::default();
         Self {
             display: Display::Inline,
             position: Position::Static,
@@ -390,22 +393,14 @@ impl Default for ComputedStyle {
 
             color: Rgba::BLACK,
             background_color: Rgba::TRANSPARENT,
-            background_image: None,
-            background_size: BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto),
-            background_position: BackgroundPosition::Position {
-                x: BackgroundPositionComponent {
-                    alignment: 0.0,
-                    offset: Length::px(0.0),
-                },
-                y: BackgroundPositionComponent {
-                    alignment: 0.0,
-                    offset: Length::px(0.0),
-                },
-            },
-            background_repeat: BackgroundRepeat::repeat(),
-            background_attachment: BackgroundAttachment::Scroll,
-            background_origin: BackgroundBox::PaddingBox,
-            background_clip: BackgroundBox::BorderBox,
+            background_images: vec![default_layer.image.clone()],
+            background_positions: vec![default_layer.position.clone()],
+            background_sizes: vec![default_layer.size.clone()],
+            background_repeats: vec![default_layer.repeat],
+            background_attachments: vec![default_layer.attachment],
+            background_origins: vec![default_layer.origin],
+            background_clips: vec![default_layer.clip],
+            background_layers: vec![default_layer],
             object_fit: ObjectFit::Fill,
             object_position: ObjectPosition {
                 x: types::PositionComponent::Keyword(types::PositionKeyword::Center),
@@ -439,6 +434,85 @@ impl Default for ComputedStyle {
 
             content: String::new(),
         }
+    }
+}
+
+impl ComputedStyle {
+    fn ensure_background_lists(&mut self) {
+        let defaults = BackgroundLayer::default();
+        if self.background_images.is_empty() {
+            self.background_images.push(defaults.image.clone());
+        }
+        if self.background_positions.is_empty() {
+            self.background_positions.push(defaults.position.clone());
+        }
+        if self.background_sizes.is_empty() {
+            self.background_sizes.push(defaults.size.clone());
+        }
+        if self.background_repeats.is_empty() {
+            self.background_repeats.push(defaults.repeat);
+        }
+        if self.background_attachments.is_empty() {
+            self.background_attachments.push(defaults.attachment);
+        }
+        if self.background_origins.is_empty() {
+            self.background_origins.push(defaults.origin);
+        }
+        if self.background_clips.is_empty() {
+            self.background_clips.push(defaults.clip);
+        }
+    }
+
+    /// Rebuild per-layer background data from the stored author lists, repeating
+    /// shorter lists by repeating their last value and truncating longer lists
+    /// to the number of background-image layers.
+    pub fn rebuild_background_layers(&mut self) {
+        self.ensure_background_lists();
+        let layer_count = self.background_images.len().max(1);
+        self.background_layers.clear();
+        for idx in 0..layer_count {
+            let mut layer = BackgroundLayer::default();
+            let img_idx = self.background_images.len().saturating_sub(1).min(idx);
+            let pos_idx = self.background_positions.len().saturating_sub(1).min(idx);
+            let size_idx = self.background_sizes.len().saturating_sub(1).min(idx);
+            let rep_idx = self.background_repeats.len().saturating_sub(1).min(idx);
+            let att_idx = self.background_attachments.len().saturating_sub(1).min(idx);
+            let origin_idx = self.background_origins.len().saturating_sub(1).min(idx);
+            let clip_idx = self.background_clips.len().saturating_sub(1).min(idx);
+
+            layer.image = self.background_images[img_idx].clone();
+            layer.position = self.background_positions[pos_idx].clone();
+            layer.size = self.background_sizes[size_idx].clone();
+            layer.repeat = self.background_repeats[rep_idx];
+            layer.attachment = self.background_attachments[att_idx];
+            layer.origin = self.background_origins[origin_idx];
+            layer.clip = self.background_clips[clip_idx];
+            self.background_layers.push(layer);
+        }
+    }
+
+    /// Set background layers directly and derive the stored property lists from them.
+    pub fn set_background_layers(&mut self, layers: Vec<BackgroundLayer>) {
+        let default_layer = BackgroundLayer::default();
+        let normalized = if layers.is_empty() {
+            vec![default_layer.clone()]
+        } else {
+            layers
+        };
+        self.background_images = normalized.iter().map(|l| l.image.clone()).collect();
+        self.background_positions = normalized.iter().map(|l| l.position.clone()).collect();
+        self.background_sizes = normalized.iter().map(|l| l.size.clone()).collect();
+        self.background_repeats = normalized.iter().map(|l| l.repeat).collect();
+        self.background_attachments = normalized.iter().map(|l| l.attachment).collect();
+        self.background_origins = normalized.iter().map(|l| l.origin).collect();
+        self.background_clips = normalized.iter().map(|l| l.clip).collect();
+        self.background_layers = normalized;
+    }
+
+    /// Reset background color and layer properties to their initial values.
+    pub fn reset_background_to_initial(&mut self) {
+        self.background_color = Rgba::TRANSPARENT;
+        self.set_background_layers(vec![BackgroundLayer::default()]);
     }
 }
 

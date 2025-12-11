@@ -43,12 +43,12 @@ use crate::geometry::Rect;
 use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutConstraints};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::display::Display as CssDisplay;
+use crate::style::grid::validate_area_rectangles;
 use crate::style::types::{
     AlignContent, AlignItems, AspectRatio, BoxSizing, Direction, GridAutoFlow, GridTrack, JustifyContent, WritingMode,
 };
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
-use crate::style::grid::validate_area_rectangles;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
 
@@ -309,10 +309,20 @@ impl GridFormattingContext {
                     let mut areas = Vec::with_capacity(entries.len());
                     for (name, (top, bottom, left, right)) in entries {
                         let (row_start, row_end, column_start, column_end) = if inline_is_horizontal_container {
-                            ((top as u16) + 1, (bottom as u16) + 2, (left as u16) + 1, (right as u16) + 2)
+                            (
+                                (top as u16) + 1,
+                                (bottom as u16) + 2,
+                                (left as u16) + 1,
+                                (right as u16) + 2,
+                            )
                         } else {
                             // Transpose area matrix for vertical inline axis
-                            ((left as u16) + 1, (right as u16) + 2, (top as u16) + 1, (bottom as u16) + 2)
+                            (
+                                (left as u16) + 1,
+                                (right as u16) + 2,
+                                (top as u16) + 1,
+                                (bottom as u16) + 2,
+                            )
                         };
                         areas.push(GridTemplateArea {
                             name,
@@ -341,14 +351,19 @@ impl GridFormattingContext {
             };
 
             // Alignment
-            taffy_style.align_content = Some(self.convert_align_content(&style.align_content, block_positive_container));
+            taffy_style.align_content =
+                Some(self.convert_align_content(&style.align_content, block_positive_container));
             taffy_style.justify_content =
                 Some(self.convert_justify_content(&style.justify_content, inline_positive_container));
         }
         taffy_style.align_items = Some(self.convert_align_items(&style.align_items, block_positive_container));
         taffy_style.justify_items = Some(self.convert_align_items(&style.justify_items, inline_positive_container));
-        taffy_style.align_self = style.align_self.map(|a| self.convert_align_items(&a, block_positive_item));
-        taffy_style.justify_self = style.justify_self.map(|a| self.convert_align_items(&a, inline_positive_item));
+        taffy_style.align_self = style
+            .align_self
+            .map(|a| self.convert_align_items(&a, block_positive_item));
+        taffy_style.justify_self = style
+            .justify_self
+            .map(|a| self.convert_align_items(&a, inline_positive_item));
 
         // Grid item properties using raw line numbers (swap placements when inline axis is vertical)
         if inline_is_horizontal_item {
@@ -366,11 +381,8 @@ impl GridFormattingContext {
                 style.grid_column_start,
                 style.grid_column_end,
             );
-            taffy_style.grid_column = self.convert_grid_placement(
-                style.grid_row_raw.as_deref(),
-                style.grid_row_start,
-                style.grid_row_end,
-            );
+            taffy_style.grid_column =
+                self.convert_grid_placement(style.grid_row_raw.as_deref(), style.grid_row_start, style.grid_row_end);
         }
 
         taffy_style
@@ -488,7 +500,10 @@ impl GridFormattingContext {
         let mut components = Vec::new();
         for track in tracks {
             match track {
-                GridTrack::RepeatAutoFill { tracks: inner, line_names } => {
+                GridTrack::RepeatAutoFill {
+                    tracks: inner,
+                    line_names,
+                } => {
                     let converted: Vec<TrackSizingFunction> =
                         inner.iter().map(|t| self.convert_track_size(t, style)).collect();
                     let repetition = GridTemplateRepetition {
@@ -498,7 +513,10 @@ impl GridFormattingContext {
                     };
                     components.push(GridTemplateComponent::Repeat(repetition));
                 }
-                GridTrack::RepeatAutoFit { tracks: inner, line_names } => {
+                GridTrack::RepeatAutoFit {
+                    tracks: inner,
+                    line_names,
+                } => {
                     let converted: Vec<TrackSizingFunction> =
                         inner.iter().map(|t| self.convert_track_size(t, style)).collect();
                     let repetition = GridTemplateRepetition {
@@ -588,12 +606,7 @@ impl GridFormattingContext {
     }
 
     /// Converts grid placements (with optional named lines) to Taffy Line<GridPlacement>
-    fn convert_grid_placement(
-        &self,
-        raw: Option<&str>,
-        start: i32,
-        end: i32,
-    ) -> Line<TaffyGridPlacement<String>> {
+    fn convert_grid_placement(&self, raw: Option<&str>, start: i32, end: i32) -> Line<TaffyGridPlacement<String>> {
         if let Some(raw_str) = raw {
             return parse_grid_line_placement_raw(raw_str);
         }
@@ -616,10 +629,18 @@ impl GridFormattingContext {
     fn convert_align_content(&self, align: &AlignContent, axis_positive: bool) -> TaffyAlignContent {
         match align {
             AlignContent::FlexStart => {
-                if axis_positive { TaffyAlignContent::Start } else { TaffyAlignContent::End }
+                if axis_positive {
+                    TaffyAlignContent::Start
+                } else {
+                    TaffyAlignContent::End
+                }
             }
             AlignContent::FlexEnd => {
-                if axis_positive { TaffyAlignContent::End } else { TaffyAlignContent::Start }
+                if axis_positive {
+                    TaffyAlignContent::End
+                } else {
+                    TaffyAlignContent::Start
+                }
             }
             AlignContent::Center => TaffyAlignContent::Center,
             AlignContent::Stretch => TaffyAlignContent::Stretch,
@@ -632,10 +653,18 @@ impl GridFormattingContext {
     fn convert_justify_content(&self, justify: &JustifyContent, axis_positive: bool) -> TaffyAlignContent {
         match justify {
             JustifyContent::FlexStart => {
-                if axis_positive { TaffyAlignContent::Start } else { TaffyAlignContent::End }
+                if axis_positive {
+                    TaffyAlignContent::Start
+                } else {
+                    TaffyAlignContent::End
+                }
             }
             JustifyContent::FlexEnd => {
-                if axis_positive { TaffyAlignContent::End } else { TaffyAlignContent::Start }
+                if axis_positive {
+                    TaffyAlignContent::End
+                } else {
+                    TaffyAlignContent::Start
+                }
             }
             JustifyContent::Center => TaffyAlignContent::Center,
             JustifyContent::SpaceBetween => TaffyAlignContent::SpaceBetween,
@@ -647,10 +676,18 @@ impl GridFormattingContext {
     fn convert_align_items(&self, align: &AlignItems, axis_positive: bool) -> taffy::style::AlignItems {
         match align {
             AlignItems::Start | AlignItems::SelfStart => {
-                if axis_positive { taffy::style::AlignItems::Start } else { taffy::style::AlignItems::End }
+                if axis_positive {
+                    taffy::style::AlignItems::Start
+                } else {
+                    taffy::style::AlignItems::End
+                }
             }
             AlignItems::End | AlignItems::SelfEnd => {
-                if axis_positive { taffy::style::AlignItems::End } else { taffy::style::AlignItems::Start }
+                if axis_positive {
+                    taffy::style::AlignItems::End
+                } else {
+                    taffy::style::AlignItems::Start
+                }
             }
             AlignItems::FlexStart => taffy::style::AlignItems::FlexStart,
             AlignItems::FlexEnd => taffy::style::AlignItems::FlexEnd,
@@ -1330,10 +1367,11 @@ mod tests {
         let mut style = ComputedStyle::default();
         style.display = CssDisplay::Grid;
         style.writing_mode = WritingMode::VerticalRl;
-        style.grid_template_columns =
-            vec![GridTrack::Length(Length::px(30.0)), GridTrack::Length(Length::px(40.0))];
-        style.grid_template_rows =
-            vec![GridTrack::Length(Length::px(100.0)), GridTrack::Length(Length::px(200.0))];
+        style.grid_template_columns = vec![GridTrack::Length(Length::px(30.0)), GridTrack::Length(Length::px(40.0))];
+        style.grid_template_rows = vec![
+            GridTrack::Length(Length::px(100.0)),
+            GridTrack::Length(Length::px(200.0)),
+        ];
         let style = Arc::new(style);
 
         let mut inline_item_style = ComputedStyle::default();

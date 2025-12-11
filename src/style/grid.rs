@@ -76,13 +76,7 @@ pub fn parse_grid_template_areas(value: &str) -> Option<Vec<Vec<Option<String>>>
             Ok(Token::QuotedString(s)) => {
                 let cols: Vec<Option<String>> = s
                     .split_whitespace()
-                    .map(|name| {
-                        if name == "." {
-                            None
-                        } else {
-                            Some(name.to_string())
-                        }
-                    })
+                    .map(|name| if name == "." { None } else { Some(name.to_string()) })
                     .collect();
                 if cols.is_empty() {
                     return None;
@@ -107,15 +101,15 @@ pub fn parse_grid_template_areas(value: &str) -> Option<Vec<Vec<Option<String>>>
 }
 
 /// Validate that each named area forms a rectangle and return area bounds per name.
-pub fn validate_area_rectangles(
-    rows: &[Vec<Option<String>>],
-) -> Option<HashMap<String, (usize, usize, usize, usize)>> {
+pub fn validate_area_rectangles(rows: &[Vec<Option<String>>]) -> Option<HashMap<String, (usize, usize, usize, usize)>> {
     let mut bounds: HashMap<String, (usize, usize, usize, usize)> = HashMap::new();
 
     for (row_idx, row) in rows.iter().enumerate() {
         for (col_idx, cell) in row.iter().enumerate() {
             let Some(name) = cell else { continue };
-            let entry = bounds.entry(name.clone()).or_insert((row_idx, row_idx, col_idx, col_idx));
+            let entry = bounds
+                .entry(name.clone())
+                .or_insert((row_idx, row_idx, col_idx, col_idx));
             let (top, bottom, left, right) = entry;
             *top = (*top).min(row_idx);
             *bottom = (*bottom).max(row_idx);
@@ -127,11 +121,7 @@ pub fn validate_area_rectangles(
     for (name, (top, bottom, left, right)) in bounds.iter() {
         for r in *top..=*bottom {
             for c in *left..=*right {
-                match rows
-                    .get(r)
-                    .and_then(|row| row.get(c))
-                    .and_then(|cell| cell.as_ref())
-                {
+                match rows.get(r).and_then(|row| row.get(c)).and_then(|cell| cell.as_ref()) {
                     Some(cell_name) if cell_name == name => {}
                     _ => return None,
                 }
@@ -237,11 +227,7 @@ pub fn parse_grid_template_shorthand(value: &str) -> Option<ParsedGridTemplate> 
 
     // Column tracks: explicit slash wins; otherwise derive auto from area width.
     let column_tracks = if let Some(cols_raw) = cols_part {
-        let ParsedTracks {
-            tracks,
-            line_names,
-            ..
-        } = parse_track_list(cols_raw);
+        let ParsedTracks { tracks, line_names, .. } = parse_track_list(cols_raw);
         if tracks.is_empty() {
             return None;
         }
@@ -283,8 +269,7 @@ pub fn parse_grid_shorthand(value: &str) -> Option<ParsedGridShorthand> {
     let mut auto_cols: Option<Vec<GridTrack>> = None;
     let mut auto_flow: Option<crate::style::types::GridAutoFlow> = None;
 
-    let parse_auto_flow_tokens =
-        |tokens: &str| -> (Option<crate::style::types::GridAutoFlow>, Option<String>) {
+    let parse_auto_flow_tokens = |tokens: &str| -> (Option<crate::style::types::GridAutoFlow>, Option<String>) {
         let lower = tokens.to_ascii_lowercase();
         if !lower.contains("auto-flow") {
             return (None, None);
@@ -312,7 +297,9 @@ pub fn parse_grid_shorthand(value: &str) -> Option<ParsedGridShorthand> {
     };
 
     let left_has_flow = left.to_ascii_lowercase().contains("auto-flow");
-    let right_has_flow = right.as_ref().map_or(false, |r| r.to_ascii_lowercase().contains("auto-flow"));
+    let right_has_flow = right
+        .as_ref()
+        .map_or(false, |r| r.to_ascii_lowercase().contains("auto-flow"));
 
     if left_has_flow {
         let (flow_parsed, remainder) = parse_auto_flow_tokens(left);
@@ -962,7 +949,8 @@ mod tests {
 
     #[test]
     fn parses_repeat_with_line_names() {
-        let (tracks, names, line_names) = parse_grid_tracks_with_names("[a] repeat(2, [b] 10px [c] minmax(0, 1fr)) [d]");
+        let (tracks, names, line_names) =
+            parse_grid_tracks_with_names("[a] repeat(2, [b] 10px [c] minmax(0, 1fr)) [d]");
         assert_eq!(tracks.len(), 4);
         assert_eq!(names.get("a"), Some(&vec![0]));
         assert_eq!(names.get("b"), Some(&vec![0, 2]));
@@ -1070,8 +1058,7 @@ mod tests {
 
     #[test]
     fn grid_template_shorthand_areas_with_sizes_and_cols() {
-        let parsed =
-            parse_grid_template_shorthand("\"a b\" 40px \"c d\" 50px / 20px 30px").expect("should parse");
+        let parsed = parse_grid_template_shorthand("\"a b\" 40px \"c d\" 50px / 20px 30px").expect("should parse");
         let areas = parsed.areas.expect("areas");
         assert_eq!(areas.len(), 2);
         assert_eq!(areas[0][0], Some("a".into()));

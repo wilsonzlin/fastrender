@@ -295,10 +295,13 @@ pub fn compute_replaced_size(
         _ => None,
     };
 
-    let intrinsic_ratio = specified_ratio.or_else(|| replaced.aspect_ratio).or_else(|| match (intrinsic_w, intrinsic_h) {
-        (Some(w), Some(h)) if h > 0.0 => Some(w / h),
-        _ => None,
-    });
+    let intrinsic_ratio =
+        specified_ratio
+            .or_else(|| replaced.aspect_ratio)
+            .or_else(|| match (intrinsic_w, intrinsic_h) {
+                (Some(w), Some(h)) if h > 0.0 => Some(w / h),
+                _ => None,
+            });
 
     let width_base = percentage_base.and_then(|s| s.width.is_finite().then_some(s.width));
     let height_base = percentage_base.and_then(|s| s.height.is_finite().then_some(s.height));
@@ -358,38 +361,36 @@ pub fn compute_replaced_size(
                 DEFAULT_SIZE.width
             };
         }
-        (None, None) => {
-            match (intrinsic_w, intrinsic_h, intrinsic_ratio) {
-                (Some(w), Some(h), _) => {
-                    width = w;
-                    height = h;
-                }
-                (Some(w), None, Some(r)) => {
-                    width = w;
-                    height = w / r;
-                }
-                (None, Some(h), Some(r)) => {
-                    height = h;
-                    width = h * r;
-                }
-                (Some(w), None, None) => {
-                    width = w;
-                    height = DEFAULT_SIZE.height;
-                }
-                (None, Some(h), None) => {
-                    width = DEFAULT_SIZE.width;
-                    height = h;
-                }
-                (None, None, Some(r)) => {
-                    width = DEFAULT_SIZE.width;
-                    height = width / r;
-                }
-                _ => {
-                    width = DEFAULT_SIZE.width;
-                    height = DEFAULT_SIZE.height;
-                }
+        (None, None) => match (intrinsic_w, intrinsic_h, intrinsic_ratio) {
+            (Some(w), Some(h), _) => {
+                width = w;
+                height = h;
             }
-        }
+            (Some(w), None, Some(r)) => {
+                width = w;
+                height = w / r;
+            }
+            (None, Some(h), Some(r)) => {
+                height = h;
+                width = h * r;
+            }
+            (Some(w), None, None) => {
+                width = w;
+                height = DEFAULT_SIZE.height;
+            }
+            (None, Some(h), None) => {
+                width = DEFAULT_SIZE.width;
+                height = h;
+            }
+            (None, None, Some(r)) => {
+                width = DEFAULT_SIZE.width;
+                height = width / r;
+            }
+            _ => {
+                width = DEFAULT_SIZE.width;
+                height = DEFAULT_SIZE.height;
+            }
+        },
     }
 
     // Apply min/max constraints when present
