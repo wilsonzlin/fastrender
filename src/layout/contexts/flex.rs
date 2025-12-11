@@ -23,10 +23,13 @@
 //! - Taffy documentation: <https://docs.rs/taffy/>
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::geometry::{Point, Rect, Size};
 use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutConstraints};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
+use crate::layout::absolute_positioning::{AbsoluteLayout, AbsoluteLayoutInput, resolve_positioned_style};
+use crate::layout::contexts::positioned::ContainingBlock;
 use crate::style::display::Display;
 use crate::style::types::{
     AlignContent, AlignItems, AspectRatio, BoxSizing, Direction, FlexBasis, FlexDirection, FlexWrap, JustifyContent,
@@ -34,6 +37,7 @@ use crate::style::types::{
 };
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
+use crate::text::font_loader::FontContext;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
 
@@ -67,10 +71,11 @@ enum Axis {
 /// let constraints = LayoutConstraints::definite(800.0, 600.0);
 /// let fragment = fc.layout(&box_node, &constraints)?;
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FlexFormattingContext {
     /// Viewport size used for resolving viewport-relative units inside Taffy conversion.
     viewport_size: Size,
+    font_context: FontContext,
 }
 
 impl FlexFormattingContext {
@@ -78,17 +83,27 @@ impl FlexFormattingContext {
     pub fn new() -> Self {
         Self {
             viewport_size: Size::new(800.0, 600.0),
+            font_context: FontContext::new(),
         }
     }
 
     pub fn with_viewport(viewport_size: Size) -> Self {
-        Self { viewport_size }
+        Self {
+            viewport_size,
+            font_context: FontContext::new(),
+        }
     }
 }
 
 impl Default for FlexFormattingContext {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl std::fmt::Debug for FlexFormattingContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FlexFormattingContext").finish_non_exhaustive()
     }
 }
 
@@ -105,9 +120,22 @@ impl FormattingContext for FlexFormattingContext {
         // Create a fresh Taffy tree for this layout
         let mut taffy_tree: TaffyTree<()> = TaffyTree::new();
 
-        // Phase 1: Build Taffy tree from BoxNode tree
+        // Partition children: out-of-flow abs/fixed are handled after flex layout per CSS positioning.
+        let mut in_flow_children: Vec<&BoxNode> = Vec::new();
+        let mut positioned_children = Vec::new();
+        for child in &box_node.children {
+            match child.style.position {
+                crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
+                    positioned_children.push(child.clone())
+                }
+                _ => in_flow_children.push(child),
+            }
+        }
+
+        // Phase 1: Build Taffy tree from in-flow children
         let mut node_map: HashMap<*const BoxNode, NodeId> = HashMap::new();
-        let root_node = self.build_taffy_tree(&mut taffy_tree, box_node, &mut node_map)?;
+        let root_node =
+            self.build_taffy_tree_children(&mut taffy_tree, box_node, &in_flow_children, &mut node_map)?;
 
         // Phase 2: Compute layout using Taffy
         let available_space = self.constraints_to_available_space(constraints);
@@ -116,7 +144,59 @@ impl FormattingContext for FlexFormattingContext {
             .map_err(|e| LayoutError::MissingContext(format!("Taffy layout failed: {:?}", e)))?;
 
         // Phase 3: Convert Taffy layout back to FragmentNode
-        let fragment = self.taffy_to_fragment(&taffy_tree, root_node, box_node, &node_map)?;
+        let mut fragment = self.taffy_to_fragment(&taffy_tree, root_node, box_node, &node_map)?;
+
+        // Phase 4: Position out-of-flow abs/fixed children against this flex container.
+        if !positioned_children.is_empty() {
+            let abs = AbsoluteLayout::new();
+            let padding_left = self.resolve_length_for_width(box_node.style.padding_left, constraints.width().unwrap_or(0.0), &box_node.style);
+            let padding_top = self.resolve_length_for_width(box_node.style.padding_top, constraints.width().unwrap_or(0.0), &box_node.style);
+            let border_left = self.resolve_length_for_width(box_node.style.border_left_width, constraints.width().unwrap_or(0.0), &box_node.style);
+            let border_top = self.resolve_length_for_width(box_node.style.border_top_width, constraints.width().unwrap_or(0.0), &box_node.style);
+            let border_right = self.resolve_length_for_width(box_node.style.border_right_width, constraints.width().unwrap_or(0.0), &box_node.style);
+            let border_bottom = self.resolve_length_for_width(box_node.style.border_bottom_width, constraints.width().unwrap_or(0.0), &box_node.style);
+
+            let padding_origin = Point::new(border_left + padding_left, border_top + padding_top);
+            let padding_size = Size::new(
+                fragment.bounds.width() - border_left - border_right,
+                fragment.bounds.height() - border_top - border_bottom,
+            );
+            let padding_rect = Rect::new(padding_origin, padding_size);
+
+            let cb = if box_node.style.position.is_positioned() {
+                ContainingBlock::with_viewport(padding_rect, self.viewport_size)
+            } else {
+                ContainingBlock::viewport(self.viewport_size)
+            };
+
+            let factory = crate::layout::contexts::factory::FormattingContextFactory::with_font_context_and_viewport(
+                self.font_context.clone(),
+                self.viewport_size,
+            );
+
+            for child in positioned_children {
+                // Layout child as static to obtain intrinsic size.
+                let mut layout_child = child.clone();
+                let mut style = (*layout_child.style).clone();
+                style.position = crate::style::position::Position::Static;
+                layout_child.style = Arc::new(style);
+
+                let fc_type = layout_child.formatting_context().unwrap_or(crate::style::display::FormattingContextType::Block);
+                let fc = factory.create(fc_type);
+                let child_constraints = LayoutConstraints::new(
+                    CrateAvailableSpace::Definite(padding_rect.size.width),
+                    CrateAvailableSpace::Definite(padding_rect.size.height),
+                );
+                let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
+
+                let positioned_style = resolve_positioned_style(&child.style, &cb, self.viewport_size, &self.font_context);
+                let static_pos = padding_origin;
+                let input = AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, static_pos);
+                let result = abs.layout_absolute(&input, &cb)?;
+                child_fragment.bounds = Rect::new(result.position, result.size);
+                fragment.children.push(child_fragment);
+            }
+        }
 
         Ok(fragment)
     }
@@ -171,7 +251,19 @@ impl FlexFormattingContext {
         box_node: &BoxNode,
         node_map: &mut HashMap<*const BoxNode, NodeId>,
     ) -> Result<NodeId, LayoutError> {
-        self.build_taffy_tree_inner(taffy_tree, box_node, node_map, true, None)
+        self.build_taffy_tree_inner(taffy_tree, box_node, node_map, true, None, None)
+    }
+
+    /// Builds a Taffy tree from a BoxNode tree using an explicit set of root children
+    /// (used to exclude out-of-flow children).
+    fn build_taffy_tree_children(
+        &self,
+        taffy_tree: &mut TaffyTree<()>,
+        box_node: &BoxNode,
+        root_children: &[&BoxNode],
+        node_map: &mut HashMap<*const BoxNode, NodeId>,
+    ) -> Result<NodeId, LayoutError> {
+        self.build_taffy_tree_inner(taffy_tree, box_node, node_map, true, None, Some(root_children))
     }
 
     /// Internal tree builder that tracks whether we're at the root
@@ -182,20 +274,29 @@ impl FlexFormattingContext {
         node_map: &mut HashMap<*const BoxNode, NodeId>,
         is_root: bool,
         containing_flex: Option<&ComputedStyle>,
+        root_children: Option<&[&BoxNode]>,
     ) -> Result<NodeId, LayoutError> {
         // Convert style to Taffy style
         let taffy_style = self.computed_style_to_taffy(&box_node.style, is_root, containing_flex);
 
         // Create Taffy node
-        let taffy_node = if box_node.children.is_empty() {
+        let children_iter: Vec<&BoxNode> = if is_root {
+            root_children
+                .map(|c| c.to_vec())
+                .unwrap_or_else(|| box_node.children.iter().collect())
+        } else {
+            box_node.children.iter().collect()
+        };
+
+        let taffy_node = if children_iter.is_empty() {
             // Leaf node
             taffy_tree
                 .new_leaf(taffy_style)
                 .map_err(|e| LayoutError::MissingContext(format!("Failed to create Taffy leaf: {:?}", e)))?
         } else {
             // Create children first (not root)
-            let mut taffy_children = Vec::with_capacity(box_node.children.len());
-            for child in &box_node.children {
+            let mut taffy_children = Vec::with_capacity(children_iter.len());
+            for child in children_iter {
                 let next_containing_flex =
                     if is_root || matches!(box_node.style.display, Display::Flex | Display::InlineFlex) {
                         Some(&box_node.style)
@@ -208,6 +309,7 @@ impl FlexFormattingContext {
                     node_map,
                     false,
                     next_containing_flex.map(|s| &**s),
+                    None,
                 )?;
                 taffy_children.push(child_node);
             }
@@ -721,6 +823,18 @@ impl FlexFormattingContext {
             AspectRatio::Ratio(ratio) => Some(ratio),
         }
     }
+
+    fn resolve_length_for_width(&self, length: Length, percentage_base: f32, style: &ComputedStyle) -> f32 {
+        if length.unit.is_percentage() {
+            length.resolve_against(percentage_base)
+        } else if length.unit.is_absolute() {
+            length.to_px()
+        } else if length.unit.is_viewport_relative() {
+            length.resolve_with_viewport(self.viewport_size.width, self.viewport_size.height)
+        } else {
+            crate::layout::utils::resolve_font_relative_length(length, style, &self.font_context)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -728,7 +842,9 @@ mod tests {
     use super::*;
     use crate::style::display::Display;
     use crate::style::display::FormattingContextType;
+    use crate::style::position::Position;
     use crate::style::types::{AlignItems, AspectRatio};
+    use crate::style::values::Length;
     use std::sync::Arc;
 
     fn create_flex_style() -> Arc<ComputedStyle> {
@@ -759,6 +875,40 @@ mod tests {
         let _fc_default = FlexFormattingContext::default();
         // Both methods should create valid contexts
         // (PhantomData<()> is zero-sized, so we just verify creation works)
+    }
+
+    #[test]
+    fn absolute_child_is_positioned_against_flex_padding_box() {
+        let mut container_style = ComputedStyle::default();
+        container_style.display = Display::Flex;
+        container_style.position = Position::Relative;
+        container_style.padding_left = Length::px(10.0);
+        container_style.padding_top = Length::px(8.0);
+        container_style.padding_right = Length::px(10.0);
+        container_style.padding_bottom = Length::px(8.0);
+
+        let mut abs_style = ComputedStyle::default();
+        abs_style.display = Display::Block;
+        abs_style.position = Position::Absolute;
+        abs_style.left = Some(Length::px(5.0));
+        abs_style.top = Some(Length::px(7.0));
+        abs_style.width = Some(Length::px(20.0));
+        abs_style.height = Some(Length::px(10.0));
+
+        let abs_child = BoxNode::new_block(Arc::new(abs_style), FormattingContextType::Block, vec![]);
+        let container =
+            BoxNode::new_block(Arc::new(container_style), FormattingContextType::Flex, vec![abs_child]);
+
+        let fc = FlexFormattingContext::with_viewport(Size::new(200.0, 200.0));
+        let constraints = LayoutConstraints::definite(100.0, 100.0);
+        let fragment = fc.layout(&container, &constraints).unwrap();
+
+        assert_eq!(fragment.children.len(), 1);
+        let abs_fragment = &fragment.children[0];
+        assert_eq!(abs_fragment.bounds.x(), 15.0);
+        assert_eq!(abs_fragment.bounds.y(), 15.0);
+        assert_eq!(abs_fragment.bounds.width(), 20.0);
+        assert_eq!(abs_fragment.bounds.height(), 10.0);
     }
 
     #[test]

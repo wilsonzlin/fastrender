@@ -260,13 +260,14 @@ impl PositionedLayout {
         // Apply offset to fragment position
         let new_bounds = fragment.bounds.translate(offset);
 
-        // Create new fragment with adjusted bounds but same children
+        // Create new fragment with adjusted bounds but same children and style.
         // Note: Children positions are relative to parent, so they don't change
-        Ok(FragmentNode::new(
-            new_bounds,
-            fragment.content.clone(),
-            fragment.children.clone(),
-        ))
+        Ok(FragmentNode {
+            bounds: new_bounds,
+            content: fragment.content.clone(),
+            children: fragment.children.clone(),
+            style: fragment.style.clone(),
+        })
     }
 
     /// Computes the offset for relative positioning
