@@ -527,12 +527,7 @@ impl DisplayListOptimizer {
             DisplayItem::StrokeRect(i) => Some(i.rect.inflate(i.width / 2.0)),
             DisplayItem::FillRoundedRect(i) => Some(i.rect),
             DisplayItem::StrokeRoundedRect(i) => Some(i.rect.inflate(i.width / 2.0)),
-            DisplayItem::Text(item) => Some(Rect::from_xywh(
-                item.origin.x,
-                item.origin.y,
-                item.advance_width,
-                item.font_size,
-            )),
+            DisplayItem::Text(item) => Some(crate::paint::display_list::text_bounds(item)),
             DisplayItem::TextDecoration(item) => Some(item.bounds),
             DisplayItem::Image(i) => Some(i.dest_rect),
             DisplayItem::BoxShadow(i) => {

@@ -130,10 +130,7 @@ impl DisplayItem {
             DisplayItem::StrokeRect(item) => Some(item.rect),
             DisplayItem::FillRoundedRect(item) => Some(item.rect),
             DisplayItem::StrokeRoundedRect(item) => Some(item.rect),
-            DisplayItem::Text(item) => {
-                // Approximate text bounds using origin and font size
-                Some(Rect::new(item.origin, Size::new(item.advance_width, item.font_size)))
-            }
+            DisplayItem::Text(item) => Some(text_bounds(item)),
             DisplayItem::Image(item) => Some(item.dest_rect),
             DisplayItem::BoxShadow(item) => {
                 // Box shadow extends beyond rect by blur + spread
@@ -511,6 +508,26 @@ pub struct DecorationStroke {
     pub thickness: f32,
     /// Optional carved segments for underline skip-ink handling.
     pub segments: Option<Vec<(f32, f32)>>,
+}
+
+/// Conservative bounds for a text item using glyph offsets and font size.
+pub fn text_bounds(item: &TextItem) -> Rect {
+    let mut min_x = item.origin.x;
+    let mut max_x = item.origin.x + item.advance_width;
+    for glyph in &item.glyphs {
+        let gx = item.origin.x + glyph.offset.x;
+        min_x = min_x.min(gx);
+        max_x = max_x.max(gx + glyph.advance);
+    }
+    // Assume glyph outlines extend roughly one font-size above the baseline and a quarter below.
+    let ascent = item.font_size;
+    let descent = item.font_size * 0.25;
+    Rect::from_xywh(
+        min_x,
+        item.origin.y - ascent,
+        (max_x - min_x).max(0.0),
+        ascent + descent,
+    )
 }
 
 // ============================================================================
