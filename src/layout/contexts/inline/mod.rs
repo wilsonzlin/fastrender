@@ -3207,7 +3207,10 @@ impl InlineFormattingContext {
             } else {
                 cursor
             };
-            Point::new(start_x, first_line.y_offset)
+            // Anchor static position to the hypothetical inline box origin: start of the line and
+            // the strut baseline offset applied to the line's baseline.
+            let start_y = first_line.y_offset + first_line.baseline - strut_metrics.baseline_offset;
+            Point::new(start_x, start_y)
         } else {
             Point::ZERO
         };
