@@ -344,3 +344,34 @@ fn backdrop_blur_samples_outside_bounds() {
         "expected blur to sample blue neighbor; got ({r},{g},{b})"
     );
 }
+
+#[test]
+fn filter_blur_not_clipped_to_bounds() {
+    let renderer = DisplayListRenderer::new(4, 1, Rgba::WHITE, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+        z_index: 0,
+        creates_stacking_context: true,
+        bounds: Rect::from_xywh(1.0, 0.0, 1.0, 1.0),
+        mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
+        is_isolated: true,
+        transform: None,
+        filters: vec![ResolvedFilter::Blur(1.0)],
+        backdrop_filters: Vec::new(),
+        radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(1.0, 0.0, 1.0, 1.0),
+        color: Rgba::RED,
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let pixmap = renderer.render(&list).unwrap();
+    // Blur should leak outside the original rect into pixel 0.
+    let (r, g, b, a) = pixel(&pixmap, 0, 0);
+    assert_eq!(a, 255);
+    assert!(
+        r > 0 && (g, b) == (0, 0),
+        "expected blurred red outside bounds; got ({r},{g},{b})"
+    );
+}
