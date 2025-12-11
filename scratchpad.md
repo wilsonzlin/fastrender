@@ -14,6 +14,7 @@
 - Display-list renderer now captures `PushBlendMode` into layers and manually composites Hue/Saturation/Color/Luminosity modes via HSL component blending so the advanced blend modes preserve the expected hue/saturation/luminance components (regressions cover the HSL blend expectations).
 - Painter mix-blend/background-blend Hue/Saturation/Color/Luminosity now composite via manual HSL blending for stacking contexts and background layers to mirror the display-list behavior; painter regressions cover hue mix-blend and color background-blend.
 - Computed/positioned stacking-context detection now mirrors the paint logic: transform/filter/backdrop/mix-blend/isolation/will-change and positioned overflow clipping all trigger stacking contexts in both computed helpers and positioned layout tests.
+- CSS `contain` now parses (`none|strict|content|layout|paint|style|size|inline-size` combos), stores containment flags, and paint stacking contexts are created when paint containment is present; property and stacking tests cover parsing and SC creation.
 - Image cache resolves relative URLs against the configured base URL; added a regression that loads a file:// PNG via base URL resolution.
 - Display-list builder exposes a base-URL setter and now resolves background image URLs against the configured base; regression covers loading a relative PNG through the base URL.
 - Added HSL reference helpers and blend-mode regressions (hue/saturation/color/luminosity) in the display-list renderer to ensure advanced blend modes follow the CSS compositing definitions.

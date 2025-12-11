@@ -32,15 +32,15 @@ use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, AspectRatio, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer,
     BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxSizing, CaptionSide,
-    Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting, FontKerning,
-    FontSizeAdjust, FontStretch, FontStyle, FontSynthesis, FontVariant, FontVariantAlternates, FontVariantCaps,
-    FontVariantEastAsian, FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontWeight, GridTrack,
-    HyphensMode, ImageRendering, Isolation, JustifyContent, LineBreak, LineHeight, ListStyleImage, ListStylePosition,
-    ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowWrap,
-    TabSize, TableLayout, TextAlign, TextAlignLast, TextCombineUpright, TextDecoration, TextDecorationSkipInk,
-    TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextTransform,
-    TextUnderlineOffset, TextUnderlinePosition, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WillChange,
-    WordBreak, WritingMode,
+    Containment, Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting,
+    FontKerning, FontSizeAdjust, FontStretch, FontStyle, FontSynthesis, FontVariant, FontVariantAlternates,
+    FontVariantCaps, FontVariantEastAsian, FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontWeight,
+    GridTrack, HyphensMode, ImageRendering, Isolation, JustifyContent, LineBreak, LineHeight, ListStyleImage,
+    ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow,
+    OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextCombineUpright, TextDecoration,
+    TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextOrientation,
+    TextTransform, TextUnderlineOffset, TextUnderlinePosition, TransformOrigin, UnicodeBidi, VerticalAlign,
+    WhiteSpace, WillChange, WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -230,6 +230,8 @@ pub struct ComputedStyle {
     pub isolation: Isolation,
     /// Author hints for upcoming changes
     pub will_change: WillChange,
+    /// CSS containment
+    pub containment: Containment,
 
     // Visual effects
     pub opacity: f32,
@@ -421,6 +423,7 @@ impl Default for ComputedStyle {
             mix_blend_mode: MixBlendMode::Normal,
             isolation: Isolation::Auto,
             will_change: WillChange::Auto,
+            containment: Containment::none(),
 
             opacity: 1.0,
             box_shadow: Vec::new(),

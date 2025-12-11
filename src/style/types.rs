@@ -354,6 +354,71 @@ impl WillChangeHint {
     }
 }
 
+/// CSS containment model
+///
+/// CSS: `contain`
+/// Reference: CSS Containment Module Level 3
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Containment {
+    pub size: bool,
+    pub inline_size: bool,
+    pub layout: bool,
+    pub style: bool,
+    pub paint: bool,
+}
+
+impl Containment {
+    pub const fn none() -> Self {
+        Self {
+            size: false,
+            inline_size: false,
+            layout: false,
+            style: false,
+            paint: false,
+        }
+    }
+
+    pub const fn strict() -> Self {
+        Self {
+            size: true,
+            inline_size: false,
+            layout: true,
+            style: true,
+            paint: true,
+        }
+    }
+
+    pub const fn content() -> Self {
+        Self {
+            size: false,
+            inline_size: false,
+            layout: true,
+            style: true,
+            paint: true,
+        }
+    }
+
+    pub fn with_flags(size: bool, inline_size: bool, layout: bool, style: bool, paint: bool) -> Self {
+        Self {
+            size,
+            inline_size,
+            layout,
+            style,
+            paint,
+        }
+    }
+
+    pub fn creates_stacking_context(&self) -> bool {
+        self.paint
+    }
+}
+
+impl Default for Containment {
+    fn default() -> Self {
+        Self::none()
+    }
+}
+
 /// Color value that can defer to currentcolor
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FilterColor {

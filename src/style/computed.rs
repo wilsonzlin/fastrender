@@ -29,8 +29,8 @@ use crate::style::color::{Color, Rgba};
 use crate::style::display::Display;
 use crate::style::position::Position;
 use crate::style::types::{
-    BoxSizing, FilterFunction, FontSizeAdjust, FontStretch, Isolation, MixBlendMode, Overflow, TextAlignLast,
-    TextIndent, TextJustify, WillChange,
+    BoxSizing, Containment, FilterFunction, FontSizeAdjust, FontStretch, Isolation, MixBlendMode, Overflow,
+    TextAlignLast, TextIndent, TextJustify, WillChange,
 };
 use crate::style::values::{Length, LengthOrAuto};
 
@@ -221,6 +221,12 @@ pub struct PositionedStyle {
     /// CSS: `will-change`
     /// Initial: auto
     pub will_change: WillChange,
+
+    /// CSS containment
+    ///
+    /// CSS: `contain`
+    /// Initial: none
+    pub containment: Containment,
 
     /// Transforms
     ///
@@ -505,6 +511,7 @@ impl Default for PositionedStyle {
             mix_blend_mode: MixBlendMode::Normal,
             isolation: Isolation::Auto,
             will_change: WillChange::default(),
+            containment: Containment::none(),
             transform: Vec::new(),
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
@@ -626,6 +633,10 @@ impl PositionedStyle {
         }
 
         if self.will_change.creates_stacking_context() {
+            return true;
+        }
+
+        if self.containment.creates_stacking_context() {
             return true;
         }
 
@@ -954,6 +965,10 @@ mod tests {
         style = PositionedStyle::default();
         style.position = Position::Absolute;
         style.overflow_x = Overflow::Hidden;
+        assert!(style.creates_stacking_context());
+
+        style = PositionedStyle::default();
+        style.containment = Containment::with_flags(false, false, false, false, true);
         assert!(style.creates_stacking_context());
     }
 

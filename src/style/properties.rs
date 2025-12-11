@@ -1983,6 +1983,11 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 styles.will_change = value;
             }
         }
+        "contain" => {
+            if let Some(value) = parse_containment(&resolved_value) {
+                styles.containment = value;
+            }
+        }
 
         "border-collapse" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
@@ -2532,6 +2537,112 @@ fn parse_transform_origin(value: &PropertyValue) -> Option<TransformOrigin> {
 fn parse_will_change(value: &PropertyValue) -> Option<WillChange> {
     let text = will_change_value_as_string(value)?;
     parse_will_change_from_str(&text)
+}
+
+fn parse_containment(value: &PropertyValue) -> Option<Containment> {
+    let text = match value {
+        PropertyValue::Keyword(k) | PropertyValue::String(k) => Some(k.clone()),
+        PropertyValue::Multiple(values) if !values.is_empty() => {
+            let mut out = String::new();
+            for token in values {
+                match token {
+                    PropertyValue::Keyword(k) => {
+                        if !out.is_empty() {
+                            out.push(' ');
+                        }
+                        out.push_str(k);
+                    }
+                    PropertyValue::String(s) => {
+                        if !out.is_empty() {
+                            out.push(' ');
+                        }
+                        out.push_str(s);
+                    }
+                    _ => return None,
+                }
+            }
+            Some(out)
+        }
+        _ => None,
+    }?;
+
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut input = ParserInput::new(trimmed);
+    let mut parser = Parser::new(&mut input);
+
+    if parser.try_parse(|p| p.expect_ident_matching("none")).is_ok() {
+        parser.skip_whitespace();
+        return if parser.is_exhausted() {
+            Some(Containment::none())
+        } else {
+            None
+        };
+    }
+    if parser.try_parse(|p| p.expect_ident_matching("strict")).is_ok() {
+        parser.skip_whitespace();
+        return if parser.is_exhausted() {
+            Some(Containment::strict())
+        } else {
+            None
+        };
+    }
+    if parser.try_parse(|p| p.expect_ident_matching("content")).is_ok() {
+        parser.skip_whitespace();
+        return if parser.is_exhausted() {
+            Some(Containment::content())
+        } else {
+            None
+        };
+    }
+
+    let mut size = false;
+    let mut inline_size = false;
+    let mut layout = false;
+    let mut style = false;
+    let mut paint = false;
+    let mut saw_any = false;
+
+    while !parser.is_exhausted() {
+        parser.skip_whitespace();
+        let ident = match parser.try_parse(|p| p.expect_ident().map(|i| i.as_ref().to_ascii_lowercase())) {
+            Ok(i) => i,
+            Err(_) => return None,
+        };
+        match ident.as_str() {
+            "size" => {
+                size = true;
+                saw_any = true;
+            }
+            "inline-size" => {
+                inline_size = true;
+                saw_any = true;
+            }
+            "layout" => {
+                layout = true;
+                saw_any = true;
+            }
+            "style" => {
+                style = true;
+                saw_any = true;
+            }
+            "paint" => {
+                paint = true;
+                saw_any = true;
+            }
+            _ => return None,
+        }
+        parser.skip_whitespace();
+    }
+
+    if saw_any {
+        Some(Containment::with_flags(size, inline_size, layout, style, paint))
+    } else {
+        None
+    }
 }
 
 fn will_change_value_as_string(value: &PropertyValue) -> Option<String> {
@@ -4385,6 +4496,55 @@ mod tests {
             16.0,
         );
         assert_eq!(style.image_rendering, ImageRendering::CrispEdges);
+    }
+
+    #[test]
+    fn parses_containment_values() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "contain".to_string(),
+                value: PropertyValue::Keyword("paint".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert!(style.containment.paint);
+        assert!(!style.containment.layout);
+        assert!(!style.containment.size);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "contain".to_string(),
+                value: PropertyValue::Keyword("strict".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert!(style.containment.paint && style.containment.layout && style.containment.size);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "contain".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("layout".into()),
+                    PropertyValue::Keyword("style".into()),
+                ]),
+                raw_value: String::new(),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert!(style.containment.layout && style.containment.style);
+        assert!(!style.containment.paint);
     }
 
     #[test]

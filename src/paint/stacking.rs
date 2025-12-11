@@ -454,6 +454,11 @@ pub fn creates_stacking_context(style: &ComputedStyle, parent_style: Option<&Com
         return true;
     }
 
+    // 7c. paint containment (or strict/content which imply paint)
+    if style.containment.creates_stacking_context() {
+        return true;
+    }
+
     // 7. Overflow hidden/scroll/auto with visible overflow on the other axis
     // This creates a stacking context in some browsers
     // For simplicity, we create stacking context for any non-visible overflow
@@ -541,6 +546,10 @@ pub fn get_stacking_context_reason(
 
     if style.will_change.creates_stacking_context() {
         return Some(StackingContextReason::WillChange);
+    }
+
+    if style.containment.creates_stacking_context() {
+        return Some(StackingContextReason::Containment);
     }
 
     if is_positioned(style)
@@ -1102,6 +1111,17 @@ mod tests {
         assert_eq!(
             get_stacking_context_reason(&style, None, false),
             Some(StackingContextReason::WillChange)
+        );
+    }
+
+    #[test]
+    fn test_creates_stacking_context_containment() {
+        let mut style = ComputedStyle::default();
+        style.containment = crate::style::types::Containment::with_flags(false, false, false, false, true);
+        assert!(creates_stacking_context(&style, None, false));
+        assert_eq!(
+            get_stacking_context_reason(&style, None, false),
+            Some(StackingContextReason::Containment)
         );
     }
 
