@@ -1162,17 +1162,15 @@ impl FormattingContext for BlockFormattingContext {
         // Add this box's own padding and borders
         let mut width = content_width + edges;
 
-        // Apply min/max constraints when present
+        // Apply min/max constraints to the border box
         let min_width = style
             .min_width
-            .as_ref()
-            .map(|l| resolve_length_for_width(*l, 0.0, style, &self.font_context, self.viewport_size))
+            .map(|l| resolve_length_for_width(l, 0.0, style, &self.font_context, self.viewport_size))
             .map(|w| border_size_from_box_sizing(w, edges, style.box_sizing))
             .unwrap_or(0.0);
         let max_width = style
             .max_width
-            .as_ref()
-            .map(|l| resolve_length_for_width(*l, 0.0, style, &self.font_context, self.viewport_size))
+            .map(|l| resolve_length_for_width(l, 0.0, style, &self.font_context, self.viewport_size))
             .map(|w| border_size_from_box_sizing(w, edges, style.box_sizing))
             .unwrap_or(f32::INFINITY);
         width = width.clamp(min_width, max_width);
