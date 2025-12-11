@@ -33,13 +33,16 @@ use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::paint::display_list::{
     BlendMode, ClipItem, DisplayItem, DisplayList, EmphasisMark, EmphasisText, FillRectItem, FontId, GlyphInstance,
     ImageData, ImageFilterQuality, ImageItem, OpacityItem, StackingContextItem, StrokeRectItem, TextEmphasis, TextItem,
-    TextShadowItem,
+    TextShadowItem, Transform2D,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::style::color::Rgba;
-use crate::style::types::{ImageRendering, MixBlendMode, ObjectFit, TextEmphasisPosition, TextEmphasisStyle};
+use crate::style::types::{
+    ImageRendering, Isolation, MixBlendMode, ObjectFit, TextEmphasisPosition, TextEmphasisStyle,
+};
+use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStretch, FontStyle, ScaledMetrics};
 use crate::text::font_loader::FontContext;
@@ -49,9 +52,6 @@ use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 use image::GenericImageView;
 use std::collections::HashSet;
 use std::sync::Arc;
-
-#[cfg(test)]
-use crate::style::values::Length;
 
 /// Builder that converts a fragment tree to a display list
 ///
@@ -286,8 +286,13 @@ impl DisplayListBuilder {
             .fragments
             .iter()
             .find_map(|f| f.style.as_deref())
-            .map(|s| matches!(s.isolation, crate::style::types::Isolation::Isolate))
+            .map(|s| matches!(s.isolation, Isolation::Isolate) || !s.backdrop_filter.is_empty())
             .unwrap_or(false);
+        let transform = context
+            .fragments
+            .first()
+            .and_then(|f| f.style.as_deref())
+            .and_then(|style| Self::build_transform(style, context.bounds));
 
         self.list.push(DisplayItem::PushStackingContext(StackingContextItem {
             z_index: context.z_index,
@@ -295,6 +300,7 @@ impl DisplayListBuilder {
             bounds: context.bounds,
             mix_blend_mode,
             is_isolated,
+            transform,
         }));
 
         for child in neg {
@@ -336,6 +342,63 @@ impl DisplayListBuilder {
             MixBlendMode::Saturation => BlendMode::Saturation,
             MixBlendMode::Color => BlendMode::Color,
             MixBlendMode::Luminosity => BlendMode::Luminosity,
+        }
+    }
+
+    fn build_transform(style: &ComputedStyle, bounds: Rect) -> Option<Transform2D> {
+        if style.transform.is_empty() {
+            return None;
+        }
+
+        let mut ts = Transform2D::identity();
+        for component in &style.transform {
+            let next = match component {
+                crate::css::types::Transform::Translate(x, y) => {
+                    let tx = Self::resolve_transform_length(x, style.font_size, bounds.width());
+                    let ty = Self::resolve_transform_length(y, style.font_size, bounds.height());
+                    Transform2D::translate(tx, ty)
+                }
+                crate::css::types::Transform::TranslateX(x) => {
+                    let tx = Self::resolve_transform_length(x, style.font_size, bounds.width());
+                    Transform2D::translate(tx, 0.0)
+                }
+                crate::css::types::Transform::TranslateY(y) => {
+                    let ty = Self::resolve_transform_length(y, style.font_size, bounds.height());
+                    Transform2D::translate(0.0, ty)
+                }
+                crate::css::types::Transform::Scale(sx, sy) => Transform2D::scale(*sx, *sy),
+                crate::css::types::Transform::ScaleX(sx) => Transform2D::scale(*sx, 1.0),
+                crate::css::types::Transform::ScaleY(sy) => Transform2D::scale(1.0, *sy),
+                crate::css::types::Transform::Rotate(deg) => Transform2D::rotate(*deg),
+                crate::css::types::Transform::SkewX(deg) => Transform2D::skew(deg.to_radians().tan(), 0.0),
+                crate::css::types::Transform::SkewY(deg) => Transform2D::skew(0.0, deg.to_radians().tan()),
+                crate::css::types::Transform::Matrix(a, b, c, d, e, f) => Transform2D {
+                    a: *a,
+                    b: *b,
+                    c: *c,
+                    d: *d,
+                    e: *e,
+                    f: *f,
+                },
+            };
+            ts = ts.multiply(&next);
+        }
+
+        let origin_x = Self::resolve_transform_length(&style.transform_origin.x, style.font_size, bounds.width());
+        let origin_y = Self::resolve_transform_length(&style.transform_origin.y, style.font_size, bounds.height());
+        let origin = Point::new(bounds.x() + origin_x, bounds.y() + origin_y);
+
+        let translate_to_origin = Transform2D::translate(origin.x, origin.y);
+        let translate_back = Transform2D::translate(-origin.x, -origin.y);
+        Some(translate_to_origin.multiply(&ts).multiply(&translate_back))
+    }
+
+    fn resolve_transform_length(len: &Length, font_size: f32, percentage_base: f32) -> f32 {
+        match len.unit {
+            LengthUnit::Percent => len.resolve_against(percentage_base),
+            LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size),
+            _ if len.unit.is_absolute() => len.to_px(),
+            _ => len.value,
         }
     }
 

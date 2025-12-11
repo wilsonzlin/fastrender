@@ -922,6 +922,9 @@ pub struct StackingContextItem {
 
     /// Whether the stacking context is isolated from backdrop blending
     pub is_isolated: bool,
+
+    /// Optional transform applied to this stacking context
+    pub transform: Option<Transform2D>,
 }
 
 // ============================================================================

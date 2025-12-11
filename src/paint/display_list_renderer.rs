@@ -232,6 +232,12 @@ impl DisplayListRenderer {
                     self.canvas.save();
                 }
                 self.stacking_layers.push(needs_layer);
+
+                if let Some(matrix) = item.transform {
+                    let t = Transform::from_row(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f);
+                    let combined = self.canvas.transform().post_concat(t);
+                    self.canvas.set_transform(combined);
+                }
             }
             DisplayItem::PopStackingContext => {
                 let needs_layer = self.stacking_layers.pop().unwrap_or(false);
@@ -1147,6 +1153,7 @@ mod tests {
                 bounds: Rect::from_xywh(0.0, 0.0, 6.0, 6.0),
                 mix_blend_mode: crate::paint::display_list::BlendMode::Normal,
                 is_isolated: false,
+                transform: None,
             },
         ));
         list.push(DisplayItem::PushClip(ClipItem {
@@ -1182,6 +1189,7 @@ mod tests {
                 bounds: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
                 mix_blend_mode: crate::paint::display_list::BlendMode::Multiply,
                 is_isolated: false,
+                transform: None,
             },
         ));
         list.push(DisplayItem::FillRect(FillRectItem {
