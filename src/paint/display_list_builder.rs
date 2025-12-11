@@ -26,21 +26,24 @@
 //! let display_list = builder.build(&fragment_tree.root);
 //! ```
 
+use crate::css::types::ColorStop;
 use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::paint::display_list::{
     BlendMode, ClipItem, DisplayItem, DisplayList, EmphasisMark, EmphasisText, FillRectItem, FontId, GlyphInstance,
-    ImageData, ImageFilterQuality, ImageItem, OpacityItem, StackingContextItem, StrokeRectItem, TextEmphasis, TextItem,
-    TextShadowItem, Transform2D,
+    GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, OpacityItem,
+    RadialGradientItem, StackingContextItem, StrokeRectItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::style::color::Rgba;
 use crate::style::types::{
-    BackgroundBox, ImageRendering, Isolation, MixBlendMode, ObjectFit, TextEmphasisPosition, TextEmphasisStyle,
+    BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeatKeyword,
+    BackgroundSize, BackgroundSizeComponent, BackgroundSizeKeyword, ImageRendering, Isolation, MixBlendMode, ObjectFit,
+    TextEmphasisPosition, TextEmphasisStyle,
 };
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
@@ -387,6 +390,318 @@ impl DisplayListBuilder {
         }
     }
 
+    fn resolve_border_radii(style: Option<&ComputedStyle>, bounds: Rect) -> crate::paint::display_list::BorderRadii {
+        let Some(style) = style else {
+            return crate::paint::display_list::BorderRadii::ZERO;
+        };
+        let w = bounds.width().max(0.0);
+        let h = bounds.height().max(0.0);
+        if w <= 0.0 || h <= 0.0 {
+            return crate::paint::display_list::BorderRadii::ZERO;
+        }
+
+        fn resolve_radius(len: &Length, reference: f32, font_size: f32) -> f32 {
+            match len.unit {
+                LengthUnit::Percent => len.resolve_against(reference),
+                LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size),
+                _ if len.unit.is_absolute() => len.to_px(),
+                _ => len.value * font_size,
+            }
+        }
+
+        crate::paint::display_list::BorderRadii {
+            top_left: resolve_radius(&style.border_top_left_radius, w, style.font_size),
+            top_right: resolve_radius(&style.border_top_right_radius, w, style.font_size),
+            bottom_right: resolve_radius(&style.border_bottom_right_radius, w, style.font_size),
+            bottom_left: resolve_radius(&style.border_bottom_left_radius, w, style.font_size),
+        }
+        .clamped(w, h)
+    }
+
+    fn resolve_clip_radii(
+        style: &ComputedStyle,
+        rects: &BackgroundRects,
+        clip: BackgroundBox,
+    ) -> crate::paint::display_list::BorderRadii {
+        let base = Self::resolve_border_radii(Some(style), rects.border);
+        if base.is_zero() {
+            return base;
+        }
+
+        let percentage_base = rects.border.width().max(0.0);
+        let font_size = style.font_size;
+        let border_left = Self::resolve_length_for_paint(&style.border_left_width, font_size, percentage_base);
+        let border_right = Self::resolve_length_for_paint(&style.border_right_width, font_size, percentage_base);
+        let border_top = Self::resolve_length_for_paint(&style.border_top_width, font_size, percentage_base);
+        let border_bottom = Self::resolve_length_for_paint(&style.border_bottom_width, font_size, percentage_base);
+
+        let padding_left = Self::resolve_length_for_paint(&style.padding_left, font_size, percentage_base);
+        let padding_right = Self::resolve_length_for_paint(&style.padding_right, font_size, percentage_base);
+        let padding_top = Self::resolve_length_for_paint(&style.padding_top, font_size, percentage_base);
+        let padding_bottom = Self::resolve_length_for_paint(&style.padding_bottom, font_size, percentage_base);
+
+        match clip {
+            BackgroundBox::BorderBox => base,
+            BackgroundBox::PaddingBox => {
+                let shrunk = crate::paint::display_list::BorderRadii {
+                    top_left: (base.top_left - border_left.max(border_top)).max(0.0),
+                    top_right: (base.top_right - border_right.max(border_top)).max(0.0),
+                    bottom_right: (base.bottom_right - border_right.max(border_bottom)).max(0.0),
+                    bottom_left: (base.bottom_left - border_left.max(border_bottom)).max(0.0),
+                };
+                shrunk.clamped(rects.padding.width(), rects.padding.height())
+            }
+            BackgroundBox::ContentBox => {
+                let shrink_left = border_left + padding_left;
+                let shrink_right = border_right + padding_right;
+                let shrink_top = border_top + padding_top;
+                let shrink_bottom = border_bottom + padding_bottom;
+                let shrunk = crate::paint::display_list::BorderRadii {
+                    top_left: (base.top_left - shrink_left.max(shrink_top)).max(0.0),
+                    top_right: (base.top_right - shrink_right.max(shrink_top)).max(0.0),
+                    bottom_right: (base.bottom_right - shrink_right.max(shrink_bottom)).max(0.0),
+                    bottom_left: (base.bottom_left - shrink_left.max(shrink_bottom)).max(0.0),
+                };
+                shrunk.clamped(rects.content.width(), rects.content.height())
+            }
+        }
+    }
+
+    fn normalize_color_stops(stops: &[ColorStop]) -> Vec<(f32, Rgba)> {
+        if stops.is_empty() {
+            return Vec::new();
+        }
+
+        let mut positions: Vec<Option<f32>> = stops.iter().map(|s| s.position).collect();
+        if positions.iter().all(|p| p.is_none()) {
+            if stops.len() == 1 {
+                return vec![(0.0, stops[0].color)];
+            }
+            let denom = (stops.len() - 1) as f32;
+            return stops
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (i as f32 / denom, s.color))
+                .collect();
+        }
+
+        if positions.first().and_then(|p| *p).is_none() {
+            positions[0] = Some(0.0);
+        }
+        if positions.last().and_then(|p| *p).is_none() {
+            if let Some(last) = positions.last_mut() {
+                *last = Some(1.0);
+            }
+        }
+
+        let mut last_known: Option<(usize, f32)> = None;
+        for i in 0..positions.len() {
+            if let Some(pos) = positions[i] {
+                if let Some((start_idx, start_pos)) = last_known {
+                    let gap = i.saturating_sub(start_idx + 1);
+                    if gap > 0 {
+                        let step = (pos - start_pos) / (gap as f32 + 1.0);
+                        for j in 1..=gap {
+                            positions[start_idx + j] = Some((start_pos + step * j as f32).max(start_pos));
+                        }
+                    }
+                } else if i > 0 {
+                    let gap = i;
+                    let step = pos / gap as f32;
+                    for j in 0..i {
+                        positions[j] = Some(step * j as f32);
+                    }
+                }
+                last_known = Some((i, pos));
+            }
+        }
+
+        let mut output = Vec::with_capacity(stops.len());
+        let mut prev = 0.0;
+        for (idx, pos_opt) in positions.into_iter().enumerate() {
+            let pos = pos_opt.unwrap_or(prev);
+            let clamped = pos.max(prev).clamp(0.0, 1.0);
+            prev = clamped;
+            output.push((clamped, stops[idx].color));
+        }
+
+        output
+    }
+
+    fn gradient_stops(stops: &[(f32, Rgba)]) -> Vec<GradientStop> {
+        stops
+            .iter()
+            .map(|(pos, color)| GradientStop {
+                position: pos.clamp(0.0, 1.0),
+                color: *color,
+            })
+            .collect()
+    }
+
+    fn compute_background_size(
+        layer: &BackgroundLayer,
+        font_size: f32,
+        area_w: f32,
+        area_h: f32,
+        img_w: f32,
+        img_h: f32,
+    ) -> (f32, f32) {
+        let natural_w = if img_w > 0.0 { Some(img_w) } else { None };
+        let natural_h = if img_h > 0.0 { Some(img_h) } else { None };
+        let ratio = if img_w > 0.0 && img_h > 0.0 {
+            Some(img_w / img_h)
+        } else {
+            None
+        };
+
+        match layer.size {
+            BackgroundSize::Keyword(BackgroundSizeKeyword::Cover) => {
+                if let (Some(w), Some(h)) = (natural_w, natural_h) {
+                    let scale = (area_w / w).max(area_h / h);
+                    (w * scale, h * scale)
+                } else {
+                    (area_w.max(0.0), area_h.max(0.0))
+                }
+            }
+            BackgroundSize::Keyword(BackgroundSizeKeyword::Contain) => {
+                if let (Some(w), Some(h)) = (natural_w, natural_h) {
+                    let scale = (area_w / w).min(area_h / h);
+                    (w * scale, h * scale)
+                } else {
+                    (area_w.max(0.0), area_h.max(0.0))
+                }
+            }
+            BackgroundSize::Explicit(x, y) => {
+                let resolve = |component: BackgroundSizeComponent, area: f32| -> Option<f32> {
+                    match component {
+                        BackgroundSizeComponent::Auto => None,
+                        BackgroundSizeComponent::Length(len) => {
+                            Some(Self::resolve_length_for_paint(&len, font_size, area).max(0.0))
+                        }
+                    }
+                };
+
+                let resolved_x = resolve(x, area_w);
+                let resolved_y = resolve(y, area_h);
+
+                match (resolved_x, resolved_y) {
+                    (Some(w), Some(h)) => (w, h),
+                    (Some(w), None) => {
+                        if let Some(r) = ratio {
+                            (w, (w / r).max(0.0))
+                        } else if let Some(h) = natural_h {
+                            (w, h)
+                        } else {
+                            (w, area_h.max(0.0))
+                        }
+                    }
+                    (None, Some(h)) => {
+                        if let Some(r) = ratio {
+                            ((h * r).max(0.0), h)
+                        } else if let Some(w) = natural_w {
+                            (w, h)
+                        } else {
+                            (area_w.max(0.0), h)
+                        }
+                    }
+                    (None, None) => {
+                        if let (Some(w), Some(h)) = (natural_w, natural_h) {
+                            (w, h)
+                        } else {
+                            (area_w.max(0.0), area_h.max(0.0))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn resolve_background_offset(
+        pos: BackgroundPosition,
+        area_w: f32,
+        area_h: f32,
+        tile_w: f32,
+        tile_h: f32,
+        font_size: f32,
+    ) -> (f32, f32) {
+        let resolve_axis = |comp: crate::style::types::BackgroundPositionComponent, area: f32, tile: f32| -> f32 {
+            let available = area - tile;
+            let offset = Self::resolve_length_for_paint(&comp.offset, font_size, available);
+            comp.alignment * available + offset
+        };
+
+        match pos {
+            BackgroundPosition::Position { x, y } => {
+                let x = resolve_axis(x, area_w, tile_w);
+                let y = resolve_axis(y, area_h, tile_h);
+                (x, y)
+            }
+        }
+    }
+
+    fn aligned_start(origin: f32, tile: f32, clip_min: f32) -> f32 {
+        if tile == 0.0 {
+            return origin;
+        }
+        let steps = ((clip_min - origin) / tile).floor();
+        origin + steps * tile
+    }
+
+    fn round_tile_length(area_len: f32, tile_len: f32) -> f32 {
+        if tile_len == 0.0 {
+            return 0.0;
+        }
+        let count = (area_len / tile_len).round().max(1.0);
+        area_len / count
+    }
+
+    fn tile_positions(
+        repeat: BackgroundRepeatKeyword,
+        area_start: f32,
+        area_len: f32,
+        tile_len: f32,
+        offset: f32,
+        clip_min: f32,
+        clip_max: f32,
+    ) -> Vec<f32> {
+        if tile_len <= 0.0 {
+            return Vec::new();
+        }
+
+        match repeat {
+            BackgroundRepeatKeyword::NoRepeat => vec![area_start + offset],
+            BackgroundRepeatKeyword::Repeat | BackgroundRepeatKeyword::Round => {
+                let start = Self::aligned_start(area_start + offset, tile_len, clip_min);
+                let mut positions = Vec::new();
+                let mut pos = start;
+                while pos < clip_max {
+                    positions.push(pos);
+                    pos += tile_len;
+                }
+                positions
+            }
+            BackgroundRepeatKeyword::Space => {
+                let count = (area_len / tile_len).floor() as i32;
+                if count >= 2 {
+                    let spacing = (area_len - tile_len * count as f32) / (count as f32 - 1.0);
+                    let step = tile_len + spacing;
+                    let anchor = area_start;
+                    let mut positions = Vec::new();
+                    let k = ((clip_min - anchor) / step).floor();
+                    let mut pos = anchor + k * step;
+                    while pos < clip_max {
+                        positions.push(pos);
+                        pos += step;
+                    }
+                    positions
+                } else {
+                    let centered = area_start + offset + (area_len - tile_len) * 0.5;
+                    vec![centered]
+                }
+            }
+        }
+    }
+
     fn resolve_length_for_paint(len: &Length, font_size: f32, percentage_base: f32) -> f32 {
         match len.unit {
             LengthUnit::Percent => len.resolve_against(percentage_base),
@@ -405,19 +720,7 @@ impl DisplayListBuilder {
     }
 
     fn border_radii(rect: Rect, style: &ComputedStyle) -> crate::paint::display_list::BorderRadii {
-        let width = rect.width().max(0.0);
-        let height = rect.height().max(0.0);
-        let font_size = style.font_size;
-        let tl = Self::resolve_length_for_paint(&style.border_top_left_radius, font_size, width.min(height));
-        let tr = Self::resolve_length_for_paint(&style.border_top_right_radius, font_size, width.min(height));
-        let br = Self::resolve_length_for_paint(&style.border_bottom_right_radius, font_size, width.min(height));
-        let bl = Self::resolve_length_for_paint(&style.border_bottom_left_radius, font_size, width.min(height));
-        crate::paint::display_list::BorderRadii {
-            top_left: tl,
-            top_right: tr,
-            bottom_right: br,
-            bottom_left: bl,
-        }
+        Self::resolve_border_radii(Some(style), rect)
     }
 
     fn border_style_visible(style: crate::style::types::BorderStyle) -> bool {
@@ -654,32 +957,296 @@ impl DisplayListBuilder {
     }
 
     fn emit_background_from_style(&mut self, rect: Rect, style: &ComputedStyle) {
-        if style.background_color.is_transparent() {
+        let has_images = style.background_layers.iter().any(|l| l.image.is_some());
+        if style.background_color.is_transparent() && !has_images {
             return;
         }
 
-        let layer = style.background_layers.first().cloned().unwrap_or_default();
         let rects = Self::background_rects(rect, style);
-        let clip_rect = match layer.clip {
+        let fallback = BackgroundLayer::default();
+        let color_layer = style.background_layers.first().unwrap_or(&fallback);
+        let color_clip_rect = match color_layer.clip {
             BackgroundBox::BorderBox => rects.border,
             BackgroundBox::PaddingBox => rects.padding,
             BackgroundBox::ContentBox => rects.content,
         };
-        if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 {
+        if style.background_color.alpha_u8() > 0
+            && color_clip_rect.width() > 0.0
+            && color_clip_rect.height() > 0.0
+        {
+            let radii = Self::resolve_clip_radii(style, &rects, color_layer.clip);
+            if radii.is_zero() {
+                self.emit_background(color_clip_rect, style.background_color);
+            } else {
+                self.list.push(DisplayItem::FillRoundedRect(
+                    crate::paint::display_list::FillRoundedRectItem {
+                        rect: color_clip_rect,
+                        color: style.background_color,
+                        radii,
+                    },
+                ));
+            }
+        }
+
+        for layer in style.background_layers.iter().rev() {
+            if let Some(image) = &layer.image {
+                self.emit_background_layer(&rects, style, layer, image);
+            }
+        }
+    }
+
+    fn emit_background_layer(
+        &mut self,
+        rects: &BackgroundRects,
+        style: &ComputedStyle,
+        layer: &BackgroundLayer,
+        bg: &BackgroundImage,
+    ) {
+        let is_local = layer.attachment == BackgroundAttachment::Local;
+        let clip_box = if is_local {
+            match layer.clip {
+                BackgroundBox::ContentBox => BackgroundBox::ContentBox,
+                _ => BackgroundBox::PaddingBox,
+            }
+        } else {
+            layer.clip
+        };
+        let clip_rect = match clip_box {
+            BackgroundBox::BorderBox => rects.border,
+            BackgroundBox::PaddingBox => rects.padding,
+            BackgroundBox::ContentBox => rects.content,
+        };
+        let origin_rect = if layer.attachment == BackgroundAttachment::Fixed {
+            if let Some((w, h)) = self.viewport {
+                Rect::from_xywh(0.0, 0.0, w, h)
+            } else {
+                rects.border
+            }
+        } else if is_local {
+            match layer.origin {
+                BackgroundBox::ContentBox => rects.content,
+                _ => rects.padding,
+            }
+        } else {
+            match layer.origin {
+                BackgroundBox::BorderBox => rects.border,
+                BackgroundBox::PaddingBox => rects.padding,
+                BackgroundBox::ContentBox => rects.content,
+            }
+        };
+
+        if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 || origin_rect.width() <= 0.0 || origin_rect.height() <= 0.0 {
             return;
         }
 
-        let radii = Self::border_radii(rect, style).clamped(clip_rect.width(), clip_rect.height());
-        if radii.is_zero() {
-            self.emit_background(clip_rect, style.background_color);
-        } else {
-            self.list.push(DisplayItem::FillRoundedRect(
-                crate::paint::display_list::FillRoundedRectItem {
-                    rect: clip_rect,
-                    color: style.background_color,
-                    radii,
-                },
-            ));
+        let clip_radii = Self::resolve_clip_radii(style, rects, clip_box);
+        let mut pushed_clip = false;
+        if !clip_radii.is_zero() {
+            self.list.push(DisplayItem::PushClip(ClipItem {
+                rect: clip_rect,
+                radii: Some(clip_radii),
+            }));
+            pushed_clip = true;
+        }
+
+        match bg {
+            BackgroundImage::LinearGradient { angle, stops } => {
+                let resolved = Self::normalize_color_stops(stops);
+                if !resolved.is_empty() {
+                    let rad = angle.to_radians();
+                    let dx = rad.sin();
+                    let dy = -rad.cos();
+                    let len = 0.5 * (origin_rect.width() * dx.abs() + origin_rect.height() * dy.abs());
+                    let cx = origin_rect.x() + origin_rect.width() / 2.0;
+                    let cy = origin_rect.y() + origin_rect.height() / 2.0;
+                    let start = Point::new(cx - dx * len - clip_rect.x(), cy - dy * len - clip_rect.y());
+                    let end = Point::new(cx + dx * len - clip_rect.x(), cy + dy * len - clip_rect.y());
+                    self.list.push(DisplayItem::LinearGradient(LinearGradientItem {
+                        rect: clip_rect,
+                        start,
+                        end,
+                        stops: Self::gradient_stops(&resolved),
+                        spread: GradientSpread::Pad,
+                    }));
+                }
+            }
+            BackgroundImage::RepeatingLinearGradient { angle, stops } => {
+                let resolved = Self::normalize_color_stops(stops);
+                if !resolved.is_empty() {
+                    let rad = angle.to_radians();
+                    let dx = rad.sin();
+                    let dy = -rad.cos();
+                    let len = 0.5 * (origin_rect.width() * dx.abs() + origin_rect.height() * dy.abs());
+                    let cx = origin_rect.x() + origin_rect.width() / 2.0;
+                    let cy = origin_rect.y() + origin_rect.height() / 2.0;
+                    let start = Point::new(cx - dx * len - clip_rect.x(), cy - dy * len - clip_rect.y());
+                    let end = Point::new(cx + dx * len - clip_rect.x(), cy + dy * len - clip_rect.y());
+                    self.list.push(DisplayItem::LinearGradient(LinearGradientItem {
+                        rect: clip_rect,
+                        start,
+                        end,
+                        stops: Self::gradient_stops(&resolved),
+                        spread: GradientSpread::Repeat,
+                    }));
+                }
+            }
+            BackgroundImage::RadialGradient { stops } => {
+                let resolved = Self::normalize_color_stops(stops);
+                if !resolved.is_empty() {
+                    let cx = origin_rect.x() + origin_rect.width() / 2.0;
+                    let cy = origin_rect.y() + origin_rect.height() / 2.0;
+                    let radius = ((origin_rect.width() * origin_rect.width()
+                        + origin_rect.height() * origin_rect.height())
+                        .sqrt())
+                        / 2.0;
+                    let center = Point::new(cx - clip_rect.x(), cy - clip_rect.y());
+                    self.list.push(DisplayItem::RadialGradient(RadialGradientItem {
+                        rect: clip_rect,
+                        center,
+                        radius,
+                        stops: Self::gradient_stops(&resolved),
+                        spread: GradientSpread::Pad,
+                    }));
+                }
+            }
+            BackgroundImage::RepeatingRadialGradient { stops } => {
+                let resolved = Self::normalize_color_stops(stops);
+                if !resolved.is_empty() {
+                    let cx = origin_rect.x() + origin_rect.width() / 2.0;
+                    let cy = origin_rect.y() + origin_rect.height() / 2.0;
+                    let radius = ((origin_rect.width() * origin_rect.width()
+                        + origin_rect.height() * origin_rect.height())
+                        .sqrt())
+                        / 2.0;
+                    let center = Point::new(cx - clip_rect.x(), cy - clip_rect.y());
+                    self.list.push(DisplayItem::RadialGradient(RadialGradientItem {
+                        rect: clip_rect,
+                        center,
+                        radius,
+                        stops: Self::gradient_stops(&resolved),
+                        spread: GradientSpread::Repeat,
+                    }));
+                }
+            }
+            BackgroundImage::Url(src) => {
+                if let Some(image) = self.decode_image(src) {
+                    let img_w = image.width as f32;
+                    let img_h = image.height as f32;
+                    if img_w > 0.0 && img_h > 0.0 {
+                        let (mut tile_w, mut tile_h) = Self::compute_background_size(
+                            layer,
+                            style.font_size,
+                            origin_rect.width(),
+                            origin_rect.height(),
+                            img_w,
+                            img_h,
+                        );
+
+                        let mut rounded_x = false;
+                        let mut rounded_y = false;
+                        if layer.repeat.x == BackgroundRepeatKeyword::Round {
+                            tile_w = Self::round_tile_length(origin_rect.width(), tile_w);
+                            rounded_x = true;
+                        }
+                        if layer.repeat.y == BackgroundRepeatKeyword::Round {
+                            tile_h = Self::round_tile_length(origin_rect.height(), tile_h);
+                            rounded_y = true;
+                        }
+                        if rounded_x ^ rounded_y
+                            && matches!(
+                                layer.size,
+                                BackgroundSize::Explicit(
+                                    BackgroundSizeComponent::Auto,
+                                    BackgroundSizeComponent::Auto
+                                )
+                            )
+                        {
+                            let aspect = if img_h != 0.0 { img_w / img_h } else { 1.0 };
+                            if rounded_x {
+                                tile_h = tile_w / aspect;
+                            } else {
+                                tile_w = tile_h * aspect;
+                            }
+                        }
+
+                        if tile_w > 0.0 && tile_h > 0.0 {
+                            let (offset_x, offset_y) = Self::resolve_background_offset(
+                                layer.position,
+                                origin_rect.width(),
+                                origin_rect.height(),
+                                tile_w,
+                                tile_h,
+                                style.font_size,
+                            );
+
+                            let positions_x = Self::tile_positions(
+                                layer.repeat.x,
+                                origin_rect.x(),
+                                origin_rect.width(),
+                                tile_w,
+                                offset_x,
+                                clip_rect.min_x(),
+                                clip_rect.max_x(),
+                            );
+                            let positions_y = Self::tile_positions(
+                                layer.repeat.y,
+                                origin_rect.y(),
+                                origin_rect.height(),
+                                tile_h,
+                                offset_y,
+                                clip_rect.min_y(),
+                                clip_rect.max_y(),
+                            );
+
+                            let max_x = clip_rect.max_x();
+                            let max_y = clip_rect.max_y();
+                            let quality = Self::image_filter_quality(Some(style));
+                            let image = Arc::new(image);
+
+                            for ty in positions_y.iter().copied() {
+                                for tx in positions_x.iter().copied() {
+                                    if tx >= max_x || ty >= max_y {
+                                        continue;
+                                    }
+
+                                    let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
+                                    let Some(intersection) = tile_rect.intersection(clip_rect) else {
+                                        continue;
+                                    };
+                                    if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
+                                        continue;
+                                    }
+
+                                    let scale_x = image.width as f32 / tile_w;
+                                    let scale_y = image.height as f32 / tile_h;
+                                    if !scale_x.is_finite() || !scale_y.is_finite() {
+                                        continue;
+                                    }
+
+                                    let src_rect = Rect::from_xywh(
+                                        (intersection.x() - tile_rect.x()) * scale_x,
+                                        (intersection.y() - tile_rect.y()) * scale_y,
+                                        intersection.width() * scale_x,
+                                        intersection.height() * scale_y,
+                                    );
+
+                                    self.list.push(DisplayItem::Image(ImageItem {
+                                        dest_rect: intersection,
+                                        image: image.clone(),
+                                        filter_quality: quality,
+                                        src_rect: Some(src_rect),
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            BackgroundImage::None => {}
+        }
+
+        if pushed_clip {
+            self.list.push(DisplayItem::PopClip);
         }
     }
 

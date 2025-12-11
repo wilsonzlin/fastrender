@@ -11,6 +11,8 @@ use fastrender::{
     OpacityItem, PaintTextItem as TextItem, RadialGradientItem, StrokeRectItem, StrokeRoundedRectItem, Transform2D,
     TransformItem,
 };
+use fastrender::css::types::ColorStop;
+use fastrender::style::types::{BackgroundImage, BackgroundLayer, BackgroundRepeat};
 use std::sync::Arc;
 
 // ============================================================================
@@ -94,6 +96,66 @@ fn fragment_uniform_border_emits_stroke() {
         .items()
         .iter()
         .any(|i| matches!(i, DisplayItem::StrokeRect(_) | DisplayItem::StrokeRoundedRect(_))));
+}
+
+#[test]
+fn fragment_background_gradient_emits_linear_gradient() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.background_color = Rgba::TRANSPARENT;
+    style.set_background_layers(vec![BackgroundLayer {
+        image: Some(BackgroundImage::LinearGradient {
+            angle: 0.0,
+            stops: vec![
+                ColorStop {
+                    color: Rgba::RED,
+                    position: Some(0.0),
+                },
+                ColorStop {
+                    color: Rgba::BLUE,
+                    position: Some(1.0),
+                },
+            ],
+        }),
+        repeat: BackgroundRepeat::no_repeat(),
+        ..Default::default()
+    }]);
+
+    let fragment =
+        fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 30.0, 10.0), vec![], Arc::new(style));
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    assert!(list
+        .items()
+        .iter()
+        .any(|i| matches!(i, DisplayItem::LinearGradient(_))));
+}
+
+#[test]
+fn fragment_background_image_emits_image_item() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.background_color = Rgba::TRANSPARENT;
+    style.set_background_layers(vec![BackgroundLayer {
+        image: Some(BackgroundImage::Url(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"><rect width=\"1\" height=\"1\" fill=\"blue\"/></svg>"
+                .into(),
+        )),
+        repeat: BackgroundRepeat::no_repeat(),
+        ..Default::default()
+    }]);
+    let fragment =
+        fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    let image = list.items().iter().find_map(|i| {
+        if let DisplayItem::Image(img) = i {
+            Some(img)
+        } else {
+            None
+        }
+    });
+    let image = image.expect("background image should emit an image item");
+    assert_eq!(image.dest_rect.width(), 1.0);
+    assert_eq!(image.dest_rect.height(), 1.0);
 }
 
 #[test]
