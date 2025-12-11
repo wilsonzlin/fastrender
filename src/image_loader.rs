@@ -325,6 +325,8 @@ impl Clone for ImageCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::RgbaImage;
+    use std::path::PathBuf;
 
     #[test]
     fn render_inline_svg_returns_image() {
@@ -341,6 +343,29 @@ mod tests {
         let data_url =
             "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E";
         let image = cache.load(data_url).expect("decode data URL");
+        assert_eq!(image.width(), 1);
+        assert_eq!(image.height(), 1);
+    }
+
+    #[test]
+    fn resolves_relative_urls_against_base() {
+        let mut cache = ImageCache::new();
+        let mut path: PathBuf = std::env::temp_dir();
+        path.push(format!(
+            "fastrender_base_url_test_{}_{}.png",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let dir = path.parent().unwrap().to_path_buf();
+        let image = RgbaImage::from_raw(1, 1, vec![255, 0, 0, 255]).expect("build 1x1");
+        image.save(&path).expect("encode png");
+        let base_url = format!("file://{}", dir.display());
+        cache.set_base_url(base_url);
+
+        let image = cache.load(path.file_name().unwrap().to_str().unwrap()).expect("load via base");
         assert_eq!(image.width(), 1);
         assert_eq!(image.height(), 1);
     }
