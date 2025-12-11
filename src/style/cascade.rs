@@ -10,7 +10,9 @@ use crate::css::parser::{parse_declarations, parse_stylesheet};
 use crate::css::selectors::PseudoElement;
 use crate::css::types::{Declaration, StyleRule, StyleSheet};
 use crate::dom::{with_target_fragment, DomNode, ElementRef};
-use crate::style::defaults::{get_default_styles_for_element, parse_color_attribute, parse_dimension_attribute};
+use crate::style::defaults::{
+    get_default_styles_for_element, parse_color_attribute, parse_dimension_attribute,
+};
 use crate::style::display::Display;
 use crate::style::grid::finalize_grid_placement;
 use crate::style::media::MediaContext;
@@ -154,7 +156,10 @@ fn apply_styles_internal(
 
     // Apply matching CSS rules and inline styles with full cascade ordering
     let ancestors: Vec<&DomNode> = vec![];
-    let matching_rules = find_matching_rules(node, rules, &ancestors);
+    let mut matching_rules = find_matching_rules(node, rules, &ancestors);
+    if let Some(presentational_rule) = dir_presentational_hint(node, 0) {
+        matching_rules.push(presentational_rule);
+    }
     let inline_decls = node.get_attribute("style").as_deref().map(parse_declarations);
     apply_cascaded_declarations(
         &mut styles,
@@ -239,7 +244,10 @@ fn apply_styles_internal_with_ancestors(
     inherit_styles(&mut styles, parent_styles);
 
     // Apply matching CSS rules and inline styles with full cascade ordering
-    let matching_rules = find_matching_rules(node, rules, ancestors);
+    let mut matching_rules = find_matching_rules(node, rules, ancestors);
+    if let Some(presentational_rule) = dir_presentational_hint(node, 0) {
+        matching_rules.push(presentational_rule);
+    }
     let inline_decls = node.get_attribute("style").as_deref().map(parse_declarations);
     apply_cascaded_declarations(
         &mut styles,
@@ -548,6 +556,60 @@ mod tests {
         let stylesheet = parse_stylesheet(".item { color: blue !important; }").unwrap();
         let styled = apply_styles(&dom, &stylesheet);
         assert_eq!(styled.styles.color, Rgba::rgb(0, 128, 0));
+    }
+
+    #[test]
+    fn dir_attribute_sets_direction_and_isolate() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("dir".to_string(), "rtl".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(styled.styles.direction, crate::style::types::Direction::Rtl));
+        assert!(matches!(
+            styled.styles.unicode_bidi,
+            crate::style::types::UnicodeBidi::Isolate
+        ));
+    }
+
+    #[test]
+    fn author_css_overrides_presentational_dir() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("dir".to_string(), "rtl".to_string())],
+            },
+            children: vec![],
+        };
+
+        let stylesheet = parse_stylesheet("div { direction: ltr; unicode-bidi: normal; }").unwrap();
+        let styled = apply_styles(&dom, &stylesheet);
+        assert!(matches!(styled.styles.direction, crate::style::types::Direction::Ltr));
+        assert!(matches!(
+            styled.styles.unicode_bidi,
+            crate::style::types::UnicodeBidi::Normal
+        ));
+    }
+
+    #[test]
+    fn inline_style_overrides_presentational_dir() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![
+                    ("dir".to_string(), "rtl".to_string()),
+                    ("style".to_string(), "direction: ltr;".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(styled.styles.direction, crate::style::types::Direction::Ltr));
     }
 
     #[test]
@@ -1579,6 +1641,24 @@ fn apply_cascaded_declarations<F>(
         if filter(&entry.declaration) {
             apply_declaration(styles, &entry.declaration, parent_font_size, root_font_size);
         }
+    }
+}
+
+fn dir_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule> {
+    let dir = node.get_attribute("dir")?;
+    let dir = dir.trim().to_ascii_lowercase();
+    match dir.as_str() {
+        "ltr" | "rtl" => {
+            let css = format!("direction: {}; unicode-bidi: isolate;", dir);
+            let declarations = parse_declarations(&css);
+            Some(MatchedRule {
+                origin: StyleOrigin::Author,
+                specificity: 0,
+                order,
+                declarations,
+            })
+        }
+        _ => None,
     }
 }
 
