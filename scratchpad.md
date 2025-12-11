@@ -496,6 +496,8 @@
    - Generate proper anonymous inline wrappers; validate remaining percentage/min-height edge cases and baseline behavior in nested formatting contexts.
 6. Lists/markers:
    - Implement ::marker property restrictions and inside positioning geometry; round out counter style coverage and marker inheritance edge cases.
+7. Positioning:
+   - Propagate positioned containing blocks through table FC and any remaining formatting contexts; derive static positions from hypothetical in-flow placement even when padding box height is unresolved.
 
 ## Notes
 - Current table code uses `InlineFormattingContext` for cell intrinsic widths; this fails for block/table/replaced content—needs a per-context intrinsic measurement.
