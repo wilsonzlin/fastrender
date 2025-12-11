@@ -329,6 +329,9 @@ pub fn establishes_bfc(style: &ComputedStyle) -> bool {
     use crate::style::display::Display;
     use crate::style::types::Overflow;
 
+    if style.containment.size || style.containment.inline_size || style.containment.layout {
+        return true;
+    }
     if style.position == Position::Absolute || style.position == Position::Fixed {
         return true;
     }
@@ -592,5 +595,18 @@ mod tests {
     fn test_establishes_bfc_static() {
         let style = ComputedStyle::default();
         assert!(!establishes_bfc(&style));
+    }
+
+    #[test]
+    fn test_establishes_bfc_containment() {
+        let mut style = ComputedStyle::default();
+        style.containment = crate::style::types::Containment::with_flags(true, false, false, false, false);
+        assert!(establishes_bfc(&style));
+
+        style.containment = crate::style::types::Containment::with_flags(false, true, false, false, false);
+        assert!(establishes_bfc(&style));
+
+        style.containment = crate::style::types::Containment::with_flags(false, false, true, false, false);
+        assert!(establishes_bfc(&style));
     }
 }

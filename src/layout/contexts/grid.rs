@@ -118,6 +118,14 @@ impl GridFormattingContext {
         Self { viewport_size }
     }
 
+    fn horizontal_edges_px(&self, style: &ComputedStyle) -> Option<f32> {
+        let left = self.resolve_length_px(&style.padding_left, style)?;
+        let right = self.resolve_length_px(&style.padding_right, style)?;
+        let bl = self.resolve_length_px(&style.border_left_width, style)?;
+        let br = self.resolve_length_px(&style.border_right_width, style)?;
+        Some(left + right + bl + br)
+    }
+
     /// Builds a Taffy tree from a BoxNode tree
     ///
     /// Recursively converts the BoxNode tree to Taffy nodes, returning
@@ -746,6 +754,12 @@ impl GridFormattingContext {
 
     /// Computes intrinsic size using Taffy
     fn compute_intrinsic_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
+        let style = &box_node.style;
+        if style.containment.size || style.containment.inline_size {
+            let edges = self.horizontal_edges_px(style).unwrap_or(0.0);
+            return Ok(edges.max(0.0));
+        }
+
         let mut taffy = TaffyTree::new();
         let (root_id, _node_map) = self.build_taffy_tree(&mut taffy, box_node)?;
 

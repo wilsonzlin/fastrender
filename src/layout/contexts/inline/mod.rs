@@ -1620,12 +1620,26 @@ impl InlineFormattingContext {
 
     /// Calculates intrinsic width for inline content
     fn calculate_intrinsic_width(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> f32 {
+        let style = &box_node.style;
+        if style.containment.size || style.containment.inline_size {
+            let edges = resolve_length_for_width(style.padding_left, 0.0, style, &self.font_context, self.viewport_size)
+                + resolve_length_for_width(style.padding_right, 0.0, style, &self.font_context, self.viewport_size)
+                + resolve_length_for_width(style.border_left_width, 0.0, style, &self.font_context, self.viewport_size)
+                + resolve_length_for_width(
+                    style.border_right_width,
+                    0.0,
+                    style,
+                    &self.font_context,
+                    self.viewport_size,
+                );
+            return edges;
+        }
+
         let base_direction = resolve_base_direction_for_box(box_node);
         let items = match self.collect_inline_items_with_base(box_node, f32::INFINITY, None, base_direction) {
             Ok(items) => items,
             Err(_) => return 0.0,
         };
-        let style = &box_node.style;
         let indent_value = resolve_length_with_percentage_inline(
             style.text_indent.length,
             None,

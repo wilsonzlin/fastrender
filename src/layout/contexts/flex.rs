@@ -123,6 +123,12 @@ impl FormattingContext for FlexFormattingContext {
 
     /// Computes intrinsic size by running Taffy with appropriate constraints
     fn compute_intrinsic_inline_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
+        let style = &box_node.style;
+        if style.containment.size || style.containment.inline_size {
+            let edges = self.horizontal_edges_px(style).unwrap_or(0.0);
+            return Ok(edges.max(0.0));
+        }
+
         // Create a fresh Taffy tree
         let mut taffy_tree: TaffyTree<()> = TaffyTree::new();
 

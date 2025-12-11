@@ -843,7 +843,10 @@ impl FormattingContext for BlockFormattingContext {
             child_height_space,
         );
 
-        let (child_fragments, content_height) = self.layout_children(box_node, &child_constraints)?;
+        let (child_fragments, mut content_height) = self.layout_children(box_node, &child_constraints)?;
+        if style.containment.size {
+            content_height = 0.0;
+        }
 
         let min_height = style
             .min_height
@@ -898,6 +901,10 @@ impl FormattingContext for BlockFormattingContext {
             if resolved > 0.0 {
                 return Ok(border_size_from_box_sizing(resolved, edges, style.box_sizing));
             }
+        }
+
+        if style.containment.size || style.containment.inline_size {
+            return Ok(edges);
         }
 
         // Replaced elements fall back to their intrinsic content size plus padding/borders
@@ -1433,5 +1440,31 @@ mod tests {
             max_width <= run_max * 1.1,
             "max-content width should not concatenate inline runs across blocks, got {max_width} vs run {run_max}"
         );
+    }
+
+    #[test]
+    fn size_containment_zeroes_intrinsic_inline_contribution() {
+        let mut style = (*default_style()).clone();
+        style.containment = crate::style::types::Containment::with_flags(true, false, false, false, false);
+        style.padding_left = Length::px(4.0);
+        style.padding_right = Length::px(4.0);
+        style.border_left_width = Length::px(2.0);
+        style.border_right_width = Length::px(2.0);
+        let container = BoxNode::new_block(
+            Arc::new(style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(default_style(), "superlongword".to_string())],
+        );
+
+        let bfc = BlockFormattingContext::new();
+        let max = bfc
+            .compute_intrinsic_inline_size(&container, IntrinsicSizingMode::MaxContent)
+            .unwrap();
+        let min = bfc
+            .compute_intrinsic_inline_size(&container, IntrinsicSizingMode::MinContent)
+            .unwrap();
+
+        assert!((max - 12.0).abs() < 0.001);
+        assert!((min - 12.0).abs() < 0.001);
     }
 }
