@@ -203,10 +203,14 @@ impl ReplacedType {
                     return src;
                 }
 
+                let has_width_descriptors = srcset.iter().any(|c| matches!(c.descriptor, SrcsetDescriptor::Width(_)));
+
                 let effective_slot_width = ctx.slot_width.or_else(|| {
                     let viewport = ctx.viewport?;
                     if let (Some(sizes_list), Some(media_ctx)) = (sizes, ctx.media_context) {
                         Some(sizes_list.evaluate(media_ctx, viewport, ctx.font_size.unwrap_or(16.0)))
+                    } else if has_width_descriptors {
+                        Some(viewport.width)
                     } else {
                         Some(viewport.width)
                     }
@@ -1110,5 +1114,37 @@ mod tests {
         });
 
         assert_eq!(chosen, "400w", "last sizes entry (300px) should drive selection");
+    }
+
+    #[test]
+    fn width_descriptors_default_to_viewport_when_no_sizes_and_no_slot() {
+        let img = ReplacedType::Image {
+            src: "fallback".to_string(),
+            alt: None,
+            srcset: vec![
+                SrcsetCandidate {
+                    url: "400w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(400),
+                },
+                SrcsetCandidate {
+                    url: "800w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(800),
+                },
+            ],
+            sizes: None,
+        };
+
+        // With viewport width 500 and DPR 2, density candidates are 0.8 and 1.6.
+        let viewport = Size::new(500.0, 300.0);
+        let media_ctx = MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(2.0);
+        let chosen = img.image_source_for_context(ImageSelectionContext {
+            scale: 2.0,
+            slot_width: None,
+            viewport: Some(viewport),
+            media_context: Some(&media_ctx),
+            font_size: Some(16.0),
+        });
+
+        assert_eq!(chosen, "800w", "viewport fallback should make 800w best for DPR=2");
     }
 }
