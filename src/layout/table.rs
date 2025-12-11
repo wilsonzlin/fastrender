@@ -27,6 +27,7 @@
 //! - HTML 5.2 Section 4.9: Tabular data
 
 use crate::geometry::{Point, Rect};
+use crate::layout::absolute_positioning::{AbsoluteLayout, AbsoluteLayoutInput, resolve_positioned_style};
 use crate::layout::constraints::{AvailableSpace, LayoutConstraints};
 use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::factory::FormattingContextFactory;
@@ -34,6 +35,7 @@ use crate::layout::contexts::table::column_distribution::{
     distribute_spanning_cell_width, distribute_spanning_percentage, ColumnConstraints, ColumnDistributor,
     DistributionMode,
 };
+use crate::layout::contexts::positioned::ContainingBlock;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::style::color::Rgba;
 use crate::style::computed::Visibility;
@@ -1994,6 +1996,8 @@ pub struct TableFormattingContext {
     structure: Option<TableStructure>,
     /// Formatting context factory carrying shared font resources for cell layout.
     factory: FormattingContextFactory,
+    viewport_size: crate::geometry::Size,
+    nearest_positioned_cb: ContainingBlock,
 }
 
 impl TableFormattingContext {
@@ -2004,9 +2008,13 @@ impl TableFormattingContext {
 
     /// Creates a table formatting context that reuses the provided factory.
     pub fn with_factory(factory: FormattingContextFactory) -> Self {
+        let viewport_size = factory.viewport_size();
+        let nearest_positioned_cb = factory.nearest_positioned_cb();
         Self {
             structure: None,
             factory,
+            viewport_size,
+            nearest_positioned_cb,
         }
     }
 
@@ -2240,11 +2248,26 @@ impl Default for TableFormattingContext {
 impl FormattingContext for TableFormattingContext {
     /// Performs full table layout following CSS table algorithms (auto layout)
     fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
+        let mut positioned_children: Vec<BoxNode> = Vec::new();
+        for child in &box_node.children {
+            if matches!(
+                child.style.position,
+                crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
+            ) {
+                positioned_children.push(child.clone());
+            }
+        }
+
         let structure = TableStructure::from_box_tree(box_node);
         let captions: Vec<&BoxNode> = box_node
             .children
             .iter()
-            .filter(|child| matches!(child.style.display, Display::TableCaption))
+            .filter(|child| {
+                !matches!(
+                    child.style.position,
+                    crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
+                ) && matches!(child.style.display, Display::TableCaption)
+            })
             .collect();
 
         let max_source_row = structure.rows.iter().map(|r| r.source_index).max().unwrap_or(0);
@@ -2336,19 +2359,62 @@ impl FormattingContext for TableFormattingContext {
         let max_height = resolve_opt_length_against(box_node.style.max_height.as_ref(), font_size, containing_height);
         let table_height = specified_height.map(|h| clamp_to_min_max(h, min_height, max_height));
 
+        // Helper to position out-of-flow children against a containing block.
+        let place_out_of_flow = |fragment: &mut FragmentNode, cb: ContainingBlock| -> Result<(), LayoutError> {
+            if positioned_children.is_empty() {
+                return Ok(());
+            }
+            let abs = AbsoluteLayout::new();
+            for child in &positioned_children {
+                let mut layout_child = child.clone();
+                let mut style = (*layout_child.style).clone();
+                style.position = crate::style::position::Position::Static;
+                layout_child.style = Arc::new(style);
+
+                let factory = self.factory.with_positioned_cb(cb);
+                let fc_type = layout_child
+                    .formatting_context()
+                    .unwrap_or(crate::style::display::FormattingContextType::Block);
+                let fc = factory.create(fc_type);
+                let child_constraints = LayoutConstraints::new(
+                    AvailableSpace::Definite(cb.rect.size.width),
+                    AvailableSpace::Definite(cb.rect.size.height),
+                );
+                let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
+                let positioned_style =
+                    resolve_positioned_style(&child.style, &cb, self.viewport_size, self.factory.font_context());
+                let input =
+                    AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, cb.rect.origin);
+                let result = abs.layout_absolute(&input, &cb)?;
+                child_fragment.bounds = Rect::new(result.position, result.size);
+                fragment.children.push(child_fragment);
+            }
+            Ok(())
+        };
+
         if (structure.column_count == 0 || structure.row_count == 0) && captions.is_empty() {
-            let bounds = Rect::from_xywh(
-                0.0,
-                0.0,
-                specified_width.or(containing_width).unwrap_or(0.0),
-                table_height.unwrap_or(0.0),
-            );
-            return Ok(FragmentNode::new_with_style(
-                bounds,
+            let width = specified_width.or(containing_width).unwrap_or(0.0);
+            let height = table_height.unwrap_or(0.0);
+            let mut fragment = FragmentNode::new_with_style(
+                Rect::from_xywh(0.0, 0.0, width, height),
                 FragmentContent::Block { box_id: None },
                 vec![],
                 box_node.style.clone(),
-            ));
+            );
+            if !positioned_children.is_empty() {
+                let cb = if box_node.style.position.is_positioned() {
+                    let padding_origin = Point::new(border_left + pad_left, border_top + pad_top);
+                    let padding_rect = Rect::new(
+                        padding_origin,
+                        crate::geometry::Size::new(width - border_left - border_right, height - border_top - border_bottom),
+                    );
+                    ContainingBlock::with_viewport(padding_rect, self.viewport_size)
+                } else {
+                    self.nearest_positioned_cb
+                };
+                place_out_of_flow(&mut fragment, cb)?;
+            }
+            return Ok(fragment);
         }
 
         let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
@@ -3345,7 +3411,8 @@ impl FormattingContext for TableFormattingContext {
             wrapper_children.push(frag);
         }
 
-        let table_translated = table_fragment.translate(Point::new(0.0, offset_y));
+        let table_origin_y = offset_y;
+        let table_translated = table_fragment.translate(Point::new(0.0, table_origin_y));
         offset_y += table_translated.bounds.height();
         wrapper_children.push(table_translated);
 
@@ -3373,12 +3440,33 @@ impl FormattingContext for TableFormattingContext {
         wrapper_style.border_left_style = BorderStyle::None;
         wrapper_style.box_shadow.clear();
 
-        Ok(FragmentNode::new_with_style(
+        let mut wrapper_fragment = FragmentNode::new_with_style(
             Rect::from_xywh(0.0, 0.0, table_bounds.width(), offset_y),
             FragmentContent::Block { box_id: None },
             wrapper_children,
             Arc::new(wrapper_style),
-        ))
+        );
+
+        if !positioned_children.is_empty() {
+            // Containing block is the table's padding box when the table itself is positioned; otherwise, inherit.
+            let cb = if box_node.style.position.is_positioned() {
+                let padding_origin = Point::new(border_left + pad_left, table_origin_y + border_top + pad_top);
+                let padding_rect = Rect::new(
+                    padding_origin,
+                    crate::geometry::Size::new(
+                        table_bounds.width() - border_left - border_right,
+                        table_bounds.height() - border_top - border_bottom,
+                    ),
+                );
+                ContainingBlock::with_viewport(padding_rect, self.viewport_size)
+            } else {
+                self.nearest_positioned_cb
+            };
+
+            place_out_of_flow(&mut wrapper_fragment, cb)?;
+        }
+
+        Ok(wrapper_fragment)
     }
 
     /// Calculates intrinsic inline size for the table
@@ -3436,6 +3524,8 @@ mod tests {
     use crate::style::ComputedStyle;
     use crate::tree::debug::DebugInfo;
     use std::sync::Arc;
+    use crate::style::position::Position;
+    use crate::text::font_loader::FontContext;
 
     fn create_test_style() -> Arc<ComputedStyle> {
         Arc::new(ComputedStyle::default())
@@ -5106,6 +5196,40 @@ mod tests {
         assert!((structure.columns[0].computed_width - 100.0).abs() < 0.01);
         assert!((structure.columns[1].computed_width - 150.0).abs() < 0.01);
         assert!((structure.columns[2].computed_width - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn absolute_child_inherits_nearest_positioned_cb_in_table() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+
+        let mut abs_style = ComputedStyle::default();
+        abs_style.display = Display::Block;
+        abs_style.position = Position::Absolute;
+        abs_style.left = Some(Length::px(5.0));
+        abs_style.top = Some(Length::px(7.0));
+        abs_style.width = Some(Length::px(12.0));
+        abs_style.height = Some(Length::px(9.0));
+
+        let abs_child = BoxNode::new_block(Arc::new(abs_style), FormattingContextType::Block, vec![]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![abs_child]);
+
+        let viewport = crate::geometry::Size::new(400.0, 400.0);
+        let cb_rect = crate::geometry::Rect::from_xywh(30.0, 40.0, 200.0, 200.0);
+        let cb = ContainingBlock::with_viewport(cb_rect, viewport);
+        let factory =
+            FormattingContextFactory::with_font_context_viewport_and_cb(FontContext::new(), viewport, cb);
+        let fc = TableFormattingContext::with_factory(factory);
+
+        let constraints = LayoutConstraints::definite(120.0, 120.0);
+        let fragment = fc.layout(&table, &constraints).unwrap();
+
+        assert!(!fragment.children.is_empty());
+        let abs_fragment = fragment.children.last().unwrap();
+        assert_eq!(abs_fragment.bounds.x(), 35.0);
+        assert_eq!(abs_fragment.bounds.y(), 47.0);
+        assert_eq!(abs_fragment.bounds.width(), 12.0);
+        assert_eq!(abs_fragment.bounds.height(), 9.0);
     }
 
     #[test]

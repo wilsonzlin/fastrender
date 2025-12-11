@@ -134,6 +134,11 @@ impl FormattingContextFactory {
         self.viewport_size
     }
 
+    /// Returns the nearest positioned containing block threaded into newly constructed contexts.
+    pub fn nearest_positioned_cb(&self) -> ContainingBlock {
+        self.nearest_positioned_cb
+    }
+
     /// Creates the appropriate FormattingContext for a box
     ///
     /// Examines the box's formatting context type and returns the
