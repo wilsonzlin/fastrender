@@ -1712,6 +1712,34 @@ pub fn calculate_auto_layout_widths(structure: &mut TableStructure, available_wi
                     col.min_width += extra * weight;
                 }
             }
+
+            // Distribute additional max width if the cell's max exceeds the span total.
+            let current_max: f32 = structure.columns[span_start..span_end]
+                .iter()
+                .map(|c| c.max_width)
+                .sum();
+            if cell.max_width.is_finite() && cell.max_width > current_max {
+                let extra = cell.max_width - current_max;
+                let weights: Vec<f32> = structure.columns[span_start..span_end]
+                    .iter()
+                    .map(|c| c.max_width.is_finite().then_some(c.max_width).unwrap_or(c.min_width).max(0.0))
+                    .collect();
+                let weight_sum: f32 = weights.iter().sum();
+                let default_weight = if weight_sum == 0.0 {
+                    1.0 / (span_end - span_start) as f32
+                } else {
+                    0.0
+                };
+                for (idx, col) in structure.columns[span_start..span_end].iter_mut().enumerate() {
+                    let weight = if weight_sum == 0.0 {
+                        default_weight
+                    } else {
+                        weights[idx] / weight_sum
+                    };
+                    // Keep max at least as large as min.
+                    col.max_width = (col.max_width + extra * weight).max(col.min_width);
+                }
+            }
         }
     }
 
@@ -5498,6 +5526,36 @@ mod tests {
 
         let sum: f32 = constraints.iter().filter_map(|c| c.percentage).sum();
         assert!((sum - 120.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn spanning_max_width_pushes_columns() {
+        let mut structure = TableStructure::new();
+        structure.column_count = 2;
+        structure.columns = vec![ColumnInfo::new(0), ColumnInfo::new(1)];
+        structure.cells = vec![CellInfo {
+            index: 0,
+            source_row: 0,
+            source_col: 0,
+            row: 0,
+            col: 0,
+            rowspan: 1,
+            colspan: 2,
+            box_index: 0,
+            min_width: 0.0,
+            max_width: 200.0,
+            min_height: 0.0,
+            bounds: Rect::ZERO,
+        }];
+
+        calculate_auto_layout_widths(&mut structure, 300.0);
+
+        let total_max = structure.columns.iter().map(|c| c.max_width).sum::<f32>();
+        assert!(
+            total_max >= 200.0 - 0.01,
+            "spanning max width should raise spanned columns (got {total_max})"
+        );
+        assert!(structure.columns[0].max_width > 0.0 && structure.columns[1].max_width > 0.0);
     }
 
     #[test]
