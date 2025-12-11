@@ -27,7 +27,7 @@
 //! ```
 
 use crate::geometry::Rect;
-use crate::paint::display_list::{BlendMode, DisplayItem, DisplayList, FillRectItem};
+use crate::paint::display_list::{BlendMode, DisplayItem, DisplayList, FillRectItem, ResolvedFilter, StackingContextItem};
 
 // ============================================================================
 // Optimization Configuration
@@ -255,8 +255,11 @@ impl DisplayListOptimizer {
     /// Cull items outside the viewport
     fn cull_items(&self, items: Vec<DisplayItem>, viewport: Rect) -> Vec<DisplayItem> {
         let mut result = Vec::with_capacity(items.len());
-        let mut stack_depth = 0;
+        let mut stack_depth = 0usize;
         let mut skip_until_depth: Option<usize> = None;
+        let mut forced_context_stack: Vec<bool> = Vec::new();
+        let mut active_forced_contexts = 0usize;
+        let mut active_transforms = 0usize;
 
         for item in items {
             // Track stack depth for push/pop operations
@@ -281,86 +284,133 @@ impl DisplayListOptimizer {
                 stack_depth += 1;
             }
 
-            // If we're skipping, check if we can stop
-            if let Some(target_depth) = skip_until_depth {
-                if is_pop && stack_depth <= target_depth {
-                    skip_until_depth = None;
+            match &item {
+                DisplayItem::PushTransform(t) => {
+                    if !t.transform.is_identity() {
+                        active_transforms += 1;
+                    }
                 }
-                if is_pop {
-                    stack_depth -= 1;
+                DisplayItem::PushStackingContext(sc) => {
+                    let force = !sc.filters.is_empty()
+                        || !sc.backdrop_filters.is_empty()
+                        || sc.transform.map_or(false, |t| !t.is_identity());
+                    forced_context_stack.push(force);
+                    if force {
+                        active_forced_contexts += 1;
+                    }
                 }
-                continue;
+                _ => {}
             }
 
-            // Check if this item intersects the viewport
-            let should_include = match &item {
-                // Check bounds for drawable items
-                DisplayItem::FillRect(i) => viewport.intersects(i.rect),
-                DisplayItem::StrokeRect(i) => viewport.intersects(i.rect.inflate(i.width / 2.0)),
-                DisplayItem::FillRoundedRect(i) => viewport.intersects(i.rect),
-                DisplayItem::StrokeRoundedRect(i) => viewport.intersects(i.rect.inflate(i.width / 2.0)),
-                DisplayItem::Text(item) => {
-                    let bounds = Rect::from_xywh(item.origin.x, item.origin.y, item.advance_width, item.font_size);
-                    viewport.intersects(bounds)
+            let force_active = active_transforms > 0 || active_forced_contexts > 0;
+
+            if skip_until_depth.is_none() {
+                match &item {
+                    DisplayItem::PushClip(clip) => {
+                        if !force_active && !viewport.intersects(clip.rect) {
+                            skip_until_depth = Some(stack_depth);
+                        }
+                    }
+                    DisplayItem::PushStackingContext(sc) => {
+                        let bounds = self.stacking_context_bounds(sc);
+                        if !viewport.intersects(bounds) {
+                            skip_until_depth = Some(stack_depth);
+                        }
+                    }
+                    _ => {}
                 }
-                DisplayItem::Image(i) => viewport.intersects(i.dest_rect),
-                DisplayItem::BoxShadow(i) => {
-                    if i.inset {
-                        viewport.intersects(i.rect)
-                    } else {
-                        // Outset shadow can extend by spread, blur, and offset.
-                        let blur_outset = i.blur_radius.abs() * 3.0;
-                        let spread = i.spread_radius;
-                        let shadow_rect = Rect::from_xywh(
-                            i.rect.x() + i.offset.x - spread,
-                            i.rect.y() + i.offset.y - spread,
-                            i.rect.width() + spread * 2.0,
-                            i.rect.height() + spread * 2.0,
-                        )
-                        .inflate(blur_outset);
-                        viewport.intersects(shadow_rect)
+            }
+
+            let skipping = skip_until_depth.is_some();
+
+            let mut include_item = false;
+
+            if !skipping {
+                include_item = if force_active {
+                    true
+                } else {
+                    match &item {
+                        // Check bounds for drawable items
+                        DisplayItem::FillRect(i) => viewport.intersects(i.rect),
+                        DisplayItem::StrokeRect(i) => viewport.intersects(i.rect.inflate(i.width / 2.0)),
+                        DisplayItem::FillRoundedRect(i) => viewport.intersects(i.rect),
+                        DisplayItem::StrokeRoundedRect(i) => viewport.intersects(i.rect.inflate(i.width / 2.0)),
+                        DisplayItem::Text(item) => {
+                            let bounds =
+                                Rect::from_xywh(item.origin.x, item.origin.y, item.advance_width, item.font_size);
+                            viewport.intersects(bounds)
+                        }
+                        DisplayItem::Image(i) => viewport.intersects(i.dest_rect),
+                        DisplayItem::BoxShadow(i) => {
+                            if i.inset {
+                                viewport.intersects(i.rect)
+                            } else {
+                                // Outset shadow can extend by spread, blur, and offset.
+                                let blur_outset = i.blur_radius.abs() * 3.0;
+                                let spread = i.spread_radius;
+                                let shadow_rect = Rect::from_xywh(
+                                    i.rect.x() + i.offset.x - spread,
+                                    i.rect.y() + i.offset.y - spread,
+                                    i.rect.width() + spread * 2.0,
+                                    i.rect.height() + spread * 2.0,
+                                )
+                                .inflate(blur_outset);
+                                viewport.intersects(shadow_rect)
+                            }
+                        }
+                        DisplayItem::Border(b) => {
+                            let max_w = b
+                                .top
+                                .width
+                                .max(b.right.width)
+                                .max(b.bottom.width)
+                                .max(b.left.width);
+                            viewport.intersects(b.rect.inflate(max_w * 0.5))
+                        }
+                        DisplayItem::LinearGradient(i) => viewport.intersects(i.rect),
+                        DisplayItem::RadialGradient(i) => viewport.intersects(i.rect),
+                        // Always include pop operations and other push operations
+                        DisplayItem::PushClip(_) => true,
+                        DisplayItem::PopClip
+                        | DisplayItem::PopOpacity
+                        | DisplayItem::PopTransform
+                        | DisplayItem::PopBlendMode
+                        | DisplayItem::PopStackingContext
+                        | DisplayItem::PushOpacity(_)
+                        | DisplayItem::PushTransform(_)
+                        | DisplayItem::PushBlendMode(_)
+                        | DisplayItem::PushStackingContext(_) => true,
+                    }
+                };
+            }
+
+            match &item {
+                DisplayItem::PopTransform => {
+                    if active_transforms > 0 {
+                        active_transforms -= 1;
                     }
                 }
-                DisplayItem::Border(b) => {
-                    let max_w = b
-                        .top
-                        .width
-                        .max(b.right.width)
-                        .max(b.bottom.width)
-                        .max(b.left.width);
-                    viewport.intersects(b.rect.inflate(max_w * 0.5))
-                }
-                DisplayItem::LinearGradient(i) => viewport.intersects(i.rect),
-                DisplayItem::RadialGradient(i) => viewport.intersects(i.rect),
-
-                // Clip items: if clip doesn't intersect viewport, skip all children
-                DisplayItem::PushClip(clip) => {
-                    if !viewport.intersects(clip.rect) {
-                        skip_until_depth = Some(stack_depth);
-                        false
-                    } else {
-                        true
+                DisplayItem::PopStackingContext => {
+                    if let Some(force) = forced_context_stack.pop() {
+                        if force && active_forced_contexts > 0 {
+                            active_forced_contexts -= 1;
+                        }
                     }
                 }
+                _ => {}
+            }
 
-                // Always include pop operations and other push operations
-                DisplayItem::PopClip
-                | DisplayItem::PopOpacity
-                | DisplayItem::PopTransform
-                | DisplayItem::PopBlendMode
-                | DisplayItem::PopStackingContext
-                | DisplayItem::PushOpacity(_)
-                | DisplayItem::PushTransform(_)
-                | DisplayItem::PushBlendMode(_)
-                | DisplayItem::PushStackingContext(_) => true,
-            };
+            if include_item {
+                result.push(item);
+            }
 
             if is_pop {
-                stack_depth -= 1;
-            }
-
-            if should_include {
-                result.push(item);
+                if let Some(target_depth) = skip_until_depth {
+                    if stack_depth <= target_depth {
+                        skip_until_depth = None;
+                    }
+                }
+                stack_depth = stack_depth.saturating_sub(1);
             }
         }
 
@@ -457,6 +507,67 @@ impl DisplayListOptimizer {
         }
 
         result
+    }
+
+    fn stacking_context_bounds(&self, item: &StackingContextItem) -> Rect {
+        let (l, t, r, b) = Self::filter_outset(&item.filters);
+        let (bl, bt, br, bb) = Self::filter_outset(&item.backdrop_filters);
+        let expand_left = l.max(bl);
+        let expand_top = t.max(bt);
+        let expand_right = r.max(br);
+        let expand_bottom = b.max(bb);
+
+        let mut bounds = if expand_left > 0.0 || expand_top > 0.0 || expand_right > 0.0 || expand_bottom > 0.0 {
+            Rect::from_xywh(
+                item.bounds.min_x() - expand_left,
+                item.bounds.min_y() - expand_top,
+                item.bounds.width() + expand_left + expand_right,
+                item.bounds.height() + expand_top + expand_bottom,
+            )
+        } else {
+            item.bounds
+        };
+
+        if let Some(transform) = item.transform {
+            bounds = transform.transform_rect(bounds);
+        }
+
+        bounds
+    }
+
+    fn filter_outset(filters: &[ResolvedFilter]) -> (f32, f32, f32, f32) {
+        let mut left: f32 = 0.0;
+        let mut top: f32 = 0.0;
+        let mut right: f32 = 0.0;
+        let mut bottom: f32 = 0.0;
+
+        for filter in filters {
+            match *filter {
+                ResolvedFilter::Blur(radius) => {
+                    let delta = radius.abs() * 3.0;
+                    left = left.max(delta);
+                    right = right.max(delta);
+                    top = top.max(delta);
+                    bottom = bottom.max(delta);
+                }
+                ResolvedFilter::DropShadow {
+                    offset_x,
+                    offset_y,
+                    blur_radius,
+                    spread,
+                    ..
+                } => {
+                    let delta = blur_radius.abs() * 3.0 + spread.max(0.0);
+                    left = left.max(delta - offset_x.min(0.0));
+                    right = right.max(delta + offset_x.max(0.0));
+                    top = top.max(delta - offset_y.min(0.0));
+                    bottom = bottom.max(delta + offset_y.max(0.0));
+                }
+                _ => {}
+            }
+        }
+
+        (left, top, right, bottom)
     }
 
     /// Try to merge two fill rects

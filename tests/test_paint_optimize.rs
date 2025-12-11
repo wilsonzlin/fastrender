@@ -5,6 +5,7 @@
 
 use fastrender::geometry::{Point, Rect};
 use fastrender::Rgba;
+use fastrender::paint::display_list::ResolvedFilter;
 use fastrender::{
     BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, DisplayListOptimizer,
     FillRectItem, FillRoundedRectItem, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem,
@@ -856,6 +857,80 @@ fn test_stacking_context_preserved() {
 
     let optimizer = DisplayListOptimizer::new();
     let (optimized, _stats) = optimizer.optimize(list, full_viewport());
+
+    assert_eq!(optimized.len(), 3);
+}
+
+#[test]
+fn stacking_context_filters_expand_cull_bounds() {
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+        z_index: 0,
+        creates_stacking_context: true,
+        bounds: Rect::from_xywh(-10.0, 0.0, 5.0, 5.0),
+        mix_blend_mode: BlendMode::Normal,
+        is_isolated: false,
+        transform: None,
+        filters: vec![ResolvedFilter::DropShadow {
+            offset_x: 20.0,
+            offset_y: 0.0,
+            blur_radius: 0.0,
+            spread: 0.0,
+            color: Rgba::BLACK,
+        }],
+        backdrop_filters: Vec::new(),
+        radii: BorderRadii::ZERO,
+    }));
+    list.push(make_fill_rect(-10.0, 0.0, 5.0, 5.0, Rgba::RED));
+    list.push(DisplayItem::PopStackingContext);
+
+    let optimizer = DisplayListOptimizer::new();
+    let (optimized, _stats) = optimizer.optimize(list, small_viewport());
+
+    // Drop shadow spills into the viewport, so the context and its content should be preserved.
+    assert_eq!(optimized.len(), 3);
+}
+
+#[test]
+fn offscreen_filtered_stacking_context_is_culled() {
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+        z_index: 0,
+        creates_stacking_context: true,
+        bounds: Rect::from_xywh(500.0, 500.0, 10.0, 10.0),
+        mix_blend_mode: BlendMode::Normal,
+        is_isolated: false,
+        transform: None,
+        filters: vec![ResolvedFilter::DropShadow {
+            offset_x: 5.0,
+            offset_y: 5.0,
+            blur_radius: 0.0,
+            spread: 0.0,
+            color: Rgba::BLACK,
+        }],
+        backdrop_filters: Vec::new(),
+        radii: BorderRadii::ZERO,
+    }));
+    list.push(make_fill_rect(500.0, 500.0, 10.0, 10.0, Rgba::RED));
+    list.push(DisplayItem::PopStackingContext);
+
+    let optimizer = DisplayListOptimizer::new();
+    let (optimized, _stats) = optimizer.optimize(list, small_viewport());
+
+    assert!(optimized.is_empty());
+}
+
+#[test]
+fn transforms_keep_children_from_being_culled() {
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushTransform(TransformItem {
+        transform: Transform2D::translate(150.0, 0.0),
+    }));
+    list.push(make_fill_rect(-120.0, 0.0, 10.0, 10.0, Rgba::RED));
+    list.push(DisplayItem::PopTransform);
+
+    let optimizer = DisplayListOptimizer::new();
+    let (optimized, _stats) = optimizer.optimize(list, small_viewport());
 
     assert_eq!(optimized.len(), 3);
 }

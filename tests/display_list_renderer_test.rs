@@ -63,3 +63,36 @@ fn backdrop_filters_modify_backdrop_region() {
     assert_eq!(pixel(&pixmap, 0, 0), (255, 0, 0, 255));
 }
 
+#[test]
+fn drop_shadow_filter_renders_shadow() {
+    let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+        z_index: 0,
+        creates_stacking_context: true,
+        bounds: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+        mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
+        is_isolated: true,
+        transform: None,
+        filters: vec![ResolvedFilter::DropShadow {
+            offset_x: 1.0,
+            offset_y: 0.0,
+            blur_radius: 0.0,
+            spread: 0.0,
+            color: Rgba::BLACK,
+        }],
+        backdrop_filters: Vec::new(),
+        radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+        color: Rgba::BLUE,
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let pixmap = renderer.render(&list).unwrap();
+    // Shadow offset right by 1px should leave black pixel at (2,0).
+    assert_eq!(pixel(&pixmap, 2, 0), (0, 0, 0, 255));
+    // Original content stays blue.
+    assert_eq!(pixel(&pixmap, 0, 0), (0, 0, 255, 255));
+}
