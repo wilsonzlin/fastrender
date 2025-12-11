@@ -259,7 +259,14 @@ impl DisplayListOptimizer {
         let mut active_transform_depth = 0usize;
         let mut context_stack: Vec<ContextRecord> = Vec::new();
         let mut active_effect_contexts = 0usize;
-        let mut skip_clip_depth = 0usize;
+        let mut clip_stack: Vec<ClipRecord> = Vec::new();
+
+        let refresh_context_clipping = |contexts: &mut [ContextRecord], clips: &[ClipRecord]| {
+            let clipped = clips.iter().any(|c| c.can_cull);
+            for ctx in contexts {
+                ctx.clipped_by_clip = clipped;
+            }
+        };
 
         for item in items {
             let mut include_item = false;
@@ -271,6 +278,10 @@ impl DisplayListOptimizer {
                     transform_stack.push(non_identity);
                     if non_identity {
                         active_transform_depth += 1;
+                        for clip in &mut clip_stack {
+                            clip.can_cull = false;
+                        }
+                        refresh_context_clipping(&mut context_stack, &clip_stack);
                     }
                     include_item = true;
                 }
@@ -284,10 +295,18 @@ impl DisplayListOptimizer {
                     let effects = !sc.filters.is_empty() || !sc.backdrop_filters.is_empty();
                     if effects {
                         active_effect_contexts += 1;
+                        for clip in &mut clip_stack {
+                            clip.can_cull = false;
+                        }
+                        refresh_context_clipping(&mut context_stack, &clip_stack);
                     }
                     let has_transform = sc.transform.map_or(false, |t| !t.is_identity());
                     if has_transform {
                         active_transform_depth += 1;
+                        for clip in &mut clip_stack {
+                            clip.can_cull = false;
+                        }
+                        refresh_context_clipping(&mut context_stack, &clip_stack);
                     }
                     context_stack.push(ContextRecord {
                         start_index: result.len(),
@@ -296,7 +315,7 @@ impl DisplayListOptimizer {
                         transform_active: active_transform_depth > 0,
                         has_transform,
                         has_effects: effects,
-                        clipped_by_clip: skip_clip_depth > 0,
+                        clipped_by_clip: clip_stack.iter().any(|c| c.can_cull),
                     });
                     include_item = true;
                 }
@@ -334,33 +353,32 @@ impl DisplayListOptimizer {
                     }
                 }
                 DisplayItem::PushClip(clip) => {
-                    if skip_clip_depth == 0 && active_effect_contexts == 0 && active_transform_depth == 0 {
-                        if !viewport.intersects(clip.rect) {
-                            skip_clip_depth += 1;
-                            include_item = false;
-                        } else {
-                            include_item = true;
-                        }
-                    } else {
-                        include_item = true;
-                    }
+                    let can_cull = !viewport.intersects(clip.rect)
+                        && active_effect_contexts == 0
+                        && active_transform_depth == 0;
+                    clip_stack.push(ClipRecord {
+                        start_index: result.len(),
+                        can_cull,
+                    });
+                    refresh_context_clipping(&mut context_stack, &clip_stack);
+                    include_item = true;
                 }
                 DisplayItem::PopClip => {
-                    if skip_clip_depth > 0 {
-                        skip_clip_depth -= 1;
-                        include_item = false;
-                    } else {
-                        include_item = true;
+                    if let Some(record) = clip_stack.pop() {
+                        if record.can_cull {
+                            result.truncate(record.start_index);
+                            continue;
+                        }
                     }
+                    refresh_context_clipping(&mut context_stack, &clip_stack);
+                    include_item = true;
                 }
                 _ => {}
             }
 
             let force_active = active_transform_depth > 0 || active_effect_contexts > 0;
 
-            if skip_clip_depth > 0 {
-                include_item = false;
-            } else if !include_item {
+            if !include_item {
                 if force_active {
                     include_item = true;
                 } else {
@@ -386,7 +404,7 @@ impl DisplayListOptimizer {
 
             if include_item {
                 result.push(item.clone());
-                if active_transform_depth == 0 && skip_clip_depth == 0 {
+                if active_transform_depth == 0 && !clip_stack.iter().any(|c| c.can_cull) {
                     if item_bounds.is_none() {
                         item_bounds = self.item_bounds(result.last().unwrap());
                     }
@@ -685,6 +703,12 @@ struct ContextRecord {
     has_transform: bool,
     has_effects: bool,
     clipped_by_clip: bool,
+}
+
+#[derive(Clone)]
+struct ClipRecord {
+    start_index: usize,
+    can_cull: bool,
 }
 
 impl Default for DisplayListOptimizer {

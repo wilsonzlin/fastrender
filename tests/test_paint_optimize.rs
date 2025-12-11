@@ -710,6 +710,28 @@ fn test_clip_outside_viewport_culls_children() {
     assert!(optimized.len() <= 2);
 }
 
+#[test]
+fn transform_keeps_clipped_content_from_being_culled() {
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushClip(ClipItem {
+        rect: Rect::from_xywh(500.0, 500.0, 50.0, 50.0),
+        radii: None,
+    }));
+    // Transform could reposition content relative to the viewport, so the optimizer should not drop it.
+    list.push(DisplayItem::PushTransform(TransformItem {
+        transform: Transform2D::translate(-450.0, -450.0),
+    }));
+    list.push(make_fill_rect(500.0, 500.0, 20.0, 20.0, Rgba::RED));
+    list.push(DisplayItem::PopTransform);
+    list.push(DisplayItem::PopClip);
+
+    let optimizer = DisplayListOptimizer::new();
+    let (optimized, _stats) = optimizer.optimize(list, small_viewport());
+
+    // Clip would normally cull, but the active transform means we conservatively keep the content.
+    assert_eq!(optimized.len(), 5);
+}
+
 // ============================================================================
 // Transform Tests
 // ============================================================================
