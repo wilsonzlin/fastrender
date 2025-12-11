@@ -636,6 +636,18 @@ impl CounterManager {
         self.scopes.len()
     }
 
+    /// Returns a snapshot of all counters (outermost to innermost values)
+    /// keyed by counter name.
+    pub fn snapshot(&self) -> HashMap<String, Vec<i32>> {
+        let mut map: HashMap<String, Vec<i32>> = HashMap::new();
+        for scope in &self.scopes {
+            for (name, value) in &scope.counters {
+                map.entry(name.clone()).or_default().push(*value);
+            }
+        }
+        map
+    }
+
     /// Checks if a counter exists in any scope
     pub fn has(&self, name: &str) -> bool {
         self.scopes.iter().any(|scope| scope.counters.contains_key(name))

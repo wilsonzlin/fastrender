@@ -148,6 +148,15 @@ impl DomNode {
         }
     }
 
+    pub fn attributes_iter(&self) -> Box<dyn Iterator<Item = (&str, &str)> + '_> {
+        match &self.node_type {
+            DomNodeType::Element { attributes, .. } => {
+                Box::new(attributes.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            }
+            _ => Box::new(std::iter::empty()),
+        }
+    }
+
     pub fn is_element(&self) -> bool {
         matches!(self.node_type, DomNodeType::Element { .. })
     }

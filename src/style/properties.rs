@@ -9,6 +9,7 @@
 use crate::css::properties::parse_length;
 use crate::css::types::{Declaration, PropertyValue};
 use crate::style::color::Rgba;
+use crate::style::content::{parse_content, ContentValue};
 use crate::style::counters::CounterSet;
 use crate::style::display::Display;
 use crate::style::float::{Clear, Float};
@@ -63,6 +64,31 @@ fn parse_background_image_value(value: &PropertyValue) -> Option<BackgroundImage
         PropertyValue::Keyword(kw) if kw == "none" => Some(BackgroundImage::None),
         _ => None,
     }
+}
+
+fn content_value_from_property(value: &PropertyValue) -> Option<ContentValue> {
+    let css_text = match value {
+        PropertyValue::String(s) => format!("\"{}\"", s),
+        PropertyValue::Url(url) => format!("url({})", url),
+        PropertyValue::Keyword(kw) => kw.clone(),
+        PropertyValue::Multiple(list) => {
+            let mut parts = Vec::new();
+            for item in list {
+                match item {
+                    PropertyValue::String(s) => parts.push(format!("\"{}\"", s)),
+                    PropertyValue::Url(url) => parts.push(format!("url({})", url)),
+                    PropertyValue::Keyword(kw) => parts.push(kw.clone()),
+                    PropertyValue::Number(n) => parts.push(n.to_string()),
+                    PropertyValue::Percentage(p) => parts.push(format!("{}%", p)),
+                    _ => return None,
+                }
+            }
+            parts.join(" ")
+        }
+        _ => return None,
+    };
+
+    parse_content(&css_text)
 }
 
 fn parse_background_image_list(value: &PropertyValue) -> Option<Vec<Option<BackgroundImage>>> {
@@ -1925,16 +1951,57 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
 
         // Content property (for ::before and ::after pseudo-elements)
         "content" => {
+            if let Some(parsed) = content_value_from_property(&resolved_value) {
+                styles.content_value = parsed.clone();
+                // Keep legacy string storage for marker tests and existing code paths.
+                styles.content = match &resolved_value {
+                    PropertyValue::String(s) => s.clone(),
+                    PropertyValue::Keyword(k) => k.clone(),
+                    PropertyValue::Multiple(tokens) => tokens
+                        .iter()
+                        .map(|t| match t {
+                            PropertyValue::String(s) => format!("\"{}\"", s),
+                            PropertyValue::Keyword(k) => k.clone(),
+                            PropertyValue::Url(u) => format!("url({})", u),
+                            PropertyValue::Number(n) => n.to_string(),
+                            PropertyValue::Percentage(p) => format!("{}%", p),
+                            _ => String::new(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    PropertyValue::Url(u) => format!("url({})", u),
+                    _ => String::new(),
+                };
+            }
+        }
+        "quotes" => {
             match &resolved_value {
-                PropertyValue::String(s) => {
-                    styles.content = s.clone();
+                PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => {
+                    styles.quotes.clear();
                 }
-                PropertyValue::Keyword(kw) => {
-                    // "none" and "normal" mean no content
-                    styles.content = kw.clone();
+                PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => {
+                    styles.quotes = crate::style::content::default_quotes();
+                }
+                PropertyValue::Multiple(list) if list.iter().all(|v| matches!(v, PropertyValue::String(_))) => {
+                    let strings: Vec<String> = list
+                        .iter()
+                        .filter_map(|v| {
+                            if let PropertyValue::String(s) = v {
+                                Some(s.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    if strings.len() % 2 == 0 && !strings.is_empty() {
+                        styles.quotes = strings
+                            .chunks(2)
+                            .map(|pair| (pair[0].clone(), pair[1].clone()))
+                            .collect();
+                    }
                 }
                 _ => {}
-            }
+            };
         }
         "image-rendering" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
@@ -5032,6 +5099,34 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert_eq!(style.list_style_type, ListStyleType::Georgian);
+    }
+
+    #[test]
+    fn parses_quotes_property() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "quotes".to_string(),
+            value: PropertyValue::Multiple(vec![
+                PropertyValue::String("«".to_string()),
+                PropertyValue::String("»".to_string()),
+                PropertyValue::String("‹".to_string()),
+                PropertyValue::String("›".to_string()),
+            ]),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(
+            style.quotes,
+            vec![("«".to_string(), "»".to_string()), ("‹".to_string(), "›".to_string())]
+        );
+
+        let decl = Declaration {
+            property: "quotes".to_string(),
+            value: PropertyValue::Keyword("none".to_string()),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(style.quotes.is_empty());
     }
 
     #[test]

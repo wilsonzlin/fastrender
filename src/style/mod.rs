@@ -248,6 +248,10 @@ pub struct ComputedStyle {
 
     // Generated content (for ::before and ::after pseudo-elements)
     pub content: String,
+    pub content_value: crate::style::content::ContentValue,
+
+    /// Quotes used by open-quote/close-quote
+    pub quotes: Vec<(String, String)>,
 }
 
 impl Default for ComputedStyle {
@@ -433,6 +437,8 @@ impl Default for ComputedStyle {
             custom_properties: HashMap::new(),
 
             content: String::new(),
+            content_value: crate::style::content::ContentValue::None,
+            quotes: crate::style::content::default_quotes(),
         }
     }
 }

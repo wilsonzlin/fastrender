@@ -7,7 +7,7 @@
 //! <https://www.w3.org/TR/CSS21/visuren.html#box-gen>
 
 use crate::geometry::Size;
-use crate::style::content::CounterStyle;
+use crate::style::content::{ContentContext, ContentGenerator, ContentValue, CounterStyle};
 use crate::style::counters::{CounterManager, CounterSet};
 use crate::style::display::{Display, FormattingContextType};
 use crate::style::types::{ListStyleType, TextTransform};
@@ -954,7 +954,7 @@ fn generate_boxes_for_styled(styled: &StyledNode, counters: &mut CounterManager,
 
     // Generate ::before pseudo-element box if styles exist
     if let Some(before_styles) = &styled.before_styles {
-        if let Some(before_box) = create_pseudo_element_box(before_styles, "before") {
+        if let Some(before_box) = create_pseudo_element_box(styled, before_styles, "before", counters) {
             children.insert(0, before_box);
         }
     }
@@ -967,7 +967,7 @@ fn generate_boxes_for_styled(styled: &StyledNode, counters: &mut CounterManager,
 
     // Generate ::after pseudo-element box if styles exist
     if let Some(after_styles) = &styled.after_styles {
-        if let Some(after_box) = create_pseudo_element_box(after_styles, "after") {
+        if let Some(after_box) = create_pseudo_element_box(styled, after_styles, "after", counters) {
             children.push(after_box);
         }
     }
@@ -1038,19 +1038,34 @@ fn attach_debug_info(mut box_node: BoxNode, styled: &StyledNode) -> BoxNode {
 }
 
 /// Creates a box for a pseudo-element (::before or ::after)
-fn create_pseudo_element_box(styles: &ComputedStyle, pseudo_name: &str) -> Option<BoxNode> {
-    // Get content value
-    let content = &styles.content;
-
-    // Skip if no content or content is "none" or "normal"
-    if content.is_empty() || content == "none" || content == "normal" {
+fn create_pseudo_element_box(
+    styled: &StyledNode,
+    styles: &ComputedStyle,
+    pseudo_name: &str,
+    counters: &CounterManager,
+) -> Option<BoxNode> {
+    if matches!(styles.content_value, ContentValue::None | ContentValue::Normal) {
         return None;
     }
 
     let pseudo_style = Arc::new(styles.clone());
 
+    let mut context = ContentContext::new();
+    for (name, value) in styled.node.attributes_iter() {
+        context.set_attribute(name, value);
+    }
+    for (name, stack) in counters.snapshot() {
+        context.set_counter_stack(&name, stack);
+    }
+    context.set_quotes(styles.quotes.clone());
+
+    let text = ContentGenerator::new().generate(&styles.content_value, &mut context);
+    if text.is_empty() {
+        return None;
+    }
+
     // Create a text box with the content
-    let text_box = BoxNode::new_text(pseudo_style.clone(), content.clone());
+    let text_box = BoxNode::new_text(pseudo_style.clone(), text);
 
     // Determine the box type based on display property
     let fc_type = styles
@@ -2150,6 +2165,47 @@ mod tests {
         let box_tree = generator.generate(&wrapper).unwrap();
 
         assert_eq!(BoxGenerator::find_replaced_boxes(&box_tree.root).len(), 1);
+    }
+
+    #[test]
+    fn pseudo_content_respects_quotes_property() {
+        use crate::dom::DomNodeType;
+        use crate::style::content::{ContentItem, ContentValue};
+
+        let mut before_style = ComputedStyle::default();
+        before_style.content_value =
+            ContentValue::Items(vec![ContentItem::OpenQuote, ContentItem::String("hi".to_string())]);
+        before_style.quotes = vec![("«".to_string(), "»".to_string())];
+
+        let base_style = ComputedStyle::default();
+        let styled = StyledNode {
+            node: dom::DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "div".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            },
+            styles: base_style,
+            before_styles: Some(before_style),
+            after_styles: None,
+            marker_styles: None,
+            children: vec![],
+        };
+
+        let mut counters = CounterManager::new();
+        counters.enter_scope();
+        let before_box =
+            create_pseudo_element_box(&styled, styled.before_styles.as_ref().unwrap(), "before", &counters)
+                .expect("before box");
+        counters.leave_scope();
+
+        assert_eq!(before_box.children.len(), 1);
+        if let BoxType::Text(text) = &before_box.children[0].box_type {
+            assert_eq!(text.text, "«hi");
+        } else {
+            panic!("expected text child");
+        }
     }
 
     #[test]

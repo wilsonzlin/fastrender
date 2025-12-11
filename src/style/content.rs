@@ -79,6 +79,14 @@ pub enum ContentValue {
     Items(Vec<ContentItem>),
 }
 
+/// Default quote pairs used for `quotes: auto`
+pub fn default_quotes() -> Vec<(String, String)> {
+    vec![
+        ("\u{201C}".to_string(), "\u{201D}".to_string()),
+        ("\u{2018}".to_string(), "\u{2019}".to_string()),
+    ]
+}
+
 impl ContentValue {
     /// Creates a content value from a single string
     ///
@@ -721,10 +729,7 @@ impl ContentContext {
             counters: HashMap::new(),
             attributes: HashMap::new(),
             quote_depth: 0,
-            quotes: vec![
-                ("\u{201C}".to_string(), "\u{201D}".to_string()), // " "
-                ("\u{2018}".to_string(), "\u{2019}".to_string()), // ' '
-            ],
+            quotes: default_quotes(),
         }
     }
 
@@ -754,6 +759,11 @@ impl ContentContext {
         } else {
             *entry.last_mut().unwrap() = value;
         }
+    }
+
+    /// Sets the full counter stack (outermost → innermost) for a given name.
+    pub fn set_counter_stack(&mut self, name: &str, values: Vec<i32>) {
+        self.counters.insert(name.to_string(), values);
     }
 
     /// Pushes a new counter scope (for nested counters)
@@ -840,6 +850,9 @@ impl ContentContext {
 
     /// Gets the current open quote character
     pub fn open_quote(&self) -> &str {
+        if self.quotes.is_empty() {
+            return "";
+        }
         let index = self.quote_depth.min(self.quotes.len().saturating_sub(1));
         self.quotes.get(index).map(|(open, _)| open.as_str()).unwrap_or("\"")
     }
@@ -849,6 +862,9 @@ impl ContentContext {
     /// This returns the close quote for the current nesting level.
     /// Should be called BEFORE `pop_quote()` to get the correct character.
     pub fn close_quote(&self) -> &str {
+        if self.quotes.is_empty() {
+            return "";
+        }
         // Use current depth minus 1 (since open quote incremented it)
         let depth = self.quote_depth.saturating_sub(1);
         let index = depth.min(self.quotes.len().saturating_sub(1));

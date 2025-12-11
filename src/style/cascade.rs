@@ -379,6 +379,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.list_style_type = parent.list_style_type;
     styles.list_style_position = parent.list_style_position;
     styles.list_style_image = parent.list_style_image.clone();
+    styles.quotes = parent.quotes.clone();
 
     // Color inherits
     styles.color = parent.color;
@@ -1747,7 +1748,10 @@ fn compute_pseudo_element_styles(
 
     // Check if content property generates content
     // Per CSS spec, ::before/::after only generate boxes if content is not 'none' or 'normal'
-    if styles.content.is_empty() || styles.content == "none" || styles.content == "normal" {
+    if matches!(
+        styles.content_value,
+        crate::style::content::ContentValue::None | crate::style::content::ContentValue::Normal
+    ) {
         return None;
     }
 
