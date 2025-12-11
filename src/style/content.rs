@@ -409,7 +409,7 @@ impl CounterStyle {
     pub fn format(&self, value: i32) -> String {
         match self {
             CounterStyle::Decimal => value.to_string(),
-            CounterStyle::DecimalLeadingZero => format!("{:02}", value),
+            CounterStyle::DecimalLeadingZero => format_decimal_leading_zero(value),
             CounterStyle::Armenian => format_additive(value, ARMENIAN_UPPER, 9999),
             CounterStyle::LowerArmenian => format_additive(value, ARMENIAN_LOWER, 9999),
             CounterStyle::Georgian => format_additive(value, GEORGIAN_SYMBOLS, 19999),
@@ -618,9 +618,21 @@ fn format_additive(mut n: i32, symbols: &[(i32, &str)], max: i32) -> String {
     result
 }
 
+/// Formats a decimal number with at least two digits, preserving the sign.
+fn format_decimal_leading_zero(n: i32) -> String {
+    if n >= 0 {
+        format!("{:02}", n)
+    } else {
+        // Avoid overflow on i32::MIN by widening.
+        let abs = (n as i64).abs();
+        format!("-{:02}", abs)
+    }
+}
+
 /// Converts a number to Roman numerals
 fn to_roman(mut n: i32) -> String {
-    if n <= 0 {
+    // CSS Counter Styles define roman only for positive values; out-of-range falls back to decimal.
+    if n <= 0 || n > 3999 {
         return n.to_string();
     }
 
@@ -1377,6 +1389,13 @@ mod tests {
     }
 
     #[test]
+    fn test_counter_style_decimal_leading_zero_negative() {
+        assert_eq!(CounterStyle::DecimalLeadingZero.format(-1), "-01");
+        assert_eq!(CounterStyle::DecimalLeadingZero.format(-9), "-09");
+        assert_eq!(CounterStyle::DecimalLeadingZero.format(-12), "-12");
+    }
+
+    #[test]
     fn test_counter_style_lower_roman() {
         assert_eq!(CounterStyle::LowerRoman.format(1), "i");
         assert_eq!(CounterStyle::LowerRoman.format(4), "iv");
@@ -1390,6 +1409,9 @@ mod tests {
         assert_eq!(CounterStyle::UpperRoman.format(1), "I");
         assert_eq!(CounterStyle::UpperRoman.format(4), "IV");
         assert_eq!(CounterStyle::UpperRoman.format(1999), "MCMXCIX");
+        // Outside the defined range, fall back to decimal per CSS Counter Styles.
+        assert_eq!(CounterStyle::UpperRoman.format(0), "0");
+        assert_eq!(CounterStyle::UpperRoman.format(4000), "4000");
     }
 
     #[test]
