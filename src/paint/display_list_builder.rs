@@ -997,19 +997,19 @@ impl DisplayListBuilder {
             FragmentContent::Replaced { replaced_type, .. } => {
                 let sources: Vec<&str> = match replaced_type {
                     ReplacedType::Image { .. } => {
-                        let media_ctx = self
-                            .viewport
-                            .map(|(w, h)| crate::style::media::MediaContext::screen(w, h)
-                                .with_device_pixel_ratio(self.device_pixel_ratio));
-                        vec![replaced_type.image_source_for_context(
-                            crate::tree::box_tree::ImageSelectionContext {
+                        let media_ctx = self.viewport.map(|(w, h)| {
+                            crate::style::media::MediaContext::screen(w, h)
+                                .with_device_pixel_ratio(self.device_pixel_ratio)
+                        });
+                        vec![
+                            replaced_type.image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
                                 scale: self.device_pixel_ratio,
                                 slot_width: Some(rect.width()),
                                 viewport: self.viewport.map(|(w, h)| crate::geometry::Size::new(w, h)),
                                 media_context: media_ctx.as_ref(),
                                 font_size: fragment.style.as_deref().map(|s| s.font_size),
-                            },
-                        )]
+                            }),
+                        ]
                     }
                     ReplacedType::Video { src, poster } => {
                         let mut list = Vec::new();
@@ -1247,15 +1247,13 @@ impl DisplayListBuilder {
                 if !resolved.is_empty() {
                     let cx = origin_rect.x() + origin_rect.width() / 2.0;
                     let cy = origin_rect.y() + origin_rect.height() / 2.0;
-                    let radius = ((origin_rect.width() * origin_rect.width()
-                        + origin_rect.height() * origin_rect.height())
-                    .sqrt())
-                        / 2.0;
+                    let radius_x = origin_rect.width() * 0.5 * std::f32::consts::SQRT_2;
+                    let radius_y = origin_rect.height() * 0.5 * std::f32::consts::SQRT_2;
                     let center = Point::new(cx - clip_rect.x(), cy - clip_rect.y());
                     self.list.push(DisplayItem::RadialGradient(RadialGradientItem {
                         rect: clip_rect,
                         center,
-                        radius,
+                        radii: Point::new(radius_x, radius_y),
                         stops: Self::gradient_stops(&resolved),
                         spread: GradientSpread::Pad,
                     }));
@@ -1266,15 +1264,13 @@ impl DisplayListBuilder {
                 if !resolved.is_empty() {
                     let cx = origin_rect.x() + origin_rect.width() / 2.0;
                     let cy = origin_rect.y() + origin_rect.height() / 2.0;
-                    let radius = ((origin_rect.width() * origin_rect.width()
-                        + origin_rect.height() * origin_rect.height())
-                    .sqrt())
-                        / 2.0;
+                    let radius_x = origin_rect.width() * 0.5 * std::f32::consts::SQRT_2;
+                    let radius_y = origin_rect.height() * 0.5 * std::f32::consts::SQRT_2;
                     let center = Point::new(cx - clip_rect.x(), cy - clip_rect.y());
                     self.list.push(DisplayItem::RadialGradient(RadialGradientItem {
                         rect: clip_rect,
                         center,
-                        radius,
+                        radii: Point::new(radius_x, radius_y),
                         stops: Self::gradient_stops(&resolved),
                         spread: GradientSpread::Repeat,
                     }));

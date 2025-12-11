@@ -641,7 +641,7 @@ fn test_radial_gradient() {
     list.push(DisplayItem::RadialGradient(RadialGradientItem {
         rect: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
         center: Point::new(50.0, 50.0),
-        radius: 50.0,
+        radii: Point::new(50.0, 50.0),
         spread: GradientSpread::Pad,
         stops: vec![
             GradientStop {
@@ -662,7 +662,7 @@ fn test_radial_gradient() {
     if let DisplayItem::RadialGradient(item) = &list.items()[0] {
         assert_eq!(item.stops.len(), 3);
         assert_eq!(item.center.x, 50.0);
-        assert_eq!(item.radius, 50.0);
+        assert_eq!(item.radii, Point::new(50.0, 50.0));
     } else {
         panic!("Expected RadialGradient item");
     }

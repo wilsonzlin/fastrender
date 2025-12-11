@@ -664,8 +664,8 @@ pub struct RadialGradientItem {
     /// Gradient center (relative to rect)
     pub center: Point,
 
-    /// Gradient radius
-    pub radius: f32,
+    /// Gradient radii on the x/y axes (relative to rect)
+    pub radii: Point,
 
     /// Color stops
     pub stops: Vec<GradientStop>,
@@ -1147,14 +1147,14 @@ impl DisplayList {
         &mut self,
         rect: Rect,
         center: Point,
-        radius: f32,
+        radii: Point,
         stops: Vec<GradientStop>,
         spread: GradientSpread,
     ) {
         self.push(DisplayItem::RadialGradient(RadialGradientItem {
             rect,
             center,
-            radius,
+            radii,
             stops,
             spread,
         }));

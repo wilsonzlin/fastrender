@@ -665,7 +665,13 @@ impl DisplayListRenderer {
         if let Some(emphasis) = &item.emphasis {
             let mut e = emphasis.clone();
             e.size = self.ds_len(e.size);
-            e.marks = e.marks.iter().map(|m| EmphasisMark { center: self.ds_point(m.center) }).collect();
+            e.marks = e
+                .marks
+                .iter()
+                .map(|m| EmphasisMark {
+                    center: self.ds_point(m.center),
+                })
+                .collect();
             if let Some(text) = &e.text {
                 let mut t = text.clone();
                 t.font_size = self.ds_len(t.font_size);
@@ -701,11 +707,10 @@ impl DisplayListRenderer {
                     s.as_ref().map(|stroke| DecorationStroke {
                         center: self.ds_len(stroke.center),
                         thickness: self.ds_len(stroke.thickness),
-                        segments: stroke.segments.as_ref().map(|segs| {
-                            segs.iter()
-                                .map(|(a, b)| (self.ds_len(*a), self.ds_len(*b)))
-                                .collect()
-                        }),
+                        segments: stroke
+                            .segments
+                            .as_ref()
+                            .map(|segs| segs.iter().map(|(a, b)| (self.ds_len(*a), self.ds_len(*b))).collect()),
                     })
                 };
                 DecorationPaint {
@@ -726,13 +731,7 @@ impl DisplayListRenderer {
     }
 
     /// Creates a renderer with an explicit device scale (DPR). Coordinates are in CSS px.
-    pub fn new_scaled(
-        width: u32,
-        height: u32,
-        background: Rgba,
-        font_ctx: FontContext,
-        scale: f32,
-    ) -> Result<Self> {
+    pub fn new_scaled(width: u32, height: u32, background: Rgba, font_ctx: FontContext, scale: f32) -> Result<Self> {
         let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
         let device_w = ((width as f32) * scale).round().max(1.0) as u32;
         let device_h = ((height as f32) * scale).round().max(1.0) as u32;
@@ -750,7 +749,10 @@ impl DisplayListRenderer {
             return;
         };
         let rect = self.ds_rect(item.rect);
-        let start = SkiaPoint::from_xy(rect.x() + self.ds_len(item.start.x), rect.y() + self.ds_len(item.start.y));
+        let start = SkiaPoint::from_xy(
+            rect.x() + self.ds_len(item.start.x),
+            rect.y() + self.ds_len(item.start.y),
+        );
         let end = SkiaPoint::from_xy(rect.x() + self.ds_len(item.end.x), rect.y() + self.ds_len(item.end.y));
         let spread = match item.spread {
             crate::paint::display_list::GradientSpread::Pad => SpreadMode::Pad,
@@ -783,14 +785,19 @@ impl DisplayListRenderer {
             return;
         };
         let rect = self.ds_rect(item.rect);
-        let center = SkiaPoint::from_xy(rect.x() + self.ds_len(item.center.x), rect.y() + self.ds_len(item.center.y));
+        let center = SkiaPoint::from_xy(
+            rect.x() + self.ds_len(item.center.x),
+            rect.y() + self.ds_len(item.center.y),
+        );
+        let radii = SkiaPoint::from_xy(self.ds_len(item.radii.x), self.ds_len(item.radii.y));
         let spread = match item.spread {
             crate::paint::display_list::GradientSpread::Pad => SpreadMode::Pad,
             crate::paint::display_list::GradientSpread::Repeat => SpreadMode::Repeat,
             crate::paint::display_list::GradientSpread::Reflect => SpreadMode::Reflect,
         };
-        let radius = self.ds_len(item.radius);
-        let Some(shader) = RadialGradient::new(center, center, radius, stops, spread, Transform::identity())
+        let transform = Transform::from_translate(center.x, center.y).pre_scale(radii.x, radii.y);
+        let Some(shader) =
+            RadialGradient::new(SkiaPoint::from_xy(0.0, 0.0), SkiaPoint::from_xy(0.0, 0.0), 1.0, stops, spread, transform)
         else {
             return;
         };
@@ -823,10 +830,22 @@ impl DisplayListRenderer {
         let blend_mode = self.canvas.blend_mode();
         let rect = self.ds_rect(item.rect);
         let radii = self.ds_radii(item.radii);
-        let top = BorderSide { width: self.ds_len(item.top.width), ..item.top.clone() };
-        let right = BorderSide { width: self.ds_len(item.right.width), ..item.right.clone() };
-        let bottom = BorderSide { width: self.ds_len(item.bottom.width), ..item.bottom.clone() };
-        let left = BorderSide { width: self.ds_len(item.left.width), ..item.left.clone() };
+        let top = BorderSide {
+            width: self.ds_len(item.top.width),
+            ..item.top.clone()
+        };
+        let right = BorderSide {
+            width: self.ds_len(item.right.width),
+            ..item.right.clone()
+        };
+        let bottom = BorderSide {
+            width: self.ds_len(item.bottom.width),
+            ..item.bottom.clone()
+        };
+        let left = BorderSide {
+            width: self.ds_len(item.left.width),
+            ..item.left.clone()
+        };
 
         let mut pushed_clip = false;
         if radii.has_radius() {
@@ -2247,7 +2266,7 @@ mod tests {
         list.push(DisplayItem::RadialGradient(RadialGradientItem {
             rect: Rect::from_xywh(0.0, 0.0, 3.0, 3.0),
             center: Point::new(1.5, 1.5),
-            radius: 2.0,
+            radii: Point::new(1.5 * std::f32::consts::SQRT_2, 1.5 * std::f32::consts::SQRT_2),
             spread: GradientSpread::Pad,
             stops: vec![
                 GradientStop {
@@ -2263,6 +2282,40 @@ mod tests {
 
         let pixmap = renderer.render(&list).unwrap();
         assert_eq!(pixel(&pixmap, 1, 1).1, 255);
+    }
+
+    #[test]
+    fn renders_radial_gradient_as_ellipse() {
+        let renderer = DisplayListRenderer::new(20, 10, Rgba::WHITE, FontContext::new()).unwrap();
+        let mut list = DisplayList::new();
+        list.push(DisplayItem::RadialGradient(RadialGradientItem {
+            rect: Rect::from_xywh(0.0, 0.0, 20.0, 10.0),
+            center: Point::new(10.0, 5.0),
+            radii: Point::new(10.0 * std::f32::consts::SQRT_2, 5.0 * std::f32::consts::SQRT_2),
+            spread: GradientSpread::Pad,
+            stops: vec![
+                GradientStop {
+                    position: 0.0,
+                    color: Rgba::rgb(255, 0, 0),
+                },
+                GradientStop {
+                    position: 1.0,
+                    color: Rgba::rgb(0, 0, 255),
+                },
+            ],
+        }));
+
+        let pixmap = renderer.render(&list).unwrap();
+        let top_center = pixel(&pixmap, 10, 0);
+        let right_center = pixel(&pixmap, 19, 5);
+        let diff_r = (top_center.0 as i32 - right_center.0 as i32).abs();
+        let diff_b = (top_center.2 as i32 - right_center.2 as i32).abs();
+        assert!(
+            diff_r < 32 && diff_b < 32,
+            "elliptical gradient should put horizontal/vertical edges at similar stops"
+        );
+        let corner = pixel(&pixmap, 19, 9);
+        assert!(corner.2 > corner.0, "corner should reach the final stop");
     }
 
     #[test]

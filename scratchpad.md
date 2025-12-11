@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Radial gradients now follow the CSS default ellipse/farthest-corner sizing: painter builds an elliptical shader via transforms, display-list items carry per-axis radii (instead of a single radius), the renderer applies the same transform-based ellipse, and regressions cover equalized edge colors plus corner reach.
 - FastRender now resolves `@import` during layout: `CssImportFetcher` fetches imports over HTTP(S) with a 30s timeout, reads `file://` imports (handling directory bases without trailing slashes), and decodes `data:` CSS with percent/base64 support and charset detection (UTF-8 preferred, Latin-1 fallback). `layout_document` always wires the loader into cascade, and API tests cover file-based imports via `base_url` and inline data-URL imports.
 - Stylesheet fetching now honors CSS encoding rules: BOM > `@charset` > `Content-Type` charset > UTF-8. A new `css::encoding` module centralizes decoding, `fetch_and_render` fetches text using it (including file URLs), and import resolution uses it for data/file/http sources. Tests cover BOM, `@charset`, and content-type charsets.
 - fetch_and_render fetches resources as bytes and decodes HTML via BOM/Content-Type charset (UTF-8 fallback) while decoding CSS through the CSS sniffer; HTTP headers are kept for charset detection and link/inlined CSS use the new decode paths. Added regression to ensure HTML decoding honors content-type charset.

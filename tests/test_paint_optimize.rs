@@ -632,7 +632,7 @@ fn test_radial_gradient_culling() {
     list.push(DisplayItem::RadialGradient(RadialGradientItem {
         rect: Rect::from_xywh(10.0, 10.0, 80.0, 80.0),
         center: Point::new(40.0, 40.0),
-        radius: 40.0,
+        radii: Point::new(40.0, 40.0),
         spread: GradientSpread::Pad,
         stops: vec![
             GradientStop {

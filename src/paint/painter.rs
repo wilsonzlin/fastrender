@@ -1428,13 +1428,17 @@ impl Painter {
         let skia_stops = gradient_stops(stops);
         let cx = gradient_rect.x() + gradient_rect.width() / 2.0;
         let cy = gradient_rect.y() + gradient_rect.height() / 2.0;
-        let radius = ((gradient_rect.width() * gradient_rect.width() + gradient_rect.height() * gradient_rect.height())
-            as f32)
-            .sqrt()
-            / 2.0;
-
-        let center = tiny_skia::Point::from_xy(cx, cy);
-        let Some(shader) = RadialGradient::new(center, center, radius, skia_stops, spread, Transform::identity())
+        let radius_x = gradient_rect.width() * 0.5 * std::f32::consts::SQRT_2;
+        let radius_y = gradient_rect.height() * 0.5 * std::f32::consts::SQRT_2;
+        let transform = Transform::from_translate(cx, cy).pre_scale(radius_x, radius_y);
+        let Some(shader) = RadialGradient::new(
+            tiny_skia::Point::from_xy(0.0, 0.0),
+            tiny_skia::Point::from_xy(0.0, 0.0),
+            1.0,
+            skia_stops,
+            spread,
+            transform,
+        )
         else {
             return;
         };
@@ -5435,6 +5439,48 @@ mod tests {
         assert!(
             distinct.len() >= 2,
             "expected at least two colors in repeating gradient"
+        );
+    }
+
+    #[test]
+    fn radial_gradient_uses_farthest_corner_ellipse() {
+        let mut style = ComputedStyle::default();
+        style.set_background_layers(vec![BackgroundLayer {
+            image: Some(BackgroundImage::RadialGradient {
+                stops: vec![
+                    crate::css::types::ColorStop {
+                        color: Color::Rgba(Rgba::RED),
+                        position: Some(0.0),
+                    },
+                    crate::css::types::ColorStop {
+                        color: Color::Rgba(Rgba::BLUE),
+                        position: Some(1.0),
+                    },
+                ],
+            }),
+            ..BackgroundLayer::default()
+        }]);
+
+        let fragment =
+            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
+        let tree = FragmentTree::new(fragment);
+        let pixmap = paint_tree(&tree, 20, 10, Rgba::WHITE).expect("paint");
+
+        let top_center = color_at(&pixmap, 10, 0);
+        let right_center = color_at(&pixmap, 19, 5);
+        let diff_r = (top_center.0 as i32 - right_center.0 as i32).abs();
+        let diff_b = (top_center.2 as i32 - right_center.2 as i32).abs();
+        assert!(
+            diff_r < 32 && diff_b < 32,
+            "elliptical gradient should make horizontal/vertical edges equally distant (diffs r={} b={})",
+            diff_r,
+            diff_b
+        );
+
+        let corner = color_at(&pixmap, 19, 9);
+        assert!(
+            corner.2 > corner.0,
+            "farthest-corner sizing should leave the corner closest to the final stop"
         );
     }
 
