@@ -499,6 +499,7 @@
 - Stacking-context transforms in the display-list renderer now scale translation components with the device scale so DPR-rendered display lists position layers correctly; `renderer_respects_device_scale` covers the scaled output size and content.
 - Display-list filters respect outsets when clipping rounded contexts: blur/drop-shadow layers expand by filter outsets and the clip grows accordingly, so filter glow is no longer chopped by border radii (covered by a new blur spill regression).
 - Painter filters now expand clip masks by filter outsets and inflate radii, and backdrop filters copy an outset-expanded region (while clipping to the original radii), preventing blur/drop-shadow from being clipped by rounded stacking contexts; a new painter regression covers blur spill outside a rounded rect.
+- Display-list filter clipping now mirrors the painter: the clip rect grows by filter outsets but radii stay unchanged, avoiding over-inflated masks while keeping blur/drop-shadow visible at rounded edges.
 
 ## To-do / next steps (spec-oriented)
 1. Inline/text:
