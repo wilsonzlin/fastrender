@@ -295,6 +295,10 @@ impl TextItem {
         });
     }
 
+    pub fn recompute_cluster_advances(&mut self) {
+        self.cluster_advances = Self::compute_cluster_advances(&self.runs, self.text.len(), self.font_size);
+    }
+
     /// Derive baseline metrics from shaped runs and CSS line-height
     pub fn metrics_from_runs(runs: &[ShapedRun], line_height: f32, fallback_font_size: f32) -> BaselineMetrics {
         let mut ascent: f32 = 0.0;
@@ -1487,10 +1491,7 @@ impl<'a> LineBuilder<'a> {
             let line_width = self.current_line_width();
             self.current_line.available_width = line_width;
             if self.current_line_space.is_some() {
-                self.current_line.box_width = self
-                    .current_line_space
-                    .map(|space| space.width)
-                    .unwrap_or(line_width);
+                self.current_line.box_width = self.current_line_space.map(|space| space.width).unwrap_or(line_width);
             } else {
                 self.current_line.box_width = line_width;
             }
@@ -2139,28 +2140,28 @@ mod tests {
         BaselineMetrics::new(12.0, 16.0, 12.0, 4.0)
     }
 
-fn make_builder(width: f32) -> LineBuilder<'static> {
-    let strut = make_strut_metrics();
-    LineBuilder::new(
-        width,
-        width,
+    fn make_builder(width: f32) -> LineBuilder<'static> {
+        let strut = make_strut_metrics();
+        LineBuilder::new(
+            width,
+            width,
             strut,
             ShapingPipeline::new(),
             FontContext::new(),
             Some(Level::ltr()),
             None,
-        0.0,
-        0.0,
-        0.0,
-    )
-}
-
-fn pipeline_dir_from_style(dir: Direction) -> crate::text::pipeline::Direction {
-    match dir {
-        Direction::Ltr => crate::text::pipeline::Direction::LeftToRight,
-        Direction::Rtl => crate::text::pipeline::Direction::RightToLeft,
+            0.0,
+            0.0,
+            0.0,
+        )
     }
-}
+
+    fn pipeline_dir_from_style(dir: Direction) -> crate::text::pipeline::Direction {
+        match dir {
+            Direction::Ltr => crate::text::pipeline::Direction::LeftToRight,
+            Direction::Rtl => crate::text::pipeline::Direction::RightToLeft,
+        }
+    }
 
     fn make_builder_with_base(width: f32, base: Level) -> LineBuilder<'static> {
         let strut = make_strut_metrics();
@@ -2906,9 +2907,7 @@ fn pipeline_dir_from_style(dir: Direction) -> crate::text::pipeline::Direction {
             InlineItem::Text(t) => t.text.clone(),
             InlineItem::Tab(_) => "\t".to_string(),
             InlineItem::InlineBox(b) => b.children.iter().map(flatten_text).collect(),
-            InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {
-                String::from("\u{FFFC}")
-            }
+            InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => String::from("\u{FFFC}"),
         }
     }
 

@@ -890,6 +890,22 @@ impl Default for TextOrientation {
     }
 }
 
+/// CSS `text-combine-upright`
+///
+/// Reference: CSS Writing Modes Level 4
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextCombineUpright {
+    None,
+    All,
+    Digits(u8),
+}
+
+impl Default for TextCombineUpright {
+    fn default() -> Self {
+        TextCombineUpright::None
+    }
+}
+
 /// CSS `text-justify`
 ///
 /// Reference: CSS Text Level 3

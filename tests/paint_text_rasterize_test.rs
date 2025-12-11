@@ -5,7 +5,7 @@
 //! and tiny-skia.
 
 use fastrender::text::font_loader::FontContext;
-use fastrender::text::pipeline::{Direction, GlyphPosition, ShapedRun, ShapingPipeline};
+use fastrender::text::pipeline::{Direction, GlyphPosition, RunRotation, ShapedRun, ShapingPipeline};
 use fastrender::{ComputedStyle, Rgba};
 use fastrender::{GlyphCache, TextRasterizer};
 use std::sync::Arc;
@@ -331,7 +331,8 @@ fn test_render_shaped_run() {
         language: None,
         synthetic_bold: 0.0,
         synthetic_oblique: 0.0,
-        rotated_90_ccw: false,
+        rotation: RunRotation::None,
+        scale: 1.0,
     };
 
     let mut pixmap = create_test_pixmap(150, 100);
@@ -384,7 +385,8 @@ fn test_render_multiple_runs() {
             language: None,
             synthetic_bold: 0.0,
             synthetic_oblique: 0.0,
-            rotated_90_ccw: false,
+            rotation: RunRotation::None,
+            scale: 1.0,
         }
     };
 

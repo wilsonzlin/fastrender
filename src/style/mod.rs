@@ -30,17 +30,17 @@ use display::Display;
 use position::Position;
 use std::collections::HashMap;
 use types::{
-    AlignContent, AlignItems, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundPosition,
+    AlignContent, AlignItems, AspectRatio, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundPosition,
     BackgroundPositionComponent, BackgroundRepeat, BackgroundSize, BackgroundSizeComponent, BorderCollapse,
     BorderStyle, BoxSizing, CaptionSide, Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap,
     FontFeatureSetting, FontKerning, FontSizeAdjust, FontStretch, FontStyle, FontSynthesis, FontVariant,
     FontVariantAlternates, FontVariantCaps, FontVariantEastAsian, FontVariantLigatures, FontVariantNumeric,
-    FontVariantPosition, FontWeight, GridTrack, HyphensMode, Isolation, JustifyContent, LineBreak, LineHeight,
-    AspectRatio, ImageRendering, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit,
-    ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign,
-    TextAlignLast, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent,
-    TextJustify, TextOrientation, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TransformOrigin, UnicodeBidi,
-    VerticalAlign, WhiteSpace, WordBreak, WritingMode,
+    FontVariantPosition, FontWeight, GridTrack, HyphensMode, ImageRendering, Isolation, JustifyContent, LineBreak,
+    LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
+    OutlineColor, OutlineStyle, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast,
+    TextCombineUpright, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent,
+    TextJustify, TextOrientation, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TransformOrigin,
+    UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -185,6 +185,7 @@ pub struct ComputedStyle {
     pub text_emphasis_color: Option<Rgba>,
     pub text_emphasis_position: TextEmphasisPosition,
     pub text_transform: TextTransform,
+    pub text_combine_upright: TextCombineUpright,
     pub text_orientation: TextOrientation,
     pub writing_mode: WritingMode,
     pub letter_spacing: f32,
@@ -369,6 +370,7 @@ impl Default for ComputedStyle {
             text_emphasis_color: None,
             text_emphasis_position: TextEmphasisPosition::default(),
             text_transform: TextTransform::default(),
+            text_combine_upright: TextCombineUpright::None,
             text_orientation: TextOrientation::Mixed,
             writing_mode: WritingMode::HorizontalTb,
             letter_spacing: 0.0,

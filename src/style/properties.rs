@@ -6,6 +6,7 @@
 //! Reference: CSS Cascading and Inheritance Level 4
 //! <https://www.w3.org/TR/css-cascade-4/>
 
+use crate::css::properties::parse_length;
 use crate::css::types::{Declaration, PropertyValue};
 use crate::style::color::Rgba;
 use crate::style::counters::CounterSet;
@@ -15,7 +16,6 @@ use crate::style::grid::{
     parse_grid_shorthand, parse_grid_template_areas, parse_grid_template_shorthand, parse_grid_tracks_with_names,
     parse_track_list, ParsedTracks,
 };
-use crate::css::properties::parse_length;
 use crate::style::position::Position;
 use crate::style::types::*;
 use crate::style::values::{Length, LengthUnit};
@@ -156,13 +156,11 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         "right" => styles.right = extract_length(&resolved_value),
         "bottom" => styles.bottom = extract_length(&resolved_value),
         "left" => styles.left = extract_length(&resolved_value),
-        "z-index" => {
-            match resolved_value {
-                PropertyValue::Number(n) => styles.z_index = Some(n as i32),
-                PropertyValue::Keyword(ref kw) if kw.eq_ignore_ascii_case("auto") => styles.z_index = None,
-                _ => {}
-            }
-        }
+        "z-index" => match resolved_value {
+            PropertyValue::Number(n) => styles.z_index = Some(n as i32),
+            PropertyValue::Keyword(ref kw) if kw.eq_ignore_ascii_case("auto") => styles.z_index = None,
+            _ => {}
+        },
         "outline-color" => match &resolved_value {
             PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentcolor") => {
                 styles.outline_color = OutlineColor::CurrentColor;
@@ -1304,6 +1302,11 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "text-combine-upright" => {
+            if let Some(value) = parse_text_combine_upright(&resolved_value) {
+                styles.text_combine_upright = value;
+            }
+        }
         "text-indent" => {
             let mut length = styles.text_indent.length;
             let mut hanging = false;
@@ -2097,9 +2100,7 @@ fn parse_image_rendering(kw: &str) -> Option<ImageRendering> {
     match kw {
         "auto" => Some(ImageRendering::Auto),
         "smooth" | "high-quality" | "optimizequality" => Some(ImageRendering::Smooth),
-        "crisp-edges" | "crispedges" | "optimize-contrast" | "optimizecontrast" => {
-            Some(ImageRendering::CrispEdges)
-        }
+        "crisp-edges" | "crispedges" | "optimize-contrast" | "optimizecontrast" => Some(ImageRendering::CrispEdges),
         "pixelated" => Some(ImageRendering::Pixelated),
         "optimizespeed" => Some(ImageRendering::CrispEdges),
         _ => None,
@@ -3558,6 +3559,37 @@ fn parse_text_decoration_skip_ink(value: &PropertyValue) -> Option<TextDecoratio
     None
 }
 
+fn parse_text_combine_upright(value: &PropertyValue) -> Option<TextCombineUpright> {
+    match value {
+        PropertyValue::Keyword(kw) => match kw.as_str() {
+            "none" => Some(TextCombineUpright::None),
+            "all" => Some(TextCombineUpright::All),
+            "digits" => Some(TextCombineUpright::Digits(2)),
+            _ => None,
+        },
+        PropertyValue::Multiple(values) => {
+            if values.is_empty() {
+                return None;
+            }
+            if let PropertyValue::Keyword(first) = &values[0] {
+                if first == "digits" {
+                    let count = values.get(1).and_then(|v| match v {
+                        PropertyValue::Number(n) => Some(*n as i32),
+                        _ => None,
+                    });
+                    let clamped = count.unwrap_or(2).clamp(1, 4) as u8;
+                    return Some(TextCombineUpright::Digits(clamped));
+                }
+            }
+            if values.len() == 1 {
+                return parse_text_combine_upright(&values[0]);
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 fn parse_text_transform(value: &PropertyValue) -> Option<TextTransform> {
     use crate::style::types::CaseTransform;
 
@@ -3922,11 +3954,10 @@ mod tests {
     use super::*;
     use crate::style::types::{
         AlignContent, AlignItems, AspectRatio, BackgroundRepeatKeyword, BoxSizing, CaseTransform, FontStretch,
-        FontVariant, GridAutoFlow, GridTrack, ImageRendering, JustifyContent, TextOrientation, TextTransform,
-        WritingMode,
-        ListStylePosition, ListStyleType, OutlineColor, OutlineStyle, PositionComponent, PositionKeyword,
-        TextDecorationLine, TextDecorationStyle, TextDecorationThickness, TextEmphasisFill, TextEmphasisPosition,
-        TextEmphasisShape, TextEmphasisStyle,
+        FontVariant, GridAutoFlow, GridTrack, ImageRendering, JustifyContent, ListStylePosition, ListStyleType,
+        OutlineColor, OutlineStyle, PositionComponent, PositionKeyword, TextCombineUpright, TextDecorationLine,
+        TextDecorationStyle, TextDecorationThickness, TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape,
+        TextEmphasisStyle, TextOrientation, TextTransform, WritingMode,
     };
 
     #[test]
@@ -4022,6 +4053,49 @@ mod tests {
             16.0,
         );
         assert_eq!(styles.text_orientation, TextOrientation::Upright);
+    }
+
+    #[test]
+    fn parses_text_combine_upright_values() {
+        let mut styles = ComputedStyle::default();
+        apply_declaration(
+            &mut styles,
+            &Declaration {
+                property: "text-combine-upright".into(),
+                value: PropertyValue::Keyword("digits".into()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(styles.text_combine_upright, TextCombineUpright::Digits(2));
+
+        apply_declaration(
+            &mut styles,
+            &Declaration {
+                property: "text-combine-upright".into(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("digits".into()),
+                    PropertyValue::Number(3.0),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(styles.text_combine_upright, TextCombineUpright::Digits(3));
+
+        apply_declaration(
+            &mut styles,
+            &Declaration {
+                property: "text-combine-upright".into(),
+                value: PropertyValue::Keyword("all".into()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(styles.text_combine_upright, TextCombineUpright::All);
     }
 
     #[test]
@@ -4312,14 +4386,8 @@ mod tests {
             16.0,
             16.0,
         );
-        assert_eq!(
-            style.grid_row_raw.as_deref(),
-            Some("hero-start / hero-end")
-        );
-        assert_eq!(
-            style.grid_column_raw.as_deref(),
-            Some("hero-start / hero-end")
-        );
+        assert_eq!(style.grid_row_raw.as_deref(), Some("hero-start / hero-end"));
+        assert_eq!(style.grid_column_raw.as_deref(), Some("hero-start / hero-end"));
     }
 
     #[test]

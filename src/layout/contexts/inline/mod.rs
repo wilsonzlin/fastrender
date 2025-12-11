@@ -50,8 +50,8 @@ use crate::layout::inline::float_integration::InlineFloatIntegration;
 use crate::layout::utils::{border_size_from_box_sizing, compute_replaced_size, resolve_font_relative_length};
 use crate::style::display::FormattingContextType;
 use crate::style::types::{
-    FontStyle, HyphensMode, LineBreak, ListStylePosition, OverflowWrap, TabSize, TextAlign, TextJustify, TextTransform,
-    WhiteSpace, WordBreak,
+    FontStyle, HyphensMode, LineBreak, ListStylePosition, OverflowWrap, TabSize, TextAlign, TextCombineUpright,
+    TextJustify, TextTransform, WhiteSpace, WordBreak, WritingMode,
 };
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
@@ -62,6 +62,7 @@ use crate::text::line_break::{find_break_opportunities, BreakOpportunity, BreakT
 use crate::text::pipeline::{compute_adjusted_font_size, preferred_font_aspect, ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::{BoxNode, BoxType, MarkerContent, ReplacedBox};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::text::font_db::ScaledMetrics;
@@ -127,15 +128,12 @@ impl InlineFormattingContext {
 
     fn hyphen_advance(&self, style: &ComputedStyle) -> f32 {
         const INSERTED_HYPHEN: &str = "\u{2010}";
-        match self
-            .pipeline
-            .shape_with_direction(
-                INSERTED_HYPHEN,
-                style,
-                &self.font_context,
-                pipeline_direction(style.direction),
-            )
-        {
+        match self.pipeline.shape_with_direction(
+            INSERTED_HYPHEN,
+            style,
+            &self.font_context,
+            pipeline_direction(style.direction),
+        ) {
             Ok(mut runs) => {
                 TextItem::apply_spacing_to_runs(&mut runs, INSERTED_HYPHEN, style.letter_spacing, style.word_spacing);
                 runs.iter().map(|r| r.advance).sum()
@@ -475,17 +473,9 @@ impl InlineFormattingContext {
         let preferred = preferred_content + horizontal_edges;
 
         let resolved_specified_height = style.height.as_ref().and_then(|h| {
-            available_height
-                .filter(|h| h.is_finite())
-                .and_then(|base| {
-                    resolve_length_with_percentage_inline(
-                        *h,
-                        Some(base),
-                        style,
-                        &self.font_context,
-                        self.viewport_size,
-                    )
-                })
+            available_height.filter(|h| h.is_finite()).and_then(|base| {
+                resolve_length_with_percentage_inline(*h, Some(base), style, &self.font_context, self.viewport_size)
+            })
         });
 
         let specified_width = style
@@ -529,7 +519,9 @@ impl InlineFormattingContext {
                         used
                     }
                 } else {
-                    preferred.min(available_for_box.max(preferred_min)).clamp(min_width, max_width)
+                    preferred
+                        .min(available_for_box.max(preferred_min))
+                        .clamp(min_width, max_width)
                 }
             } else {
                 let available = if available_for_box.is_finite() {
@@ -564,15 +556,18 @@ impl InlineFormattingContext {
 
         let va = self.convert_vertical_align(style.vertical_align, style.font_size, line_height);
 
-        if matches!(style.aspect_ratio, crate::style::types::AspectRatio::Ratio(r) if r > 0.0)
-            && style.height.is_none()
+        if matches!(style.aspect_ratio, crate::style::types::AspectRatio::Ratio(r) if r > 0.0) && style.height.is_none()
         {
             if let crate::style::types::AspectRatio::Ratio(r) = style.aspect_ratio {
                 if r > 0.0 && fragment.bounds.width().is_finite() {
                     let target_height = fragment.bounds.width() / r;
                     if target_height > fragment.bounds.height() {
-                        fragment.bounds =
-                            Rect::from_xywh(fragment.bounds.x(), fragment.bounds.y(), fragment.bounds.width(), target_height);
+                        fragment.bounds = Rect::from_xywh(
+                            fragment.bounds.x(),
+                            fragment.bounds.y(),
+                            fragment.bounds.width(),
+                            target_height,
+                        );
                     }
                 }
             }
@@ -619,12 +614,7 @@ impl InlineFormattingContext {
         normalized: NormalizedText,
         is_marker: bool,
     ) -> Result<Vec<InlineItem>, LayoutError> {
-        self.create_inline_items_from_normalized_with_base(
-            box_node,
-            normalized,
-            is_marker,
-            box_node.style.direction,
-        )
+        self.create_inline_items_from_normalized_with_base(box_node, normalized, is_marker, box_node.style.direction)
     }
 
     fn create_inline_items_from_normalized_with_base(
@@ -645,15 +635,14 @@ impl InlineFormattingContext {
             if normalized_text.is_empty() {
                 return Ok(Vec::new());
             }
-            let item = self.create_text_item_from_normalized(
+            return self.create_text_items_with_combine(
                 &box_node.style,
                 &normalized_text,
                 forced_breaks,
                 allow_soft_wrap,
                 is_marker,
                 base_direction,
-            )?;
-            return Ok(vec![InlineItem::Text(item)]);
+            );
         }
 
         let mut items = Vec::new();
@@ -665,7 +654,7 @@ impl InlineFormattingContext {
             }
             if idx > segment_start {
                 let segment_breaks = slice_breaks(&forced_breaks, segment_start, idx);
-                let item = self.create_text_item_from_normalized(
+                let mut produced = self.create_text_items_with_combine(
                     &box_node.style,
                     &normalized_text[segment_start..idx],
                     segment_breaks,
@@ -673,9 +662,7 @@ impl InlineFormattingContext {
                     is_marker,
                     base_direction,
                 )?;
-                if !item.text.is_empty() {
-                    items.push(InlineItem::Text(item));
-                }
+                items.append(&mut produced);
             }
             let tab = self.create_tab_item(box_node, allow_soft_wrap)?;
             items.push(tab);
@@ -684,7 +671,7 @@ impl InlineFormattingContext {
 
         if segment_start < normalized_text.len() {
             let segment_breaks = slice_breaks(&forced_breaks, segment_start, normalized_text.len());
-            let item = self.create_text_item_from_normalized(
+            let mut produced = self.create_text_items_with_combine(
                 &box_node.style,
                 &normalized_text[segment_start..],
                 segment_breaks,
@@ -692,9 +679,7 @@ impl InlineFormattingContext {
                 is_marker,
                 base_direction,
             )?;
-            if !item.text.is_empty() {
-                items.push(InlineItem::Text(item));
-            }
+            items.append(&mut produced);
         }
 
         Ok(items)
@@ -702,11 +687,7 @@ impl InlineFormattingContext {
 
     /// Creates a text item from a text box
     #[allow(dead_code)]
-    fn create_text_item(
-        &self,
-        box_node: &BoxNode,
-        text: &str,
-    ) -> Result<TextItem, LayoutError> {
+    fn create_text_item(&self, box_node: &BoxNode, text: &str) -> Result<TextItem, LayoutError> {
         self.create_text_item_with_base(box_node, text, box_node.style.direction)
     }
 
@@ -817,19 +798,139 @@ impl InlineFormattingContext {
         Ok(item)
     }
 
+    fn create_text_items_with_combine(
+        &self,
+        style: &Arc<ComputedStyle>,
+        text: &str,
+        forced_breaks: Vec<crate::text::line_break::BreakOpportunity>,
+        allow_soft_wrap: bool,
+        is_marker: bool,
+        base_direction: crate::style::types::Direction,
+    ) -> Result<Vec<InlineItem>, LayoutError> {
+        if !is_vertical_writing_mode(style.writing_mode)
+            || matches!(style.text_combine_upright, TextCombineUpright::None)
+        {
+            let item = self.create_text_item_from_normalized(
+                style,
+                text,
+                forced_breaks,
+                allow_soft_wrap,
+                is_marker,
+                base_direction,
+            )?;
+            return Ok(vec![InlineItem::Text(item)]);
+        }
+
+        let mut items = Vec::new();
+        let chars: Vec<(usize, char)> = text.char_indices().collect();
+        if chars.is_empty() {
+            return Ok(items);
+        }
+        let forced_set: HashSet<usize> = forced_breaks.iter().map(|b| b.byte_offset).collect();
+        let max_len = match style.text_combine_upright {
+            TextCombineUpright::Digits(n) => n.max(1) as usize,
+            TextCombineUpright::All => 4,
+            TextCombineUpright::None => 0,
+        };
+
+        let mut idx = 0usize;
+        while idx < chars.len() {
+            let (byte_offset, ch) = chars[idx];
+            let combinable = can_combine_for_mode(ch, style.text_combine_upright) && !forced_set.contains(&byte_offset);
+            if combinable {
+                let mut end = idx + 1;
+                let mut count = 1usize;
+                while end < chars.len() {
+                    let (next_off, next_ch) = chars[end];
+                    if forced_set.contains(&next_off) {
+                        break;
+                    }
+                    if !can_combine_for_mode(next_ch, style.text_combine_upright) {
+                        break;
+                    }
+                    if count >= max_len {
+                        break;
+                    }
+                    count += 1;
+                    end += 1;
+                }
+                let end_byte = chars.get(end).map(|p| p.0).unwrap_or_else(|| text.len());
+                let sub_breaks = slice_breaks(&forced_breaks, byte_offset, end_byte);
+                let mut item = self.create_text_item_from_normalized(
+                    style,
+                    &text[byte_offset..end_byte],
+                    sub_breaks,
+                    false,
+                    is_marker,
+                    base_direction,
+                )?;
+                self.compress_text_combine(&mut item, style.font_size);
+                if !item.text.is_empty() {
+                    items.push(InlineItem::Text(item));
+                }
+                idx = end;
+            } else {
+                let mut end = idx + 1;
+                while end < chars.len() {
+                    let next_off = chars[end].0;
+                    if forced_set.contains(&next_off) || can_combine_for_mode(chars[end].1, style.text_combine_upright)
+                    {
+                        break;
+                    }
+                    end += 1;
+                }
+                let end_byte = chars.get(end).map(|p| p.0).unwrap_or_else(|| text.len());
+                let sub_breaks = slice_breaks(&forced_breaks, byte_offset, end_byte);
+                let item = self.create_text_item_from_normalized(
+                    style,
+                    &text[byte_offset..end_byte],
+                    sub_breaks,
+                    allow_soft_wrap,
+                    is_marker,
+                    base_direction,
+                )?;
+                if !item.text.is_empty() {
+                    items.push(InlineItem::Text(item));
+                }
+                idx = end;
+            }
+        }
+
+        Ok(items)
+    }
+
+    fn compress_text_combine(&self, item: &mut TextItem, em: f32) {
+        if em <= 0.0 || item.advance_for_layout <= 0.0 {
+            return;
+        }
+        let factor = (em / item.advance_for_layout).min(1.0);
+        if factor >= 0.999 {
+            return;
+        }
+
+        for run in &mut item.runs {
+            for glyph in &mut run.glyphs {
+                glyph.x_offset *= factor;
+                glyph.y_offset *= factor;
+                glyph.x_advance *= factor;
+                glyph.y_advance *= factor;
+            }
+            run.advance *= factor;
+            run.scale *= factor;
+        }
+
+        item.advance *= factor;
+        item.advance_for_layout = item.advance;
+        item.recompute_cluster_advances();
+    }
+
     fn create_collapsed_space_item(
         &self,
         style: &Arc<ComputedStyle>,
         allow_soft_wrap: bool,
     ) -> Result<InlineItem, LayoutError> {
-        let item = self.create_text_item_from_normalized(
-            style,
-            " ",
-            Vec::new(),
-            allow_soft_wrap,
-            false,
-            style.direction,
-        )?;
+        let item =
+            self.create_text_item_from_normalized(style, " ", Vec::new(), allow_soft_wrap, false, style.direction)?;
         Ok(InlineItem::Text(item))
     }
 
@@ -2673,10 +2774,15 @@ impl InlineFormattingContext {
             .unwrap_or(0.0)
             .max(0.0);
 
-        let horizontal_edges =
-            horizontal_padding_and_borders(&floating.box_node.style, percentage_base, self.viewport_size, &self.font_context);
+        let horizontal_edges = horizontal_padding_and_borders(
+            &floating.box_node.style,
+            percentage_base,
+            self.viewport_size,
+            &self.font_context,
+        );
 
-        let factory = FormattingContextFactory::with_font_context_and_viewport(self.font_context.clone(), self.viewport_size);
+        let factory =
+            FormattingContextFactory::with_font_context_and_viewport(self.font_context.clone(), self.viewport_size);
         let fc_type = floating
             .box_node
             .formatting_context()
@@ -2750,7 +2856,8 @@ impl InlineFormattingContext {
         };
 
         let content_width = (used_border_box - horizontal_edges).max(0.0);
-        let child_constraints = LayoutConstraints::new(AvailableSpace::Definite(content_width), AvailableSpace::Indefinite);
+        let child_constraints =
+            LayoutConstraints::new(AvailableSpace::Definite(content_width), AvailableSpace::Indefinite);
         let bfc = BlockFormattingContext::with_font_context_and_viewport(self.font_context.clone(), self.viewport_size);
         let mut fragment = bfc.layout(&floating.box_node, &child_constraints)?;
 
@@ -2759,7 +2866,15 @@ impl InlineFormattingContext {
             .style
             .margin_top
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, containing_width, &floating.box_node.style, &self.font_context, self.viewport_size))
+            .map(|l| {
+                resolve_length_for_width(
+                    *l,
+                    containing_width,
+                    &floating.box_node.style,
+                    &self.font_context,
+                    self.viewport_size,
+                )
+            })
             .unwrap_or(0.0)
             .max(0.0);
         let margin_bottom = floating
@@ -2767,7 +2882,15 @@ impl InlineFormattingContext {
             .style
             .margin_bottom
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, containing_width, &floating.box_node.style, &self.font_context, self.viewport_size))
+            .map(|l| {
+                resolve_length_for_width(
+                    *l,
+                    containing_width,
+                    &floating.box_node.style,
+                    &self.font_context,
+                    self.viewport_size,
+                )
+            })
             .unwrap_or(0.0)
             .max(0.0);
         let box_width = used_border_box;
@@ -2780,10 +2903,15 @@ impl InlineFormattingContext {
         };
 
         let cleared_y = float_ctx.compute_clearance(min_y, floating.box_node.style.clear);
-        let (fx, fy) = float_ctx.compute_float_position(side, margin_left + box_width + margin_right, float_height, cleared_y);
+        let (fx, fy) =
+            float_ctx.compute_float_position(side, margin_left + box_width + margin_right, float_height, cleared_y);
 
-        fragment.bounds =
-            Rect::from_xywh(fx + margin_left, fy + margin_top - float_base_y, box_width, fragment.bounds.height());
+        fragment.bounds = Rect::from_xywh(
+            fx + margin_left,
+            fy + margin_top - float_base_y,
+            box_width,
+            fragment.bounds.height(),
+        );
         float_ctx.add_float_at(side, fx, fy, margin_left + box_width + margin_right, float_height);
         let bottom_rel = fy + float_height - float_base_y;
         Ok((fragment, fy, bottom_rel))
@@ -2829,7 +2957,11 @@ impl InlineFormattingContext {
 
         let indent_value = resolve_length_with_percentage_inline(
             style.text_indent.length,
-            if inline_vertical { constraints.height() } else { constraints.width() },
+            if inline_vertical {
+                constraints.height()
+            } else {
+                constraints.width()
+            },
             style,
             &self.font_context,
             self.viewport_size,
@@ -2876,7 +3008,8 @@ impl InlineFormattingContext {
                              use_first_line_width: &mut bool,
                              line_offset: &mut f32,
                              lines_out: &mut Vec<Line>,
-                             ctx_ref: Option<&FloatContext>| -> Option<(f32, f32, f32)> {
+                             ctx_ref: Option<&FloatContext>|
+         -> Option<(f32, f32, f32)> {
             if pending.is_empty() {
                 return None;
             }
@@ -2892,10 +3025,7 @@ impl InlineFormattingContext {
                 first_line_indent_cut,
                 subsequent_line_indent_cut,
             );
-            let seg_height = seg_lines
-                .iter()
-                .map(|l| l.y_offset + l.height)
-                .fold(0.0, f32::max);
+            let seg_height = seg_lines.iter().map(|l| l.y_offset + l.height).fold(0.0, f32::max);
             let last_top = seg_lines.last().map(|l| l.y_offset).unwrap_or(0.0);
             let last_height = seg_lines.last().map(|l| l.height).unwrap_or(0.0);
             for mut line in seg_lines {
@@ -2954,13 +3084,16 @@ impl InlineFormattingContext {
 
         // Flush any remaining content
         let final_ctx = float_ctx.as_deref().or_else(|| local_float_ctx.as_ref());
-        flush_pending(&mut pending, &mut use_first_line_width, &mut line_offset, &mut lines, final_ctx);
+        flush_pending(
+            &mut pending,
+            &mut use_first_line_width,
+            &mut line_offset,
+            &mut lines,
+            final_ctx,
+        );
 
         // Calculate total height
-        let total_height: f32 = lines
-            .iter()
-            .map(|l| l.y_offset + l.height)
-            .fold(0.0, f32::max);
+        let total_height: f32 = lines.iter().map(|l| l.y_offset + l.height).fold(0.0, f32::max);
         let total_height = total_height.max(max_float_bottom);
         let line_max_width = lines
             .iter()
@@ -3202,6 +3335,18 @@ fn resolve_text_align_for_line(
     }
 }
 
+fn is_vertical_writing_mode(mode: WritingMode) -> bool {
+    matches!(mode, WritingMode::VerticalRl | WritingMode::VerticalLr)
+}
+
+fn can_combine_for_mode(ch: char, mode: TextCombineUpright) -> bool {
+    match mode {
+        TextCombineUpright::Digits(_) => ch.is_ascii_digit(),
+        TextCombineUpright::All => !ch.is_whitespace() && !ch.is_control(),
+        TextCombineUpright::None => false,
+    }
+}
+
 fn map_text_align(text_align: TextAlign, direction: crate::style::types::Direction) -> TextAlign {
     match text_align {
         TextAlign::Start => {
@@ -3436,10 +3581,12 @@ mod tests {
     use crate::style::display::{Display, FormattingContextType};
     use crate::style::types::FontSizeAdjust;
     use crate::style::types::{
-        CaseTransform, HyphensMode, ListStylePosition, OverflowWrap, TextTransform, WhiteSpace, WordBreak,
+        CaseTransform, HyphensMode, ListStylePosition, OverflowWrap, TextCombineUpright, TextTransform, WhiteSpace,
+        WordBreak, WritingMode,
     };
     use crate::style::values::{Length, LengthUnit};
     use crate::style::ComputedStyle;
+    use crate::text::line_break::BreakType;
     use crate::tree::box_tree::ReplacedType;
     use crate::tree::fragment_tree::FragmentContent;
     use std::sync::Arc;
@@ -3556,6 +3703,36 @@ mod tests {
 
         assert!(text_x.unwrap_or(-100.0) >= -0.01 && text_x.unwrap() <= 0.1);
         assert!(marker_x.unwrap_or(0.0) < -5.0);
+    }
+
+    #[test]
+    fn text_combine_digits_limits_width_to_em() {
+        let ifc = InlineFormattingContext::new();
+        let mut style = ComputedStyle::default();
+        style.writing_mode = WritingMode::VerticalRl;
+        style.text_combine_upright = TextCombineUpright::Digits(2);
+        style.font_size = 16.0;
+        let normalized = normalize_text_for_white_space("123", style.white_space);
+        let items = ifc
+            .create_text_items_with_combine(
+                &Arc::new(style),
+                &normalized.text,
+                normalized.forced_breaks.clone(),
+                normalized.allow_soft_wrap,
+                false,
+                crate::style::types::Direction::Ltr,
+            )
+            .expect("text combine items");
+        assert!(!items.is_empty());
+        if let InlineItem::Text(text) = &items[0] {
+            assert!(text.advance_for_layout <= 16.0 + 0.01);
+            assert!(text
+                .break_opportunities
+                .iter()
+                .all(|b| matches!(b.break_type, BreakType::Mandatory)));
+        } else {
+            panic!("expected text item");
+        }
     }
 
     #[test]
@@ -4473,8 +4650,17 @@ mod tests {
         let ifc = InlineFormattingContext::new();
         let mut items = ifc.create_inline_items_for_text(&node, "ab\tc", false).unwrap();
         let strut = ifc.compute_strut_metrics(&node.style);
-        let lines =
-            ifc.build_lines(std::mem::take(&mut items), 1000.0, 1000.0, &strut, None, None, 0.0, 0.0, 0.0);
+        let lines = ifc.build_lines(
+            std::mem::take(&mut items),
+            1000.0,
+            1000.0,
+            &strut,
+            None,
+            None,
+            0.0,
+            0.0,
+            0.0,
+        );
         let line = &lines[0];
         assert_eq!(line.items.len(), 3);
 
@@ -4550,10 +4736,7 @@ mod tests {
         let text_style = Arc::new(ComputedStyle::default());
         let before = BoxNode::new_text(text_style.clone(), "before ".to_string());
         let after = BoxNode::new_text(text_style.clone(), "after wrapping text".to_string());
-        let root = BoxNode::new_inline(
-            text_style,
-            vec![before, float_node.clone(), after],
-        );
+        let root = BoxNode::new_inline(text_style, vec![before, float_node.clone(), after]);
 
         let mut float_ctx = crate::layout::float_context::FloatContext::new(120.0);
         let ifc = InlineFormattingContext::new();

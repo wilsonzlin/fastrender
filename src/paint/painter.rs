@@ -34,13 +34,13 @@ use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::stacking::creates_stacking_context;
 use crate::paint::text_shadow::{resolve_text_shadows, PathBounds, ResolvedTextShadow};
 use crate::style::color::Rgba;
+use crate::style::display::Display;
+use crate::style::position::Position;
 use crate::style::types::{
     BackgroundAttachment, BackgroundImage, BackgroundPosition, BackgroundRepeatKeyword, BackgroundSize,
     BackgroundSizeComponent, BackgroundSizeKeyword, BorderStyle as CssBorderStyle, ImageRendering, ObjectFit,
     TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
 };
-use crate::style::display::Display;
-use crate::style::position::Position;
 use crate::style::types::{FilterColor, FilterFunction, MixBlendMode, Overflow};
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
@@ -424,30 +424,72 @@ impl Painter {
 
             negative_contexts.sort_by(|(z1, i1), (z2, i2)| z1.cmp(z2).then_with(|| i1.cmp(i2)));
             for (_, idx) in negative_contexts {
-                self.collect_stacking_context(&fragment.children[idx], next_offset, style_ref, false, &mut local_commands);
+                self.collect_stacking_context(
+                    &fragment.children[idx],
+                    next_offset,
+                    style_ref,
+                    false,
+                    &mut local_commands,
+                );
             }
 
             for idx in blocks {
-                self.collect_stacking_context(&fragment.children[idx], next_offset, style_ref, false, &mut local_commands);
+                self.collect_stacking_context(
+                    &fragment.children[idx],
+                    next_offset,
+                    style_ref,
+                    false,
+                    &mut local_commands,
+                );
             }
             for idx in floats {
-                self.collect_stacking_context(&fragment.children[idx], next_offset, style_ref, false, &mut local_commands);
+                self.collect_stacking_context(
+                    &fragment.children[idx],
+                    next_offset,
+                    style_ref,
+                    false,
+                    &mut local_commands,
+                );
             }
             for idx in inlines {
-                self.collect_stacking_context(&fragment.children[idx], next_offset, style_ref, false, &mut local_commands);
+                self.collect_stacking_context(
+                    &fragment.children[idx],
+                    next_offset,
+                    style_ref,
+                    false,
+                    &mut local_commands,
+                );
             }
             for idx in positioned {
-                self.collect_stacking_context(&fragment.children[idx], next_offset, style_ref, false, &mut local_commands);
+                self.collect_stacking_context(
+                    &fragment.children[idx],
+                    next_offset,
+                    style_ref,
+                    false,
+                    &mut local_commands,
+                );
             }
 
             zero_contexts.sort_by(|(z1, i1), (z2, i2)| z1.cmp(z2).then_with(|| i1.cmp(i2)));
             for (_, idx) in zero_contexts {
-                self.collect_stacking_context(&fragment.children[idx], next_offset, style_ref, false, &mut local_commands);
+                self.collect_stacking_context(
+                    &fragment.children[idx],
+                    next_offset,
+                    style_ref,
+                    false,
+                    &mut local_commands,
+                );
             }
 
             positive_contexts.sort_by(|(z1, i1), (z2, i2)| z1.cmp(z2).then_with(|| i1.cmp(i2)));
             for (_, idx) in positive_contexts {
-                self.collect_stacking_context(&fragment.children[idx], next_offset, style_ref, false, &mut local_commands);
+                self.collect_stacking_context(
+                    &fragment.children[idx],
+                    next_offset,
+                    style_ref,
+                    false,
+                    &mut local_commands,
+                );
             }
 
             items.extend(local_commands);
@@ -1584,7 +1626,8 @@ impl Painter {
             Err(_) => return,
         };
         let units_per_em = face.units_per_em() as f32;
-        let scale = run.font_size / units_per_em;
+        let mut scale = run.font_size / units_per_em;
+        scale *= run.scale;
 
         let mut glyph_paths = Vec::with_capacity(run.glyphs.len());
         let mut bounds = PathBounds::new();
@@ -1609,8 +1652,12 @@ impl Painter {
         }
 
         // Rotate sideways runs for vertical text-orientation.
-        if run.rotated_90_ccw {
-            let angle = -90.0_f32.to_radians();
+        if !matches!(run.rotation, crate::text::pipeline::RunRotation::None) {
+            let angle = match run.rotation {
+                crate::text::pipeline::RunRotation::Ccw90 => -90.0_f32.to_radians(),
+                crate::text::pipeline::RunRotation::Cw90 => 90.0_f32.to_radians(),
+                crate::text::pipeline::RunRotation::None => 0.0,
+            };
             let (sin, cos) = angle.sin_cos();
             let tx = origin_x - origin_x * cos + baseline_y * sin;
             let ty = baseline_y - origin_x * sin - baseline_y * cos;

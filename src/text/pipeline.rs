@@ -624,6 +624,9 @@ pub struct FontRun {
 
     /// Optional rotation hint for vertical writing modes.
     pub rotation: RunRotation,
+
+    /// Whether this run should participate in vertical shaping (inline progression vertical).
+    pub vertical: bool,
 }
 
 /// Collects OpenType features from computed style.
@@ -860,6 +863,7 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
             language: style.language.clone(),
             features: features.clone(),
             rotation: RunRotation::None,
+            vertical: false,
         });
     }
 
@@ -891,6 +895,7 @@ fn apply_vertical_text_orientation(
             .into_iter()
             .map(|mut run| {
                 run.rotation = RunRotation::None;
+                run.vertical = true;
                 run
             })
             .collect(),
@@ -942,6 +947,7 @@ fn push_oriented_segment(run: &FontRun, start: usize, end: usize, rotation: RunR
     segment.start = run.start + start;
     segment.end = run.start + end;
     segment.rotation = rotation;
+    segment.vertical = matches!(rotation, RunRotation::None);
     out.push(segment);
 }
 
@@ -1080,6 +1086,9 @@ pub struct ShapedRun {
     pub synthetic_oblique: f32,
     /// Optional rotation to apply when painting.
     pub rotation: RunRotation,
+
+    /// Optional additional scale factor (1.0 = none).
+    pub scale: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1176,6 +1185,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
         rotation: RunRotation::None,
+        scale: 1.0,
     })
 }
 
