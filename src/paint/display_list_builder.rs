@@ -347,6 +347,19 @@ impl DisplayListBuilder {
             .first()
             .and_then(|f| f.style.as_deref())
             .and_then(|style| Self::build_transform(style, context.bounds));
+        let paint_contained = context
+            .fragments
+            .iter()
+            .find_map(|f| f.style.as_deref())
+            .map(|s| s.containment.paint)
+            .unwrap_or(false);
+
+        if paint_contained {
+            self.list.push(DisplayItem::PushClip(ClipItem {
+                rect: context.bounds,
+                radii: None,
+            }));
+        }
 
         self.list.push(DisplayItem::PushStackingContext(StackingContextItem {
             z_index: context.z_index,
@@ -379,6 +392,9 @@ impl DisplayListBuilder {
         }
 
         self.list.push(DisplayItem::PopStackingContext);
+        if paint_contained {
+            self.list.push(DisplayItem::PopClip);
+        }
     }
 
     fn convert_blend_mode(mode: MixBlendMode) -> BlendMode {

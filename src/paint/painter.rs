@@ -640,11 +640,11 @@ impl Painter {
             let clip_x = matches!(
                 style.overflow_x,
                 Overflow::Hidden | Overflow::Scroll | Overflow::Auto | Overflow::Clip
-            );
+            ) || style.containment.paint;
             let clip_y = matches!(
                 style.overflow_y,
                 Overflow::Hidden | Overflow::Scroll | Overflow::Auto | Overflow::Clip
-            );
+            ) || style.containment.paint;
             if !clip_x && !clip_y {
                 return None;
             }
