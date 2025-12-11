@@ -591,6 +591,41 @@ fn test_max_content_gte_min_content() {
     }
 }
 
+#[test]
+fn block_intrinsic_width_respects_min_width() {
+    let factory = FormattingContextFactory::new();
+    let mut style = ComputedStyle::default();
+    style.min_width = Some(fastrender::style::values::Length::px(50.0));
+    let block = BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![]);
+    let width = factory
+        .create(FormattingContextType::Block)
+        .compute_intrinsic_inline_size(&block, IntrinsicSizingMode::MinContent)
+        .expect("intrinsic width");
+    assert!(
+        width >= 50.0,
+        "min-width should clamp intrinsic width to at least 50px, got {}",
+        width
+    );
+}
+
+#[test]
+fn block_intrinsic_width_respects_max_width() {
+    let factory = FormattingContextFactory::new();
+    let mut style = ComputedStyle::default();
+    style.max_width = Some(fastrender::style::values::Length::px(5.0));
+    let text = create_text_box("this text should exceed five pixels");
+    let block = BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![text]);
+    let width = factory
+        .create(FormattingContextType::Block)
+        .compute_intrinsic_inline_size(&block, IntrinsicSizingMode::MaxContent)
+        .expect("intrinsic width");
+    assert!(
+        width <= 5.01,
+        "max-width should clamp intrinsic width to 5px, got {}",
+        width
+    );
+}
+
 // =============================================================================
 // Fragment Structure Tests
 // =============================================================================
