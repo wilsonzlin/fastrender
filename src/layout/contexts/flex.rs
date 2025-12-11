@@ -76,6 +76,7 @@ pub struct FlexFormattingContext {
     /// Viewport size used for resolving viewport-relative units inside Taffy conversion.
     viewport_size: Size,
     font_context: FontContext,
+    nearest_positioned_cb: ContainingBlock,
 }
 
 impl FlexFormattingContext {
@@ -84,6 +85,7 @@ impl FlexFormattingContext {
         Self {
             viewport_size: Size::new(800.0, 600.0),
             font_context: FontContext::new(),
+            nearest_positioned_cb: ContainingBlock::viewport(Size::new(800.0, 600.0)),
         }
     }
 
@@ -91,6 +93,19 @@ impl FlexFormattingContext {
         Self {
             viewport_size,
             font_context: FontContext::new(),
+            nearest_positioned_cb: ContainingBlock::viewport(viewport_size),
+        }
+    }
+
+    pub fn with_viewport_and_cb(
+        viewport_size: Size,
+        nearest_positioned_cb: ContainingBlock,
+        font_context: FontContext,
+    ) -> Self {
+        Self {
+            viewport_size,
+            font_context,
+            nearest_positioned_cb,
         }
     }
 }
@@ -166,7 +181,7 @@ impl FormattingContext for FlexFormattingContext {
             let cb = if box_node.style.position.is_positioned() {
                 ContainingBlock::with_viewport(padding_rect, self.viewport_size)
             } else {
-                ContainingBlock::viewport(self.viewport_size)
+                self.nearest_positioned_cb
             };
 
             let factory = crate::layout::contexts::factory::FormattingContextFactory::with_font_context_and_viewport(
@@ -909,6 +924,37 @@ mod tests {
         assert_eq!(abs_fragment.bounds.y(), 15.0);
         assert_eq!(abs_fragment.bounds.width(), 20.0);
         assert_eq!(abs_fragment.bounds.height(), 10.0);
+    }
+
+    #[test]
+    fn absolute_child_inherits_positioned_containing_block_from_ancestor() {
+        let mut container_style = ComputedStyle::default();
+        container_style.display = Display::Flex;
+        container_style.position = Position::Static;
+
+        let mut abs_style = ComputedStyle::default();
+        abs_style.display = Display::Block;
+        abs_style.position = Position::Absolute;
+        abs_style.left = Some(Length::px(5.0));
+        abs_style.top = Some(Length::px(7.0));
+        abs_style.width = Some(Length::px(10.0));
+        abs_style.height = Some(Length::px(6.0));
+
+        let abs_child = BoxNode::new_block(Arc::new(abs_style), FormattingContextType::Block, vec![]);
+        let container =
+            BoxNode::new_block(Arc::new(container_style), FormattingContextType::Flex, vec![abs_child]);
+
+        let cb_rect = Rect::from_xywh(20.0, 30.0, 150.0, 150.0);
+        let viewport = Size::new(300.0, 300.0);
+        let cb = ContainingBlock::with_viewport(cb_rect, viewport);
+        let fc = FlexFormattingContext::with_viewport_and_cb(viewport, cb, FontContext::new());
+        let constraints = LayoutConstraints::definite(100.0, 100.0);
+        let fragment = fc.layout(&container, &constraints).unwrap();
+
+        assert_eq!(fragment.children.len(), 1);
+        let abs_fragment = &fragment.children[0];
+        assert_eq!(abs_fragment.bounds.x(), 25.0);
+        assert_eq!(abs_fragment.bounds.y(), 37.0);
     }
 
     #[test]

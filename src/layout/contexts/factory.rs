@@ -24,6 +24,7 @@ use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::flex::FlexFormattingContext;
 use crate::layout::contexts::grid::GridFormattingContext;
 use crate::layout::contexts::inline::InlineFormattingContext;
+use crate::layout::contexts::positioned::ContainingBlock;
 use crate::layout::formatting_context::{FormattingContext, LayoutError};
 use crate::layout::table::TableFormattingContext;
 use crate::style::display::FormattingContextType;
@@ -65,6 +66,7 @@ use crate::tree::box_tree::BoxNode;
 pub struct FormattingContextFactory {
     font_context: FontContext,
     viewport_size: crate::geometry::Size,
+    nearest_positioned_cb: ContainingBlock,
 }
 
 impl std::fmt::Debug for FormattingContextFactory {
@@ -76,28 +78,50 @@ impl std::fmt::Debug for FormattingContextFactory {
 impl FormattingContextFactory {
     /// Creates a new factory
     pub fn new() -> Self {
-        Self {
-            font_context: FontContext::new(),
-            viewport_size: crate::geometry::Size::new(800.0, 600.0),
-        }
+        let viewport_size = crate::geometry::Size::new(800.0, 600.0);
+        Self::with_font_context_viewport_and_cb(
+            FontContext::new(),
+            viewport_size,
+            ContainingBlock::viewport(viewport_size),
+        )
     }
 
     /// Creates a factory wired to a specific font context, allowing layout to share
     /// font caches with paint and callers.
     pub fn with_font_context(font_context: FontContext) -> Self {
-        Self {
+        let viewport_size = crate::geometry::Size::new(800.0, 600.0);
+        Self::with_font_context_viewport_and_cb(
             font_context,
-            viewport_size: crate::geometry::Size::new(800.0, 600.0),
-        }
+            viewport_size,
+            ContainingBlock::viewport(viewport_size),
+        )
     }
 
     /// Creates a factory wired to a specific font context and viewport size, allowing layout to share
     /// both font caches and viewport-dependent resolution with callers.
     pub fn with_font_context_and_viewport(font_context: FontContext, viewport_size: crate::geometry::Size) -> Self {
+        let cb = ContainingBlock::viewport(viewport_size);
+        Self::with_font_context_viewport_and_cb(font_context, viewport_size, cb)
+    }
+
+    /// Creates a factory with explicit font context, viewport, and nearest positioned containing block.
+    pub fn with_font_context_viewport_and_cb(
+        font_context: FontContext,
+        viewport_size: crate::geometry::Size,
+        nearest_positioned_cb: ContainingBlock,
+    ) -> Self {
         Self {
             font_context,
             viewport_size,
+            nearest_positioned_cb,
         }
+    }
+
+    /// Returns a copy of this factory with an updated nearest positioned containing block.
+    pub fn with_positioned_cb(&self, cb: ContainingBlock) -> Self {
+        let mut clone = self.clone();
+        clone.nearest_positioned_cb = cb;
+        clone
     }
 
     /// Returns the font context backing formatting context construction.
@@ -157,16 +181,26 @@ impl FormattingContextFactory {
     /// - Reusable (can be used for multiple layouts)
     pub fn create(&self, fc_type: FormattingContextType) -> Box<dyn FormattingContext> {
         match fc_type {
-            FormattingContextType::Block => Box::new(BlockFormattingContext::with_font_context_and_viewport(
+            FormattingContextType::Block => Box::new(BlockFormattingContext::with_font_context_viewport_and_cb(
                 self.font_context.clone(),
                 self.viewport_size,
+                self.nearest_positioned_cb,
             )),
-            FormattingContextType::Inline => Box::new(InlineFormattingContext::with_font_context_and_viewport(
+            FormattingContextType::Inline => Box::new(InlineFormattingContext::with_font_context_viewport_and_cb(
                 self.font_context.clone(),
                 self.viewport_size,
+                self.nearest_positioned_cb,
             )),
-            FormattingContextType::Flex => Box::new(FlexFormattingContext::with_viewport(self.viewport_size)),
-            FormattingContextType::Grid => Box::new(GridFormattingContext::with_viewport(self.viewport_size)),
+            FormattingContextType::Flex => Box::new(FlexFormattingContext::with_viewport_and_cb(
+                self.viewport_size,
+                self.nearest_positioned_cb,
+                self.font_context.clone(),
+            )),
+            FormattingContextType::Grid => Box::new(GridFormattingContext::with_viewport_and_cb(
+                self.viewport_size,
+                self.nearest_positioned_cb,
+                self.font_context.clone(),
+            )),
             FormattingContextType::Table => Box::new(TableFormattingContext::with_factory(self.clone())),
         }
     }

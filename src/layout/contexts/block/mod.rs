@@ -96,24 +96,41 @@ fn resolve_opt_length(
 pub struct BlockFormattingContext {
     font_context: FontContext,
     viewport_size: crate::geometry::Size,
+    nearest_positioned_cb: ContainingBlock,
 }
 
 impl BlockFormattingContext {
     /// Creates a new BlockFormattingContext
     pub fn new() -> Self {
-        Self::with_font_context_and_viewport(FontContext::new(), crate::geometry::Size::new(800.0, 600.0))
+        let viewport = crate::geometry::Size::new(800.0, 600.0);
+        Self::with_font_context_viewport_and_cb(
+            FontContext::new(),
+            viewport,
+            ContainingBlock::viewport(viewport),
+        )
     }
 
     /// Creates a BlockFormattingContext backed by a specific font context so text
     /// measurement shares caches with the caller.
     pub fn with_font_context(font_context: FontContext) -> Self {
-        Self::with_font_context_and_viewport(font_context, crate::geometry::Size::new(800.0, 600.0))
+        let viewport = crate::geometry::Size::new(800.0, 600.0);
+        Self::with_font_context_viewport_and_cb(font_context, viewport, ContainingBlock::viewport(viewport))
     }
 
     pub fn with_font_context_and_viewport(font_context: FontContext, viewport_size: crate::geometry::Size) -> Self {
+        let cb = ContainingBlock::viewport(viewport_size);
+        Self::with_font_context_viewport_and_cb(font_context, viewport_size, cb)
+    }
+
+    pub fn with_font_context_viewport_and_cb(
+        font_context: FontContext,
+        viewport_size: crate::geometry::Size,
+        nearest_positioned_cb: ContainingBlock,
+    ) -> Self {
         Self {
             font_context,
             viewport_size,
+            nearest_positioned_cb,
         }
     }
 
@@ -199,9 +216,10 @@ impl BlockFormattingContext {
         let (child_fragments, content_height, _) = if let Some(fc_type) = fc_type {
             if fc_type != FormattingContextType::Block {
                 // Child establishes a non-block FC - use the appropriate FC
-                let factory = FormattingContextFactory::with_font_context_and_viewport(
+                let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
                     self.font_context.clone(),
                     self.viewport_size,
+                    *nearest_positioned_cb,
                 );
                 let fc = factory.create(fc_type);
 
@@ -461,8 +479,11 @@ impl BlockFormattingContext {
             *current_y += pending_margin;
 
             let inline_container = BoxNode::new_inline(parent.style.clone(), buffer.clone());
-            let inline_fc =
-                InlineFormattingContext::with_font_context_and_viewport(self.font_context.clone(), self.viewport_size);
+            let inline_fc = InlineFormattingContext::with_font_context_viewport_and_cb(
+                self.font_context.clone(),
+                self.viewport_size,
+                *nearest_positioned_cb,
+            );
             let inline_constraints =
                 LayoutConstraints::new(AvailableSpace::Definite(containing_width), available_height);
             let mut inline_fragment = inline_fc.layout_with_floats(
@@ -572,9 +593,10 @@ impl BlockFormattingContext {
                 );
 
                 // CSS 2.1 shrink-to-fit formula for floats
-                let factory = FormattingContextFactory::with_font_context_and_viewport(
+                let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
                     self.font_context.clone(),
                     self.viewport_size,
+                    *nearest_positioned_cb,
                 );
                 let fc_type = child.formatting_context().unwrap_or(FormattingContextType::Block);
                 let fc = factory.create(fc_type);
@@ -646,9 +668,10 @@ impl BlockFormattingContext {
 
                 let child_constraints =
                     LayoutConstraints::new(AvailableSpace::Definite(content_width), AvailableSpace::Indefinite);
-                let child_bfc = BlockFormattingContext::with_font_context_and_viewport(
+                let child_bfc = BlockFormattingContext::with_font_context_viewport_and_cb(
                     self.font_context.clone(),
                     self.viewport_size,
+                    *nearest_positioned_cb,
                 );
                 let mut fragment = child_bfc.layout(child, &child_constraints)?;
 
@@ -919,7 +942,7 @@ impl FormattingContext for BlockFormattingContext {
             child_height_space,
         );
 
-        let initial_cb = ContainingBlock::viewport(self.viewport_size);
+        let initial_cb = self.nearest_positioned_cb;
         let (mut child_fragments, mut content_height, positioned_children) =
             self.layout_children(box_node, &child_constraints, &initial_cb)?;
         if style.containment.size {
@@ -972,10 +995,6 @@ impl FormattingContext for BlockFormattingContext {
         let padding_rect = Rect::new(padding_origin, padding_size);
 
         if !positioned_children.is_empty() {
-            let factory = FormattingContextFactory::with_font_context_and_viewport(
-                self.font_context.clone(),
-                self.viewport_size,
-            );
             let abs = crate::layout::absolute_positioning::AbsoluteLayout::new();
             let parent_padding_cb = ContainingBlock::with_viewport(padding_rect, self.viewport_size);
 
@@ -984,6 +1003,11 @@ impl FormattingContext for BlockFormattingContext {
                     ContainingBlockSource::ParentPadding => parent_padding_cb,
                     ContainingBlockSource::Explicit(cb) => cb,
                 };
+                let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
+                    self.font_context.clone(),
+                    self.viewport_size,
+                    cb,
+                );
                 // Layout the child as if it were in normal flow to obtain its intrinsic size.
             let mut layout_child = child.clone();
             let mut style = (*layout_child.style).clone();
@@ -1068,10 +1092,16 @@ impl FormattingContext for BlockFormattingContext {
             return Ok(size.width + edges);
         }
 
-        let factory =
-            FormattingContextFactory::with_font_context_and_viewport(self.font_context.clone(), self.viewport_size);
-        let inline_fc =
-            InlineFormattingContext::with_font_context_and_viewport(self.font_context.clone(), self.viewport_size);
+        let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
+            self.font_context.clone(),
+            self.viewport_size,
+            self.nearest_positioned_cb,
+        );
+        let inline_fc = InlineFormattingContext::with_font_context_viewport_and_cb(
+            self.font_context.clone(),
+            self.viewport_size,
+            self.nearest_positioned_cb,
+        );
 
         // Inline formatting context contribution (text and inline-level children).
         // Block-level children split inline runs into separate formatting contexts.

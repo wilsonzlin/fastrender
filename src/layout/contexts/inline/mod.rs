@@ -94,6 +94,7 @@ pub struct InlineFormattingContext {
     font_context: FontContext,
     default_hyphenator: Option<Hyphenator>,
     viewport_size: crate::geometry::Size,
+    nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock,
 }
 
 impl InlineFormattingContext {
@@ -104,6 +105,7 @@ impl InlineFormattingContext {
             font_context: FontContext::new(),
             default_hyphenator: Hyphenator::new("en-us").ok(),
             viewport_size: crate::geometry::Size::new(800.0, 600.0),
+            nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock::viewport(crate::geometry::Size::new(800.0, 600.0)),
         }
     }
 
@@ -112,11 +114,21 @@ impl InlineFormattingContext {
     }
 
     pub fn with_font_context_and_viewport(font_context: FontContext, viewport_size: crate::geometry::Size) -> Self {
+        let cb = crate::layout::contexts::positioned::ContainingBlock::viewport(viewport_size);
+        Self::with_font_context_viewport_and_cb(font_context, viewport_size, cb)
+    }
+
+    pub fn with_font_context_viewport_and_cb(
+        font_context: FontContext,
+        viewport_size: crate::geometry::Size,
+        nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock,
+    ) -> Self {
         Self {
             pipeline: ShapingPipeline::new(),
             font_context,
             default_hyphenator: Hyphenator::new("en-us").ok(),
             viewport_size,
+            nearest_positioned_cb,
         }
     }
 
@@ -433,8 +445,11 @@ impl InlineFormattingContext {
         let style = &box_node.style;
         let metrics = self.resolve_scaled_metrics(style);
         let line_height = compute_line_height_with_metrics(style, metrics.as_ref());
-        let factory =
-            FormattingContextFactory::with_font_context_and_viewport(self.font_context.clone(), self.viewport_size);
+        let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
+            self.font_context.clone(),
+            self.viewport_size,
+            self.nearest_positioned_cb,
+        );
         let fc = factory.create(fc_type);
 
         let percentage_base = if available_width.is_finite() {
@@ -2790,8 +2805,11 @@ impl InlineFormattingContext {
             &self.font_context,
         );
 
-        let factory =
-            FormattingContextFactory::with_font_context_and_viewport(self.font_context.clone(), self.viewport_size);
+        let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
+            self.font_context.clone(),
+            self.viewport_size,
+            self.nearest_positioned_cb,
+        );
         let fc_type = floating
             .box_node
             .formatting_context()
@@ -2867,7 +2885,11 @@ impl InlineFormattingContext {
         let content_width = (used_border_box - horizontal_edges).max(0.0);
         let child_constraints =
             LayoutConstraints::new(AvailableSpace::Definite(content_width), AvailableSpace::Indefinite);
-        let bfc = BlockFormattingContext::with_font_context_and_viewport(self.font_context.clone(), self.viewport_size);
+        let bfc = BlockFormattingContext::with_font_context_viewport_and_cb(
+            self.font_context.clone(),
+            self.viewport_size,
+            self.nearest_positioned_cb,
+        );
         let mut fragment = bfc.layout(&floating.box_node, &child_constraints)?;
 
         let margin_top = floating
