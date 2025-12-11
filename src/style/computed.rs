@@ -316,7 +316,7 @@ pub struct PositionedStyle {
 /// Border colors for all four sides
 ///
 /// Allows different colors per side
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BorderColors {
     pub top: Color,
     pub right: Color,
@@ -326,11 +326,11 @@ pub struct BorderColors {
 
 impl BorderColors {
     /// Creates border colors with the same color on all sides
-    pub const fn all(color: Color) -> Self {
+    pub fn all(color: Color) -> Self {
         Self {
-            top: color,
-            right: color,
-            bottom: color,
+            top: color.clone(),
+            right: color.clone(),
+            bottom: color.clone(),
             left: color,
         }
     }

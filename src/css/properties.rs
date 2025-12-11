@@ -517,6 +517,7 @@ mod tests {
                 assert!((c.a - 0.5).abs() < 1e-6);
             }
             Color::CurrentColor => panic!("second stop should not be currentColor"),
+            Color::Mix { .. } => panic!("second stop should not be a mix"),
         }
         assert_eq!(stops[1].position, Some(0.90));
     }

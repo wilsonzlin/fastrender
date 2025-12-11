@@ -27,6 +27,25 @@
 
 use std::fmt;
 
+fn srgb_to_linear_component(c: u8) -> f32 {
+    let c = c as f32 / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb_component(c: f32) -> u8 {
+    let c = c.clamp(0.0, 1.0);
+    let srgb = if c <= 0.0031308 {
+        12.92 * c
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
+    (srgb * 255.0).round().clamp(0.0, 255.0) as u8
+}
+
 /// RGBA color representation
 ///
 /// Represents a color in the RGB color space with an alpha channel.
@@ -433,7 +452,7 @@ impl fmt::Display for Hsla {
 /// let red = Color::Rgba(Rgba::RED);
 /// let current = Color::CurrentColor;
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Color {
     /// RGBA color
     Rgba(Rgba),
@@ -441,9 +460,18 @@ pub enum Color {
     /// HSLA color
     Hsla(Hsla),
 
+    /// Interpolated color mix
+    Mix { components: [(Box<Color>, f32); 2], space: ColorMixSpace },
+
     /// Special keyword: currentColor
     /// Uses the current value of the 'color' property
     CurrentColor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorMixSpace {
+    Srgb,
+    SrgbLinear,
 }
 
 impl Color {
@@ -460,16 +488,72 @@ impl Color {
     /// let current = Color::CurrentColor;
     /// assert_eq!(current.to_rgba(Rgba::BLUE), Rgba::BLUE);
     /// ```
-    pub fn to_rgba(self, current_color: Rgba) -> Rgba {
+    pub fn to_rgba(&self, current_color: Rgba) -> Rgba {
         match self {
-            Color::Rgba(rgba) => rgba,
+            Color::Rgba(rgba) => *rgba,
             Color::Hsla(hsla) => hsla.to_rgba(),
+            Color::Mix { components, space } => {
+                let weights: [f32; 2] = [components[0].1, components[1].1];
+                let sum = weights[0] + weights[1];
+                if sum <= f32::EPSILON {
+                    return Rgba::TRANSPARENT;
+                }
+                let w0 = weights[0] / sum;
+                let w1 = weights[1] / sum;
+                let c0 = components[0].0.as_ref().to_rgba(current_color);
+                let c1 = components[1].0.as_ref().to_rgba(current_color);
+
+                let (r0, g0, b0) = match space {
+                    ColorMixSpace::Srgb => (
+                        srgb_to_linear_component(c0.r),
+                        srgb_to_linear_component(c0.g),
+                        srgb_to_linear_component(c0.b),
+                    ),
+                    ColorMixSpace::SrgbLinear => (
+                        c0.r as f32 / 255.0,
+                        c0.g as f32 / 255.0,
+                        c0.b as f32 / 255.0,
+                    ),
+                };
+                let (r1, g1, b1) = match space {
+                    ColorMixSpace::Srgb => (
+                        srgb_to_linear_component(c1.r),
+                        srgb_to_linear_component(c1.g),
+                        srgb_to_linear_component(c1.b),
+                    ),
+                    ColorMixSpace::SrgbLinear => (
+                        c1.r as f32 / 255.0,
+                        c1.g as f32 / 255.0,
+                        c1.b as f32 / 255.0,
+                    ),
+                };
+
+                let r_lin = r0 * w0 + r1 * w1;
+                let g_lin = g0 * w0 + g1 * w1;
+                let b_lin = b0 * w0 + b1 * w1;
+                let a = c0.a * w0 + c1.a * w1;
+
+                let (r, g, b) = match space {
+                    ColorMixSpace::Srgb => (
+                        linear_to_srgb_component(r_lin),
+                        linear_to_srgb_component(g_lin),
+                        linear_to_srgb_component(b_lin),
+                    ),
+                    ColorMixSpace::SrgbLinear => (
+                        (r_lin * 255.0).round().clamp(0.0, 255.0) as u8,
+                        (g_lin * 255.0).round().clamp(0.0, 255.0) as u8,
+                        (b_lin * 255.0).round().clamp(0.0, 255.0) as u8,
+                    ),
+                };
+
+                Rgba::new(r, g, b, a)
+            }
             Color::CurrentColor => current_color,
         }
     }
 
     /// Returns true if this is CurrentColor
-    pub fn is_current_color(self) -> bool {
+    pub fn is_current_color(&self) -> bool {
         matches!(self, Color::CurrentColor)
     }
 
@@ -510,13 +594,18 @@ impl Color {
     /// ```
     pub fn parse(s: &str) -> Result<Self, ColorParseError> {
         let s = s.trim();
+        let lower = s.to_ascii_lowercase();
 
         // Special keywords
-        if s.eq_ignore_ascii_case("transparent") {
+        if lower == "transparent" {
             return Ok(Color::transparent());
         }
-        if s.eq_ignore_ascii_case("currentcolor") || s.eq_ignore_ascii_case("currentColor") {
+        if lower == "currentcolor" {
             return Ok(Color::CurrentColor);
+        }
+
+        if lower.starts_with("color-mix(") {
+            return parse_color_mix(s);
         }
 
         // Hex colors
@@ -525,17 +614,17 @@ impl Color {
         }
 
         // RGB/RGBA functions
-        if s.starts_with("rgb(") || s.starts_with("rgba(") {
+        if lower.starts_with("rgb(") || lower.starts_with("rgba(") {
             return parse_rgb(s);
         }
 
         // HSL/HSLA functions
-        if s.starts_with("hsl(") || s.starts_with("hsla(") {
+        if lower.starts_with("hsl(") || lower.starts_with("hsla(") {
             return parse_hsl(s);
         }
 
         // HWB function
-        if s.starts_with("hwb(") {
+        if lower.starts_with("hwb(") {
             return parse_hwb(s);
         }
 
@@ -565,6 +654,7 @@ impl fmt::Display for Color {
         match self {
             Color::Rgba(rgba) => write!(f, "{}", rgba),
             Color::Hsla(hsla) => write!(f, "{}", hsla),
+            Color::Mix { .. } => write!(f, "color-mix(...)"),
             Color::CurrentColor => write!(f, "currentColor"),
         }
     }
@@ -817,6 +907,127 @@ fn hwb_to_rgba(h: f32, whiteness: f32, blackness: f32, alpha: f32) -> Rgba {
 
     let hsla = Hsla::new(h, sat * 100.0, l * 100.0, alpha);
     hsla.to_rgba()
+}
+
+fn parse_color_mix(input: &str) -> Result<Color, ColorParseError> {
+    let inner = input
+        .strip_prefix("color-mix(")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .ok_or_else(|| ColorParseError::InvalidFormat(input.to_string()))?;
+    let parts = split_top_level_commas(inner);
+    if parts.len() != 3 {
+        return Err(ColorParseError::InvalidFormat(input.to_string()));
+    }
+
+    let space = {
+        let mut iter = parts[0].trim().split_whitespace();
+        if !matches!(iter.next(), Some(tok) if tok.eq_ignore_ascii_case("in")) {
+            return Err(ColorParseError::InvalidFormat(input.to_string()));
+        }
+        let name = iter.next().ok_or_else(|| ColorParseError::InvalidFormat(input.to_string()))?;
+        if iter.next().is_some() {
+            return Err(ColorParseError::InvalidFormat(input.to_string()));
+        }
+        match name.to_ascii_lowercase().as_str() {
+            "srgb" => ColorMixSpace::Srgb,
+            "srgb-linear" => ColorMixSpace::SrgbLinear,
+            other => return Err(ColorParseError::InvalidComponent(other.to_string())),
+        }
+    };
+
+    let (c0, w0) = parse_mix_component(parts[1].trim())?;
+    let (c1, w1) = parse_mix_component(parts[2].trim())?;
+    let (w0, w1) = normalize_mix_weights(w0, w1);
+
+    Ok(Color::Mix {
+        components: [(Box::new(c0), w0), (Box::new(c1), w1)],
+        space,
+    })
+}
+
+fn parse_mix_component(component: &str) -> Result<(Color, Option<f32>), ColorParseError> {
+    let (color_part, percent) = split_color_and_percentage(component);
+    let color = Color::parse(&color_part)?;
+    Ok((color, percent))
+}
+
+fn split_top_level_commas(input: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    for (idx, ch) in input.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(input[start..idx].trim());
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+    if start < input.len() {
+        parts.push(input[start..].trim());
+    }
+    parts
+}
+
+fn split_color_and_percentage(component: &str) -> (String, Option<f32>) {
+    let mut depth = 0i32;
+    let mut last_space = None;
+    for (idx, ch) in component.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            c if c.is_whitespace() && depth == 0 => last_space = Some(idx),
+            _ => {}
+        }
+    }
+
+    if let Some(idx) = last_space {
+        let color = component[..idx].trim_end();
+        let tail = component[idx + 1..].trim();
+        if let Some(val) = tail.strip_suffix('%') {
+            if let Ok(p) = val.trim().parse::<f32>() {
+                return (color.to_string(), Some(p.max(0.0)));
+            }
+        }
+        (color.to_string(), None)
+    } else {
+        (component.trim().to_string(), None)
+    }
+}
+
+fn normalize_mix_weights(w0: Option<f32>, w1: Option<f32>) -> (f32, f32) {
+    match (w0, w1) {
+        (Some(a), Some(b)) => {
+            let sum = a + b;
+            if sum <= f32::EPSILON {
+                (0.5, 0.5)
+            } else {
+                (a / sum, b / sum)
+            }
+        }
+        (Some(a), None) => {
+            let remaining = (100.0 - a).max(0.0);
+            let sum = a + remaining;
+            if sum <= f32::EPSILON {
+                (0.5, 0.5)
+            } else {
+                (a / sum, remaining / sum)
+            }
+        }
+        (None, Some(b)) => {
+            let remaining = (100.0 - b).max(0.0);
+            let sum = b + remaining;
+            if sum <= f32::EPSILON {
+                (0.5, 0.5)
+            } else {
+                (remaining / sum, b / sum)
+            }
+        }
+        (None, None) => (0.5, 0.5),
+    }
 }
 
 /// Parse named color (all 147 CSS named colors)
@@ -1219,6 +1430,20 @@ mod tests {
         let color = Color::parse("currentColor").unwrap();
         assert!(color.is_current_color());
         assert_eq!(color.to_rgba(Rgba::BLUE), Rgba::BLUE);
+    }
+
+    #[test]
+    fn parses_color_mix_srgb_linear() {
+        let color = Color::parse("color-mix(in srgb-linear, red 25%, blue)").expect("parsed");
+        let rgba = color.to_rgba(Rgba::BLACK);
+        assert_eq!(rgba, Rgba::new(64, 0, 191, 1.0));
+    }
+
+    #[test]
+    fn color_mix_defaults_to_even_weights() {
+        let color = Color::parse("color-mix(in srgb-linear, red, blue)").expect("parsed");
+        let rgba = color.to_rgba(Rgba::BLACK);
+        assert_eq!(rgba, Rgba::new(128, 0, 128, 1.0));
     }
 
     // Error tests
