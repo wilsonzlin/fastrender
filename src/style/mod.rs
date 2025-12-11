@@ -95,6 +95,29 @@ pub enum LogicalProperty {
         start: Option<Length>,
         end: Option<Length>,
     },
+    InlineSize {
+        value: Option<Option<Length>>,
+    },
+    BlockSize {
+        value: Option<Option<Length>>,
+    },
+    MinInlineSize {
+        value: Option<Option<Length>>,
+    },
+    MinBlockSize {
+        value: Option<Option<Length>>,
+    },
+    MaxInlineSize {
+        value: Option<Option<Length>>,
+    },
+    MaxBlockSize {
+        value: Option<Option<Length>>,
+    },
+    Inset {
+        axis: LogicalAxis,
+        start: Option<Option<Length>>,
+        end: Option<Option<Length>>,
+    },
     BorderWidth {
         axis: LogicalAxis,
         start: Option<Length>,
@@ -119,7 +142,7 @@ pub struct PendingLogical {
 }
 
 /// Tracks cascade ordering and deferred logical properties while computing styles.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LogicalState {
     pub pending: Vec<PendingLogical>,
     pub margin_orders: SideOrders,
@@ -127,7 +150,35 @@ pub struct LogicalState {
     pub border_width_orders: SideOrders,
     pub border_style_orders: SideOrders,
     pub border_color_orders: SideOrders,
+    pub inset_orders: SideOrders,
+    pub width_order: i32,
+    pub height_order: i32,
+    pub min_width_order: i32,
+    pub min_height_order: i32,
+    pub max_width_order: i32,
+    pub max_height_order: i32,
     next_order: i32,
+}
+
+impl Default for LogicalState {
+    fn default() -> Self {
+        Self {
+            pending: Vec::new(),
+            margin_orders: SideOrders::default(),
+            padding_orders: SideOrders::default(),
+            border_width_orders: SideOrders::default(),
+            border_style_orders: SideOrders::default(),
+            border_color_orders: SideOrders::default(),
+            inset_orders: SideOrders::default(),
+            width_order: -1,
+            height_order: -1,
+            min_width_order: -1,
+            min_height_order: -1,
+            max_width_order: -1,
+            max_height_order: -1,
+            next_order: 0,
+        }
+    }
 }
 
 impl LogicalState {

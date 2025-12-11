@@ -677,6 +677,83 @@ fn push_logical(styles: &mut ComputedStyle, property: crate::style::LogicalPrope
         .push(crate::style::PendingLogical { order, property });
 }
 
+fn set_inset_side(styles: &mut ComputedStyle, side: crate::style::PhysicalSide, value: Option<Length>, order: i32) {
+    if order < side_order(&styles.logical.inset_orders, side) {
+        return;
+    }
+    match side {
+        crate::style::PhysicalSide::Top => styles.top = value,
+        crate::style::PhysicalSide::Right => styles.right = value,
+        crate::style::PhysicalSide::Bottom => styles.bottom = value,
+        crate::style::PhysicalSide::Left => styles.left = value,
+    }
+    *side_order_mut(&mut styles.logical.inset_orders, side) = order;
+}
+
+fn set_length_with_order(target: &mut Option<Length>, order_slot: &mut i32, value: Option<Length>, order: i32) {
+    if order < *order_slot {
+        return;
+    }
+    *target = value;
+    *order_slot = order;
+}
+
+fn set_axis_dimension(styles: &mut ComputedStyle, axis: crate::style::LogicalAxis, value: Option<Length>, order: i32) {
+    let is_horizontal = match axis {
+        crate::style::LogicalAxis::Inline => inline_axis_is_horizontal(styles.writing_mode),
+        crate::style::LogicalAxis::Block => block_axis_is_horizontal(styles.writing_mode),
+    };
+    if is_horizontal {
+        set_length_with_order(&mut styles.width, &mut styles.logical.width_order, value, order);
+    } else {
+        set_length_with_order(&mut styles.height, &mut styles.logical.height_order, value, order);
+    }
+}
+
+fn set_axis_min_dimension(
+    styles: &mut ComputedStyle,
+    axis: crate::style::LogicalAxis,
+    value: Option<Length>,
+    order: i32,
+) {
+    let is_horizontal = match axis {
+        crate::style::LogicalAxis::Inline => inline_axis_is_horizontal(styles.writing_mode),
+        crate::style::LogicalAxis::Block => block_axis_is_horizontal(styles.writing_mode),
+    };
+    if is_horizontal {
+        set_length_with_order(&mut styles.min_width, &mut styles.logical.min_width_order, value, order);
+    } else {
+        set_length_with_order(
+            &mut styles.min_height,
+            &mut styles.logical.min_height_order,
+            value,
+            order,
+        );
+    }
+}
+
+fn set_axis_max_dimension(
+    styles: &mut ComputedStyle,
+    axis: crate::style::LogicalAxis,
+    value: Option<Length>,
+    order: i32,
+) {
+    let is_horizontal = match axis {
+        crate::style::LogicalAxis::Inline => inline_axis_is_horizontal(styles.writing_mode),
+        crate::style::LogicalAxis::Block => block_axis_is_horizontal(styles.writing_mode),
+    };
+    if is_horizontal {
+        set_length_with_order(&mut styles.max_width, &mut styles.logical.max_width_order, value, order);
+    } else {
+        set_length_with_order(
+            &mut styles.max_height,
+            &mut styles.logical.max_height_order,
+            value,
+            order,
+        );
+    }
+}
+
 pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_font_size: f32, root_font_size: f32) {
     // Handle CSS Custom Properties (--*)
     if decl.property.starts_with("--") {
@@ -793,10 +870,117 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
             }
         }
 
-        "top" => styles.top = extract_length(&resolved_value),
-        "right" => styles.right = extract_length(&resolved_value),
-        "bottom" => styles.bottom = extract_length(&resolved_value),
-        "left" => styles.left = extract_length(&resolved_value),
+        "top" => set_inset_side(
+            styles,
+            crate::style::PhysicalSide::Top,
+            extract_length(&resolved_value),
+            order,
+        ),
+        "right" => set_inset_side(
+            styles,
+            crate::style::PhysicalSide::Right,
+            extract_length(&resolved_value),
+            order,
+        ),
+        "bottom" => set_inset_side(
+            styles,
+            crate::style::PhysicalSide::Bottom,
+            extract_length(&resolved_value),
+            order,
+        ),
+        "left" => set_inset_side(
+            styles,
+            crate::style::PhysicalSide::Left,
+            extract_length(&resolved_value),
+            order,
+        ),
+        "inset" => {
+            if let Some(lengths) = extract_margin_values(&resolved_value) {
+                let mut top = styles.top;
+                let mut right = styles.right;
+                let mut bottom = styles.bottom;
+                let mut left = styles.left;
+                apply_margin_values(&mut top, &mut right, &mut bottom, &mut left, lengths);
+                set_inset_side(styles, crate::style::PhysicalSide::Top, top, order);
+                set_inset_side(styles, crate::style::PhysicalSide::Right, right, order);
+                set_inset_side(styles, crate::style::PhysicalSide::Bottom, bottom, order);
+                set_inset_side(styles, crate::style::PhysicalSide::Left, left, order);
+            }
+        }
+        "inset-inline-start" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Inset {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: Some(extract_length(&resolved_value)),
+                    end: None,
+                },
+                order,
+            );
+        }
+        "inset-inline-end" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Inset {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: None,
+                    end: Some(extract_length(&resolved_value)),
+                },
+                order,
+            );
+        }
+        "inset-block-start" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Inset {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: Some(extract_length(&resolved_value)),
+                    end: None,
+                },
+                order,
+            );
+        }
+        "inset-block-end" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Inset {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: None,
+                    end: Some(extract_length(&resolved_value)),
+                },
+                order,
+            );
+        }
+        "inset-inline" => {
+            if let Some(values) = extract_margin_values(&resolved_value) {
+                let start = values.get(0).cloned().unwrap_or(None);
+                let end = values.get(1).cloned().unwrap_or(start);
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::Inset {
+                        axis: crate::style::LogicalAxis::Inline,
+                        start: Some(start),
+                        end: Some(end),
+                    },
+                    order,
+                );
+            }
+        }
+        "inset-block" => {
+            if let Some(values) = extract_margin_values(&resolved_value) {
+                let start = values.get(0).cloned().unwrap_or(None);
+                let end = values.get(1).cloned().unwrap_or(start);
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::Inset {
+                        axis: crate::style::LogicalAxis::Block,
+                        start: Some(start),
+                        end: Some(end),
+                    },
+                    order,
+                );
+            }
+        }
         "z-index" => match resolved_value {
             PropertyValue::Number(n) => styles.z_index = Some(n as i32),
             PropertyValue::Keyword(ref kw) if kw.eq_ignore_ascii_case("auto") => styles.z_index = None,
@@ -836,12 +1020,96 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         }
 
         // Width and height
-        "width" => styles.width = extract_length(&resolved_value),
-        "height" => styles.height = extract_length(&resolved_value),
-        "min-width" => styles.min_width = extract_length(&resolved_value),
-        "min-height" => styles.min_height = extract_length(&resolved_value),
-        "max-width" => styles.max_width = extract_length(&resolved_value),
-        "max-height" => styles.max_height = extract_length(&resolved_value),
+        "width" => set_length_with_order(
+            &mut styles.width,
+            &mut styles.logical.width_order,
+            extract_length(&resolved_value),
+            order,
+        ),
+        "height" => set_length_with_order(
+            &mut styles.height,
+            &mut styles.logical.height_order,
+            extract_length(&resolved_value),
+            order,
+        ),
+        "min-width" => set_length_with_order(
+            &mut styles.min_width,
+            &mut styles.logical.min_width_order,
+            extract_length(&resolved_value),
+            order,
+        ),
+        "min-height" => set_length_with_order(
+            &mut styles.min_height,
+            &mut styles.logical.min_height_order,
+            extract_length(&resolved_value),
+            order,
+        ),
+        "max-width" => set_length_with_order(
+            &mut styles.max_width,
+            &mut styles.logical.max_width_order,
+            extract_length(&resolved_value),
+            order,
+        ),
+        "max-height" => set_length_with_order(
+            &mut styles.max_height,
+            &mut styles.logical.max_height_order,
+            extract_length(&resolved_value),
+            order,
+        ),
+        "inline-size" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::InlineSize {
+                    value: Some(extract_length(&resolved_value)),
+                },
+                order,
+            );
+        }
+        "block-size" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::BlockSize {
+                    value: Some(extract_length(&resolved_value)),
+                },
+                order,
+            );
+        }
+        "min-inline-size" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::MinInlineSize {
+                    value: Some(extract_length(&resolved_value)),
+                },
+                order,
+            );
+        }
+        "min-block-size" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::MinBlockSize {
+                    value: Some(extract_length(&resolved_value)),
+                },
+                order,
+            );
+        }
+        "max-inline-size" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::MaxInlineSize {
+                    value: Some(extract_length(&resolved_value)),
+                },
+                order,
+            );
+        }
+        "max-block-size" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::MaxBlockSize {
+                    value: Some(extract_length(&resolved_value)),
+                },
+                order,
+            );
+        }
 
         // Margin
         "margin" => {
@@ -8574,6 +8842,45 @@ pub fn resolve_pending_logical_properties(styles: &mut ComputedStyle) {
                 }
                 if let Some(v) = end {
                     set_border_color_side(styles, end_side, v, pending_prop.order);
+                }
+            }
+            crate::style::LogicalProperty::InlineSize { value } => {
+                if let Some(v) = value {
+                    set_axis_dimension(styles, crate::style::LogicalAxis::Inline, v, pending_prop.order);
+                }
+            }
+            crate::style::LogicalProperty::BlockSize { value } => {
+                if let Some(v) = value {
+                    set_axis_dimension(styles, crate::style::LogicalAxis::Block, v, pending_prop.order);
+                }
+            }
+            crate::style::LogicalProperty::MinInlineSize { value } => {
+                if let Some(v) = value {
+                    set_axis_min_dimension(styles, crate::style::LogicalAxis::Inline, v, pending_prop.order);
+                }
+            }
+            crate::style::LogicalProperty::MinBlockSize { value } => {
+                if let Some(v) = value {
+                    set_axis_min_dimension(styles, crate::style::LogicalAxis::Block, v, pending_prop.order);
+                }
+            }
+            crate::style::LogicalProperty::MaxInlineSize { value } => {
+                if let Some(v) = value {
+                    set_axis_max_dimension(styles, crate::style::LogicalAxis::Inline, v, pending_prop.order);
+                }
+            }
+            crate::style::LogicalProperty::MaxBlockSize { value } => {
+                if let Some(v) = value {
+                    set_axis_max_dimension(styles, crate::style::LogicalAxis::Block, v, pending_prop.order);
+                }
+            }
+            crate::style::LogicalProperty::Inset { axis, start, end } => {
+                let (start_side, end_side) = sides_for_axis(axis, inline_sides, block_sides);
+                if let Some(v) = start {
+                    set_inset_side(styles, start_side, v, pending_prop.order);
+                }
+                if let Some(v) = end {
+                    set_inset_side(styles, end_side, v, pending_prop.order);
                 }
             }
         }

@@ -128,3 +128,59 @@ fn logical_border_inline_colors_follow_writing_mode() {
     assert_eq!(style.border_top_color, Rgba::RED);
     assert_eq!(style.border_bottom_color, Rgba::GREEN);
 }
+
+#[test]
+fn inline_and_block_sizes_map_to_physical_axes() {
+    let mut style = ComputedStyle::default();
+    apply_declaration(
+        &mut style,
+        &decl("inline-size", PropertyValue::Length(Length::px(40.0))),
+        16.0,
+        16.0,
+    );
+    apply_declaration(
+        &mut style,
+        &decl("block-size", PropertyValue::Length(Length::px(60.0))),
+        16.0,
+        16.0,
+    );
+    resolve_pending_logical_properties(&mut style);
+    assert_eq!(style.width, Some(Length::px(40.0)));
+    assert_eq!(style.height, Some(Length::px(60.0)));
+
+    // Inline-size should map to block axis in vertical writing.
+    style = ComputedStyle::default();
+    style.writing_mode = WritingMode::VerticalRl;
+    apply_declaration(
+        &mut style,
+        &decl("inline-size", PropertyValue::Length(Length::px(25.0))),
+        16.0,
+        16.0,
+    );
+    resolve_pending_logical_properties(&mut style);
+    assert_eq!(style.height, Some(Length::px(25.0)));
+    assert_eq!(style.width, None);
+}
+
+#[test]
+fn logical_inset_maps_to_physical_sides() {
+    let mut style = ComputedStyle::default();
+    style.writing_mode = WritingMode::VerticalRl;
+    apply_declaration(
+        &mut style,
+        &decl("inset-inline-start", PropertyValue::Length(Length::px(5.0))),
+        16.0,
+        16.0,
+    );
+    apply_declaration(
+        &mut style,
+        &decl("inset-block-end", PropertyValue::Length(Length::px(7.0))),
+        16.0,
+        16.0,
+    );
+    resolve_pending_logical_properties(&mut style);
+
+    // Vertical-rl: inline axis is vertical -> start at top, block axis horizontal right->left -> end is left.
+    assert_eq!(style.top, Some(Length::px(5.0)));
+    assert_eq!(style.left, Some(Length::px(7.0)));
+}
