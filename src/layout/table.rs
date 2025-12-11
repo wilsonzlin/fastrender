@@ -1693,9 +1693,23 @@ pub fn calculate_auto_layout_widths(structure: &mut TableStructure, available_wi
             // If cell needs more, distribute proportionally
             if cell.min_width > current_min {
                 let extra = cell.min_width - current_min;
-                let per_col = extra / cell.colspan as f32;
-                for c in span_start..span_end {
-                    structure.columns[c].min_width += per_col;
+                let weights: Vec<f32> = structure.columns[span_start..span_end]
+                    .iter()
+                    .map(|c| c.min_width.max(0.0))
+                    .collect();
+                let weight_sum: f32 = weights.iter().sum();
+                let default_weight = if weight_sum == 0.0 {
+                    1.0 / (span_end - span_start) as f32
+                } else {
+                    0.0
+                };
+                for (idx, col) in structure.columns[span_start..span_end].iter_mut().enumerate() {
+                    let weight = if weight_sum == 0.0 {
+                        default_weight
+                    } else {
+                        weights[idx] / weight_sum
+                    };
+                    col.min_width += extra * weight;
                 }
             }
         }
