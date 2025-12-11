@@ -47,6 +47,101 @@ use values::Length;
 // Re-export common types from values module
 // These are now public via the module system
 
+/// Physical box sides used when resolving logical properties.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhysicalSide {
+    Top,
+    Right,
+    Bottom,
+    Left,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SideOrders {
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+    pub left: i32,
+}
+
+impl Default for SideOrders {
+    fn default() -> Self {
+        Self {
+            top: -1,
+            right: -1,
+            bottom: -1,
+            left: -1,
+        }
+    }
+}
+
+/// Logical axis for start/end mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogicalAxis {
+    Inline,
+    Block,
+}
+
+/// Pending logical properties (margin/padding/border) to resolve after writing-mode is known.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LogicalProperty {
+    Margin {
+        axis: LogicalAxis,
+        start: Option<Option<Length>>,
+        end: Option<Option<Length>>,
+    },
+    Padding {
+        axis: LogicalAxis,
+        start: Option<Length>,
+        end: Option<Length>,
+    },
+    BorderWidth {
+        axis: LogicalAxis,
+        start: Option<Length>,
+        end: Option<Length>,
+    },
+    BorderStyle {
+        axis: LogicalAxis,
+        start: Option<BorderStyle>,
+        end: Option<BorderStyle>,
+    },
+    BorderColor {
+        axis: LogicalAxis,
+        start: Option<Rgba>,
+        end: Option<Rgba>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingLogical {
+    pub order: i32,
+    pub property: LogicalProperty,
+}
+
+/// Tracks cascade ordering and deferred logical properties while computing styles.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct LogicalState {
+    pub pending: Vec<PendingLogical>,
+    pub margin_orders: SideOrders,
+    pub padding_orders: SideOrders,
+    pub border_width_orders: SideOrders,
+    pub border_style_orders: SideOrders,
+    pub border_color_orders: SideOrders,
+    next_order: i32,
+}
+
+impl LogicalState {
+    pub fn next_order(&mut self) -> i32 {
+        let order = self.next_order;
+        self.next_order += 1;
+        order
+    }
+
+    pub fn reset(&mut self) {
+        *self = LogicalState::default();
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
     // Display and positioning
@@ -108,6 +203,8 @@ pub struct ComputedStyle {
     pub border_top_right_radius: Length,
     pub border_bottom_left_radius: Length,
     pub border_bottom_right_radius: Length,
+    /// Tracks cascade ordering and deferred logical box properties
+    pub(crate) logical: LogicalState,
 
     // Flexbox
     pub flex_direction: FlexDirection,
@@ -321,6 +418,7 @@ impl Default for ComputedStyle {
             border_top_right_radius: Length::px(0.0),
             border_bottom_left_radius: Length::px(0.0),
             border_bottom_right_radius: Length::px(0.0),
+            logical: LogicalState::default(),
 
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::NoWrap,

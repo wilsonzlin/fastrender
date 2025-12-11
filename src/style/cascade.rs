@@ -7,15 +7,15 @@
 //! <https://www.w3.org/TR/css-cascade-4/>
 
 use crate::css::parser::{parse_declarations, parse_stylesheet};
-use crate::css::types::CssImportLoader;
 use crate::css::selectors::{PseudoElement, TextDirection};
+use crate::css::types::CssImportLoader;
 use crate::css::types::{Declaration, StyleRule, StyleSheet};
 use crate::dom::{resolve_first_strong_direction, with_target_fragment, DomNode, ElementRef};
 use crate::style::defaults::{get_default_styles_for_element, parse_color_attribute, parse_dimension_attribute};
 use crate::style::display::Display;
 use crate::style::grid::finalize_grid_placement;
 use crate::style::media::MediaContext;
-use crate::style::properties::{apply_declaration, with_image_set_dpr};
+use crate::style::properties::{apply_declaration, resolve_pending_logical_properties, with_image_set_dpr};
 use crate::style::{normalize_language_tag, ComputedStyle};
 use selectors::context::{QuirksMode, SelectorCaches};
 use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
@@ -363,6 +363,8 @@ fn apply_styles_internal_with_ancestors(
 }
 
 fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
+    // Reset cascade bookkeeping for the new style; logical pending state should not inherit.
+    styles.logical.reset();
     // Typography properties inherit
     styles.font_family = parent.font_family.clone();
     styles.font_size = parent.font_size;
@@ -1971,6 +1973,7 @@ fn apply_cascaded_declarations<F>(
             apply_declaration(styles, &entry.declaration, parent_font_size, root_font_size);
         }
     }
+    resolve_pending_logical_properties(styles);
 }
 
 fn dir_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule> {

@@ -555,6 +555,128 @@ fn parse_layer_list<T>(value: &PropertyValue, parse: impl Fn(&PropertyValue) -> 
     }
 }
 
+fn extract_color_values_with(
+    value: &PropertyValue,
+    resolver: &dyn Fn(&PropertyValue) -> Option<Rgba>,
+) -> Option<Vec<Rgba>> {
+    match value {
+        PropertyValue::Multiple(values) => {
+            let colors: Vec<Rgba> = values.iter().filter_map(resolver).collect();
+            if colors.is_empty() {
+                None
+            } else {
+                Some(colors)
+            }
+        }
+        _ => resolver(value).map(|c| vec![c]),
+    }
+}
+
+fn extract_color_pair_with(
+    value: &PropertyValue,
+    resolver: &dyn Fn(&PropertyValue) -> Option<Rgba>,
+) -> Option<(Rgba, Rgba)> {
+    extract_color_values_with(value, resolver).and_then(|colors| {
+        if colors.is_empty() {
+            None
+        } else {
+            let first = colors[0];
+            let second = *colors.get(1).unwrap_or(&first);
+            Some((first, second))
+        }
+    })
+}
+
+fn side_order(orders: &crate::style::SideOrders, side: crate::style::PhysicalSide) -> i32 {
+    match side {
+        crate::style::PhysicalSide::Top => orders.top,
+        crate::style::PhysicalSide::Right => orders.right,
+        crate::style::PhysicalSide::Bottom => orders.bottom,
+        crate::style::PhysicalSide::Left => orders.left,
+    }
+}
+
+fn side_order_mut<'a>(orders: &'a mut crate::style::SideOrders, side: crate::style::PhysicalSide) -> &'a mut i32 {
+    match side {
+        crate::style::PhysicalSide::Top => &mut orders.top,
+        crate::style::PhysicalSide::Right => &mut orders.right,
+        crate::style::PhysicalSide::Bottom => &mut orders.bottom,
+        crate::style::PhysicalSide::Left => &mut orders.left,
+    }
+}
+
+fn set_margin_side(styles: &mut ComputedStyle, side: crate::style::PhysicalSide, value: Option<Length>, order: i32) {
+    if order < side_order(&styles.logical.margin_orders, side) {
+        return;
+    }
+    match side {
+        crate::style::PhysicalSide::Top => styles.margin_top = value,
+        crate::style::PhysicalSide::Right => styles.margin_right = value,
+        crate::style::PhysicalSide::Bottom => styles.margin_bottom = value,
+        crate::style::PhysicalSide::Left => styles.margin_left = value,
+    }
+    *side_order_mut(&mut styles.logical.margin_orders, side) = order;
+}
+
+fn set_padding_side(styles: &mut ComputedStyle, side: crate::style::PhysicalSide, value: Length, order: i32) {
+    if order < side_order(&styles.logical.padding_orders, side) {
+        return;
+    }
+    match side {
+        crate::style::PhysicalSide::Top => styles.padding_top = value,
+        crate::style::PhysicalSide::Right => styles.padding_right = value,
+        crate::style::PhysicalSide::Bottom => styles.padding_bottom = value,
+        crate::style::PhysicalSide::Left => styles.padding_left = value,
+    }
+    *side_order_mut(&mut styles.logical.padding_orders, side) = order;
+}
+
+fn set_border_width_side(styles: &mut ComputedStyle, side: crate::style::PhysicalSide, value: Length, order: i32) {
+    if order < side_order(&styles.logical.border_width_orders, side) {
+        return;
+    }
+    match side {
+        crate::style::PhysicalSide::Top => styles.border_top_width = value,
+        crate::style::PhysicalSide::Right => styles.border_right_width = value,
+        crate::style::PhysicalSide::Bottom => styles.border_bottom_width = value,
+        crate::style::PhysicalSide::Left => styles.border_left_width = value,
+    }
+    *side_order_mut(&mut styles.logical.border_width_orders, side) = order;
+}
+
+fn set_border_style_side(styles: &mut ComputedStyle, side: crate::style::PhysicalSide, value: BorderStyle, order: i32) {
+    if order < side_order(&styles.logical.border_style_orders, side) {
+        return;
+    }
+    match side {
+        crate::style::PhysicalSide::Top => styles.border_top_style = value,
+        crate::style::PhysicalSide::Right => styles.border_right_style = value,
+        crate::style::PhysicalSide::Bottom => styles.border_bottom_style = value,
+        crate::style::PhysicalSide::Left => styles.border_left_style = value,
+    }
+    *side_order_mut(&mut styles.logical.border_style_orders, side) = order;
+}
+
+fn set_border_color_side(styles: &mut ComputedStyle, side: crate::style::PhysicalSide, value: Rgba, order: i32) {
+    if order < side_order(&styles.logical.border_color_orders, side) {
+        return;
+    }
+    match side {
+        crate::style::PhysicalSide::Top => styles.border_top_color = value,
+        crate::style::PhysicalSide::Right => styles.border_right_color = value,
+        crate::style::PhysicalSide::Bottom => styles.border_bottom_color = value,
+        crate::style::PhysicalSide::Left => styles.border_left_color = value,
+    }
+    *side_order_mut(&mut styles.logical.border_color_orders, side) = order;
+}
+
+fn push_logical(styles: &mut ComputedStyle, property: crate::style::LogicalProperty, order: i32) {
+    styles
+        .logical
+        .pending
+        .push(crate::style::PendingLogical { order, property });
+}
+
 pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_font_size: f32, root_font_size: f32) {
     // Handle CSS Custom Properties (--*)
     if decl.property.starts_with("--") {
@@ -571,6 +693,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         // Unresolved or invalid at computed-value time -> declaration is ignored per spec.
         _ => return,
     };
+    let order = styles.logical.next_order();
 
     let resolve_color_value = |value: &PropertyValue| -> Option<Rgba> {
         match value {
@@ -723,121 +846,455 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         // Margin
         "margin" => {
             if let Some(lengths) = extract_margin_values(&resolved_value) {
-                apply_margin_values(
-                    &mut styles.margin_top,
-                    &mut styles.margin_right,
-                    &mut styles.margin_bottom,
-                    &mut styles.margin_left,
-                    lengths,
-                );
+                let mut top = styles.margin_top;
+                let mut right = styles.margin_right;
+                let mut bottom = styles.margin_bottom;
+                let mut left = styles.margin_left;
+                apply_margin_values(&mut top, &mut right, &mut bottom, &mut left, lengths);
+                set_margin_side(styles, crate::style::PhysicalSide::Top, top, order);
+                set_margin_side(styles, crate::style::PhysicalSide::Right, right, order);
+                set_margin_side(styles, crate::style::PhysicalSide::Bottom, bottom, order);
+                set_margin_side(styles, crate::style::PhysicalSide::Left, left, order);
             }
         }
         "margin-top" => {
-            styles.margin_top = extract_length(&resolved_value);
+            set_margin_side(
+                styles,
+                crate::style::PhysicalSide::Top,
+                extract_length(&resolved_value),
+                order,
+            );
         }
         "margin-right" => {
-            styles.margin_right = extract_length(&resolved_value);
+            set_margin_side(
+                styles,
+                crate::style::PhysicalSide::Right,
+                extract_length(&resolved_value),
+                order,
+            );
         }
         "margin-bottom" => {
-            styles.margin_bottom = extract_length(&resolved_value);
+            set_margin_side(
+                styles,
+                crate::style::PhysicalSide::Bottom,
+                extract_length(&resolved_value),
+                order,
+            );
         }
         "margin-left" => {
-            styles.margin_left = extract_length(&resolved_value);
+            set_margin_side(
+                styles,
+                crate::style::PhysicalSide::Left,
+                extract_length(&resolved_value),
+                order,
+            );
+        }
+        "margin-inline-start" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Margin {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: Some(extract_length(&resolved_value)),
+                    end: None,
+                },
+                order,
+            );
+        }
+        "margin-inline-end" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Margin {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: None,
+                    end: Some(extract_length(&resolved_value)),
+                },
+                order,
+            );
+        }
+        "margin-block-start" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Margin {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: Some(extract_length(&resolved_value)),
+                    end: None,
+                },
+                order,
+            );
+        }
+        "margin-block-end" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Margin {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: None,
+                    end: Some(extract_length(&resolved_value)),
+                },
+                order,
+            );
+        }
+        "margin-inline" => {
+            if let Some(values) = extract_margin_values(&resolved_value) {
+                let start = values.get(0).cloned().unwrap_or(None);
+                let end = values.get(1).cloned().unwrap_or(start);
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::Margin {
+                        axis: crate::style::LogicalAxis::Inline,
+                        start: Some(start),
+                        end: Some(end),
+                    },
+                    order,
+                );
+            }
+        }
+        "margin-block" => {
+            if let Some(values) = extract_margin_values(&resolved_value) {
+                let start = values.get(0).cloned().unwrap_or(None);
+                let end = values.get(1).cloned().unwrap_or(start);
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::Margin {
+                        axis: crate::style::LogicalAxis::Block,
+                        start: Some(start),
+                        end: Some(end),
+                    },
+                    order,
+                );
+            }
         }
 
         // Padding
         "padding" => {
             if let Some(lengths) = extract_box_values(&resolved_value) {
-                apply_box_values(
-                    &mut styles.padding_top,
-                    &mut styles.padding_right,
-                    &mut styles.padding_bottom,
-                    &mut styles.padding_left,
-                    lengths,
-                );
+                let mut top = styles.padding_top;
+                let mut right = styles.padding_right;
+                let mut bottom = styles.padding_bottom;
+                let mut left = styles.padding_left;
+                apply_box_values(&mut top, &mut right, &mut bottom, &mut left, lengths);
+                set_padding_side(styles, crate::style::PhysicalSide::Top, top, order);
+                set_padding_side(styles, crate::style::PhysicalSide::Right, right, order);
+                set_padding_side(styles, crate::style::PhysicalSide::Bottom, bottom, order);
+                set_padding_side(styles, crate::style::PhysicalSide::Left, left, order);
             }
         }
         "padding-top" => {
             if let Some(len) = extract_length(&resolved_value) {
-                styles.padding_top = len;
+                set_padding_side(styles, crate::style::PhysicalSide::Top, len, order);
             }
         }
         "padding-right" => {
             if let Some(len) = extract_length(&resolved_value) {
-                styles.padding_right = len;
+                set_padding_side(styles, crate::style::PhysicalSide::Right, len, order);
             }
         }
         "padding-bottom" => {
             if let Some(len) = extract_length(&resolved_value) {
-                styles.padding_bottom = len;
+                set_padding_side(styles, crate::style::PhysicalSide::Bottom, len, order);
             }
         }
         "padding-left" => {
             if let Some(len) = extract_length(&resolved_value) {
-                styles.padding_left = len;
+                set_padding_side(styles, crate::style::PhysicalSide::Left, len, order);
+            }
+        }
+        "padding-inline-start" => {
+            if let Some(len) = extract_length(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::Padding {
+                        axis: crate::style::LogicalAxis::Inline,
+                        start: Some(len),
+                        end: None,
+                    },
+                    order,
+                );
+            }
+        }
+        "padding-inline-end" => {
+            if let Some(len) = extract_length(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::Padding {
+                        axis: crate::style::LogicalAxis::Inline,
+                        start: None,
+                        end: Some(len),
+                    },
+                    order,
+                );
+            }
+        }
+        "padding-block-start" => {
+            if let Some(len) = extract_length(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::Padding {
+                        axis: crate::style::LogicalAxis::Block,
+                        start: Some(len),
+                        end: None,
+                    },
+                    order,
+                );
+            }
+        }
+        "padding-block-end" => {
+            if let Some(len) = extract_length(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::Padding {
+                        axis: crate::style::LogicalAxis::Block,
+                        start: None,
+                        end: Some(len),
+                    },
+                    order,
+                );
+            }
+        }
+        "padding-inline" => {
+            if let Some((start, end)) = extract_length_pair(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::Padding {
+                        axis: crate::style::LogicalAxis::Inline,
+                        start: Some(start),
+                        end: Some(end),
+                    },
+                    order,
+                );
+            }
+        }
+        "padding-block" => {
+            if let Some((start, end)) = extract_length_pair(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::Padding {
+                        axis: crate::style::LogicalAxis::Block,
+                        start: Some(start),
+                        end: Some(end),
+                    },
+                    order,
+                );
             }
         }
 
         // Border width
         "border-width" => {
             if let Some(lengths) = extract_box_values(&resolved_value) {
-                apply_box_values(
-                    &mut styles.border_top_width,
-                    &mut styles.border_right_width,
-                    &mut styles.border_bottom_width,
-                    &mut styles.border_left_width,
-                    lengths,
-                );
+                let mut top = styles.border_top_width;
+                let mut right = styles.border_right_width;
+                let mut bottom = styles.border_bottom_width;
+                let mut left = styles.border_left_width;
+                apply_box_values(&mut top, &mut right, &mut bottom, &mut left, lengths);
+                set_border_width_side(styles, crate::style::PhysicalSide::Top, top, order);
+                set_border_width_side(styles, crate::style::PhysicalSide::Right, right, order);
+                set_border_width_side(styles, crate::style::PhysicalSide::Bottom, bottom, order);
+                set_border_width_side(styles, crate::style::PhysicalSide::Left, left, order);
             }
         }
         "border-top-width" => {
             if let Some(len) = extract_length(&resolved_value) {
-                styles.border_top_width = len;
+                set_border_width_side(styles, crate::style::PhysicalSide::Top, len, order);
             }
         }
         "border-right-width" => {
             if let Some(len) = extract_length(&resolved_value) {
-                styles.border_right_width = len;
+                set_border_width_side(styles, crate::style::PhysicalSide::Right, len, order);
             }
         }
         "border-bottom-width" => {
             if let Some(len) = extract_length(&resolved_value) {
-                styles.border_bottom_width = len;
+                set_border_width_side(styles, crate::style::PhysicalSide::Bottom, len, order);
             }
         }
         "border-left-width" => {
             if let Some(len) = extract_length(&resolved_value) {
-                styles.border_left_width = len;
+                set_border_width_side(styles, crate::style::PhysicalSide::Left, len, order);
+            }
+        }
+        "border-inline-start-width" => {
+            if let Some(len) = extract_length(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderWidth {
+                        axis: crate::style::LogicalAxis::Inline,
+                        start: Some(len),
+                        end: None,
+                    },
+                    order,
+                );
+            }
+        }
+        "border-inline-end-width" => {
+            if let Some(len) = extract_length(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderWidth {
+                        axis: crate::style::LogicalAxis::Inline,
+                        start: None,
+                        end: Some(len),
+                    },
+                    order,
+                );
+            }
+        }
+        "border-block-start-width" => {
+            if let Some(len) = extract_length(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderWidth {
+                        axis: crate::style::LogicalAxis::Block,
+                        start: Some(len),
+                        end: None,
+                    },
+                    order,
+                );
+            }
+        }
+        "border-block-end-width" => {
+            if let Some(len) = extract_length(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderWidth {
+                        axis: crate::style::LogicalAxis::Block,
+                        start: None,
+                        end: Some(len),
+                    },
+                    order,
+                );
+            }
+        }
+        "border-inline-width" => {
+            if let Some((start, end)) = extract_length_pair(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderWidth {
+                        axis: crate::style::LogicalAxis::Inline,
+                        start: Some(start),
+                        end: Some(end),
+                    },
+                    order,
+                );
+            }
+        }
+        "border-block-width" => {
+            if let Some((start, end)) = extract_length_pair(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderWidth {
+                        axis: crate::style::LogicalAxis::Block,
+                        start: Some(start),
+                        end: Some(end),
+                    },
+                    order,
+                );
             }
         }
 
         // Border color
         "border-color" => {
             if let Some(c) = resolve_color_value(&resolved_value) {
-                styles.border_top_color = c;
-                styles.border_right_color = c;
-                styles.border_bottom_color = c;
-                styles.border_left_color = c;
+                set_border_color_side(styles, crate::style::PhysicalSide::Top, c, order);
+                set_border_color_side(styles, crate::style::PhysicalSide::Right, c, order);
+                set_border_color_side(styles, crate::style::PhysicalSide::Bottom, c, order);
+                set_border_color_side(styles, crate::style::PhysicalSide::Left, c, order);
             }
         }
         "border-top-color" => {
             if let Some(c) = resolve_color_value(&resolved_value) {
-                styles.border_top_color = c;
+                set_border_color_side(styles, crate::style::PhysicalSide::Top, c, order);
             }
         }
         "border-right-color" => {
             if let Some(c) = resolve_color_value(&resolved_value) {
-                styles.border_right_color = c;
+                set_border_color_side(styles, crate::style::PhysicalSide::Right, c, order);
             }
         }
         "border-bottom-color" => {
             if let Some(c) = resolve_color_value(&resolved_value) {
-                styles.border_bottom_color = c;
+                set_border_color_side(styles, crate::style::PhysicalSide::Bottom, c, order);
             }
         }
         "border-left-color" => {
             if let Some(c) = resolve_color_value(&resolved_value) {
-                styles.border_left_color = c;
+                set_border_color_side(styles, crate::style::PhysicalSide::Left, c, order);
+            }
+        }
+        "border-inline-start-color" => {
+            if let Some(c) = resolve_color_value(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderColor {
+                        axis: crate::style::LogicalAxis::Inline,
+                        start: Some(c),
+                        end: None,
+                    },
+                    order,
+                );
+            }
+        }
+        "border-inline-end-color" => {
+            if let Some(c) = resolve_color_value(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderColor {
+                        axis: crate::style::LogicalAxis::Inline,
+                        start: None,
+                        end: Some(c),
+                    },
+                    order,
+                );
+            }
+        }
+        "border-block-start-color" => {
+            if let Some(c) = resolve_color_value(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderColor {
+                        axis: crate::style::LogicalAxis::Block,
+                        start: Some(c),
+                        end: None,
+                    },
+                    order,
+                );
+            }
+        }
+        "border-block-end-color" => {
+            if let Some(c) = resolve_color_value(&resolved_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderColor {
+                        axis: crate::style::LogicalAxis::Block,
+                        start: None,
+                        end: Some(c),
+                    },
+                    order,
+                );
+            }
+        }
+        "border-inline-color" => {
+            if let Some((start, end)) = extract_color_pair_with(&resolved_value, &resolve_color_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderColor {
+                        axis: crate::style::LogicalAxis::Inline,
+                        start: Some(start),
+                        end: Some(end),
+                    },
+                    order,
+                );
+            }
+        }
+        "border-block-color" => {
+            if let Some((start, end)) = extract_color_pair_with(&resolved_value, &resolve_color_value) {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderColor {
+                        axis: crate::style::LogicalAxis::Block,
+                        start: Some(start),
+                        end: Some(end),
+                    },
+                    order,
+                );
             }
         }
 
@@ -845,30 +1302,145 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         "border-style" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 let style = parse_border_style(kw);
-                styles.border_top_style = style;
-                styles.border_right_style = style;
-                styles.border_bottom_style = style;
-                styles.border_left_style = style;
+                set_border_style_side(styles, crate::style::PhysicalSide::Top, style, order);
+                set_border_style_side(styles, crate::style::PhysicalSide::Right, style, order);
+                set_border_style_side(styles, crate::style::PhysicalSide::Bottom, style, order);
+                set_border_style_side(styles, crate::style::PhysicalSide::Left, style, order);
             }
         }
         "border-top-style" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.border_top_style = parse_border_style(kw);
+                set_border_style_side(styles, crate::style::PhysicalSide::Top, parse_border_style(kw), order);
             }
         }
         "border-right-style" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.border_right_style = parse_border_style(kw);
+                set_border_style_side(styles, crate::style::PhysicalSide::Right, parse_border_style(kw), order);
             }
         }
         "border-bottom-style" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.border_bottom_style = parse_border_style(kw);
+                set_border_style_side(
+                    styles,
+                    crate::style::PhysicalSide::Bottom,
+                    parse_border_style(kw),
+                    order,
+                );
             }
         }
         "border-left-style" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.border_left_style = parse_border_style(kw);
+                set_border_style_side(styles, crate::style::PhysicalSide::Left, parse_border_style(kw), order);
+            }
+        }
+        "border-inline-start-style" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderStyle {
+                        axis: crate::style::LogicalAxis::Inline,
+                        start: Some(parse_border_style(kw)),
+                        end: None,
+                    },
+                    order,
+                );
+            }
+        }
+        "border-inline-end-style" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderStyle {
+                        axis: crate::style::LogicalAxis::Inline,
+                        start: None,
+                        end: Some(parse_border_style(kw)),
+                    },
+                    order,
+                );
+            }
+        }
+        "border-block-start-style" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderStyle {
+                        axis: crate::style::LogicalAxis::Block,
+                        start: Some(parse_border_style(kw)),
+                        end: None,
+                    },
+                    order,
+                );
+            }
+        }
+        "border-block-end-style" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderStyle {
+                        axis: crate::style::LogicalAxis::Block,
+                        start: None,
+                        end: Some(parse_border_style(kw)),
+                    },
+                    order,
+                );
+            }
+        }
+        "border-inline-style" => {
+            let styles_list: Vec<BorderStyle> = match &resolved_value {
+                PropertyValue::Keyword(kw) => vec![parse_border_style(kw)],
+                PropertyValue::Multiple(values) => values
+                    .iter()
+                    .filter_map(|v| {
+                        if let PropertyValue::Keyword(kw) = v {
+                            Some(parse_border_style(kw))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            if !styles_list.is_empty() {
+                let start = styles_list[0];
+                let end = *styles_list.get(1).unwrap_or(&start);
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderStyle {
+                        axis: crate::style::LogicalAxis::Inline,
+                        start: Some(start),
+                        end: Some(end),
+                    },
+                    order,
+                );
+            }
+        }
+        "border-block-style" => {
+            let styles_list: Vec<BorderStyle> = match &resolved_value {
+                PropertyValue::Keyword(kw) => vec![parse_border_style(kw)],
+                PropertyValue::Multiple(values) => values
+                    .iter()
+                    .filter_map(|v| {
+                        if let PropertyValue::Keyword(kw) = v {
+                            Some(parse_border_style(kw))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            if !styles_list.is_empty() {
+                let start = styles_list[0];
+                let end = *styles_list.get(1).unwrap_or(&start);
+                push_logical(
+                    styles,
+                    crate::style::LogicalProperty::BorderStyle {
+                        axis: crate::style::LogicalAxis::Block,
+                        start: Some(start),
+                        end: Some(end),
+                    },
+                    order,
+                );
             }
         }
 
@@ -878,26 +1450,128 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 for val in values {
                     match val {
                         PropertyValue::Length(len) => {
-                            styles.border_top_width = *len;
-                            styles.border_right_width = *len;
-                            styles.border_bottom_width = *len;
-                            styles.border_left_width = *len;
+                            set_border_width_side(styles, crate::style::PhysicalSide::Top, *len, order);
+                            set_border_width_side(styles, crate::style::PhysicalSide::Right, *len, order);
+                            set_border_width_side(styles, crate::style::PhysicalSide::Bottom, *len, order);
+                            set_border_width_side(styles, crate::style::PhysicalSide::Left, *len, order);
                         }
                         PropertyValue::Keyword(kw) => {
                             let style = parse_border_style(kw);
-                            styles.border_top_style = style;
-                            styles.border_right_style = style;
-                            styles.border_bottom_style = style;
-                            styles.border_left_style = style;
+                            set_border_style_side(styles, crate::style::PhysicalSide::Top, style, order);
+                            set_border_style_side(styles, crate::style::PhysicalSide::Right, style, order);
+                            set_border_style_side(styles, crate::style::PhysicalSide::Bottom, style, order);
+                            set_border_style_side(styles, crate::style::PhysicalSide::Left, style, order);
                         }
                         PropertyValue::Color(c) => {
-                            styles.border_top_color = *c;
-                            styles.border_right_color = *c;
-                            styles.border_bottom_color = *c;
-                            styles.border_left_color = *c;
+                            set_border_color_side(styles, crate::style::PhysicalSide::Top, *c, order);
+                            set_border_color_side(styles, crate::style::PhysicalSide::Right, *c, order);
+                            set_border_color_side(styles, crate::style::PhysicalSide::Bottom, *c, order);
+                            set_border_color_side(styles, crate::style::PhysicalSide::Left, *c, order);
                         }
                         _ => {}
                     }
+                }
+            }
+        }
+        "border-inline" => {
+            if let PropertyValue::Multiple(values) = &resolved_value {
+                let mut width: Option<Length> = None;
+                let mut style_val: Option<BorderStyle> = None;
+                let mut color: Option<Rgba> = None;
+                for val in values {
+                    match val {
+                        PropertyValue::Length(len) => width = Some(*len),
+                        PropertyValue::Keyword(kw) => style_val = Some(parse_border_style(kw)),
+                        _ => {
+                            if let Some(c) = resolve_color_value(val) {
+                                color = Some(c);
+                            }
+                        }
+                    }
+                }
+                if let Some(w) = width {
+                    push_logical(
+                        styles,
+                        crate::style::LogicalProperty::BorderWidth {
+                            axis: crate::style::LogicalAxis::Inline,
+                            start: Some(w),
+                            end: Some(w),
+                        },
+                        order,
+                    );
+                }
+                if let Some(st) = style_val {
+                    push_logical(
+                        styles,
+                        crate::style::LogicalProperty::BorderStyle {
+                            axis: crate::style::LogicalAxis::Inline,
+                            start: Some(st),
+                            end: Some(st),
+                        },
+                        order,
+                    );
+                }
+                if let Some(c) = color {
+                    push_logical(
+                        styles,
+                        crate::style::LogicalProperty::BorderColor {
+                            axis: crate::style::LogicalAxis::Inline,
+                            start: Some(c),
+                            end: Some(c),
+                        },
+                        order,
+                    );
+                }
+            }
+        }
+        "border-block" => {
+            if let PropertyValue::Multiple(values) = &resolved_value {
+                let mut width: Option<Length> = None;
+                let mut style_val: Option<BorderStyle> = None;
+                let mut color: Option<Rgba> = None;
+                for val in values {
+                    match val {
+                        PropertyValue::Length(len) => width = Some(*len),
+                        PropertyValue::Keyword(kw) => style_val = Some(parse_border_style(kw)),
+                        _ => {
+                            if let Some(c) = resolve_color_value(val) {
+                                color = Some(c);
+                            }
+                        }
+                    }
+                }
+                if let Some(w) = width {
+                    push_logical(
+                        styles,
+                        crate::style::LogicalProperty::BorderWidth {
+                            axis: crate::style::LogicalAxis::Block,
+                            start: Some(w),
+                            end: Some(w),
+                        },
+                        order,
+                    );
+                }
+                if let Some(st) = style_val {
+                    push_logical(
+                        styles,
+                        crate::style::LogicalProperty::BorderStyle {
+                            axis: crate::style::LogicalAxis::Block,
+                            start: Some(st),
+                            end: Some(st),
+                        },
+                        order,
+                    );
+                }
+                if let Some(c) = color {
+                    push_logical(
+                        styles,
+                        crate::style::LogicalProperty::BorderColor {
+                            axis: crate::style::LogicalAxis::Block,
+                            start: Some(c),
+                            end: Some(c),
+                        },
+                        order,
+                    );
                 }
             }
         }
@@ -7774,4 +8448,134 @@ fn parse_feature_setting<'i, 't>(
     };
 
     Ok(FontFeatureSetting { tag: tag_bytes, value })
+}
+
+fn inline_axis_is_horizontal(wm: WritingMode) -> bool {
+    matches!(
+        wm,
+        WritingMode::HorizontalTb | WritingMode::SidewaysLr | WritingMode::SidewaysRl
+    )
+}
+
+fn inline_axis_positive(wm: WritingMode, dir: Direction) -> bool {
+    match wm {
+        WritingMode::HorizontalTb => dir != Direction::Rtl,
+        WritingMode::SidewaysRl => false,
+        WritingMode::SidewaysLr => true,
+        WritingMode::VerticalRl | WritingMode::VerticalLr => true,
+    }
+}
+
+fn block_axis_is_horizontal(wm: WritingMode) -> bool {
+    matches!(wm, WritingMode::VerticalRl | WritingMode::VerticalLr)
+}
+
+fn block_axis_positive(wm: WritingMode) -> bool {
+    match wm {
+        WritingMode::VerticalRl => false,
+        _ => true,
+    }
+}
+
+fn inline_physical_sides(styles: &ComputedStyle) -> (crate::style::PhysicalSide, crate::style::PhysicalSide) {
+    let horizontal = inline_axis_is_horizontal(styles.writing_mode);
+    let positive = inline_axis_positive(styles.writing_mode, styles.direction);
+    if horizontal {
+        if positive {
+            (crate::style::PhysicalSide::Left, crate::style::PhysicalSide::Right)
+        } else {
+            (crate::style::PhysicalSide::Right, crate::style::PhysicalSide::Left)
+        }
+    } else if positive {
+        (crate::style::PhysicalSide::Top, crate::style::PhysicalSide::Bottom)
+    } else {
+        (crate::style::PhysicalSide::Bottom, crate::style::PhysicalSide::Top)
+    }
+}
+
+fn block_physical_sides(styles: &ComputedStyle) -> (crate::style::PhysicalSide, crate::style::PhysicalSide) {
+    let horizontal = block_axis_is_horizontal(styles.writing_mode);
+    let positive = block_axis_positive(styles.writing_mode);
+    if horizontal {
+        if positive {
+            (crate::style::PhysicalSide::Left, crate::style::PhysicalSide::Right)
+        } else {
+            (crate::style::PhysicalSide::Right, crate::style::PhysicalSide::Left)
+        }
+    } else if positive {
+        (crate::style::PhysicalSide::Top, crate::style::PhysicalSide::Bottom)
+    } else {
+        (crate::style::PhysicalSide::Bottom, crate::style::PhysicalSide::Top)
+    }
+}
+
+fn sides_for_axis(
+    axis: crate::style::LogicalAxis,
+    inline_sides: (crate::style::PhysicalSide, crate::style::PhysicalSide),
+    block_sides: (crate::style::PhysicalSide, crate::style::PhysicalSide),
+) -> (crate::style::PhysicalSide, crate::style::PhysicalSide) {
+    match axis {
+        crate::style::LogicalAxis::Inline => inline_sides,
+        crate::style::LogicalAxis::Block => block_sides,
+    }
+}
+
+pub fn resolve_pending_logical_properties(styles: &mut ComputedStyle) {
+    if styles.logical.pending.is_empty() {
+        return;
+    }
+
+    let inline_sides = inline_physical_sides(styles);
+    let block_sides = block_physical_sides(styles);
+
+    let pending = std::mem::take(&mut styles.logical.pending);
+    for pending_prop in pending {
+        match pending_prop.property {
+            crate::style::LogicalProperty::Margin { axis, start, end } => {
+                let (start_side, end_side) = sides_for_axis(axis, inline_sides, block_sides);
+                if let Some(v) = start {
+                    set_margin_side(styles, start_side, v, pending_prop.order);
+                }
+                if let Some(v) = end {
+                    set_margin_side(styles, end_side, v, pending_prop.order);
+                }
+            }
+            crate::style::LogicalProperty::Padding { axis, start, end } => {
+                let (start_side, end_side) = sides_for_axis(axis, inline_sides, block_sides);
+                if let Some(v) = start {
+                    set_padding_side(styles, start_side, v, pending_prop.order);
+                }
+                if let Some(v) = end {
+                    set_padding_side(styles, end_side, v, pending_prop.order);
+                }
+            }
+            crate::style::LogicalProperty::BorderWidth { axis, start, end } => {
+                let (start_side, end_side) = sides_for_axis(axis, inline_sides, block_sides);
+                if let Some(v) = start {
+                    set_border_width_side(styles, start_side, v, pending_prop.order);
+                }
+                if let Some(v) = end {
+                    set_border_width_side(styles, end_side, v, pending_prop.order);
+                }
+            }
+            crate::style::LogicalProperty::BorderStyle { axis, start, end } => {
+                let (start_side, end_side) = sides_for_axis(axis, inline_sides, block_sides);
+                if let Some(v) = start {
+                    set_border_style_side(styles, start_side, v, pending_prop.order);
+                }
+                if let Some(v) = end {
+                    set_border_style_side(styles, end_side, v, pending_prop.order);
+                }
+            }
+            crate::style::LogicalProperty::BorderColor { axis, start, end } => {
+                let (start_side, end_side) = sides_for_axis(axis, inline_sides, block_sides);
+                if let Some(v) = start {
+                    set_border_color_side(styles, start_side, v, pending_prop.order);
+                }
+                if let Some(v) = end {
+                    set_border_color_side(styles, end_side, v, pending_prop.order);
+                }
+            }
+        }
+    }
 }

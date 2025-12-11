@@ -13,6 +13,7 @@
 - Added HTML charset regression coverage for meta-declared encodings and the Windows-1252 default (pound sign decoding) to lock the sniffing order.
 - Block intrinsic inline width calculation now clamps against resolved min/max width for the border box, so shrink-to-fit respects authored constraints during intrinsic measurement.
 - Added regressions to ensure block intrinsic width computations obey min/max constraints (`tests/layout/test_factory.rs`).
+- Logical box properties now resolve per writing-mode/direction: margin/padding/border inline/block/start/end shorthands defer until the final writing mode is known, respecting cascade order against physical sides. Added regression coverage for inline directionality, vertical writing modes, and cascade precedence (`tests/style/logical_properties_test.rs`).
 - ImageCache URL resolution now delegates to the `url` crate so relative paths (including `..`, `./`, protocol-relative sources, and file:// directory bases without trailing slashes) resolve per RFC 3986 rather than string concatenation.
 - `fetch_and_render` now resolves `<link rel="stylesheet">` hrefs with the `url` crate (including protocol-relative, root-relative, relative, and file:// bases) instead of ad-hoc string concatenation; regression tests cover the resolution paths.
 - `fetch_and_render` also rewrites `url(...)` references inside fetched stylesheets against the stylesheet’s own base URL so inlined CSS retains correct resource bases (backgrounds/fonts); added regression for url() absolutization.
