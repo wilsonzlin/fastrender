@@ -4,17 +4,18 @@
 
 use fastrender::{Error, FastRender, Result};
 use fastrender::css::encoding::decode_css_bytes;
+use encoding_rs::{Encoding, UTF_8};
 use std::env;
 use std::collections::HashSet;
 use std::path::Path;
 use url::Url;
 
-fn fetch_url(url: &str) -> Result<String> {
+fn fetch_bytes(url: &str) -> Result<(Vec<u8>, Option<String>)> {
     // Handle file:// URLs
     if url.starts_with("file://") {
         let path = url.strip_prefix("file://").unwrap();
         let bytes = std::fs::read(path).map_err(Error::Io)?;
-        return Ok(decode_css_bytes(&bytes, None));
+        return Ok((bytes, None));
     }
 
     // Configure agent with timeout for ureq 3.x
@@ -39,7 +40,40 @@ fn fetch_url(url: &str) -> Result<String> {
         .read_to_vec()
         .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
-    Ok(decode_css_bytes(&bytes, content_type.as_deref()))
+    Ok((bytes, content_type))
+}
+
+fn decode_html_bytes(bytes: &[u8], content_type: Option<&str>) -> String {
+    if bytes.is_empty() {
+        return String::new();
+    }
+
+    if let Some((enc, bom_len)) = Encoding::for_bom(bytes) {
+        return enc.decode_without_bom_handling(&bytes[bom_len..]).0.into_owned();
+    }
+
+    if let Some(label) = content_type.and_then(charset_from_content_type) {
+        if let Some(enc) = Encoding::for_label(label.as_bytes()) {
+            return enc.decode_with_bom_removal(bytes).0.into_owned();
+        }
+    }
+
+    UTF_8.decode_with_bom_removal(bytes).0.into_owned()
+}
+
+fn charset_from_content_type(content_type: &str) -> Option<String> {
+    for param in content_type.split(';').skip(1) {
+        let mut parts = param.splitn(2, '=');
+        let name = parts.next()?.trim();
+        if !name.eq_ignore_ascii_case("charset") {
+            continue;
+        }
+        let value = parts.next()?.trim().trim_matches('"').trim_matches('\'');
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
 }
 
 fn resolve_href(base: &str, href: &str) -> Option<String> {
@@ -509,6 +543,13 @@ mod tests {
         let urls = extract_css_links(html, "https://example.com/site/page.html");
         assert_eq!(urls, vec!["https://example.com/styles/a.css".to_string()]);
     }
+
+    #[test]
+    fn decode_html_uses_content_type_charset() {
+        let encoded = encoding_rs::SHIFT_JIS.encode("abcデ").0;
+        let decoded = decode_html_bytes(&encoded, Some("text/html; charset=shift_jis"));
+        assert!(decoded.contains('デ'), "decoded text should include kana: {}", decoded);
+    }
 }
 
 fn main() -> Result<()> {
@@ -549,7 +590,8 @@ fn main() -> Result<()> {
     };
 
     println!("Fetching HTML from: {}", url);
-    let html = fetch_url(url)?;
+    let (html_bytes, html_content_type) = fetch_bytes(url)?;
+    let html = decode_html_bytes(&html_bytes, html_content_type.as_deref());
 
     println!("Extracting CSS links...");
     let css_links = extract_css_links(&html, url);
@@ -561,10 +603,13 @@ fn main() -> Result<()> {
     for css_url in css_links {
         println!("Fetching CSS from: {}", css_url);
         seen_imports.insert(css_url.clone());
-        match fetch_url(&css_url) {
-            Ok(css) => {
-                let rewritten = absolutize_css_urls(&css, &css_url);
-                let inlined = inline_imports(&rewritten, &css_url, &fetch_url, &mut seen_imports);
+        match fetch_bytes(&css_url) {
+            Ok((bytes, content_type)) => {
+                let css_text = decode_css_bytes(&bytes, content_type.as_deref());
+                let rewritten = absolutize_css_urls(&css_text, &css_url);
+                let inlined = inline_imports(&rewritten, &css_url, &|u| {
+                    fetch_bytes(u).map(|(b, ct)| decode_css_bytes(&b, ct.as_deref()))
+                }, &mut seen_imports);
                 combined_css.push_str(&inlined);
                 combined_css.push('\n');
             }
