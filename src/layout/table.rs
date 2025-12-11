@@ -1872,18 +1872,16 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
                     .map(|idx| row_floor(&structure.rows[idx]))
                     .sum();
                 let remaining = (span_height - non_target_sum).max(0.0);
-                let total_weight = {
-                    let sum: f32 = targets.iter().map(|r| row_floor(&structure.rows[*r])).sum();
-                    if sum > 0.0 {
-                        sum
-                    } else {
-                        targets.len() as f32
-                    }
+                let base_sum: f32 = targets.iter().map(|r| row_floor(&structure.rows[*r])).sum();
+                let total_weight = if base_sum > 0.0 {
+                    base_sum
+                } else {
+                    targets.len() as f32
                 };
 
                 for &r in &targets {
                     let base = row_floor(&structure.rows[r]);
-                    let weight = if total_weight > 0.0 {
+                    let weight = if base_sum > 0.0 {
                         base / total_weight
                     } else {
                         1.0 / targets.len() as f32
@@ -1912,10 +1910,22 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
 
     if let Some(base) = content_available {
         // Apply percentage rows against the definite base.
-        for (idx, pct) in percent_rows {
+        for &(idx, pct) in &percent_rows {
             let target = (pct / 100.0) * base;
             computed[idx] = computed[idx].max(target);
-            fixed_sum += computed[idx];
+        }
+
+        // Recompute the fixed budget (fixed + percentage rows) using specified heights where applicable.
+        fixed_sum = 0.0;
+        for (idx, row) in structure.rows.iter().enumerate() {
+            match row.specified_height {
+                Some(SpecifiedHeight::Fixed(h)) => {
+                    computed[idx] = computed[idx].max(h);
+                    fixed_sum += computed[idx];
+                }
+                Some(SpecifiedHeight::Percent(_)) => fixed_sum += computed[idx],
+                _ => {}
+            }
         }
 
         // Fixed rows were already counted in fixed_sum via target or explicit fixed.
@@ -2526,30 +2536,22 @@ impl FormattingContext for TableFormattingContext {
                         .sum();
                     let remaining = (span_height - non_target_sum).max(0.0);
                     let use_proportional = !has_auto;
-                    let total_weight = if use_proportional {
-                        let sum: f32 = targets
-                            .iter()
-                            .map(|idx| row_floor(*idx, *row_heights.get(*idx).unwrap_or(&0.0)))
-                            .sum();
-                        if sum > 0.0 {
-                            sum
-                        } else {
-                            targets.len() as f32
-                        }
+                    let base_sum: f32 = targets
+                        .iter()
+                        .map(|idx| row_floor(*idx, *row_heights.get(*idx).unwrap_or(&0.0)))
+                        .sum();
+                    let total_weight = if use_proportional && base_sum > 0.0 {
+                        base_sum
                     } else {
                         targets.len() as f32
                     };
 
                     for &idx in &targets {
-                        let weight = if use_proportional {
-                            let base = row_floor(idx, *row_heights.get(idx).unwrap_or(&0.0));
-                            if total_weight > 0.0 {
-                                base / total_weight
-                            } else {
-                                1.0 / targets.len() as f32
-                            }
+                        let base = row_floor(idx, *row_heights.get(idx).unwrap_or(&0.0));
+                        let weight = if use_proportional && base_sum > 0.0 {
+                            base / total_weight
                         } else {
-                            1.0 / total_weight
+                            1.0 / targets.len() as f32
                         };
                         if let Some(row) = row_heights.get_mut(idx) {
                             let share = remaining * weight;
@@ -2614,8 +2616,9 @@ impl FormattingContext for TableFormattingContext {
             } else {
                 percent_rows.clone()
             };
-            let flex_total: f32 = flex_indices.iter().map(|i| row_heights[*i]).sum();
+
             let available = target_rows - percent_total;
+            let flex_total: f32 = flex_indices.iter().map(|i| row_heights[*i]).sum();
 
             if available > 0.0 {
                 if flex_total > 0.0 {
