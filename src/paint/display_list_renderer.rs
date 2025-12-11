@@ -516,7 +516,7 @@ struct StackingRecord {
     needs_layer: bool,
     filters: Vec<ResolvedFilter>,
     radii: BorderRadii,
-    bounds: Rect,
+    mask_bounds: Rect,
 }
 
 impl DisplayListRenderer {
@@ -900,7 +900,7 @@ impl DisplayListRenderer {
                     needs_layer,
                     filters: item.filters.clone(),
                     radii: item.radii,
-                    bounds: expanded_bounds,
+                    mask_bounds: item.bounds,
                 });
 
                 if let Some(matrix) = item.transform {
@@ -914,7 +914,7 @@ impl DisplayListRenderer {
                     needs_layer: false,
                     filters: Vec::new(),
                     radii: BorderRadii::ZERO,
-                    bounds: Rect::ZERO,
+                    mask_bounds: Rect::ZERO,
                 });
                 if record.needs_layer {
                     if !record.filters.is_empty() {
@@ -922,7 +922,8 @@ impl DisplayListRenderer {
                     }
                     if !record.radii.is_zero() {
                         self.canvas.save();
-                        self.canvas.set_clip_with_radii(record.bounds, Some(record.radii));
+                        self.canvas
+                            .set_clip_with_radii(record.mask_bounds, Some(record.radii));
                         self.canvas.pop_layer()?;
                         self.canvas.restore();
                     } else {

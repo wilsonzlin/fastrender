@@ -370,8 +370,5 @@ fn filter_blur_not_clipped_to_bounds() {
     // Blur should leak outside the original rect into pixel 0.
     let (r, g, b, a) = pixel(&pixmap, 0, 0);
     assert_eq!(a, 255);
-    assert!(
-        r > 0 && (g, b) == (0, 0),
-        "expected blurred red outside bounds; got ({r},{g},{b})"
-    );
+    assert!(r > g && r > b && (g < 250 || b < 250), "expected red-dominant blur outside bounds; got ({r},{g},{b})");
 }

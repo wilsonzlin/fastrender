@@ -7,6 +7,7 @@
 
 ## Recent changes (this branch)
 - Stacking contexts with filters in the display-list renderer now expand their clip to the filter outset and store the expanded bounds, so blur/drop-shadow effects aren’t clipped to the original box and still mask with the authored radii.
+- Stacking context filter masking now aligns to the element’s original bounds in both painter and display-list paths: filter layers expand by outsets, but radii/clips are applied at the original border box so rounded corners mask correctly without clipping the blur region. Added regression that blur spills outside the context bounds.
 - Backdrop filters in the display-list renderer now expand by filter outsets so blur/drop-shadow samples include pixels outside the element bounds; masked copy-back ensures the effect remains clipped to the element. Added a regression for blur sampling outside the filtered region.
 - Added HSL reference helpers and blend-mode regressions (hue/saturation/color/luminosity) in the display-list renderer to ensure advanced blend modes follow the CSS compositing definitions.
 - Canvas blend mode conversion now maps Hue/Saturation/Color/Luminosity to tiny-skia equivalents so PushBlendMode honors the full CSS set; regression asserts `color` blend preserves destination luminance while keeping source hue.

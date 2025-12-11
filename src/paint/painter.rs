@@ -932,7 +932,7 @@ impl Painter {
                 }
 
                 if !radii.is_zero() {
-                    apply_clip_mask(&mut layer_pixmap, radii);
+                    apply_clip_mask_rect(&mut layer_pixmap, root_rect, radii);
                 }
 
                 if !backdrop_filters.is_empty() {
@@ -3442,7 +3442,13 @@ fn apply_backdrop_filters(pixmap: &mut Pixmap, bounds: &Rect, filters: &[Resolve
 
     apply_filters(&mut region, filters);
     if !radii.is_zero() {
-        apply_clip_mask(&mut region, radii);
+        let local_rect = Rect::from_xywh(
+            bounds.x() - clamped_x as f32,
+            bounds.y() - clamped_y as f32,
+            bounds.width(),
+            bounds.height(),
+        );
+        apply_clip_mask_rect(&mut region, local_rect, radii);
     }
 
     let mut paint = PixmapPaint::default();
@@ -3769,35 +3775,6 @@ fn build_rounded_rect_mask(rect: Rect, radii: BorderRadii, canvas_w: u32, canvas
         Rgba::new(255, 255, 255, 1.0),
     );
     Some(Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha))
-}
-
-fn apply_clip_mask(pixmap: &mut Pixmap, radii: BorderRadii) {
-    if radii.is_zero() {
-        return;
-    }
-    let width = pixmap.width();
-    let height = pixmap.height();
-    if width == 0 || height == 0 {
-        return;
-    }
-
-    let mut mask_pixmap = match Pixmap::new(width, height) {
-        Some(p) => p,
-        None => return,
-    };
-    // White mask inside rounded rect (alpha 255).
-    let _ = fill_rounded_rect(
-        &mut mask_pixmap,
-        0.0,
-        0.0,
-        width as f32,
-        height as f32,
-        &radii,
-        Rgba::new(255, 255, 255, 1.0),
-    );
-
-    let mask = Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha);
-    pixmap.apply_mask(&mask);
 }
 
 fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
