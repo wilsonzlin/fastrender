@@ -1227,19 +1227,8 @@ impl DisplayListRenderer {
                             record.mask_bounds.width() + out_l + out_r,
                             record.mask_bounds.height() + out_t + out_b,
                         );
-                        let inflate = out_l.max(out_t).max(out_r).max(out_b);
-                        let radii = if inflate > 0.0 {
-                            BorderRadii {
-                                top_left: record.radii.top_left + inflate,
-                                top_right: record.radii.top_right + inflate,
-                                bottom_right: record.radii.bottom_right + inflate,
-                                bottom_left: record.radii.bottom_left + inflate,
-                            }
-                        } else {
-                            record.radii
-                        };
                         self.canvas.save();
-                        self.canvas.set_clip_with_radii(clip_rect, Some(radii));
+                        self.canvas.set_clip_with_radii(clip_rect, Some(record.radii));
                         self.canvas.pop_layer()?;
                         self.canvas.restore();
                     } else {
