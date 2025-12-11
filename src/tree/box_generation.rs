@@ -1084,6 +1084,46 @@ pub fn generate_box_tree(styled: &StyledNode) -> BoxTree {
     BoxTree { root }
 }
 
+fn escape_attr(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn escape_text(value: &str) -> String {
+    value.replace('&', "&amp;").replace('<', "&lt;")
+}
+
+fn serialize_dom_subtree(node: &crate::dom::DomNode) -> String {
+    match &node.node_type {
+        crate::dom::DomNodeType::Text { content } => escape_text(content),
+        crate::dom::DomNodeType::Element { tag_name, attributes } => {
+            let mut out = String::new();
+            out.push('<');
+            out.push_str(tag_name);
+            for (name, value) in attributes {
+                out.push(' ');
+                out.push_str(name);
+                out.push('=');
+                out.push('"');
+                out.push_str(&escape_attr(value));
+                out.push('"');
+            }
+            out.push('>');
+            for child in &node.children {
+                out.push_str(&serialize_dom_subtree(child));
+            }
+            out.push_str("</");
+            out.push_str(tag_name);
+            out.push('>');
+            out
+        }
+        crate::dom::DomNodeType::Document => node.children.iter().map(serialize_dom_subtree).collect(),
+    }
+}
+
 /// Recursively generates BoxNodes from a StyledNode, honoring display: contents by
 /// splicing grandchildren into the parent’s child list rather than creating a box.
 fn generate_boxes_for_styled(styled: &StyledNode, counters: &mut CounterManager, _is_root: bool) -> Vec<BoxNode> {
@@ -1601,7 +1641,9 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
         "video" => ReplacedType::Video { src, poster },
         "audio" => ReplacedType::Audio { src },
         "canvas" => ReplacedType::Canvas,
-        "svg" => ReplacedType::Svg { content: String::new() },
+        "svg" => ReplacedType::Svg {
+            content: serialize_dom_subtree(&styled.node),
+        },
         "iframe" => ReplacedType::Iframe { src },
         "embed" => ReplacedType::Embed { src },
         "object" => ReplacedType::Object { data: data_attr },
@@ -3598,6 +3640,40 @@ mod tests {
                 other => panic!("expected image marker, got {:?}", other),
             },
             other => panic!("expected marker, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn inline_svg_carries_serialized_content() {
+        let html =
+            r#"<html><body><svg width="10" height="10"><rect width="10" height="10" fill="red"/></svg></body></html>"#;
+        let dom = crate::dom::parse_html(html).expect("parse");
+        let styled = crate::style::cascade::apply_styles(&dom, &crate::css::types::StyleSheet::new());
+        let box_tree = generate_box_tree(&styled);
+
+        fn find_svg(node: &BoxNode) -> Option<&ReplacedBox> {
+            if let BoxType::Replaced(repl) = &node.box_type {
+                if matches!(repl.replaced_type, ReplacedType::Svg { .. }) {
+                    return Some(repl);
+                }
+            }
+            for child in &node.children {
+                if let Some(found) = find_svg(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let svg = find_svg(&box_tree.root).expect("svg replaced box");
+        match &svg.replaced_type {
+            ReplacedType::Svg { content } => {
+                assert!(
+                    content.contains("<rect") && content.contains("fill=\"red\""),
+                    "serialized SVG should include child elements"
+                );
+            }
+            other => panic!("expected svg replaced type, got {:?}", other),
         }
     }
 }
