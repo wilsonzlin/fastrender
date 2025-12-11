@@ -7,9 +7,9 @@
 //! <https://www.w3.org/TR/css-cascade-4/>
 
 use crate::css::parser::{parse_declarations, parse_stylesheet};
-use crate::css::selectors::PseudoElement;
+use crate::css::selectors::{PseudoElement, TextDirection};
 use crate::css::types::{Declaration, StyleRule, StyleSheet};
-use crate::dom::{with_target_fragment, DomNode, DomNodeType, ElementRef};
+use crate::dom::{resolve_first_strong_direction, with_target_fragment, DomNode, ElementRef};
 use crate::style::defaults::{
     get_default_styles_for_element, parse_color_attribute, parse_dimension_attribute,
 };
@@ -1659,10 +1659,13 @@ fn dir_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule> 
             })
         }
         "auto" => {
-            let resolved = resolve_auto_direction(node).unwrap_or(crate::style::types::Direction::Ltr);
-            let dir_value = match resolved {
+            let resolved = resolve_first_strong_direction(node).map(|d| match d {
+                TextDirection::Ltr => crate::style::types::Direction::Ltr,
+                TextDirection::Rtl => crate::style::types::Direction::Rtl,
+            });
+            let dir_value = match resolved.unwrap_or(crate::style::types::Direction::Ltr) {
                 crate::style::types::Direction::Rtl => "rtl",
-                _ => "ltr",
+                crate::style::types::Direction::Ltr => "ltr",
             };
             let declarations = parse_declarations(&format!("direction: {}; unicode-bidi: isolate;", dir_value));
             Some(MatchedRule {
@@ -1674,40 +1677,6 @@ fn dir_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule> 
         }
         _ => None,
     }
-}
-
-fn resolve_auto_direction(node: &DomNode) -> Option<crate::style::types::Direction> {
-    let mut stack = vec![node];
-    while let Some(current) = stack.pop() {
-        match &current.node_type {
-            DomNodeType::Text { content } => {
-                for ch in content.chars() {
-                    match unicode_bidi::bidi_class(ch) {
-                        unicode_bidi::BidiClass::L => return Some(crate::style::types::Direction::Ltr),
-                        unicode_bidi::BidiClass::R | unicode_bidi::BidiClass::AL => {
-                            return Some(crate::style::types::Direction::Rtl)
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            DomNodeType::Element { tag_name, .. } => {
-                // Skip script and style contents for direction heuristics per HTML spec.
-                if tag_name.eq_ignore_ascii_case("script") || tag_name.eq_ignore_ascii_case("style") {
-                    continue;
-                }
-                for child in &current.children {
-                    stack.push(child);
-                }
-            }
-            DomNodeType::Document => {
-                for child in &current.children {
-                    stack.push(child);
-                }
-            }
-        }
-    }
-    None
 }
 
 fn resolve_relative_font_weight(styles: &mut ComputedStyle, parent: &ComputedStyle) {

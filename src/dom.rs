@@ -11,6 +11,7 @@ use selectors::{
 use std::cell::RefCell;
 use std::ptr;
 use std::thread_local;
+use unicode_bidi::bidi_class;
 
 #[derive(Debug, Clone)]
 pub struct DomNode {
@@ -48,6 +49,41 @@ pub(crate) fn with_target_fragment<R, F: FnOnce() -> R>(target: Option<&str>, f:
 
 fn current_target_fragment() -> Option<String> {
     TARGET_FRAGMENT.with(|slot| slot.borrow().clone())
+}
+
+/// Resolve the first-strong direction within this subtree, skipping script/style contents.
+pub fn resolve_first_strong_direction(node: &DomNode) -> Option<TextDirection> {
+    let mut stack = vec![node];
+    while let Some(current) = stack.pop() {
+        match &current.node_type {
+            DomNodeType::Text { content } => {
+                for ch in content.chars() {
+                    match bidi_class(ch) {
+                        unicode_bidi::BidiClass::L => return Some(TextDirection::Ltr),
+                        unicode_bidi::BidiClass::R | unicode_bidi::BidiClass::AL => {
+                            return Some(TextDirection::Rtl)
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            DomNodeType::Element { tag_name, .. } => {
+                let skip = tag_name.eq_ignore_ascii_case("script") || tag_name.eq_ignore_ascii_case("style");
+                if skip {
+                    continue;
+                }
+                for child in &current.children {
+                    stack.push(child);
+                }
+            }
+            DomNodeType::Document => {
+                for child in &current.children {
+                    stack.push(child);
+                }
+            }
+        }
+    }
+    None
 }
 
 pub fn parse_html(html: &str) -> Result<DomNode> {
@@ -250,24 +286,25 @@ impl<'a> ElementRef<'a> {
 
     /// Direction from dir/xml:dir attributes, inherited; defaults to LTR when none found.
     fn direction(&self) -> TextDirection {
-        if let Some(dir) = self.dir_attribute(self.node) {
+        if let Some(dir) = self.dir_attribute(self.node, self.node) {
             return dir;
         }
         for ancestor in self.all_ancestors.iter().rev() {
-            if let Some(dir) = self.dir_attribute(ancestor) {
+            if let Some(dir) = self.dir_attribute(ancestor, ancestor) {
                 return dir;
             }
         }
         TextDirection::Ltr
     }
 
-    fn dir_attribute(&self, node: &DomNode) -> Option<TextDirection> {
+    fn dir_attribute(&self, node: &DomNode, resolve_root: &DomNode) -> Option<TextDirection> {
         node.get_attribute("dir")
             .or_else(|| node.get_attribute("xml:dir"))
             .and_then(|d| match d.to_ascii_lowercase().as_str() {
                 "ltr" => Some(TextDirection::Ltr),
                 "rtl" => Some(TextDirection::Rtl),
-                _ => None, // ignore 'auto' or invalid per Selectors Level 4 definition
+                "auto" => resolve_first_strong_direction(resolve_root),
+                _ => None,
             })
     }
 
@@ -699,6 +736,47 @@ mod tests {
 
         assert!(matches(node, &ancestors, &PseudoClass::Dir(TextDirection::Rtl)));
         assert!(!matches(node, &ancestors, &PseudoClass::Dir(TextDirection::Ltr)));
+    }
+
+    #[test]
+    fn dir_auto_uses_first_strong() {
+        let rtl_text = DomNode {
+            node_type: DomNodeType::Text {
+                content: "שלום".to_string(),
+            },
+            children: vec![],
+        };
+        let root = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("dir".to_string(), "auto".to_string())],
+            },
+            children: vec![rtl_text],
+        };
+        assert!(matches(&root, &[], &PseudoClass::Dir(TextDirection::Rtl)));
+        assert!(!matches(&root, &[], &PseudoClass::Dir(TextDirection::Ltr)));
+    }
+
+    #[test]
+    fn dir_auto_on_ancestor_inherits_resolved_direction() {
+        let rtl_text = DomNode {
+            node_type: DomNodeType::Text {
+                content: "שלום".to_string(),
+            },
+            children: vec![],
+        };
+        let child = element("span", vec![]);
+        let container = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "p".to_string(),
+                attributes: vec![("dir".to_string(), "auto".to_string())],
+            },
+            children: vec![rtl_text, child],
+        };
+        let root = element("div", vec![container]);
+        let ancestors: Vec<&DomNode> = vec![&root, &root.children[0]];
+        let target = &root.children[0].children[1];
+        assert!(matches(target, &ancestors, &PseudoClass::Dir(TextDirection::Rtl)));
     }
 
     #[test]
