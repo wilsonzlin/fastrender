@@ -1300,10 +1300,9 @@ impl InlineFormattingContext {
         text_justify: TextJustify,
         first_line_indent: f32,
         subsequent_line_indent: f32,
+        paragraph_info: &[(bool, bool)],
     ) -> Vec<FragmentNode> {
         let mut fragments = Vec::new();
-
-        let paragraph_info = compute_paragraph_line_flags(&lines);
 
         for (idx, line) in lines.into_iter().enumerate() {
             let line_y = start_y + line.y_offset;
@@ -3163,10 +3162,50 @@ impl InlineFormattingContext {
         };
 
         // Create fragments
-        let static_position = lines
-            .first()
-            .map(|l| Point::new(l.left_offset, l.y_offset))
-            .unwrap_or(Point::ZERO);
+        let paragraph_info = compute_paragraph_line_flags(&lines);
+        let static_position = if let (Some(first_line), Some((is_last_line, _))) =
+            (lines.first(), paragraph_info.first())
+        {
+            let indent_raw = if indent_applies_first { indent_value } else { 0.0 };
+            let indent_offset = if matches!(first_line.resolved_direction, crate::style::types::Direction::Rtl) {
+                -indent_raw
+            } else {
+                indent_raw
+            };
+            let mut base_align = map_text_align(style.text_align, first_line.resolved_direction);
+            let resolved_justify = resolve_auto_text_justify(style.text_justify, &first_line.items);
+            if matches!(base_align, TextAlign::Justify) && matches!(resolved_justify, TextJustify::None) {
+                base_align = map_text_align(TextAlign::Start, first_line.resolved_direction);
+            }
+            let mut effective_align =
+                resolve_text_align_for_line(base_align, style.text_align_last, first_line.resolved_direction, *is_last_line);
+            let has_justify = has_justify_opportunities(&first_line.items, resolved_justify);
+            if matches!(effective_align, TextAlign::Justify)
+                && (matches!(resolved_justify, TextJustify::None) || !has_justify)
+            {
+                effective_align = map_text_align(TextAlign::Start, first_line.resolved_direction);
+            }
+            let usable_width = if first_line.available_width > 0.0 {
+                first_line.available_width
+            } else {
+                first_line.width
+            };
+            let total_width: f32 = first_line.items.iter().map(|p| p.item.width()).sum();
+            let extra_space = (usable_width - total_width).max(0.0);
+            let lead = match effective_align {
+                TextAlign::Right => extra_space,
+                TextAlign::Center => extra_space * 0.5,
+                _ => 0.0,
+            };
+            let cursor = if matches!(first_line.resolved_direction, crate::style::types::Direction::Rtl) {
+                first_line.left_offset + indent_offset + lead + total_width
+            } else {
+                first_line.left_offset + indent_offset + lead
+            };
+            Point::new(cursor, first_line.y_offset)
+        } else {
+            Point::ZERO
+        };
 
         let children = self.create_fragments(
             lines,
@@ -3176,6 +3215,7 @@ impl InlineFormattingContext {
             style.text_justify,
             if indent_applies_first { indent_value } else { 0.0 },
             if indent_applies_subsequent { indent_value } else { 0.0 },
+            &paragraph_info,
         );
 
         // Create containing fragment
@@ -5645,6 +5685,48 @@ mod tests {
         assert!(
             fragment.children.len() >= 2,
             "negative indent should not increase available width enough to prevent wrapping"
+        );
+    }
+
+    #[test]
+    fn absolute_child_static_position_follows_indented_line_start() {
+        let mut root_style = ComputedStyle::default();
+        root_style.text_indent.length = Length::px(20.0);
+        root_style.font_size = 16.0;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::PreWrap;
+        let positioned_style = {
+            let mut style = ComputedStyle::default();
+            style.position = crate::style::position::Position::Absolute;
+            style.width = Some(Length::px(10.0));
+            style.height = Some(Length::px(5.0));
+            Arc::new(style)
+        };
+        let positioned = BoxNode::new_inline(positioned_style, vec![]);
+        let text = BoxNode::new_text(Arc::new(text_style), "inline text".to_string());
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![positioned, text],
+        );
+        let constraints = LayoutConstraints::definite_width(120.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert!(
+            fragment.children.len() >= 2,
+            "should produce line and positioned fragments"
+        );
+        let positioned_fragment = fragment.children.last().expect("positioned fragment");
+        assert!(
+            (positioned_fragment.bounds.x() - 20.0).abs() < 0.1,
+            "static position should start at indented line start; got {}",
+            positioned_fragment.bounds.x()
+        );
+        assert!(
+            positioned_fragment.bounds.y() >= -0.1 && positioned_fragment.bounds.y() <= 0.1,
+            "static position should anchor to first line top; got {}",
+            positioned_fragment.bounds.y()
         );
     }
 
