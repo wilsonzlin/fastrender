@@ -4,6 +4,7 @@
 
 use fastrender::{Error, FastRender, Result};
 use std::env;
+use std::collections::HashSet;
 use std::path::Path;
 use url::Url;
 
@@ -193,6 +194,181 @@ fn absolutize_css_urls(css: &str, base_url: &str) -> String {
     out
 }
 
+fn parse_import_target(rule: &str) -> Option<(String, String)> {
+    let after_at = rule.strip_prefix("@import")?.trim_start();
+    let (target, rest) = if let Some(inner) = after_at.strip_prefix("url(") {
+        let close = inner.find(')')?;
+        let url_part = &inner[..close].trim();
+        let url_str = url_part.trim_matches(|c| c == '"' || c == '\'').to_string();
+        let media = inner[close + 1..].trim().trim_end_matches(';').trim().to_string();
+        (url_str, media)
+    } else if after_at.starts_with('"') || after_at.starts_with('\'') {
+        let quote = after_at.as_bytes()[0] as char;
+        let mut iter = after_at[1..].char_indices();
+        let mut end = None;
+        while let Some((idx, ch)) = iter.next() {
+            if ch == quote {
+                end = Some(idx + 1);
+                break;
+            }
+        }
+        let end = end?;
+        let url_str = after_at[1..end - 1].to_string();
+        let media = after_at[end..].trim().trim_end_matches(';').trim().to_string();
+        (url_str, media)
+    } else {
+        return None;
+    };
+    Some((target, rest))
+}
+
+fn inline_imports(
+    css: &str,
+    base_url: &str,
+    fetch: &dyn Fn(&str) -> Result<String>,
+    seen: &mut HashSet<String>,
+) -> String {
+    #[derive(PartialEq)]
+    enum State {
+        Normal,
+        Single,
+        Double,
+        Comment,
+    }
+
+    let mut out = String::with_capacity(css.len());
+    let mut state = State::Normal;
+    let bytes = css.as_bytes();
+    let mut i = 0usize;
+    let mut last_emit = 0usize;
+
+    while i < bytes.len() {
+        match state {
+            State::Normal => {
+                if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                    state = State::Comment;
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'\'' {
+                    state = State::Single;
+                    i += 1;
+                    continue;
+                }
+                if bytes[i] == b'"' {
+                    state = State::Double;
+                    i += 1;
+                    continue;
+                }
+
+                if bytes[i] == b'@' {
+                    let remainder = &css[i..];
+                    if remainder.len() >= 7
+                        && remainder[1..].to_lowercase().starts_with("import")
+                    {
+                        // Find end of import statement (;)
+                        let mut j = i;
+                        let mut inner_state = State::Normal;
+                        while j < bytes.len() {
+                            match inner_state {
+                                State::Normal => {
+                                    if bytes[j] == b';' {
+                                        j += 1;
+                                        break;
+                                    }
+                                    if bytes[j] == b'\'' {
+                                        inner_state = State::Single;
+                                    } else if bytes[j] == b'"' {
+                                        inner_state = State::Double;
+                                    } else if bytes[j] == b'/' && j + 1 < bytes.len() && bytes[j + 1] == b'*' {
+                                        inner_state = State::Comment;
+                                        j += 1;
+                                    }
+                                }
+                                State::Single => {
+                                    if bytes[j] == b'\\' {
+                                        j += 1;
+                                    } else if bytes[j] == b'\'' {
+                                        inner_state = State::Normal;
+                                    }
+                                }
+                                State::Double => {
+                                    if bytes[j] == b'\\' {
+                                        j += 1;
+                                    } else if bytes[j] == b'"' {
+                                        inner_state = State::Normal;
+                                    }
+                                }
+                                State::Comment => {
+                                    if bytes[j] == b'*' && j + 1 < bytes.len() && bytes[j + 1] == b'/' {
+                                        inner_state = State::Normal;
+                                        j += 1;
+                                    }
+                                }
+                            }
+                            j += 1;
+                        }
+
+                        let rule = css[i..j].trim();
+                        if let Some((target, media)) = parse_import_target(rule) {
+                            if let Some(resolved) = resolve_href(base_url, &target) {
+                                out.push_str(&css[last_emit..i]);
+                                if seen.insert(resolved.clone()) {
+                                    if let Ok(fetched) = fetch(&resolved) {
+                                        let rewritten = absolutize_css_urls(&fetched, &resolved);
+                                        let inlined = inline_imports(&rewritten, &resolved, fetch, seen);
+                                        if media.is_empty() || media.eq_ignore_ascii_case("all") {
+                                            out.push_str(&inlined);
+                                        } else {
+                                            out.push_str(&format!("@media {} {{\n{}\n}}\n", media, inlined));
+                                        }
+                                    }
+                                }
+                                last_emit = j;
+                                i = j;
+                                continue;
+                            }
+                        }
+                    }
+                }
+
+                i += 1;
+            }
+            State::Single => {
+                if bytes[i] == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'\'' {
+                    state = State::Normal;
+                }
+                i += 1;
+            }
+            State::Double => {
+                if bytes[i] == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'"' {
+                    state = State::Normal;
+                }
+                i += 1;
+            }
+            State::Comment => {
+                if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                    state = State::Normal;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+
+    out.push_str(&css[last_emit..]);
+    out
+}
+
 fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
     let mut css_urls = Vec::new();
 
@@ -297,6 +473,24 @@ mod tests {
     }
 
     #[test]
+    fn inlines_imports_with_media_wrapping() {
+        fn fake_fetch(url: &str) -> Result<String> {
+            match url {
+                "https://example.com/css/imported.css" => Ok("h1 { color: red; }".to_string()),
+                _ => Err(Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "not found",
+                ))),
+            }
+        }
+        let css = r#"@import url("https://example.com/css/imported.css") screen;"#;
+        let mut seen = HashSet::new();
+        let inlined = inline_imports(css, "https://example.com/css/main.css", &fake_fetch, &mut seen);
+        assert!(inlined.contains("@media screen"), "expected media wrapper: {}", inlined);
+        assert!(inlined.contains("color: red"));
+    }
+
+    #[test]
     fn extracts_stylesheet_hrefs_with_resolution() {
         let html = r#"
             <html><head>
@@ -355,12 +549,18 @@ fn main() -> Result<()> {
     println!("Found {} CSS link(s)", css_links.len());
 
     let mut combined_css = String::new();
+    let mut seen_imports = HashSet::new();
     for css_url in css_links {
         println!("Fetching CSS from: {}", css_url);
         match fetch_url(&css_url) {
             Ok(css) => {
                 let rewritten = absolutize_css_urls(&css, &css_url);
+                let inlined = inline_imports(&rewritten, &css_url, &fetch_url, &mut seen_imports);
                 combined_css.push_str(&rewritten);
+                if rewritten != inlined {
+                    combined_css.push('\n');
+                    combined_css.push_str(&inlined);
+                }
                 combined_css.push('\n');
             }
             Err(e) => {
