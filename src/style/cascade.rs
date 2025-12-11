@@ -786,6 +786,23 @@ mod tests {
     }
 
     #[test]
+    fn table_cells_wrap_by_default() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "td".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(
+            styled.styles.white_space,
+            crate::style::types::WhiteSpace::Normal
+        ));
+    }
+
+    #[test]
     fn text_align_shorthand_resets_text_align_last_to_auto() {
         let dom = element_with_style("text-align-last: right; text-align: center;");
         let styled = apply_styles(&dom, &StyleSheet::new());

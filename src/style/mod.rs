@@ -217,6 +217,7 @@ pub struct ComputedStyle {
     pub background_origins: Vec<BackgroundBox>,
     pub background_clips: Vec<BackgroundBox>,
     pub background_layers: Vec<BackgroundLayer>,
+    pub background_blend_modes: Vec<MixBlendMode>,
     pub object_fit: ObjectFit,
     pub object_position: ObjectPosition,
     pub image_rendering: ImageRendering,
@@ -404,7 +405,8 @@ impl Default for ComputedStyle {
             background_attachments: vec![default_layer.attachment],
             background_origins: vec![default_layer.origin],
             background_clips: vec![default_layer.clip],
-            background_layers: vec![default_layer],
+            background_layers: vec![default_layer.clone()],
+            background_blend_modes: vec![default_layer.blend_mode],
             object_fit: ObjectFit::Fill,
             object_position: ObjectPosition {
                 x: types::PositionComponent::Keyword(types::PositionKeyword::Center),
@@ -467,6 +469,9 @@ impl ComputedStyle {
         if self.background_clips.is_empty() {
             self.background_clips.push(defaults.clip);
         }
+        if self.background_blend_modes.is_empty() {
+            self.background_blend_modes.push(defaults.blend_mode);
+        }
     }
 
     /// Rebuild per-layer background data from the stored author lists, repeating
@@ -485,6 +490,7 @@ impl ComputedStyle {
             let att_idx = self.background_attachments.len().saturating_sub(1).min(idx);
             let origin_idx = self.background_origins.len().saturating_sub(1).min(idx);
             let clip_idx = self.background_clips.len().saturating_sub(1).min(idx);
+            let blend_idx = self.background_blend_modes.len().saturating_sub(1).min(idx);
 
             layer.image = self.background_images[img_idx].clone();
             layer.position = self.background_positions[pos_idx].clone();
@@ -493,6 +499,7 @@ impl ComputedStyle {
             layer.attachment = self.background_attachments[att_idx];
             layer.origin = self.background_origins[origin_idx];
             layer.clip = self.background_clips[clip_idx];
+            layer.blend_mode = self.background_blend_modes[blend_idx];
             self.background_layers.push(layer);
         }
     }
@@ -512,6 +519,7 @@ impl ComputedStyle {
         self.background_attachments = normalized.iter().map(|l| l.attachment).collect();
         self.background_origins = normalized.iter().map(|l| l.origin).collect();
         self.background_clips = normalized.iter().map(|l| l.clip).collect();
+        self.background_blend_modes = normalized.iter().map(|l| l.blend_mode).collect();
         self.background_layers = normalized;
     }
 

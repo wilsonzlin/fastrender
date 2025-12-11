@@ -32,10 +32,10 @@ use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::paint::display_list::{
-    BlendMode, BorderItem, BorderSide, BoxShadowItem, ClipItem, DisplayItem, DisplayList, EmphasisMark, EmphasisText,
-    FillRectItem, FontId, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem,
-    LinearGradientItem, OpacityItem, RadialGradientItem, ResolvedFilter, StackingContextItem, StrokeRectItem,
-    TextEmphasis, TextItem, TextShadowItem, Transform2D,
+    BlendMode, BlendModeItem, BorderItem, BorderSide, BoxShadowItem, ClipItem, DisplayItem, DisplayList,
+    EmphasisMark, EmphasisText, FillRectItem, FontId, GlyphInstance, GradientSpread, GradientStop, ImageData,
+    ImageFilterQuality, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem, ResolvedFilter,
+    StackingContextItem, StrokeRectItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
@@ -1104,6 +1104,8 @@ impl DisplayListBuilder {
         }
 
         let clip_radii = Self::resolve_clip_radii(style, rects, clip_box);
+        let blend_mode = Self::convert_blend_mode(layer.blend_mode);
+        let use_blend = blend_mode != BlendMode::Normal;
         let mut pushed_clip = false;
         if !clip_radii.is_zero() {
             self.list.push(DisplayItem::PushClip(ClipItem {
@@ -1111,6 +1113,9 @@ impl DisplayListBuilder {
                 radii: Some(clip_radii),
             }));
             pushed_clip = true;
+        }
+        if use_blend {
+            self.list.push(DisplayItem::PushBlendMode(BlendModeItem { mode: blend_mode }));
         }
 
         match bg {
@@ -1306,6 +1311,9 @@ impl DisplayListBuilder {
             BackgroundImage::None => {}
         }
 
+        if use_blend {
+            self.list.push(DisplayItem::PopBlendMode);
+        }
         if pushed_clip {
             self.list.push(DisplayItem::PopClip);
         }
@@ -1796,9 +1804,10 @@ mod tests {
     use super::*;
     use crate::image_loader::ImageCache;
     use crate::paint::stacking::{StackingContext, StackingContextReason};
+    use crate::style::color::Rgba;
     use crate::style::display::Display;
     use crate::style::position::Position;
-    use crate::style::types::ImageRendering;
+    use crate::style::types::{BackgroundImage, BackgroundLayer, BackgroundRepeat, ImageRendering, MixBlendMode};
     use crate::style::ComputedStyle;
     use crate::tree::box_tree::ReplacedType;
 
@@ -2031,6 +2040,56 @@ mod tests {
 
         let list = builder.list;
         assert!(list.is_empty());
+    }
+
+    #[test]
+    fn background_blend_mode_emits_push_and_pop() {
+        let mut style = ComputedStyle::default();
+        style.background_color = Rgba::BLUE;
+        style.set_background_layers(vec![BackgroundLayer {
+            image: Some(BackgroundImage::LinearGradient {
+                angle: 0.0,
+                stops: vec![
+                    crate::css::types::ColorStop {
+                        color: Rgba::RED,
+                        position: Some(0.0),
+                    },
+                    crate::css::types::ColorStop {
+                        color: Rgba::RED,
+                        position: Some(1.0),
+                    },
+                ],
+            }),
+            repeat: BackgroundRepeat::no_repeat(),
+            blend_mode: MixBlendMode::Multiply,
+            ..BackgroundLayer::default()
+        }]);
+        let fragment =
+            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
+
+        let list = DisplayListBuilder::new().build(&fragment);
+        let mut push_idx = None;
+        let mut gradient_idx = None;
+        let mut pop_idx = None;
+        for (idx, item) in list.items().iter().enumerate() {
+            match item {
+                DisplayItem::PushBlendMode(mode) => {
+                    push_idx = Some(idx);
+                    assert_eq!(mode.mode, BlendMode::Multiply);
+                }
+                DisplayItem::LinearGradient(_) => gradient_idx = Some(idx),
+                DisplayItem::PopBlendMode => pop_idx = Some(idx),
+                _ => {}
+            }
+        }
+
+        assert!(push_idx.is_some(), "blend push missing");
+        assert!(pop_idx.is_some(), "blend pop missing");
+        assert!(gradient_idx.is_some(), "background gradient missing");
+        assert!(
+            push_idx.unwrap() < gradient_idx.unwrap() && gradient_idx.unwrap() < pop_idx.unwrap(),
+            "blend mode should wrap background layer"
+        );
     }
 
     #[test]

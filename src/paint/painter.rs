@@ -1049,11 +1049,19 @@ impl Painter {
                     *angle,
                     &resolved,
                     SpreadMode::Pad,
+                    layer.blend_mode,
                 );
             }
             BackgroundImage::RadialGradient { stops } => {
                 let resolved = normalize_color_stops(stops);
-                self.paint_radial_gradient(origin_rect, clip_rect, clip_mask.as_ref(), &resolved, SpreadMode::Pad);
+                self.paint_radial_gradient(
+                    origin_rect,
+                    clip_rect,
+                    clip_mask.as_ref(),
+                    &resolved,
+                    SpreadMode::Pad,
+                    layer.blend_mode,
+                );
             }
             BackgroundImage::RepeatingLinearGradient { angle, stops } => {
                 let resolved = normalize_color_stops(stops);
@@ -1064,6 +1072,7 @@ impl Painter {
                     *angle,
                     &resolved,
                     SpreadMode::Repeat,
+                    layer.blend_mode,
                 );
             }
             BackgroundImage::RepeatingRadialGradient { stops } => {
@@ -1074,6 +1083,7 @@ impl Painter {
                     clip_mask.as_ref(),
                     &resolved,
                     SpreadMode::Repeat,
+                    layer.blend_mode,
                 );
             }
             BackgroundImage::None => {
@@ -1176,6 +1186,7 @@ impl Painter {
                             tile_h,
                             clip_rect,
                             clip_mask.as_ref(),
+                            layer.blend_mode,
                             quality,
                         );
                     }
@@ -1192,6 +1203,7 @@ impl Painter {
         angle: f32,
         stops: &[(f32, Rgba)],
         spread: SpreadMode,
+        blend_mode: MixBlendMode,
     ) {
         if stops.is_empty() {
             return;
@@ -1221,6 +1233,7 @@ impl Painter {
         let mut paint = Paint::default();
         paint.shader = shader;
         paint.anti_alias = true;
+        paint.blend_mode = map_blend_mode(blend_mode);
         self.pixmap.fill_path(
             &path,
             &paint,
@@ -1237,6 +1250,7 @@ impl Painter {
         clip_mask: Option<&Mask>,
         stops: &[(f32, Rgba)],
         spread: SpreadMode,
+        blend_mode: MixBlendMode,
     ) {
         if stops.is_empty() {
             return;
@@ -1266,6 +1280,7 @@ impl Painter {
         let mut paint = Paint::default();
         paint.shader = shader;
         paint.anti_alias = true;
+        paint.blend_mode = map_blend_mode(blend_mode);
         self.pixmap.fill_path(
             &path,
             &paint,
@@ -1284,6 +1299,7 @@ impl Painter {
         tile_h: f32,
         clip: Rect,
         mask: Option<&Mask>,
+        blend_mode: MixBlendMode,
         quality: FilterQuality,
     ) {
         if tile_w <= 0.0 || tile_h <= 0.0 {
@@ -1313,6 +1329,7 @@ impl Painter {
             Transform::from_row(scale_x, 0.0, 0.0, scale_y, tile_x, tile_y),
         );
         paint.anti_alias = false;
+        paint.blend_mode = map_blend_mode(blend_mode);
 
         if let Some(rect) = SkiaRect::from_xywh(
             intersection.x(),
@@ -4135,7 +4152,10 @@ mod tests {
     use crate::geometry::Rect;
     use crate::image_loader::ImageCache;
     use crate::paint::display_list::BorderRadii;
-    use crate::style::types::{BackgroundAttachment, BackgroundBox, Isolation, OutlineColor, OutlineStyle, Overflow};
+    use crate::style::types::{
+        BackgroundAttachment, BackgroundBox, BackgroundRepeat, Isolation, MixBlendMode, OutlineColor, OutlineStyle,
+        Overflow,
+    };
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
     use crate::text::font_loader::FontContext;
@@ -5078,6 +5098,56 @@ mod tests {
     fn background_repeat_round_resizes_to_integer_tiles() {
         let rounded = round_tile_length(1099.0, 100.0);
         assert!((rounded - (1099.0 / 11.0)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn background_blend_mode_multiplies_layers() {
+        let make_style = |blend_mode| {
+            let mut style = ComputedStyle::default();
+            style.background_color = Rgba::BLUE;
+            style.set_background_layers(vec![BackgroundLayer {
+                image: Some(BackgroundImage::LinearGradient {
+                    angle: 0.0,
+                    stops: vec![
+                        crate::css::types::ColorStop {
+                            color: Rgba::new(255, 255, 0, 1.0),
+                            position: Some(0.0),
+                        },
+                        crate::css::types::ColorStop {
+                            color: Rgba::new(255, 255, 0, 1.0),
+                            position: Some(1.0),
+                        },
+                    ],
+                }),
+                repeat: BackgroundRepeat::no_repeat(),
+                blend_mode,
+                ..BackgroundLayer::default()
+            }]);
+            style
+        };
+
+        let normal_fragment = FragmentNode::new_block_styled(
+            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+            vec![],
+            Arc::new(make_style(MixBlendMode::Normal)),
+        );
+        let multiply_fragment = FragmentNode::new_block_styled(
+            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+            vec![],
+            Arc::new(make_style(MixBlendMode::Multiply)),
+        );
+
+        let normal = paint_tree(&FragmentTree::new(normal_fragment), 10, 10, Rgba::WHITE).expect("paint");
+        let multiplied =
+            paint_tree(&FragmentTree::new(multiply_fragment), 10, 10, Rgba::WHITE).expect("paint multiply");
+
+        assert_eq!(color_at(&normal, 5, 5), (255, 255, 0, 255));
+        let blended = color_at(&multiplied, 5, 5);
+        assert!(
+            blended.0 < 5 && blended.1 < 5 && blended.2 < 5,
+            "multiply blend should blacken blue + yellow, got {:?}",
+            blended
+        );
     }
 
     #[test]

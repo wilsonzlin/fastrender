@@ -1410,6 +1410,7 @@ pub struct BackgroundLayer {
     pub attachment: BackgroundAttachment,
     pub origin: BackgroundBox,
     pub clip: BackgroundBox,
+    pub blend_mode: MixBlendMode,
 }
 
 impl Default for BackgroundLayer {
@@ -1431,6 +1432,7 @@ impl Default for BackgroundLayer {
             attachment: BackgroundAttachment::Scroll,
             origin: BackgroundBox::PaddingBox,
             clip: BackgroundBox::BorderBox,
+            blend_mode: MixBlendMode::Normal,
         }
     }
 }

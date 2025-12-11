@@ -1820,6 +1820,16 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 styles.rebuild_background_layers();
             }
         }
+        "background-blend-mode" => {
+            let parse = |value: &PropertyValue| match value {
+                PropertyValue::Keyword(kw) => parse_mix_blend_mode(kw),
+                _ => None,
+            };
+            if let Some(modes) = parse_layer_list(&resolved_value, parse) {
+                styles.background_blend_modes = modes;
+                styles.rebuild_background_layers();
+            }
+        }
 
         // Shorthand: background
         "background" => {
@@ -4113,9 +4123,9 @@ mod tests {
     use crate::style::types::{
         AlignContent, AlignItems, AspectRatio, BackgroundRepeatKeyword, BoxSizing, CaseTransform, FontStretch,
         FontVariant, GridAutoFlow, GridTrack, ImageRendering, JustifyContent, ListStylePosition, ListStyleType,
-        OutlineColor, OutlineStyle, PositionComponent, PositionKeyword, TextCombineUpright, TextDecorationLine,
-        TextDecorationStyle, TextDecorationThickness, TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape,
-        TextEmphasisStyle, TextOrientation, TextTransform, WritingMode,
+        MixBlendMode, OutlineColor, OutlineStyle, PositionComponent, PositionKeyword, TextCombineUpright,
+        TextDecorationLine, TextDecorationStyle, TextDecorationThickness, TextEmphasisFill, TextEmphasisPosition,
+        TextEmphasisShape, TextEmphasisStyle, TextOrientation, TextTransform, WritingMode,
     };
 
     #[test]
@@ -5380,6 +5390,82 @@ mod tests {
         let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
         assert!((x.alignment - 0.0).abs() < 0.01);
         assert!((y.alignment - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn background_blend_mode_repeats_and_truncates() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-image".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Url("a.png".to_string()),
+                    PropertyValue::Keyword(",".to_string()),
+                    PropertyValue::Url("b.png".to_string()),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-blend-mode".to_string(),
+                value: PropertyValue::Keyword("screen".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.background_layers[0].blend_mode, MixBlendMode::Screen);
+        assert_eq!(style.background_layers[1].blend_mode, MixBlendMode::Screen);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-blend-mode".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("multiply".to_string()),
+                    PropertyValue::Keyword(",".to_string()),
+                    PropertyValue::Keyword("overlay".to_string()),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.background_layers[0].blend_mode, MixBlendMode::Multiply);
+        assert_eq!(style.background_layers[1].blend_mode, MixBlendMode::Overlay);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-image".to_string(),
+                value: PropertyValue::Url("single.png".to_string()),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-blend-mode".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("darken".to_string()),
+                    PropertyValue::Keyword(",".to_string()),
+                    PropertyValue::Keyword("lighten".to_string()),
+                ]),
+                important: false,
+            },
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.background_layers.len(), 1);
+        assert_eq!(style.background_layers[0].blend_mode, MixBlendMode::Darken);
     }
 
     #[test]

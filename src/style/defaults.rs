@@ -7,7 +7,6 @@
 //! <https://html.spec.whatwg.org/multipage/rendering.html>
 
 use crate::dom::{DomNode, DomNodeType};
-use crate::style::types::WhiteSpace;
 use crate::style::{ComputedStyle, Display, Length, Rgba};
 
 /// Get default styles for an HTML element
@@ -90,11 +89,6 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
                 styles.font_style = crate::style::FontStyle::Oblique(None);
             }
             _ => {}
-        }
-
-        // Prevent text wrapping in table cells by default
-        if matches!(styles.display, Display::TableCell) {
-            styles.white_space = WhiteSpace::Nowrap;
         }
     }
 
