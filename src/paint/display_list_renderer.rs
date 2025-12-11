@@ -42,9 +42,10 @@ fn map_blend_mode(mode: BlendMode) -> tiny_skia::BlendMode {
         BlendMode::SoftLight => tiny_skia::BlendMode::SoftLight,
         BlendMode::Difference => tiny_skia::BlendMode::Difference,
         BlendMode::Exclusion => tiny_skia::BlendMode::Exclusion,
-        BlendMode::Hue | BlendMode::Saturation | BlendMode::Color | BlendMode::Luminosity => {
-            tiny_skia::BlendMode::SourceOver
-        }
+        BlendMode::Hue => tiny_skia::BlendMode::Hue,
+        BlendMode::Saturation => tiny_skia::BlendMode::Saturation,
+        BlendMode::Color => tiny_skia::BlendMode::Color,
+        BlendMode::Luminosity => tiny_skia::BlendMode::Luminosity,
     }
 }
 
