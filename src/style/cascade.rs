@@ -161,6 +161,9 @@ fn apply_styles_internal(
     if let Some(presentational_rule) = list_type_presentational_hint(node, 1) {
         matching_rules.push(presentational_rule);
     }
+    if let Some(presentational_rule) = alignment_presentational_hint(node, 2) {
+        matching_rules.push(presentational_rule);
+    }
     let inline_decls = node.get_attribute("style").as_deref().map(parse_declarations);
     apply_cascaded_declarations(
         &mut styles,
@@ -250,6 +253,9 @@ fn apply_styles_internal_with_ancestors(
         matching_rules.push(presentational_rule);
     }
     if let Some(presentational_rule) = list_type_presentational_hint(node, 1) {
+        matching_rules.push(presentational_rule);
+    }
+    if let Some(presentational_rule) = alignment_presentational_hint(node, 2) {
         matching_rules.push(presentational_rule);
     }
     let inline_decls = node.get_attribute("style").as_deref().map(parse_declarations);
@@ -692,6 +698,57 @@ mod tests {
             styled.styles.list_style_type,
             crate::style::types::ListStyleType::LowerAlpha
         ));
+    }
+
+    #[test]
+    fn align_attribute_sets_text_align_on_table_cells() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "td".to_string(),
+                attributes: vec![("align".to_string(), "right".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(
+            styled.styles.text_align,
+            crate::style::types::TextAlign::Right
+        ));
+    }
+
+    #[test]
+    fn valign_attribute_sets_vertical_align_on_cells() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "td".to_string(),
+                attributes: vec![("valign".to_string(), "middle".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(
+            styled.styles.vertical_align,
+            crate::style::types::VerticalAlign::Middle
+        ));
+    }
+
+    #[test]
+    fn css_overrides_align_presentational_hint() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "td".to_string(),
+                attributes: vec![
+                    ("align".to_string(), "center".to_string()),
+                    ("style".to_string(), "text-align: left;".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(styled.styles.text_align, crate::style::types::TextAlign::Left));
     }
 
     #[test]
@@ -1790,6 +1847,58 @@ fn map_ul_type(value: &str) -> Option<&'static str> {
         "disc" => Some("disc"),
         "circle" => Some("circle"),
         "square" => Some("square"),
+        _ => None,
+    }
+}
+
+fn alignment_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule> {
+    let tag = node.tag_name()?.to_ascii_lowercase();
+    let mut declarations = String::new();
+
+    if let Some(align) = node.get_attribute("align") {
+        if let Some(mapped) = map_align(&align) {
+            if matches!(tag.as_str(), "td" | "th" | "tr" | "table") {
+                declarations.push_str(&format!("text-align: {};", mapped));
+            }
+        }
+    }
+
+    if matches!(tag.as_str(), "td" | "th" | "tr") {
+        if let Some(valign) = node.get_attribute("valign") {
+            if let Some(mapped) = map_valign(&valign) {
+                declarations.push_str(&format!("vertical-align: {};", mapped));
+            }
+        }
+    }
+
+    if declarations.is_empty() {
+        return None;
+    }
+
+    Some(MatchedRule {
+        origin: StyleOrigin::Author,
+        specificity: 0,
+        order,
+        declarations: parse_declarations(&declarations),
+    })
+}
+
+fn map_align(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "left" => Some("left"),
+        "center" => Some("center"),
+        "right" => Some("right"),
+        "justify" => Some("justify"),
+        _ => None,
+    }
+}
+
+fn map_valign(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "top" => Some("top"),
+        "middle" => Some("middle"),
+        "bottom" => Some("bottom"),
+        "baseline" => Some("baseline"),
         _ => None,
     }
 }
