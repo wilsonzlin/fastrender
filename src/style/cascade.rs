@@ -356,7 +356,7 @@ mod tests {
     use crate::style::float::Float;
     use crate::style::types::{
         LineBreak, ListStylePosition, ListStyleType, TextCombineUpright, TextDecorationLine, TextUnderlineOffset,
-        TextUnderlinePosition,
+        TextUnderlinePosition, UnicodeBidi, WhiteSpace,
     };
 
     fn element_with_style(style: &str) -> DomNode {
@@ -956,6 +956,46 @@ mod tests {
     }
 
     #[test]
+    fn marker_ua_defaults_match_css_lists() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "ul".to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            }],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        let li = styled.children.first().expect("li");
+        let marker = li.marker_styles.as_ref().expect("marker styles");
+
+        assert!(
+            matches!(marker.unicode_bidi, UnicodeBidi::Isolate),
+            "marker should default unicode-bidi to isolate"
+        );
+        assert!(
+            matches!(marker.white_space, WhiteSpace::Pre),
+            "marker should default white-space to pre"
+        );
+        assert_eq!(
+            marker.font_variant_numeric.spacing,
+            crate::style::types::NumericSpacing::Tabular,
+            "marker should default to tabular numbers"
+        );
+        assert_eq!(
+            marker.text_transform,
+            crate::style::types::TextTransform::none(),
+            "marker should default text-transform to none"
+        );
+    }
+
+    #[test]
     fn marker_rejects_alignment_and_indent_declarations() {
         let dom = DomNode {
             node_type: DomNodeType::Element {
@@ -1227,6 +1267,10 @@ fn compute_marker_styles(
     propagate_text_decorations(&mut styles, list_item_styles);
 
     reset_marker_box_properties(&mut styles);
+    styles.unicode_bidi = crate::style::types::UnicodeBidi::Isolate;
+    styles.font_variant_numeric.spacing = crate::style::types::NumericSpacing::Tabular;
+    styles.white_space = crate::style::types::WhiteSpace::Pre;
+    styles.text_transform = crate::style::types::TextTransform::none();
     styles.display = Display::Inline;
     Some(styles)
 }
