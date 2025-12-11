@@ -103,7 +103,7 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
     let value_str = value_str.trim_end_matches("!important").trim();
 
     let is_background_longhand = property.starts_with("background-") || property == "background";
-    let allow_commas = is_background_longhand;
+    let allow_commas = is_background_longhand || property == "cursor";
 
     // Try to parse as color first for color properties (exclude shorthand background so we can parse layers)
     if matches!(

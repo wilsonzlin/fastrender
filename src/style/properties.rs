@@ -412,6 +412,10 @@ fn parse_cursor(value: &PropertyValue) -> Option<(Vec<CursorImage>, CursorKeywor
     let mut idx = 0;
     while idx < tokens.len() {
         match &tokens[idx] {
+            PropertyValue::Keyword(k) if k == "," => {
+                idx += 1;
+                continue;
+            }
             PropertyValue::Url(url) => {
                 let mut hotspot = None;
                 if idx + 2 < tokens.len() {
@@ -6297,7 +6301,10 @@ mod tests {
             &mut style,
             &Declaration {
                 property: "cursor".to_string(),
-                value: PropertyValue::Keyword("pointer".to_string()),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("pointer".to_string()),
+                    PropertyValue::Keyword(",".to_string()),
+                ]),
                 raw_value: String::new(),
                 important: false,
             },
@@ -6319,6 +6326,7 @@ mod tests {
                     PropertyValue::Url("cursor.cur".to_string()),
                     PropertyValue::Number(5.0),
                     PropertyValue::Number(7.0),
+                    PropertyValue::Keyword(",".to_string()),
                     PropertyValue::Keyword("move".to_string()),
                 ]),
                 raw_value: String::new(),
@@ -6345,6 +6353,7 @@ mod tests {
                     PropertyValue::Keyword(
                         "image-set(url(\"c1.cur\") 1x, url(\"c2.cur\") 2x)".to_string()
                     ),
+                    PropertyValue::Keyword(",".to_string()),
                     PropertyValue::Keyword("crosshair".to_string()),
                 ]),
                 raw_value: String::new(),
