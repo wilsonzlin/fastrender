@@ -16,6 +16,7 @@
 - Backdrop filters in the display-list renderer now respect border radii via a rounded mask, and drop-shadow filters render from a dedicated shadow buffer instead of cloning the whole pixmap.
 - Added display-list renderer regressions to lock filter/backdrop behavior (invert filters on content and backdrop inversion region).
 - Display list optimizer now accounts for box-shadow offsets/blur when culling, and keeps shadows that land in the viewport via offset; added optimizer regression for offset shadows.
+- Backdrop filter masking in the display-list renderer now draws the rounded mask at the backdrop's offset within the copied region so partially visible radii clip correctly when the context is clipped to the viewport.
 - Display list builder now initializes an `ImageCache` by default so replaced images decode even when callers forget to opt in; added a regression (`default_builder_decodes_images_without_explicit_cache`) that data-URL SVGs render as image items rather than placeholders.
 - Display list images now carry sampling quality; builder maps `image-rendering: pixelated/crisp-edges` to nearest-neighbor and renderer honors the quality, with a regression covering nearest vs. linear resampling.
 - Display list renderer now respects `ImageItem::src_rect`, cropping the source before scaling; regression covers sprite-like cropping to ensure sub-rectangles map to the destination instead of the full image.

@@ -227,13 +227,15 @@ fn apply_backdrop_filters(pixmap: &mut Pixmap, bounds: &Rect, filters: &[Resolve
             Some(p) => p,
             None => return,
         };
+        let local_x = bounds.x() - clamped_x as f32;
+        let local_y = bounds.y() - clamped_y as f32;
         let _ = fill_rounded_rect(
             &mut mask,
-            0.0,
-            0.0,
-            region_w as f32,
-            region_h as f32,
-            &radii.clamped(region_w as f32, region_h as f32),
+            local_x,
+            local_y,
+            bounds.width(),
+            bounds.height(),
+            &radii.clamped(bounds.width(), bounds.height()),
             Rgba::new(255, 255, 255, 1.0),
         );
         for (dst, m) in region.pixels_mut().iter_mut().zip(mask.pixels()) {
