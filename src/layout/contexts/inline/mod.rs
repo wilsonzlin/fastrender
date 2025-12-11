@@ -1307,12 +1307,8 @@ impl InlineFormattingContext {
             if matches!(base_align, TextAlign::Justify) && matches!(resolved_justify, TextJustify::None) {
                 base_align = map_text_align(TextAlign::Start, line_direction);
             }
-            let mut effective_align = resolve_text_align_for_line(
-                base_align,
-                text_align_last,
-                line_direction,
-                is_last_line,
-            );
+            let mut effective_align =
+                resolve_text_align_for_line(base_align, text_align_last, line_direction, is_last_line);
             let justify_probe_items =
                 if matches!(effective_align, TextAlign::Justify) && !matches!(resolved_justify, TextJustify::None) {
                     self.expand_items_for_justification(&line.items, resolved_justify)
@@ -5125,7 +5121,10 @@ mod tests {
         assert_eq!(fragment.children.len(), 1, "single-line paragraph expected");
         let line = fragment.children.first().unwrap();
         let first_child = line.children.first().unwrap();
-        assert!(first_child.bounds.x() < 1.0, "last-line auto should start-align even on single-line justify");
+        assert!(
+            first_child.bounds.x() < 1.0,
+            "last-line auto should start-align even on single-line justify"
+        );
         let last_child = line.children.last().unwrap();
         let right_edge = last_child.bounds.x() + last_child.bounds.width();
         assert!(

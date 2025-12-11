@@ -64,7 +64,7 @@ use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem;
 use crate::layout::engine::{LayoutConfig, LayoutEngine};
 use crate::paint::painter::paint_tree_with_resources;
-use crate::style::cascade::apply_styles;
+use crate::style::cascade::apply_styles_with_target;
 use crate::style::color::Rgba;
 use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStretch, FontStyle as DbFontStyle, ScaledMetrics};
@@ -135,12 +135,16 @@ pub struct FastRender {
 
     /// Default background color for rendering
     background_color: Rgba,
+
+    /// Base URL used for resolving links/targets
+    base_url: Option<String>,
 }
 
 impl std::fmt::Debug for FastRender {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FastRender")
             .field("background_color", &self.background_color)
+            .field("base_url", &self.base_url)
             .finish_non_exhaustive()
     }
 }
@@ -397,6 +401,7 @@ impl FastRender {
             layout_engine,
             image_cache,
             background_color: config.background_color,
+            base_url: config.base_url.clone(),
         })
     }
 
@@ -568,7 +573,8 @@ impl FastRender {
         let stylesheet = extract_css(dom)?;
 
         // Apply styles to create styled tree
-        let styled_tree = apply_styles(dom, &stylesheet);
+        let target_fragment = self.current_target_fragment();
+        let styled_tree = apply_styles_with_target(dom, &stylesheet, target_fragment.as_deref());
 
         // Generate box tree
         let mut box_tree = generate_box_tree(&styled_tree);
@@ -647,12 +653,15 @@ impl FastRender {
 
     /// Sets the base URL used to resolve relative resource references.
     pub fn set_base_url(&mut self, base_url: impl Into<String>) {
-        self.image_cache.set_base_url(base_url);
+        let base = base_url.into();
+        self.base_url = Some(base.clone());
+        self.image_cache.set_base_url(base);
     }
 
     /// Clears any configured base URL, leaving relative resources unresolved.
     pub fn clear_base_url(&mut self) {
         self.image_cache.clear_base_url();
+        self.base_url = None;
     }
 
     /// Gets the default background color
@@ -663,6 +672,11 @@ impl FastRender {
     /// Sets the default background color
     pub fn set_background_color(&mut self, color: Rgba) {
         self.background_color = color;
+    }
+
+    /// Extract the fragment identifier (without '#') from the configured base URL, if any.
+    fn current_target_fragment(&self) -> Option<String> {
+        self.base_url.as_ref().and_then(|url| extract_fragment(url))
     }
 
     /// Populate intrinsic sizes for replaced elements (e.g., images) using the image cache.
@@ -903,6 +917,17 @@ impl FastRender {
     pub fn render(&mut self, html: &str) -> Result<Vec<u8>> {
         self.render_to_png(html, 800, 600)
     }
+}
+
+fn extract_fragment(url: &str) -> Option<String> {
+    url.find('#').and_then(|idx| {
+        let frag = &url[idx + 1..];
+        if frag.is_empty() {
+            None
+        } else {
+            Some(frag.to_string())
+        }
+    })
 }
 
 #[cfg(test)]

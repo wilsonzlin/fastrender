@@ -9,7 +9,7 @@
 use crate::css::parser::{parse_declarations, parse_stylesheet};
 use crate::css::selectors::PseudoElement;
 use crate::css::types::{Declaration, StyleRule, StyleSheet};
-use crate::dom::{DomNode, ElementRef};
+use crate::dom::{with_target_fragment, DomNode, ElementRef};
 use crate::style::defaults::{get_default_styles_for_element, parse_color_attribute, parse_dimension_attribute};
 use crate::style::display::Display;
 use crate::style::grid::finalize_grid_placement;
@@ -21,6 +21,52 @@ use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
 
 /// User-agent stylesheet containing default browser styles
 const USER_AGENT_STYLESHEET: &str = include_str!("../user_agent.css");
+
+/// The origin of a style rule for cascade ordering.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum StyleOrigin {
+    UserAgent,
+    Author,
+    Inline,
+}
+
+impl StyleOrigin {
+    fn rank(self) -> u8 {
+        match self {
+            StyleOrigin::UserAgent => 0,
+            StyleOrigin::Author | StyleOrigin::Inline => 1,
+        }
+    }
+}
+
+/// A style rule annotated with its origin and document order.
+#[derive(Copy, Clone)]
+struct CascadeRule<'a> {
+    origin: StyleOrigin,
+    order: usize,
+    rule: &'a StyleRule,
+}
+
+/// A matched rule with the specificity of the selector that applied.
+struct MatchedRule {
+    origin: StyleOrigin,
+    specificity: u32,
+    order: usize,
+    declarations: Vec<Declaration>,
+}
+
+/// A single declaration annotated with cascade ordering keys.
+struct MatchedDeclaration {
+    important: bool,
+    origin: StyleOrigin,
+    specificity: u32,
+    rule_order: usize,
+    decl_order: usize,
+    declaration: Declaration,
+}
+
+const INLINE_SPECIFICITY: u32 = 1 << 30;
+const INLINE_RULE_ORDER: usize = usize::MAX / 2;
 
 /// A styled DOM node with computed CSS styles
 #[derive(Debug, Clone)]
@@ -41,9 +87,14 @@ pub struct StyledNode {
 /// This is the main entry point for CSS cascade. It uses a default
 /// desktop viewport size for media query evaluation.
 pub fn apply_styles(dom: &DomNode, stylesheet: &StyleSheet) -> StyledNode {
+    apply_styles_with_target(dom, stylesheet, None)
+}
+
+/// Apply styles with an explicit target fragment for :target matching.
+pub fn apply_styles_with_target(dom: &DomNode, stylesheet: &StyleSheet, target_fragment: Option<&str>) -> StyledNode {
     // Use default desktop viewport
     let media_ctx = MediaContext::screen(1200.0, 800.0);
-    apply_styles_with_media(dom, stylesheet, &media_ctx)
+    apply_styles_with_media_and_target(dom, stylesheet, &media_ctx, target_fragment)
 }
 
 /// Apply styles to a DOM tree with a specific media context
@@ -51,20 +102,48 @@ pub fn apply_styles(dom: &DomNode, stylesheet: &StyleSheet) -> StyledNode {
 /// This allows controlling viewport size and other media features
 /// for responsive rendering.
 pub fn apply_styles_with_media(dom: &DomNode, stylesheet: &StyleSheet, media_ctx: &MediaContext) -> StyledNode {
+    apply_styles_with_media_and_target(dom, stylesheet, media_ctx, None)
+}
+
+pub fn apply_styles_with_media_and_target(
+    dom: &DomNode,
+    stylesheet: &StyleSheet,
+    media_ctx: &MediaContext,
+    target_fragment: Option<&str>,
+) -> StyledNode {
     // Parse user-agent stylesheet
     let ua_stylesheet = parse_stylesheet(USER_AGENT_STYLESHEET).unwrap_or_else(|_| StyleSheet::new());
 
     // Collect applicable rules from both stylesheets
     // User-agent rules come first (lower priority)
-    let mut all_rules: Vec<&StyleRule> = ua_stylesheet.collect_style_rules(media_ctx);
-    all_rules.extend(stylesheet.collect_style_rules(media_ctx));
+    let ua_rules = ua_stylesheet.collect_style_rules(media_ctx);
+    let author_rules = stylesheet.collect_style_rules(media_ctx);
 
-    apply_styles_internal(dom, &all_rules, &ComputedStyle::default(), 16.0)
+    let mut all_rules: Vec<CascadeRule<'_>> = Vec::with_capacity(ua_rules.len() + author_rules.len());
+    for (order, rule) in ua_rules.iter().enumerate() {
+        all_rules.push(CascadeRule {
+            origin: StyleOrigin::UserAgent,
+            order,
+            rule,
+        });
+    }
+    let offset = all_rules.len();
+    for (idx, rule) in author_rules.iter().enumerate() {
+        all_rules.push(CascadeRule {
+            origin: StyleOrigin::Author,
+            order: offset + idx,
+            rule,
+        });
+    }
+
+    with_target_fragment(target_fragment, || {
+        apply_styles_internal(dom, &all_rules, &ComputedStyle::default(), 16.0)
+    })
 }
 
 fn apply_styles_internal(
     node: &DomNode,
-    rules: &[&StyleRule],
+    rules: &[CascadeRule<'_>],
     parent_styles: &ComputedStyle,
     root_font_size: f32,
 ) -> StyledNode {
@@ -73,22 +152,18 @@ fn apply_styles_internal(
     // Inherit styles from parent
     inherit_styles(&mut styles, parent_styles);
 
-    // Apply matching CSS rules
+    // Apply matching CSS rules and inline styles with full cascade ordering
     let ancestors: Vec<&DomNode> = vec![];
     let matching_rules = find_matching_rules(node, rules, &ancestors);
-    for (_specificity, declarations) in matching_rules {
-        for decl in declarations {
-            apply_declaration(&mut styles, &decl, parent_styles.font_size, root_font_size);
-        }
-    }
-
-    // Apply inline styles (highest specificity)
-    if let Some(style_attr) = node.get_attribute("style") {
-        let inline_decls = parse_declarations(&style_attr);
-        for decl in inline_decls {
-            apply_declaration(&mut styles, &decl, parent_styles.font_size, root_font_size);
-        }
-    }
+    let inline_decls = node.get_attribute("style").as_deref().map(parse_declarations);
+    apply_cascaded_declarations(
+        &mut styles,
+        matching_rules,
+        inline_decls,
+        parent_styles.font_size,
+        root_font_size,
+        |_| true,
+    );
 
     // Apply language from attributes (inherits by default)
     if let Some(lang) = node
@@ -153,7 +228,7 @@ fn apply_styles_internal(
 
 fn apply_styles_internal_with_ancestors(
     node: &DomNode,
-    rules: &[&StyleRule],
+    rules: &[CascadeRule<'_>],
     parent_styles: &ComputedStyle,
     root_font_size: f32,
     ancestors: &[&DomNode],
@@ -163,21 +238,17 @@ fn apply_styles_internal_with_ancestors(
     // Inherit styles from parent
     inherit_styles(&mut styles, parent_styles);
 
-    // Apply matching CSS rules
+    // Apply matching CSS rules and inline styles with full cascade ordering
     let matching_rules = find_matching_rules(node, rules, ancestors);
-    for (_specificity, declarations) in matching_rules {
-        for decl in declarations {
-            apply_declaration(&mut styles, &decl, parent_styles.font_size, root_font_size);
-        }
-    }
-
-    // Apply inline styles (highest specificity)
-    if let Some(style_attr) = node.get_attribute("style") {
-        let inline_decls = parse_declarations(&style_attr);
-        for decl in inline_decls {
-            apply_declaration(&mut styles, &decl, parent_styles.font_size, root_font_size);
-        }
-    }
+    let inline_decls = node.get_attribute("style").as_deref().map(parse_declarations);
+    apply_cascaded_declarations(
+        &mut styles,
+        matching_rules,
+        inline_decls,
+        parent_styles.font_size,
+        root_font_size,
+        |_| true,
+    );
 
     // Parse legacy HTML presentation attributes (bgcolor, width, height, etc.)
     if let Some(bgcolor) = node.get_attribute("bgcolor") {
@@ -429,6 +500,54 @@ mod tests {
         };
         let styled = apply_styles(&parent, &StyleSheet::new());
         styled.children.first().expect("child").styles.font_weight.to_u16()
+    }
+
+    fn element_with_id_and_class(id: &str, class: &str, style: Option<&str>) -> DomNode {
+        let mut attributes = vec![
+            ("id".to_string(), id.to_string()),
+            ("class".to_string(), class.to_string()),
+        ];
+        if let Some(style) = style {
+            attributes.push(("style".to_string(), style.to_string()));
+        }
+        DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes,
+            },
+            children: vec![],
+        }
+    }
+
+    #[test]
+    fn important_overrides_more_specific_normal_declarations() {
+        let dom = element_with_id_and_class("target", "item", None);
+        let stylesheet = parse_stylesheet(
+            r#"
+            #target { color: red; }
+            .item { color: blue !important; }
+        "#,
+        )
+        .unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        assert_eq!(styled.styles.color, Rgba::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn author_important_beats_inline_normal() {
+        let dom = element_with_id_and_class("target", "item", Some("color: green;"));
+        let stylesheet = parse_stylesheet(".item { color: red !important; }").unwrap();
+        let styled = apply_styles(&dom, &stylesheet);
+        assert_eq!(styled.styles.color, Rgba::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn inline_important_outranks_author_important_through_specificity() {
+        let dom = element_with_id_and_class("target", "item", Some("color: green !important;"));
+        let stylesheet = parse_stylesheet(".item { color: blue !important; }").unwrap();
+        let styled = apply_styles(&dom, &stylesheet);
+        assert_eq!(styled.styles.color, Rgba::rgb(0, 128, 0));
     }
 
     #[test]
@@ -752,7 +871,10 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
-                attributes: vec![("style".to_string(), "direction: rtl; text-align-last: start;".to_string())],
+                attributes: vec![(
+                    "style".to_string(),
+                    "direction: rtl; text-align-last: start;".to_string(),
+                )],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
@@ -776,7 +898,10 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
-                attributes: vec![("style".to_string(), "direction: rtl; text-align-last: start;".to_string())],
+                attributes: vec![(
+                    "style".to_string(),
+                    "direction: rtl; text-align-last: start;".to_string(),
+                )],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
@@ -789,10 +914,7 @@ mod tests {
 
         let styled = apply_styles(&parent, &StyleSheet::new());
         let child = styled.children.first().expect("child");
-        assert!(matches!(
-            child.styles.text_align,
-            crate::style::types::TextAlign::Right
-        ));
+        assert!(matches!(child.styles.text_align, crate::style::types::TextAlign::Right));
         assert!(matches!(
             child.styles.text_align_last,
             crate::style::types::TextAlignLast::Right
@@ -1011,7 +1133,16 @@ mod tests {
         .unwrap();
 
         let media_ctx = MediaContext::screen(1200.0, 800.0);
-        let rule_refs: Vec<&StyleRule> = stylesheet.collect_style_rules(&media_ctx);
+        let rule_refs: Vec<CascadeRule<'_>> = stylesheet
+            .collect_style_rules(&media_ctx)
+            .into_iter()
+            .enumerate()
+            .map(|(order, rule)| CascadeRule {
+                origin: StyleOrigin::Author,
+                order,
+                rule,
+            })
+            .collect();
         assert_eq!(rule_refs.len(), 1, "should collect the authored li::marker rule");
         let ancestors: Vec<&DomNode> = vec![&dom]; // ul ancestor for the li
         let element_ref = build_element_ref_chain(&dom.children[0], &ancestors);
@@ -1024,7 +1155,7 @@ mod tests {
             selectors::matching::NeedsSelectorFlags::No,
             selectors::matching::MatchingForInvalidation::No,
         );
-        let selector = rule_refs[0].selectors.slice().first().expect("selector in rule");
+        let selector = rule_refs[0].rule.selectors.slice().first().expect("selector in rule");
         assert!(
             matches_selector(selector, 0, None, &element_ref, &mut context),
             "selector should match the originating element"
@@ -1283,7 +1414,11 @@ mod tests {
     }
 }
 
-fn find_matching_rules(node: &DomNode, rules: &[&StyleRule], ancestors: &[&DomNode]) -> Vec<(u32, Vec<Declaration>)> {
+fn find_matching_rules(
+    node: &DomNode,
+    rules: &[CascadeRule<'_>],
+    ancestors: &[&DomNode],
+) -> Vec<MatchedRule> {
     let mut matches = Vec::new();
 
     // Build ElementRef chain with proper parent links
@@ -1300,12 +1435,12 @@ fn find_matching_rules(node: &DomNode, rules: &[&StyleRule], ancestors: &[&DomNo
         selectors::matching::MatchingForInvalidation::No,
     );
 
-    for rule in rules {
+    for rule in rules.iter() {
         // Check if any selector in the list matches
         let mut matched = false;
         let mut max_specificity = 0u32;
 
-        for selector in rule.selectors.slice().iter() {
+        for selector in rule.rule.selectors.slice().iter() {
             // Skip selectors with pseudo-elements (handled separately)
             if selector.pseudo_element().is_some() {
                 continue;
@@ -1320,12 +1455,17 @@ fn find_matching_rules(node: &DomNode, rules: &[&StyleRule], ancestors: &[&DomNo
         }
 
         if matched {
-            matches.push((max_specificity, rule.declarations.clone()));
+            matches.push(MatchedRule {
+                origin: rule.origin,
+                specificity: max_specificity,
+                order: rule.order,
+                declarations: rule.rule.declarations.clone(),
+            });
         }
     }
 
-    // Sort by specificity (lower specificity first, so later rules override)
-    matches.sort_by_key(|(spec, _)| *spec);
+    // Sort by specificity (lower specificity first, so later rules override), then document order.
+    matches.sort_by(|a, b| a.specificity.cmp(&b.specificity).then(a.order.cmp(&b.order)));
 
     matches
 }
@@ -1333,10 +1473,10 @@ fn find_matching_rules(node: &DomNode, rules: &[&StyleRule], ancestors: &[&DomNo
 /// Find rules that match an element with a specific pseudo-element
 fn find_pseudo_element_rules(
     node: &DomNode,
-    rules: &[&StyleRule],
+    rules: &[CascadeRule<'_>],
     ancestors: &[&DomNode],
     pseudo: &PseudoElement,
-) -> Vec<(u32, Vec<Declaration>)> {
+) -> Vec<MatchedRule> {
     let mut matches = Vec::new();
 
     // Build ElementRef chain with proper parent links
@@ -1353,11 +1493,11 @@ fn find_pseudo_element_rules(
         selectors::matching::MatchingForInvalidation::No,
     );
 
-    for rule in rules {
+    for rule in rules.iter() {
         let mut matched = false;
         let mut max_specificity = 0u32;
 
-        for selector in rule.selectors.slice().iter() {
+        for selector in rule.rule.selectors.slice().iter() {
             // Only consider selectors with the matching pseudo-element
             if let Some(selector_pseudo) = selector.pseudo_element() {
                 if selector_pseudo == pseudo {
@@ -1374,14 +1514,72 @@ fn find_pseudo_element_rules(
         }
 
         if matched {
-            matches.push((max_specificity, rule.declarations.clone()));
+            matches.push(MatchedRule {
+                origin: rule.origin,
+                specificity: max_specificity,
+                order: rule.order,
+                declarations: rule.rule.declarations.clone(),
+            });
         }
     }
 
-    // Sort by specificity
-    matches.sort_by_key(|(spec, _)| *spec);
+    matches.sort_by(|a, b| a.specificity.cmp(&b.specificity).then(a.order.cmp(&b.order)));
 
     matches
+}
+
+fn apply_cascaded_declarations<F>(
+    styles: &mut ComputedStyle,
+    matched_rules: Vec<MatchedRule>,
+    inline_declarations: Option<Vec<Declaration>>,
+    parent_font_size: f32,
+    root_font_size: f32,
+    filter: F,
+) where
+    F: Fn(&Declaration) -> bool,
+{
+    let mut flattened: Vec<MatchedDeclaration> = Vec::new();
+
+    for rule in matched_rules {
+        for (decl_order, declaration) in rule.declarations.into_iter().enumerate() {
+            flattened.push(MatchedDeclaration {
+                important: declaration.important,
+                origin: rule.origin,
+                specificity: rule.specificity,
+                rule_order: rule.order,
+                decl_order,
+                declaration,
+            });
+        }
+    }
+
+    if let Some(inline) = inline_declarations {
+        for (decl_order, declaration) in inline.into_iter().enumerate() {
+            flattened.push(MatchedDeclaration {
+                important: declaration.important,
+                origin: StyleOrigin::Inline,
+                specificity: INLINE_SPECIFICITY,
+                rule_order: INLINE_RULE_ORDER,
+                decl_order,
+                declaration,
+            });
+        }
+    }
+
+    flattened.sort_by(|a, b| {
+        a.important
+            .cmp(&b.important)
+            .then(a.origin.rank().cmp(&b.origin.rank()))
+            .then(a.specificity.cmp(&b.specificity))
+            .then(a.rule_order.cmp(&b.rule_order))
+            .then(a.decl_order.cmp(&b.decl_order))
+    });
+
+    for entry in flattened {
+        if filter(&entry.declaration) {
+            apply_declaration(styles, &entry.declaration, parent_font_size, root_font_size);
+        }
+    }
 }
 
 fn resolve_relative_font_weight(styles: &mut ComputedStyle, parent: &ComputedStyle) {
@@ -1422,7 +1620,7 @@ fn build_element_ref_chain<'a>(node: &'a DomNode, ancestors: &'a [&'a DomNode]) 
 /// (i.e., has content property set to something other than 'none' or 'normal')
 fn compute_pseudo_element_styles(
     node: &DomNode,
-    rules: &[&StyleRule],
+    rules: &[CascadeRule<'_>],
     ancestors: &[&DomNode],
     parent_styles: &ComputedStyle,
     root_font_size: f32,
@@ -1443,11 +1641,14 @@ fn compute_pseudo_element_styles(
     inherit_styles(&mut styles, parent_styles);
 
     // Apply matching declarations
-    for (_specificity, declarations) in matching_rules {
-        for decl in declarations {
-            apply_declaration(&mut styles, &decl, parent_styles.font_size, root_font_size);
-        }
-    }
+    apply_cascaded_declarations(
+        &mut styles,
+        matching_rules,
+        None,
+        parent_styles.font_size,
+        root_font_size,
+        |_| true,
+    );
     resolve_match_parent_text_align(&mut styles, parent_styles, false);
     resolve_match_parent_text_align_last(&mut styles, parent_styles, false);
     resolve_relative_font_weight(&mut styles, parent_styles);
@@ -1464,7 +1665,7 @@ fn compute_pseudo_element_styles(
 
 fn compute_marker_styles(
     node: &DomNode,
-    rules: &[&StyleRule],
+    rules: &[CascadeRule<'_>],
     ancestors: &[&DomNode],
     list_item_styles: &ComputedStyle,
     root_font_size: f32,
@@ -1485,13 +1686,14 @@ fn compute_marker_styles(
     styles.white_space = crate::style::types::WhiteSpace::Pre;
     styles.text_transform = crate::style::types::TextTransform::none();
 
-    for (_specificity, declarations) in matching_rules {
-        for decl in declarations {
-            if marker_allows_property(&decl.property) {
-                apply_declaration(&mut styles, &decl, list_item_styles.font_size, root_font_size);
-            }
-        }
-    }
+    apply_cascaded_declarations(
+        &mut styles,
+        matching_rules,
+        None,
+        list_item_styles.font_size,
+        root_font_size,
+        |decl| marker_allows_property(&decl.property),
+    );
     resolve_match_parent_text_align(&mut styles, list_item_styles, false);
     resolve_match_parent_text_align_last(&mut styles, list_item_styles, false);
     resolve_relative_font_weight(&mut styles, list_item_styles);

@@ -27,7 +27,9 @@
 //! ```
 
 use crate::geometry::Rect;
-use crate::paint::display_list::{BlendMode, DisplayItem, DisplayList, FillRectItem, ResolvedFilter, StackingContextItem};
+use crate::paint::display_list::{
+    BlendMode, DisplayItem, DisplayList, FillRectItem, ResolvedFilter, StackingContextItem,
+};
 
 // ============================================================================
 // Optimization Configuration
@@ -353,9 +355,8 @@ impl DisplayListOptimizer {
                     }
                 }
                 DisplayItem::PushClip(clip) => {
-                    let can_cull = !viewport.intersects(clip.rect)
-                        && active_effect_contexts == 0
-                        && active_transform_depth == 0;
+                    let can_cull =
+                        !viewport.intersects(clip.rect) && active_effect_contexts == 0 && active_transform_depth == 0;
                     clip_stack.push(ClipRecord {
                         start_index: result.len(),
                         can_cull,
@@ -547,12 +548,7 @@ impl DisplayListOptimizer {
                 }
             }
             DisplayItem::Border(b) => {
-                let max_w = b
-                    .top
-                    .width
-                    .max(b.right.width)
-                    .max(b.bottom.width)
-                    .max(b.left.width);
+                let max_w = b.top.width.max(b.right.width).max(b.bottom.width).max(b.left.width);
                 Some(b.rect.inflate(max_w * 0.5))
             }
             DisplayItem::LinearGradient(i) => Some(i.rect),

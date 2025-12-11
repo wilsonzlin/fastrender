@@ -370,8 +370,9 @@ fn apply_color_filter(pixmap: &mut Pixmap, f: impl Fn((u8, u8, u8), f32) -> ((u8
         let (c, a2) = f((pixel.red(), pixel.green(), pixel.blue()), a);
         let final_a = (a2 * 255.0).round().clamp(0.0, 255.0) as u8;
         let premultiply = |v: u8| ((v as f32 * a2).round().clamp(0.0, 255.0)) as u8;
-        *pixel = tiny_skia::PremultipliedColorU8::from_rgba(premultiply(c.0), premultiply(c.1), premultiply(c.2), final_a)
-            .unwrap_or(tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap());
+        *pixel =
+            tiny_skia::PremultipliedColorU8::from_rgba(premultiply(c.0), premultiply(c.1), premultiply(c.2), final_a)
+                .unwrap_or(tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap());
     }
 }
 
@@ -387,16 +388,32 @@ fn apply_contrast((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
 }
 
 fn grayscale((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
-    let gray = (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32).round().clamp(0.0, 255.0) as u8;
-    let mix = |v: u8| ((v as f32 * (1.0 - amount) + gray as f32 * amount).round().clamp(0.0, 255.0)) as u8;
+    let gray = (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32)
+        .round()
+        .clamp(0.0, 255.0) as u8;
+    let mix = |v: u8| {
+        ((v as f32 * (1.0 - amount) + gray as f32 * amount)
+            .round()
+            .clamp(0.0, 255.0)) as u8
+    };
     (mix(r), mix(g), mix(b))
 }
 
 fn sepia((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
-    let tr = (0.393 * r as f32 + 0.769 * g as f32 + 0.189 * b as f32).round().clamp(0.0, 255.0);
-    let tg = (0.349 * r as f32 + 0.686 * g as f32 + 0.168 * b as f32).round().clamp(0.0, 255.0);
-    let tb = (0.272 * r as f32 + 0.534 * g as f32 + 0.131 * b as f32).round().clamp(0.0, 255.0);
-    let mix = |orig: u8, target: f32| ((orig as f32 * (1.0 - amount) + target * amount).round().clamp(0.0, 255.0)) as u8;
+    let tr = (0.393 * r as f32 + 0.769 * g as f32 + 0.189 * b as f32)
+        .round()
+        .clamp(0.0, 255.0);
+    let tg = (0.349 * r as f32 + 0.686 * g as f32 + 0.168 * b as f32)
+        .round()
+        .clamp(0.0, 255.0);
+    let tb = (0.272 * r as f32 + 0.534 * g as f32 + 0.131 * b as f32)
+        .round()
+        .clamp(0.0, 255.0);
+    let mix = |orig: u8, target: f32| {
+        ((orig as f32 * (1.0 - amount) + target * amount)
+            .round()
+            .clamp(0.0, 255.0)) as u8
+    };
     (mix(r, tr), mix(g, tg), mix(b, tb))
 }
 
@@ -427,7 +444,11 @@ fn hue_rotate((r, g, b): (u8, u8, u8), degrees: f32) -> (u8, u8, u8) {
 }
 
 fn invert((r, g, b): (u8, u8, u8), amount: f32) -> (u8, u8, u8) {
-    let inv = |v: u8| ((255.0 - v as f32) * amount + v as f32 * (1.0 - amount)).round().clamp(0.0, 255.0) as u8;
+    let inv = |v: u8| {
+        ((255.0 - v as f32) * amount + v as f32 * (1.0 - amount))
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
     (inv(r), inv(g), inv(b))
 }
 
@@ -576,7 +597,18 @@ impl DisplayListRenderer {
         ];
 
         for (edge, side, (x1, y1), (x2, y2)) in edges {
-            self.render_border_edge(edge, x1, y1, x2, y2, side, blend_mode, opacity, clip.as_ref(), transform);
+            self.render_border_edge(
+                edge,
+                x1,
+                y1,
+                x2,
+                y2,
+                side,
+                blend_mode,
+                opacity,
+                clip.as_ref(),
+                transform,
+            );
         }
 
         if pushed_clip {
@@ -779,7 +811,12 @@ impl DisplayListRenderer {
             DisplayItem::BoxShadow(item) => self.render_box_shadow(item),
             DisplayItem::PushStackingContext(item) => {
                 if !item.backdrop_filters.is_empty() {
-                    apply_backdrop_filters(self.canvas.pixmap_mut(), &item.bounds, &item.backdrop_filters, item.radii);
+                    apply_backdrop_filters(
+                        self.canvas.pixmap_mut(),
+                        &item.bounds,
+                        &item.backdrop_filters,
+                        item.radii,
+                    );
                 }
 
                 let needs_layer = item.is_isolated

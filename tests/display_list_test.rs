@@ -3,7 +3,9 @@
 //! These tests verify the display list types work correctly for the paint system.
 //! Unit tests are in the display_list module itself; these are integration tests.
 
+use fastrender::css::types::{BoxShadow, ColorStop};
 use fastrender::geometry::{Point, Rect};
+use fastrender::style::types::{BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle};
 use fastrender::Rgba;
 use fastrender::{
     BlendMode, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FillRoundedRectItem,
@@ -11,8 +13,6 @@ use fastrender::{
     OpacityItem, PaintTextItem as TextItem, RadialGradientItem, StrokeRectItem, StrokeRoundedRectItem, Transform2D,
     TransformItem,
 };
-use fastrender::css::types::{BoxShadow, ColorStop};
-use fastrender::style::types::{BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle};
 use std::sync::Arc;
 
 // ============================================================================
@@ -92,10 +92,10 @@ fn fragment_uniform_border_emits_stroke() {
         fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
 
     let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
-    assert!(list
-        .items()
-        .iter()
-        .any(|i| matches!(i, DisplayItem::StrokeRect(_) | DisplayItem::StrokeRoundedRect(_) | DisplayItem::Border(_))));
+    assert!(list.items().iter().any(|i| matches!(
+        i,
+        DisplayItem::StrokeRect(_) | DisplayItem::StrokeRoundedRect(_) | DisplayItem::Border(_)
+    )));
 }
 
 #[test]
@@ -118,13 +118,10 @@ fn fragment_mixed_borders_emit_border_item() {
         fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
 
     let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
-    let border = list.items().iter().find_map(|i| {
-        if let DisplayItem::Border(b) = i {
-            Some(b)
-        } else {
-            None
-        }
-    });
+    let border = list
+        .items()
+        .iter()
+        .find_map(|i| if let DisplayItem::Border(b) = i { Some(b) } else { None });
 
     let border = border.expect("expected border item");
     assert_eq!(border.top.style, BorderStyle::Dotted);
@@ -161,10 +158,7 @@ fn fragment_background_gradient_emits_linear_gradient() {
         fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 30.0, 10.0), vec![], Arc::new(style));
 
     let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
-    assert!(list
-        .items()
-        .iter()
-        .any(|i| matches!(i, DisplayItem::LinearGradient(_))));
+    assert!(list.items().iter().any(|i| matches!(i, DisplayItem::LinearGradient(_))));
 }
 
 #[test]

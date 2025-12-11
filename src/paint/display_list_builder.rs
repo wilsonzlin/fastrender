@@ -1033,10 +1033,7 @@ impl DisplayListBuilder {
             BackgroundBox::PaddingBox => rects.padding,
             BackgroundBox::ContentBox => rects.content,
         };
-        if style.background_color.alpha_u8() > 0
-            && color_clip_rect.width() > 0.0
-            && color_clip_rect.height() > 0.0
-        {
+        if style.background_color.alpha_u8() > 0 && color_clip_rect.width() > 0.0 && color_clip_rect.height() > 0.0 {
             let radii = Self::resolve_clip_radii(style, &rects, color_layer.clip);
             if radii.is_zero() {
                 self.emit_background(color_clip_rect, style.background_color);
@@ -1098,7 +1095,11 @@ impl DisplayListBuilder {
             }
         };
 
-        if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 || origin_rect.width() <= 0.0 || origin_rect.height() <= 0.0 {
+        if clip_rect.width() <= 0.0
+            || clip_rect.height() <= 0.0
+            || origin_rect.width() <= 0.0
+            || origin_rect.height() <= 0.0
+        {
             return;
         }
 
@@ -1160,7 +1161,7 @@ impl DisplayListBuilder {
                     let cy = origin_rect.y() + origin_rect.height() / 2.0;
                     let radius = ((origin_rect.width() * origin_rect.width()
                         + origin_rect.height() * origin_rect.height())
-                        .sqrt())
+                    .sqrt())
                         / 2.0;
                     let center = Point::new(cx - clip_rect.x(), cy - clip_rect.y());
                     self.list.push(DisplayItem::RadialGradient(RadialGradientItem {
@@ -1179,7 +1180,7 @@ impl DisplayListBuilder {
                     let cy = origin_rect.y() + origin_rect.height() / 2.0;
                     let radius = ((origin_rect.width() * origin_rect.width()
                         + origin_rect.height() * origin_rect.height())
-                        .sqrt())
+                    .sqrt())
                         / 2.0;
                     let center = Point::new(cx - clip_rect.x(), cy - clip_rect.y());
                     self.list.push(DisplayItem::RadialGradient(RadialGradientItem {
@@ -1218,10 +1219,7 @@ impl DisplayListBuilder {
                         if rounded_x ^ rounded_y
                             && matches!(
                                 layer.size,
-                                BackgroundSize::Explicit(
-                                    BackgroundSizeComponent::Auto,
-                                    BackgroundSizeComponent::Auto
-                                )
+                                BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
                             )
                         {
                             let aspect = if img_h != 0.0 { img_w / img_h } else { 1.0 };
@@ -1329,8 +1327,7 @@ impl DisplayListBuilder {
             let offset_x = Self::resolve_length_for_paint(&shadow.offset_x, style.font_size, rect.width());
             let offset_y = Self::resolve_length_for_paint(&shadow.offset_y, style.font_size, rect.width());
             let blur = Self::resolve_length_for_paint(&shadow.blur_radius, style.font_size, rect.width()).max(0.0);
-            let spread =
-                Self::resolve_length_for_paint(&shadow.spread_radius, style.font_size, rect.width()).max(-1e6);
+            let spread = Self::resolve_length_for_paint(&shadow.spread_radius, style.font_size, rect.width()).max(-1e6);
 
             self.list.push(DisplayItem::BoxShadow(BoxShadowItem {
                 rect: base_rect,

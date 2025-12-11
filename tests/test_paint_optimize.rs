@@ -4,8 +4,8 @@
 //! in various scenarios including edge cases.
 
 use fastrender::geometry::{Point, Rect};
-use fastrender::Rgba;
 use fastrender::paint::display_list::ResolvedFilter;
+use fastrender::Rgba;
 use fastrender::{
     BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, DisplayListOptimizer,
     FillRectItem, FillRoundedRectItem, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem,

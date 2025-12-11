@@ -1,4 +1,4 @@
-use crate::css::selectors::{FastRenderSelectorImpl, PseudoClass, PseudoElement};
+use crate::css::selectors::{FastRenderSelectorImpl, PseudoClass, PseudoElement, TextDirection};
 use crate::css::types::CssString;
 use crate::error::{Error, ParseError, Result};
 use html5ever::parse_document;
@@ -8,7 +8,9 @@ use selectors::{
     attr::{AttrSelectorOperation, CaseSensitivity},
     Element, OpaqueElement,
 };
+use std::cell::RefCell;
 use std::ptr;
+use std::thread_local;
 
 #[derive(Debug, Clone)]
 pub struct DomNode {
@@ -26,6 +28,26 @@ pub enum DomNodeType {
     Text {
         content: String,
     },
+}
+
+thread_local! {
+    static TARGET_FRAGMENT: RefCell<Option<String>> = RefCell::new(None);
+}
+
+pub(crate) fn with_target_fragment<R, F: FnOnce() -> R>(target: Option<&str>, f: F) -> R {
+    TARGET_FRAGMENT.with(|slot| {
+        let previous = slot.borrow_mut().take();
+        if let Some(t) = target {
+            *slot.borrow_mut() = Some(t.trim_start_matches('#').to_string());
+        }
+        let result = f();
+        *slot.borrow_mut() = previous;
+        result
+    })
+}
+
+fn current_target_fragment() -> Option<String> {
+    TARGET_FRAGMENT.with(|slot| slot.borrow().clone())
 }
 
 pub fn parse_html(html: &str) -> Result<DomNode> {
@@ -183,6 +205,108 @@ impl<'a> ElementRef<'a> {
         let siblings = self.sibling_elements();
         siblings.iter().position(|&sibling| ptr::eq(sibling, self.node))
     }
+
+    /// Position (index, total) among siblings filtered by a predicate.
+    fn position_in_siblings<F>(&self, predicate: F) -> Option<(usize, usize)>
+    where
+        F: Fn(&DomNode) -> bool,
+    {
+        let siblings: Vec<_> = self.sibling_elements().into_iter().filter(|s| predicate(s)).collect();
+        let index = siblings.iter().position(|&sibling| ptr::eq(sibling, self.node))?;
+        Some((index, siblings.len()))
+    }
+
+    /// Position among siblings of the same element type (case-insensitive).
+    fn position_in_type(&self) -> Option<(usize, usize)> {
+        let tag = self.node.tag_name()?;
+        self.position_in_siblings(|sibling| {
+            sibling
+                .tag_name()
+                .map(|name| name.eq_ignore_ascii_case(tag))
+                .unwrap_or(false)
+        })
+    }
+
+    /// Return the language of this element, inherited from ancestors if absent.
+    fn language(&self) -> Option<String> {
+        // Walk from self up through ancestors (closest first) for lang/xml:lang
+        if let Some(lang) = self.lang_attribute(self.node) {
+            return Some(lang);
+        }
+
+        for ancestor in self.all_ancestors.iter().rev() {
+            if let Some(lang) = self.lang_attribute(ancestor) {
+                return Some(lang);
+            }
+        }
+        None
+    }
+
+    fn lang_attribute(&self, node: &DomNode) -> Option<String> {
+        node.get_attribute("lang")
+            .or_else(|| node.get_attribute("xml:lang"))
+            .map(|l| l.to_ascii_lowercase())
+    }
+
+    /// Direction from dir/xml:dir attributes, inherited; defaults to LTR when none found.
+    fn direction(&self) -> TextDirection {
+        if let Some(dir) = self.dir_attribute(self.node) {
+            return dir;
+        }
+        for ancestor in self.all_ancestors.iter().rev() {
+            if let Some(dir) = self.dir_attribute(ancestor) {
+                return dir;
+            }
+        }
+        TextDirection::Ltr
+    }
+
+    fn dir_attribute(&self, node: &DomNode) -> Option<TextDirection> {
+        node.get_attribute("dir")
+            .or_else(|| node.get_attribute("xml:dir"))
+            .and_then(|d| match d.to_ascii_lowercase().as_str() {
+                "ltr" => Some(TextDirection::Ltr),
+                "rtl" => Some(TextDirection::Rtl),
+                _ => None, // ignore 'auto' or invalid per Selectors Level 4 definition
+            })
+    }
+
+    fn is_target(&self) -> bool {
+        let Some(target) = current_target_fragment() else {
+            return false;
+        };
+        if self.node.get_attribute("id").as_deref() == Some(target.as_str()) {
+            return true;
+        }
+        if let Some(tag) = self.node.tag_name() {
+            if matches!(tag.to_ascii_lowercase().as_str(), "a" | "area") {
+                if self.node.get_attribute("name").as_deref() == Some(target.as_str()) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
+fn matches_an_plus_b(a: i32, b: i32, position: i32) -> bool {
+    if a == 0 {
+        position == b
+    } else {
+        let diff = position - b;
+        diff % a == 0 && diff / a >= 0
+    }
+}
+
+fn lang_matches(range: &str, lang: &str) -> bool {
+    if range == "*" {
+        return true;
+    }
+    if range.eq_ignore_ascii_case(lang) {
+        return true;
+    }
+    // Prefix match with boundary
+    lang.starts_with(range) && lang.as_bytes().get(range.len()) == Some(&b'-')
 }
 
 impl<'a> Element for ElementRef<'a> {
@@ -318,36 +442,51 @@ impl<'a> Element for ElementRef<'a> {
                 self.element_index() == Some(siblings.len().saturating_sub(1))
             }
             PseudoClass::OnlyChild => self.sibling_elements().len() == 1,
-            PseudoClass::NthChild(a, b) => {
-                // nth-child formula: an + b
-                // Index is 1-based in CSS
-                if let Some(index) = self.element_index() {
-                    let n = (index + 1) as i32;
-                    if *a == 0 {
-                        n == *b
-                    } else {
-                        (n - b) % a == 0 && (n - b) / a >= 0
-                    }
-                } else {
-                    false
-                }
-            }
+            PseudoClass::NthChild(a, b) => self
+                .element_index()
+                .map(|index| matches_an_plus_b(*a, *b, (index + 1) as i32))
+                .unwrap_or(false),
             PseudoClass::NthLastChild(a, b) => {
                 let siblings = self.sibling_elements();
-                if let Some(index) = self.element_index() {
-                    let n = (siblings.len() - index) as i32;
-                    if *a == 0 {
-                        n == *b
-                    } else {
-                        (n - b) % a == 0 && (n - b) / a >= 0
-                    }
+                self.element_index()
+                    .map(|index| {
+                        let n = (siblings.len() - index) as i32;
+                        matches_an_plus_b(*a, *b, n)
+                    })
+                    .unwrap_or(false)
+            }
+            PseudoClass::FirstOfType => self.position_in_type().map(|(index, _)| index == 0).unwrap_or(false),
+            PseudoClass::LastOfType => self
+                .position_in_type()
+                .map(|(index, len)| index == len.saturating_sub(1))
+                .unwrap_or(false),
+            PseudoClass::OnlyOfType => self.position_in_type().map(|(_, len)| len == 1).unwrap_or(false),
+            PseudoClass::NthOfType(a, b) => self
+                .position_in_type()
+                .map(|(index, _)| matches_an_plus_b(*a, *b, (index + 1) as i32))
+                .unwrap_or(false),
+            PseudoClass::NthLastOfType(a, b) => self
+                .position_in_type()
+                .map(|(index, len)| {
+                    let n = (len - index) as i32;
+                    matches_an_plus_b(*a, *b, n)
+                })
+                .unwrap_or(false),
+            PseudoClass::Lang(langs) => {
+                if let Some(lang) = self.language() {
+                    langs.iter().any(|range| lang_matches(range, &lang))
                 } else {
                     false
                 }
             }
+            PseudoClass::Dir(dir) => self.direction() == *dir,
+            PseudoClass::AnyLink => self.is_link(),
+            PseudoClass::Target => self.is_target(),
+            PseudoClass::Scope => self.all_ancestors.is_empty(),
+            PseudoClass::Empty => self.is_empty(),
             // Interactive pseudo-classes (not supported in static rendering)
             PseudoClass::Hover | PseudoClass::Active | PseudoClass::Focus => false,
-            PseudoClass::Link => matches!(self.node.tag_name(), Some("a")) && self.node.get_attribute("href").is_some(),
+            PseudoClass::Link => self.is_link(),
             PseudoClass::Visited => false, // Can't determine visited state
         }
     }
@@ -361,7 +500,11 @@ impl<'a> Element for ElementRef<'a> {
     }
 
     fn is_link(&self) -> bool {
-        matches!(self.node.tag_name(), Some("a")) && self.node.get_attribute("href").is_some()
+        let Some(tag) = self.node.tag_name() else {
+            return false;
+        };
+        let has_href = self.node.get_attribute("href").is_some();
+        has_href && matches!(tag.to_ascii_lowercase().as_str(), "a" | "area" | "link")
     }
 
     fn is_html_slot_element(&self) -> bool {
@@ -388,7 +531,7 @@ impl<'a> Element for ElementRef<'a> {
         self.node
             .children
             .iter()
-            .all(|child| child.is_text() && child.text_content().map(|t| t.trim().is_empty()).unwrap_or(true))
+            .all(|child| !child.is_element() && !child.is_text())
     }
 
     fn is_root(&self) -> bool {
@@ -415,5 +558,219 @@ impl<'a> Element for ElementRef<'a> {
     ) -> bool {
         // We don't use bloom filters for optimization
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use selectors::matching::{
+        MatchingContext, MatchingForInvalidation, MatchingMode, NeedsSelectorFlags, QuirksMode, SelectorCaches,
+    };
+
+    fn element(tag: &str, children: Vec<DomNode>) -> DomNode {
+        DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: tag.to_string(),
+                attributes: vec![],
+            },
+            children,
+        }
+    }
+
+    fn text(content: &str) -> DomNode {
+        DomNode {
+            node_type: DomNodeType::Text {
+                content: content.to_string(),
+            },
+            children: vec![],
+        }
+    }
+
+    fn matches(node: &DomNode, ancestors: &[&DomNode], pseudo: &PseudoClass) -> bool {
+        let mut caches = SelectorCaches::default();
+        let mut context = MatchingContext::new(
+            MatchingMode::Normal,
+            None,
+            &mut caches,
+            QuirksMode::NoQuirks,
+            NeedsSelectorFlags::No,
+            MatchingForInvalidation::No,
+        );
+        let element_ref = ElementRef::with_ancestors(node, ancestors);
+        element_ref.match_non_ts_pseudo_class(pseudo, &mut context)
+    }
+
+    #[test]
+    fn empty_pseudo_requires_no_element_or_text_children() {
+        let empty = element("div", vec![]);
+        let whitespace = element("div", vec![text(" \n")]);
+        let child = element("div", vec![element("span", vec![])]);
+
+        assert!(matches(&empty, &[], &PseudoClass::Empty));
+        assert!(!matches(&whitespace, &[], &PseudoClass::Empty));
+        assert!(!matches(&child, &[], &PseudoClass::Empty));
+    }
+
+    #[test]
+    fn type_position_pseudos_filter_by_tag_name() {
+        let parent = element(
+            "div",
+            vec![element("span", vec![]), element("em", vec![]), element("span", vec![])],
+        );
+        let ancestors: Vec<&DomNode> = vec![&parent];
+
+        let first_span = &parent.children[0];
+        let em = &parent.children[1];
+        let second_span = &parent.children[2];
+
+        assert!(matches(first_span, &ancestors, &PseudoClass::FirstOfType));
+        assert!(!matches(first_span, &ancestors, &PseudoClass::LastOfType));
+        assert!(!matches(first_span, &ancestors, &PseudoClass::OnlyOfType));
+        assert!(!matches(first_span, &ancestors, &PseudoClass::NthOfType(2, 0)));
+        assert!(matches(first_span, &ancestors, &PseudoClass::NthLastOfType(2, 0)));
+
+        assert!(matches(second_span, &ancestors, &PseudoClass::LastOfType));
+        assert!(!matches(second_span, &ancestors, &PseudoClass::OnlyOfType));
+        assert!(matches(second_span, &ancestors, &PseudoClass::NthOfType(2, 0)));
+        assert!(matches(second_span, &ancestors, &PseudoClass::NthLastOfType(0, 1)));
+
+        // Different element type should be unaffected by span counting.
+        assert!(matches(em, &ancestors, &PseudoClass::OnlyOfType));
+    }
+
+    #[test]
+    fn only_of_type_ignores_unrelated_siblings() {
+        let parent = element("div", vec![element("span", vec![]), element("div", vec![])]);
+        let ancestors: Vec<&DomNode> = vec![&parent];
+
+        let span = &parent.children[0];
+        let div = &parent.children[1];
+
+        assert!(matches(span, &ancestors, &PseudoClass::OnlyOfType));
+        assert!(matches(div, &ancestors, &PseudoClass::OnlyOfType));
+    }
+
+    #[test]
+    fn lang_matches_inherit_and_prefix() {
+        let child = element("p", vec![]);
+        let root = element(
+            "html",
+            vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "div".to_string(),
+                    attributes: vec![("lang".to_string(), "en-US".to_string())],
+                },
+                children: vec![child],
+            }],
+        );
+
+        let ancestors: Vec<&DomNode> = vec![&root, &root.children[0]];
+        let node = &root.children[0].children[0];
+
+        assert!(matches(node, &ancestors, &PseudoClass::Lang(vec!["en".into()])));
+        assert!(matches(node, &ancestors, &PseudoClass::Lang(vec!["en-us".into()])));
+        assert!(matches(node, &ancestors, &PseudoClass::Lang(vec!["*".into()])));
+        assert!(!matches(node, &ancestors, &PseudoClass::Lang(vec!["fr".into()])));
+
+        // Multiple ranges OR together
+        assert!(matches(
+            node,
+            &ancestors,
+            &PseudoClass::Lang(vec!["fr".into(), "en".into()])
+        ));
+    }
+
+    #[test]
+    fn dir_matches_inherited_direction() {
+        let child = element("span", vec![]);
+        let root = element(
+            "div",
+            vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "p".to_string(),
+                    attributes: vec![("dir".to_string(), "rtl".to_string())],
+                },
+                children: vec![child],
+            }],
+        );
+        let ancestors: Vec<&DomNode> = vec![&root, &root.children[0]];
+        let node = &root.children[0].children[0];
+
+        assert!(matches(node, &ancestors, &PseudoClass::Dir(TextDirection::Rtl)));
+        assert!(!matches(node, &ancestors, &PseudoClass::Dir(TextDirection::Ltr)));
+    }
+
+    #[test]
+    fn any_link_matches_href_anchors() {
+        let link = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "a".to_string(),
+                attributes: vec![("href".to_string(), "#foo".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(matches(&link, &[], &PseudoClass::AnyLink));
+        assert!(matches(&link, &[], &PseudoClass::Link));
+        assert!(!matches(&link, &[], &PseudoClass::Visited));
+
+        // Area and link elements also qualify
+        let area = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "area".to_string(),
+                attributes: vec![("href".to_string(), "/foo".to_string())],
+            },
+            children: vec![],
+        };
+        let stylesheet_link = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "link".to_string(),
+                attributes: vec![("href".to_string(), "style.css".to_string())],
+            },
+            children: vec![],
+        };
+
+        assert!(matches(&area, &[], &PseudoClass::AnyLink));
+        assert!(matches(&stylesheet_link, &[], &PseudoClass::AnyLink));
+    }
+
+    #[test]
+    fn target_matches_id_and_name() {
+        let target = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("id".to_string(), "section".to_string())],
+            },
+            children: vec![],
+        };
+        with_target_fragment(Some("#section"), || {
+            assert!(matches(&target, &[], &PseudoClass::Target));
+        });
+        with_target_fragment(Some("section"), || {
+            assert!(matches(&target, &[], &PseudoClass::Target));
+        });
+        with_target_fragment(Some("other"), || {
+            assert!(!matches(&target, &[], &PseudoClass::Target));
+        });
+
+        let anchor = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "a".to_string(),
+                attributes: vec![("name".to_string(), "anchor".to_string())],
+            },
+            children: vec![],
+        };
+        with_target_fragment(Some("anchor"), || {
+            assert!(matches(&anchor, &[], &PseudoClass::Target));
+        });
+    }
+
+    #[test]
+    fn scope_matches_document_root_only() {
+        let child = element("div", vec![]);
+        let root = element("html", vec![child.clone()]);
+        let ancestors: Vec<&DomNode> = vec![&root];
+        assert!(matches(&root, &[], &PseudoClass::Scope));
+        assert!(!matches(&child, &ancestors, &PseudoClass::Scope));
     }
 }
