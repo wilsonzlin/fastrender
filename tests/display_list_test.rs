@@ -49,6 +49,24 @@ fn test_display_list_from_items() {
 }
 
 #[test]
+fn fragment_background_emits_fill() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.background_color = Rgba::RED;
+    let fragment =
+        fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    assert!(!list.is_empty());
+    match &list.items()[0] {
+        DisplayItem::FillRect(item) => {
+            assert_eq!(item.rect.width(), 20.0);
+            assert_eq!(item.color, Rgba::RED);
+        }
+        _ => panic!("expected background fill"),
+    }
+}
+
+#[test]
 fn fragment_opacity_wraps_display_items() {
     let mut style = fastrender::ComputedStyle::default();
     style.opacity = 0.5;

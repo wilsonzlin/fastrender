@@ -40,7 +40,7 @@ use crate::paint::stacking::StackingContext;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::style::color::Rgba;
 use crate::style::types::{
-    ImageRendering, Isolation, MixBlendMode, ObjectFit, TextEmphasisPosition, TextEmphasisStyle,
+    BackgroundBox, ImageRendering, Isolation, MixBlendMode, ObjectFit, TextEmphasisPosition, TextEmphasisStyle,
 };
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
@@ -64,6 +64,13 @@ pub struct DisplayListBuilder {
     viewport: Option<(f32, f32)>,
     font_ctx: FontContext,
     shaper: ShapingPipeline,
+}
+
+#[derive(Clone, Copy)]
+struct BackgroundRects {
+    border: Rect,
+    padding: Rect,
+    content: Rect,
 }
 
 impl DisplayListBuilder {
@@ -185,6 +192,10 @@ impl DisplayListBuilder {
             fragment.bounds.size,
         );
 
+        if let Some(style) = fragment.style.as_deref() {
+            self.emit_background_from_style(absolute_rect, style);
+        }
+
         // CSS Paint Order:
         // 1. Background (handled by caller if style available)
         // 2. Border (handled by caller if style available)
@@ -227,6 +238,10 @@ impl DisplayListBuilder {
             Point::new(fragment.bounds.origin.x + offset.x, fragment.bounds.origin.y + offset.y),
             fragment.bounds.size,
         );
+
+        if let Some(style) = fragment.style.as_deref() {
+            self.emit_background_from_style(absolute_rect, style);
+        }
 
         let box_id = Self::get_box_id(fragment);
         let should_clip = clips.contains(&box_id);
@@ -342,6 +357,64 @@ impl DisplayListBuilder {
             MixBlendMode::Saturation => BlendMode::Saturation,
             MixBlendMode::Color => BlendMode::Color,
             MixBlendMode::Luminosity => BlendMode::Luminosity,
+        }
+    }
+
+    fn background_rects(rect: Rect, style: &ComputedStyle) -> BackgroundRects {
+        let font_size = style.font_size;
+        let base = rect.width().max(0.0);
+
+        let border_left = Self::resolve_length_for_paint(&style.border_left_width, font_size, base);
+        let border_right = Self::resolve_length_for_paint(&style.border_right_width, font_size, base);
+        let border_top = Self::resolve_length_for_paint(&style.border_top_width, font_size, base);
+        let border_bottom = Self::resolve_length_for_paint(&style.border_bottom_width, font_size, base);
+
+        let padding_left = Self::resolve_length_for_paint(&style.padding_left, font_size, base);
+        let padding_right = Self::resolve_length_for_paint(&style.padding_right, font_size, base);
+        let padding_top = Self::resolve_length_for_paint(&style.padding_top, font_size, base);
+        let padding_bottom = Self::resolve_length_for_paint(&style.padding_bottom, font_size, base);
+
+        let border_rect = rect;
+        let padding_rect = Self::inset_rect(border_rect, border_left, border_top, border_right, border_bottom);
+        let content_rect = Self::inset_rect(padding_rect, padding_left, padding_top, padding_right, padding_bottom);
+
+        BackgroundRects {
+            border: border_rect,
+            padding: padding_rect,
+            content: content_rect,
+        }
+    }
+
+    fn resolve_length_for_paint(len: &Length, font_size: f32, percentage_base: f32) -> f32 {
+        match len.unit {
+            LengthUnit::Percent => len.resolve_against(percentage_base),
+            LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size),
+            _ if len.unit.is_absolute() => len.to_px(),
+            _ => len.value,
+        }
+    }
+
+    fn inset_rect(rect: Rect, left: f32, top: f32, right: f32, bottom: f32) -> Rect {
+        let new_x = rect.x() + left;
+        let new_y = rect.y() + top;
+        let new_w = (rect.width() - left - right).max(0.0);
+        let new_h = (rect.height() - top - bottom).max(0.0);
+        Rect::from_xywh(new_x, new_y, new_w, new_h)
+    }
+
+    fn border_radii(rect: Rect, style: &ComputedStyle) -> crate::paint::display_list::BorderRadii {
+        let width = rect.width().max(0.0);
+        let height = rect.height().max(0.0);
+        let font_size = style.font_size;
+        let tl = Self::resolve_length_for_paint(&style.border_top_left_radius, font_size, width.min(height));
+        let tr = Self::resolve_length_for_paint(&style.border_top_right_radius, font_size, width.min(height));
+        let br = Self::resolve_length_for_paint(&style.border_bottom_right_radius, font_size, width.min(height));
+        let bl = Self::resolve_length_for_paint(&style.border_bottom_left_radius, font_size, width.min(height));
+        crate::paint::display_list::BorderRadii {
+            top_left: tl,
+            top_right: tr,
+            bottom_right: br,
+            bottom_left: bl,
         }
     }
 
@@ -568,6 +641,36 @@ impl DisplayListBuilder {
                 width,
                 blend_mode: BlendMode::Normal,
             }));
+        }
+    }
+
+    fn emit_background_from_style(&mut self, rect: Rect, style: &ComputedStyle) {
+        if style.background_color.is_transparent() {
+            return;
+        }
+
+        let layer = style.background_layers.first().cloned().unwrap_or_default();
+        let rects = Self::background_rects(rect, style);
+        let clip_rect = match layer.clip {
+            BackgroundBox::BorderBox => rects.border,
+            BackgroundBox::PaddingBox => rects.padding,
+            BackgroundBox::ContentBox => rects.content,
+        };
+        if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 {
+            return;
+        }
+
+        let radii = Self::border_radii(rect, style).clamped(clip_rect.width(), clip_rect.height());
+        if radii.is_zero() {
+            self.emit_background(clip_rect, style.background_color);
+        } else {
+            self.list.push(DisplayItem::FillRoundedRect(
+                crate::paint::display_list::FillRoundedRectItem {
+                    rect: clip_rect,
+                    color: style.background_color,
+                    radii,
+                },
+            ));
         }
     }
 
