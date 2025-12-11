@@ -101,7 +101,7 @@ fn sniff_html_meta_charset(bytes: &[u8]) -> Option<&'static Encoding> {
             if lower[i..].starts_with(b"<meta") {
                 if let Some(tag_end) = find_tag_end(&lower, i + 5) {
                     let attrs = &lower[i + 5..tag_end];
-                    if let Some(enc) = parse_meta_charset(attrs, slice) {
+                    if let Some(enc) = parse_meta_charset(attrs) {
                         return Some(enc);
                     }
                     i = tag_end + 1;
@@ -130,11 +130,11 @@ fn find_tag_end(bytes: &[u8], mut idx: usize) -> Option<usize> {
     None
 }
 
-fn parse_meta_charset(attrs_lower: &[u8], original: &[u8]) -> Option<&'static Encoding> {
+fn parse_meta_charset(attrs_lower: &[u8]) -> Option<&'static Encoding> {
     // Look for charset attribute.
     if let Some(pos) = find_bytes(attrs_lower, b"charset") {
         let after = &attrs_lower[pos + "charset".len()..];
-        let (raw_val, _) = parse_attr_value(after, original, pos + "charset".len());
+        let (raw_val, _) = parse_attr_value(after);
         if let Some(label) = raw_val {
             if let Some(enc) = Encoding::for_label(label.as_bytes()) {
                 return Some(enc);
@@ -144,20 +144,12 @@ fn parse_meta_charset(attrs_lower: &[u8], original: &[u8]) -> Option<&'static En
 
     // Look for http-equiv/content pair specifying charset
     if let Some(http_equiv_pos) = find_bytes(attrs_lower, b"http-equiv") {
-        let (http_equiv, _) = parse_attr_value(
-            &attrs_lower[http_equiv_pos + "http-equiv".len()..],
-            original,
-            http_equiv_pos + "http-equiv".len(),
-        );
+        let (http_equiv, _) = parse_attr_value(&attrs_lower[http_equiv_pos + "http-equiv".len()..]);
         if http_equiv.as_deref() != Some("content-type") {
             return None;
         }
         if let Some(content_pos) = find_bytes(attrs_lower, b"content") {
-            let (content, _) = parse_attr_value(
-                &attrs_lower[content_pos + "content".len()..],
-                original,
-                content_pos + "content".len(),
-            );
+            let (content, _) = parse_attr_value(&attrs_lower[content_pos + "content".len()..]);
             if let Some(content) = content {
                 if let Some(idx) = content.to_ascii_lowercase().find("charset=") {
                     let label = content[idx + "charset=".len()..].trim_matches(['\'', '"', ' ', ';']);
@@ -173,7 +165,7 @@ fn parse_meta_charset(attrs_lower: &[u8], original: &[u8]) -> Option<&'static En
 
 /// Parses an attribute value after the attribute name.
 /// Returns (value, bytes_consumed_from_lowercase_slice_after_name)
-fn parse_attr_value(slice_lower: &[u8], original: &[u8], offset_from_tag_start: usize) -> (Option<String>, usize) {
+fn parse_attr_value(slice_lower: &[u8]) -> (Option<String>, usize) {
     let mut i = 0;
     while i < slice_lower.len() && (slice_lower[i].is_ascii_whitespace() || slice_lower[i] == b'=') {
         i += 1;
@@ -189,7 +181,7 @@ fn parse_attr_value(slice_lower: &[u8], original: &[u8], offset_from_tag_start: 
             i += 1;
         }
         let end = i.min(slice_lower.len());
-        let value_bytes = &original[offset_from_tag_start + 1 + start..offset_from_tag_start + 1 + end];
+        let value_bytes = &slice_lower[start..end];
         (Some(String::from_utf8_lossy(value_bytes).into_owned()), end + 1)
     } else {
         let start = i;
@@ -197,7 +189,7 @@ fn parse_attr_value(slice_lower: &[u8], original: &[u8], offset_from_tag_start: 
             i += 1;
         }
         let end = i;
-        let value_bytes = &original[offset_from_tag_start + start..offset_from_tag_start + end];
+        let value_bytes = &slice_lower[start..end];
         (Some(String::from_utf8_lossy(value_bytes).into_owned()), end)
     };
     (value, consumed)
