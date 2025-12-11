@@ -490,7 +490,7 @@ mod tests {
     use crate::style::float::Float;
     use crate::style::types::{
         LineBreak, ListStylePosition, ListStyleType, TextCombineUpright, TextDecorationLine, TextUnderlineOffset,
-        TextUnderlinePosition, UnicodeBidi, WhiteSpace,
+        TextUnderlinePosition, UnicodeBidi, WhiteSpace, WillChange, WillChangeHint,
     };
 
     fn element_with_style(style: &str) -> DomNode {
@@ -814,6 +814,35 @@ mod tests {
             styled.styles.text_align_last,
             crate::style::types::TextAlignLast::Auto
         ));
+    }
+
+    #[test]
+    fn will_change_parses_hint_list() {
+        let dom = element_with_style("will-change: transform, opacity");
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        match &styled.styles.will_change {
+            WillChange::Hints(hints) => {
+                assert_eq!(
+                    hints,
+                    &vec![
+                        WillChangeHint::Property("transform".to_string()),
+                        WillChangeHint::Property("opacity".to_string())
+                    ]
+                );
+            }
+            other => panic!("expected hints, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn will_change_accepts_auto_and_rejects_invalid() {
+        let auto = element_with_style("will-change: auto");
+        let styled_auto = apply_styles(&auto, &StyleSheet::new());
+        assert!(matches!(styled_auto.styles.will_change, WillChange::Auto));
+
+        let invalid = element_with_style("will-change: auto, transform");
+        let styled_invalid = apply_styles(&invalid, &StyleSheet::new());
+        assert!(matches!(styled_invalid.styles.will_change, WillChange::Auto));
     }
 
     #[test]

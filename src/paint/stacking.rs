@@ -449,6 +449,11 @@ pub fn creates_stacking_context(style: &ComputedStyle, parent_style: Option<&Com
         return true;
     }
 
+    // 7b. Will-change on a stacking-context-creating property
+    if style.will_change.creates_stacking_context() {
+        return true;
+    }
+
     // 7. Overflow hidden/scroll/auto with visible overflow on the other axis
     // This creates a stacking context in some browsers
     // For simplicity, we create stacking context for any non-visible overflow
@@ -532,6 +537,10 @@ pub fn get_stacking_context_reason(
 
     if !style.backdrop_filter.is_empty() {
         return Some(StackingContextReason::BackdropFilter);
+    }
+
+    if style.will_change.creates_stacking_context() {
+        return Some(StackingContextReason::WillChange);
     }
 
     if is_positioned(style)
@@ -1009,6 +1018,7 @@ impl StackingContext {
 mod tests {
     use super::*;
     use crate::geometry::Rect;
+    use crate::style::types::{WillChange, WillChangeHint};
 
     // Helper function to create a simple fragment
     fn create_block_fragment(x: f32, y: f32, width: f32, height: f32) -> FragmentNode {
@@ -1082,6 +1092,17 @@ mod tests {
         let mut style = ComputedStyle::default();
         style.opacity = 1.0;
         assert!(!creates_stacking_context(&style, None, false));
+    }
+
+    #[test]
+    fn test_creates_stacking_context_will_change_transform() {
+        let mut style = ComputedStyle::default();
+        style.will_change = WillChange::Hints(vec![WillChangeHint::Property("transform".into())]);
+        assert!(creates_stacking_context(&style, None, false));
+        assert_eq!(
+            get_stacking_context_reason(&style, None, false),
+            Some(StackingContextReason::WillChange)
+        );
     }
 
     #[test]

@@ -539,9 +539,10 @@ impl PositionedStyle {
 
     /// Returns true if this element creates a stacking context
     ///
-    /// Simplified check - real implementation has more conditions
     pub fn creates_stacking_context(&self) -> bool {
-        self.is_positioned() && self.z_index.is_some() || self.opacity < 1.0
+        (self.is_positioned() && self.z_index.is_some())
+            || matches!(self.position, Position::Fixed | Position::Sticky)
+            || self.opacity < 1.0
     }
 
     // === Display Helpers ===

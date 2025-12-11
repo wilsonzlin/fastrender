@@ -39,8 +39,8 @@ use types::{
     ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowWrap,
     TabSize, TableLayout, TextAlign, TextAlignLast, TextCombineUpright, TextDecoration, TextDecorationSkipInk,
     TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextTransform,
-    TextUnderlineOffset, TextUnderlinePosition, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WordBreak,
-    WritingMode,
+    TextUnderlineOffset, TextUnderlinePosition, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WillChange,
+    WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -228,6 +228,8 @@ pub struct ComputedStyle {
     pub backdrop_filter: Vec<FilterFunction>,
     pub mix_blend_mode: MixBlendMode,
     pub isolation: Isolation,
+    /// Author hints for upcoming changes
+    pub will_change: WillChange,
 
     // Visual effects
     pub opacity: f32,
@@ -418,6 +420,7 @@ impl Default for ComputedStyle {
             backdrop_filter: Vec::new(),
             mix_blend_mode: MixBlendMode::Normal,
             isolation: Isolation::Auto,
+            will_change: WillChange::Auto,
 
             opacity: 1.0,
             box_shadow: Vec::new(),

@@ -291,6 +291,69 @@ pub enum Isolation {
     Isolate,
 }
 
+/// CSS will-change hints
+///
+/// CSS: `will-change`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WillChange {
+    /// Default value – no proactive optimizations
+    Auto,
+    /// Explicit list of features the author expects to change
+    Hints(Vec<WillChangeHint>),
+}
+
+impl Default for WillChange {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+/// Individual will-change hints
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WillChangeHint {
+    ScrollPosition,
+    Contents,
+    /// A property name (lowercased)
+    Property(String),
+}
+
+impl WillChange {
+    /// Returns true if the hint set should proactively create a stacking context.
+    ///
+    /// CSS Will Change: "will-change set to a property that would create a stacking context
+    /// when not at its initial value" requires creating a stacking context up-front.
+    pub fn creates_stacking_context(&self) -> bool {
+        match self {
+            WillChange::Auto => false,
+            WillChange::Hints(hints) => hints.iter().any(WillChangeHint::creates_stacking_context),
+        }
+    }
+}
+
+impl WillChangeHint {
+    fn creates_stacking_context(&self) -> bool {
+        match self {
+            WillChangeHint::ScrollPosition | WillChangeHint::Contents => true,
+            WillChangeHint::Property(name) => matches!(
+                name.as_str(),
+                // Properties that create stacking contexts when non-initial
+                "transform"
+                    | "opacity"
+                    | "filter"
+                    | "backdrop-filter"
+                    | "perspective"
+                    | "clip-path"
+                    | "mask"
+                    | "mask-image"
+                    | "mask-border"
+                    | "mix-blend-mode"
+                    | "isolation"
+                    | "contain"
+            ),
+        }
+    }
+}
+
 /// Color value that can defer to currentcolor
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FilterColor {

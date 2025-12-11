@@ -351,8 +351,11 @@ impl Canvas {
         Ok(())
     }
 
-    /// Pops the most recent offscreen layer and composites it into the parent.
-    pub fn pop_layer(&mut self) -> Result<()> {
+    /// Pops the most recent offscreen layer without compositing it.
+    ///
+    /// Returns the layer pixmap, the effective opacity (including parent opacity),
+    /// and any explicit composite blend mode that was requested.
+    pub fn pop_layer_raw(&mut self) -> Result<(Pixmap, f32, Option<SkiaBlendMode>)> {
         let Some(record) = self.layer_stack.pop() else {
             return Err(RenderError::InvalidParameters {
                 message: "pop_layer without matching push".into(),
@@ -363,10 +366,17 @@ impl Canvas {
         let layer_pixmap = std::mem::replace(&mut self.pixmap, record.pixmap);
         self.state_stack = record.state_stack;
         self.current_state = record.current_state;
+        let opacity = (record.opacity * self.current_state.opacity).clamp(0.0, 1.0);
+        Ok((layer_pixmap, opacity, record.composite_blend))
+    }
+
+    /// Pops the most recent offscreen layer and composites it into the parent.
+    pub fn pop_layer(&mut self) -> Result<()> {
+        let (layer_pixmap, opacity, composite_blend) = self.pop_layer_raw()?;
 
         let mut paint = PixmapPaint::default();
-        paint.opacity = (record.opacity * self.current_state.opacity).clamp(0.0, 1.0);
-        paint.blend_mode = record.composite_blend.unwrap_or(self.current_state.blend_mode);
+        paint.opacity = opacity;
+        paint.blend_mode = composite_blend.unwrap_or(self.current_state.blend_mode);
         let clip = self.current_state.clip_mask.clone();
         let transform = self.current_state.transform;
 

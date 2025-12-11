@@ -1978,6 +1978,11 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
+        "will-change" => {
+            if let Some(value) = parse_will_change(&resolved_value) {
+                styles.will_change = value;
+            }
+        }
 
         "border-collapse" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
@@ -2522,6 +2527,90 @@ fn parse_transform_origin(value: &PropertyValue) -> Option<TransformOrigin> {
     let x = x.unwrap_or_else(|| Length::percent(50.0));
     let y = y.unwrap_or_else(|| Length::percent(50.0));
     Some(TransformOrigin { x, y })
+}
+
+fn parse_will_change(value: &PropertyValue) -> Option<WillChange> {
+    let text = will_change_value_as_string(value)?;
+    parse_will_change_from_str(&text)
+}
+
+fn will_change_value_as_string(value: &PropertyValue) -> Option<String> {
+    match value {
+        PropertyValue::Keyword(kw) | PropertyValue::String(kw) => Some(kw.clone()),
+        PropertyValue::Multiple(values) => {
+            let mut out = String::new();
+            for token in values {
+                match token {
+                    PropertyValue::Keyword(k) => {
+                        if !out.is_empty() && k != "," {
+                            out.push(' ');
+                        }
+                        out.push_str(k);
+                        if k == "," {
+                            out.push(' ');
+                        }
+                    }
+                    PropertyValue::String(s) => {
+                        if !out.is_empty() {
+                            out.push(' ');
+                        }
+                        out.push_str(s);
+                    }
+                    _ => return None,
+                }
+            }
+            let trimmed = out.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        _ => None,
+    }
+}
+
+fn parse_will_change_from_str(text: &str) -> Option<WillChange> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut input = ParserInput::new(trimmed);
+    let mut parser = Parser::new(&mut input);
+
+    if parser.try_parse(|p| p.expect_ident_matching("auto")).is_ok() {
+        parser.skip_whitespace();
+        return if parser.is_exhausted() {
+            Some(WillChange::Auto)
+        } else {
+            None
+        };
+    }
+
+    let mut hints = Vec::new();
+    while !parser.is_exhausted() {
+        parser.skip_whitespace();
+        let ident = parser.expect_ident().ok()?;
+        let ident_lower = ident.as_ref().to_ascii_lowercase();
+        match ident_lower.as_str() {
+            "auto" => return None,
+            "scroll-position" => hints.push(WillChangeHint::ScrollPosition),
+            "contents" => hints.push(WillChangeHint::Contents),
+            other => hints.push(WillChangeHint::Property(other.to_string())),
+        }
+        parser.skip_whitespace();
+        if parser.is_exhausted() {
+            break;
+        }
+        parser.expect_comma().ok()?;
+    }
+
+    if hints.is_empty() {
+        None
+    } else {
+        Some(WillChange::Hints(hints))
+    }
 }
 
 fn parse_filter_list(value: &PropertyValue) -> Option<Vec<FilterFunction>> {

@@ -57,6 +57,70 @@ fn shade_color(color: &Rgba, factor: f32) -> Rgba {
     Rgba::new(r, g, b, color.a)
 }
 
+fn rgb_to_hsl(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) * 0.5;
+
+    if (max - min).abs() < f32::EPSILON {
+        return (0.0, 0.0, l);
+    }
+
+    let d = max - min;
+    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+    let h = if max == r {
+        ((g - b) / d + if g < b { 6.0 } else { 0.0 }) / 6.0
+    } else if max == g {
+        ((b - r) / d + 2.0) / 6.0
+    } else {
+        ((r - g) / d + 4.0) / 6.0
+    };
+    (h, s, l)
+}
+
+fn hue_to_rgb(p: f32, q: f32, t: f32) -> f32 {
+    let mut t = t;
+    if t < 0.0 {
+        t += 1.0;
+    }
+    if t > 1.0 {
+        t -= 1.0;
+    }
+    if t < 1.0 / 6.0 {
+        p + (q - p) * 6.0 * t
+    } else if t < 0.5 {
+        q
+    } else if t < 2.0 / 3.0 {
+        p + (q - p) * (2.0 / 3.0 - t) * 6.0
+    } else {
+        p
+    }
+}
+
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
+    if s <= 0.0 {
+        return (l, l, l);
+    }
+    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let p = 2.0 * l - q;
+    let r = hue_to_rgb(p, q, h + 1.0 / 3.0);
+    let g = hue_to_rgb(p, q, h);
+    let b = hue_to_rgb(p, q, h - 1.0 / 3.0);
+    (r, g, b)
+}
+
+fn apply_hsl_blend(mode: BlendMode, src: (f32, f32, f32), dst: (f32, f32, f32)) -> (f32, f32, f32) {
+    let (sh, ss, sl) = rgb_to_hsl(src.0, src.1, src.2);
+    let (dh, ds, dl) = rgb_to_hsl(dst.0, dst.1, dst.2);
+    match mode {
+        BlendMode::Hue => hsl_to_rgb(sh, ds, dl),
+        BlendMode::Saturation => hsl_to_rgb(dh, ss, dl),
+        BlendMode::Color => hsl_to_rgb(sh, ss, dl),
+        BlendMode::Luminosity => hsl_to_rgb(dh, ds, sl),
+        _ => dst,
+    }
+}
+
 #[derive(Copy, Clone)]
 enum EdgeOrientation {
     Horizontal,
@@ -509,6 +573,7 @@ pub struct DisplayListRenderer {
     canvas: Canvas,
     font_ctx: FontContext,
     stacking_layers: Vec<StackingRecord>,
+    blend_stack: Vec<Option<BlendMode>>,
 }
 
 #[derive(Debug)]
@@ -526,6 +591,7 @@ impl DisplayListRenderer {
             canvas: Canvas::new(width, height, background)?,
             font_ctx,
             stacking_layers: Vec::new(),
+            blend_stack: Vec::new(),
         })
     }
 
@@ -834,6 +900,77 @@ impl DisplayListRenderer {
             .draw_pixmap(0, 0, temp.as_ref(), &paint, transform, clip.as_ref());
     }
 
+    fn composite_hsl_layer(&mut self, layer: &Pixmap, opacity: f32, mode: BlendMode) -> Result<()> {
+        let target = self.canvas.pixmap_mut();
+        let width = target.width().min(layer.width()) as usize;
+        let height = target.height().min(layer.height()) as usize;
+        if width == 0 || height == 0 {
+            return Ok(());
+        }
+
+        let src_pixels = layer.pixels();
+        let src_stride = layer.width() as usize;
+        let dst_stride = target.width() as usize;
+        let dst_pixels = target.pixels_mut();
+        let opacity = opacity.clamp(0.0, 1.0);
+
+        for y in 0..height {
+            let src_row = &src_pixels[y * src_stride..y * src_stride + width];
+            let dst_row = &mut dst_pixels[y * dst_stride..y * dst_stride + width];
+            for (src_px, dst_px) in src_row.iter().zip(dst_row.iter_mut()) {
+                let raw_sa = src_px.alpha() as f32 / 255.0;
+                if raw_sa == 0.0 || opacity == 0.0 {
+                    continue;
+                }
+                let sa = (raw_sa * opacity).clamp(0.0, 1.0);
+                let da = dst_px.alpha() as f32 / 255.0;
+
+                let src_rgb = if raw_sa > 0.0 {
+                    (
+                        (src_px.red() as f32 / 255.0) / raw_sa,
+                        (src_px.green() as f32 / 255.0) / raw_sa,
+                        (src_px.blue() as f32 / 255.0) / raw_sa,
+                    )
+                } else {
+                    (0.0, 0.0, 0.0)
+                };
+
+                let dst_rgb = if da > 0.0 {
+                    (
+                        (dst_px.red() as f32 / 255.0) / da,
+                        (dst_px.green() as f32 / 255.0) / da,
+                        (dst_px.blue() as f32 / 255.0) / da,
+                    )
+                } else {
+                    (0.0, 0.0, 0.0)
+                };
+
+                let blended_rgb = apply_hsl_blend(mode, src_rgb, dst_rgb);
+
+                let out_a = sa + da * (1.0 - sa);
+                let out_rgb = if out_a > 0.0 {
+                    (
+                        (blended_rgb.0 * sa + dst_rgb.0 * da * (1.0 - sa)) / out_a,
+                        (blended_rgb.1 * sa + dst_rgb.1 * da * (1.0 - sa)) / out_a,
+                        (blended_rgb.2 * sa + dst_rgb.2 * da * (1.0 - sa)) / out_a,
+                    )
+                } else {
+                    (0.0, 0.0, 0.0)
+                };
+
+                let out_a_u8 = (out_a * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+                let scale = out_a;
+                let r = ((out_rgb.0 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
+                let g = ((out_rgb.1 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
+                let b = ((out_rgb.2 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
+                *dst_px = PremultipliedColorU8::from_rgba(r, g, b, out_a_u8)
+                    .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Consumes the renderer and returns the painted pixmap.
     pub fn render(mut self, list: &DisplayList) -> Result<Pixmap> {
         for item in list.items() {
@@ -936,11 +1073,25 @@ impl DisplayListRenderer {
                 self.canvas.restore();
             }
             DisplayItem::PushBlendMode(mode) => {
-                self.canvas.save();
-                self.canvas.set_blend_mode(mode.mode);
+                if matches!(
+                    mode.mode,
+                    BlendMode::Hue | BlendMode::Saturation | BlendMode::Color | BlendMode::Luminosity
+                ) {
+                    self.canvas.push_layer(1.0)?;
+                    self.blend_stack.push(Some(mode.mode));
+                } else {
+                    self.canvas.push_layer_with_blend(1.0, Some(map_blend_mode(mode.mode)))?;
+                    self.blend_stack.push(None);
+                }
             }
             DisplayItem::PopBlendMode => {
-                self.canvas.restore();
+                let blend_mode = self.blend_stack.pop().flatten();
+                if let Some(mode) = blend_mode {
+                    let (layer, opacity, _) = self.canvas.pop_layer_raw()?;
+                    self.composite_hsl_layer(&layer, opacity, mode)?;
+                } else {
+                    self.canvas.pop_layer()?;
+                }
             }
         }
 
