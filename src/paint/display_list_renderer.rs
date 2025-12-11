@@ -23,8 +23,8 @@ use crate::text::font_db::{FontStretch, FontStyle as DbFontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
 use crate::text::shaper::GlyphPosition;
 use tiny_skia::{
-    GradientStop as SkiaGradientStop, LinearGradient, Mask, PathBuilder, Pixmap, Point as SkiaPoint, RadialGradient,
-    SpreadMode, Stroke, StrokeDash, Transform,
+    BlendMode as SkiaBlendMode, GradientStop as SkiaGradientStop, LinearGradient, Mask, PathBuilder, Pixmap,
+    PixmapPaint, Point as SkiaPoint, PremultipliedColorU8, RadialGradient, SpreadMode, Stroke, StrokeDash, Transform,
 };
 
 fn map_blend_mode(mode: BlendMode) -> tiny_skia::BlendMode {
@@ -269,70 +269,99 @@ fn apply_backdrop_filters(pixmap: &mut Pixmap, bounds: &Rect, filters: &[Resolve
 }
 
 fn apply_drop_shadow(pixmap: &mut Pixmap, offset_x: f32, offset_y: f32, blur_radius: f32, spread: f32, color: Rgba) {
-    if color.alpha_u8() == 0 {
+    if pixmap.width() == 0 || pixmap.height() == 0 {
         return;
     }
 
-    // Compute a bounding rect for the shadow.
-    let width = pixmap.width();
-    let height = pixmap.height();
-    if width == 0 || height == 0 {
-        return;
-    }
-
-    let mut shadow = match Pixmap::new(width + (blur_radius * 6.0) as u32, height + (blur_radius * 6.0) as u32) {
+    let source = pixmap.clone();
+    let mut shadow = match Pixmap::new(source.width(), source.height()) {
         Some(p) => p,
         None => return,
     };
-    let offset_x_i = (blur_radius * 3.0 + offset_x.max(0.0) + spread.max(0.0)).round() as i32;
-    let offset_y_i = (blur_radius * 3.0 + offset_y.max(0.0) + spread.max(0.0)).round() as i32;
 
-    // Copy source alpha into shadow buffer, optionally scaled by spread.
-    for y in 0..height {
-        for x in 0..width {
-            let idx = (y * width + x) as usize;
-            let px = pixmap.pixels().get(idx).copied().unwrap_or_else(|| tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap());
-            let a = px.alpha();
-            if a == 0 {
+    {
+        let src = source.pixels();
+        let dst = shadow.pixels_mut();
+        for (src_px, dst_px) in src.iter().zip(dst.iter_mut()) {
+            let alpha = src_px.alpha() as f32 / 255.0;
+            if alpha == 0.0 {
+                *dst_px = PremultipliedColorU8::TRANSPARENT;
                 continue;
             }
-            let sa = if spread == 0.0 {
-                a
-            } else {
-                (a as f32 * (1.0 + spread * 0.01)).round().clamp(0.0, 255.0) as u8
-            };
-            let sx = (x as i32 + offset_x_i).max(0) as u32;
-            let sy = (y as i32 + offset_y_i).max(0) as u32;
-            let sidx = (sy * shadow.width() + sx) as usize;
-            if let Some(dst) = shadow.pixels_mut().get_mut(sidx) {
-                *dst = tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, sa).unwrap();
-            }
+            let total_alpha = (color.a * alpha).clamp(0.0, 1.0);
+            let r = (color.r as f32 / 255.0) * total_alpha;
+            let g = (color.g as f32 / 255.0) * total_alpha;
+            let b = (color.b as f32 / 255.0) * total_alpha;
+            let a = total_alpha * 255.0;
+            *dst_px = PremultipliedColorU8::from_rgba(
+                (r * 255.0).round() as u8,
+                (g * 255.0).round() as u8,
+                (b * 255.0).round() as u8,
+                a.round().clamp(0.0, 255.0) as u8,
+            )
+            .unwrap_or(PremultipliedColorU8::TRANSPARENT);
         }
     }
 
-    apply_gaussian_blur(&mut shadow, blur_radius);
-
-    // Tint with the shadow color and composite.
-    let tint = tiny_skia::PremultipliedColorU8::from_rgba(color.r, color.g, color.b, 255).unwrap();
-    for px in shadow.pixels_mut() {
-        let a = px.alpha();
-        let scale = a as f32 / 255.0;
-        *px = tiny_skia::PremultipliedColorU8::from_rgba(
-            (tint.red() as f32 * scale).round() as u8,
-            (tint.green() as f32 * scale).round() as u8,
-            (tint.blue() as f32 * scale).round() as u8,
-            ((color.a * a as f32 / 255.0).round().clamp(0.0, 255.0)) as u8,
-        )
-        .unwrap_or(*px);
+    if spread > 0.0 {
+        apply_spread(&mut shadow, spread);
     }
 
-    let paint = tiny_skia::PixmapPaint {
-        opacity: 1.0,
-        blend_mode: tiny_skia::BlendMode::SourceOver,
-        ..Default::default()
+    if blur_radius > 0.0 {
+        apply_gaussian_blur(&mut shadow, blur_radius);
+    }
+
+    let mut result = match Pixmap::new(source.width(), source.height()) {
+        Some(p) => p,
+        None => return,
     };
-    let transform = Transform::from_translate(-blur_radius * 3.0, -blur_radius * 3.0);
-    pixmap.draw_pixmap(0, 0, shadow.as_ref(), &paint, transform, None);
+
+    let mut paint = PixmapPaint::default();
+    paint.blend_mode = SkiaBlendMode::SourceOver;
+    result.draw_pixmap(
+        0,
+        0,
+        shadow.as_ref(),
+        &paint,
+        Transform::from_translate(offset_x, offset_y),
+        None,
+    );
+    result.draw_pixmap(0, 0, source.as_ref(), &paint, Transform::identity(), None);
+
+    *pixmap = result;
+}
+
+fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
+    let radius = spread.ceil() as i32;
+    if radius <= 0 {
+        return;
+    }
+    let width = pixmap.width() as i32;
+    let height = pixmap.height() as i32;
+    let original = pixmap.clone();
+    let src = original.pixels();
+    let dst = pixmap.pixels_mut();
+
+    for y in 0..height {
+        for x in 0..width {
+            let mut max = [0u8; 4];
+            for dy in -radius..=radius {
+                for dx in -radius..=radius {
+                    let ny = (y + dy).clamp(0, height - 1);
+                    let nx = (x + dx).clamp(0, width - 1);
+                    let idx = (ny as usize) * (width as usize) + nx as usize;
+                    let px = src[idx];
+                    max[0] = max[0].max(px.red());
+                    max[1] = max[1].max(px.green());
+                    max[2] = max[2].max(px.blue());
+                    max[3] = max[3].max(px.alpha());
+                }
+            }
+            let idx = (y as usize) * (width as usize) + x as usize;
+            dst[idx] = PremultipliedColorU8::from_rgba(max[0], max[1], max[2], max[3])
+                .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+        }
+    }
 }
 
 fn apply_color_filter(pixmap: &mut Pixmap, f: impl Fn((u8, u8, u8), f32) -> ((u8, u8, u8), f32)) {
