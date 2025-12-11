@@ -1059,6 +1059,52 @@ mod tests {
     }
 
     #[test]
+    fn marker_author_overrides_ua_defaults() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "ul".to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: vec![("style".to_string(), "color: black;".to_string())],
+                },
+                children: vec![],
+            }],
+        };
+
+        let stylesheet = parse_stylesheet(
+            r#"
+            li::marker {
+                white-space: normal;
+                unicode-bidi: normal;
+                text-transform: uppercase;
+            }
+        "#,
+        )
+        .unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        let li = styled.children.first().expect("li");
+        let marker = li.marker_styles.as_ref().expect("marker styles");
+
+        assert!(
+            matches!(marker.white_space, WhiteSpace::Normal),
+            "author white-space should override UA default"
+        );
+        assert!(
+            matches!(marker.unicode_bidi, UnicodeBidi::Normal),
+            "author unicode-bidi should override UA default"
+        );
+        assert_eq!(
+            marker.text_transform,
+            crate::style::types::TextTransform::with_case(crate::style::types::CaseTransform::Uppercase),
+            "author text-transform should override UA default"
+        );
+    }
+
+    #[test]
     fn marker_allows_text_emphasis_properties() {
         let dom = DomNode {
             node_type: DomNodeType::Element {
@@ -1329,6 +1375,12 @@ fn compute_marker_styles(
     styles.display = Display::Inline;
     inherit_styles(&mut styles, list_item_styles);
 
+    // UA defaults per CSS Lists 3: isolate, tabular numbers, pre white-space, no transforms.
+    styles.unicode_bidi = crate::style::types::UnicodeBidi::Isolate;
+    styles.font_variant_numeric.spacing = crate::style::types::NumericSpacing::Tabular;
+    styles.white_space = crate::style::types::WhiteSpace::Pre;
+    styles.text_transform = crate::style::types::TextTransform::none();
+
     for (_specificity, declarations) in matching_rules {
         for decl in declarations {
             if marker_allows_property(&decl.property) {
@@ -1340,10 +1392,6 @@ fn compute_marker_styles(
     propagate_text_decorations(&mut styles, list_item_styles);
 
     reset_marker_box_properties(&mut styles);
-    styles.unicode_bidi = crate::style::types::UnicodeBidi::Isolate;
-    styles.font_variant_numeric.spacing = crate::style::types::NumericSpacing::Tabular;
-    styles.white_space = crate::style::types::WhiteSpace::Pre;
-    styles.text_transform = crate::style::types::TextTransform::none();
     styles.display = Display::Inline;
     Some(styles)
 }
