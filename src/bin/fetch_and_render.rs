@@ -4,6 +4,8 @@
 
 use fastrender::{Error, FastRender, Result};
 use std::env;
+use std::path::Path;
+use url::Url;
 
 fn fetch_url(url: &str) -> Result<String> {
     // Handle file:// URLs
@@ -31,6 +33,166 @@ fn fetch_url(url: &str) -> Result<String> {
     Ok(body)
 }
 
+fn resolve_href(base: &str, href: &str) -> Option<String> {
+    if href.is_empty() {
+        return None;
+    }
+
+    if href.starts_with("data:") {
+        return Some(href.to_string());
+    }
+
+    if let Ok(abs) = Url::parse(href) {
+        return Some(abs.to_string());
+    }
+
+    let mut base_candidate = base.to_string();
+    if base_candidate.starts_with("file://") {
+        let path = &base_candidate["file://".len()..];
+        if Path::new(path).is_dir() && !base_candidate.ends_with('/') {
+            base_candidate.push('/');
+        }
+    }
+
+    let base_url = Url::parse(&base_candidate)
+        .or_else(|_| Url::from_file_path(&base_candidate).map_err(|_| url::ParseError::RelativeUrlWithoutBase))
+        .ok()?;
+
+    base_url.join(href).ok().map(|u| u.to_string())
+}
+
+/// Rewrite url(...) references in a CSS string to be absolute using the stylesheet's base URL.
+fn absolutize_css_urls(css: &str, base_url: &str) -> String {
+    #[derive(PartialEq)]
+    enum State {
+        Normal,
+        SingleString,
+        DoubleString,
+        Comment,
+    }
+
+    let mut out = String::with_capacity(css.len());
+    let mut state = State::Normal;
+    let bytes = css.as_bytes();
+    let mut i = 0usize;
+    let mut last_emit = 0usize;
+
+    while i < bytes.len() {
+        match state {
+            State::Normal => {
+                // Start of comment
+                if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                    i += 2;
+                    state = State::Comment;
+                    continue;
+                }
+                // Strings
+                if bytes[i] == b'\'' {
+                    i += 1;
+                    state = State::SingleString;
+                    continue;
+                }
+                if bytes[i] == b'"' {
+                    i += 1;
+                    state = State::DoubleString;
+                    continue;
+                }
+
+                // Check for url(
+                if (bytes[i] == b'u' || bytes[i] == b'U')
+                    && i + 3 < bytes.len()
+                    && bytes[i + 1..].len() >= 3
+                    && bytes[i + 1].eq_ignore_ascii_case(&b'r')
+                    && bytes[i + 2].eq_ignore_ascii_case(&b'l')
+                {
+                    let mut j = i + 3;
+                    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    if j < bytes.len() && bytes[j] == b'(' {
+                        j += 1;
+                        // Skip leading whitespace inside url(
+                        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                            j += 1;
+                        }
+                        let content_start = j;
+                        let mut in_single = false;
+                        let mut in_double = false;
+                        while j < bytes.len() {
+                            let b = bytes[j];
+                            if !in_single && !in_double && b == b')' {
+                                break;
+                            }
+                            match b {
+                                b'\\' => {
+                                    // Skip escaped next char
+                                    j += 1;
+                                }
+                                b'\'' if !in_double => in_single = !in_single,
+                                b'"' if !in_single => in_double = !in_double,
+                                _ => {}
+                            }
+                            j += 1;
+                        }
+                        if j < bytes.len() && bytes[j] == b')' {
+                            let content_end = j;
+                            // Emit preceding slice
+                            out.push_str(&css[last_emit..i]);
+
+                            let raw = css[content_start..content_end].trim();
+                            let unquoted = raw
+                                .trim_matches('"')
+                                .trim_matches('\'')
+                                .to_string();
+                            if let Some(resolved) = resolve_href(base_url, &unquoted) {
+                                out.push_str(&format!("url(\"{}\")", resolved));
+                            } else {
+                                // Fallback: leave original text
+                                out.push_str(&css[i..=content_end]);
+                            }
+                            i = content_end + 1;
+                            last_emit = i;
+                            continue;
+                        }
+                    }
+                }
+                i += 1;
+            }
+            State::SingleString => {
+                if bytes[i] == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'\'' {
+                    state = State::Normal;
+                }
+                i += 1;
+            }
+            State::DoubleString => {
+                if bytes[i] == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'"' {
+                    state = State::Normal;
+                }
+                i += 1;
+            }
+            State::Comment => {
+                if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                    i += 2;
+                    state = State::Normal;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+
+    out.push_str(&css[last_emit..]);
+    out
+}
+
 fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
     let mut css_urls = Vec::new();
 
@@ -54,52 +216,9 @@ fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
                         let after_quote = &href_section[quote_start + 1..];
                         if let Some(quote_end) = after_quote.find(quote_char) {
                             let href = &after_quote[..quote_end];
-
-                            // Resolve relative URLs
-                            let full_url = if href.starts_with("http://") || href.starts_with("https://") {
-                                href.to_string()
-                            } else if href.starts_with("//") {
-                                format!("https:{}", href)
-                            } else if href.starts_with('/') {
-                                // Absolute path
-                                let base_parts: Vec<&str> = base_url.splitn(4, '/').collect();
-                                if base_parts.len() >= 3 {
-                                    format!("{}//{}{}", base_parts[0], base_parts[2], href)
-                                } else {
-                                    href.to_string()
-                                }
-                            } else {
-                                // Relative path - need to append to base URL's directory
-                                // Parse the base URL to handle it correctly
-                                if base_url.contains("://") {
-                                    // Find the path part after the domain
-                                    let protocol_end = base_url.find("://").unwrap() + 3;
-                                    let after_protocol = &base_url[protocol_end..];
-
-                                    // Find where the path starts (after the domain)
-                                    let path_start = after_protocol.find('/').map(|p| protocol_end + p);
-
-                                    let base_without_file = if let Some(path_pos) = path_start {
-                                        // There's a path - find the last / to get directory
-                                        if let Some(last_slash) = base_url[path_pos..].rfind('/') {
-                                            &base_url[..=path_pos + last_slash]
-                                        } else {
-                                            // No slash in path, use the path start
-                                            &base_url[..=path_pos]
-                                        }
-                                    } else {
-                                        // No path, just domain - add trailing slash
-                                        base_url
-                                    };
-
-                                    format!("{}/{}", base_without_file.trim_end_matches('/'), href)
-                                } else {
-                                    // Fallback for non-URL base paths
-                                    format!("{}/{}", base_url.trim_end_matches('/'), href)
-                                }
-                            };
-
-                            css_urls.push(full_url);
+                            if let Some(full_url) = resolve_href(base_url, href) {
+                                css_urls.push(full_url);
+                            }
                         }
                     }
                 }
@@ -133,6 +252,60 @@ fn inject_css_into_html(html: &str, css: &str) -> String {
     } else {
         // No head or body, just prepend
         format!("{}{}", style_tag, html)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_relative_http_links() {
+        let base = "https://example.com/a/b/page.html";
+        let href = "../styles/site.css";
+        let resolved = resolve_href(base, href).expect("resolved");
+        assert_eq!(resolved, "https://example.com/a/styles/site.css");
+    }
+
+    #[test]
+    fn resolves_protocol_relative_links() {
+        let base = "https://example.com/index.html";
+        let href = "//cdn.example.com/main.css";
+        let resolved = resolve_href(base, href).expect("resolved");
+        assert_eq!(resolved, "https://cdn.example.com/main.css");
+    }
+
+    #[test]
+    fn resolves_file_scheme_links() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let base = format!("file://{}", dir.path().join("page.html").display());
+        let href = "css/app.css";
+        let resolved = resolve_href(&base, href).expect("resolved");
+        assert!(resolved.ends_with("/css/app.css"), "resolved={}", resolved);
+    }
+
+    #[test]
+    fn absolutizes_css_urls_against_stylesheet() {
+        let css = r#"
+            body { background: url("../img/bg.png") no-repeat; }
+            @font-face { src: url('fonts/font.woff2'); }
+        "#;
+        let base = "https://example.com/assets/css/main.css";
+        let out = absolutize_css_urls(css, base);
+        assert!(out.contains("url(\"https://example.com/assets/img/bg.png\")"));
+        assert!(out.contains("url(\"https://example.com/assets/css/fonts/font.woff2\")"));
+    }
+
+    #[test]
+    fn extracts_stylesheet_hrefs_with_resolution() {
+        let html = r#"
+            <html><head>
+                <link rel="stylesheet" href="../styles/a.css">
+                <link rel="icon" href="/favicon.ico">
+            </head><body></body></html>
+        "#;
+        let urls = extract_css_links(html, "https://example.com/site/page.html");
+        assert_eq!(urls, vec!["https://example.com/styles/a.css".to_string()]);
     }
 }
 
@@ -186,7 +359,8 @@ fn main() -> Result<()> {
         println!("Fetching CSS from: {}", css_url);
         match fetch_url(&css_url) {
             Ok(css) => {
-                combined_css.push_str(&css);
+                let rewritten = absolutize_css_urls(&css, &css_url);
+                combined_css.push_str(&rewritten);
                 combined_css.push('\n');
             }
             Err(e) => {

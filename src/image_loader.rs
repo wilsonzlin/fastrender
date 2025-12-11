@@ -1,7 +1,9 @@
 use crate::error::{Error, ImageError, RenderError, Result};
 use image::DynamicImage;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
+use url::Url;
 
 /// Cache for loaded images
 pub struct ImageCache {
@@ -36,60 +38,26 @@ impl ImageCache {
 
     /// Resolve a potentially relative URL to an absolute URL
     fn resolve_url(&self, url: &str) -> String {
-        // If it's already absolute, return as-is
-        if url.starts_with("http://")
-            || url.starts_with("https://")
-            || url.starts_with("data:")
-            || url.starts_with("file://")
-        {
-            return url.to_string();
+        if url.is_empty() {
+            return String::new();
         }
 
-        // If we have a base URL, resolve relative to it
-        if let Some(base) = &self.base_url {
-            if url.starts_with("//") {
-                // Protocol-relative URL
-                let protocol = if base.starts_with("https://") {
-                    "https:"
-                } else {
-                    "http:"
-                };
-                return format!("{}{}", protocol, url);
-            } else if url.starts_with('/') {
-                // Absolute path - extract protocol and domain from base
-                // Find the third slash (after protocol://)
-                let after_protocol = if base.starts_with("https://") {
-                    &base[8..]
-                } else if base.starts_with("http://") {
-                    &base[7..]
-                } else {
-                    base
-                };
+        // Absolute or data URLs can be returned directly.
+        if url.starts_with("data:") {
+            return url.to_string();
+        }
+        if let Ok(parsed) = url::Url::parse(url) {
+            return parsed.to_string();
+        }
 
-                if let Some(slash_pos) = after_protocol.find('/') {
-                    let protocol_len = base.len() - after_protocol.len();
-                    let domain = &base[..protocol_len + slash_pos];
-                    return format!("{}{}", domain, url);
-                } else {
-                    return format!("{}{}", base, url);
-                }
-            } else if url.starts_with("./") {
-                // Relative path with ./
-                let path = &url[2..];
-                if let Some(last_slash) = base.rfind('/') {
-                    return format!("{}/{}", &base[..last_slash], path);
-                } else {
-                    return format!("{}/{}", base, path);
-                }
-            } else {
-                // Relative path without ./
-                // For base URLs like <https://news.ycombinator.com,> append directly
-                let resolved_url = format!("{}/{}", base.trim_end_matches('/'), url);
-                return resolved_url;
+        // Resolve against the configured base URL when present.
+        if let Some(base) = &self.base_url {
+            if let Some(resolved) = resolve_against_base(base, url) {
+                return resolved;
             }
         }
 
-        // No base URL, return as-is
+        // No usable base; return the reference unchanged.
         url.to_string()
     }
 
@@ -307,6 +275,33 @@ impl ImageCache {
     }
 }
 
+fn resolve_against_base(base: &str, reference: &str) -> Option<String> {
+    // Normalize file:// bases that point to directories so Url::join keeps the directory segment.
+    let mut base_candidate = base.to_string();
+    if base_candidate.starts_with("file://") {
+        let path = &base_candidate["file://".len()..];
+        if Path::new(path).is_dir() && !base_candidate.ends_with('/') {
+            base_candidate.push('/');
+        }
+    }
+
+    let mut base_url = Url::parse(&base_candidate)
+        .or_else(|_| Url::from_file_path(&base_candidate).map_err(|_| url::ParseError::RelativeUrlWithoutBase))
+        .ok()?;
+
+    if base_url.scheme() == "file" {
+        if let Ok(path) = base_url.to_file_path() {
+            if path.is_dir() && !base_url.path().ends_with('/') {
+                let mut path_str = base_url.path().to_string();
+                path_str.push('/');
+                base_url.set_path(&path_str);
+            }
+        }
+    }
+
+    base_url.join(reference).ok().map(|u| u.to_string())
+}
+
 impl Default for ImageCache {
     fn default() -> Self {
         Self::new()
@@ -327,6 +322,7 @@ mod tests {
     use super::*;
     use image::RgbaImage;
     use std::path::PathBuf;
+    use std::time::SystemTime;
 
     #[test]
     fn render_inline_svg_returns_image() {
@@ -370,5 +366,52 @@ mod tests {
             .expect("load via base");
         assert_eq!(image.width(), 1);
         assert_eq!(image.height(), 1);
+    }
+
+    #[test]
+    fn resolves_relative_paths_against_http_base() {
+        let cache = ImageCache::with_base_url("https://example.com/a/b/".to_string());
+        assert_eq!(
+            cache.resolve_url("../img.png"),
+            "https://example.com/a/img.png".to_string()
+        );
+        assert_eq!(
+            cache.resolve_url("./nested/icon.png"),
+            "https://example.com/a/b/nested/icon.png".to_string()
+        );
+    }
+
+    #[test]
+    fn resolves_protocol_relative_urls_using_base_scheme() {
+        let cache = ImageCache::with_base_url("https://example.com/base/".to_string());
+        assert_eq!(
+            cache.resolve_url("//cdn.example.com/asset.png"),
+            "https://cdn.example.com/asset.png".to_string()
+        );
+    }
+
+    #[test]
+    fn resolves_file_base_without_trailing_slash_as_directory() {
+        let mut dir: PathBuf = std::env::temp_dir();
+        dir.push(format!(
+            "fastrender_url_base_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("assets")).expect("create temp dir");
+        let base = format!("file://{}", dir.display());
+        let cache = ImageCache::with_base_url(base);
+
+        let resolved = cache.resolve_url("assets/image.png");
+        assert!(
+            resolved.ends_with("/assets/image.png"),
+            "resolved path should keep directory: {}",
+            resolved
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
