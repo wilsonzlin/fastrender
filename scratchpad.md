@@ -497,6 +497,7 @@
 - Root line strut still provides minimum line-height rather than full descendant baseline synthesis.
 - Display-list renderer now accepts device-scale rendering: it allocates DPR-sized canvases and scales all geometry/text/filters before rasterization so the display-list path matches painter device outputs. A new constructor allows explicit scale; existing APIs stay CSS-pixel default.
 - Stacking-context transforms in the display-list renderer now scale translation components with the device scale so DPR-rendered display lists position layers correctly; `renderer_respects_device_scale` covers the scaled output size and content.
+- Display-list filters respect outsets when clipping rounded contexts: blur/drop-shadow layers expand by filter outsets and the clip grows accordingly, so filter glow is no longer chopped by border radii (covered by a new blur spill regression).
 
 ## To-do / next steps (spec-oriented)
 1. Inline/text:

@@ -1219,9 +1219,27 @@ impl DisplayListRenderer {
                     if !record.filters.is_empty() {
                         apply_filters(self.canvas.pixmap_mut(), &record.filters, self.scale);
                     }
-                    if !record.radii.is_zero() {
+                    if !record.radii.is_zero() || !record.filters.is_empty() {
+                        let (out_l, out_t, out_r, out_b) = filter_outset(&record.filters, self.scale);
+                        let clip_rect = Rect::from_xywh(
+                            record.mask_bounds.x() - out_l,
+                            record.mask_bounds.y() - out_t,
+                            record.mask_bounds.width() + out_l + out_r,
+                            record.mask_bounds.height() + out_t + out_b,
+                        );
+                        let inflate = out_l.max(out_t).max(out_r).max(out_b);
+                        let radii = if inflate > 0.0 {
+                            BorderRadii {
+                                top_left: record.radii.top_left + inflate,
+                                top_right: record.radii.top_right + inflate,
+                                bottom_right: record.radii.bottom_right + inflate,
+                                bottom_left: record.radii.bottom_left + inflate,
+                            }
+                        } else {
+                            record.radii
+                        };
                         self.canvas.save();
-                        self.canvas.set_clip_with_radii(record.mask_bounds, Some(record.radii));
+                        self.canvas.set_clip_with_radii(clip_rect, Some(radii));
                         self.canvas.pop_layer()?;
                         self.canvas.restore();
                     } else {

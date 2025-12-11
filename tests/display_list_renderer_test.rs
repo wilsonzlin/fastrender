@@ -212,6 +212,40 @@ fn drop_shadow_filter_renders_shadow() {
 }
 
 #[test]
+fn blur_filters_arent_clipped_by_border_radii() {
+    use fastrender::paint::display_list::BorderRadii;
+
+    let renderer = DisplayListRenderer::new(4, 4, Rgba::TRANSPARENT, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+        z_index: 0,
+        creates_stacking_context: true,
+        bounds: Rect::from_xywh(1.0, 1.0, 2.0, 2.0),
+        mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
+        is_isolated: true,
+        transform: None,
+        filters: vec![ResolvedFilter::Blur(1.0)],
+        backdrop_filters: Vec::new(),
+        radii: BorderRadii::uniform(0.5),
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(1.0, 1.0, 2.0, 2.0),
+        color: Rgba::RED,
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let pixmap = renderer.render(&list).unwrap();
+    // Blur should spill outside the original bounds; left neighbor gains alpha.
+    let (_, _, _, alpha) = pixel(&pixmap, 0, 1);
+    assert!(
+        alpha > 0,
+        "expected blur outside rounded rect to remain visible; alpha at (0,1) was {alpha}"
+    );
+    // Farther away stays untouched.
+    assert_eq!(pixel(&pixmap, 0, 0), (0, 0, 0, 0));
+}
+
+#[test]
 fn color_blend_mode_uses_destination_luminance() {
     use fastrender::paint::display_list::{BlendMode, BlendModeItem};
 
