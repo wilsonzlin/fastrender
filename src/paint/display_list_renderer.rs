@@ -9,9 +9,10 @@ use crate::geometry::{Point, Rect};
 use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::canvas::Canvas;
 use crate::paint::display_list::{
-    BlendMode, BorderItem, BorderRadii, BorderSide, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem,
-    FontId, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem, ResolvedFilter, StrokeRectItem,
-    TextEmphasis, TextItem, TransformItem,
+    BlendMode, BorderItem, BorderRadii, BorderSide, BoxShadowItem, ClipItem, DecorationPaint, DecorationStroke,
+    DisplayItem, DisplayList, EmphasisMark, FillRectItem, FontId, GlyphInstance, ImageItem, LinearGradientItem,
+    OpacityItem, RadialGradientItem, ResolvedFilter, StrokeRectItem, TextEmphasis, TextItem, TextShadowItem,
+    TransformItem,
 };
 use crate::paint::rasterize::{fill_rounded_rect, render_box_shadow, BoxShadow};
 use crate::paint::text_shadow::PathBounds;
@@ -67,7 +68,11 @@ fn rgb_to_hsl(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     }
 
     let d = max - min;
-    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
     let h = if max == r {
         ((g - b) / d + if g < b { 6.0 } else { 0.0 }) / 6.0
     } else if max == g {
@@ -218,10 +223,10 @@ fn set_paint_color(paint: &mut tiny_skia::Paint, color: &Rgba, opacity: f32) {
     paint.set_color_rgba8(color.r, color.g, color.b, alpha);
 }
 
-fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter]) {
+fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32) {
     for filter in filters {
         match *filter {
-            ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, radius),
+            ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, radius * scale),
             ResolvedFilter::Brightness(amount) => apply_color_filter(pixmap, |c, a| (scale_color(c, amount), a)),
             ResolvedFilter::Contrast(amount) => apply_color_filter(pixmap, |c, a| (apply_contrast(c, amount), a)),
             ResolvedFilter::Grayscale(amount) => apply_color_filter(pixmap, |c, a| (grayscale(c, amount), a)),
@@ -236,12 +241,19 @@ fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter]) {
                 blur_radius,
                 spread,
                 color,
-            } => apply_drop_shadow(pixmap, offset_x, offset_y, blur_radius, spread, color),
+            } => apply_drop_shadow(
+                pixmap,
+                offset_x * scale,
+                offset_y * scale,
+                blur_radius * scale,
+                spread * scale,
+                color,
+            ),
         }
     }
 }
 
-fn filter_outset(filters: &[ResolvedFilter]) -> (f32, f32, f32, f32) {
+fn filter_outset(filters: &[ResolvedFilter], scale: f32) -> (f32, f32, f32, f32) {
     let mut left: f32 = 0.0;
     let mut top: f32 = 0.0;
     let mut right: f32 = 0.0;
@@ -250,7 +262,7 @@ fn filter_outset(filters: &[ResolvedFilter]) -> (f32, f32, f32, f32) {
     for filter in filters {
         match *filter {
             ResolvedFilter::Blur(radius) => {
-                let delta = radius.abs() * 3.0;
+                let delta = (radius * scale).abs() * 3.0;
                 left = left.max(delta);
                 right = right.max(delta);
                 top = top.max(delta);
@@ -263,11 +275,15 @@ fn filter_outset(filters: &[ResolvedFilter]) -> (f32, f32, f32, f32) {
                 spread,
                 ..
             } => {
-                let delta = blur_radius.abs() * 3.0 + spread.max(0.0);
-                left = left.max(delta - offset_x.min(0.0));
-                right = right.max(delta + offset_x.max(0.0));
-                top = top.max(delta - offset_y.min(0.0));
-                bottom = bottom.max(delta + offset_y.max(0.0));
+                let dx = offset_x * scale;
+                let dy = offset_y * scale;
+                let blur = blur_radius * scale;
+                let spread = spread * scale;
+                let delta = blur.abs() * 3.0 + spread.max(0.0);
+                left = left.max(delta - dx.min(0.0));
+                right = right.max(delta + dx.max(0.0));
+                top = top.max(delta - dy.min(0.0));
+                bottom = bottom.max(delta + dy.max(0.0));
             }
             _ => {}
         }
@@ -276,11 +292,17 @@ fn filter_outset(filters: &[ResolvedFilter]) -> (f32, f32, f32, f32) {
     (left.max(0.0), top.max(0.0), right.max(0.0), bottom.max(0.0))
 }
 
-fn apply_backdrop_filters(pixmap: &mut Pixmap, bounds: &Rect, filters: &[ResolvedFilter], radii: BorderRadii) {
+fn apply_backdrop_filters(
+    pixmap: &mut Pixmap,
+    bounds: &Rect,
+    filters: &[ResolvedFilter],
+    radii: BorderRadii,
+    scale: f32,
+) {
     if filters.is_empty() {
         return;
     }
-    let (out_l, out_t, out_r, out_b) = filter_outset(filters);
+    let (out_l, out_t, out_r, out_b) = filter_outset(filters, scale);
     let x = (bounds.min_x() - out_l).floor() as i32;
     let y = (bounds.min_y() - out_t).floor() as i32;
     let width = (bounds.width() + out_l + out_r).ceil() as u32;
@@ -322,7 +344,7 @@ fn apply_backdrop_filters(pixmap: &mut Pixmap, bounds: &Rect, filters: &[Resolve
         dest[dst_idx..dst_idx + region_row_bytes].copy_from_slice(&data[src_idx..src_idx + region_row_bytes]);
     }
 
-    apply_filters(&mut region, filters);
+    apply_filters(&mut region, filters, scale);
 
     if !radii.is_zero() {
         let mut mask = match Pixmap::new(region_w, region_h) {
@@ -363,12 +385,8 @@ fn apply_backdrop_filters(pixmap: &mut Pixmap, bounds: &Rect, filters: &[Resolve
 
     let write_x = bounds.min_x().floor().max(clamped_x as f32) as u32;
     let write_y = bounds.min_y().floor().max(clamped_y as f32) as u32;
-    let write_w = (bounds.width().ceil() as i32)
-        .min(pix_w - write_x as i32)
-        .max(0) as u32;
-    let write_h = (bounds.height().ceil() as i32)
-        .min(pix_h - write_y as i32)
-        .max(0) as u32;
+    let write_w = (bounds.width().ceil() as i32).min(pix_w - write_x as i32).max(0) as u32;
+    let write_h = (bounds.height().ceil() as i32).min(pix_h - write_y as i32).max(0) as u32;
     if write_w == 0 || write_h == 0 {
         return;
     }
@@ -574,6 +592,7 @@ pub struct DisplayListRenderer {
     font_ctx: FontContext,
     stacking_layers: Vec<StackingRecord>,
     blend_stack: Vec<Option<BlendMode>>,
+    scale: f32,
 }
 
 #[derive(Debug)]
@@ -585,13 +604,144 @@ struct StackingRecord {
 }
 
 impl DisplayListRenderer {
+    #[inline]
+    fn ds_len(&self, v: f32) -> f32 {
+        v * self.scale
+    }
+
+    #[inline]
+    fn ds_point(&self, p: Point) -> Point {
+        Point::new(p.x * self.scale, p.y * self.scale)
+    }
+
+    #[inline]
+    fn ds_rect(&self, rect: Rect) -> Rect {
+        Rect::from_xywh(
+            rect.x() * self.scale,
+            rect.y() * self.scale,
+            rect.width() * self.scale,
+            rect.height() * self.scale,
+        )
+    }
+
+    #[inline]
+    fn ds_radii(&self, radii: BorderRadii) -> BorderRadii {
+        BorderRadii {
+            top_left: radii.top_left * self.scale,
+            top_right: radii.top_right * self.scale,
+            bottom_right: radii.bottom_right * self.scale,
+            bottom_left: radii.bottom_left * self.scale,
+        }
+    }
+
+    fn ds_filters(&self, filters: &[ResolvedFilter]) -> Vec<ResolvedFilter> {
+        filters.to_vec()
+    }
+
+    fn scale_text_item(&self, item: &TextItem) -> TextItem {
+        let mut scaled = item.clone();
+        scaled.origin = self.ds_point(item.origin);
+        scaled.font_size = self.ds_len(item.font_size);
+        scaled.advance_width = self.ds_len(item.advance_width);
+        scaled.synthetic_bold = self.ds_len(item.synthetic_bold);
+        scaled.glyphs = item
+            .glyphs
+            .iter()
+            .map(|g| GlyphInstance {
+                glyph_id: g.glyph_id,
+                offset: self.ds_point(g.offset),
+                advance: self.ds_len(g.advance),
+            })
+            .collect();
+        scaled.shadows = item
+            .shadows
+            .iter()
+            .map(|s| TextShadowItem {
+                offset: self.ds_point(s.offset),
+                blur_radius: self.ds_len(s.blur_radius),
+                color: s.color,
+            })
+            .collect();
+        if let Some(emphasis) = &item.emphasis {
+            let mut e = emphasis.clone();
+            e.size = self.ds_len(e.size);
+            e.marks = e.marks.iter().map(|m| EmphasisMark { center: self.ds_point(m.center) }).collect();
+            if let Some(text) = &e.text {
+                let mut t = text.clone();
+                t.font_size = self.ds_len(t.font_size);
+                t.glyphs = t
+                    .glyphs
+                    .into_iter()
+                    .map(|g| GlyphInstance {
+                        glyph_id: g.glyph_id,
+                        offset: self.ds_point(g.offset),
+                        advance: self.ds_len(g.advance),
+                    })
+                    .collect();
+                e.text = Some(t);
+            }
+            scaled.emphasis = Some(e);
+        }
+        scaled
+    }
+
+    fn scale_decoration_item(
+        &self,
+        item: &crate::paint::display_list::TextDecorationItem,
+    ) -> crate::paint::display_list::TextDecorationItem {
+        let mut scaled = item.clone();
+        scaled.bounds = self.ds_rect(item.bounds);
+        scaled.line_start = self.ds_len(item.line_start);
+        scaled.line_width = self.ds_len(item.line_width);
+        scaled.decorations = item
+            .decorations
+            .iter()
+            .map(|d| {
+                let scale_stroke = |s: &Option<DecorationStroke>| -> Option<DecorationStroke> {
+                    s.as_ref().map(|stroke| DecorationStroke {
+                        center: self.ds_len(stroke.center),
+                        thickness: self.ds_len(stroke.thickness),
+                        segments: stroke.segments.as_ref().map(|segs| {
+                            segs.iter()
+                                .map(|(a, b)| (self.ds_len(*a), self.ds_len(*b)))
+                                .collect()
+                        }),
+                    })
+                };
+                DecorationPaint {
+                    style: d.style,
+                    color: d.color,
+                    underline: scale_stroke(&d.underline),
+                    overline: scale_stroke(&d.overline),
+                    line_through: scale_stroke(&d.line_through),
+                }
+            })
+            .collect();
+        scaled
+    }
+
     /// Creates a renderer with the given dimensions and background color.
     pub fn new(width: u32, height: u32, background: Rgba, font_ctx: FontContext) -> Result<Self> {
+        Self::new_scaled(width, height, background, font_ctx, 1.0)
+    }
+
+    /// Creates a renderer with an explicit device scale (DPR). Coordinates are in CSS px.
+    pub fn new_scaled(
+        width: u32,
+        height: u32,
+        background: Rgba,
+        font_ctx: FontContext,
+        scale: f32,
+    ) -> Result<Self> {
+        let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+        let device_w = ((width as f32) * scale).round().max(1.0) as u32;
+        let device_h = ((height as f32) * scale).round().max(1.0) as u32;
         Ok(Self {
-            canvas: Canvas::new(width, height, background)?,
+            canvas: Canvas::new(device_w, device_h, background)?,
             font_ctx,
             stacking_layers: Vec::new(),
             blend_stack: Vec::new(),
+            scale,
         })
     }
 
@@ -599,8 +749,9 @@ impl DisplayListRenderer {
         let Some(stops) = self.convert_stops(&item.stops) else {
             return;
         };
-        let start = SkiaPoint::from_xy(item.rect.x() + item.start.x, item.rect.y() + item.start.y);
-        let end = SkiaPoint::from_xy(item.rect.x() + item.end.x, item.rect.y() + item.end.y);
+        let rect = self.ds_rect(item.rect);
+        let start = SkiaPoint::from_xy(rect.x() + self.ds_len(item.start.x), rect.y() + self.ds_len(item.start.y));
+        let end = SkiaPoint::from_xy(rect.x() + self.ds_len(item.end.x), rect.y() + self.ds_len(item.end.y));
         let spread = match item.spread {
             crate::paint::display_list::GradientSpread::Pad => SpreadMode::Pad,
             crate::paint::display_list::GradientSpread::Repeat => SpreadMode::Repeat,
@@ -610,9 +761,7 @@ impl DisplayListRenderer {
             return;
         };
 
-        let Some(skia_rect) =
-            tiny_skia::Rect::from_xywh(item.rect.x(), item.rect.y(), item.rect.width(), item.rect.height())
-        else {
+        let Some(skia_rect) = tiny_skia::Rect::from_xywh(rect.x(), rect.y(), rect.width(), rect.height()) else {
             return;
         };
 
@@ -633,20 +782,20 @@ impl DisplayListRenderer {
         let Some(stops) = self.convert_stops(&item.stops) else {
             return;
         };
-        let center = SkiaPoint::from_xy(item.rect.x() + item.center.x, item.rect.y() + item.center.y);
+        let rect = self.ds_rect(item.rect);
+        let center = SkiaPoint::from_xy(rect.x() + self.ds_len(item.center.x), rect.y() + self.ds_len(item.center.y));
         let spread = match item.spread {
             crate::paint::display_list::GradientSpread::Pad => SpreadMode::Pad,
             crate::paint::display_list::GradientSpread::Repeat => SpreadMode::Repeat,
             crate::paint::display_list::GradientSpread::Reflect => SpreadMode::Reflect,
         };
-        let Some(shader) = RadialGradient::new(center, center, item.radius, stops, spread, Transform::identity())
+        let radius = self.ds_len(item.radius);
+        let Some(shader) = RadialGradient::new(center, center, radius, stops, spread, Transform::identity())
         else {
             return;
         };
 
-        let Some(skia_rect) =
-            tiny_skia::Rect::from_xywh(item.rect.x(), item.rect.y(), item.rect.width(), item.rect.height())
-        else {
+        let Some(skia_rect) = tiny_skia::Rect::from_xywh(rect.x(), rect.y(), rect.width(), rect.height()) else {
             return;
         };
 
@@ -672,45 +821,44 @@ impl DisplayListRenderer {
         let transform = self.canvas.transform();
         let clip = self.canvas.clip_mask().cloned();
         let blend_mode = self.canvas.blend_mode();
-        let rect = item.rect;
+        let rect = self.ds_rect(item.rect);
+        let radii = self.ds_radii(item.radii);
+        let top = BorderSide { width: self.ds_len(item.top.width), ..item.top.clone() };
+        let right = BorderSide { width: self.ds_len(item.right.width), ..item.right.clone() };
+        let bottom = BorderSide { width: self.ds_len(item.bottom.width), ..item.bottom.clone() };
+        let left = BorderSide { width: self.ds_len(item.left.width), ..item.left.clone() };
 
         let mut pushed_clip = false;
-        if item.radii.has_radius() {
+        if radii.has_radius() {
             self.canvas.save();
-            self.canvas.set_clip_with_radii(rect, Some(item.radii));
+            self.canvas.set_clip_with_radii(rect, Some(radii));
             pushed_clip = true;
         }
 
         let edges: [(_, _, _, _); 4] = [
             (
                 BorderEdge::Top,
-                &item.top,
-                (rect.x(), rect.y() + item.top.width * 0.5),
-                (rect.x() + rect.width(), rect.y() + item.top.width * 0.5),
+                &top,
+                (rect.x(), rect.y() + top.width * 0.5),
+                (rect.x() + rect.width(), rect.y() + top.width * 0.5),
             ),
             (
                 BorderEdge::Right,
-                &item.right,
-                (rect.x() + rect.width() - item.right.width * 0.5, rect.y()),
-                (
-                    rect.x() + rect.width() - item.right.width * 0.5,
-                    rect.y() + rect.height(),
-                ),
+                &right,
+                (rect.x() + rect.width() - right.width * 0.5, rect.y()),
+                (rect.x() + rect.width() - right.width * 0.5, rect.y() + rect.height()),
             ),
             (
                 BorderEdge::Bottom,
-                &item.bottom,
-                (rect.x(), rect.y() + rect.height() - item.bottom.width * 0.5),
-                (
-                    rect.x() + rect.width(),
-                    rect.y() + rect.height() - item.bottom.width * 0.5,
-                ),
+                &bottom,
+                (rect.x(), rect.y() + rect.height() - bottom.width * 0.5),
+                (rect.x() + rect.width(), rect.y() + rect.height() - bottom.width * 0.5),
             ),
             (
                 BorderEdge::Left,
-                &item.left,
-                (rect.x() + item.left.width * 0.5, rect.y()),
-                (rect.x() + item.left.width * 0.5, rect.y() + rect.height()),
+                &left,
+                (rect.x() + left.width * 0.5, rect.y()),
+                (rect.x() + left.width * 0.5, rect.y() + rect.height()),
             ),
         ];
 
@@ -861,13 +1009,16 @@ impl DisplayListRenderer {
 
     fn render_box_shadow(&mut self, item: &BoxShadowItem) {
         let mut shadow = BoxShadow {
-            offset_x: item.offset.x,
-            offset_y: item.offset.y,
-            blur_radius: item.blur_radius,
-            spread_radius: item.spread_radius,
+            offset_x: self.ds_len(item.offset.x),
+            offset_y: self.ds_len(item.offset.y),
+            blur_radius: self.ds_len(item.blur_radius),
+            spread_radius: self.ds_len(item.spread_radius),
             color: item.color,
             inset: item.inset,
         };
+
+        let rect = self.ds_rect(item.rect);
+        let radii = self.ds_radii(item.radii);
 
         let mut temp = match Pixmap::new(self.canvas.width(), self.canvas.height()) {
             Some(p) => p,
@@ -880,11 +1031,11 @@ impl DisplayListRenderer {
 
         let _ = render_box_shadow(
             &mut temp,
-            item.rect.x(),
-            item.rect.y(),
-            item.rect.width(),
-            item.rect.height(),
-            &item.radii,
+            rect.x(),
+            rect.y(),
+            rect.width(),
+            rect.height(),
+            &radii,
             &shadow,
         );
 
@@ -963,8 +1114,8 @@ impl DisplayListRenderer {
                 let r = ((out_rgb.0 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
                 let g = ((out_rgb.1 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
                 let b = ((out_rgb.2 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
-                *dst_px = PremultipliedColorU8::from_rgba(r, g, b, out_a_u8)
-                    .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+                *dst_px =
+                    PremultipliedColorU8::from_rgba(r, g, b, out_a_u8).unwrap_or(PremultipliedColorU8::TRANSPARENT);
             }
         }
 
@@ -981,38 +1132,52 @@ impl DisplayListRenderer {
 
     fn render_item(&mut self, item: &DisplayItem) -> Result<()> {
         match item {
-            DisplayItem::FillRect(FillRectItem { rect, color }) => self.canvas.draw_rect(*rect, *color),
+            DisplayItem::FillRect(FillRectItem { rect, color }) => self.canvas.draw_rect(self.ds_rect(*rect), *color),
             DisplayItem::StrokeRect(StrokeRectItem {
                 rect,
                 color,
                 width,
                 blend_mode,
-            }) => self.canvas.stroke_rect_with_blend(*rect, *color, *width, *blend_mode),
-            DisplayItem::FillRoundedRect(item) => self.canvas.draw_rounded_rect(item.rect, item.radii, item.color),
-            DisplayItem::StrokeRoundedRect(item) => self
+            }) => self
                 .canvas
-                .stroke_rounded_rect(item.rect, item.radii, item.color, item.width),
+                .stroke_rect_with_blend(self.ds_rect(*rect), *color, self.ds_len(*width), *blend_mode),
+            DisplayItem::FillRoundedRect(item) => {
+                self.canvas
+                    .draw_rounded_rect(self.ds_rect(item.rect), self.ds_radii(item.radii), item.color)
+            }
+            DisplayItem::StrokeRoundedRect(item) => self.canvas.stroke_rounded_rect(
+                self.ds_rect(item.rect),
+                self.ds_radii(item.radii),
+                item.color,
+                self.ds_len(item.width),
+            ),
             DisplayItem::LinearGradient(item) => self.render_linear_gradient(item),
             DisplayItem::RadialGradient(item) => self.render_radial_gradient(item),
             DisplayItem::Border(item) => self.render_border(item),
-            DisplayItem::TextDecoration(item) => self.render_text_decoration(item)?,
-            DisplayItem::Text(item) => self.render_text(item)?,
+            DisplayItem::TextDecoration(item) => {
+                let scaled = self.scale_decoration_item(item);
+                self.render_text_decoration(&scaled)?
+            }
+            DisplayItem::Text(item) => {
+                let scaled = self.scale_text_item(item);
+                self.render_text(&scaled)?
+            }
             DisplayItem::Image(item) => self.render_image(item)?,
             DisplayItem::BoxShadow(item) => self.render_box_shadow(item),
             DisplayItem::PushStackingContext(item) => {
-                if !item.backdrop_filters.is_empty() {
-                    apply_backdrop_filters(
-                        self.canvas.pixmap_mut(),
-                        &item.bounds,
-                        &item.backdrop_filters,
-                        item.radii,
-                    );
+                let scaled_filters = self.ds_filters(&item.filters);
+                let scaled_backdrop = self.ds_filters(&item.backdrop_filters);
+                let bounds = self.ds_rect(item.bounds);
+                let radii = self.ds_radii(item.radii);
+
+                if !scaled_backdrop.is_empty() {
+                    apply_backdrop_filters(self.canvas.pixmap_mut(), &bounds, &scaled_backdrop, radii, self.scale);
                 }
 
                 let needs_layer = item.is_isolated
                     || !matches!(item.mix_blend_mode, crate::paint::display_list::BlendMode::Normal)
-                    || !item.filters.is_empty()
-                    || !item.backdrop_filters.is_empty();
+                    || !scaled_filters.is_empty()
+                    || !scaled_backdrop.is_empty();
                 if needs_layer {
                     let blend = if item.is_isolated {
                         tiny_skia::BlendMode::SourceOver
@@ -1025,13 +1190,20 @@ impl DisplayListRenderer {
                 }
                 self.stacking_layers.push(StackingRecord {
                     needs_layer,
-                    filters: item.filters.clone(),
-                    radii: item.radii,
-                    mask_bounds: item.bounds,
+                    filters: scaled_filters,
+                    radii,
+                    mask_bounds: bounds,
                 });
 
                 if let Some(matrix) = item.transform {
-                    let t = Transform::from_row(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f);
+                    let t = Transform::from_row(
+                        matrix.a,
+                        matrix.b,
+                        matrix.c,
+                        matrix.d,
+                        self.ds_len(matrix.e),
+                        self.ds_len(matrix.f),
+                    );
                     let combined = self.canvas.transform().post_concat(t);
                     self.canvas.set_transform(combined);
                 }
@@ -1045,12 +1217,11 @@ impl DisplayListRenderer {
                 });
                 if record.needs_layer {
                     if !record.filters.is_empty() {
-                        apply_filters(self.canvas.pixmap_mut(), &record.filters);
+                        apply_filters(self.canvas.pixmap_mut(), &record.filters, self.scale);
                     }
                     if !record.radii.is_zero() {
                         self.canvas.save();
-                        self.canvas
-                            .set_clip_with_radii(record.mask_bounds, Some(record.radii));
+                        self.canvas.set_clip_with_radii(record.mask_bounds, Some(record.radii));
                         self.canvas.pop_layer()?;
                         self.canvas.restore();
                     } else {
@@ -1080,7 +1251,8 @@ impl DisplayListRenderer {
                     self.canvas.push_layer(1.0)?;
                     self.blend_stack.push(Some(mode.mode));
                 } else {
-                    self.canvas.push_layer_with_blend(1.0, Some(map_blend_mode(mode.mode)))?;
+                    self.canvas
+                        .push_layer_with_blend(1.0, Some(map_blend_mode(mode.mode)))?;
                     self.blend_stack.push(None);
                 }
             }
@@ -1666,8 +1838,9 @@ impl DisplayListRenderer {
     }
 
     fn render_image(&mut self, item: &ImageItem) -> Result<()> {
+        let dest_rect = self.ds_rect(item.dest_rect);
         if let Some(clip) = self.canvas.clip_bounds() {
-            if clip.width() <= 0.0 || clip.height() <= 0.0 || clip.intersection(item.dest_rect).is_none() {
+            if clip.width() <= 0.0 || clip.height() <= 0.0 || clip.intersection(dest_rect).is_none() {
                 return Ok(());
             }
         }
@@ -1676,7 +1849,7 @@ impl DisplayListRenderer {
             return Ok(());
         };
 
-        if item.dest_rect.width() <= 0.0 || item.dest_rect.height() <= 0.0 {
+        if dest_rect.width() <= 0.0 || dest_rect.height() <= 0.0 {
             return Ok(());
         }
 
@@ -1687,10 +1860,10 @@ impl DisplayListRenderer {
             ..Default::default()
         };
 
-        let scale_x = item.dest_rect.width() / pixmap.width() as f32;
-        let scale_y = item.dest_rect.height() / pixmap.height() as f32;
+        let scale_x = dest_rect.width() / pixmap.width() as f32;
+        let scale_y = dest_rect.height() / pixmap.height() as f32;
 
-        let transform = Transform::from_row(scale_x, 0.0, 0.0, scale_y, item.dest_rect.x(), item.dest_rect.y())
+        let transform = Transform::from_row(scale_x, 0.0, 0.0, scale_y, dest_rect.x(), dest_rect.y())
             .post_concat(self.canvas.transform());
         let clip_mask = self.canvas.clip_mask().cloned();
         self.canvas
@@ -1702,7 +1875,8 @@ impl DisplayListRenderer {
 
     fn push_clip(&mut self, clip: &ClipItem) {
         self.canvas.save();
-        self.canvas.set_clip_with_radii(clip.rect, clip.radii);
+        let radii = clip.radii.map(|r| self.ds_radii(r));
+        self.canvas.set_clip_with_radii(self.ds_rect(clip.rect), radii);
     }
 
     fn pop_clip(&mut self) {
@@ -1716,8 +1890,8 @@ impl DisplayListRenderer {
             transform.transform.b,
             transform.transform.c,
             transform.transform.d,
-            transform.transform.e,
-            transform.transform.f,
+            transform.transform.e * self.scale,
+            transform.transform.f * self.scale,
         );
         let combined = self.canvas.transform().post_concat(matrix);
         self.canvas.set_transform(combined);

@@ -6,6 +6,10 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- CSS cascade now evaluates media queries against the actual viewport requested by `layout_document`/`render_html` (MediaContext built from the passed width/height instead of a fixed desktop size), so responsive rules track the real render target.
+- FastRender keeps the configured default viewport and `render()` uses those dimensions (not a baked-in 800×600); new API tests cover viewport-aware media queries and default-render sizing.
+- Image-set selection is now device-pixel-ratio aware: cascade sets the current DPR from the media context, `FastRender` exposes/configures DPR, and `image-set()` chooses the best candidate for that DPR across backgrounds, list-style images, cursors, etc. Added property/cascade/regression tests plus a builder test for DPR plumbing.
+- Painting now happens directly at device scale: the painter allocates a DPR-scaled canvas, scales all geometry/lengths (backgrounds, borders, text, filters/shadows, replaced content), and composites stacking contexts in device coordinates instead of post-upscaling. API regression covers integer DPR output sizing and a new fractional (1.5) DPR case.
 - Display list regression added for video replaced elements: builder now covered by a test that writes a temporary PNG poster and asserts the display list uses it for `ReplacedType::Video`, cleaning up the temp file afterward.
 - FormattingContextFactory now carries the nearest positioned containing block and threads it into block/inline/flex/grid contexts; flex and newly updated grid contexts lay out out-of-flow abs/fixed children against the inherited containing block when the container itself isn’t positioned, and new regressions cover ancestor CB fallback for both flex and grid.
 - Table formatting context now inherits the nearest positioned containing block and positions out-of-flow abs/fixed children accordingly; positioned tables use their padding box as the CB, and empty tables still lay out positioned descendants. Added a regression for CB inheritance through table layout.
@@ -491,6 +495,8 @@
 - Non-image replaced content (iframe/video/etc.) remains unrendered; need full replaced-element handling beyond images/SVG.
 - Painting still lacks 3D transforms/transform-origin z and fuller filter/blend/isolation interplay, and the richer display list module remains partially integrated.
 - Root line strut still provides minimum line-height rather than full descendant baseline synthesis.
+- Display-list renderer now accepts device-scale rendering: it allocates DPR-sized canvases and scales all geometry/text/filters before rasterization so the display-list path matches painter device outputs. A new constructor allows explicit scale; existing APIs stay CSS-pixel default.
+- Stacking-context transforms in the display-list renderer now scale translation components with the device scale so DPR-rendered display lists position layers correctly; `renderer_respects_device_scale` covers the scaled output size and content.
 
 ## To-do / next steps (spec-oriented)
 1. Inline/text:

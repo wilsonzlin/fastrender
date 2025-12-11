@@ -17,7 +17,11 @@ fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
     }
 
     let d = max - min;
-    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
     let h = if (max - r).abs() < f32::EPSILON {
         (g - b) / d + if g < b { 6.0 } else { 0.0 }
     } else if (max - g).abs() < f32::EPSILON {
@@ -106,7 +110,9 @@ fn assert_hsl_components(
 ) {
     let (h, s, l) = rgb_to_hsl(actual.0, actual.1, actual.2);
     assert!(
-        hue_delta(h, expected_hsl.0) <= tol_h && (s - expected_hsl.1).abs() <= tol_s && (l - expected_hsl.2).abs() <= tol_l,
+        hue_delta(h, expected_hsl.0) <= tol_h
+            && (s - expected_hsl.1).abs() <= tol_s
+            && (l - expected_hsl.2).abs() <= tol_l,
         "{context}: expected hsl {:?}, got hsl ({h:.3},{s:.3},{l:.3})",
         expected_hsl
     );
@@ -217,9 +223,7 @@ fn color_blend_mode_uses_destination_luminance() {
         color: Rgba::from_rgba8(128, 128, 128, 255),
     }));
     // Apply color blend with vivid red source: hue/saturation from source, luminance from destination.
-    list.push(DisplayItem::PushBlendMode(BlendModeItem {
-        mode: BlendMode::Color,
-    }));
+    list.push(DisplayItem::PushBlendMode(BlendModeItem { mode: BlendMode::Color }));
     list.push(DisplayItem::FillRect(FillRectItem {
         rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
         color: Rgba::RED,
@@ -246,9 +250,7 @@ fn hue_blend_mode_uses_source_hue() {
         rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
         color: Rgba::from_rgba8(dst.0, dst.1, dst.2, 255),
     }));
-    list.push(DisplayItem::PushBlendMode(BlendModeItem {
-        mode: BlendMode::Hue,
-    }));
+    list.push(DisplayItem::PushBlendMode(BlendModeItem { mode: BlendMode::Hue }));
     list.push(DisplayItem::FillRect(FillRectItem {
         rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
         color: Rgba::from_rgba8(src.0, src.1, src.2, 255),
@@ -288,6 +290,31 @@ fn saturation_blend_mode_uses_source_saturation() {
     let expected = blend_saturation(src, dst);
     let (eh, es, el) = rgb_to_hsl(expected.0, expected.1, expected.2);
     assert_hsl_components((r, g, b), (eh, es, el), 0.02, 0.05, 0.05, "saturation blend");
+}
+
+#[test]
+fn renderer_respects_device_scale() {
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 1.0, 1.0),
+        color: Rgba::rgb(255, 0, 0),
+    }));
+
+    let renderer = DisplayListRenderer::new_scaled(2, 1, Rgba::WHITE, FontContext::new(), 2.0).unwrap();
+    let pixmap = renderer.render(&list).unwrap();
+    assert_eq!(pixmap.width(), 4);
+    assert_eq!(pixmap.height(), 2);
+
+    let red_pixels = pixmap
+        .pixels()
+        .iter()
+        .filter(|p| p.red() == 255 && p.green() == 0 && p.blue() == 0 && p.alpha() == 255)
+        .count();
+    assert!(
+        red_pixels >= 4,
+        "expected at least a 2x2 red block after scaling, got {}",
+        red_pixels
+    );
 }
 
 #[test]
@@ -380,5 +407,8 @@ fn filter_blur_not_clipped_to_bounds() {
     // Blur should leak outside the original rect into pixel 0.
     let (r, g, b, a) = pixel(&pixmap, 0, 0);
     assert_eq!(a, 255);
-    assert!(r > g && r > b && (g < 250 || b < 250), "expected red-dominant blur outside bounds; got ({r},{g},{b})");
+    assert!(
+        r > g && r > b && (g < 250 || b < 250),
+        "expected red-dominant blur outside bounds; got ({r},{g},{b})"
+    );
 }
