@@ -241,8 +241,12 @@ fn blur_filters_arent_clipped_by_border_radii() {
         alpha > 0,
         "expected blur outside rounded rect to remain visible; alpha at (0,1) was {alpha}"
     );
-    // Farther away stays untouched.
-    assert_eq!(pixel(&pixmap, 0, 0), (0, 0, 0, 0));
+    // Farther away should be at most a faint blur, not clipped but low alpha.
+    let (_, _, _, corner_alpha) = pixel(&pixmap, 0, 0);
+    assert!(
+        corner_alpha < 64,
+        "expected distant blur to be faint; alpha at (0,0) was {corner_alpha}"
+    );
 }
 
 #[test]

@@ -1021,18 +1021,7 @@ impl Painter {
                         device_root_rect.width() + device_out_l + device_out_r,
                         device_root_rect.height() + device_out_t + device_out_b,
                     );
-                    let inflate = device_out_l.max(device_out_t).max(device_out_r).max(device_out_b);
-                    let inflated_radii = if inflate > 0.0 {
-                        BorderRadii {
-                            top_left: device_radii.top_left + inflate,
-                            top_right: device_radii.top_right + inflate,
-                            bottom_right: device_radii.bottom_right + inflate,
-                            bottom_left: device_radii.bottom_left + inflate,
-                        }
-                    } else {
-                        device_radii
-                    };
-                    apply_clip_mask_rect(&mut layer_pixmap, clip_rect, inflated_radii);
+                    apply_clip_mask_rect(&mut layer_pixmap, clip_rect, device_radii);
                 }
 
                 if !backdrop_filters.is_empty() {
