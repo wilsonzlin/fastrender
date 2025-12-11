@@ -158,6 +158,9 @@ fn apply_styles_internal(
     if let Some(presentational_rule) = dir_presentational_hint(node, 0) {
         matching_rules.push(presentational_rule);
     }
+    if let Some(presentational_rule) = list_type_presentational_hint(node, 1) {
+        matching_rules.push(presentational_rule);
+    }
     let inline_decls = node.get_attribute("style").as_deref().map(parse_declarations);
     apply_cascaded_declarations(
         &mut styles,
@@ -244,6 +247,9 @@ fn apply_styles_internal_with_ancestors(
     // Apply matching CSS rules and inline styles with full cascade ordering
     let mut matching_rules = find_matching_rules(node, rules, ancestors);
     if let Some(presentational_rule) = dir_presentational_hint(node, 0) {
+        matching_rules.push(presentational_rule);
+    }
+    if let Some(presentational_rule) = list_type_presentational_hint(node, 1) {
         matching_rules.push(presentational_rule);
     }
     let inline_decls = node.get_attribute("style").as_deref().map(parse_declarations);
@@ -609,6 +615,83 @@ mod tests {
 
         let styled = apply_styles(&dom, &StyleSheet::new());
         assert!(matches!(styled.styles.direction, crate::style::types::Direction::Ltr));
+    }
+
+    #[test]
+    fn ol_type_attribute_sets_list_style_type() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "ol".to_string(),
+                attributes: vec![("type".to_string(), "A".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(
+            styled.styles.list_style_type,
+            crate::style::types::ListStyleType::UpperAlpha
+        ));
+    }
+
+    #[test]
+    fn li_type_attribute_overrides_parent_style() {
+        let child = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "li".to_string(),
+                attributes: vec![("type".to_string(), "i".to_string())],
+            },
+            children: vec![],
+        };
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "ol".to_string(),
+                attributes: vec![("type".to_string(), "A".to_string())],
+            },
+            children: vec![child],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let li = styled.children.first().expect("li");
+        assert!(matches!(
+            li.styles.list_style_type,
+            crate::style::types::ListStyleType::LowerRoman
+        ));
+    }
+
+    #[test]
+    fn ul_type_attribute_uses_presentational_hint() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "ul".to_string(),
+                attributes: vec![("type".to_string(), "circle".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(
+            styled.styles.list_style_type,
+            crate::style::types::ListStyleType::Circle
+        ));
+    }
+
+    #[test]
+    fn author_css_overrides_type_presentational_hint() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "ol".to_string(),
+                attributes: vec![("type".to_string(), "I".to_string())],
+            },
+            children: vec![],
+        };
+
+        let stylesheet = parse_stylesheet("ol { list-style-type: lower-alpha; }").unwrap();
+        let styled = apply_styles(&dom, &stylesheet);
+        assert!(matches!(
+            styled.styles.list_style_type,
+            crate::style::types::ListStyleType::LowerAlpha
+        ));
     }
 
     #[test]
@@ -1670,6 +1753,43 @@ fn dir_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule> 
                 declarations,
             })
         }
+        _ => None,
+    }
+}
+
+fn list_type_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule> {
+    let tag = node.tag_name()?.to_ascii_lowercase();
+    let ty = node.get_attribute("type")?;
+    let mapped = match tag.as_str() {
+        "ol" | "li" => map_ol_type(&ty),
+        "ul" => map_ul_type(&ty),
+        _ => None,
+    }?;
+    let declarations = parse_declarations(&format!("list-style-type: {};", mapped));
+    Some(MatchedRule {
+        origin: StyleOrigin::Author,
+        specificity: 0,
+        order,
+        declarations,
+    })
+}
+
+fn map_ol_type(value: &str) -> Option<&'static str> {
+    match value.trim() {
+        "1" => Some("decimal"),
+        "a" => Some("lower-alpha"),
+        "A" => Some("upper-alpha"),
+        "i" => Some("lower-roman"),
+        "I" => Some("upper-roman"),
+        _ => None,
+    }
+}
+
+fn map_ul_type(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "disc" => Some("disc"),
+        "circle" => Some("circle"),
+        "square" => Some("square"),
         _ => None,
     }
 }
