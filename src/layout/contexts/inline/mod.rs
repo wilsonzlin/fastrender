@@ -5314,6 +5314,34 @@ mod tests {
     }
 
     #[test]
+    fn text_align_last_overrides_non_justify_alignment() {
+        let mut root_style = ComputedStyle::default();
+        root_style.font_size = 16.0;
+        root_style.text_align = TextAlign::Center;
+        root_style.text_align_last = crate::style::types::TextAlignLast::Right;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(text_style), "foo\nbar".to_string())],
+        );
+        let constraints = LayoutConstraints::definite_width(120.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        let last_line = fragment.children.last().expect("last line");
+        let child = last_line.children.first().expect("text fragment");
+        let right_edge = child.bounds.x() + child.bounds.width();
+        assert!(
+            right_edge > last_line.bounds.width() * 0.8,
+            "text-align-last should override base alignment even when text-align is not justify; right_edge={}, line_width={}",
+            right_edge,
+            last_line.bounds.width()
+        );
+    }
+
+    #[test]
     fn text_indent_shifts_first_line_start() {
         let mut root_style = ComputedStyle::default();
         root_style.text_indent.length = Length::px(10.0);
