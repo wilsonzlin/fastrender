@@ -552,15 +552,12 @@ fn main() -> Result<()> {
     let mut seen_imports = HashSet::new();
     for css_url in css_links {
         println!("Fetching CSS from: {}", css_url);
+        seen_imports.insert(css_url.clone());
         match fetch_url(&css_url) {
             Ok(css) => {
                 let rewritten = absolutize_css_urls(&css, &css_url);
                 let inlined = inline_imports(&rewritten, &css_url, &fetch_url, &mut seen_imports);
-                combined_css.push_str(&rewritten);
-                if rewritten != inlined {
-                    combined_css.push('\n');
-                    combined_css.push_str(&inlined);
-                }
+                combined_css.push_str(&inlined);
                 combined_css.push('\n');
             }
             Err(e) => {

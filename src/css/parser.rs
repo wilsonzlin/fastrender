@@ -4,11 +4,11 @@
 
 use super::properties::parse_property_value;
 use super::selectors::PseudoClassParser;
-use super::types::{CssRule, Declaration, MediaRule, StyleRule, StyleSheet};
+use super::types::{CssRule, Declaration, ImportRule, MediaRule, StyleRule, StyleSheet};
 use crate::dom::DomNode;
 use crate::error::Result;
 use crate::style::media::MediaQuery;
-use cssparser::{ParseError, Parser, ParserInput, Token};
+use cssparser::{ParseError, Parser, ParserInput, Token, ToCss};
 use selectors::parser::{SelectorList, SelectorParseErrorKind};
 
 // ============================================================================
@@ -77,6 +77,7 @@ fn parse_rule<'i, 't>(
         if let Ok(Token::AtKeyword(kw)) = p.next() {
             let kw_str = kw.to_string();
             match kw_str.as_str() {
+                "import" => parse_import_rule(p),
                 "media" => parse_media_rule(p),
                 _ => {
                     skip_at_rule(p);
@@ -93,6 +94,48 @@ fn parse_rule<'i, 't>(
 
     // Parse style rule
     parse_style_rule(parser).map(|opt| opt.map(CssRule::Style))
+}
+
+/// Parse an @import rule
+fn parse_import_rule<'i, 't>(
+    parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+    parser.skip_whitespace();
+
+    // Import target can be url() or string
+    let href = match parser.next_including_whitespace() {
+        Ok(Token::Function(f)) if f.as_ref().eq_ignore_ascii_case("url") => parser
+            .parse_nested_block(|p| {
+                p.skip_whitespace();
+                match p.next_including_whitespace() {
+                    Ok(Token::QuotedString(s)) | Ok(Token::Ident(s)) => Ok(s.to_string()),
+                    _ => Err(p.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected url".into()))),
+                }
+            })?,
+        Ok(Token::QuotedString(s)) => s.to_string(),
+        _ => return Ok(None),
+    };
+
+    // Parse optional media list until semicolon or block start (best-effort; unknown tokens are ignored).
+    let mut media_queries = Vec::new();
+    let mut media_tokens = String::new();
+    while let Ok(token) = parser.next_including_whitespace() {
+        match token {
+            Token::Semicolon | Token::CurlyBracketBlock => break,
+            Token::WhiteSpace(ws) => media_tokens.push_str(ws),
+            other => media_tokens.push_str(&other.to_css_string()),
+        }
+    }
+    if !media_tokens.trim().is_empty() {
+        if let Ok(list) = MediaQuery::parse_list(&media_tokens) {
+            media_queries = list;
+        }
+    }
+
+    // Skip until semicolon
+    // (already consumed above)
+
+    Ok(Some(CssRule::Import(ImportRule { href, media: media_queries })))
 }
 
 /// Parse a @media rule
@@ -332,6 +375,7 @@ pub fn extract_css(dom: &DomNode) -> Result<StyleSheet> {
 mod tests {
     use super::*;
     use crate::PropertyValue;
+    use crate::css::types::CssImportLoader;
 
     #[test]
     fn test_parse_simple_stylesheet() {
@@ -343,6 +387,40 @@ mod tests {
         } else {
             panic!("Expected style rule");
         }
+    }
+
+    #[test]
+    fn test_parse_import_rule() {
+        let css = r#"@import url("https://example.com/base.css") screen and (min-width: 800px);"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        assert_eq!(stylesheet.rules.len(), 1);
+        if let CssRule::Import(import) = &stylesheet.rules[0] {
+            assert_eq!(import.href, "https://example.com/base.css");
+        } else {
+            panic!("Expected import rule");
+        }
+    }
+
+    #[test]
+    fn resolve_imports_inlines_before_other_rules() {
+        struct Loader;
+        impl CssImportLoader for Loader {
+            fn load(&self, url: &str) -> crate::error::Result<String> {
+                assert_eq!(url, "https://example.com/base.css");
+                Ok(".from-import { color: red; }".to_string())
+            }
+        }
+
+        let css = r#"
+            @import url("https://example.com/base.css");
+            .local { color: blue; }
+        "#;
+        let sheet = parse_stylesheet(css).unwrap();
+        let media_ctx = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let resolved = sheet.resolve_imports(&Loader, Some("https://example.com/page.css"), &media_ctx);
+        assert_eq!(resolved.rules.len(), 2);
+        assert!(matches!(resolved.rules[0], CssRule::Style(_)));
+        assert!(matches!(resolved.rules[1], CssRule::Style(_)));
     }
 
     #[test]

@@ -75,6 +75,13 @@ pub struct StyleSheet {
     pub rules: Vec<CssRule>,
 }
 
+/// A minimal interface for loading imported stylesheets.
+///
+/// Implementations can fetch from network, filesystem, or an in-memory map.
+pub trait CssImportLoader {
+    fn load(&self, url: &str) -> crate::error::Result<String>;
+}
+
 impl StyleSheet {
     /// Creates an empty stylesheet
     pub fn new() -> Self {
@@ -88,6 +95,22 @@ impl StyleSheet {
         let mut result = Vec::new();
         collect_rules_recursive(&self.rules, media_ctx, &mut result);
         result
+    }
+
+    /// Resolve @import rules by fetching external stylesheets and inlining their rules.
+    ///
+    /// Imports are processed in order; only imports whose media lists match the provided
+    /// `media_ctx` are inlined. Relative URLs are resolved against `base_url` when provided.
+    pub fn resolve_imports<L: CssImportLoader + ?Sized>(
+        &self,
+        loader: &L,
+        base_url: Option<&str>,
+        media_ctx: &MediaContext,
+    ) -> Self {
+        let mut resolved = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        resolve_rules(&self.rules, loader, base_url, media_ctx, &mut seen, &mut resolved);
+        StyleSheet { rules: resolved }
     }
 }
 
@@ -103,6 +126,9 @@ fn collect_rules_recursive<'a>(rules: &'a [CssRule], media_ctx: &MediaContext, o
                 if media_ctx.evaluate(&media_rule.query) {
                     collect_rules_recursive(&media_rule.rules, media_ctx, out);
                 }
+            }
+            CssRule::Import(_) => {
+                // Imports are resolved before collection; nothing to add here.
             }
         }
     }
@@ -121,6 +147,8 @@ pub enum CssRule {
     Style(StyleRule),
     /// A @media rule containing conditional rules
     Media(MediaRule),
+    /// An @import rule (href + optional media list)
+    Import(ImportRule),
 }
 
 /// A @media rule containing conditional rules
@@ -130,6 +158,15 @@ pub struct MediaRule {
     pub query: MediaQuery,
     /// Rules that apply when query matches (can be nested)
     pub rules: Vec<CssRule>,
+}
+
+/// A @import rule targeting another stylesheet
+#[derive(Debug, Clone)]
+pub struct ImportRule {
+    /// Target stylesheet URL (as authored, possibly relative)
+    pub href: String,
+    /// Optional list of media queries that gate the import
+    pub media: Vec<MediaQuery>,
 }
 
 /// A single CSS style rule (selectors + declarations)
@@ -147,6 +184,56 @@ pub struct Declaration {
     /// Raw token string as authored (after stripping !important/semicolon). Used for custom properties.
     pub raw_value: String,
     pub important: bool,
+}
+
+fn resolve_rules<L: CssImportLoader + ?Sized>(
+    rules: &[CssRule],
+    loader: &L,
+    base_url: Option<&str>,
+    media_ctx: &MediaContext,
+    seen: &mut std::collections::HashSet<String>,
+    out: &mut Vec<CssRule>,
+) {
+    use url::Url;
+
+    for rule in rules {
+        match rule {
+            CssRule::Style(_) | CssRule::Media(_) => out.push(rule.clone()),
+            CssRule::Import(import) => {
+                let media_matches = import.media.is_empty() || media_ctx.evaluate_list(&import.media);
+                if !media_matches {
+                    continue;
+                }
+
+                let mut resolved_href = import.href.clone();
+                if let Some(base) = base_url {
+                    if let Ok(base_url) = Url::parse(base)
+                        .or_else(|_| Url::from_file_path(base).map_err(|_| url::ParseError::RelativeUrlWithoutBase))
+                    {
+                        if let Ok(resolved) = base_url.join(&import.href) {
+                            resolved_href = resolved.to_string();
+                        }
+                    }
+                }
+
+                if seen.contains(&resolved_href) {
+                    continue;
+                }
+
+                match loader.load(&resolved_href) {
+                    Ok(css_text) => {
+                        seen.insert(resolved_href.clone());
+                        if let Ok(sheet) = crate::css::parser::parse_stylesheet(&css_text) {
+                            resolve_rules(&sheet.rules, loader, Some(&resolved_href), media_ctx, seen, out);
+                        }
+                    }
+                    Err(_) => {
+                        // Per spec, failed imports are ignored.
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// CSS property values

@@ -7,6 +7,7 @@
 //! <https://www.w3.org/TR/css-cascade-4/>
 
 use crate::css::parser::{parse_declarations, parse_stylesheet};
+use crate::css::types::CssImportLoader;
 use crate::css::selectors::{PseudoElement, TextDirection};
 use crate::css::types::{Declaration, StyleRule, StyleSheet};
 use crate::dom::{resolve_first_strong_direction, with_target_fragment, DomNode, ElementRef};
@@ -111,13 +112,32 @@ pub fn apply_styles_with_media_and_target(
     media_ctx: &MediaContext,
     target_fragment: Option<&str>,
 ) -> StyledNode {
+    apply_styles_with_media_target_and_imports(dom, stylesheet, media_ctx, target_fragment, None, None::<&str>)
+}
+
+/// Apply styles with media context, optional :target, and optional import loader/base URL.
+pub fn apply_styles_with_media_target_and_imports(
+    dom: &DomNode,
+    stylesheet: &StyleSheet,
+    media_ctx: &MediaContext,
+    target_fragment: Option<&str>,
+    import_loader: Option<&dyn CssImportLoader>,
+    base_url: Option<&str>,
+) -> StyledNode {
     // Parse user-agent stylesheet
     let ua_stylesheet = parse_stylesheet(USER_AGENT_STYLESHEET).unwrap_or_else(|_| StyleSheet::new());
+
+    // Resolve imports if a loader is provided
+    let author_sheet = if let Some(loader) = import_loader {
+        stylesheet.resolve_imports(loader, base_url, media_ctx)
+    } else {
+        stylesheet.clone()
+    };
 
     // Collect applicable rules from both stylesheets
     // User-agent rules come first (lower priority)
     let ua_rules = ua_stylesheet.collect_style_rules(media_ctx);
-    let author_rules = stylesheet.collect_style_rules(media_ctx);
+    let author_rules = author_sheet.collect_style_rules(media_ctx);
 
     let mut all_rules: Vec<CascadeRule<'_>> = Vec::with_capacity(ua_rules.len() + author_rules.len());
     for (order, rule) in ua_rules.iter().enumerate() {
@@ -486,6 +506,7 @@ mod tests {
     use super::*;
     use crate::css::parser::parse_declarations;
     use crate::css::parser::parse_stylesheet;
+    use crate::css::types::CssImportLoader;
     use crate::css::types::StyleSheet;
     use crate::dom::DomNodeType;
     use crate::style::color::Rgba;
@@ -572,6 +593,35 @@ mod tests {
         let stylesheet = parse_stylesheet(".item { color: blue !important; }").unwrap();
         let styled = apply_styles(&dom, &stylesheet);
         assert_eq!(styled.styles.color, Rgba::rgb(0, 128, 0));
+    }
+
+    #[test]
+    fn imports_are_resolved_when_loader_present() {
+        struct Loader;
+        impl CssImportLoader for Loader {
+            fn load(&self, _url: &str) -> crate::error::Result<String> {
+                Ok("#target { color: rgb(1, 2, 3); }".to_string())
+            }
+        }
+
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("id".to_string(), "target".to_string())],
+            },
+            children: vec![],
+        };
+        let stylesheet = parse_stylesheet(r#"@import url("import.css");"#).unwrap();
+        let media_ctx = MediaContext::screen(800.0, 600.0);
+        let styled = apply_styles_with_media_target_and_imports(
+            &dom,
+            &stylesheet,
+            &media_ctx,
+            None,
+            Some(&Loader),
+            Some("https://example.com/page.css"),
+        );
+        assert_eq!(styled.styles.color, Rgba::rgb(1, 2, 3));
     }
 
     #[test]

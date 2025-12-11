@@ -55,6 +55,7 @@
 //! instance per thread.
 
 use crate::css::parser::extract_css;
+use crate::css::types::CssImportLoader;
 use crate::dom::{self, DomNode};
 use crate::error::{Error, RenderError, Result};
 use crate::geometry::Size;
@@ -64,7 +65,7 @@ use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem;
 use crate::layout::engine::{LayoutConfig, LayoutEngine};
 use crate::paint::painter::paint_tree_with_resources_scaled;
-use crate::style::cascade::apply_styles_with_media_and_target;
+use crate::style::cascade::apply_styles_with_media_target_and_imports;
 use crate::style::color::Rgba;
 use crate::style::media::MediaContext;
 use crate::style::ComputedStyle;
@@ -75,6 +76,9 @@ use crate::tree::box_generation::generate_box_tree;
 use crate::tree::box_tree::{BoxNode, BoxType, MarkerContent, ReplacedBox, ReplacedType};
 use crate::tree::fragment_tree::FragmentTree;
 use image::GenericImageView;
+use std::io;
+use std::path::Path;
+use url::Url;
 
 // Re-export Pixmap from tiny-skia for public use
 pub use tiny_skia::Pixmap;
@@ -608,7 +612,17 @@ impl FastRender {
         let target_fragment = self.current_target_fragment();
         let media_ctx =
             MediaContext::screen(width as f32, height as f32).with_device_pixel_ratio(self.device_pixel_ratio);
-        let styled_tree = apply_styles_with_media_and_target(dom, &stylesheet, &media_ctx, target_fragment.as_deref());
+        let import_loader = CssImportFetcher {
+            base_url: self.base_url.clone(),
+        };
+        let styled_tree = apply_styles_with_media_target_and_imports(
+            dom,
+            &stylesheet,
+            &media_ctx,
+            target_fragment.as_deref(),
+            Some(&import_loader),
+            self.base_url.as_deref(),
+        );
 
         // Generate box tree
         let mut box_tree = generate_box_tree(&styled_tree);
@@ -982,6 +996,181 @@ impl FastRender {
     }
 }
 
+#[derive(Clone, Debug)]
+struct CssImportFetcher {
+    base_url: Option<String>,
+}
+
+impl CssImportFetcher {
+    fn resolve_url(&self, href: &str) -> Option<Url> {
+        if href.starts_with("data:") {
+            return None;
+        }
+
+        if let Ok(abs) = Url::parse(href) {
+            return Some(abs);
+        }
+
+        let base = self.base_url.as_ref()?;
+        let mut base_candidate = base.clone();
+        if base_candidate.starts_with("file://") {
+            let path = &base_candidate["file://".len()..];
+            if Path::new(path).is_dir() && !base_candidate.ends_with('/') {
+                base_candidate.push('/');
+            }
+        }
+
+        Url::parse(&base_candidate)
+            .or_else(|_| Url::from_file_path(&base_candidate).map_err(|_| url::ParseError::RelativeUrlWithoutBase))
+            .ok()
+            .and_then(|base_url| base_url.join(href).ok())
+    }
+}
+
+impl CssImportLoader for CssImportFetcher {
+    fn load(&self, url: &str) -> Result<String> {
+        if url.starts_with("data:") {
+            return decode_data_url_to_string(url);
+        }
+
+        let resolved = self
+            .resolve_url(url)
+            .or_else(|| Url::parse(url).ok())
+            .ok_or_else(|| Error::Io(io::Error::new(io::ErrorKind::InvalidInput, format!("Cannot resolve @import URL '{}'", url))))?;
+
+        match resolved.scheme() {
+            "file" => {
+                let path = resolved.to_file_path().map_err(|_| {
+                    Error::Io(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("Invalid file URL for @import: {}", resolved),
+                    ))
+                })?;
+                let bytes = std::fs::read(&path).map_err(Error::Io)?;
+                Ok(match String::from_utf8(bytes) {
+                    Ok(s) => s,
+                    Err(e) => String::from_utf8_lossy(&e.into_bytes()).into_owned(),
+                })
+            }
+            _ => {
+                let config = ureq::Agent::config_builder()
+                    .timeout_global(Some(std::time::Duration::from_secs(30)))
+                    .build();
+                let agent: ureq::Agent = config.into();
+
+                let mut response = agent
+                    .get(resolved.as_str())
+                    .call()
+                    .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
+
+                let bytes = response
+                    .body_mut()
+                    .read_to_vec()
+                    .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
+
+                Ok(match String::from_utf8(bytes) {
+                    Ok(s) => s,
+                    Err(e) => String::from_utf8_lossy(&e.into_bytes()).into_owned(),
+                })
+            }
+        }
+    }
+}
+
+fn decode_data_url_to_string(data_url: &str) -> Result<String> {
+    if !data_url.starts_with("data:") {
+        return Err(Error::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Not a data: URL",
+        )));
+    }
+
+    let mut parts = data_url.splitn(2, ',');
+    let header = parts
+        .next()
+        .ok_or_else(|| Error::Io(io::Error::new(io::ErrorKind::InvalidInput, "Malformed data URL")))?;
+    let payload = parts
+        .next()
+        .ok_or_else(|| Error::Io(io::Error::new(io::ErrorKind::InvalidInput, "Missing data in data URL")))?;
+
+    let header = header.trim_start_matches("data:");
+    let mut is_base64 = false;
+    let mut charset: Option<&str> = None;
+    for segment in header.split(';') {
+        let seg = segment.trim();
+        if seg.is_empty() || seg.contains('/') {
+            continue;
+        }
+        if seg.eq_ignore_ascii_case("base64") {
+            is_base64 = true;
+        } else if let Some(cs) = seg.strip_prefix("charset=") {
+            charset = Some(cs.trim());
+        }
+    }
+
+    let bytes = if is_base64 {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(payload)
+            .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::InvalidData, format!("Invalid base64 data URL: {}", e))))?
+    } else {
+        percent_decode_bytes(payload)?
+    };
+
+    decode_bytes_with_charset(&bytes, charset)
+}
+
+fn decode_bytes_with_charset(bytes: &[u8], charset: Option<&str>) -> Result<String> {
+    let prefer_utf8 = charset
+        .map(|cs| cs.eq_ignore_ascii_case("utf-8") || cs.eq_ignore_ascii_case("utf8"))
+        .unwrap_or(true);
+
+    if prefer_utf8 {
+        return String::from_utf8(bytes.to_vec())
+            .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::InvalidData, format!("Invalid UTF-8 in data URL: {}", e))));
+    }
+
+    if let Ok(text) = String::from_utf8(bytes.to_vec()) {
+        return Ok(text);
+    }
+
+    Ok(bytes.iter().map(|b| char::from(*b)).collect())
+}
+
+fn percent_decode_bytes(input: &str) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len() {
+                return Err(Error::Io(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Incomplete percent-escape in data URL",
+                )));
+            }
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            match (hi, lo) {
+                (Some(hi), Some(lo)) => {
+                    out.push(((hi << 4) | lo) as u8);
+                    i += 3;
+                }
+                _ => {
+                    return Err(Error::Io(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Invalid percent-escape in data URL",
+                    )))
+                }
+            }
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    Ok(out)
+}
+
 fn extract_fragment(url: &str) -> Option<String> {
     url.find('#').and_then(|idx| {
         let frag = &url[idx + 1..];
@@ -1142,6 +1331,43 @@ mod tests {
         let large = renderer.layout_document(&dom, 800, 800).unwrap();
         let large_color = text_color_for(&large, "hi").expect("color for large viewport");
         assert_eq!(large_color, Rgba::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn layout_document_resolves_file_imports_with_base_url() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let import_path = dir.path().join("import.css");
+        std::fs::write(&import_path, "body { color: rgb(9, 8, 7); }").expect("write import");
+
+        let html = r#"
+            <style>
+                @import "import.css";
+            </style>
+            <body>hello</body>
+        "#;
+        let base_url = Url::from_file_path(dir.path().join("page.html"))
+            .expect("file base url")
+            .to_string();
+
+        let mut renderer = FastRender::builder().base_url(base_url).build().unwrap();
+        let dom = renderer.parse_html(html).unwrap();
+        let styled = renderer.layout_document(&dom, 400, 200).unwrap();
+        let color = text_color_for(&styled, "hello").expect("text color");
+        assert_eq!(color, Rgba::rgb(9, 8, 7));
+    }
+
+    #[test]
+    fn layout_document_resolves_data_url_imports() {
+        let mut renderer = FastRender::new().unwrap();
+        let data_css = "data:text/css,body%7Bcolor:rgb(11,12,13);%7D";
+        let html = format!(
+            r#"<style>@import url("{}");</style><body>data import</body>"#,
+            data_css
+        );
+        let dom = renderer.parse_html(&html).unwrap();
+        let styled = renderer.layout_document(&dom, 320, 200).unwrap();
+        let color = text_color_for(&styled, "data").expect("text color");
+        assert_eq!(color, Rgba::rgb(11, 12, 13));
     }
 
     #[test]
