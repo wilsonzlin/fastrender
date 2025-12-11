@@ -1853,31 +1853,43 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
             let span_start = cell.row;
             let span_end = (cell.row + cell.rowspan).min(structure.row_count);
 
-            let current_height: f32 = structure.rows[span_start..span_end].iter().map(row_floor).sum();
-
             let spacing = structure.border_spacing.1 * (cell.rowspan - 1) as f32;
+            let span_height = (cell.min_height - spacing).max(0.0);
 
-            if cell.min_height > current_height + spacing {
-                let extra = cell.min_height - current_height - spacing;
-                let auto_rows: Vec<usize> = (span_start..span_end)
-                    .filter(|idx| {
-                        matches!(
-                            structure.rows[*idx].specified_height,
-                            Some(SpecifiedHeight::Auto) | None
-                        )
-                    })
-                    .collect();
-                let targets: Vec<usize> = if auto_rows.is_empty() {
-                    (span_start..span_end).collect()
-                } else {
-                    auto_rows
-                };
-                if !targets.is_empty() {
-                    let total: f32 = targets.iter().map(|r| row_floor(&structure.rows[*r])).sum();
-                    for r in targets {
-                        let weight = if total > 0.0 { row_floor(&structure.rows[r]) / total } else { 1.0 / (span_end - span_start) as f32 };
-                        structure.rows[r].min_height += extra * weight;
+            let auto_rows: Vec<usize> = (span_start..span_end)
+                .filter(|idx| {
+                    matches!(
+                        structure.rows[*idx].specified_height,
+                        Some(SpecifiedHeight::Auto) | None
+                    )
+                })
+                .collect();
+            let has_auto = !auto_rows.is_empty();
+            let targets: Vec<usize> = if has_auto { auto_rows.clone() } else { (span_start..span_end).collect() };
+            if !targets.is_empty() {
+                let non_target_sum: f32 = (span_start..span_end)
+                    .filter(|idx| !targets.contains(idx))
+                    .map(|idx| row_floor(&structure.rows[idx]))
+                    .sum();
+                let remaining = (span_height - non_target_sum).max(0.0);
+                let total_weight = {
+                    let sum: f32 = targets.iter().map(|r| row_floor(&structure.rows[*r])).sum();
+                    if sum > 0.0 {
+                        sum
+                    } else {
+                        targets.len() as f32
                     }
+                };
+
+                for &r in &targets {
+                    let base = row_floor(&structure.rows[r]);
+                    let weight = if total_weight > 0.0 {
+                        base / total_weight
+                    } else {
+                        1.0 / targets.len() as f32
+                    };
+                    let share = remaining * weight;
+                    structure.rows[r].min_height = structure.rows[r].min_height.max(share);
                 }
             }
         }
@@ -2069,7 +2081,7 @@ impl TableFormattingContext {
                 continue;
             };
             let (min_w, max_w) = match mode {
-                DistributionMode::Fixed => (0.0, 0.0), // content is ignored in fixed layout
+                DistributionMode::Fixed => (0.0, f32::INFINITY), // content is ignored in fixed layout
                 _ => self.measure_cell_intrinsic_widths(cell_box, structure.border_collapse),
             };
             let specified_width = cell_box.style.width.as_ref().and_then(|width| match width.unit {
@@ -2496,38 +2508,52 @@ impl FormattingContext for TableFormattingContext {
                 let span_start = laid.cell.row;
                 let span_end = (laid.cell.row + laid.cell.rowspan).min(structure.row_count);
                 let spacing_total = v_spacing * (laid.cell.rowspan.saturating_sub(1) as f32);
-                let current: f32 = (span_start..span_end)
-                    .map(|idx| row_floor(idx, *row_heights.get(idx).unwrap_or(&0.0)))
-                    .sum();
-                if laid.height > current + spacing_total {
-                    let extra = laid.height - current - spacing_total;
-                    let auto_rows: Vec<usize> = (span_start..span_end)
-                        .filter(|idx| {
-                            matches!(
-                                structure.rows[*idx].specified_height,
-                                Some(SpecifiedHeight::Auto) | None
-                            )
-                        })
-                        .collect();
-                    let targets: Vec<usize> = if auto_rows.is_empty() {
-                        (span_start..span_end).collect()
-                    } else {
-                        auto_rows
-                    };
-                    if !targets.is_empty() {
-                        let total: f32 = targets
+                let span_height = (laid.height - spacing_total).max(0.0);
+                let auto_rows: Vec<usize> = (span_start..span_end)
+                    .filter(|idx| {
+                        matches!(
+                            structure.rows[*idx].specified_height,
+                            Some(SpecifiedHeight::Auto) | None
+                        )
+                    })
+                    .collect();
+                let has_auto = !auto_rows.is_empty();
+                let targets: Vec<usize> = if has_auto { auto_rows.clone() } else { (span_start..span_end).collect() };
+                if !targets.is_empty() {
+                    let non_target_sum: f32 = (span_start..span_end)
+                        .filter(|idx| !targets.contains(idx))
+                        .map(|idx| row_floor(idx, *row_heights.get(idx).unwrap_or(&0.0)))
+                        .sum();
+                    let remaining = (span_height - non_target_sum).max(0.0);
+                    let use_proportional = !has_auto;
+                    let total_weight = if use_proportional {
+                        let sum: f32 = targets
                             .iter()
                             .map(|idx| row_floor(*idx, *row_heights.get(*idx).unwrap_or(&0.0)))
                             .sum();
-                        for idx in targets {
-                            let weight = if total > 0.0 {
-                                row_floor(idx, *row_heights.get(idx).unwrap_or(&0.0)) / total
+                        if sum > 0.0 {
+                            sum
+                        } else {
+                            targets.len() as f32
+                        }
+                    } else {
+                        targets.len() as f32
+                    };
+
+                    for &idx in &targets {
+                        let weight = if use_proportional {
+                            let base = row_floor(idx, *row_heights.get(idx).unwrap_or(&0.0));
+                            if total_weight > 0.0 {
+                                base / total_weight
                             } else {
-                                1.0 / (span_end - span_start) as f32
-                            };
-                            if let Some(row) = row_heights.get_mut(idx) {
-                                *row += extra * weight;
+                                1.0 / targets.len() as f32
                             }
+                        } else {
+                            1.0 / total_weight
+                        };
+                        if let Some(row) = row_heights.get_mut(idx) {
+                            let share = remaining * weight;
+                            *row = row.max(share);
                         }
                     }
                 }
@@ -4139,7 +4165,8 @@ mod tests {
         cell1_style.width = Some(Length::percent(50.0));
         let cell1 = BoxNode::new_block(Arc::new(cell1_style), FormattingContextType::Block, vec![]);
 
-        let cell2_style = ComputedStyle::default();
+        let mut cell2_style = ComputedStyle::default();
+        cell2_style.display = Display::TableCell;
         let cell2 = BoxNode::new_block(Arc::new(cell2_style), FormattingContextType::Block, vec![]);
 
         let first_row = BoxNode::new_block(
@@ -4167,13 +4194,28 @@ mod tests {
 
         let tfc = TableFormattingContext::new();
         let constraints = LayoutConstraints::definite_width(200.0);
+        let structure = TableStructure::from_box_tree(&table);
+        let mut column_constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+            .map(|_| ColumnConstraints::new(0.0, 0.0))
+            .collect();
+        let spacing = structure.total_horizontal_spacing();
+        let edge_consumption = 0.0;
+        let available_content = (200.0 - spacing - edge_consumption).max(0.0);
+        tfc.populate_column_constraints(
+            &table,
+            &structure,
+            &mut column_constraints,
+            DistributionMode::Fixed,
+            Some(available_content),
+        );
+        let distribution = ColumnDistributor::new(DistributionMode::Fixed).distribute(&column_constraints, available_content);
         let fragment = tfc.layout(&table, &constraints).expect("table layout");
 
         // Expect first column to take ~50% of available space regardless of second row width.
-        let widths: Vec<f32> = fragment.children.iter().map(|c| c.bounds.width()).collect();
-        assert_eq!(widths.len(), 2);
-        assert!((widths[0] - 100.0).abs() < 0.1);
-        assert!((widths[1] - 100.0).abs() < 0.1);
+        assert_eq!(distribution.widths.len(), 2);
+        assert!((distribution.widths[0] - 100.0).abs() < 0.1);
+        assert!((distribution.widths[1] - 100.0).abs() < 0.1);
+        assert!((fragment.bounds.width() - 200.0).abs() < 0.1);
     }
 
     #[test]

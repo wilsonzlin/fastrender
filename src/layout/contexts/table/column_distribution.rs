@@ -456,20 +456,48 @@ impl ColumnDistributor {
         let mut widths = vec![0.0; columns.len()];
         let mut remaining_width = available_width;
         let mut flexible_count = 0;
+        let mut percent_indices = Vec::new();
+        let mut fixed_total = 0.0;
 
         // Phase 1: Apply fixed widths
         for (i, col) in columns.iter().enumerate() {
             if let Some(fixed) = col.fixed_width {
-                let width = fixed.max(self.min_column_width);
+                let width = fixed
+                    .max(col.min_width)
+                    .max(self.min_column_width)
+                    .min(col.max_width.max(col.min_width));
                 widths[i] = width;
                 remaining_width -= width;
+                fixed_total += width;
             } else if let Some(pct) = col.percentage {
-                let width = (pct / 100.0 * available_width).max(self.min_column_width);
-                widths[i] = width;
-                remaining_width -= width;
+                percent_indices.push((i, pct));
             } else {
                 flexible_count += 1;
             }
+        }
+
+        // Phase 2: Allocate percentage columns. Percentages are relative to the table width,
+        // but they are scaled down when their total demand exceeds the post-fixed budget.
+        let percent_budget = (available_width - fixed_total).max(0.0);
+        let requested_percent: f32 = percent_indices
+            .iter()
+            .map(|(_, pct)| (pct / 100.0) * available_width)
+            .sum();
+        let percent_scale = if requested_percent > 0.0 && requested_percent > percent_budget && percent_budget > 0.0 {
+            percent_budget / requested_percent
+        } else {
+            1.0
+        };
+
+        for (idx, pct) in percent_indices {
+            let col = &columns[idx];
+            let raw = (pct / 100.0) * available_width * percent_scale;
+            let width = raw
+                .max(col.min_width)
+                .max(self.min_column_width)
+                .min(col.max_width.max(col.min_width));
+            widths[idx] = width;
+            remaining_width -= width;
         }
 
         // Phase 2: Distribute remaining to flexible columns
@@ -575,21 +603,44 @@ impl ColumnDistributor {
         let mut widths = vec![0.0; columns.len()];
         let mut remaining_width = available_width;
         let mut flexible_indices = Vec::new();
+        let mut percent_indices = Vec::new();
+        let mut fixed_total = 0.0;
 
         for (i, col) in columns.iter().enumerate() {
             if let Some(fixed) = col.fixed_width {
                 let width = fixed.max(col.min_width).max(self.min_column_width);
                 widths[i] = width;
                 remaining_width -= width;
+                fixed_total += width;
             } else if let Some(pct) = col.percentage {
-                let width = (pct / 100.0 * available_width)
+                percent_indices.push((i, pct));
+            } else {
+                flexible_indices.push(i);
+            }
+        }
+
+        // Apply percentages with scaling when they overrun the budget left after fixed columns.
+        if !percent_indices.is_empty() {
+            let percent_budget = (available_width - fixed_total).max(0.0);
+            let requested_percent: f32 = percent_indices
+                .iter()
+                .map(|(_, pct)| (pct / 100.0) * available_width)
+                .sum();
+            let percent_scale = if requested_percent > 0.0 && requested_percent > percent_budget && percent_budget > 0.0 {
+                percent_budget / requested_percent
+            } else {
+                1.0
+            };
+
+            for (idx, pct) in percent_indices {
+                let col = &columns[idx];
+                let raw = (pct / 100.0) * available_width * percent_scale;
+                let width = raw
                     .max(col.min_width)
                     .max(self.min_column_width)
                     .min(col.max_width.max(col.min_width));
-                widths[i] = width;
+                widths[idx] = width;
                 remaining_width -= width;
-            } else {
-                flexible_indices.push(i);
             }
         }
 
@@ -1151,7 +1202,7 @@ mod tests {
     }
 
     #[test]
-    fn percentage_columns_can_overconstrain() {
+    fn percentage_columns_scale_when_over_budget() {
         // Two percentage columns that sum to 140% of the available width.
         let columns = vec![
             ColumnConstraints::percentage(60.0, 20.0, 500.0),
@@ -1160,10 +1211,28 @@ mod tests {
         let distributor = ColumnDistributor::new(DistributionMode::Auto);
 
         let result = distributor.distribute(&columns, 100.0);
-        // Percentages are honored even if they exceed the available space.
-        assert!((result.widths[0] - 60.0).abs() < 0.1);
-        assert!((result.widths[1] - 80.0).abs() < 0.1);
-        assert!(result.is_over_constrained);
+        // Percentages are scaled down to fit the available space.
+        assert!((result.widths[0] - 42.85).abs() < 0.5);
+        assert!((result.widths[1] - 57.14).abs() < 0.5);
+        assert!(!result.is_over_constrained);
+    }
+
+    #[test]
+    fn percentage_columns_scale_after_fixed_columns() {
+        // A fixed column leaves less room than the percentages demand; the percents should normalize.
+        let columns = vec![
+            ColumnConstraints::fixed(200.0),
+            ColumnConstraints::percentage(70.0, 10.0, 500.0),
+            ColumnConstraints::percentage(50.0, 10.0, 500.0),
+        ];
+        let distributor = ColumnDistributor::new(DistributionMode::Auto);
+
+        let result = distributor.distribute(&columns, 400.0);
+        assert!((result.widths[0] - 200.0).abs() < 0.1);
+        assert!((result.widths[1] - 116.6).abs() < 0.6);
+        assert!((result.widths[2] - 83.3).abs() < 0.6);
+        assert!(!result.is_over_constrained);
+        assert!((result.total_width - 400.0).abs() < 1.0);
     }
 
     #[test]
@@ -1176,9 +1245,9 @@ mod tests {
         let distributor = ColumnDistributor::new(DistributionMode::Auto);
 
         let result = distributor.distribute(&columns, 100.0);
-        // Mins are respected and the distribution reports over-constraint.
-        assert!(result.widths[0] >= 60.0);
-        assert!(result.widths[1] >= 60.0);
+        // Available space is below the summed minimum, so we clamp to mins and report overflow.
+        assert!((result.widths[0] - 60.0).abs() < 0.5);
+        assert!((result.widths[1] - 60.0).abs() < 0.5);
         assert!(result.is_over_constrained);
     }
 
@@ -1373,8 +1442,8 @@ mod tests {
         let distributor = ColumnDistributor::new(DistributionMode::Auto);
         let result = distributor.distribute(&columns, 400.0);
 
-        // Percent column keeps its authored percentage; flex gets its min and table is over-constrained.
-        assert!((result.widths[1] - 240.0).abs() < 0.5);
+        // Percent column keeps a scaled share; flex gets its min and table is over-constrained.
+        assert!((result.widths[1] - 200.0).abs() < 0.5);
         assert!(result.widths[2] >= 100.0);
         assert!(result.is_over_constrained);
     }
@@ -1396,7 +1465,7 @@ mod tests {
     }
 
     #[test]
-    fn percentages_over_hundred_do_not_scale_without_flex() {
+    fn percentages_over_hundred_normalize_without_flex() {
         let columns = vec![
             ColumnConstraints::percentage(60.0, 10.0, 500.0),
             ColumnConstraints::percentage(80.0, 10.0, 500.0),
@@ -1405,10 +1474,10 @@ mod tests {
         let distributor = ColumnDistributor::new(DistributionMode::Auto);
         let result = distributor.distribute(&columns, 400.0);
 
-        // Percentages keep their requested share and overflow.
-        assert!((result.widths[0] - 240.0).abs() < 0.5);
-        assert!((result.widths[1] - 320.0).abs() < 0.5);
-        assert!(result.is_over_constrained);
+        // Percentages are normalized to the available space.
+        assert!((result.widths[0] - 171.0).abs() < 0.5);
+        assert!((result.widths[1] - 229.0).abs() < 0.5);
+        assert!(!result.is_over_constrained);
         assert!(result.widths[0] < result.widths[1]);
     }
 
