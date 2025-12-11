@@ -6,6 +6,11 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- `unicode-bidi: plaintext` no longer forces the entire paragraph to first-strong when only inline isolates are present; bidi reordering keeps the paragraph base direction while FSI/PDI isolates handle inline plaintext content. Added a regression for inline plaintext followed by LTR text.
+- Var() resolution is property-aware: the resolver now parses substituted values using the destination property grammar (e.g., background layers keep commas/gradients) instead of a generic parser that flattened complex values.
+- Invalid var() references now drop declarations per spec: `resolve_var_for_property` reports unresolved/not-found/recursion cases and `apply_declaration` ignores the declaration when a var() can’t be resolved, preventing bogus values from entering computed styles.
+- Custom properties now store raw token strings (`PropertyValue::Custom`) rather than lossy parsed forms; declaration handling preserves authored text for `--*` values so cascading variables retain exact input for later substitution.
+- Declaration fixtures now carry the new `raw_value` field so custom-property text survives through parsing/cascade; parser populates `raw_value` for authored values and the suite compiles (`cargo test` green).
 - CSS `background-blend-mode` now parses as a per-layer list, repeats/truncates alongside background images, and flows into `BackgroundLayer` so both painter and display-list paths honor per-layer blend modes (push/pop blend around backgrounds). Added regressions for layer repetition, painter multiply compositing, and display-list blend emission.
 - Table cells no longer default to `white-space: nowrap`; UA defaults keep cells wrapping unless styles request nowrap. Presentational `align`/`valign` hints now map to text-align/vertical-align at low specificity.
 - Added `background-position-x`/`background-position-y` longhands: parsed as per-layer lists, merged with existing positions, and repeated/truncated to match layer counts. Grammar follows the axis-specific keywords/lengths/percentages, with regressions covering vertical-first keyword orders and longhand combinations.

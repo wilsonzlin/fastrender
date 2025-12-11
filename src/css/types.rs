@@ -144,6 +144,8 @@ pub struct StyleRule {
 pub struct Declaration {
     pub property: String,
     pub value: PropertyValue,
+    /// Raw token string as authored (after stripping !important/semicolon). Used for custom properties.
+    pub raw_value: String,
     pub important: bool,
 }
 
@@ -166,6 +168,8 @@ pub enum PropertyValue {
     RadialGradient { stops: Vec<ColorStop> },
     RepeatingLinearGradient { angle: f32, stops: Vec<ColorStop> },
     RepeatingRadialGradient { stops: Vec<ColorStop> },
+    /// Raw custom property value (stored unparsed)
+    Custom(String),
 }
 
 // ============================================================================

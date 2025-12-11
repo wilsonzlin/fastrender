@@ -46,6 +46,11 @@ fn tokenize_property_value(value_str: &str, allow_commas: bool) -> Vec<String> {
 
 /// Parse a CSS property value
 pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyValue> {
+    // Custom properties store their tokens verbatim (post !important stripping handled by caller).
+    if property.starts_with("--") {
+        return Some(PropertyValue::Custom(value_str.to_string()));
+    }
+
     let value_str = value_str.trim();
     if value_str.is_empty() {
         return None;
@@ -111,10 +116,10 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
                 parts.push(PropertyValue::Keyword(",".to_string()));
                 continue;
             }
-            if let Some(v) = parse_simple_value(&token) {
-                parts.push(v);
-            } else if let Some(gradient) = parse_gradient(&token) {
+            if let Some(gradient) = parse_gradient(&token) {
                 parts.push(gradient);
+            } else if let Some(v) = parse_simple_value(&token) {
+                parts.push(v);
             } else if let Ok(color) = csscolorparser::parse(&token) {
                 parts.push(PropertyValue::Color(Rgba::new(
                     (color.r * 255.0) as u8,

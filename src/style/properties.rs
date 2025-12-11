@@ -20,7 +20,7 @@ use crate::style::grid::{
 use crate::style::position::Position;
 use crate::style::types::*;
 use crate::style::values::{Length, LengthUnit};
-use crate::style::var_resolution::resolve_var;
+use crate::style::var_resolution::{resolve_var_for_property, VarResolutionResult};
 use crate::style::ComputedStyle;
 use cssparser::{Parser, ParserInput, Token};
 
@@ -157,41 +157,17 @@ fn parse_layer_list<T>(value: &PropertyValue, parse: impl Fn(&PropertyValue) -> 
 pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_font_size: f32, root_font_size: f32) {
     // Handle CSS Custom Properties (--*)
     if decl.property.starts_with("--") {
-        // Convert the property value to a string for storage
-        let value_str = match &decl.value {
-            PropertyValue::Keyword(kw) => kw.clone(),
-            PropertyValue::Length(len) => {
-                use crate::style::values::LengthUnit;
-                format!(
-                    "{}{}",
-                    len.value,
-                    match len.unit {
-                        LengthUnit::Px => "px",
-                        LengthUnit::Em => "em",
-                        LengthUnit::Rem => "rem",
-                        LengthUnit::Percent => "%",
-                        LengthUnit::Pt => "pt",
-                        LengthUnit::Vw => "vw",
-                        LengthUnit::Vh => "vh",
-                        LengthUnit::Cm => "cm",
-                        LengthUnit::Mm => "mm",
-                        LengthUnit::In => "in",
-                        LengthUnit::Pc => "pc",
-                        _ => "px",
-                    }
-                )
-            }
-            PropertyValue::Number(n) => n.to_string(),
-            PropertyValue::Percentage(p) => format!("{}%", p),
-            PropertyValue::Color(c) => format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b),
-            _ => return, // Skip other types for now
-        };
-        styles.custom_properties.insert(decl.property.clone(), value_str);
+        // Preserve the raw custom property value verbatim.
+        styles.custom_properties.insert(decl.property.clone(), decl.raw_value.clone());
         return;
     }
 
     // Resolve var() references in the value
-    let resolved_value = resolve_var(&decl.value, &styles.custom_properties);
+    let resolved_value = match resolve_var_for_property(&decl.value, &styles.custom_properties, &decl.property) {
+        VarResolutionResult::Resolved(v) => v,
+        // Unresolved or invalid at computed-value time -> declaration is ignored per spec.
+        _ => return,
+    };
 
     match decl.property.as_str() {
         // Display
@@ -4261,6 +4237,7 @@ mod tests {
         let decl = Declaration {
             property: "object-fit".to_string(),
             value: PropertyValue::Keyword("cover".to_string()),
+            raw_value: String::new(),
             important: false,
         };
 
@@ -4276,6 +4253,7 @@ mod tests {
             &Declaration {
                 property: "image-rendering".to_string(),
                 value: PropertyValue::Keyword("pixelated".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4288,6 +4266,7 @@ mod tests {
             &Declaration {
                 property: "image-rendering".to_string(),
                 value: PropertyValue::Keyword("crisp-edges".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4304,6 +4283,7 @@ mod tests {
             &Declaration {
                 property: "text-orientation".into(),
                 value: PropertyValue::Keyword("upright".into()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4316,6 +4296,7 @@ mod tests {
             &Declaration {
                 property: "text-orientation".into(),
                 value: PropertyValue::Keyword("sideways-right".into()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4332,6 +4313,7 @@ mod tests {
             &Declaration {
                 property: "text-orientation".into(),
                 value: PropertyValue::Keyword("upright".into()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4342,6 +4324,7 @@ mod tests {
             &Declaration {
                 property: "text-orientation".into(),
                 value: PropertyValue::Keyword("invalid".into()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4358,6 +4341,7 @@ mod tests {
             &Declaration {
                 property: "text-combine-upright".into(),
                 value: PropertyValue::Keyword("digits".into()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4373,6 +4357,7 @@ mod tests {
                     PropertyValue::Keyword("digits".into()),
                     PropertyValue::Number(3.0),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4385,6 +4370,7 @@ mod tests {
             &Declaration {
                 property: "text-combine-upright".into(),
                 value: PropertyValue::Keyword("all".into()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4399,6 +4385,7 @@ mod tests {
         let prop = Declaration {
             property: "text-transform".into(),
             value: PropertyValue::Keyword("uppercase".into()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut styles, &prop, 16.0, 16.0);
@@ -4416,6 +4403,7 @@ mod tests {
             &Declaration {
                 property: "aspect-ratio".to_string(),
                 value: PropertyValue::Keyword("16/9".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4428,6 +4416,7 @@ mod tests {
             &Declaration {
                 property: "aspect-ratio".to_string(),
                 value: PropertyValue::Number(2.0),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4440,6 +4429,7 @@ mod tests {
             &Declaration {
                 property: "aspect-ratio".to_string(),
                 value: PropertyValue::Keyword("auto".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4456,6 +4446,7 @@ mod tests {
             &Declaration {
                 property: "align-items".to_string(),
                 value: PropertyValue::Keyword("start".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4468,6 +4459,7 @@ mod tests {
             &Declaration {
                 property: "align-self".to_string(),
                 value: PropertyValue::Keyword("self-end".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4480,6 +4472,7 @@ mod tests {
             &Declaration {
                 property: "justify-items".to_string(),
                 value: PropertyValue::Keyword("right".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4492,6 +4485,7 @@ mod tests {
             &Declaration {
                 property: "justify-self".to_string(),
                 value: PropertyValue::Keyword("auto".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4504,6 +4498,7 @@ mod tests {
             &Declaration {
                 property: "justify-self".to_string(),
                 value: PropertyValue::Keyword("center".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4521,6 +4516,7 @@ mod tests {
             &Declaration {
                 property: "place-items".to_string(),
                 value: PropertyValue::Keyword("center stretch".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4534,6 +4530,7 @@ mod tests {
             &Declaration {
                 property: "place-self".to_string(),
                 value: PropertyValue::Keyword("end start".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4547,6 +4544,7 @@ mod tests {
             &Declaration {
                 property: "place-content".to_string(),
                 value: PropertyValue::Keyword("space-between center".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4564,6 +4562,7 @@ mod tests {
             &Declaration {
                 property: "writing-mode".to_string(),
                 value: PropertyValue::Keyword("vertical-rl".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4576,6 +4575,7 @@ mod tests {
             &Declaration {
                 property: "writing-mode".to_string(),
                 value: PropertyValue::Keyword("sideways-lr".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4593,6 +4593,7 @@ mod tests {
                 PropertyValue::Keyword("right".to_string()),
                 PropertyValue::Keyword("bottom".to_string()),
             ]),
+            raw_value: String::new(),
             important: false,
         };
 
@@ -4615,6 +4616,7 @@ mod tests {
             &Declaration {
                 property: "box-sizing".to_string(),
                 value: PropertyValue::Keyword("border-box".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4632,6 +4634,7 @@ mod tests {
             &Declaration {
                 property: "grid-auto-rows".into(),
                 value: PropertyValue::Keyword("10px minmax(0,1fr)".into()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4644,6 +4647,7 @@ mod tests {
             &Declaration {
                 property: "grid-auto-columns".into(),
                 value: PropertyValue::Keyword("20%".into()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4660,6 +4664,7 @@ mod tests {
             &Declaration {
                 property: "grid-auto-flow".into(),
                 value: PropertyValue::Keyword("column dense".into()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4676,6 +4681,7 @@ mod tests {
             &Declaration {
                 property: "grid-area".into(),
                 value: PropertyValue::Keyword("hero".into()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4693,6 +4699,7 @@ mod tests {
             &Declaration {
                 property: "grid".into(),
                 value: PropertyValue::Keyword("auto-flow 10px / 20px".into()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4711,6 +4718,7 @@ mod tests {
             &Declaration {
                 property: "grid".into(),
                 value: PropertyValue::Keyword("\"a a\" \"b b\" / 1fr 2fr".into()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4729,6 +4737,7 @@ mod tests {
             &Declaration {
                 property: "gap".to_string(),
                 value: PropertyValue::Keyword("10px 20%".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4747,6 +4756,7 @@ mod tests {
             &Declaration {
                 property: "row-gap".to_string(),
                 value: PropertyValue::Keyword("normal".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4760,6 +4770,7 @@ mod tests {
             &Declaration {
                 property: "column-gap".to_string(),
                 value: PropertyValue::Percentage(15.0),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4780,6 +4791,7 @@ mod tests {
             &Declaration {
                 property: "outline".to_string(),
                 value: PropertyValue::Color(Rgba::RED),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4805,6 +4817,7 @@ mod tests {
                     PropertyValue::Keyword("solid".to_string()),
                     PropertyValue::Keyword("thin".to_string()),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4826,6 +4839,7 @@ mod tests {
             &Declaration {
                 property: "outline-width".to_string(),
                 value: PropertyValue::Number(-3.0),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4843,6 +4857,7 @@ mod tests {
             &Declaration {
                 property: "overflow".to_string(),
                 value: PropertyValue::Keyword("clip".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4862,6 +4877,7 @@ mod tests {
                 PropertyValue::Keyword("left".to_string()),
                 PropertyValue::Keyword("top".to_string()),
             ]),
+            raw_value: String::new(),
             important: false,
         };
 
@@ -4884,6 +4900,7 @@ mod tests {
                     PropertyValue::Keyword("left".to_string()),
                     PropertyValue::Percentage(20.0),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4907,6 +4924,7 @@ mod tests {
                     PropertyValue::Keyword("top".to_string()),
                     PropertyValue::Keyword("right".to_string()),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4929,6 +4947,7 @@ mod tests {
                     PropertyValue::Keyword("center".to_string()),
                     PropertyValue::Keyword("left".to_string()),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4950,6 +4969,7 @@ mod tests {
                     PropertyValue::Keyword("center".to_string()),
                     PropertyValue::Keyword("bottom".to_string()),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4972,6 +4992,7 @@ mod tests {
                     PropertyValue::Length(Length::px(10.0)),
                     PropertyValue::Keyword("bottom".to_string()),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -4996,6 +5017,7 @@ mod tests {
                     PropertyValue::Length(Length::px(5.0)),
                     PropertyValue::Keyword("right".to_string()),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -5021,6 +5043,7 @@ mod tests {
                     PropertyValue::Keyword("bottom".to_string()),
                     PropertyValue::Length(Length::px(10.0)),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -5046,6 +5069,7 @@ mod tests {
                     PropertyValue::Keyword("left".to_string()),
                     PropertyValue::Length(Length::px(5.0)),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -5070,6 +5094,7 @@ mod tests {
                     PropertyValue::Keyword(",".to_string()),
                     PropertyValue::Url("b.png".to_string()),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -5081,6 +5106,7 @@ mod tests {
             &Declaration {
                 property: "background-position-y".to_string(),
                 value: PropertyValue::Keyword("bottom".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -5096,6 +5122,7 @@ mod tests {
                     PropertyValue::Keyword(",".to_string()),
                     PropertyValue::Percentage(20.0),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -5125,6 +5152,7 @@ mod tests {
                     PropertyValue::Keyword(",".to_string()),
                     PropertyValue::Url("b.png".to_string()),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -5136,6 +5164,7 @@ mod tests {
             &Declaration {
                 property: "background-position-y".to_string(),
                 value: PropertyValue::Percentage(10.0),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -5159,6 +5188,7 @@ mod tests {
                 PropertyValue::Keyword("bottom".to_string()),
                 PropertyValue::Length(Length::px(5.0)),
             ]),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5180,6 +5210,7 @@ mod tests {
                 PropertyValue::Keyword("top".to_string()),
                 PropertyValue::Percentage(25.0),
             ]),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5193,6 +5224,7 @@ mod tests {
         let decl = Declaration {
             property: "background-position".to_string(),
             value: PropertyValue::Keyword("top".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5212,6 +5244,7 @@ mod tests {
                 PropertyValue::Keyword("underline".to_string()),
                 PropertyValue::Keyword("overline".to_string()),
             ]),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5221,6 +5254,7 @@ mod tests {
         let decl = Declaration {
             property: "text-decoration-style".to_string(),
             value: PropertyValue::Keyword("dashed".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5229,6 +5263,7 @@ mod tests {
         let decl = Declaration {
             property: "text-decoration-color".to_string(),
             value: PropertyValue::Color(Rgba::BLUE),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5237,6 +5272,7 @@ mod tests {
         let decl = Declaration {
             property: "text-decoration-thickness".to_string(),
             value: PropertyValue::Length(Length::px(3.0)),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5248,6 +5284,7 @@ mod tests {
         let decl = Declaration {
             property: "text-decoration-thickness".to_string(),
             value: PropertyValue::Keyword("from-font".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5259,6 +5296,7 @@ mod tests {
         let decl = Declaration {
             property: "text-underline-position".to_string(),
             value: PropertyValue::Keyword("under".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5270,6 +5308,7 @@ mod tests {
                 PropertyValue::Keyword("left".to_string()),
                 PropertyValue::Keyword("under".to_string()),
             ]),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5289,6 +5328,7 @@ mod tests {
                 PropertyValue::Keyword("open".to_string()),
                 PropertyValue::Keyword("sesame".to_string()),
             ]),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5303,6 +5343,7 @@ mod tests {
         let decl = Declaration {
             property: "text-emphasis-color".to_string(),
             value: PropertyValue::Color(Rgba::RED),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5314,6 +5355,7 @@ mod tests {
                 PropertyValue::Keyword("under".to_string()),
                 PropertyValue::Keyword("right".to_string()),
             ]),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5325,6 +5367,7 @@ mod tests {
                 PropertyValue::Keyword("circle".to_string()),
                 PropertyValue::Color(Rgba::BLUE),
             ]),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5349,6 +5392,7 @@ mod tests {
                 PropertyValue::Keyword("auto".to_string()),
                 PropertyValue::Keyword("under".to_string()),
             ]),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5374,6 +5418,7 @@ mod tests {
                 PropertyValue::Keyword("dotted".to_string()),
                 PropertyValue::Color(Rgba::RED),
             ]),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5392,6 +5437,7 @@ mod tests {
                 PropertyValue::Keyword("wavy".to_string()),
                 PropertyValue::Keyword("currentcolor".to_string()),
             ]),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5409,6 +5455,7 @@ mod tests {
                 PropertyValue::Color(Rgba::GREEN),
                 PropertyValue::Length(Length::px(3.2)),
             ]),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5427,6 +5474,7 @@ mod tests {
         let decl = Declaration {
             property: "list-style-type".to_string(),
             value: PropertyValue::Keyword("square".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5435,6 +5483,7 @@ mod tests {
         let decl = Declaration {
             property: "list-style-position".to_string(),
             value: PropertyValue::Keyword("inside".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5443,6 +5492,7 @@ mod tests {
         let decl = Declaration {
             property: "list-style-image".to_string(),
             value: PropertyValue::Url("marker.png".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5454,6 +5504,7 @@ mod tests {
                 PropertyValue::Keyword("upper-roman".to_string()),
                 PropertyValue::Keyword("outside".to_string()),
             ]),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5464,6 +5515,7 @@ mod tests {
         let decl = Declaration {
             property: "list-style".to_string(),
             value: PropertyValue::Url("img.png".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5474,6 +5526,7 @@ mod tests {
         let decl = Declaration {
             property: "list-style".to_string(),
             value: PropertyValue::Keyword("none".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5483,6 +5536,7 @@ mod tests {
         let decl = Declaration {
             property: "list-style-type".to_string(),
             value: PropertyValue::Keyword("lower-greek".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5491,6 +5545,7 @@ mod tests {
         let decl = Declaration {
             property: "list-style-type".to_string(),
             value: PropertyValue::Keyword("armenian".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5499,6 +5554,7 @@ mod tests {
         let decl = Declaration {
             property: "list-style-type".to_string(),
             value: PropertyValue::Keyword("lower-armenian".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5507,6 +5563,7 @@ mod tests {
         let decl = Declaration {
             property: "list-style-type".to_string(),
             value: PropertyValue::Keyword("georgian".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5524,6 +5581,7 @@ mod tests {
                 PropertyValue::String("‹".to_string()),
                 PropertyValue::String("›".to_string()),
             ]),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5535,6 +5593,7 @@ mod tests {
         let decl = Declaration {
             property: "quotes".to_string(),
             value: PropertyValue::Keyword("none".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5550,6 +5609,7 @@ mod tests {
         let decl = Declaration {
             property: "letter-spacing".to_string(),
             value: PropertyValue::Keyword("normal".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5558,6 +5618,7 @@ mod tests {
         let decl = Declaration {
             property: "letter-spacing".to_string(),
             value: PropertyValue::Length(Length::em(0.25)),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5566,6 +5627,7 @@ mod tests {
         let decl = Declaration {
             property: "word-spacing".to_string(),
             value: PropertyValue::Percentage(50.0),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5574,6 +5636,7 @@ mod tests {
         let decl = Declaration {
             property: "word-spacing".to_string(),
             value: PropertyValue::Length(Length::em(-0.5)),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5586,6 +5649,7 @@ mod tests {
         let decl = Declaration {
             property: "counter-reset".to_string(),
             value: PropertyValue::Keyword("chapter 3 section".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5602,6 +5666,7 @@ mod tests {
                 PropertyValue::Keyword("item".to_string()),
                 PropertyValue::Number(2.0),
             ]),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5613,6 +5678,7 @@ mod tests {
         let decl = Declaration {
             property: "counter-set".to_string(),
             value: PropertyValue::Keyword("item 7".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5624,6 +5690,7 @@ mod tests {
         let decl = Declaration {
             property: "counter-increment".to_string(),
             value: PropertyValue::Keyword("none".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5673,6 +5740,7 @@ mod tests {
                 PropertyValue::Keyword("padding-box".to_string()),
                 PropertyValue::Color(Rgba::RED),
             ]),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5705,6 +5773,7 @@ mod tests {
                     PropertyValue::Keyword(",".to_string()),
                     PropertyValue::Url("b.png".to_string()),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -5720,6 +5789,7 @@ mod tests {
                     PropertyValue::Length(Length::px(10.0)),
                     PropertyValue::Length(Length::px(20.0)),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -5749,6 +5819,7 @@ mod tests {
                     PropertyValue::Keyword(",".to_string()),
                     PropertyValue::Keyword("space".to_string()),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -5766,6 +5837,7 @@ mod tests {
             &Declaration {
                 property: "background-image".to_string(),
                 value: PropertyValue::Url("one.png".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -5783,6 +5855,7 @@ mod tests {
                     PropertyValue::Keyword("right".to_string()),
                     PropertyValue::Keyword("bottom".to_string()),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -5806,6 +5879,7 @@ mod tests {
                     PropertyValue::Keyword(",".to_string()),
                     PropertyValue::Url("b.png".to_string()),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -5817,6 +5891,7 @@ mod tests {
             &Declaration {
                 property: "background-blend-mode".to_string(),
                 value: PropertyValue::Keyword("screen".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -5834,6 +5909,7 @@ mod tests {
                     PropertyValue::Keyword(",".to_string()),
                     PropertyValue::Keyword("overlay".to_string()),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -5847,6 +5923,7 @@ mod tests {
             &Declaration {
                 property: "background-image".to_string(),
                 value: PropertyValue::Url("single.png".to_string()),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -5861,6 +5938,7 @@ mod tests {
                     PropertyValue::Keyword(",".to_string()),
                     PropertyValue::Keyword("lighten".to_string()),
                 ]),
+                raw_value: String::new(),
                 important: false,
             },
             16.0,
@@ -5887,6 +5965,7 @@ mod tests {
         let decl = Declaration {
             property: "background".to_string(),
             value: PropertyValue::Color(Rgba::RED),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5921,6 +6000,7 @@ mod tests {
         let decl = Declaration {
             property: "background".to_string(),
             value: PropertyValue::Keyword("none".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5940,6 +6020,7 @@ mod tests {
         let decl = Declaration {
             property: "background-repeat".to_string(),
             value: PropertyValue::Keyword("space".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5949,6 +6030,7 @@ mod tests {
         let decl = Declaration {
             property: "background-repeat".to_string(),
             value: PropertyValue::Keyword("repeat-x".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5961,6 +6043,7 @@ mod tests {
                 PropertyValue::Keyword("space".to_string()),
                 PropertyValue::Keyword("round".to_string()),
             ]),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5974,6 +6057,7 @@ mod tests {
         let decl = Declaration {
             property: "background-size".to_string(),
             value: PropertyValue::Length(Length::px(25.0)),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -5991,6 +6075,7 @@ mod tests {
                 PropertyValue::Keyword("auto".to_string()),
                 PropertyValue::Percentage(50.0),
             ]),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6005,6 +6090,7 @@ mod tests {
         let decl = Declaration {
             property: "background-size".to_string(),
             value: PropertyValue::Keyword("contain".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6020,6 +6106,7 @@ mod tests {
         let decl = Declaration {
             property: "white-space".to_string(),
             value: PropertyValue::Keyword("break-spaces".to_string()),
+            raw_value: String::new(),
             important: false,
         };
 
@@ -6033,6 +6120,7 @@ mod tests {
         let decl = Declaration {
             property: "line-break".to_string(),
             value: PropertyValue::Keyword("anywhere".to_string()),
+            raw_value: String::new(),
             important: false,
         };
 
@@ -6047,6 +6135,7 @@ mod tests {
         let origin_decl = Declaration {
             property: "background-origin".to_string(),
             value: PropertyValue::Keyword("content-box".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &origin_decl, 16.0, 16.0);
@@ -6055,6 +6144,7 @@ mod tests {
         let clip_decl = Declaration {
             property: "background-clip".to_string(),
             value: PropertyValue::Keyword("padding-box".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &clip_decl, 16.0, 16.0);
@@ -6097,6 +6187,7 @@ mod tests {
         let decl = Declaration {
             property: "backdrop-filter".to_string(),
             value: PropertyValue::Keyword("blur(5px)".to_string()),
+            raw_value: String::new(),
             important: false,
         };
 
@@ -6114,6 +6205,7 @@ mod tests {
         let number_decl = Declaration {
             property: "tab-size".to_string(),
             value: PropertyValue::Number(4.0),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &number_decl, 16.0, 16.0);
@@ -6122,6 +6214,7 @@ mod tests {
         let length_decl = Declaration {
             property: "tab-size".to_string(),
             value: PropertyValue::Length(Length::px(20.0)),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &length_decl, 16.0, 16.0);
@@ -6137,6 +6230,7 @@ mod tests {
         let decl = Declaration {
             property: "font".to_string(),
             value: PropertyValue::Keyword("italic 700 20px/30px \"Fira Sans\", serif".to_string()),
+            raw_value: String::new(),
             important: false,
         };
 
@@ -6161,6 +6255,7 @@ mod tests {
         let decl = Declaration {
             property: "font".to_string(),
             value: PropertyValue::Keyword("bold larger/125% serif".to_string()),
+            raw_value: String::new(),
             important: false,
         };
 
@@ -6178,6 +6273,7 @@ mod tests {
         let decl = Declaration {
             property: "font".to_string(),
             value: PropertyValue::Keyword("italic 16px".to_string()),
+            raw_value: String::new(),
             important: false,
         };
 
@@ -6193,6 +6289,7 @@ mod tests {
         let decl = Declaration {
             property: "line-height".to_string(),
             value: PropertyValue::Percentage(150.0),
+            raw_value: String::new(),
             important: false,
         };
 
@@ -6207,6 +6304,7 @@ mod tests {
         let decl = Declaration {
             property: "font-size".to_string(),
             value: PropertyValue::Keyword("large".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6215,6 +6313,7 @@ mod tests {
         let decl = Declaration {
             property: "font-size".to_string(),
             value: PropertyValue::Percentage(150.0),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 20.0, 16.0);
@@ -6223,6 +6322,7 @@ mod tests {
         let decl = Declaration {
             property: "font-size".to_string(),
             value: PropertyValue::Length(Length::em(2.0)),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 10.0, 16.0);
@@ -6235,6 +6335,7 @@ mod tests {
         let decl = Declaration {
             property: "font-stretch".to_string(),
             value: PropertyValue::Keyword("expanded".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6243,6 +6344,7 @@ mod tests {
         let decl = Declaration {
             property: "font-stretch".to_string(),
             value: PropertyValue::Percentage(125.0),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6255,6 +6357,7 @@ mod tests {
         let decl = Declaration {
             property: "font".to_string(),
             value: PropertyValue::Keyword("italic bold condensed 16px/20px serif".to_string()),
+            raw_value: String::new(),
             important: false,
         };
 
@@ -6272,6 +6375,7 @@ mod tests {
         let decl = Declaration {
             property: "font-variant".to_string(),
             value: PropertyValue::Keyword("small-caps".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6280,6 +6384,7 @@ mod tests {
         let decl = Declaration {
             property: "font".to_string(),
             value: PropertyValue::Keyword("small-caps 16px serif".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6292,6 +6397,7 @@ mod tests {
         let decl = Declaration {
             property: "font-variant-caps".to_string(),
             value: PropertyValue::Keyword("all-small-caps".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6300,6 +6406,7 @@ mod tests {
         let decl = Declaration {
             property: "font-variant".to_string(),
             value: PropertyValue::Keyword("all-petite-caps titling-caps".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6312,6 +6419,7 @@ mod tests {
         let decl = Declaration {
             property: "font-variant-position".to_string(),
             value: PropertyValue::Keyword("super".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6320,6 +6428,7 @@ mod tests {
         let decl = Declaration {
             property: "font-variant-position".to_string(),
             value: PropertyValue::Keyword("normal".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6332,6 +6441,7 @@ mod tests {
         let decl = Declaration {
             property: "font-size-adjust".to_string(),
             value: PropertyValue::Number(0.7),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6340,6 +6450,7 @@ mod tests {
         let decl = Declaration {
             property: "font-size-adjust".to_string(),
             value: PropertyValue::Keyword("from-font".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6348,6 +6459,7 @@ mod tests {
         let decl = Declaration {
             property: "font-size-adjust".to_string(),
             value: PropertyValue::Keyword("none".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6360,6 +6472,7 @@ mod tests {
         let decl = Declaration {
             property: "font-synthesis".to_string(),
             value: PropertyValue::Keyword("weight style".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6370,6 +6483,7 @@ mod tests {
         let decl = Declaration {
             property: "font-synthesis".to_string(),
             value: PropertyValue::Keyword("none".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6384,6 +6498,7 @@ mod tests {
         let decl = Declaration {
             property: "font-variant-east-asian".to_string(),
             value: PropertyValue::Keyword("jis90 proportional-width ruby".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6400,6 +6515,7 @@ mod tests {
         let decl = Declaration {
             property: "font-variant-east-asian".to_string(),
             value: PropertyValue::Keyword("normal".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6416,6 +6532,7 @@ mod tests {
             value: PropertyValue::Keyword(
                 "oldstyle-nums tabular-nums stacked-fractions ordinal slashed-zero".to_string(),
             ),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6428,6 +6545,7 @@ mod tests {
         let decl = Declaration {
             property: "font-variant-numeric".to_string(),
             value: PropertyValue::Keyword("normal".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6444,6 +6562,7 @@ mod tests {
         let decl = Declaration {
             property: "font-kerning".to_string(),
             value: PropertyValue::Keyword("none".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6452,6 +6571,7 @@ mod tests {
         let decl = Declaration {
             property: "font-kerning".to_string(),
             value: PropertyValue::Keyword("normal".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6464,6 +6584,7 @@ mod tests {
         let decl = Declaration {
             property: "float".to_string(),
             value: PropertyValue::Keyword("left".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6472,6 +6593,7 @@ mod tests {
         let decl = Declaration {
             property: "clear".to_string(),
             value: PropertyValue::Keyword("both".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
@@ -6480,6 +6602,7 @@ mod tests {
         let decl = Declaration {
             property: "float".to_string(),
             value: PropertyValue::Keyword("invalid".to_string()),
+            raw_value: String::new(),
             important: false,
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);

@@ -96,8 +96,27 @@ impl VarResolutionResult {
 /// // resolved is now PropertyValue::Color(...)
 /// ```
 #[allow(clippy::implicit_hasher)]
+/// Resolves CSS `var()` references using the provided custom properties.
+///
+/// This helper performs property-agnostic resolution (parses fallback/results without knowing
+/// the destination property). For property-aware parsing, use `resolve_var_for_property`.
 pub fn resolve_var(value: &PropertyValue, custom_properties: &HashMap<String, String>) -> PropertyValue {
-    resolve_var_recursive(value, custom_properties, 0)
+    match resolve_var_recursive(value, custom_properties, 0, "") {
+        VarResolutionResult::Resolved(v) => v,
+        other => other.unwrap_or(value.clone()),
+    }
+}
+
+/// Resolves CSS `var()` references with knowledge of the target property.
+///
+/// Passing the property name allows the resolver to parse the substituted value using the
+/// appropriate grammar (e.g., background layers with commas), rather than the generic parser.
+pub fn resolve_var_for_property(
+    value: &PropertyValue,
+    custom_properties: &HashMap<String, String>,
+    property_name: &str,
+) -> VarResolutionResult {
+    resolve_var_recursive(value, custom_properties, 0, property_name)
 }
 
 /// Resolves var() references with explicit depth tracking
@@ -120,7 +139,10 @@ pub fn resolve_var_with_depth(
     custom_properties: &HashMap<String, String>,
     depth: usize,
 ) -> PropertyValue {
-    resolve_var_recursive(value, custom_properties, depth)
+    match resolve_var_recursive(value, custom_properties, depth, "") {
+        VarResolutionResult::Resolved(v) => v,
+        other => other.unwrap_or(value.clone()),
+    }
 }
 
 /// Internal recursive implementation of var() resolution
@@ -128,44 +150,55 @@ fn resolve_var_recursive(
     value: &PropertyValue,
     custom_properties: &HashMap<String, String>,
     depth: usize,
-) -> PropertyValue {
+    property_name: &str,
+) -> VarResolutionResult {
     // Check recursion limit to prevent infinite loops
     if depth >= MAX_RECURSION_DEPTH {
-        return value.clone();
+        return VarResolutionResult::RecursionLimitExceeded;
     }
 
     match value {
-        PropertyValue::Keyword(kw) => resolve_keyword_var(kw, custom_properties, depth),
-        _ => value.clone(),
+        PropertyValue::Keyword(kw) => resolve_keyword_var(kw, custom_properties, depth, property_name),
+        _ => VarResolutionResult::Resolved(value.clone()),
     }
 }
 
 /// Resolves var() references within a keyword/string value
-fn resolve_keyword_var(kw: &str, custom_properties: &HashMap<String, String>, depth: usize) -> PropertyValue {
+fn resolve_keyword_var(
+    kw: &str,
+    custom_properties: &HashMap<String, String>,
+    depth: usize,
+    property_name: &str,
+) -> VarResolutionResult {
     // Check if it's a simple var() reference (starts with "var(" and ends with ")")
     if kw.starts_with("var(") && kw.ends_with(')') && !kw[4..kw.len() - 1].contains("var(") {
         let inner = &kw[4..kw.len() - 1];
-        return resolve_simple_var(inner, custom_properties, depth);
+        return resolve_simple_var(inner, custom_properties, depth, property_name);
     }
 
     // Check if the string contains any var() references
     if kw.contains("var(") {
         let resolved_str = resolve_embedded_vars(kw, custom_properties, depth);
         // Try to parse the resolved string as a proper CSS value
-        if let Some(parsed) = parse_resolved_value(&resolved_str) {
+        if let Some(parsed) = parse_resolved_value(&resolved_str, property_name) {
             // Recursively resolve in case the result contains more var() references
-            return resolve_var_recursive(&parsed, custom_properties, depth + 1);
+            return resolve_var_recursive(&parsed, custom_properties, depth + 1, property_name);
         }
-        return PropertyValue::Keyword(resolved_str);
+        return VarResolutionResult::Resolved(PropertyValue::Keyword(resolved_str));
     }
 
-    PropertyValue::Keyword(kw.to_string())
+    VarResolutionResult::Resolved(PropertyValue::Keyword(kw.to_string()))
 }
 
 /// Resolves a simple var() reference (content inside var(...))
 ///
 /// Handles: var(--name) and var(--name, fallback)
-fn resolve_simple_var(inner: &str, custom_properties: &HashMap<String, String>, depth: usize) -> PropertyValue {
+fn resolve_simple_var(
+    inner: &str,
+    custom_properties: &HashMap<String, String>,
+    depth: usize,
+    property_name: &str,
+) -> VarResolutionResult {
     // Split by first comma to separate variable name from fallback
     let (var_name, fallback) = split_var_args(inner);
     let var_name = var_name.trim();
@@ -173,29 +206,29 @@ fn resolve_simple_var(inner: &str, custom_properties: &HashMap<String, String>, 
     // Look up the variable
     if let Some(resolved_value) = custom_properties.get(var_name) {
         // Try to parse the resolved value as a CSS property value
-        if let Some(mut parsed) = parse_resolved_value(resolved_value) {
+        if let Some(mut parsed) = parse_resolved_value(resolved_value, property_name) {
             // Recursively resolve in case the value contains another var()
-            parsed = resolve_var_recursive(&parsed, custom_properties, depth + 1);
-            return parsed;
+            parsed = resolve_var_recursive(&parsed, custom_properties, depth + 1, property_name).unwrap_or(parsed);
+            return VarResolutionResult::Resolved(parsed);
         }
         // If parsing fails, return as keyword and try to resolve recursively
         let as_keyword = PropertyValue::Keyword(resolved_value.clone());
-        return resolve_var_recursive(&as_keyword, custom_properties, depth + 1);
+        return resolve_var_recursive(&as_keyword, custom_properties, depth + 1, property_name);
     }
 
     // Variable not found - try fallback
     if let Some(fallback_str) = fallback {
         // The fallback may itself contain var() references
-        if let Some(mut parsed) = parse_resolved_value(fallback_str) {
-            parsed = resolve_var_recursive(&parsed, custom_properties, depth + 1);
-            return parsed;
+        if let Some(mut parsed) = parse_resolved_value(fallback_str, property_name) {
+            parsed = resolve_var_recursive(&parsed, custom_properties, depth + 1, property_name).unwrap_or(parsed);
+            return VarResolutionResult::Resolved(parsed);
         }
         let as_keyword = PropertyValue::Keyword(fallback_str.to_string());
-        return resolve_var_recursive(&as_keyword, custom_properties, depth + 1);
+        return resolve_var_recursive(&as_keyword, custom_properties, depth + 1, property_name);
     }
 
     // No variable found and no fallback - return original
-    PropertyValue::Keyword(format!("var({})", inner))
+    VarResolutionResult::NotFound(inner.to_string())
 }
 
 /// Splits var() arguments into variable name and optional fallback
@@ -297,9 +330,9 @@ fn find_matching_paren(s: &str) -> Option<usize> {
 ///
 /// This function attempts to parse the string representation of a CSS value
 /// (as stored in custom properties) into a typed PropertyValue.
-fn parse_resolved_value(value: &str) -> Option<PropertyValue> {
+fn parse_resolved_value(value: &str, property_name: &str) -> Option<PropertyValue> {
     // Use the CSS parser to interpret the value
-    parse_property_value("", value)
+    parse_property_value(property_name, value)
 }
 
 /// Checks if a string contains any var() references
@@ -521,6 +554,29 @@ mod tests {
         } else {
             panic!("Expected Keyword, got {:?}", resolved);
         }
+    }
+
+    #[test]
+    fn test_resolve_var_uses_property_specific_parser() {
+        let props = make_props(&[("--bg", "url(image.png), linear-gradient(red, blue)")]);
+        let value = PropertyValue::Keyword("var(--bg)".to_string());
+        let resolved = resolve_var_for_property(&value, &props, "background-image");
+
+        if let VarResolutionResult::Resolved(PropertyValue::Multiple(list)) = resolved {
+            assert_eq!(list.len(), 3); // url, comma token, gradient
+            assert!(matches!(list[0], PropertyValue::Url(ref u) if u == "image.png"));
+            assert!(matches!(list[2], PropertyValue::LinearGradient { .. } | PropertyValue::RepeatingLinearGradient { .. }));
+        } else {
+            panic!("Expected Multiple for background layers, got {:?}", resolved);
+        }
+    }
+
+    #[test]
+    fn unresolved_var_marks_declaration_invalid() {
+        let props = HashMap::new();
+        let value = PropertyValue::Keyword("var(--missing)".to_string());
+        let resolved = resolve_var_for_property(&value, &props, "color");
+        assert!(matches!(resolved, VarResolutionResult::NotFound(_)));
     }
 
     // Recursion limit tests

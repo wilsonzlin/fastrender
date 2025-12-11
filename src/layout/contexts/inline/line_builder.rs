@@ -1629,7 +1629,6 @@ fn reorder_paragraph(
     }
 
     let mut box_counter = 0usize;
-    let mut has_plaintext = false;
     let mut line_leaves: Vec<Vec<BidiLeaf>> = Vec::with_capacity(lines.len());
     for line in lines.iter() {
         let mut leaves = Vec::new();
@@ -1639,7 +1638,6 @@ fn reorder_paragraph(
                 &mut Vec::new(),
                 &mut box_counter,
                 &mut leaves,
-                &mut has_plaintext,
             );
         }
         line_leaves.push(leaves);
@@ -1757,8 +1755,7 @@ fn reorder_paragraph(
         return;
     }
 
-    let effective_base = if has_plaintext { None } else { base_level };
-    let bidi = BidiInfo::new(&logical_text, effective_base);
+    let bidi = BidiInfo::new(&logical_text, base_level);
 
     for (line_idx, line_range) in line_ranges.iter().enumerate() {
         if line_range.is_empty() {
@@ -2078,7 +2075,6 @@ fn flatten_positioned_item(
     box_stack: &mut Vec<BoxContext>,
     box_counter: &mut usize,
     leaves: &mut Vec<BidiLeaf>,
-    has_plaintext: &mut bool,
 ) {
     match &positioned.item {
         InlineItem::InlineBox(inline_box) => {
@@ -2096,9 +2092,6 @@ fn flatten_positioned_item(
                 unicode_bidi: inline_box.unicode_bidi,
                 style: inline_box.style.clone(),
             };
-            if inline_box.unicode_bidi == UnicodeBidi::Plaintext {
-                *has_plaintext = true;
-            }
             box_stack.push(ctx);
             for child in &inline_box.children {
                 let child_positioned = PositionedItem {
@@ -2106,16 +2099,11 @@ fn flatten_positioned_item(
                     x: positioned.x,
                     baseline_offset: positioned.baseline_offset,
                 };
-                flatten_positioned_item(&child_positioned, box_stack, box_counter, leaves, has_plaintext);
+                flatten_positioned_item(&child_positioned, box_stack, box_counter, leaves);
             }
             box_stack.pop();
         }
         _ => {
-            if positioned.item.unicode_bidi() == UnicodeBidi::Plaintext
-                || box_stack.iter().any(|ctx| ctx.unicode_bidi == UnicodeBidi::Plaintext)
-            {
-                *has_plaintext = true;
-            }
             leaves.push(BidiLeaf {
                 item: positioned.item.clone(),
                 baseline_offset: positioned.baseline_offset,
@@ -2445,6 +2433,31 @@ mod tests {
 
         // Base was RTL, but plaintext forces first-strong (LTR here), so visual order stays logical LTR then RTL.
         assert_eq!(texts, vec!["abc ".to_string(), "אבג".to_string()]);
+    }
+
+    #[test]
+    fn bidi_plaintext_inline_preserves_paragraph_base_direction() {
+        let mut builder = make_builder_with_base(200.0, Level::ltr());
+        builder.add_item(InlineItem::Text(make_text_item_with_bidi(
+            "אבג",
+            30.0,
+            UnicodeBidi::Plaintext,
+        )));
+        builder.add_item(InlineItem::Text(make_text_item(" xyz", 30.0)));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].resolved_direction, Direction::Ltr);
+        let texts: Vec<String> = lines[0]
+            .items
+            .iter()
+            .map(|p| match &p.item {
+                InlineItem::Text(t) => t.text.clone(),
+                _ => String::new(),
+            })
+            .collect();
+
+        assert_eq!(texts, vec!["אבג".to_string(), " xyz".to_string()]);
     }
 
     #[test]

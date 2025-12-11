@@ -256,15 +256,18 @@ fn parse_declaration_list<'i, 't>(
         }
 
         // Slice from value_start to value_end
-        let full_slice = parser.slice_from(value_start).trim();
+        let full_slice_raw = parser.slice_from(value_start);
+
+        // Strip trailing "!important" / semicolon but preserve leading whitespace for custom properties.
         let value = if important {
-            full_slice
-                .trim_end_matches("!important")
-                .trim_end()
-                .trim_end_matches(';')
-                .trim_end()
+            let without_important = if let Some((before, _)) = full_slice_raw.rsplit_once("!important") {
+                before
+            } else {
+                full_slice_raw
+            };
+            without_important.trim_end_matches(';').trim_end()
         } else {
-            full_slice.trim_end_matches(';').trim_end()
+            full_slice_raw.trim_end_matches(';').trim_end()
         };
 
         // Parse the value based on property
@@ -272,6 +275,7 @@ fn parse_declaration_list<'i, 't>(
             declarations.push(Declaration {
                 property,
                 value: parsed_value,
+                raw_value: value.to_string(),
                 important,
             });
         }
@@ -327,6 +331,7 @@ pub fn extract_css(dom: &DomNode) -> Result<StyleSheet> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PropertyValue;
 
     #[test]
     fn test_parse_simple_stylesheet() {
@@ -391,6 +396,19 @@ mod tests {
         let narrow_ctx = MediaContext::screen(400.0, 600.0);
         let narrow_rules = stylesheet.collect_style_rules(&narrow_ctx);
         assert_eq!(narrow_rules.len(), 2, "Narrow viewport should have 2 rules");
+    }
+
+    #[test]
+    fn custom_properties_preserve_raw_tokens() {
+        let css = "--foo:  10px  var(--bar) ;";
+        let decls = parse_declarations(css);
+        assert_eq!(decls.len(), 1);
+        assert_eq!(decls[0].property, "--foo");
+        match &decls[0].value {
+            PropertyValue::Custom(raw) => assert_eq!(raw, "  10px  var(--bar)"),
+            other => panic!("expected custom value, got {:?}", other),
+        }
+        assert_eq!(decls[0].raw_value, "  10px  var(--bar)");
     }
 
     #[test]
