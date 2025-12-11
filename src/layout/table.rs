@@ -1393,10 +1393,8 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     let tfc = TableFormattingContext::new();
     for cell in &structure.cells {
         if let Some(cell_box) = tfc.get_cell_box(table_box, cell) {
-            let hide_empty = cell_box.style.empty_cells == EmptyCells::Hide && cell_is_visually_empty(cell_box);
-            if hide_empty {
-                continue;
-            }
+            // In the collapsed border model the `empty-cells` property has no effect (CSS 2.1 §17.6.1),
+            // so even visually empty cells participate in border conflict resolution.
             let style = &cell_box.style;
             let start_col = cell.col;
             let end_col = (cell.col + cell.colspan).min(structure.column_count);
@@ -2179,7 +2177,9 @@ impl TableFormattingContext {
         cell_width: f32,
         border_collapse: BorderCollapse,
     ) -> Result<FragmentNode, LayoutError> {
-        let hide_empty = cell_box.style.empty_cells == EmptyCells::Hide && cell_is_visually_empty(cell_box);
+        let hide_empty = border_collapse == BorderCollapse::Separate
+            && cell_box.style.empty_cells == EmptyCells::Hide
+            && cell_is_visually_empty(cell_box);
         let mut cloned = cell_box.clone();
         if hide_empty {
             let mut style = (*cloned.style).clone();
@@ -3879,7 +3879,7 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_borders_skip_empty_cells_when_hidden() {
+    fn collapsed_borders_ignore_empty_cells_property() {
         let mut table_style = ComputedStyle::default();
         table_style.display = Display::Table;
         table_style.border_collapse = BorderCollapse::Collapse;
@@ -3907,10 +3907,7 @@ mod tests {
 
         assert_eq!(borders.vertical.len(), 3);
         let middle = &borders.vertical[1][0];
-        assert!(
-            (middle.width - 2.0).abs() < f32::EPSILON,
-            "hidden empty cell should not contribute"
-        );
+        assert!((middle.width - 4.0).abs() < f32::EPSILON, "empty-cells is ignored when borders are collapsed");
     }
 
     fn find_cell_fragment<'a>(fragment: &'a FragmentNode) -> Option<&'a FragmentNode> {
