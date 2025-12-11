@@ -2969,23 +2969,18 @@ impl InlineFormattingContext {
         .unwrap_or(0.0);
         let indent_applies_first = style.text_indent.each_line || !style.text_indent.hanging;
         let indent_applies_subsequent = style.text_indent.each_line || style.text_indent.hanging;
-        let indent_positive = indent_value.max(0.0);
         let first_line_width = if indent_applies_first {
-            (available_inline - indent_positive).max(0.0)
+            (available_inline - indent_value).max(0.0)
         } else {
             available_inline
         };
         let subsequent_line_width = if indent_applies_subsequent {
-            (available_inline - indent_positive).max(0.0)
+            (available_inline - indent_value).max(0.0)
         } else {
             available_inline
         };
-        let first_line_indent_cut = if indent_applies_first { indent_positive } else { 0.0 };
-        let subsequent_line_indent_cut = if indent_applies_subsequent {
-            indent_positive
-        } else {
-            0.0
-        };
+        let first_line_indent_cut = if indent_applies_first { indent_value } else { 0.0 };
+        let subsequent_line_indent_cut = if indent_applies_subsequent { indent_value } else { 0.0 };
 
         let base_level = match style.unicode_bidi {
             crate::style::types::UnicodeBidi::Plaintext => None,
