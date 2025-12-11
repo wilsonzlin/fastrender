@@ -557,6 +557,28 @@ mod tests {
         assert!(parse_length("calc(10px * 5px)").is_none());
         assert!(parse_length("calc(10px / 0px)").is_none());
     }
+
+    #[test]
+    fn parses_min_max_clamp_lengths() {
+        assert_eq!(parse_length("min(10px, 20px)").unwrap(), Length::px(10.0));
+        assert_eq!(parse_length("max(10px, 20px)").unwrap(), Length::px(20.0));
+        assert_eq!(
+            parse_length("clamp(10px, 5px, 15px)").unwrap(),
+            Length::px(10.0)
+        );
+        assert_eq!(
+            parse_length("clamp(10px, 12px, 15px)").unwrap(),
+            Length::px(12.0)
+        );
+        assert_eq!(
+            parse_length("clamp(10px, 30px, 15px)").unwrap(),
+            Length::px(15.0)
+        );
+        assert_eq!(
+            parse_length("min(10%, 20%)").unwrap(),
+            Length::percent(10.0)
+        );
+    }
 }
 
 /// Parse a CSS length value
@@ -572,13 +594,13 @@ pub fn parse_length(s: &str) -> Option<Length> {
         }
     }
 
-    if s.to_ascii_lowercase().starts_with("calc(") {
-        if let Some(len) = parse_calc_length(s) {
+    let lower = s.to_ascii_lowercase();
+    if lower.starts_with("calc(") || lower.starts_with("min(") || lower.starts_with("max(") || lower.starts_with("clamp(") {
+        if let Some(len) = parse_function_length(s) {
             return Some(len);
         }
     }
 
-    let lower = s.to_ascii_lowercase();
     for (suffix, unit) in [
         ("vmin", LengthUnit::Vmin),
         ("vmax", LengthUnit::Vmax),
@@ -613,12 +635,24 @@ struct CalcComponent {
     unit: Option<LengthUnit>,
 }
 
-fn parse_calc_length(input: &str) -> Option<Length> {
+fn parse_function_length(input: &str) -> Option<Length> {
     let mut parser_input = ParserInput::new(input);
     let mut parser = Parser::new(&mut parser_input);
     let result = parser.parse_entirely(|p| {
-        p.expect_function_matching("calc")?;
-        p.parse_nested_block(parse_calc_sum)
+        match p.next()? {
+            Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => p.parse_nested_block(parse_calc_sum),
+            Token::Function(ref name) if name.eq_ignore_ascii_case("min") => {
+                p.parse_nested_block(|block| parse_min_max(block, MathFn::Min))
+            }
+            Token::Function(ref name) if name.eq_ignore_ascii_case("max") => {
+                p.parse_nested_block(|block| parse_min_max(block, MathFn::Max))
+            }
+            Token::Function(ref name) if name.eq_ignore_ascii_case("clamp") => p.parse_nested_block(parse_clamp),
+            _ => Err(cssparser::ParseError {
+                kind: cssparser::ParseErrorKind::Custom(()),
+                location: p.current_source_location(),
+            }),
+        }
     });
 
     match result {
@@ -733,6 +767,15 @@ fn parse_calc_factor<'i, 't>(
         Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
             input.parse_nested_block(parse_calc_sum)
         }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("min") => {
+            input.parse_nested_block(|block| parse_min_max(block, MathFn::Min))
+        }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("max") => {
+            input.parse_nested_block(|block| parse_min_max(block, MathFn::Max))
+        }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("clamp") => {
+            input.parse_nested_block(parse_clamp)
+        }
         Token::ParenthesisBlock => input.parse_nested_block(parse_calc_sum),
         Token::Delim('+') => parse_calc_factor(input),
         Token::Delim('-') => {
@@ -747,6 +790,115 @@ fn parse_calc_factor<'i, 't>(
             location: input.current_source_location(),
         }),
     }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum MathFn {
+    Min,
+    Max,
+}
+
+pub(crate) fn parse_min_max_function_length<'i, 't>(
+    input: &mut Parser<'i, 't>,
+    func: MathFn,
+) -> Result<Length, cssparser::ParseError<'i, ()>> {
+    let component = input.parse_nested_block(|block| parse_min_max(block, func))?;
+    calc_component_to_length(component).ok_or(cssparser::ParseError {
+        kind: cssparser::ParseErrorKind::Custom(()),
+        location: input.current_source_location(),
+    })
+}
+
+pub(crate) fn parse_clamp_function_length<'i, 't>(
+    input: &mut Parser<'i, 't>,
+) -> Result<Length, cssparser::ParseError<'i, ()>> {
+    let component = input.parse_nested_block(parse_clamp)?;
+    calc_component_to_length(component).ok_or(cssparser::ParseError {
+        kind: cssparser::ParseErrorKind::Custom(()),
+        location: input.current_source_location(),
+    })
+}
+
+fn parse_min_max<'i, 't>(
+    input: &mut Parser<'i, 't>,
+    func: MathFn,
+) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
+    let mut values = Vec::new();
+    loop {
+        input.skip_whitespace();
+        values.push(parse_calc_sum(input)?);
+        input.skip_whitespace();
+        if input.try_parse(|p| p.expect_comma()).is_err() {
+            break;
+        }
+    }
+
+    if values.len() < 2 {
+        return Err(cssparser::ParseError {
+            kind: cssparser::ParseErrorKind::Custom(()),
+            location: input.current_source_location(),
+        });
+    }
+
+    reduce_components(values, func)
+}
+
+fn parse_clamp<'i, 't>(input: &mut Parser<'i, 't>) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
+    input.skip_whitespace();
+    let min = parse_calc_sum(input)?;
+    input.skip_whitespace();
+    input.expect_comma()?;
+    input.skip_whitespace();
+    let preferred = parse_calc_sum(input)?;
+    input.skip_whitespace();
+    input.expect_comma()?;
+    input.skip_whitespace();
+    let max = parse_calc_sum(input)?;
+
+    if !all_same_unit(&[min, preferred, max]) || min.unit.is_none() {
+        return Err(cssparser::ParseError {
+            kind: cssparser::ParseErrorKind::Custom(()),
+            location: input.current_source_location(),
+        });
+    }
+
+    let preferred_clamped = preferred.value.clamp(min.value, max.value);
+    Ok(CalcComponent {
+        value: preferred_clamped,
+        unit: min.unit,
+    })
+}
+
+fn all_same_unit(values: &[CalcComponent]) -> bool {
+    if values.is_empty() {
+        return false;
+    }
+    let first = values[0].unit;
+    values.iter().all(|v| v.unit == first)
+}
+
+fn reduce_components<'i>(
+    values: Vec<CalcComponent>,
+    func: MathFn,
+) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
+    if !all_same_unit(&values) || values.iter().any(|v| v.unit.is_none()) {
+        return Err(cssparser::ParseError {
+            kind: cssparser::ParseErrorKind::Custom(()),
+            location: cssparser::SourceLocation { line: 0, column: 0 },
+        });
+    }
+
+    let unit = values[0].unit;
+    let init = match func {
+        MathFn::Min => f32::INFINITY,
+        MathFn::Max => f32::NEG_INFINITY,
+    };
+    let result = values.into_iter().fold(init, |acc, v| match func {
+        MathFn::Min => acc.min(v.value),
+        MathFn::Max => acc.max(v.value),
+    });
+
+    Ok(CalcComponent { value: result, unit })
 }
 
 fn combine_sum<'i>(

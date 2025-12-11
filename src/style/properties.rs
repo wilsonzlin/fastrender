@@ -3035,6 +3035,15 @@ fn parse_length_component<'i, 't>(input: &mut Parser<'i, 't>) -> Result<Length, 
         Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
             crate::css::properties::parse_calc_function_length(input)
         }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("min") => {
+            crate::css::properties::parse_min_max_function_length(input, crate::css::properties::MathFn::Min)
+        }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("max") => {
+            crate::css::properties::parse_min_max_function_length(input, crate::css::properties::MathFn::Max)
+        }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("clamp") => {
+            crate::css::properties::parse_clamp_function_length(input)
+        }
         Token::Percentage { unit_value, .. } => Ok(Length::percent(*unit_value * 100.0)),
         Token::Number { value, .. } if *value == 0.0 => Ok(Length::px(0.0)),
         _ => Err(location.new_custom_error(())),
@@ -4325,6 +4334,16 @@ mod tests {
         let mut parser = Parser::new(&mut input);
         let len = parse_length_component(&mut parser).expect("calc percent");
         assert_eq!(len, Length::percent(30.0));
+
+        let mut input = ParserInput::new("min(2em, 3em)");
+        let mut parser = Parser::new(&mut input);
+        let len = parse_length_component(&mut parser).expect("min length");
+        assert_eq!(len, Length::em(2.0));
+
+        let mut input = ParserInput::new("clamp(10px, 12px, 15px)");
+        let mut parser = Parser::new(&mut input);
+        let len = parse_length_component(&mut parser).expect("clamp length");
+        assert_eq!(len, Length::px(12.0));
     }
 
     #[test]
