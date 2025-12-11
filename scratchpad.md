@@ -16,6 +16,7 @@
 - Computed/positioned stacking-context detection now mirrors the paint logic: transform/filter/backdrop/mix-blend/isolation/will-change and positioned overflow clipping all trigger stacking contexts in both computed helpers and positioned layout tests.
 - CSS `contain` now parses (`none|strict|content|layout|paint|style|size|inline-size` combos), stores containment flags, and paint stacking contexts are created when paint containment is present; property and stacking tests cover parsing and SC creation.
 - Size/inline-size/layout containment now establishes BFCs (blocking margin collapse/float leakage) and zeroes intrinsic inline contributions; size containment also prevents child height from inflating auto heights. Added regression for intrinsic sizing.
+- Flow-root/inline flex/inline grid now explicitly establish BFCs so margins don’t collapse through them and floats stay contained; coverage added in margin collapse tests.
 - Paint containment now clips stacking contexts: painter treats contain: paint like overflow clip, and the display-list builder wraps paint-contained contexts in a padding-box clip (with radii) so renderers keep painting inside the element bounds; regression covers the emitted PushClip/PopClip.
 - Image cache resolves relative URLs against the configured base URL; added a regression that loads a file:// PNG via base URL resolution.
 - Display-list builder exposes a base-URL setter and now resolves background image URLs against the configured base; regression covers loading a relative PNG through the base URL.

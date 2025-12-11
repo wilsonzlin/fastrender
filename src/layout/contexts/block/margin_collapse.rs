@@ -335,7 +335,10 @@ pub fn establishes_bfc(style: &ComputedStyle) -> bool {
     if style.position == Position::Absolute || style.position == Position::Fixed {
         return true;
     }
-    if matches!(style.display, Display::InlineBlock) {
+    if matches!(
+        style.display,
+        Display::InlineBlock | Display::InlineFlex | Display::InlineGrid | Display::FlowRoot
+    ) {
         return true;
     }
     if style.overflow_x != Overflow::Visible || style.overflow_y != Overflow::Visible {
@@ -351,6 +354,7 @@ pub fn establishes_bfc(style: &ComputedStyle) -> bool {
 mod tests {
     use super::*;
     use crate::style::values::Length;
+    use crate::style::display::Display;
 
     // ==========================================================================
     // CollapsibleMargin Tests
@@ -607,6 +611,19 @@ mod tests {
         assert!(establishes_bfc(&style));
 
         style.containment = crate::style::types::Containment::with_flags(false, false, true, false, false);
+        assert!(establishes_bfc(&style));
+    }
+
+    #[test]
+    fn test_establishes_bfc_flow_root_and_inline_flex_grid() {
+        let mut style = ComputedStyle::default();
+        style.display = Display::FlowRoot;
+        assert!(establishes_bfc(&style));
+
+        style.display = Display::InlineFlex;
+        assert!(establishes_bfc(&style));
+
+        style.display = Display::InlineGrid;
         assert!(establishes_bfc(&style));
     }
 }
