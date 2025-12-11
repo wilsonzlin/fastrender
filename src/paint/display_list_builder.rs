@@ -194,6 +194,7 @@ impl DisplayListBuilder {
 
         if let Some(style) = fragment.style.as_deref() {
             self.emit_background_from_style(absolute_rect, style);
+            self.emit_border_from_style(absolute_rect, style);
         }
 
         // CSS Paint Order:
@@ -241,6 +242,7 @@ impl DisplayListBuilder {
 
         if let Some(style) = fragment.style.as_deref() {
             self.emit_background_from_style(absolute_rect, style);
+            self.emit_border_from_style(absolute_rect, style);
         }
 
         let box_id = Self::get_box_id(fragment);
@@ -416,6 +418,13 @@ impl DisplayListBuilder {
             bottom_right: br,
             bottom_left: bl,
         }
+    }
+
+    fn border_style_visible(style: crate::style::types::BorderStyle) -> bool {
+        !matches!(
+            style,
+            crate::style::types::BorderStyle::None | crate::style::types::BorderStyle::Hidden
+        )
     }
 
     fn build_transform(style: &ComputedStyle, bounds: Rect) -> Option<Transform2D> {
@@ -668,6 +677,53 @@ impl DisplayListBuilder {
                 crate::paint::display_list::FillRoundedRectItem {
                     rect: clip_rect,
                     color: style.background_color,
+                    radii,
+                },
+            ));
+        }
+    }
+
+    fn emit_border_from_style(&mut self, rect: Rect, style: &ComputedStyle) {
+        // Only emit when all sides share the same solid color/width.
+        let border_style = style.border_top_style;
+        let widths = (
+            Self::resolve_length_for_paint(&style.border_top_width, style.font_size, rect.width()),
+            Self::resolve_length_for_paint(&style.border_right_width, style.font_size, rect.width()),
+            Self::resolve_length_for_paint(&style.border_bottom_width, style.font_size, rect.width()),
+            Self::resolve_length_for_paint(&style.border_left_width, style.font_size, rect.width()),
+        );
+        if !(Self::border_style_visible(border_style)
+            && border_style == style.border_right_style
+            && border_style == style.border_bottom_style
+            && border_style == style.border_left_style)
+        {
+            return;
+        }
+        if (widths.0 - widths.1).abs() > f32::EPSILON
+            || (widths.0 - widths.2).abs() > f32::EPSILON
+            || (widths.0 - widths.3).abs() > f32::EPSILON
+        {
+            return;
+        }
+        let width = widths.0;
+        if width <= 0.0 {
+            return;
+        }
+
+        let color = style.border_top_color;
+        if color.is_transparent() {
+            return;
+        }
+
+        let radii = Self::border_radii(rect, style).clamped(rect.width(), rect.height());
+        if radii.is_zero() {
+            self.emit_border(rect, width, color);
+        } else {
+            self.list.push(DisplayItem::StrokeRoundedRect(
+                crate::paint::display_list::StrokeRoundedRectItem {
+                    rect,
+                    color,
+                    width,
                     radii,
                 },
             ));

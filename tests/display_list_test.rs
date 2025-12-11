@@ -52,6 +52,10 @@ fn test_display_list_from_items() {
 fn fragment_background_emits_fill() {
     let mut style = fastrender::ComputedStyle::default();
     style.background_color = Rgba::RED;
+    style.border_top_width = fastrender::style::values::Length::px(0.0);
+    style.border_right_width = fastrender::style::values::Length::px(0.0);
+    style.border_bottom_width = fastrender::style::values::Length::px(0.0);
+    style.border_left_width = fastrender::style::values::Length::px(0.0);
     let fragment =
         fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
 
@@ -64,6 +68,32 @@ fn fragment_background_emits_fill() {
         }
         _ => panic!("expected background fill"),
     }
+}
+
+#[test]
+fn fragment_uniform_border_emits_stroke() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.border_top_width = fastrender::style::values::Length::px(2.0);
+    style.border_right_width = fastrender::style::values::Length::px(2.0);
+    style.border_bottom_width = fastrender::style::values::Length::px(2.0);
+    style.border_left_width = fastrender::style::values::Length::px(2.0);
+    style.border_top_style = fastrender::style::types::BorderStyle::Solid;
+    style.border_right_style = fastrender::style::types::BorderStyle::Solid;
+    style.border_bottom_style = fastrender::style::types::BorderStyle::Solid;
+    style.border_left_style = fastrender::style::types::BorderStyle::Solid;
+    style.border_top_color = Rgba::BLUE;
+    style.border_right_color = Rgba::BLUE;
+    style.border_bottom_color = Rgba::BLUE;
+    style.border_left_color = Rgba::BLUE;
+
+    let fragment =
+        fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    assert!(list
+        .items()
+        .iter()
+        .any(|i| matches!(i, DisplayItem::StrokeRect(_) | DisplayItem::StrokeRoundedRect(_))));
 }
 
 #[test]
