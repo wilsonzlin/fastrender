@@ -1038,7 +1038,7 @@ impl Painter {
                 if !backdrop_filters.is_empty() {
                     apply_backdrop_filters(
                         &mut self.pixmap,
-                        &device_bounds,
+                        &device_root_rect,
                         &backdrop_filters,
                         device_radii,
                         self.scale,
@@ -3684,15 +3684,15 @@ fn apply_backdrop_filters(
         return;
     }
     let (out_l, out_t, out_r, out_b) = filter_outset(filters);
-    let device_out_l = out_l * scale;
-    let device_out_t = out_t * scale;
-    let device_out_r = out_r * scale;
-    let device_out_b = out_b * scale;
+    let out_l = out_l * scale;
+    let out_t = out_t * scale;
+    let out_r = out_r * scale;
+    let out_b = out_b * scale;
 
-    let x = (bounds.min_x() - device_out_l).floor() as i32;
-    let y = (bounds.min_y() - device_out_t).floor() as i32;
-    let width = (bounds.width() + device_out_l + device_out_r).ceil() as u32;
-    let height = (bounds.height() + device_out_t + device_out_b).ceil() as u32;
+    let x = (bounds.min_x() - out_l).floor() as i32;
+    let y = (bounds.min_y() - out_t).floor() as i32;
+    let width = (bounds.width() + out_l + out_r).ceil() as u32;
+    let height = (bounds.height() + out_t + out_b).ceil() as u32;
     if width == 0 || height == 0 {
         return;
     }
@@ -3735,23 +3735,12 @@ fn apply_backdrop_filters(
     apply_filters(&mut region, filters, scale);
     if !radii.is_zero() {
         let local_rect = Rect::from_xywh(
-            bounds.x() - device_out_l - clamped_x as f32,
-            bounds.y() - device_out_t - clamped_y as f32,
-            bounds.width() + device_out_l + device_out_r,
-            bounds.height() + device_out_t + device_out_b,
+            bounds.x() - clamped_x as f32,
+            bounds.y() - clamped_y as f32,
+            bounds.width(),
+            bounds.height(),
         );
-        let inflate = device_out_l.max(device_out_t).max(device_out_r).max(device_out_b);
-        let inflated_radii = if inflate > 0.0 {
-            BorderRadii {
-                top_left: radii.top_left + inflate,
-                top_right: radii.top_right + inflate,
-                bottom_right: radii.bottom_right + inflate,
-                bottom_left: radii.bottom_left + inflate,
-            }
-        } else {
-            radii
-        };
-        apply_clip_mask_rect(&mut region, local_rect, inflated_radii);
+        apply_clip_mask_rect(&mut region, local_rect, radii);
     }
 
     let mut paint = PixmapPaint::default();
