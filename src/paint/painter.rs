@@ -39,7 +39,7 @@ use crate::style::position::Position;
 use crate::style::types::{
     BackgroundAttachment, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeatKeyword,
     BackgroundSize, BackgroundSizeComponent, BackgroundSizeKeyword, BorderStyle as CssBorderStyle, ImageRendering,
-    ObjectFit, TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
+    ObjectFit, TextDecorationLine, TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness,
 };
 use crate::style::types::{FilterColor, FilterFunction, MixBlendMode, Overflow};
 use crate::style::values::{Length, LengthUnit};
@@ -2548,7 +2548,8 @@ impl Painter {
                     crate::style::types::TextDecorationSkipInk::Auto | crate::style::types::TextDecorationSkipInk::All
                 ) {
                     if let Some(runs) = runs {
-                        let segments = self.build_underline_segments(runs, x, width, center, thickness, baseline_y);
+                        let segments =
+                            self.build_underline_segments(runs, x, width, center, thickness, baseline_y, deco.skip_ink);
                         for (seg_start, seg_end) in segments {
                             let seg_width = seg_end - seg_start;
                             if seg_width <= 0.0 {
@@ -2588,6 +2589,7 @@ impl Painter {
         center: f32,
         thickness: f32,
         baseline_y: f32,
+        skip_ink: TextDecorationSkipInk,
     ) -> Vec<(f32, f32)> {
         if line_width <= 0.0 {
             return Vec::new();
@@ -2596,10 +2598,17 @@ impl Painter {
         let band_half = (thickness * 0.5).abs();
         let band_top = center - band_half;
         let band_bottom = center + band_half;
-        let mut exclusions = collect_underline_exclusions(runs, line_start, baseline_y, band_top, band_bottom);
+        let mut exclusions = collect_underline_exclusions(
+            runs,
+            line_start,
+            baseline_y,
+            band_top,
+            band_bottom,
+            skip_ink == TextDecorationSkipInk::All,
+        );
 
         let mut segments = subtract_intervals((line_start, line_start + line_width), &mut exclusions);
-        if segments.is_empty() {
+        if segments.is_empty() && skip_ink != TextDecorationSkipInk::All {
             // Never drop the underline entirely when skipping ink; fall back to a full span.
             segments.push((line_start, line_start + line_width));
         }
@@ -2918,6 +2927,7 @@ fn collect_underline_exclusions(
     baseline_y: f32,
     band_top: f32,
     band_bottom: f32,
+    skip_all: bool,
 ) -> Vec<(f32, f32)> {
     let mut intervals = Vec::new();
     // Small inflation to account for antialiasing without swallowing the entire line.
@@ -2952,7 +2962,7 @@ fn collect_underline_exclusions(
                 let top = glyph_y - bbox.y_max as f32 * scale - tolerance;
                 let bottom = glyph_y - bbox.y_min as f32 * scale + tolerance;
 
-                if bottom >= band_top && top <= band_bottom {
+                if skip_all || (bottom >= band_top && top <= band_bottom) {
                     intervals.push((left, right));
                 }
             }
@@ -4428,39 +4438,67 @@ mod tests {
     }
 
     #[test]
-    fn skip_ink_all_behaves_like_auto() {
+    fn skip_ink_all_forces_exclusions_even_without_overlap() {
         let mut style = ComputedStyle::default();
         style.color = Rgba::BLACK;
-        style.font_size = 28.0;
+        style.font_size = 24.0;
         style.text_decoration.lines = crate::style::types::TextDecorationLine::UNDERLINE;
         style.text_decoration.color = Some(Rgba::from_rgba8(255, 0, 0, 255));
         style.text_decoration_skip_ink = crate::style::types::TextDecorationSkipInk::All;
         style.text_decoration.thickness = crate::style::types::TextDecorationThickness::Length(Length::px(6.0));
         style.text_underline_offset = crate::style::types::TextUnderlineOffset::Length(Length::px(0.0));
 
-        let painter = Painter::new(160, 80, Rgba::WHITE).expect("painter");
-        let runs = painter.shaper.shape("gg", &style, &painter.font_ctx).expect("shape");
+        let painter = Painter::new(240, 140, Rgba::WHITE).expect("painter");
+        let runs = painter.shaper.shape("HI HI", &style, &painter.font_ctx).expect("shape");
         let metrics = painter.decoration_metrics(Some(&runs), &style).expect("metrics");
         let width: f32 = runs.iter().map(|r| r.advance).sum();
-        let baseline = 40.0;
-        let center = baseline;
+        let baseline = 50.0;
+        // Place the underline well below the glyph ink so auto skip-ink would keep it continuous.
+        let center = baseline + 30.0;
         let thickness = match style.text_decoration.thickness {
             crate::style::types::TextDecorationThickness::Length(l) => l.to_px(),
             _ => metrics.underline_thickness,
         };
-        let segments_all = painter.build_underline_segments(&runs, 10.0, width, center, thickness, baseline);
-
-        let mut auto_style = style.clone();
-        auto_style.text_decoration_skip_ink = crate::style::types::TextDecorationSkipInk::Auto;
-        let segments_auto = painter.build_underline_segments(&runs, 10.0, width, center, thickness, baseline);
-
-        assert_eq!(
-            segments_all, segments_auto,
-            "skip-ink all should follow the same skipping behavior as auto"
+        let line_start = 10.0;
+        let segments_all = painter.build_underline_segments(
+            &runs,
+            line_start,
+            width,
+            center,
+            thickness,
+            baseline,
+            crate::style::types::TextDecorationSkipInk::All,
         );
+
+        let segments_auto = painter.build_underline_segments(
+            &runs,
+            line_start,
+            width,
+            center,
+            thickness,
+            baseline,
+            crate::style::types::TextDecorationSkipInk::Auto,
+        );
+
         assert!(
             !segments_all.is_empty(),
-            "segment computation should always produce at least one span"
+            "skip-ink all should still paint around glyphs rather than dropping the line entirely"
+        );
+        assert_eq!(
+            segments_auto.len(),
+            1,
+            "auto skip-ink should keep a continuous line when nothing overlaps the band"
+        );
+        let full_span = (line_start, line_start + width);
+        let auto_span = segments_auto[0];
+        assert!(
+            (auto_span.0 - full_span.0).abs() < 0.01 && (auto_span.1 - full_span.1).abs() < 0.01,
+            "auto span should cover the entire underline"
+        );
+        let carved_length: f32 = segments_all.iter().map(|(s, e)| e - s).sum();
+        assert!(
+            carved_length < width - 0.5,
+            "skip-ink: all should carve out glyph intervals even when the underline is far from ink"
         );
     }
 
@@ -4498,6 +4536,7 @@ mod tests {
             baseline,
             center - thickness * 0.5,
             center + thickness * 0.5,
+            false,
         );
         let target = exclusions
             .iter()
@@ -4510,7 +4549,15 @@ mod tests {
             .expect("descenders should intersect the underline band when skip-ink is evaluated");
         let sample_x_f = (target.0 + target.1) * 0.5;
         let sample_x = sample_x_f.round().clamp(0.0, 159.0) as u32;
-        let segments = painter.build_underline_segments(&runs, line_start, line_width, center, thickness, baseline);
+        let segments = painter.build_underline_segments(
+            &runs,
+            line_start,
+            line_width,
+            center,
+            thickness,
+            baseline,
+            crate::style::types::TextDecorationSkipInk::Auto,
+        );
         assert!(
             !segments.iter().any(|(s, e)| sample_x_f >= *s && sample_x_f <= *e),
             "segments should omit the exclusion area chosen for sampling"

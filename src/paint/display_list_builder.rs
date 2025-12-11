@@ -32,10 +32,10 @@ use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::paint::display_list::{
-    BlendMode, BlendModeItem, BorderItem, BorderSide, BoxShadowItem, ClipItem, DisplayItem, DisplayList,
-    EmphasisMark, EmphasisText, FillRectItem, FontId, GlyphInstance, GradientSpread, GradientStop, ImageData,
-    ImageFilterQuality, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem, ResolvedFilter,
-    StackingContextItem, StrokeRectItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
+    BlendMode, BlendModeItem, BorderItem, BorderSide, BoxShadowItem, ClipItem, DisplayItem, DisplayList, EmphasisMark,
+    EmphasisText, FillRectItem, FontId, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality,
+    ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem, ResolvedFilter, StackingContextItem,
+    StrokeRectItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
@@ -1115,7 +1115,8 @@ impl DisplayListBuilder {
             pushed_clip = true;
         }
         if use_blend {
-            self.list.push(DisplayItem::PushBlendMode(BlendModeItem { mode: blend_mode }));
+            self.list
+                .push(DisplayItem::PushBlendMode(BlendModeItem { mode: blend_mode }));
         }
 
         match bg {
@@ -2064,8 +2065,7 @@ mod tests {
             blend_mode: MixBlendMode::Multiply,
             ..BackgroundLayer::default()
         }]);
-        let fragment =
-            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
 
         let list = DisplayListBuilder::new().build(&fragment);
         let mut push_idx = None;

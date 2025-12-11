@@ -1808,7 +1808,10 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                         .get(source_idx)
                         .cloned()
                         .unwrap_or(BackgroundLayer::default().position.clone());
-                    let x_comp = xs.get(idx).cloned().unwrap_or_else(|| xs.last().copied().unwrap_or(default));
+                    let x_comp = xs
+                        .get(idx)
+                        .cloned()
+                        .unwrap_or_else(|| xs.last().copied().unwrap_or(default));
                     let BackgroundPosition::Position { y, .. } = source;
                     positions.push(BackgroundPosition::Position { x: x_comp, y });
                 }
@@ -1831,7 +1834,10 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                         .get(source_idx)
                         .cloned()
                         .unwrap_or(BackgroundLayer::default().position.clone());
-                    let y_comp = ys.get(idx).cloned().unwrap_or_else(|| ys.last().copied().unwrap_or(default));
+                    let y_comp = ys
+                        .get(idx)
+                        .cloned()
+                        .unwrap_or_else(|| ys.last().copied().unwrap_or(default));
                     let BackgroundPosition::Position { x, .. } = source;
                     positions.push(BackgroundPosition::Position { x, y: y_comp });
                 }
@@ -3227,9 +3233,7 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
 
     fn component_from_single(part: &Part, axis: AxisKind) -> Option<BackgroundPositionComponent> {
         match (part, axis) {
-            (Part::Keyword(kind, align), _) if *kind == AxisKind::Either => {
-                Some(component_from_keyword(*align, None))
-            }
+            (Part::Keyword(kind, align), _) if *kind == AxisKind::Either => Some(component_from_keyword(*align, None)),
             (Part::Keyword(kind, align), AxisKind::Horizontal) if *kind == AxisKind::Horizontal => {
                 Some(component_from_keyword(*align, None))
             }
@@ -3256,26 +3260,24 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
     let mut y: Option<BackgroundPositionComponent> = None;
 
     match parts.len() {
-        1 => {
-            match parts[0] {
-                Part::Keyword(AxisKind::Horizontal, align) => {
-                    x = Some(component_from_keyword(align, None));
-                    y = Some(component_from_keyword(0.5, None));
-                }
-                Part::Keyword(AxisKind::Vertical, align) => {
-                    y = Some(component_from_keyword(align, None));
-                    x = Some(component_from_keyword(0.5, None));
-                }
-                Part::Keyword(AxisKind::Either, align) => {
-                    x = Some(component_from_keyword(align, None));
-                    y = Some(component_from_keyword(align, None));
-                }
-                Part::Offset(len) => {
-                    x = Some(component_from_keyword(0.0, Some(len)));
-                    y = Some(component_from_keyword(0.5, None));
-                }
+        1 => match parts[0] {
+            Part::Keyword(AxisKind::Horizontal, align) => {
+                x = Some(component_from_keyword(align, None));
+                y = Some(component_from_keyword(0.5, None));
             }
-        }
+            Part::Keyword(AxisKind::Vertical, align) => {
+                y = Some(component_from_keyword(align, None));
+                x = Some(component_from_keyword(0.5, None));
+            }
+            Part::Keyword(AxisKind::Either, align) => {
+                x = Some(component_from_keyword(align, None));
+                y = Some(component_from_keyword(align, None));
+            }
+            Part::Offset(len) => {
+                x = Some(component_from_keyword(0.0, Some(len)));
+                y = Some(component_from_keyword(0.5, None));
+            }
+        },
         2 => {
             // Two-value syntax: first is horizontal, second vertical; if order is vertical+horizontal, swap.
             let (first, second) = (&parts[0], &parts[1]);
@@ -3331,7 +3333,13 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
             // Horizontal pair first
             if matches!(a, Part::Keyword(AxisKind::Horizontal | AxisKind::Either, _)) && matches!(b, Part::Offset(_)) {
                 if let Part::Keyword(_, align) = a {
-                    x = Some(component_from_keyword(*align, Some(match b { Part::Offset(l) => *l, _ => unreachable!() })));
+                    x = Some(component_from_keyword(
+                        *align,
+                        Some(match b {
+                            Part::Offset(l) => *l,
+                            _ => unreachable!(),
+                        }),
+                    ));
                 } else if let Part::Offset(_) = a {
                     // unreachable
                 }
@@ -3339,9 +3347,18 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
             }
 
             // Vertical pair first
-            if x.is_none() && matches!(a, Part::Keyword(AxisKind::Vertical | AxisKind::Either, _)) && matches!(b, Part::Offset(_)) {
+            if x.is_none()
+                && matches!(a, Part::Keyword(AxisKind::Vertical | AxisKind::Either, _))
+                && matches!(b, Part::Offset(_))
+            {
                 if let Part::Keyword(_, align) = a {
-                    y = Some(component_from_keyword(*align, Some(match b { Part::Offset(l) => *l, _ => unreachable!() })));
+                    y = Some(component_from_keyword(
+                        *align,
+                        Some(match b {
+                            Part::Offset(l) => *l,
+                            _ => unreachable!(),
+                        }),
+                    ));
                 }
                 x = component_from_single(c, AxisKind::Horizontal);
             }
@@ -3359,10 +3376,22 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
                 && matches!(d, Part::Offset(_))
             {
                 if let Part::Keyword(_, align) = a {
-                    x = Some(component_from_keyword(*align, Some(match b { Part::Offset(l) => *l, _ => unreachable!() })));
+                    x = Some(component_from_keyword(
+                        *align,
+                        Some(match b {
+                            Part::Offset(l) => *l,
+                            _ => unreachable!(),
+                        }),
+                    ));
                 }
                 if let Part::Keyword(_, align) = c {
-                    y = Some(component_from_keyword(*align, Some(match d { Part::Offset(l) => *l, _ => unreachable!() })));
+                    y = Some(component_from_keyword(
+                        *align,
+                        Some(match d {
+                            Part::Offset(l) => *l,
+                            _ => unreachable!(),
+                        }),
+                    ));
                 }
             } else if matches!(a, Part::Keyword(AxisKind::Vertical | AxisKind::Either, _))
                 && matches!(b, Part::Offset(_))
@@ -3370,10 +3399,22 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
                 && matches!(d, Part::Offset(_))
             {
                 if let Part::Keyword(_, align) = a {
-                    y = Some(component_from_keyword(*align, Some(match b { Part::Offset(l) => *l, _ => unreachable!() })));
+                    y = Some(component_from_keyword(
+                        *align,
+                        Some(match b {
+                            Part::Offset(l) => *l,
+                            _ => unreachable!(),
+                        }),
+                    ));
                 }
                 if let Part::Keyword(_, align) = c {
-                    x = Some(component_from_keyword(*align, Some(match d { Part::Offset(l) => *l, _ => unreachable!() })));
+                    x = Some(component_from_keyword(
+                        *align,
+                        Some(match d {
+                            Part::Offset(l) => *l,
+                            _ => unreachable!(),
+                        }),
+                    ));
                 }
             }
         }
