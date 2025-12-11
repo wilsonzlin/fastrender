@@ -51,6 +51,9 @@ pub enum LengthUnit {
     /// Millimeters (mm)
     Mm,
 
+    /// Quarter-millimeters (Q)
+    Q,
+
     /// Em units - relative to element's font size
     Em,
 
@@ -95,7 +98,7 @@ impl LengthUnit {
     /// assert!(!LengthUnit::Em.is_absolute());
     /// ```
     pub fn is_absolute(self) -> bool {
-        matches!(self, Self::Px | Self::Pt | Self::Pc | Self::In | Self::Cm | Self::Mm)
+        matches!(self, Self::Px | Self::Pt | Self::Pc | Self::In | Self::Cm | Self::Mm | Self::Q)
     }
 
     /// Returns true if this is a font-relative unit (em, rem, ex, ch)
@@ -156,6 +159,7 @@ impl LengthUnit {
             Self::In => "in",
             Self::Cm => "cm",
             Self::Mm => "mm",
+            Self::Q => "q",
             Self::Em => "em",
             Self::Rem => "rem",
             Self::Ex => "ex",
@@ -179,6 +183,7 @@ mod tests {
         assert!(LengthUnit::Px.is_absolute());
         assert!(LengthUnit::Pt.is_absolute());
         assert!(LengthUnit::In.is_absolute());
+        assert!(LengthUnit::Q.is_absolute());
 
         assert!(LengthUnit::Em.is_font_relative());
         assert!(LengthUnit::Rem.is_font_relative());
@@ -427,6 +432,11 @@ impl Length {
         Self::new(value, LengthUnit::Mm)
     }
 
+    /// Creates a length in quarter-millimeters (1Q = 0.25mm)
+    pub const fn q(value: f32) -> Self {
+        Self::new(value, LengthUnit::Q)
+    }
+
     // Convenience constructors for relative units
 
     /// Creates a length in em units
@@ -481,6 +491,7 @@ impl Length {
             LengthUnit::In => self.value * 96.0,          // 1in = 96px (CSS spec)
             LengthUnit::Cm => self.value * 37.795276,     // 1cm = 96px/2.54
             LengthUnit::Mm => self.value * 3.7795276,     // 1mm = 1/10 cm
+            LengthUnit::Q => self.value * 0.944882,       // 1Q = 1/4 mm
             _ => panic!("Cannot convert {} to px without context", self.unit.as_str()),
         }
     }

@@ -3011,16 +3011,23 @@ fn parse_length_component<'i, 't>(input: &mut Parser<'i, 't>) -> Result<Length, 
     let location = input.current_source_location();
     match input.next()? {
         Token::Dimension { value, ref unit, .. } => {
-            let unit = unit.as_ref();
-            let len = match unit {
+            let unit = unit.as_ref().to_ascii_lowercase();
+            let len = match unit.as_str() {
                 "px" => Length::px(*value),
                 "em" => Length::em(*value),
                 "rem" => Length::rem(*value),
+                "ex" => Length::ex(*value),
+                "ch" => Length::ch(*value),
                 "pt" => Length::pt(*value),
                 "pc" => Length::pc(*value),
                 "in" => Length::inches(*value),
                 "cm" => Length::cm(*value),
                 "mm" => Length::mm(*value),
+                "q" => Length::q(*value),
+                "vw" => Length::new(*value, LengthUnit::Vw),
+                "vh" => Length::new(*value, LengthUnit::Vh),
+                "vmin" => Length::new(*value, LengthUnit::Vmin),
+                "vmax" => Length::new(*value, LengthUnit::Vmax),
                 _ => return Err(location.new_custom_error(())),
             };
             Ok(len)
@@ -4230,6 +4237,7 @@ mod tests {
         TextDecorationLine, TextDecorationStyle, TextDecorationThickness, TextEmphasisFill, TextEmphasisPosition,
         TextEmphasisShape, TextEmphasisStyle, TextOrientation, TextTransform, WritingMode,
     };
+    use cssparser::{Parser, ParserInput};
 
     #[test]
     fn parses_object_fit_keyword() {
@@ -4273,6 +4281,34 @@ mod tests {
             16.0,
         );
         assert_eq!(style.image_rendering, ImageRendering::CrispEdges);
+    }
+
+    #[test]
+    fn parse_length_component_supports_all_units_case_insensitive() {
+        let cases = [
+            ("10PX", LengthUnit::Px),
+            ("2rem", LengthUnit::Rem),
+            ("3EM", LengthUnit::Em),
+            ("1ex", LengthUnit::Ex),
+            ("1ch", LengthUnit::Ch),
+            ("5pt", LengthUnit::Pt),
+            ("4pc", LengthUnit::Pc),
+            ("2in", LengthUnit::In),
+            ("1cm", LengthUnit::Cm),
+            ("8mm", LengthUnit::Mm),
+            ("6q", LengthUnit::Q),
+            ("12vw", LengthUnit::Vw),
+            ("14vh", LengthUnit::Vh),
+            ("16vmin", LengthUnit::Vmin),
+            ("18vmax", LengthUnit::Vmax),
+        ];
+
+        for (text, unit) in cases {
+            let mut input = ParserInput::new(text);
+            let mut parser = Parser::new(&mut input);
+            let len = parse_length_component(&mut parser).expect("length");
+            assert_eq!(len.unit, unit, "failed for {}", text);
+        }
     }
 
     #[test]

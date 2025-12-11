@@ -509,72 +509,76 @@ mod tests {
         assert_eq!(stops[0].position, Some(0.10));
         assert_eq!(stops[1].position, Some(0.60));
     }
+
+    #[test]
+    fn parses_lengths_with_all_units_and_case_insensitivity() {
+        let cases = [
+            ("10px", 10.0, LengthUnit::Px),
+            ("5PT", 5.0, LengthUnit::Pt),
+            ("3pc", 3.0, LengthUnit::Pc),
+            ("2in", 2.0, LengthUnit::In),
+            ("1cm", 1.0, LengthUnit::Cm),
+            ("4mm", 4.0, LengthUnit::Mm),
+            ("8q", 8.0, LengthUnit::Q),
+            ("2em", 2.0, LengthUnit::Em),
+            ("3rem", 3.0, LengthUnit::Rem),
+            ("1ex", 1.0, LengthUnit::Ex),
+            ("1ch", 1.0, LengthUnit::Ch),
+            ("25vw", 25.0, LengthUnit::Vw),
+            ("30vh", 30.0, LengthUnit::Vh),
+            ("15vmin", 15.0, LengthUnit::Vmin),
+            ("40vmax", 40.0, LengthUnit::Vmax),
+            ("75%", 75.0, LengthUnit::Percent),
+        ];
+
+        for (text, expected_value, expected_unit) in cases {
+            let len = parse_length(text).unwrap_or_else(|| panic!("failed to parse {}", text));
+            assert_eq!(len.value, expected_value);
+            assert_eq!(len.unit, expected_unit);
+        }
+
+        assert_eq!(parse_length("0"), Some(Length::px(0.0)));
+        assert_eq!(parse_length("-0"), Some(Length::px(0.0)));
+    }
 }
 
 /// Parse a CSS length value
 pub fn parse_length(s: &str) -> Option<Length> {
     let s = s.trim();
-
-    if s == "0" {
-        return Some(Length::px(0.0));
+    if s.is_empty() {
+        return None;
     }
 
-    if let Some(rest) = s.strip_suffix("px") {
-        return rest.parse::<f32>().ok().map(Length::px);
+    if let Ok(num) = s.parse::<f32>() {
+        if num == 0.0 {
+            return Some(Length::px(0.0));
+        }
     }
 
-    if let Some(rest) = s.strip_suffix("rem") {
-        return rest.parse::<f32>().ok().map(Length::rem);
-    }
-
-    if let Some(rest) = s.strip_suffix("em") {
-        return rest.parse::<f32>().ok().map(Length::em);
-    }
-
-    if let Some(rest) = s.strip_suffix("pt") {
-        return rest.parse::<f32>().ok().map(|v| Length {
-            value: v,
-            unit: LengthUnit::Pt,
-        });
-    }
-
-    if let Some(rest) = s.strip_suffix("%") {
-        return rest.parse::<f32>().ok().map(Length::percent);
-    }
-
-    if let Some(rest) = s.strip_suffix("vw") {
-        return rest.parse::<f32>().ok().map(|v| Length {
-            value: v,
-            unit: LengthUnit::Vw,
-        });
-    }
-
-    if let Some(rest) = s.strip_suffix("vh") {
-        return rest.parse::<f32>().ok().map(|v| Length {
-            value: v,
-            unit: LengthUnit::Vh,
-        });
-    }
-
-    if let Some(rest) = s.strip_suffix("cm") {
-        return rest.parse::<f32>().ok().map(|v| Length {
-            value: v,
-            unit: LengthUnit::Cm,
-        });
-    }
-
-    if let Some(rest) = s.strip_suffix("mm") {
-        return rest.parse::<f32>().ok().map(|v| Length {
-            value: v,
-            unit: LengthUnit::Mm,
-        });
-    }
-
-    if let Some(rest) = s.strip_suffix("in") {
-        return rest.parse::<f32>().ok().map(|v| Length {
-            value: v,
-            unit: LengthUnit::In,
-        });
+    let lower = s.to_ascii_lowercase();
+    for (suffix, unit) in [
+        ("vmin", LengthUnit::Vmin),
+        ("vmax", LengthUnit::Vmax),
+        ("vw", LengthUnit::Vw),
+        ("vh", LengthUnit::Vh),
+        ("rem", LengthUnit::Rem),
+        ("em", LengthUnit::Em),
+        ("ex", LengthUnit::Ex),
+        ("ch", LengthUnit::Ch),
+        ("px", LengthUnit::Px),
+        ("pc", LengthUnit::Pc),
+        ("pt", LengthUnit::Pt),
+        ("cm", LengthUnit::Cm),
+        ("mm", LengthUnit::Mm),
+        ("q", LengthUnit::Q),
+        ("in", LengthUnit::In),
+        ("%", LengthUnit::Percent),
+    ] {
+        if let Some(rest) = lower.strip_suffix(suffix) {
+            if let Ok(value) = rest.trim().parse::<f32>() {
+                return Some(Length::new(value, unit));
+            }
+        }
     }
 
     None

@@ -1298,6 +1298,7 @@ impl MediaContext {
             LengthUnit::Pt => length.value * 96.0 / 72.0,
             LengthUnit::Cm => length.value * 96.0 / 2.54,
             LengthUnit::Mm => length.value * 96.0 / 25.4,
+            LengthUnit::Q => length.value * 96.0 / 101.6, // 1Q = 0.25mm = 1/40th cm
             LengthUnit::In => length.value * 96.0,
             LengthUnit::Pc => length.value * 16.0,
             LengthUnit::Ex => length.value * 8.0, // Approximate: half of em
