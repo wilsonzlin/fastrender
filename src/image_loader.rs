@@ -36,14 +36,6 @@ impl ImageCache {
 
     /// Resolve a potentially relative URL to an absolute URL
     fn resolve_url(&self, url: &str) -> String {
-        // DEBUG: Log URL resolution for y18.svg
-        if url.contains("y18") {
-            eprintln!(
-                "DEBUG: Resolving Y logo URL '{}' with base_url {:?}",
-                url, self.base_url
-            );
-        }
-
         // If it's already absolute, return as-is
         if url.starts_with("http://")
             || url.starts_with("https://")

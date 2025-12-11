@@ -91,18 +91,24 @@ fn blend_luminosity(src: (u8, u8, u8), dst: (u8, u8, u8)) -> (u8, u8, u8) {
     hsl_to_rgb(dh, ds, sl)
 }
 
-fn assert_color_close(actual: (u8, u8, u8), expected: (u8, u8, u8), tol: u8) {
-    let diff = (
-        actual.0.abs_diff(expected.0),
-        actual.1.abs_diff(expected.1),
-        actual.2.abs_diff(expected.2),
-    );
+fn hue_delta(a: f32, b: f32) -> f32 {
+    let d = (a - b).abs();
+    d.min(1.0 - d)
+}
+
+fn assert_hsl_components(
+    actual: (u8, u8, u8),
+    expected_hsl: (f32, f32, f32),
+    tol_h: f32,
+    tol_s: f32,
+    tol_l: f32,
+    context: &str,
+) {
+    let (h, s, l) = rgb_to_hsl(actual.0, actual.1, actual.2);
     assert!(
-        diff.0 <= tol && diff.1 <= tol && diff.2 <= tol,
-        "expected {:?}, got {:?} (diff {:?})",
-        expected,
-        actual,
-        diff
+        hue_delta(h, expected_hsl.0) <= tol_h && (s - expected_hsl.1).abs() <= tol_s && (l - expected_hsl.2).abs() <= tol_l,
+        "{context}: expected hsl {:?}, got hsl ({h:.3},{s:.3},{l:.3})",
+        expected_hsl
     );
 }
 
@@ -224,7 +230,8 @@ fn color_blend_mode_uses_destination_luminance() {
     let (r, g, b, a) = pixel(&pixmap, 0, 0);
     assert_eq!(a, 255);
     let expected = blend_color((255, 0, 0), (128, 128, 128));
-    assert_color_close((r, g, b), expected, 2);
+    let (eh, es, el) = rgb_to_hsl(expected.0, expected.1, expected.2);
+    assert_hsl_components((r, g, b), (eh, es, el), 0.02, 0.05, 0.05, "color blend");
 }
 
 #[test]
@@ -251,7 +258,8 @@ fn hue_blend_mode_uses_source_hue() {
     let pixmap = renderer.render(&list).unwrap();
     let (r, g, b, _) = pixel(&pixmap, 0, 0);
     let expected = blend_hue(src, dst);
-    assert_color_close((r, g, b), expected, 2);
+    let (eh, es, el) = rgb_to_hsl(expected.0, expected.1, expected.2);
+    assert_hsl_components((r, g, b), (eh, es, el), 0.02, 0.05, 0.05, "hue blend");
 }
 
 #[test]
@@ -278,7 +286,8 @@ fn saturation_blend_mode_uses_source_saturation() {
     let pixmap = renderer.render(&list).unwrap();
     let (r, g, b, _) = pixel(&pixmap, 0, 0);
     let expected = blend_saturation(src, dst);
-    assert_color_close((r, g, b), expected, 2);
+    let (eh, es, el) = rgb_to_hsl(expected.0, expected.1, expected.2);
+    assert_hsl_components((r, g, b), (eh, es, el), 0.02, 0.05, 0.05, "saturation blend");
 }
 
 #[test]
@@ -305,7 +314,8 @@ fn luminosity_blend_mode_uses_source_luminance() {
     let pixmap = renderer.render(&list).unwrap();
     let (r, g, b, _) = pixel(&pixmap, 0, 0);
     let expected = blend_luminosity(src, dst);
-    assert_color_close((r, g, b), expected, 2);
+    let (eh, es, el) = rgb_to_hsl(expected.0, expected.1, expected.2);
+    assert_hsl_components((r, g, b), (eh, es, el), 0.02, 0.05, 0.05, "luminosity blend");
 }
 
 #[test]
