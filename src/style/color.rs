@@ -29,6 +29,10 @@ use std::fmt;
 
 fn srgb_to_linear_component(c: u8) -> f32 {
     let c = c as f32 / 255.0;
+    srgb_to_linear_value(c)
+}
+
+fn srgb_to_linear_value(c: f32) -> f32 {
     if c <= 0.04045 {
         c / 12.92
     } else {
@@ -1127,6 +1131,7 @@ fn parse_color_function(input: &str) -> Result<Color, ColorParseError> {
     let mut input = cssparser::ParserInput::new(inner);
     let mut parser = cssparser::Parser::new(&mut input);
 
+    parser.skip_whitespace();
     let space_ident = parser
         .next()
         .map_err(|_| ColorParseError::InvalidFormat("color() space".to_string()))?;
@@ -1135,7 +1140,18 @@ fn parse_color_function(input: &str) -> Result<Color, ColorParseError> {
         other => return Err(ColorParseError::InvalidComponent(format!("{:?}", other))),
     };
 
-    let mut channels = Vec::new();
+    let space = match space_name.as_str() {
+        "srgb" => ColorFunctionSpace::Srgb,
+        "srgb-linear" => ColorFunctionSpace::SrgbLinear,
+        "display-p3" => ColorFunctionSpace::DisplayP3,
+        "lab" => ColorFunctionSpace::Lab,
+        "lch" => ColorFunctionSpace::Lch,
+        "oklab" => ColorFunctionSpace::Oklab,
+        "oklch" => ColorFunctionSpace::Oklch,
+        _ => return Err(ColorParseError::InvalidComponent(space_name)),
+    };
+
+    let mut channels: Vec<ColorChannelValue> = Vec::new();
     let mut saw_slash = false;
     loop {
         parser.skip_whitespace();
@@ -1150,8 +1166,13 @@ fn parse_color_function(input: &str) -> Result<Color, ColorParseError> {
             .next()
             .map_err(|_| ColorParseError::InvalidFormat("color() channel".to_string()))?;
         let value = match token {
-            cssparser::Token::Percentage { unit_value, .. } => unit_value.clamp(0.0, 1.0),
-            cssparser::Token::Number { value, .. } => (*value).max(0.0),
+            ref t @ cssparser::Token::Dimension { .. }
+                if matches!(space, ColorFunctionSpace::Lch | ColorFunctionSpace::Oklch) && channels.len() == 2 =>
+            {
+                ColorChannelValue::Number(parse_hue_token(t)?)
+            }
+            cssparser::Token::Percentage { unit_value, .. } => ColorChannelValue::Percentage(*unit_value),
+            cssparser::Token::Number { value, .. } => ColorChannelValue::Number(*value),
             other => return Err(ColorParseError::InvalidComponent(format!("{:?}", other))),
         };
         channels.push(value);
@@ -1159,17 +1180,17 @@ fn parse_color_function(input: &str) -> Result<Color, ColorParseError> {
 
     parser.skip_whitespace();
     let alpha = if saw_slash {
-        parse_alpha_component(&mut parser)?
+        parser.skip_whitespace();
+        let alpha = parse_alpha_component(&mut parser)?;
+        parser.skip_whitespace();
+        alpha
     } else {
         1.0
     };
 
-    let space = match space_name.as_str() {
-        "srgb" => ColorFunctionSpace::Srgb,
-        "srgb-linear" => ColorFunctionSpace::SrgbLinear,
-        "display-p3" => ColorFunctionSpace::DisplayP3,
-        _ => return Err(ColorParseError::InvalidComponent(space_name)),
-    };
+    if !parser.is_exhausted() {
+        return Err(ColorParseError::InvalidFormat("color() trailing tokens".to_string()));
+    }
 
     let rgba = color_function_to_rgba(space, &channels, alpha)?;
     Ok(Color::Rgba(rgba))
@@ -1179,6 +1200,16 @@ enum ColorFunctionSpace {
     Srgb,
     SrgbLinear,
     DisplayP3,
+    Lab,
+    Lch,
+    Oklab,
+    Oklch,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ColorChannelValue {
+    Number(f32),
+    Percentage(f32),
 }
 
 fn display_p3_to_xyz_d65(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
@@ -1189,28 +1220,37 @@ fn display_p3_to_xyz_d65(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     (x, y, z)
 }
 
-fn color_function_to_rgba(space: ColorFunctionSpace, channels: &[f32], alpha: f32) -> Result<Rgba, ColorParseError> {
-    if channels.len() < 3 {
-        return Err(ColorParseError::InvalidFormat("color() missing channels".to_string()));
+fn channel_value(channel: &ColorChannelValue) -> f32 {
+    match channel {
+        ColorChannelValue::Number(v) => *v,
+        ColorChannelValue::Percentage(p) => *p,
     }
+}
+
+fn color_function_to_rgba(space: ColorFunctionSpace, channels: &[ColorChannelValue], alpha: f32) -> Result<Rgba, ColorParseError> {
+    if channels.len() != 3 {
+        return Err(ColorParseError::InvalidFormat("color() requires three channels".to_string()));
+    }
+
+    let alpha = alpha.clamp(0.0, 1.0);
 
     match space {
         ColorFunctionSpace::Srgb => {
-            let r = (channels[0] * 255.0).clamp(0.0, 255.0) as u8;
-            let g = (channels[1] * 255.0).clamp(0.0, 255.0) as u8;
-            let b = (channels[2] * 255.0).clamp(0.0, 255.0) as u8;
+            let r = (channel_value(&channels[0]) * 255.0).round().clamp(0.0, 255.0) as u8;
+            let g = (channel_value(&channels[1]) * 255.0).round().clamp(0.0, 255.0) as u8;
+            let b = (channel_value(&channels[2]) * 255.0).round().clamp(0.0, 255.0) as u8;
             Ok(Rgba::new(r, g, b, alpha))
         }
         ColorFunctionSpace::SrgbLinear => {
-            let r = linear_to_srgb_component(channels[0]);
-            let g = linear_to_srgb_component(channels[1]);
-            let b = linear_to_srgb_component(channels[2]);
+            let r = linear_to_srgb_component(channel_value(&channels[0]));
+            let g = linear_to_srgb_component(channel_value(&channels[1]));
+            let b = linear_to_srgb_component(channel_value(&channels[2]));
             Ok(Rgba::new(r, g, b, alpha))
         }
         ColorFunctionSpace::DisplayP3 => {
-            let r = channels[0].clamp(0.0, 1.0);
-            let g = channels[1].clamp(0.0, 1.0);
-            let b = channels[2].clamp(0.0, 1.0);
+            let r = srgb_to_linear_value(channel_value(&channels[0]));
+            let g = srgb_to_linear_value(channel_value(&channels[1]));
+            let b = srgb_to_linear_value(channel_value(&channels[2]));
             let (x, y, z) = display_p3_to_xyz_d65(r, g, b);
             let (rs, gs, bs) = xyz_d65_to_linear_rgb(x, y, z);
             Ok(Rgba::new(
@@ -1219,6 +1259,62 @@ fn color_function_to_rgba(space: ColorFunctionSpace, channels: &[f32], alpha: f3
                 linear_to_srgb_component(bs),
                 alpha,
             ))
+        }
+        ColorFunctionSpace::Lab => {
+            let l = match channels[0] {
+                ColorChannelValue::Percentage(p) => p * 100.0,
+                ColorChannelValue::Number(n) => n,
+            }
+            .clamp(0.0, 100.0);
+            let a = match channels[1] {
+                ColorChannelValue::Percentage(p) => p * 100.0,
+                ColorChannelValue::Number(n) => n,
+            };
+            let b = match channels[2] {
+                ColorChannelValue::Percentage(p) => p * 100.0,
+                ColorChannelValue::Number(n) => n,
+            };
+            Ok(lab_to_rgba(l, a, b, alpha))
+        }
+        ColorFunctionSpace::Lch => {
+            let l = match channels[0] {
+                ColorChannelValue::Percentage(p) => p * 100.0,
+                ColorChannelValue::Number(n) => n,
+            }
+            .clamp(0.0, 100.0);
+            let c = match channels[1] {
+                ColorChannelValue::Percentage(p) => p * 100.0,
+                ColorChannelValue::Number(n) => n,
+            }
+            .max(0.0);
+            let h_deg = match channels[2] {
+                ColorChannelValue::Percentage(p) => p * 360.0,
+                ColorChannelValue::Number(n) => n,
+            };
+            let h_rad = normalize_hue(h_deg).to_radians();
+            let a = c * h_rad.cos();
+            let b = c * h_rad.sin();
+            Ok(lab_to_rgba(l, a, b, alpha))
+        }
+        ColorFunctionSpace::Oklab => {
+            let l_raw = channel_value(&channels[0]);
+            let l = if l_raw > 1.0 { l_raw / 100.0 } else { l_raw }.clamp(0.0, 1.0);
+            let a = channel_value(&channels[1]);
+            let b = channel_value(&channels[2]);
+            Ok(oklab_to_rgba(l, a, b, alpha))
+        }
+        ColorFunctionSpace::Oklch => {
+            let l_raw = channel_value(&channels[0]);
+            let l = if l_raw > 1.0 { l_raw / 100.0 } else { l_raw }.clamp(0.0, 1.0);
+            let c = channel_value(&channels[1]).max(0.0);
+            let h_deg = match channels[2] {
+                ColorChannelValue::Percentage(p) => p * 360.0,
+                ColorChannelValue::Number(n) => n,
+            };
+            let h = normalize_hue(h_deg).to_radians();
+            let a = c * h.cos();
+            let b = c * h.sin();
+            Ok(oklab_to_rgba(l, a, b, alpha))
         }
     }
 }
@@ -1882,6 +1978,28 @@ mod tests {
 
         let p3 = Color::parse("color(display-p3 0.5 0.4 0.3)").unwrap().to_rgba(Rgba::BLACK);
         assert!(p3.r > 0 && p3.g > 0 && p3.b > 0);
+    }
+
+    #[test]
+    fn parses_color_function_lab_like_spaces() {
+        let lab = Color::parse("color(lab 50% 10 -5)").unwrap().to_rgba(Rgba::BLACK);
+        let lab_direct = Color::parse("lab(50% 10 -5)").unwrap().to_rgba(Rgba::BLACK);
+        assert_eq!(lab, lab_direct);
+
+        let lch = Color::parse("color(lch 60% 30 200deg / 0.25)").unwrap().to_rgba(Rgba::BLACK);
+        let lch_direct = Color::parse("lch(60% 30 200deg / 0.25)").unwrap().to_rgba(Rgba::BLACK);
+        assert_eq!(lch, lch_direct);
+    }
+
+    #[test]
+    fn parses_color_function_oklab_like_spaces() {
+        let oklab = Color::parse("color(oklab 60% 0.1 -0.05)").unwrap().to_rgba(Rgba::BLACK);
+        let oklab_direct = Color::parse("oklab(60% 0.1 -0.05)").unwrap().to_rgba(Rgba::BLACK);
+        assert_eq!(oklab, oklab_direct);
+
+        let oklch = Color::parse("color(oklch 70% 0.1 45deg / 0.4)").unwrap().to_rgba(Rgba::BLACK);
+        let oklch_direct = Color::parse("oklch(70% 0.1 45deg / 0.4)").unwrap().to_rgba(Rgba::BLACK);
+        assert_eq!(oklch, oklch_direct);
     }
 
     // Error tests
