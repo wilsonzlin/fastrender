@@ -36,8 +36,8 @@ use crate::paint::display_list::{
     BlendMode, BlendModeItem, BorderImageItem, BorderImageSourceItem, BorderItem, BorderSide, BoxShadowItem, ClipItem,
     ConicGradientItem, DecorationPaint, DecorationStroke, DisplayItem, DisplayList, EmphasisMark, EmphasisText,
     FillRectItem, FontId, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem,
-    LinearGradientItem, OpacityItem, RadialGradientItem, ResolvedFilter, StackingContextItem, StrokeRectItem,
-    TextDecorationItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
+    LinearGradientItem, OpacityItem, OutlineItem, RadialGradientItem, ResolvedFilter, StackingContextItem,
+    StrokeRectItem, TextDecorationItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
@@ -1733,25 +1733,15 @@ impl DisplayListBuilder {
             return;
         }
         let offset = style.outline_offset.to_px();
-        let expand = offset + ow * 0.5;
-        let outline_rect = Rect::from_xywh(
-            rect.x() - expand,
-            rect.y() - expand,
-            rect.width() + 2.0 * expand,
-            rect.height() + 2.0 * expand,
-        );
         let (color, invert) = style.outline_color.resolve(style.color);
-        let blend_mode = if invert {
-            BlendMode::Difference
-        } else {
-            BlendMode::Normal
-        };
         if ow > 0.0 && !color.is_transparent() {
-            self.list.push(DisplayItem::StrokeRect(StrokeRectItem {
-                rect: outline_rect,
-                color,
+            self.list.push(DisplayItem::Outline(OutlineItem {
+                rect,
                 width: ow,
-                blend_mode,
+                style: outline_style,
+                color,
+                offset,
+                invert,
             }));
         }
     }
@@ -2970,12 +2960,7 @@ mod tests {
 
         let builder = DisplayListBuilder::new();
         let list = builder.build(&fragment);
-        assert!(
-            list.items()
-                .iter()
-                .any(|item| matches!(item, DisplayItem::StrokeRect(_))),
-            "outline should emit stroke rect"
-        );
+        assert!(list.items().iter().any(|item| matches!(item, DisplayItem::Outline(_))), "outline should emit outline item");
     }
 
     #[test]
@@ -2988,12 +2973,7 @@ mod tests {
         let clips = vec![None].into_iter().collect();
         let builder = DisplayListBuilder::new();
         let list = builder.build_with_clips(&fragment, &clips);
-        assert!(
-            list.items()
-                .iter()
-                .any(|item| matches!(item, DisplayItem::StrokeRect(_))),
-            "outline should be emitted even when fragment is clipped"
-        );
+        assert!(list.items().iter().any(|item| matches!(item, DisplayItem::Outline(_))), "outline should be emitted even when fragment is clipped");
     }
 
     #[test]

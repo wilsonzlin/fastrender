@@ -63,6 +63,9 @@ pub enum DisplayItem {
     /// Stroke a rectangle outline
     StrokeRect(StrokeRectItem),
 
+    /// Outline drawn outside the border box with CSS outline semantics
+    Outline(OutlineItem),
+
     /// Fill a rounded rectangle (border-radius)
     FillRoundedRect(FillRoundedRectItem),
 
@@ -134,6 +137,7 @@ impl DisplayItem {
             DisplayItem::StrokeRect(item) => Some(item.rect),
             DisplayItem::FillRoundedRect(item) => Some(item.rect),
             DisplayItem::StrokeRoundedRect(item) => Some(item.rect),
+            DisplayItem::Outline(item) => Some(item.outer_rect()),
             DisplayItem::Text(item) => Some(text_bounds(item)),
             DisplayItem::Image(item) => Some(item.dest_rect),
             DisplayItem::BoxShadow(item) => {
@@ -208,6 +212,40 @@ pub struct StrokeRectItem {
 
     /// Blend mode for the stroke (defaults to normal)
     pub blend_mode: BlendMode,
+}
+
+/// Outline item
+#[derive(Debug, Clone)]
+pub struct OutlineItem {
+    /// Border-rect in CSS px (before offset expansion)
+    pub rect: Rect,
+
+    /// Outline width in CSS px
+    pub width: f32,
+
+    /// Outline style resolved to a border style
+    pub style: CssBorderStyle,
+
+    /// Outline color
+    pub color: Rgba,
+
+    /// Outline offset in CSS px
+    pub offset: f32,
+
+    /// Whether to invert using difference blend mode
+    pub invert: bool,
+}
+
+impl OutlineItem {
+    pub fn outer_rect(&self) -> Rect {
+        let expand = self.offset + self.width * 0.5;
+        Rect::from_xywh(
+            self.rect.x() - expand,
+            self.rect.y() - expand,
+            self.rect.width() + 2.0 * expand,
+            self.rect.height() + 2.0 * expand,
+        )
+    }
 }
 
 /// Fill a rounded rectangle

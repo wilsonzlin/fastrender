@@ -11,8 +11,8 @@ use crate::paint::canvas::Canvas;
 use crate::paint::display_list::{
     BlendMode, BorderImageItem, BorderImageSourceItem, BorderItem, BorderRadii, BorderSide, BoxShadowItem, ClipItem,
     ConicGradientItem, DecorationPaint, DecorationStroke, DisplayItem, DisplayList, EmphasisMark, FillRectItem, FontId,
-    GlyphInstance, ImageData, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem, ResolvedFilter,
-    StrokeRectItem, TextEmphasis, TextItem, TextShadowItem, TransformItem,
+    GlyphInstance, ImageData, ImageItem, LinearGradientItem, OpacityItem, OutlineItem, RadialGradientItem,
+    ResolvedFilter, StrokeRectItem, TextEmphasis, TextItem, TextShadowItem, TransformItem,
 };
 use crate::paint::rasterize::{fill_rounded_rect, render_box_shadow, BoxShadow};
 use crate::paint::text_shadow::PathBounds;
@@ -1008,6 +1008,98 @@ impl DisplayListRenderer {
         }
     }
 
+    fn render_outline(&mut self, item: &OutlineItem) {
+        let width = self.ds_len(item.width);
+        if width <= 0.0 || matches!(item.style, CssBorderStyle::None | CssBorderStyle::Hidden) {
+            return;
+        }
+        let offset = self.ds_len(item.offset);
+        let expand = offset + width * 0.5;
+        let rect = self.ds_rect(item.rect);
+        let outer_x = rect.x() - expand;
+        let outer_y = rect.y() - expand;
+        let outer_w = rect.width() + 2.0 * expand;
+        let outer_h = rect.height() + 2.0 * expand;
+        let blend_mode = if item.invert {
+            tiny_skia::BlendMode::Difference
+        } else {
+            self.canvas.blend_mode()
+        };
+        let opacity = self.canvas.opacity().clamp(0.0, 1.0);
+        let clip = self.canvas.clip_mask().cloned();
+        let transform = self.canvas.transform();
+        let color = item.color;
+
+        // Top
+        self.render_border_edge(
+            BorderEdge::Top,
+            outer_x,
+            outer_y + width * 0.5,
+            outer_x + outer_w,
+            outer_y + width * 0.5,
+            &BorderSide {
+                width,
+                style: item.style,
+                color,
+            },
+            blend_mode,
+            opacity,
+            clip.as_ref(),
+            transform,
+        );
+        // Bottom
+        self.render_border_edge(
+            BorderEdge::Bottom,
+            outer_x,
+            outer_y + outer_h - width * 0.5,
+            outer_x + outer_w,
+            outer_y + outer_h - width * 0.5,
+            &BorderSide {
+                width,
+                style: item.style,
+                color,
+            },
+            blend_mode,
+            opacity,
+            clip.as_ref(),
+            transform,
+        );
+        // Left
+        self.render_border_edge(
+            BorderEdge::Left,
+            outer_x + width * 0.5,
+            outer_y,
+            outer_x + width * 0.5,
+            outer_y + outer_h,
+            &BorderSide {
+                width,
+                style: item.style,
+                color,
+            },
+            blend_mode,
+            opacity,
+            clip.as_ref(),
+            transform,
+        );
+        // Right
+        self.render_border_edge(
+            BorderEdge::Right,
+            outer_x + outer_w - width * 0.5,
+            outer_y,
+            outer_x + outer_w - width * 0.5,
+            outer_y + outer_h,
+            &BorderSide {
+                width,
+                style: item.style,
+                color,
+            },
+            blend_mode,
+            opacity,
+            clip.as_ref(),
+            transform,
+        );
+    }
+
     fn render_border_image(
         &mut self,
         border_image: &BorderImageItem,
@@ -1686,6 +1778,7 @@ impl DisplayListRenderer {
                 item.color,
                 self.ds_len(item.width),
             ),
+            DisplayItem::Outline(item) => self.render_outline(item),
             DisplayItem::LinearGradient(item) => self.render_linear_gradient(item),
             DisplayItem::RadialGradient(item) => self.render_radial_gradient(item),
             DisplayItem::ConicGradient(item) => self.render_conic_gradient(item),
@@ -3263,6 +3356,26 @@ mod tests {
         assert_eq!(pixel(&pixmap, 1, 6), (0, 0, 255, 255));
         // Center remains white because fill is false.
         assert_eq!(pixel(&pixmap, 4, 4), (255, 255, 255, 255));
+    }
+
+    #[test]
+    fn outline_respects_offset_and_style() {
+        let renderer = DisplayListRenderer::new(8, 8, Rgba::WHITE, FontContext::new()).unwrap();
+        let mut list = DisplayList::new();
+        list.push(DisplayItem::Outline(OutlineItem {
+            rect: Rect::from_xywh(2.0, 2.0, 2.0, 2.0),
+            width: 2.0,
+            style: CssBorderStyle::Solid,
+            color: Rgba::BLACK,
+            offset: 1.0,
+            invert: false,
+        }));
+
+        let pixmap = renderer.render(&list).unwrap();
+        // Outline expands outward; top-left outer pixel should be stroked.
+        assert_eq!(pixel(&pixmap, 0, 0), (0, 0, 0, 255));
+        // Inside the original rect stays untouched.
+        assert_eq!(pixel(&pixmap, 3, 3), (255, 255, 255, 255));
     }
 
     #[test]
