@@ -1031,11 +1031,18 @@ impl FormattingContext for GridFormattingContext {
                     &self.font_context,
                 );
                 let static_pos = padding_origin;
-                let input = crate::layout::absolute_positioning::AbsoluteLayoutInput::new(
+                let preferred_min_inline =
+                    fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent).ok();
+                let preferred_inline =
+                    fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent).ok();
+
+                let mut input = crate::layout::absolute_positioning::AbsoluteLayoutInput::new(
                     positioned_style,
                     child_fragment.bounds.size,
                     static_pos,
                 );
+                input.preferred_min_inline_size = preferred_min_inline;
+                input.preferred_inline_size = preferred_inline;
                 let result = abs.layout_absolute(&input, &cb)?;
                 child_fragment.bounds = crate::geometry::Rect::new(result.position, result.size);
                 fragment.children.push(child_fragment);

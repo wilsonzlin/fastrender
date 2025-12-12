@@ -4362,7 +4362,13 @@ impl InlineFormattingContext {
                 let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
                 let positioned_style =
                     resolve_positioned_style(&child.style, &cb, self.viewport_size, &self.font_context);
-                let input = AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, static_position);
+                let preferred_min_inline =
+                    fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent).ok();
+                let preferred_inline =
+                    fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent).ok();
+                let mut input = AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, static_position);
+                input.preferred_min_inline_size = preferred_min_inline;
+                input.preferred_inline_size = preferred_inline;
                 let result = abs.layout_absolute(&input, &cb)?;
                 child_fragment.bounds = Rect::new(result.position, result.size);
                 merged_children.push(child_fragment);

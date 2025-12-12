@@ -52,7 +52,7 @@ use crate::layout::formatting_context::LayoutError;
 use crate::layout::utils::{content_size_from_box_sizing, resolve_offset_for_positioned};
 use crate::style::computed::PositionedStyle;
 use crate::style::position::Position;
-use crate::style::values::LengthOrAuto;
+use crate::style::values::{Length, LengthOrAuto};
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::tree::fragment_tree::FragmentNode;
@@ -116,6 +116,10 @@ impl ResolvedMargins {
 pub struct AbsoluteLayoutInput {
     /// The computed style of the absolutely positioned element
     pub style: PositionedStyle,
+    /// Preferred minimum inline size (min-content), in CSS pixels (content box).
+    pub preferred_min_inline_size: Option<f32>,
+    /// Preferred inline size (max-content), in CSS pixels (content box).
+    pub preferred_inline_size: Option<f32>,
     /// The intrinsic size (used when width/height are auto)
     pub intrinsic_size: Size,
     /// The static position (where element would be in normal flow)
@@ -127,6 +131,8 @@ impl AbsoluteLayoutInput {
     pub fn new(style: PositionedStyle, intrinsic_size: Size, static_position: Point) -> Self {
         Self {
             style,
+            preferred_min_inline_size: None,
+            preferred_inline_size: None,
             intrinsic_size,
             static_position,
         }
@@ -209,6 +215,8 @@ impl AbsoluteLayout {
             style,
             cb_width,
             viewport,
+            input.preferred_min_inline_size,
+            input.preferred_inline_size,
             input.intrinsic_size.width,
             input.static_position.x,
         )?;
@@ -278,6 +286,8 @@ impl AbsoluteLayout {
         style: &PositionedStyle,
         cb_width: f32,
         viewport: Size,
+        preferred_min_inline_size: Option<f32>,
+        preferred_inline_size: Option<f32>,
         intrinsic_width: f32,
         static_x: f32,
     ) -> Result<(f32, f32, f32, f32), LayoutError> {
@@ -295,6 +305,9 @@ impl AbsoluteLayout {
             .width
             .resolve_against(cb_width)
             .map(|w| content_size_from_box_sizing(w, total_horizontal_spacing, style.box_sizing));
+        let min_width = content_size_from_box_sizing(style.min_width.to_px(), total_horizontal_spacing, style.box_sizing);
+        let max_width =
+            content_size_from_box_sizing(style.max_width.to_px(), total_horizontal_spacing, style.box_sizing);
 
         // Default margin values (auto resolved only when the constraint equation includes both edges)
         let margin_left_auto = style.margin_left_auto;
@@ -302,7 +315,7 @@ impl AbsoluteLayout {
         let mut margin_left = if margin_left_auto { 0.0 } else { style.margin.left };
         let mut margin_right = if margin_right_auto { 0.0 } else { style.margin.right };
 
-        let (mut x, width) = match (left, specified_width, right) {
+        let (mut x, mut width) = match (left, specified_width, right) {
             // Case 1: All three specified (overconstrained) - ignore right for LTR
             (Some(l), Some(w), Some(_r)) => {
                 // For LTR, ignore right value
@@ -325,7 +338,10 @@ impl AbsoluteLayout {
             // Case 4: left and right specified, width is auto (shrink-to-fit)
             (Some(l), None, Some(r)) => {
                 let available = cb_width - l - r - margin_left - margin_right - total_horizontal_spacing;
-                let width = intrinsic_width.min(available.max(0.0));
+                let preferred_min = preferred_min_inline_size.unwrap_or(intrinsic_width);
+                let preferred = preferred_inline_size.unwrap_or(preferred_min);
+                let shrink = preferred.min(available.max(preferred_min).max(0.0));
+                let width = shrink;
                 let x = l + margin_left + border_left + padding_left;
                 (x, width)
             }
@@ -355,6 +371,8 @@ impl AbsoluteLayout {
                 (x, intrinsic_width)
             }
         };
+
+        width = width.clamp(min_width, max_width);
 
         // Apply auto margin resolution only when both edges participate in the constraint (CSS 2.1 §10.3.7).
         if left.is_some() && right.is_some() && specified_width.is_some() {
@@ -408,8 +426,12 @@ impl AbsoluteLayout {
             .height
             .resolve_against(cb_height)
             .map(|h| content_size_from_box_sizing(h, total_vertical_spacing, style.box_sizing));
+        let min_height =
+            content_size_from_box_sizing(style.min_height.to_px(), total_vertical_spacing, style.box_sizing);
+        let max_height =
+            content_size_from_box_sizing(style.max_height.to_px(), total_vertical_spacing, style.box_sizing);
 
-        let (mut y, height) = match (top, specified_height, bottom) {
+        let (mut y, mut height) = match (top, specified_height, bottom) {
             // All three specified (overconstrained) - ignore bottom
             (Some(t), Some(h), Some(_b)) => {
                 let y = t + margin_top + border_top + padding_top;
@@ -459,6 +481,8 @@ impl AbsoluteLayout {
                 (y, intrinsic_height)
             }
         };
+
+        height = height.clamp(min_height, max_height);
 
         if top.is_some() && bottom.is_some() && specified_height.is_some() {
             let top_edge = y - (margin_top + border_top + padding_top);
@@ -1009,6 +1033,71 @@ mod tests {
     }
 
     #[test]
+    fn test_layout_absolute_shrink_to_fit_uses_preferred_width() {
+        let layout = AbsoluteLayout::new();
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.left = LengthOrAuto::px(20.0);
+        style.right = LengthOrAuto::px(20.0);
+        style.width = LengthOrAuto::Auto;
+
+        let mut input = AbsoluteLayoutInput::new(style, Size::new(10.0, 20.0), Point::ZERO);
+        input.preferred_min_inline_size = Some(30.0);
+        input.preferred_inline_size = Some(70.0);
+
+        // available content width = 100 - 20 - 20 = 60
+        let cb = create_containing_block(100.0, 200.0);
+
+        let result = layout.layout_absolute(&input, &cb).unwrap();
+        assert!(
+            (result.size.width - 60.0).abs() < 0.001,
+            "shrink-to-fit width should use min(max(min, available), pref) when provided"
+        );
+    }
+
+    #[test]
+    fn test_layout_absolute_width_respects_min_max_constraints() {
+        let layout = AbsoluteLayout::new();
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.left = LengthOrAuto::px(10.0);
+        style.right = LengthOrAuto::px(10.0);
+        style.width = LengthOrAuto::Auto;
+        style.min_width = Length::px(90.0);
+        style.max_width = Length::px(100.0);
+
+        let mut input = AbsoluteLayoutInput::new(style, Size::new(20.0, 20.0), Point::ZERO);
+        input.preferred_min_inline_size = Some(30.0);
+        input.preferred_inline_size = Some(40.0);
+
+        // available content width = 120 - 10 - 10 = 100
+        let cb = create_containing_block(120.0, 200.0);
+        let result = layout.layout_absolute(&input, &cb).unwrap();
+        assert!(
+            (result.size.width - 90.0).abs() < 0.001,
+            "min-width should clamp shrink-to-fit width up to the authored minimum"
+        );
+
+        // Now cap via max-width
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.left = LengthOrAuto::px(10.0);
+        style.right = LengthOrAuto::px(10.0);
+        style.width = LengthOrAuto::Auto;
+        style.max_width = Length::px(50.0);
+
+        let mut input = AbsoluteLayoutInput::new(style, Size::new(20.0, 20.0), Point::ZERO);
+        input.preferred_min_inline_size = Some(30.0);
+        input.preferred_inline_size = Some(80.0);
+        let cb = create_containing_block(200.0, 200.0);
+        let result = layout.layout_absolute(&input, &cb).unwrap();
+        assert!(
+            (result.size.width - 50.0).abs() < 0.001,
+            "max-width should clamp shrink-to-fit width down to the authored maximum"
+        );
+    }
+
+    #[test]
     fn test_layout_absolute_only_left() {
         let layout = AbsoluteLayout::new();
 
@@ -1199,8 +1288,8 @@ mod tests {
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
 
-        // Width should be clamped to 0
-        assert_eq!(result.size.width, 0.0);
+        // Width should shrink to the minimum (intrinsic) instead of going negative
+        assert_eq!(result.size.width, 50.0);
     }
 
     #[test]
@@ -1275,6 +1364,35 @@ pub fn resolve_positioned_style(
     resolved.border_width.right = resolve_len(&style.border_right_width, cb_width);
     resolved.border_width.top = resolve_len(&style.border_top_width, cb_width);
     resolved.border_width.bottom = resolve_len(&style.border_bottom_width, cb_width);
+
+    resolved.min_width = Length::px(
+        style
+            .min_width
+            .as_ref()
+            .map(|l| resolve_len(l, cb_width))
+            .unwrap_or(0.0),
+    );
+    resolved.max_width = Length::px(
+        style
+            .max_width
+            .as_ref()
+            .map(|l| resolve_len(l, cb_width))
+            .unwrap_or(f32::INFINITY),
+    );
+    resolved.min_height = Length::px(
+        style
+            .min_height
+            .as_ref()
+            .map(|l| resolve_len(l, cb_height))
+            .unwrap_or(0.0),
+    );
+    resolved.max_height = Length::px(
+        style
+            .max_height
+            .as_ref()
+            .map(|l| resolve_len(l, cb_height))
+            .unwrap_or(f32::INFINITY),
+    );
 
     resolved.margin_left_auto = style.margin_left.is_none();
     resolved.margin_right_auto = style.margin_right.is_none();

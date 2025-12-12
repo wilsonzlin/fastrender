@@ -1040,11 +1040,18 @@ impl FormattingContext for BlockFormattingContext {
                 );
 
                 let static_pos = static_position.unwrap_or(padding_origin);
-                let input = crate::layout::absolute_positioning::AbsoluteLayoutInput::new(
+                let preferred_min_inline =
+                    fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent).ok();
+                let preferred_inline =
+                    fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent).ok();
+
+                let mut input = crate::layout::absolute_positioning::AbsoluteLayoutInput::new(
                     positioned_style,
                     child_fragment.bounds.size,
                     static_pos,
                 );
+                input.preferred_min_inline_size = preferred_min_inline;
+                input.preferred_inline_size = preferred_inline;
 
                 let result = abs.layout_absolute(&input, &cb)?;
                 child_fragment.bounds = Rect::new(result.position, result.size);
