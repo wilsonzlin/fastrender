@@ -171,24 +171,36 @@ impl DisplayListBuilder {
 
     /// Builds a display list from a fragment tree root
     pub fn build(mut self, root: &FragmentNode) -> DisplayList {
+        if self.viewport.is_none() {
+            self.viewport = Some((root.bounds.width(), root.bounds.height()));
+        }
         self.build_fragment(root, Point::ZERO);
         self.list
     }
 
     /// Builds a display list from a FragmentTree
     pub fn build_tree(mut self, tree: &FragmentTree) -> DisplayList {
+        if self.viewport.is_none() {
+            self.viewport = Some((tree.root.bounds.width(), tree.root.bounds.height()));
+        }
         self.build_fragment(&tree.root, Point::ZERO);
         self.list
     }
 
     /// Builds a display list from a stacking context tree (respecting z-order).
     pub fn build_from_stacking(mut self, stacking: &StackingContext) -> DisplayList {
+        if self.viewport.is_none() {
+            self.viewport = Some((stacking.bounds.width(), stacking.bounds.height()));
+        }
         self.build_stacking_context(stacking, Point::ZERO);
         self.list
     }
 
     /// Builds a display list by first constructing a stacking context tree from the fragment tree.
     pub fn build_with_stacking_tree(mut self, root: &FragmentNode) -> DisplayList {
+        if self.viewport.is_none() {
+            self.viewport = Some((root.bounds.width(), root.bounds.height()));
+        }
         let stacking = crate::paint::stacking::build_stacking_tree_from_fragment_tree(root);
         self.build_stacking_context(&stacking, Point::ZERO);
         self.list
@@ -3139,7 +3151,7 @@ mod tests {
             style: Some(Arc::new(style)),
         };
 
-        let builder = DisplayListBuilder::with_image_cache(ImageCache::new()).with_viewport_size(200.0, 100.0);
+        let builder = DisplayListBuilder::with_image_cache(ImageCache::new());
         let list = builder.build(&fragment);
 
         assert_eq!(list.len(), 1);
