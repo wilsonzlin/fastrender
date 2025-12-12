@@ -784,19 +784,17 @@ pub fn distribute_spanning_cell_width(
         if indices.is_empty() || need <= 0.0 {
             return need;
         }
-        let headrooms: Vec<f32> = indices
+        // Weight by current min widths so wider columns carry proportionally more.
+        let weights: Vec<f32> = indices
             .iter()
-            .map(|&i| (cols[i].max_width - cols[i].min_width).max(0.0))
+            .map(|&i| cols[i].min_width.max(1.0))
             .collect();
-        let total_headroom: f32 = headrooms.iter().sum();
-        if total_headroom <= 0.0 {
+        let total_weight: f32 = weights.iter().sum();
+        if total_weight <= 0.0 {
             return need;
         }
-        for (&idx, headroom) in indices.iter().zip(headrooms.iter()) {
-            if *headroom <= 0.0 {
-                continue;
-            }
-            let delta = need * (*headroom / total_headroom);
+        for (&idx, weight) in indices.iter().zip(weights.iter()) {
+            let delta = need * (*weight / total_weight);
             cols[idx].min_width += delta;
             if cols[idx].min_width > cols[idx].max_width {
                 cols[idx].max_width = cols[idx].min_width;
@@ -1538,6 +1536,17 @@ mod tests {
         assert!((total_max - 150.0).abs() < 0.5);
         assert!((columns[0].min_width - 75.0).abs() < 0.5);
         assert!((columns[1].min_width - 75.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn distribute_spanning_weights_minimums_by_current_widths() {
+        // Wider column should receive a larger share of the required minimum.
+        let mut columns = vec![ColumnConstraints::new(20.0, 200.0), ColumnConstraints::new(60.0, 200.0)];
+        distribute_spanning_cell_width(&mut columns, 0, 2, 120.0, 200.0);
+
+        let total_min: f32 = columns.iter().map(|c| c.min_width).sum();
+        assert!((total_min - 120.0).abs() < 0.5);
+        assert!(columns[1].min_width > columns[0].min_width + 15.0);
     }
 
     #[test]
