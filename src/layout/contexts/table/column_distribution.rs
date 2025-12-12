@@ -784,22 +784,44 @@ pub fn distribute_spanning_cell_width(
         if indices.is_empty() || need <= 0.0 {
             return need;
         }
-        // Weight by current min widths so wider columns carry proportionally more.
-        let weights: Vec<f32> = indices
+        // Prefer columns with existing headroom so we don't immediately burst past their maxima.
+        let headrooms: Vec<f32> = indices
             .iter()
-            .map(|&i| cols[i].min_width.max(1.0))
+            .map(|&i| (cols[i].max_width - cols[i].min_width).max(0.0))
             .collect();
-        let total_weight: f32 = weights.iter().sum();
-        if total_weight <= 0.0 {
-            return need;
-        }
-        for (&idx, weight) in indices.iter().zip(weights.iter()) {
-            let delta = need * (*weight / total_weight);
-            cols[idx].min_width += delta;
-            if cols[idx].min_width > cols[idx].max_width {
-                cols[idx].max_width = cols[idx].min_width;
+        let total_headroom: f32 = headrooms.iter().sum();
+
+        if total_headroom > 0.0 {
+            for (&idx, headroom) in indices.iter().zip(headrooms.iter()) {
+                if *headroom <= 0.0 {
+                    continue;
+                }
+                let share = need * (*headroom / total_headroom);
+                let delta = share.min(*headroom);
+                cols[idx].min_width += delta;
+                if cols[idx].min_width > cols[idx].max_width {
+                    cols[idx].max_width = cols[idx].min_width;
+                }
+            }
+        } else {
+            // No headroom left—fall back to weighting by current widths.
+            let weights: Vec<f32> = indices
+                .iter()
+                .map(|&i| cols[i].min_width.max(1.0))
+                .collect();
+            let total_weight: f32 = weights.iter().sum();
+            if total_weight <= 0.0 {
+                return need;
+            }
+            for (&idx, weight) in indices.iter().zip(weights.iter()) {
+                let delta = need * (*weight / total_weight);
+                cols[idx].min_width += delta;
+                if cols[idx].min_width > cols[idx].max_width {
+                    cols[idx].max_width = cols[idx].min_width;
+                }
             }
         }
+
         let new_sum: f32 = cols.iter().map(|c| c.min_width).sum();
         (cell_min - new_sum).max(0.0)
     };
@@ -842,30 +864,71 @@ pub fn distribute_spanning_cell_width(
     // Then ensure the span can satisfy the cell's maximum width request, preferring flexible and percentage columns.
     let current_max_sum: f32 = spanned.iter().map(|c| c.max_width).sum();
     if cell_max > current_max_sum {
-        let extra = cell_max - current_max_sum;
-        let mut adjustable: Vec<usize> = spanned
+        let distribute_max = |cols: &mut [ColumnConstraints], indices: &[usize], need: f32| -> f32 {
+            if indices.is_empty() || need <= 0.0 {
+                return need;
+            }
+
+            let headrooms: Vec<f32> = indices
+                .iter()
+                .map(|&i| (cols[i].max_width - cols[i].min_width).max(0.0))
+                .collect();
+            let total_headroom: f32 = headrooms.iter().sum();
+            let mut remaining = need;
+
+            if total_headroom > 0.0 {
+                let to_distribute = remaining.min(total_headroom);
+                let mut distributed = 0.0;
+                for (&idx, headroom) in indices.iter().zip(headrooms.iter()) {
+                    if *headroom <= 0.0 {
+                        continue;
+                    }
+                    let delta = (to_distribute * (*headroom / total_headroom)).min(*headroom);
+                    cols[idx].max_width += delta;
+                    if cols[idx].max_width < cols[idx].min_width {
+                        cols[idx].max_width = cols[idx].min_width;
+                    }
+                    distributed += delta;
+                }
+                remaining -= distributed;
+            }
+
+            if remaining > 0.0 {
+                let weights: Vec<f32> = indices
+                    .iter()
+                    .map(|&i| cols[i].max_width.max(1.0))
+                    .collect();
+                let total_weight: f32 = weights.iter().sum();
+                if total_weight > 0.0 {
+                    let mut distributed = 0.0;
+                    for (&idx, weight) in indices.iter().zip(weights.iter()) {
+                        let delta = remaining * (*weight / total_weight);
+                        cols[idx].max_width += delta;
+                        if cols[idx].max_width < cols[idx].min_width {
+                            cols[idx].max_width = cols[idx].min_width;
+                        }
+                        distributed += delta;
+                    }
+                    remaining -= distributed;
+                }
+            }
+
+            remaining
+        };
+
+        let mut extra = cell_max - current_max_sum;
+        let adjustable: Vec<usize> = spanned
             .iter()
             .enumerate()
             .filter_map(|(i, c)| if c.max_width > c.min_width + 0.01 { Some(i) } else { None })
             .collect();
-        if adjustable.is_empty() {
-            adjustable = (0..spanned.len()).collect();
+        if !adjustable.is_empty() {
+            extra = distribute_max(spanned, &adjustable, extra);
         }
 
-        let weights: Vec<f32> = adjustable
-            .iter()
-            .map(|&i| spanned[i].max_width.max(1.0))
-            .collect();
-        let total_weight: f32 = weights.iter().sum();
-        if total_weight > 0.0 {
-            for (&idx, weight) in adjustable.iter().zip(weights.iter()) {
-                let delta = extra * (*weight / total_weight);
-                let col = &mut spanned[idx];
-                col.max_width += delta;
-                if col.max_width < col.min_width {
-                    col.max_width = col.min_width;
-                }
-            }
+        if extra > 0.0 {
+            let all_indices: Vec<usize> = (0..spanned.len()).collect();
+            distribute_max(spanned, &all_indices, extra);
         }
     }
 }
@@ -1555,6 +1618,20 @@ mod tests {
         let total_max: f32 = columns.iter().map(|c| c.max_width).sum();
         assert!((total_max - 260.0).abs() < 0.5);
         assert!(columns[1].max_width > columns[0].max_width);
+    }
+
+    #[test]
+    fn distribute_spanning_max_uses_headroom_before_busting_caps() {
+        let mut columns = vec![ColumnConstraints::new(20.0, 60.0), ColumnConstraints::new(80.0, 90.0)];
+        // Sum max = 150; need 200. Prefer the 40px headroom before pushing the tight column.
+        distribute_spanning_cell_width(&mut columns, 0, 2, 100.0, 200.0);
+
+        let total_max: f32 = columns.iter().map(|c| c.max_width).sum();
+        assert!((total_max - 200.0).abs() < 0.5);
+        // The roomy column should grow substantially more than the tight one.
+        let growth0 = columns[0].max_width - 60.0;
+        let growth1 = columns[1].max_width - 90.0;
+        assert!(growth0 > growth1 + 20.0);
     }
 
     #[test]
