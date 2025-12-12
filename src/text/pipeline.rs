@@ -55,9 +55,11 @@ use crate::style::types::{
 };
 use crate::style::ComputedStyle;
 use crate::text::font_db::font_has_feature;
-use crate::text::font_db::{FontStretch, FontStyle, LoadedFont};
+use crate::text::font_db::{FontStretch as DbFontStretch, FontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
 use rustybuzz::{Direction as HbDirection, Face, Feature, Language as HbLanguage, UnicodeBuffer, Variation};
+use std::collections::HashSet;
+use std::iter::FromIterator;
 use std::str::FromStr;
 use std::sync::Arc;
 use ttf_parser::Tag;
@@ -88,7 +90,7 @@ fn has_native_small_caps(style: &ComputedStyle, font_context: &FontContext) -> b
             CssFontStyle::Italic => FontStyle::Italic,
             CssFontStyle::Oblique(_) => FontStyle::Oblique,
         },
-        FontStretch::from_percentage(style.font_stretch.to_percentage()),
+        DbFontStretch::from_percentage(style.font_stretch.to_percentage()),
     ) {
         let has_smcp = font_has_feature(&font, *b"smcp");
         let has_c2sc = !needs_c2sc || font_has_feature(&font, *b"c2sc");
@@ -806,7 +808,7 @@ pub fn preferred_font_aspect(style: &ComputedStyle, font_context: &FontContext) 
                 CssFontStyle::Italic => FontStyle::Italic,
                 CssFontStyle::Oblique(_) => FontStyle::Oblique,
             };
-            let font_stretch = FontStretch::from_percentage(style.font_stretch.to_percentage());
+            let font_stretch = DbFontStretch::from_percentage(style.font_stretch.to_percentage());
             font_context
                 .get_font_full(&style.font_family, style.font_weight.to_u16(), font_style, font_stretch)
                 .and_then(|font| font_aspect_ratio(&font))
@@ -841,7 +843,7 @@ pub fn compute_adjusted_font_size(style: &ComputedStyle, font: &LoadedFont, pref
 pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &FontContext) -> Result<Vec<FontRun>> {
     let mut font_runs = Vec::with_capacity(runs.len());
     let features = collect_opentype_features(style);
-    let variations: Vec<Variation> = style
+    let authored_variations: Vec<Variation> = style
         .font_variation_settings
         .iter()
         .map(|v| Variation {
@@ -859,6 +861,50 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
             synthetic_bold *= used_font_size / style.font_size;
         }
 
+        // Collect available variation axes on the chosen font.
+        let mut auto_variations = Vec::new();
+        if let Ok(face) = font.as_ttf_face() {
+            let axes: Vec<_> = face.variation_axes().into_iter().collect();
+            if !axes.is_empty() {
+                let mut set_tags: HashSet<Tag> = HashSet::from_iter(authored_variations.iter().map(|v| v.tag));
+                let wght_tag = Tag::from_bytes(b"wght");
+                let wdth_tag = Tag::from_bytes(b"wdth");
+                let opsz_tag = Tag::from_bytes(b"opsz");
+                let ital_tag = Tag::from_bytes(b"ital");
+
+                for axis in axes {
+                    if axis.tag == wght_tag && !set_tags.contains(&wght_tag) {
+                        auto_variations.push(Variation {
+                            tag: wght_tag,
+                            value: style.font_weight.to_u16() as f32,
+                        });
+                        set_tags.insert(wght_tag);
+                    } else if axis.tag == wdth_tag && !set_tags.contains(&wdth_tag) {
+                        auto_variations.push(Variation {
+                            tag: wdth_tag,
+                            value: style.font_stretch.to_percentage(),
+                        });
+                        set_tags.insert(wdth_tag);
+                    } else if axis.tag == opsz_tag && !set_tags.contains(&opsz_tag) {
+                        auto_variations.push(Variation {
+                            tag: opsz_tag,
+                            value: used_font_size,
+                        });
+                        set_tags.insert(opsz_tag);
+                    } else if axis.tag == ital_tag && !set_tags.contains(&ital_tag) {
+                        let ital = matches!(style.font_style, CssFontStyle::Italic | CssFontStyle::Oblique(_));
+                        auto_variations.push(Variation {
+                            tag: ital_tag,
+                            value: if ital { 1.0 } else { 0.0 },
+                        });
+                        set_tags.insert(ital_tag);
+                    }
+                }
+            }
+        }
+        let mut variations = authored_variations.clone();
+        variations.extend(auto_variations);
+
         font_runs.push(FontRun {
             text: run.text.clone(),
             start: run.start,
@@ -872,7 +918,7 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
             font_size: used_font_size,
             language: style.language.clone(),
             features: features.clone(),
-            variations: variations.clone(),
+            variations,
             rotation: RunRotation::None,
             vertical: false,
         });
@@ -974,7 +1020,7 @@ fn get_font_for_run(
         CssFontStyle::Italic => FontStyle::Italic,
         CssFontStyle::Oblique(_) => FontStyle::Oblique,
     };
-    let font_stretch = FontStretch::from_percentage(style.font_stretch.to_percentage());
+    let font_stretch = DbFontStretch::from_percentage(style.font_stretch.to_percentage());
 
     // Try the font family list first
     if let Some(font) =
@@ -1529,14 +1575,36 @@ impl ClusterMap {
 mod tests {
     use super::*;
     use crate::style::types::{
-        EastAsianVariant, EastAsianWidth, FontFeatureSetting, FontKerning, FontVariationSetting, FontVariantLigatures,
-        NumericFigure, NumericFraction, NumericSpacing, TextOrientation, WritingMode,
+        EastAsianVariant, EastAsianWidth, FontFeatureSetting, FontKerning, FontStretch, FontVariationSetting,
+        FontVariantLigatures, NumericFigure, NumericFraction, NumericSpacing, TextOrientation, WritingMode,
     };
     use crate::text::font_db::FontDatabase;
     use std::fs;
     use std::path::Path;
     use std::sync::Arc;
     use ttf_parser::name_id;
+
+    fn load_variable_font() -> (FontContext, String) {
+        let font_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fonts/RobotoFlex-VF.ttf");
+        let data = fs::read(&font_path).expect("variable font fixture");
+        let face = ttf_parser::Face::parse(&data, 0).expect("parse fixture font");
+        let family = face
+            .names()
+            .into_iter()
+            .find_map(|name| {
+                if name.name_id == name_id::FAMILY {
+                    name.to_string()
+                } else {
+                    None
+                }
+            })
+            .expect("font family name");
+
+        let mut db = FontDatabase::empty();
+        db.load_font_data(data).expect("load font into database");
+        let ctx = FontContext::with_database(Arc::new(db));
+        (ctx, family)
+    }
 
     #[test]
     fn test_direction_from_level() {
@@ -1872,25 +1940,7 @@ mod tests {
 
     #[test]
     fn font_variation_settings_adjust_variable_font_axes() {
-        let font_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fonts/RobotoFlex-VF.ttf");
-        let data = fs::read(&font_path).expect("variable font fixture");
-        let face = ttf_parser::Face::parse(&data, 0).expect("parse fixture font");
-        let family = face
-            .names()
-            .into_iter()
-            .find_map(|name| {
-                if name.name_id == name_id::FAMILY {
-                    name.to_string()
-                } else {
-                    None
-                }
-            })
-            .expect("font family name");
-
-        let mut db = FontDatabase::empty();
-        db.load_font_data(data).expect("load font into database");
-        let ctx = FontContext::with_database(Arc::new(db));
-
+        let (ctx, family) = load_variable_font();
         let mut style = ComputedStyle::default();
         style.font_family = vec![family];
         style.font_size = 16.0;
@@ -1916,6 +1966,62 @@ mod tests {
 
         assert!(narrow_advance < default_advance, "wdth axis should shrink glyph advances");
         assert!(wide_advance > default_advance, "wdth axis should widen glyph advances");
+    }
+
+    #[test]
+    fn font_stretch_maps_to_wdth_axis_when_present() {
+        let (ctx, family) = load_variable_font();
+        let mut style = ComputedStyle::default();
+        style.font_family = vec![family.clone()];
+        style.font_size = 16.0;
+
+        let pipeline = ShapingPipeline::new();
+
+        let base = pipeline.shape("mmmm", &style, &ctx).unwrap();
+        let base_adv: f32 = base.iter().map(|r| r.advance).sum();
+
+        style.font_stretch = FontStretch::from_percentage(75.0);
+        let narrow = pipeline.shape("mmmm", &style, &ctx).unwrap();
+        let narrow_adv: f32 = narrow.iter().map(|r| r.advance).sum();
+
+        style.font_stretch = FontStretch::from_percentage(125.0);
+        let wide = pipeline.shape("mmmm", &style, &ctx).unwrap();
+        let wide_adv: f32 = wide.iter().map(|r| r.advance).sum();
+
+        assert!(narrow_adv < base_adv, "narrow stretch should reduce advance with wdth axis");
+        assert!(wide_adv > base_adv, "wide stretch should increase advance with wdth axis");
+        assert!(
+            (wide_adv - narrow_adv) > 1.0,
+            "wdth axis should produce a noticeable difference"
+        );
+    }
+
+    #[test]
+    fn authored_font_variations_override_auto_axes() {
+        let (ctx, family) = load_variable_font();
+        let mut style = ComputedStyle::default();
+        style.font_family = vec![family.clone()];
+        style.font_size = 16.0;
+
+        let pipeline = ShapingPipeline::new();
+
+        style.font_stretch = FontStretch::from_percentage(75.0);
+        style.font_variation_settings = vec![FontVariationSetting {
+            tag: *b"wdth",
+            value: 100.0,
+        }];
+        let forced = pipeline.shape("mmmm", &style, &ctx).unwrap();
+        let forced_adv: f32 = forced.iter().map(|r| r.advance).sum();
+
+        style.font_variation_settings.clear();
+        style.font_stretch = FontStretch::Normal;
+        let baseline = pipeline.shape("mmmm", &style, &ctx).unwrap();
+        let baseline_adv: f32 = baseline.iter().map(|r| r.advance).sum();
+
+        assert!(
+            (forced_adv - baseline_adv).abs() < 0.25,
+            "authored wdth should override font-stretch mapping"
+        );
     }
 
     #[test]
