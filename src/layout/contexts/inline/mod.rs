@@ -5303,6 +5303,38 @@ mod tests {
     }
 
     #[test]
+    fn marker_gap_uses_inline_end_margin_in_vertical_ltr() {
+        let mut style = ComputedStyle::default();
+        style.writing_mode = WritingMode::VerticalRl;
+        style.direction = crate::style::types::Direction::Ltr;
+        style.margin_bottom = Some(Length::px(30.0));
+        style.margin_top = Some(Length::px(2.0));
+
+        let gap = marker_inline_gap(&style, &FontContext::new(), Size::new(800.0, 600.0));
+        assert!(
+            (29.0..31.0).contains(&gap),
+            "expected inline-end gap from margin-bottom in vertical LTR, got {}",
+            gap
+        );
+    }
+
+    #[test]
+    fn marker_gap_uses_inline_end_margin_in_vertical_rtl() {
+        let mut style = ComputedStyle::default();
+        style.writing_mode = WritingMode::VerticalRl;
+        style.direction = crate::style::types::Direction::Rtl;
+        style.margin_top = Some(Length::px(22.0));
+        style.margin_bottom = Some(Length::px(0.0));
+
+        let gap = marker_inline_gap(&style, &FontContext::new(), Size::new(800.0, 600.0));
+        assert!(
+            (21.0..23.0).contains(&gap),
+            "expected inline-end gap from margin-top in vertical RTL, got {}",
+            gap
+        );
+    }
+
+    #[test]
     fn replaced_inline_includes_padding_and_border_in_box() {
         let ifc = InlineFormattingContext::new();
         let mut style = ComputedStyle::default();
