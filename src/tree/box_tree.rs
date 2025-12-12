@@ -208,11 +208,15 @@ impl ReplacedType {
                     return src;
                 }
 
+                let slot_width = ctx
+                    .slot_width
+                    .filter(|w| *w > 0.0 && w.is_finite());
+
                 let has_width_descriptors = srcset
                     .iter()
                     .any(|c| matches!(c.descriptor, SrcsetDescriptor::Width(_)));
 
-                let effective_slot_width = ctx.slot_width.or_else(|| {
+                let effective_slot_width = slot_width.or_else(|| {
                     let viewport = ctx.viewport?;
                     if let (Some(sizes_list), Some(media_ctx)) = (sizes, ctx.media_context) {
                         Some(sizes_list.evaluate(media_ctx, viewport, ctx.font_size.unwrap_or(16.0)))
@@ -1156,5 +1160,37 @@ mod tests {
         });
 
         assert_eq!(chosen, "800w", "viewport fallback should make 800w best for DPR=2");
+    }
+
+    #[test]
+    fn non_positive_slot_width_falls_back_to_viewport_for_width_descriptors() {
+        let img = ReplacedType::Image {
+            src: "fallback".to_string(),
+            alt: None,
+            srcset: vec![
+                SrcsetCandidate {
+                    url: "100w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(100),
+                },
+                SrcsetCandidate {
+                    url: "400w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(400),
+                },
+            ],
+            sizes: None,
+        };
+
+        // Slot width is zero (e.g., auto-sized placeholder), so selection should fall back to viewport.
+        let viewport = Size::new(400.0, 300.0);
+        let media_ctx = MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(1.0);
+        let chosen = img.image_source_for_context(ImageSelectionContext {
+            scale: 1.0,
+            slot_width: Some(0.0),
+            viewport: Some(viewport),
+            media_context: Some(&media_ctx),
+            font_size: Some(16.0),
+        });
+
+        assert_eq!(chosen, "400w", "zero-width slot should use viewport width for width descriptors");
     }
 }
