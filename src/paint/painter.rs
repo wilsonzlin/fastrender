@@ -28,6 +28,7 @@ use crate::geometry::{Point, Rect, Size};
 use crate::image_loader::{CachedImage, ImageCache};
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem;
+use crate::layout::utils::resolve_font_relative_length;
 use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::display_list::BorderRadii;
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
@@ -3359,6 +3360,25 @@ impl Painter {
         resolved * self.scale
     }
 
+    fn resolve_decoration_thickness_value(
+        &self,
+        thickness: TextDecorationThickness,
+        style: &ComputedStyle,
+    ) -> Option<f32> {
+        match thickness {
+            TextDecorationThickness::Auto | TextDecorationThickness::FromFont => None,
+            TextDecorationThickness::Length(l) => {
+                if l.unit == LengthUnit::Percent {
+                    Some(l.resolve_against(style.font_size) * self.scale)
+                } else if l.unit.is_viewport_relative() {
+                    Some(l.resolve_with_viewport(self.css_width, self.css_height) * self.scale)
+                } else {
+                    Some(resolve_font_relative_length(l, style, &self.font_ctx) * self.scale)
+                }
+            }
+        }
+    }
+
     fn underline_position(
         &self,
         metrics: &DecorationMetrics,
@@ -3742,23 +3762,7 @@ impl Painter {
             let decoration_color = deco.decoration.color.unwrap_or(style.color);
             paint.set_color(color_to_skia(decoration_color));
 
-            let used_thickness = match deco.decoration.thickness {
-                TextDecorationThickness::Auto => None,
-                TextDecorationThickness::FromFont => None,
-                TextDecorationThickness::Length(l) => {
-                    let unit = l.unit;
-                    let resolved = if unit == LengthUnit::Percent {
-                        l.resolve_against(style.font_size)
-                    } else if unit.is_font_relative() {
-                        l.resolve_with_font_size(style.font_size)
-                    } else if unit.is_viewport_relative() {
-                        l.resolve_with_viewport(self.css_width, self.css_height)
-                    } else {
-                        l.to_px()
-                    };
-                    Some(resolved * self.scale)
-                }
-            };
+            let used_thickness = self.resolve_decoration_thickness_value(deco.decoration.thickness, style);
 
             let painter_style = deco.decoration.style;
             let render_line = |pixmap: &mut Pixmap, center: f32, thickness: f32| match painter_style {
@@ -6396,6 +6400,34 @@ mod tests {
         assert!(
             under_center - auto_center > 0.5,
             "under position should move the line a noticeable distance below the baseline"
+        );
+    }
+
+    #[test]
+    fn text_decoration_thickness_uses_font_relative_units() {
+        let mut style = ComputedStyle::default();
+        style.color = Rgba::BLACK;
+        style.font_size = 20.0;
+        style.text_decoration.lines = crate::style::types::TextDecorationLine::UNDERLINE;
+        style.text_decoration.color = Some(Rgba::from_rgba8(255, 0, 0, 255));
+        style.text_decoration.thickness = crate::style::types::TextDecorationThickness::Length(Length::percent(50.0));
+        let style = Arc::new(style);
+
+        let painter = Painter::new(100, 60, Rgba::WHITE).expect("painter");
+        let runs = painter.shaper.shape("Hi", &style, &painter.font_ctx).expect("shape");
+        let width: f32 = runs.iter().map(|r| r.advance).sum();
+        let baseline = 32.0;
+        let rect = Rect::from_xywh(10.0, 10.0, width + 2.0, 40.0);
+        let fragment = FragmentNode::new_text_shaped(rect, "Hi".to_string(), baseline - rect.y(), runs, style);
+        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 60.0), vec![fragment]);
+        let pixmap = paint_tree(&FragmentTree::new(root), 100, 60, Rgba::WHITE).expect("paint");
+
+        let red_bbox =
+            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80).expect("underline");
+        let height = red_bbox.3 - red_bbox.1 + 1;
+        assert!(
+            height >= 9 && height <= 11,
+            "expected underline thickness around 10px (50% of 20px font), got {height}"
         );
     }
 

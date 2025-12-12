@@ -32,6 +32,7 @@ use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
+use crate::layout::utils::resolve_font_relative_length;
 use crate::paint::display_list::{
     BlendMode, BlendModeItem, BorderImageItem, BorderImageSourceItem, BorderItem, BorderSide, BoxShadowItem, ClipItem,
     ConicGradientItem, DecorationPaint, DecorationStroke, DisplayItem, DisplayList, EmphasisMark, EmphasisText,
@@ -2065,18 +2066,15 @@ impl DisplayListBuilder {
                 TextDecorationThickness::Auto => None,
                 TextDecorationThickness::FromFont => None,
                 TextDecorationThickness::Length(l) => {
-                    let unit = l.unit;
-                    let resolved = if unit == LengthUnit::Percent {
+                    let resolved = if l.unit == LengthUnit::Percent {
                         l.resolve_against(style.font_size)
-                    } else if unit.is_font_relative() {
-                        l.resolve_with_font_size(style.font_size)
-                    } else if unit.is_viewport_relative() {
+                    } else if l.unit.is_viewport_relative() {
                         match self.viewport {
                             Some((vw, vh)) => l.resolve_with_viewport(vw, vh),
                             None => l.to_px(),
                         }
                     } else {
-                        l.to_px()
+                        resolve_font_relative_length(l, style, &self.font_ctx)
                     };
                     Some(resolved)
                 }
