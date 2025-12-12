@@ -4009,6 +4009,67 @@ mod tests {
     }
 
     #[test]
+    fn text_shadows_scale_with_device_pixel_ratio() {
+        let font_ctx = FontContext::new();
+        let Some(font) = font_ctx.get_sans_serif() else {
+            return;
+        };
+        let Ok(face) = font.as_ttf_face() else {
+            return;
+        };
+        let Some(glyph_id) = face.glyph_index('H') else {
+            return;
+        };
+
+        let mut list = DisplayList::new();
+        list.push(DisplayItem::Text(TextItem {
+            origin: Point::new(10.0, 24.0),
+            glyphs: vec![GlyphInstance {
+                glyph_id: glyph_id.0 as u32,
+                offset: Point::new(0.0, 0.0),
+                advance: 14.0,
+            }],
+            color: Rgba::BLACK,
+            shadows: vec![TextShadowItem {
+                offset: Point::new(2.0, 0.0),
+                blur_radius: 0.0,
+                color: Rgba::from_rgba8(255, 0, 0, 255),
+            }],
+            font_size: 20.0,
+            advance_width: 14.0,
+            font_id: Some(FontId {
+                family: font.family.clone(),
+                weight: font.weight.value(),
+                style: font.style,
+                stretch: font.stretch,
+            }),
+            synthetic_bold: 0.0,
+            synthetic_oblique: 0.0,
+            emphasis: None,
+            decorations: Vec::new(),
+        }));
+
+        let renderer =
+            DisplayListRenderer::new_scaled(80, 40, Rgba::WHITE, font_ctx, 2.0).expect("renderer with scale");
+        let pixmap = renderer.render(&list).expect("rendered");
+
+        let black_bbox =
+            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32).expect("text pixels");
+        let red_bbox =
+            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80).expect("shadow");
+
+        let dx = red_bbox.0.saturating_sub(black_bbox.0);
+        assert!(
+            (3..=5).contains(&dx),
+            "shadow should move ~4 device px at 2x scale (got {dx})"
+        );
+        assert!(
+            red_bbox.1.abs_diff(black_bbox.1) <= 2,
+            "shadow should stay aligned vertically"
+        );
+    }
+
+    #[test]
     fn renders_text_emphasis_marks() {
         let mut list = DisplayList::new();
         list.push(DisplayItem::Text(TextItem {

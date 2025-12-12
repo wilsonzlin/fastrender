@@ -6331,6 +6331,42 @@ mod tests {
     }
 
     #[test]
+    fn text_shadow_offset_scales_with_device_pixel_ratio() {
+        let mut style = ComputedStyle::default();
+        style.color = Rgba::BLACK;
+        style.font_size = 16.0;
+        style.text_shadow = vec![TextShadow {
+            offset_x: Length::px(2.0),
+            offset_y: Length::px(0.0),
+            blur_radius: Length::px(0.0),
+            color: Some(Rgba::from_rgba8(255, 0, 0, 255)),
+        }];
+        let style = Arc::new(style);
+
+        let fragment =
+            FragmentNode::new_text_styled(Rect::from_xywh(10.0, 10.0, 80.0, 30.0), "Hi".to_string(), 16.0, style);
+        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 120.0, 60.0), vec![fragment]);
+        let tree = FragmentTree::new(root);
+
+        let pixmap = paint_tree_scaled(&tree, 120, 60, Rgba::WHITE, 2.0).expect("paint");
+
+        let black_bbox =
+            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32).expect("black text");
+        let red_bbox =
+            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80).expect("shadow");
+
+        let dx = red_bbox.0.saturating_sub(black_bbox.0);
+        assert!(
+            (3..=5).contains(&dx),
+            "shadow should shift ~4 device px (2 CSS px at 2x), got {dx}"
+        );
+        assert!(
+            red_bbox.1.abs_diff(black_bbox.1) <= 2,
+            "shadow should align vertically when no y offset is set"
+        );
+    }
+
+    #[test]
     fn underline_offset_moves_line() {
         let mut style = ComputedStyle::default();
         style.text_decoration.lines = crate::style::types::TextDecorationLine::UNDERLINE;
