@@ -2424,9 +2424,7 @@ impl FormattingContext for TableFormattingContext {
             .and_then(|len| resolve_length_against(len, font_size, containing_height));
         let min_height = resolve_opt_length_against(box_node.style.min_height.as_ref(), font_size, containing_height);
         let max_height = resolve_opt_length_against(box_node.style.max_height.as_ref(), font_size, containing_height);
-        let table_height = specified_height
-            .or(containing_height)
-            .map(|h| clamp_to_min_max(h, min_height, max_height));
+        let table_height = specified_height.map(|h| clamp_to_min_max(h, min_height, max_height));
 
         // Helper to position out-of-flow children against a containing block.
         let place_out_of_flow = |fragment: &mut FragmentNode, cb: ContainingBlock| -> Result<(), LayoutError> {
@@ -2611,18 +2609,20 @@ impl FormattingContext for TableFormattingContext {
             }
         }
 
-        let percent_height_base = table_height.map(|base| {
-            let mut content_base = if structure.border_collapse == BorderCollapse::Collapse {
-                (base - padding_v - outer_border_v).max(0.0)
-            } else {
-                (base - padding_v - border_v).max(0.0)
-            };
-            if structure.border_collapse != BorderCollapse::Collapse {
-                let spacing_total = v_spacing * (structure.row_count as f32 + 1.0);
-                content_base = (content_base - spacing_total).max(0.0);
-            }
-            content_base
-        });
+        let percent_height_base = table_height
+            .or(containing_height)
+            .map(|base| {
+                let mut content_base = if structure.border_collapse == BorderCollapse::Collapse {
+                    (base - padding_v - outer_border_v).max(0.0)
+                } else {
+                    (base - padding_v - border_v).max(0.0)
+                };
+                if structure.border_collapse != BorderCollapse::Collapse {
+                    let spacing_total = v_spacing * (structure.row_count as f32 + 1.0);
+                    content_base = (content_base - spacing_total).max(0.0);
+                }
+                content_base
+            });
 
         let row_floor = |idx: usize, current: f32| -> f32 {
             let row = structure.rows.get(idx);
