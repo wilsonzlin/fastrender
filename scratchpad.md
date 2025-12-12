@@ -18,6 +18,7 @@
 - Aspect-ratio adjustments now reapply min/max clamps so min-/max-height/width still bound sizes after ratio resolution; regression ensures min-height clamps an aspect-derived height.
 - Absolute positioning now threads min/max-content block sizes into shrink-to-fit: preferred block sizes are plumbed from all formatting contexts into absolute layout, and auto heights shrink-to-fit against available block space when top/bottom aren’t both specified, clamped by min/max-height and aspect adjustments.
 - Height auto with both top/bottom now uses the available space per CSS 2.1 (ignoring preferred block shrink), while auto heights without both insets still shrink-to-fit using preferred block sizes. Regression locks the fill behavior with top/bottom insets.
+- Added regressions for the block shrink paths: auto height with no insets picks the preferred block size, and single-inset auto height shrinks to the remaining space while keeping the inset.
 - Angle math now honors calc/min/max/clamp for filters and font oblique angles: hue-rotate accepts calc() with mixed angle units, and oblique angles in the font shorthand validate range after calc evaluation (regressions added for both).
 - mix-blend-mode supports the spec `plus-lighter` keyword across parse/layout/paint/display-list; painter/display-list/canvas map it to additive blending and regression covers additive compositing.
 - background-blend-mode plus-lighter is exercised in painter: additive blending of background layers now has regression coverage.
