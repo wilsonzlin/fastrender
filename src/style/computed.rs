@@ -305,7 +305,7 @@ pub struct PositionedStyle {
     ///
     /// CSS: `line-height`
     /// Initial: normal (1.2)
-    /// Note: Can be length or number
+    /// Note: Can be length, number, or percentage
     pub line_height: LineHeight,
 
     /// Text alignment
@@ -419,6 +419,8 @@ pub enum LineHeight {
     Number(f32),
     /// Length in pixels
     Length(f32),
+    /// Percentage of font size
+    Percentage(f32),
 }
 
 /// CSS text-align property values
@@ -688,6 +690,7 @@ impl PositionedStyle {
             LineHeight::Normal => self.font_size * 1.2,
             LineHeight::Number(n) => self.font_size * n,
             LineHeight::Length(px) => px,
+            LineHeight::Percentage(pct) => self.font_size * (pct / 100.0),
         }
     }
 
@@ -897,6 +900,10 @@ mod tests {
         // Length
         style.line_height = LineHeight::Length(25.0);
         assert_eq!(style.computed_line_height(), 25.0);
+
+        // Percentage
+        style.line_height = LineHeight::Percentage(150.0);
+        assert_eq!(style.computed_line_height(), 30.0);
     }
 
     #[test]

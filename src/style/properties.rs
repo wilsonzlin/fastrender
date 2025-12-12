@@ -2856,7 +2856,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 styles.line_height = LineHeight::Length(*len);
             }
             PropertyValue::Percentage(pct) => {
-                styles.line_height = LineHeight::Number(*pct / 100.0);
+                styles.line_height = LineHeight::Percentage(*pct);
             }
             _ => {}
         },
@@ -4707,7 +4707,7 @@ fn parse_line_height_token(token: &Token) -> Option<LineHeight> {
     match token {
         Token::Ident(ref ident) if ident.as_ref().eq_ignore_ascii_case("normal") => Some(LineHeight::Normal),
         Token::Number { value, .. } => Some(LineHeight::Number(*value)),
-        Token::Percentage { unit_value, .. } => Some(LineHeight::Number(*unit_value)),
+        Token::Percentage { unit_value, .. } => Some(LineHeight::Percentage(*unit_value * 100.0)),
         _ => length_from_token(token).map(LineHeight::Length),
     }
 }
@@ -8382,7 +8382,7 @@ mod tests {
         assert!(matches!(style.font_weight, FontWeight::Bold));
         assert!((style.font_stretch.to_percentage() - 100.0).abs() < 0.01);
         assert!((style.font_size - 24.0).abs() < 0.01);
-        assert!(matches!(style.line_height, LineHeight::Number(n) if (n - 1.25).abs() < 0.001));
+        assert!(matches!(style.line_height, LineHeight::Percentage(p) if (p - 125.0).abs() < 0.001));
         assert_eq!(style.font_family, vec!["serif".to_string()]);
     }
 
@@ -8543,7 +8543,7 @@ mod tests {
         };
 
         apply_declaration(&mut style, &decl, 16.0, 16.0);
-        assert!(matches!(style.line_height, LineHeight::Number(n) if (n - 1.5).abs() < 0.001));
+        assert!(matches!(style.line_height, LineHeight::Percentage(p) if (p - 150.0).abs() < 0.001));
     }
 
     #[test]

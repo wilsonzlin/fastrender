@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Line-height keeps percentages distinct from numbers: parsing stores CSS percentages (unit_value × 100) into a dedicated `Percentage` variant, computed/inline line-height resolution handles the variant against font-size, and font shorthand parsing no longer converts percentages to numbers.
 - Conic gradients parse/paint (including `from` angles and `at` positions) in both painter and display list; stop positions stay unclamped for correct repeating periods and the display-list renderer now samples relative to the target rect instead of the canvas origin.
 - Inline layout now preserves block-level children instead of dropping them: mixed inline/block content is segmented into inline runs and block fragments laid out in flow order (with float-aware flushing), and inline segments restart first-line indentation around block intrusions.
 - Block fragments inside inline layout now honor margins: vertical flow advances by margin-top/height/margin-bottom and horizontal extents include margins when computing max width; tests cover margin-induced spacing.

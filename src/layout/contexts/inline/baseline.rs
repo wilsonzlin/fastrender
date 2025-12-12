@@ -377,6 +377,7 @@ pub fn compute_line_height_with_metrics(
         }
         LineHeight::Number(n) => font_size * n,
         LineHeight::Length(len) => len.to_px(),
+        LineHeight::Percentage(pct) => font_size * (pct / 100.0),
     }
 }
 

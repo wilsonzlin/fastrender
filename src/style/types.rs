@@ -1015,6 +1015,7 @@ pub enum LineHeight {
     Normal,
     Number(f32),
     Length(Length),
+    Percentage(f32),
 }
 
 /// Vertical alignment
