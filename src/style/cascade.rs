@@ -559,7 +559,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.word_break = parent.word_break;
     styles.overflow_wrap = parent.overflow_wrap;
     styles.language = parent.language.clone();
-    styles.list_style_type = parent.list_style_type;
+    styles.list_style_type = parent.list_style_type.clone();
     styles.list_style_position = parent.list_style_position;
     styles.list_style_image = parent.list_style_image.clone();
     styles.quotes = parent.quotes.clone();

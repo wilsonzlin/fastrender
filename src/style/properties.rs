@@ -2085,11 +2085,11 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
             styles.text_decoration = source.text_decoration.clone();
             styles.text_decoration_line_specified = source.text_decoration_line_specified;
         }
-        "list-style-type" => styles.list_style_type = source.list_style_type,
+        "list-style-type" => styles.list_style_type = source.list_style_type.clone(),
         "list-style-position" => styles.list_style_position = source.list_style_position,
         "list-style-image" => styles.list_style_image = source.list_style_image.clone(),
         "list-style" => {
-            styles.list_style_type = source.list_style_type;
+            styles.list_style_type = source.list_style_type.clone();
             styles.list_style_position = source.list_style_position;
             styles.list_style_image = source.list_style_image.clone();
         }
@@ -7997,6 +7997,7 @@ fn parse_list_style_type(value: &PropertyValue) -> Option<ListStyleType> {
             "none" => Some(ListStyleType::None),
             _ => None,
         },
+        PropertyValue::String(s) => Some(ListStyleType::String(s.clone())),
         _ => None,
     }
 }
@@ -10066,6 +10067,15 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.list_style_type, ListStyleType::DisclosureClosed);
+
+        let decl = Declaration {
+            property: "list-style-type".to_string(),
+            value: PropertyValue::String("★".to_string()),
+            raw_value: "\"★\"".to_string(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert!(matches!(style.list_style_type, ListStyleType::String(ref s) if s == "★"));
     }
 
     #[test]

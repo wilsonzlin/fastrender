@@ -1517,7 +1517,7 @@ fn marker_content_from_style(
         crate::style::types::ListStyleImage::None => {}
     }
 
-    let text = list_marker_text(style.list_style_type, counters);
+    let text = list_marker_text(style.list_style_type.clone(), counters);
     if text.is_empty() {
         None
     } else {
@@ -2936,6 +2936,42 @@ mod tests {
     }
 
     #[test]
+    fn marker_uses_string_list_style_type() {
+        let mut style = ComputedStyle::default();
+        style.list_style_type = ListStyleType::String("★".to_string());
+        style.display = Display::ListItem;
+        let styled = StyledNode {
+            node: dom::DomNode {
+                node_type: dom::DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            },
+            styles: style.clone(),
+            marker_styles: Some(style.clone()),
+            before_styles: None,
+            after_styles: None,
+            children: vec![],
+        };
+
+        let mut counters = CounterManager::new();
+        counters.enter_scope();
+        counters.apply_reset(&CounterSet::single("list-item", 1));
+
+        let marker_box = create_marker_box(&styled, &counters).expect("marker");
+        counters.leave_scope();
+
+        match marker_box.box_type {
+            BoxType::Marker(marker) => match marker.content {
+                MarkerContent::Text(t) => assert_eq!(t, "★ "),
+                _ => panic!("expected text marker from string list-style-type"),
+            },
+            _ => panic!("expected marker box"),
+        }
+    }
+
+    #[test]
     fn ordered_list_start_attribute_sets_initial_counter() {
         let mut ol_style = ComputedStyle::default();
         ol_style.display = Display::Block;
@@ -3824,6 +3860,7 @@ fn list_marker_text(list_style: ListStyleType, counters: &CounterManager) -> Str
         ListStyleType::LowerGreek => counters.format("list-item", CounterStyle::LowerGreek),
         ListStyleType::DisclosureOpen => "▾".to_string(),
         ListStyleType::DisclosureClosed => "▸".to_string(),
+        ListStyleType::String(text) => text,
     };
 
     if core.is_empty() {

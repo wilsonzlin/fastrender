@@ -1625,7 +1625,7 @@ impl Default for TextEmphasisPosition {
 }
 
 /// list-style-type values
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListStyleType {
     Disc,
     Circle,
@@ -1642,6 +1642,8 @@ pub enum ListStyleType {
     LowerGreek,
     DisclosureOpen,
     DisclosureClosed,
+    /// Custom marker string value from list-style-type: "<string>"
+    String(String),
     None,
 }
 
