@@ -15,7 +15,9 @@ use crate::style::defaults::{get_default_styles_for_element, parse_color_attribu
 use crate::style::display::Display;
 use crate::style::grid::finalize_grid_placement;
 use crate::style::media::MediaContext;
-use crate::style::properties::{apply_declaration, resolve_pending_logical_properties, with_image_set_dpr};
+use crate::style::properties::{
+    apply_declaration_with_base, resolve_pending_logical_properties, with_image_set_dpr,
+};
 use crate::style::{normalize_language_tag, ComputedStyle};
 use selectors::context::{QuirksMode, SelectorCaches};
 use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
@@ -49,6 +51,7 @@ struct CascadeRule<'a> {
 }
 
 /// A matched rule with the specificity of the selector that applied.
+#[derive(Clone)]
 struct MatchedRule {
     origin: StyleOrigin,
     specificity: u32,
@@ -158,7 +161,14 @@ pub fn apply_styles_with_media_target_and_imports(
 
     with_target_fragment(target_fragment, || {
         with_image_set_dpr(media_ctx.device_pixel_ratio, || {
-            apply_styles_internal(dom, &all_rules, &ComputedStyle::default(), 16.0)
+            apply_styles_internal(
+                dom,
+                &all_rules,
+                &ComputedStyle::default(),
+                &ComputedStyle::default(),
+                16.0,
+                16.0,
+            )
         })
     })
 }
@@ -167,16 +177,55 @@ fn apply_styles_internal(
     node: &DomNode,
     rules: &[CascadeRule<'_>],
     parent_styles: &ComputedStyle,
+    parent_ua_styles: &ComputedStyle,
     root_font_size: f32,
+    ua_root_font_size: f32,
 ) -> StyledNode {
+    let mut ua_styles = get_default_styles_for_element(node);
+    inherit_styles(&mut ua_styles, parent_ua_styles);
+
+    let ancestors: Vec<&DomNode> = vec![];
+    let mut matching_rules = find_matching_rules(node, rules, &ancestors);
+    let ua_matches: Vec<MatchedRule> = matching_rules
+        .iter()
+        .filter(|r| r.origin == StyleOrigin::UserAgent)
+        .cloned()
+        .collect();
+    apply_cascaded_declarations(
+        &mut ua_styles,
+        ua_matches,
+        None,
+        parent_ua_styles,
+        parent_ua_styles.font_size,
+        ua_root_font_size,
+        &ComputedStyle::default(),
+        |_| true,
+    );
+
+    if let Some(lang) = node
+        .get_attribute("lang")
+        .or_else(|| node.get_attribute("xml:lang"))
+        .filter(|l| !l.is_empty())
+    {
+        ua_styles.language = normalize_language_tag(&lang);
+    }
+
+    finalize_grid_placement(&mut ua_styles);
+    resolve_match_parent_text_align(&mut ua_styles, parent_ua_styles, ancestors.is_empty());
+    resolve_match_parent_text_align_last(&mut ua_styles, parent_ua_styles, ancestors.is_empty());
+    resolve_relative_font_weight(&mut ua_styles, parent_ua_styles);
+    propagate_text_decorations(&mut ua_styles, parent_ua_styles);
+
+    let is_root = ancestors.is_empty();
+    let current_ua_root_font_size = if is_root { ua_styles.font_size } else { ua_root_font_size };
+    ua_styles.root_font_size = current_ua_root_font_size;
+
     let mut styles = get_default_styles_for_element(node);
 
     // Inherit styles from parent
     inherit_styles(&mut styles, parent_styles);
 
     // Apply matching CSS rules and inline styles with full cascade ordering
-    let ancestors: Vec<&DomNode> = vec![];
-    let mut matching_rules = find_matching_rules(node, rules, &ancestors);
     if let Some(presentational_rule) = dir_presentational_hint(node, 0) {
         matching_rules.push(presentational_rule);
     }
@@ -194,6 +243,7 @@ fn apply_styles_internal(
         parent_styles,
         parent_styles.font_size,
         root_font_size,
+        &ua_styles,
         |_| true,
     );
 
@@ -224,7 +274,9 @@ fn apply_styles_internal(
         rules,
         &ancestors,
         &styles,
+        &ua_styles,
         current_root_font_size,
+        current_ua_root_font_size,
         &PseudoElement::Before,
     );
     let after_styles = compute_pseudo_element_styles(
@@ -232,10 +284,20 @@ fn apply_styles_internal(
         rules,
         &ancestors,
         &styles,
+        &ua_styles,
         current_root_font_size,
+        current_ua_root_font_size,
         &PseudoElement::After,
     );
-    let marker_styles = compute_marker_styles(node, rules, &ancestors, &styles, current_root_font_size);
+    let marker_styles = compute_marker_styles(
+        node,
+        rules,
+        &ancestors,
+        &styles,
+        &ua_styles,
+        current_root_font_size,
+        current_ua_root_font_size,
+    );
 
     // Recursively style children (passing current node in ancestors)
     let mut new_ancestors = ancestors.clone();
@@ -244,7 +306,15 @@ fn apply_styles_internal(
         .children
         .iter()
         .map(|child| {
-            apply_styles_internal_with_ancestors(child, rules, &styles, current_root_font_size, &new_ancestors)
+            apply_styles_internal_with_ancestors(
+                child,
+                rules,
+                &styles,
+                &ua_styles,
+                current_root_font_size,
+                current_ua_root_font_size,
+                &new_ancestors,
+            )
         })
         .collect();
 
@@ -262,16 +332,55 @@ fn apply_styles_internal_with_ancestors(
     node: &DomNode,
     rules: &[CascadeRule<'_>],
     parent_styles: &ComputedStyle,
+    parent_ua_styles: &ComputedStyle,
     root_font_size: f32,
+    ua_root_font_size: f32,
     ancestors: &[&DomNode],
 ) -> StyledNode {
+    let mut ua_styles = get_default_styles_for_element(node);
+    inherit_styles(&mut ua_styles, parent_ua_styles);
+
+    let mut matching_rules = find_matching_rules(node, rules, ancestors);
+    let ua_matches: Vec<MatchedRule> = matching_rules
+        .iter()
+        .filter(|r| r.origin == StyleOrigin::UserAgent)
+        .cloned()
+        .collect();
+    apply_cascaded_declarations(
+        &mut ua_styles,
+        ua_matches,
+        None,
+        parent_ua_styles,
+        parent_ua_styles.font_size,
+        ua_root_font_size,
+        &ComputedStyle::default(),
+        |_| true,
+    );
+
+    if let Some(lang) = node
+        .get_attribute("lang")
+        .or_else(|| node.get_attribute("xml:lang"))
+        .filter(|l| !l.is_empty())
+    {
+        ua_styles.language = normalize_language_tag(&lang);
+    }
+
+    finalize_grid_placement(&mut ua_styles);
+    resolve_match_parent_text_align(&mut ua_styles, parent_ua_styles, ancestors.is_empty());
+    resolve_match_parent_text_align_last(&mut ua_styles, parent_ua_styles, ancestors.is_empty());
+    resolve_relative_font_weight(&mut ua_styles, parent_ua_styles);
+    propagate_text_decorations(&mut ua_styles, parent_ua_styles);
+
+    let is_root = ancestors.is_empty();
+    let current_ua_root_font_size = if is_root { ua_styles.font_size } else { ua_root_font_size };
+    ua_styles.root_font_size = current_ua_root_font_size;
+
     let mut styles = get_default_styles_for_element(node);
 
     // Inherit styles from parent
     inherit_styles(&mut styles, parent_styles);
 
     // Apply matching CSS rules and inline styles with full cascade ordering
-    let mut matching_rules = find_matching_rules(node, rules, ancestors);
     if let Some(presentational_rule) = dir_presentational_hint(node, 0) {
         matching_rules.push(presentational_rule);
     }
@@ -289,6 +398,7 @@ fn apply_styles_internal_with_ancestors(
         parent_styles,
         parent_styles.font_size,
         root_font_size,
+        &ua_styles,
         |_| true,
     );
 
@@ -320,7 +430,6 @@ fn apply_styles_internal_with_ancestors(
     resolve_relative_font_weight(&mut styles, parent_styles);
     propagate_text_decorations(&mut styles, parent_styles);
 
-    let is_root = ancestors.is_empty();
     let current_root_font_size = if is_root { styles.font_size } else { root_font_size };
     styles.root_font_size = current_root_font_size;
 
@@ -330,7 +439,9 @@ fn apply_styles_internal_with_ancestors(
         rules,
         ancestors,
         &styles,
+        &ua_styles,
         current_root_font_size,
+        current_ua_root_font_size,
         &PseudoElement::Before,
     );
     let after_styles = compute_pseudo_element_styles(
@@ -338,10 +449,20 @@ fn apply_styles_internal_with_ancestors(
         rules,
         ancestors,
         &styles,
+        &ua_styles,
         current_root_font_size,
+        current_ua_root_font_size,
         &PseudoElement::After,
     );
-    let marker_styles = compute_marker_styles(node, rules, ancestors, &styles, current_root_font_size);
+    let marker_styles = compute_marker_styles(
+        node,
+        rules,
+        ancestors,
+        &styles,
+        &ua_styles,
+        current_root_font_size,
+        current_ua_root_font_size,
+    );
 
     // Recursively style children (passing current node in ancestors)
     let mut new_ancestors = ancestors.to_vec();
@@ -350,7 +471,15 @@ fn apply_styles_internal_with_ancestors(
         .children
         .iter()
         .map(|child| {
-            apply_styles_internal_with_ancestors(child, rules, &styles, current_root_font_size, &new_ancestors)
+            apply_styles_internal_with_ancestors(
+                child,
+                rules,
+                &styles,
+                &ua_styles,
+                current_root_font_size,
+                current_ua_root_font_size,
+                &new_ancestors,
+            )
         })
         .collect();
 
@@ -521,6 +650,8 @@ mod tests {
     use crate::style::computed::Visibility;
     use crate::style::display::Display;
     use crate::style::float::Float;
+    use crate::style::properties::apply_declaration;
+    use crate::style::ComputedStyle;
     use crate::style::types::{
         BorderStyle, LineBreak, ListStylePosition, ListStyleType, TextCombineUpright, TextDecorationLine,
         TextUnderlineOffset, TextUnderlinePosition, UnicodeBidi, WhiteSpace, WillChange, WillChangeHint,
@@ -602,6 +733,44 @@ mod tests {
         let stylesheet = parse_stylesheet(".item { color: blue !important; }").unwrap();
         let styled = apply_styles(&dom, &stylesheet);
         assert_eq!(styled.styles.color, Rgba::rgb(0, 128, 0));
+    }
+
+    #[test]
+    fn revert_falls_back_to_ua_for_non_inherited_property() {
+        let dom = element_with_id_and_class("target", "box", None);
+        let stylesheet = parse_stylesheet(
+            r#"
+            .box { display: inline; }
+            #target { display: revert; }
+        "#,
+        )
+        .unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        assert!(matches!(styled.styles.display, Display::Block));
+    }
+
+    #[test]
+    fn revert_ignores_author_inherited_value() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), "color: rgb(1, 2, 3);".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "span".to_string(),
+                    attributes: vec![("id".to_string(), "target".to_string())],
+                },
+                children: vec![],
+            }],
+        };
+        let stylesheet = parse_stylesheet("#target { color: revert; }").unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        let child = styled.children.first().expect("child");
+        assert_eq!(child.styles.color, ComputedStyle::default().color);
+        assert_ne!(child.styles.color, styled.styles.color);
     }
 
     #[test]
@@ -2052,6 +2221,7 @@ fn apply_cascaded_declarations<F>(
     parent_styles: &ComputedStyle,
     parent_font_size: f32,
     root_font_size: f32,
+    revert_base_styles: &ComputedStyle,
     filter: F,
 ) where
     F: Fn(&Declaration) -> bool,
@@ -2093,12 +2263,18 @@ fn apply_cascaded_declarations<F>(
             .then(a.decl_order.cmp(&b.decl_order))
     });
 
+    let defaults = ComputedStyle::default();
     for entry in flattened {
         if filter(&entry.declaration) {
-            apply_declaration(
+            let revert_base = match entry.origin {
+                StyleOrigin::UserAgent => &defaults,
+                StyleOrigin::Author | StyleOrigin::Inline => revert_base_styles,
+            };
+            apply_declaration_with_base(
                 styles,
                 &entry.declaration,
                 parent_styles,
+                revert_base,
                 parent_font_size,
                 root_font_size,
             );
@@ -2278,7 +2454,9 @@ fn compute_pseudo_element_styles(
     rules: &[CascadeRule<'_>],
     ancestors: &[&DomNode],
     parent_styles: &ComputedStyle,
+    ua_parent_styles: &ComputedStyle,
     root_font_size: f32,
+    ua_root_font_size: f32,
     pseudo: &PseudoElement,
 ) -> Option<ComputedStyle> {
     // Find rules matching this pseudo-element
@@ -2287,6 +2465,31 @@ fn compute_pseudo_element_styles(
     if matching_rules.is_empty() {
         return None;
     }
+
+    let ua_matches: Vec<MatchedRule> = matching_rules
+        .iter()
+        .filter(|r| r.origin == StyleOrigin::UserAgent)
+        .cloned()
+        .collect();
+
+    let mut ua_styles = ComputedStyle::default();
+    ua_styles.display = Display::Inline;
+    inherit_styles(&mut ua_styles, ua_parent_styles);
+    apply_cascaded_declarations(
+        &mut ua_styles,
+        ua_matches,
+        None,
+        ua_parent_styles,
+        ua_parent_styles.font_size,
+        ua_root_font_size,
+        &ComputedStyle::default(),
+        |_| true,
+    );
+    resolve_match_parent_text_align(&mut ua_styles, ua_parent_styles, false);
+    resolve_match_parent_text_align_last(&mut ua_styles, ua_parent_styles, false);
+    resolve_relative_font_weight(&mut ua_styles, ua_parent_styles);
+    propagate_text_decorations(&mut ua_styles, ua_parent_styles);
+    ua_styles.root_font_size = ua_root_font_size;
 
     // Start with default inline styles (pseudo-elements default to display: inline)
     let mut styles = ComputedStyle::default();
@@ -2303,12 +2506,14 @@ fn compute_pseudo_element_styles(
         parent_styles,
         parent_styles.font_size,
         root_font_size,
+        &ua_styles,
         |_| true,
     );
     resolve_match_parent_text_align(&mut styles, parent_styles, false);
     resolve_match_parent_text_align_last(&mut styles, parent_styles, false);
     resolve_relative_font_weight(&mut styles, parent_styles);
     propagate_text_decorations(&mut styles, parent_styles);
+    styles.root_font_size = root_font_size;
 
     // Check if content property generates content
     // Per CSS spec, ::before/::after only generate boxes if content is not 'none' or 'normal'
@@ -2327,13 +2532,48 @@ fn compute_marker_styles(
     rules: &[CascadeRule<'_>],
     ancestors: &[&DomNode],
     list_item_styles: &ComputedStyle,
+    ua_list_item_styles: &ComputedStyle,
     root_font_size: f32,
+    ua_root_font_size: f32,
 ) -> Option<ComputedStyle> {
     if list_item_styles.display != Display::ListItem {
         return None;
     }
 
     let matching_rules = find_pseudo_element_rules(node, rules, ancestors, &PseudoElement::Marker);
+    let ua_matches: Vec<MatchedRule> = matching_rules
+        .iter()
+        .filter(|r| r.origin == StyleOrigin::UserAgent)
+        .cloned()
+        .collect();
+
+    let mut ua_styles = ComputedStyle::default();
+    ua_styles.display = Display::Inline;
+    inherit_styles(&mut ua_styles, ua_list_item_styles);
+
+    // UA defaults per CSS Lists 3: isolate, tabular numbers, pre white-space, no transforms.
+    ua_styles.unicode_bidi = crate::style::types::UnicodeBidi::Isolate;
+    ua_styles.font_variant_numeric.spacing = crate::style::types::NumericSpacing::Tabular;
+    ua_styles.white_space = crate::style::types::WhiteSpace::Pre;
+    ua_styles.text_transform = crate::style::types::TextTransform::none();
+
+    apply_cascaded_declarations(
+        &mut ua_styles,
+        ua_matches,
+        None,
+        ua_list_item_styles,
+        ua_list_item_styles.font_size,
+        ua_root_font_size,
+        &ComputedStyle::default(),
+        |_| true,
+    );
+    resolve_match_parent_text_align(&mut ua_styles, ua_list_item_styles, false);
+    resolve_match_parent_text_align_last(&mut ua_styles, ua_list_item_styles, false);
+    resolve_relative_font_weight(&mut ua_styles, ua_list_item_styles);
+    propagate_text_decorations(&mut ua_styles, ua_list_item_styles);
+    ua_styles.root_font_size = ua_root_font_size;
+    reset_marker_box_properties(&mut ua_styles);
+    ua_styles.display = Display::Inline;
 
     let mut styles = ComputedStyle::default();
     styles.display = Display::Inline;
@@ -2352,12 +2592,14 @@ fn compute_marker_styles(
         list_item_styles,
         list_item_styles.font_size,
         root_font_size,
+        &ua_styles,
         |decl| marker_allows_property(&decl.property),
     );
     resolve_match_parent_text_align(&mut styles, list_item_styles, false);
     resolve_match_parent_text_align_last(&mut styles, list_item_styles, false);
     resolve_relative_font_weight(&mut styles, list_item_styles);
     propagate_text_decorations(&mut styles, list_item_styles);
+    styles.root_font_size = root_font_size;
 
     reset_marker_box_properties(&mut styles);
     styles.display = Display::Inline;

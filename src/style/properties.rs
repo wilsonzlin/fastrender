@@ -959,6 +959,7 @@ fn global_keyword_source<'a>(
     property: &str,
     parent: &'a ComputedStyle,
     defaults: &'a ComputedStyle,
+    revert_base: &'a ComputedStyle,
 ) -> Option<&'a ComputedStyle> {
     match keyword {
         "inherit" => Some(parent),
@@ -970,7 +971,7 @@ fn global_keyword_source<'a>(
                 Some(defaults)
             }
         }
-        "revert" => Some(defaults),
+        "revert" => Some(revert_base),
         _ => None,
     }
 }
@@ -2119,11 +2120,12 @@ fn apply_global_keyword(
     styles: &mut ComputedStyle,
     parent: &ComputedStyle,
     defaults: &ComputedStyle,
+    revert_base: &ComputedStyle,
     property: &str,
     keyword: &str,
     order: i32,
 ) -> bool {
-    let Some(source) = global_keyword_source(keyword, property, parent, defaults) else {
+    let Some(source) = global_keyword_source(keyword, property, parent, defaults, revert_base) else {
         return false;
     };
     apply_property_from_source(styles, source, property, order)
@@ -2133,6 +2135,25 @@ pub fn apply_declaration(
     styles: &mut ComputedStyle,
     decl: &Declaration,
     parent_styles: &ComputedStyle,
+    parent_font_size: f32,
+    root_font_size: f32,
+) {
+    let defaults = ComputedStyle::default();
+    apply_declaration_with_base(
+        styles,
+        decl,
+        parent_styles,
+        &defaults,
+        parent_font_size,
+        root_font_size,
+    );
+}
+
+pub fn apply_declaration_with_base(
+    styles: &mut ComputedStyle,
+    decl: &Declaration,
+    parent_styles: &ComputedStyle,
+    revert_base: &ComputedStyle,
     parent_font_size: f32,
     root_font_size: f32,
 ) {
@@ -2158,6 +2179,7 @@ pub fn apply_declaration(
             styles,
             parent_styles,
             &defaults,
+            revert_base,
             decl.property.as_str(),
             global,
             order,
