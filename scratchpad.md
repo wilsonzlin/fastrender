@@ -686,6 +686,7 @@
    - Propagate positioned containing blocks through any remaining formatting contexts; derive static positions from hypothetical in-flow placement even when padding box height is unresolved.
 
 ## Notes
+- Pushing is currently blocked (GitHub public key denied on `git push`); need credentials/keys to publish commits.
 - Current table code uses `InlineFormattingContext` for cell intrinsic widths; this fails for block/table/replaced content—needs a per-context intrinsic measurement.
 - Default font family remains `"serif"`; UA defaults can be revisited when baseline metrics are real.
 
