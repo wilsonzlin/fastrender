@@ -1063,8 +1063,31 @@ fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f
     }
 
     if style.font_synthesis.style && matches!(font.style, FontStyle::Normal) {
-        if let Some(angle) = requested_slant_angle(style) {
-            synthetic_oblique = angle.to_radians().tan();
+        let (has_slnt_axis, has_ital_axis) = if let Ok(face) = font.as_ttf_face() {
+            let mut has_slnt = false;
+            let mut has_ital = false;
+            for axis in face.variation_axes() {
+                if axis.tag == Tag::from_bytes(b"slnt") {
+                    has_slnt = true;
+                } else if axis.tag == Tag::from_bytes(b"ital") {
+                    has_ital = true;
+                }
+            }
+            (has_slnt, has_ital)
+        } else {
+            (false, false)
+        };
+
+        let variation_covers_slant = match style.font_style {
+            CssFontStyle::Oblique(_) => has_slnt_axis || has_ital_axis,
+            CssFontStyle::Italic => has_ital_axis || has_slnt_axis,
+            CssFontStyle::Normal => false,
+        };
+
+        if !variation_covers_slant {
+            if let Some(angle) = requested_slant_angle(style) {
+                synthetic_oblique = angle.to_radians().tan();
+            }
         }
     }
 
@@ -1335,6 +1358,15 @@ fn push_font_run(
             let opsz_tag = Tag::from_bytes(b"opsz");
             let ital_tag = Tag::from_bytes(b"ital");
             let slnt_tag = Tag::from_bytes(b"slnt");
+            let has_slnt_axis = axes.iter().any(|a| a.tag == slnt_tag);
+            let has_ital_axis = axes.iter().any(|a| a.tag == ital_tag);
+            let slnt_angle = match style.font_style {
+                CssFontStyle::Oblique(angle) => Some(angle.unwrap_or(DEFAULT_OBLIQUE_ANGLE_DEG)),
+                CssFontStyle::Italic if !has_ital_axis => Some(DEFAULT_OBLIQUE_ANGLE_DEG),
+                _ => None,
+            };
+            let ital_needed = matches!(style.font_style, CssFontStyle::Italic)
+                || (matches!(style.font_style, CssFontStyle::Oblique(_)) && !has_slnt_axis);
 
             for axis in axes {
                 if axis.tag == wght_tag && !set_tags.contains(&wght_tag) {
@@ -1359,7 +1391,7 @@ fn push_font_run(
                     });
                     set_tags.insert(opsz_tag);
                 } else if axis.tag == slnt_tag && !set_tags.contains(&slnt_tag) {
-                    if let Some(angle) = requested_slant_angle(style) {
+                    if let Some(angle) = slnt_angle {
                         let slnt_value = (-angle).clamp(axis.min_value, axis.max_value);
                         variations.push(Variation {
                             tag: slnt_tag,
@@ -1368,12 +1400,19 @@ fn push_font_run(
                         set_tags.insert(slnt_tag);
                     }
                 } else if axis.tag == ital_tag && !set_tags.contains(&ital_tag) {
-                    let ital = matches!(style.font_style, CssFontStyle::Italic | CssFontStyle::Oblique(_));
-                    variations.push(Variation {
-                        tag: ital_tag,
-                        value: if ital { 1.0 } else { 0.0 },
-                    });
-                    set_tags.insert(ital_tag);
+                    if ital_needed {
+                        variations.push(Variation {
+                            tag: ital_tag,
+                            value: 1.0,
+                        });
+                        set_tags.insert(ital_tag);
+                    } else if matches!(style.font_style, CssFontStyle::Normal) {
+                        variations.push(Variation {
+                            tag: ital_tag,
+                            value: 0.0,
+                        });
+                        set_tags.insert(ital_tag);
+                    }
                 }
             }
         }
@@ -2502,6 +2541,129 @@ mod tests {
             .expect("authored slnt should survive auto mapping");
 
         assert!((slnt_value + 5.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn oblique_prefers_slnt_axis_over_ital() {
+        let (ctx, family) = load_variable_font();
+        let mut style = ComputedStyle::default();
+        style.font_family = vec![family.clone()];
+        style.font_size = 16.0;
+        style.font_style = CssFontStyle::Oblique(Some(12.0));
+
+        let runs = assign_fonts(
+            &[ItemizedRun {
+                text: "mmmm".to_string(),
+                start: 0,
+                end: 4,
+                script: Script::Latin,
+                direction: Direction::LeftToRight,
+                level: 0,
+            }],
+            &style,
+            &ctx,
+        )
+        .expect("assign fonts");
+
+        let slnt_tag = Tag::from_bytes(b"slnt");
+        let ital_tag = Tag::from_bytes(b"ital");
+        let tags: Vec<_> = runs[0].variations.iter().map(|v| v.tag).collect();
+        assert!(tags.contains(&slnt_tag), "slnt axis should be populated");
+        let font_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fonts/RobotoFlex-VF.ttf");
+        let data = fs::read(&font_path).expect("fixture font data");
+        let face = ttf_parser::Face::parse(&data, 0).expect("parse fixture font");
+        let has_ital_axis = face.variation_axes().into_iter().any(|a| a.tag == ital_tag);
+        if has_ital_axis {
+            assert!(
+                !tags.contains(&ital_tag),
+                "ital axis should not be set when slnt axis is available for oblique"
+            );
+        }
+        let axis = face
+            .variation_axes()
+            .into_iter()
+            .find(|a| a.tag == slnt_tag)
+            .expect("fixture font exposes slnt axis");
+        let slnt_value = runs[0]
+            .variations
+            .iter()
+            .find(|v| v.tag == slnt_tag)
+            .map(|v| v.value)
+            .unwrap();
+        let expected = (-12.0_f32).clamp(axis.min_value, axis.max_value);
+        assert!((slnt_value - expected).abs() < 0.001);
+    }
+
+    #[test]
+    fn italic_maps_to_available_axis() {
+        let (ctx, family) = load_variable_font();
+        let mut style = ComputedStyle::default();
+        style.font_family = vec![family.clone()];
+        style.font_size = 16.0;
+        style.font_style = CssFontStyle::Italic;
+
+        let runs = assign_fonts(
+            &[ItemizedRun {
+                text: "mmmm".to_string(),
+                start: 0,
+                end: 4,
+                script: Script::Latin,
+                direction: Direction::LeftToRight,
+                level: 0,
+            }],
+            &style,
+            &ctx,
+        )
+        .expect("assign fonts");
+        let ital_tag = Tag::from_bytes(b"ital");
+        let slnt_tag = Tag::from_bytes(b"slnt");
+        let font_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fonts/RobotoFlex-VF.ttf");
+        let data = fs::read(&font_path).expect("fixture font data");
+        let face = ttf_parser::Face::parse(&data, 0).expect("parse fixture font");
+        let has_ital_axis = face.variation_axes().into_iter().any(|a| a.tag == ital_tag);
+
+        if has_ital_axis {
+            let ital_value = runs[0].variations.iter().find(|v| v.tag == ital_tag).map(|v| v.value);
+            assert_eq!(ital_value, Some(1.0));
+            assert!(
+                runs[0].variations.iter().all(|v| v.tag != slnt_tag),
+                "italic should not use slnt when ital axis is present"
+            );
+        } else {
+            let slnt_value = runs[0]
+                .variations
+                .iter()
+                .find(|v| v.tag == slnt_tag)
+                .map(|v| v.value)
+                .expect("italic should map to slnt when ital axis is absent");
+            let axis = face
+                .variation_axes()
+                .into_iter()
+                .find(|a| a.tag == slnt_tag)
+                .expect("fixture font exposes slnt axis");
+            let expected = (-DEFAULT_OBLIQUE_ANGLE_DEG).clamp(axis.min_value, axis.max_value);
+            assert!((slnt_value - expected).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn slnt_axis_disables_synthetic_slant() {
+        let (ctx, family) = load_variable_font();
+        let mut style = ComputedStyle::default();
+        style.font_family = vec![family.clone()];
+        style.font_size = 16.0;
+        style.font_style = CssFontStyle::Oblique(Some(10.0));
+
+        let font = ctx
+            .get_font_full(
+                &style.font_family,
+                style.font_weight.to_u16(),
+                DbFontStyle::Normal,
+                DbFontStretch::from_percentage(style.font_stretch.to_percentage()),
+            )
+            .expect("load font with slnt axis");
+        let (_, synthetic_slant) = compute_synthetic_styles(&style, &font);
+        assert_eq!(synthetic_slant, 0.0, "slnt axis should satisfy slant without synthesis");
     }
 
     #[test]
