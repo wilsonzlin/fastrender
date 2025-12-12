@@ -48,7 +48,7 @@ pub fn resolve_text_shadows(style: &ComputedStyle) -> Vec<ResolvedTextShadow> {
             offset_x: resolve_shadow_length(&shadow.offset_x, style.font_size),
             offset_y: resolve_shadow_length(&shadow.offset_y, style.font_size),
             blur_radius: resolve_shadow_length(&shadow.blur_radius, style.font_size).max(0.0),
-            color: shadow.color,
+            color: shadow.color.unwrap_or(style.color),
         })
         .collect()
 }

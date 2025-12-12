@@ -347,10 +347,13 @@ impl TextItem {
     ) -> Option<(TextItem, TextItem)> {
         const INSERTED_HYPHEN: char = '\u{2010}'; // CSS hyphenation hyphen
 
-        let split_offset = self
+        let mut split_offset = self
             .cluster_boundary_at_or_before(byte_offset)
             .map(|b| b.byte_offset)
             .unwrap_or(byte_offset);
+        if split_offset < byte_offset && byte_offset <= self.text.len() {
+            split_offset = byte_offset;
+        }
 
         if split_offset == 0 || split_offset >= self.text.len() {
             return None;
@@ -396,25 +399,15 @@ impl TextItem {
         let before_metrics = TextItem::metrics_from_runs(&before_runs, line_height, self.font_size);
         let after_metrics = TextItem::metrics_from_runs(&after_runs, line_height, self.font_size);
 
-        let before_breaks = self
-            .break_opportunities
-            .iter()
-            .filter(|b| b.byte_offset <= split_offset)
-            .copied()
-            .collect();
-        let after_breaks = self
-            .break_opportunities
-            .iter()
-            .filter(|b| b.byte_offset > split_offset)
-            .map(|b| BreakOpportunity::with_hyphen(b.byte_offset - split_offset, b.break_type, b.adds_hyphen))
-            .collect();
-
-        // Create new items using freshly shaped runs
-        let before_item = TextItem::new(
+        let mut before_item = TextItem::new(
             before_runs,
-            before_text_owned.unwrap_or_else(|| before_text.to_string()),
+            before_text_owned.clone().unwrap_or_else(|| before_text.to_string()),
             before_metrics,
-            before_breaks,
+            self.break_opportunities
+                .iter()
+                .filter(|b| b.byte_offset <= split_offset)
+                .copied()
+                .collect(),
             self.forced_break_offsets
                 .iter()
                 .copied()
@@ -425,11 +418,15 @@ impl TextItem {
         )
         .with_vertical_align(self.vertical_align);
 
-        let after_item = TextItem::new(
+        let mut after_item = TextItem::new(
             after_runs,
             after_text.to_string(),
             after_metrics,
-            after_breaks,
+            self.break_opportunities
+                .iter()
+                .filter(|b| b.byte_offset > split_offset)
+                .map(|b| BreakOpportunity::with_hyphen(b.byte_offset - split_offset, b.break_type, b.adds_hyphen))
+                .collect(),
             self.forced_break_offsets
                 .iter()
                 .copied()
@@ -440,6 +437,51 @@ impl TextItem {
             self.base_direction,
         )
         .with_vertical_align(self.vertical_align);
+
+        if before_item.advance <= 0.0 || after_item.advance <= 0.0 {
+            let before_runs = shaper.shape(before_text, &self.style, font_context).ok()?;
+            let after_runs = shaper.shape(after_text, &self.style, font_context).ok()?;
+            let before_metrics = TextItem::metrics_from_runs(&before_runs, line_height, self.font_size);
+            let after_metrics = TextItem::metrics_from_runs(&after_runs, line_height, self.font_size);
+            before_item = TextItem::new(
+                before_runs,
+                before_text_owned.unwrap_or_else(|| before_text.to_string()),
+                before_metrics,
+                self.break_opportunities
+                    .iter()
+                    .filter(|b| b.byte_offset <= split_offset)
+                    .copied()
+                    .collect(),
+                self.forced_break_offsets
+                    .iter()
+                    .copied()
+                    .filter(|o| *o <= split_offset)
+                    .collect(),
+                self.style.clone(),
+                self.base_direction,
+            )
+            .with_vertical_align(self.vertical_align);
+
+            after_item = TextItem::new(
+                after_runs,
+                after_text.to_string(),
+                after_metrics,
+                self.break_opportunities
+                    .iter()
+                    .filter(|b| b.byte_offset > split_offset)
+                    .map(|b| BreakOpportunity::with_hyphen(b.byte_offset - split_offset, b.break_type, b.adds_hyphen))
+                    .collect(),
+                self.forced_break_offsets
+                    .iter()
+                    .copied()
+                    .filter(|o| *o > split_offset)
+                    .map(|o| o - split_offset)
+                    .collect(),
+                self.style.clone(),
+                self.base_direction,
+            )
+            .with_vertical_align(self.vertical_align);
+        }
 
         let mut before_item = before_item;
         let mut after_item = after_item;
@@ -583,17 +625,26 @@ impl TextItem {
     /// Finds the best break point that fits within max_width
     pub fn find_break_point(&self, max_width: f32) -> Option<BreakOpportunity> {
         // Find the last break opportunity that fits
-        let mut best_break = None;
+        let mut mandatory_break: Option<BreakOpportunity> = None;
+        let mut allowed_break: Option<BreakOpportunity> = None;
 
         for brk in &self.break_opportunities {
             let width_at_break = self.advance_at_offset(brk.byte_offset);
             if width_at_break <= max_width {
-                best_break = Some(*brk);
+                match brk.break_type {
+                    BreakType::Mandatory => {
+                        if mandatory_break.is_none() {
+                            mandatory_break = Some(*brk);
+                        }
+                    }
+                    _ => allowed_break = Some(*brk),
+                }
             } else {
                 break;
             }
         }
 
+        let mut best_break = mandatory_break.or(allowed_break);
         if best_break.is_some() || !allows_soft_wrap(self.style.as_ref()) {
             return best_break;
         }
@@ -1606,14 +1657,102 @@ impl<'a> LineBuilder<'a> {
         let font_context = self.font_context.clone();
 
         for (start, end) in ranges {
+            let mut paragraph_level = base_level;
+            if self.root_unicode_bidi == UnicodeBidi::Plaintext
+                || Self::paragraph_all_plaintext(&self.lines[start..end])
+            {
+                if let Some(dir) = Self::paragraph_direction_from_lines(&self.lines[start..end]) {
+                    paragraph_level = Some(match dir {
+                        Direction::Rtl => Level::rtl(),
+                        _ => Level::ltr(),
+                    });
+                } else {
+                    paragraph_level = None;
+                }
+            }
             reorder_paragraph(
                 &mut self.lines[start..end],
-                base_level,
+                paragraph_level,
                 self.root_unicode_bidi,
                 self.root_direction,
                 &shaper,
                 &font_context,
             );
+        }
+    }
+
+    fn collect_text_from_item(item: &InlineItem, out: &mut String) {
+        const OBJECT_REPLACEMENT: char = '\u{FFFC}';
+        match item {
+            InlineItem::Text(t) => out.push_str(&t.text),
+            InlineItem::Tab(_) => out.push('\t'),
+            InlineItem::InlineBox(b) => {
+                for child in &b.children {
+                    Self::collect_text_from_item(child, out);
+                }
+            }
+            InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {
+                out.push(OBJECT_REPLACEMENT);
+            }
+        }
+    }
+
+    fn paragraph_direction_from_lines(lines: &[Line]) -> Option<Direction> {
+        let mut logical = String::new();
+        for line in lines {
+            for positioned in &line.items {
+                Self::collect_text_from_item(&positioned.item, &mut logical);
+            }
+        }
+        if logical.is_empty() {
+            return None;
+        }
+        let bidi = unicode_bidi::BidiInfo::new(&logical, None);
+        bidi.paragraphs.first().map(|p| {
+            if p.level.is_rtl() {
+                Direction::Rtl
+            } else {
+                Direction::Ltr
+            }
+        })
+    }
+
+    fn paragraph_all_plaintext(lines: &[Line]) -> bool {
+        let mut saw_plaintext = false;
+        let all_plain = lines.iter().all(|line| {
+            line.items.iter().all(|p| Self::item_allows_plaintext(&p.item, &mut saw_plaintext))
+        });
+        all_plain && saw_plaintext
+    }
+
+    fn item_allows_plaintext(item: &InlineItem, saw_plaintext: &mut bool) -> bool {
+        use crate::style::types::UnicodeBidi;
+        match item {
+            InlineItem::Text(t) => {
+                if matches!(t.style.unicode_bidi, UnicodeBidi::Plaintext) {
+                    *saw_plaintext = true;
+                    true
+                } else {
+                    false
+                }
+            }
+            InlineItem::InlineBox(b) => {
+                if matches!(b.unicode_bidi, UnicodeBidi::Plaintext) {
+                    *saw_plaintext = true;
+                    true
+                } else {
+                    b.children.iter().all(|c| Self::item_allows_plaintext(c, saw_plaintext))
+                }
+            }
+            InlineItem::Floating(f) => {
+                if matches!(f.unicode_bidi, UnicodeBidi::Plaintext) {
+                    *saw_plaintext = true;
+                    true
+                } else {
+                    false
+                }
+            }
+            InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Tab(_) => true,
         }
     }
 
@@ -1692,7 +1831,7 @@ fn reorder_paragraph(
         };
 
     // Seed root unicode-bidi context if needed.
-    if !matches!(root_unicode_bidi, UnicodeBidi::Normal) {
+    if !matches!(root_unicode_bidi, UnicodeBidi::Normal | UnicodeBidi::Plaintext) {
         let (opens, closes) = crate::layout::contexts::inline::bidi_controls(root_unicode_bidi, root_direction);
         if let Some((depth_added, closer_vec)) = push_controls(&opens, &closes, &mut current_depth, &mut logical_text) {
             active_stack.push(ActiveCtx {

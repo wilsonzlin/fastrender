@@ -2609,6 +2609,74 @@ mod tests {
     }
 
     #[test]
+    fn marker_styles_keep_text_decorations_and_shadows() {
+        use crate::css::types::TextShadow;
+        use crate::style::color::Rgba;
+        use crate::style::counters::CounterManager;
+        use crate::style::types::{
+            ListStyleType, TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
+        };
+        use crate::style::values::Length;
+
+        let mut li_style = ComputedStyle::default();
+        li_style.display = Display::ListItem;
+        li_style.list_style_type = ListStyleType::Decimal;
+
+        let mut marker_styles = ComputedStyle::default();
+        marker_styles.display = Display::Inline;
+        marker_styles.list_style_type = ListStyleType::Decimal;
+        marker_styles.text_decoration.lines = TextDecorationLine::UNDERLINE;
+        marker_styles.text_decoration.style = TextDecorationStyle::Wavy;
+        marker_styles.text_decoration.color = Some(Rgba::BLUE);
+        marker_styles.text_decoration.thickness = TextDecorationThickness::Length(Length::px(2.0));
+        marker_styles.text_shadow.push(TextShadow {
+            offset_x: Length::px(1.0),
+            offset_y: Length::px(2.0),
+            blur_radius: Length::px(3.0),
+            color: Some(Rgba::GREEN),
+        });
+        marker_styles.padding_left = Length::px(8.0);
+        marker_styles.margin_left = Some(Length::px(4.0));
+        marker_styles.background_color = Rgba::rgb(255, 0, 255);
+
+        let styled = StyledNode {
+            node: dom::DomNode {
+                node_type: dom::DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            },
+            styles: li_style,
+            before_styles: None,
+            after_styles: None,
+            marker_styles: Some(marker_styles),
+            children: vec![],
+        };
+
+        let marker_box =
+            create_marker_box(&styled, &CounterManager::default()).expect("marker should be generated");
+        let style = marker_box.style.as_ref();
+        assert!(style.text_decoration.lines.contains(TextDecorationLine::UNDERLINE));
+        assert_eq!(style.text_decoration.style, TextDecorationStyle::Wavy);
+        assert_eq!(style.text_decoration.color, Some(Rgba::BLUE));
+        assert_eq!(
+            style.text_decoration.thickness,
+            TextDecorationThickness::Length(Length::px(2.0))
+        );
+        assert_eq!(style.text_shadow.len(), 1);
+        assert_eq!(style.text_shadow[0].offset_x, Length::px(1.0));
+        assert_eq!(style.text_shadow[0].offset_y, Length::px(2.0));
+        assert_eq!(style.text_shadow[0].blur_radius, Length::px(3.0));
+        assert_eq!(style.text_shadow[0].color, Some(Rgba::GREEN));
+
+        // Layout-affecting properties are reset even when authored on ::marker.
+        assert!(style.padding_left.is_zero());
+        assert!(style.margin_left.unwrap().is_zero());
+        assert_eq!(style.background_color, Rgba::TRANSPARENT);
+    }
+
+    #[test]
     fn test_validate_box_tree_valid() {
         let style = default_style();
 

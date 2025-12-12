@@ -461,7 +461,8 @@ pub struct TextShadow {
     pub offset_x: Length,
     pub offset_y: Length,
     pub blur_radius: Length,
-    pub color: Rgba,
+    /// None represents currentColor.
+    pub color: Option<Rgba>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

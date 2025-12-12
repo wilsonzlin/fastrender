@@ -3,7 +3,7 @@
 //! Parses individual CSS property values.
 
 use super::types::{
-    GradientPosition, GradientPositionComponent, PropertyValue, RadialGradientShape, RadialGradientSize,
+    GradientPosition, GradientPositionComponent, PropertyValue, RadialGradientShape, RadialGradientSize, TextShadow,
 };
 use crate::style::color::{Color, Rgba};
 use crate::style::values::{Length, LengthUnit};
@@ -107,6 +107,13 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
     let is_background_longhand = property.starts_with("background-") || property == "background";
     let allow_commas = is_background_longhand || property == "cursor";
 
+    if property == "text-shadow" {
+        if let Some(shadows) = parse_text_shadow_list(value_str) {
+            return Some(PropertyValue::TextShadow(shadows));
+        }
+        return None;
+    }
+
     // Try to parse as color first for color properties (exclude shorthand background so we can parse layers)
     if matches!(
         property,
@@ -205,6 +212,82 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
 
     // Default to keyword
     Some(PropertyValue::Keyword(value_str.to_string()))
+}
+
+fn parse_text_shadow_list(value_str: &str) -> Option<Vec<TextShadow>> {
+    if value_str.eq_ignore_ascii_case("none") {
+        return Some(Vec::new());
+    }
+
+    let layers = split_shadow_layers(value_str)?;
+    let mut shadows = Vec::new();
+    for layer in layers {
+        let mut color: Option<Option<Rgba>> = None;
+        let mut lengths = Vec::new();
+        for token in layer {
+            if color.is_none() {
+                if let Some(parsed_color) = parse_shadow_color(&token) {
+                    color = Some(parsed_color);
+                    continue;
+                }
+            }
+
+            if let Some(len) = parse_length(&token) {
+                lengths.push(len);
+                continue;
+            }
+
+            return None;
+        }
+
+        if lengths.len() < 2 || lengths.len() > 3 {
+            return None;
+        }
+
+        let blur = if lengths.len() == 3 { lengths[2] } else { Length::px(0.0) };
+        shadows.push(TextShadow {
+            offset_x: lengths[0],
+            offset_y: lengths[1],
+            blur_radius: blur,
+            color: color.flatten(),
+        });
+    }
+
+    Some(shadows)
+}
+
+fn split_shadow_layers(value_str: &str) -> Option<Vec<Vec<String>>> {
+    let tokens = tokenize_property_value(value_str, true);
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let mut layers = Vec::new();
+    let mut current = Vec::new();
+    for token in tokens {
+        if token == "," {
+            if current.is_empty() {
+                return None;
+            }
+            layers.push(current);
+            current = Vec::new();
+        } else {
+            current.push(token);
+        }
+    }
+
+    if current.is_empty() {
+        return None;
+    }
+    layers.push(current);
+    Some(layers)
+}
+
+fn parse_shadow_color(token: &str) -> Option<Option<Rgba>> {
+    Color::parse(token).ok().map(|color| match color {
+        Color::CurrentColor => None,
+        other => Some(other.to_rgba(Rgba::BLACK)),
+    })
 }
 
 fn parse_simple_value(value_str: &str) -> Option<PropertyValue> {

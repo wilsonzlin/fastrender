@@ -5889,7 +5889,7 @@ mod tests {
             offset_x: Length::px(4.0),
             offset_y: Length::px(0.0),
             blur_radius: Length::px(0.0),
-            color: Rgba::from_rgba8(255, 0, 0, 255),
+            color: Some(Rgba::from_rgba8(255, 0, 0, 255)),
         }];
         let style = Arc::new(style);
 

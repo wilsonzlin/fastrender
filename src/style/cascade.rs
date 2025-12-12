@@ -1895,7 +1895,11 @@ mod tests {
         assert!(marker.margin_left.unwrap().is_zero());
         assert_eq!(marker.background_color, Rgba::TRANSPARENT);
         assert_eq!(marker.text_transform, crate::style::types::TextTransform::none());
-        assert!(marker.text_decoration.lines == crate::style::types::TextDecorationLine::NONE);
+        assert!(marker
+            .text_decoration
+            .lines
+            .contains(crate::style::types::TextDecorationLine::UNDERLINE));
+        assert_eq!(marker.applied_text_decorations.len(), 1);
         assert!(matches!(marker.text_align, crate::style::types::TextAlign::Start));
         assert_eq!(marker.text_indent, crate::style::types::TextIndent::default());
         assert!(matches!(marker.float, Float::None));
@@ -2154,12 +2158,19 @@ mod tests {
         let marker = li.marker_styles.as_ref().expect("marker styles");
 
         assert!(
-            marker.applied_text_decorations.is_empty(),
-            "non-inherited text decorations should not be applied to ::marker"
+            marker.text_decoration
+                .lines
+                .contains(crate::style::types::TextDecorationLine::UNDERLINE),
+            "authored text decorations should apply to ::marker"
         );
         assert!(
-            marker.text_shadow.is_empty(),
-            "text-shadow should not apply to ::marker"
+            marker.applied_text_decorations.len() == 1,
+            "resolved text decorations should be captured for ::marker"
+        );
+        assert_eq!(
+            marker.text_shadow.len(),
+            1,
+            "text-shadow should apply to ::marker"
         );
     }
 
@@ -2870,7 +2881,6 @@ pub(crate) fn reset_marker_box_properties(styles: &mut ComputedStyle) {
     styles.object_position = defaults.object_position.clone();
 
     styles.box_shadow.clear();
-    styles.text_shadow.clear();
     styles.filter.clear();
     styles.backdrop_filter.clear();
     styles.mix_blend_mode = defaults.mix_blend_mode;
@@ -2921,6 +2931,15 @@ fn marker_allows_property(property: &str) -> bool {
             | "text-emphasis-style"
             | "text-emphasis-color"
             | "text-emphasis-position"
+            | "text-decoration"
+            | "text-decoration-line"
+            | "text-decoration-style"
+            | "text-decoration-color"
+            | "text-decoration-thickness"
+            | "text-decoration-skip-ink"
+            | "text-underline-offset"
+            | "text-underline-position"
+            | "text-shadow"
             | "line-break"
             | "word-break"
             | "overflow-wrap"

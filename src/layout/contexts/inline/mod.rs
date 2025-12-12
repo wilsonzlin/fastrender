@@ -443,28 +443,34 @@ impl InlineFormattingContext {
                         positioned_children,
                         bidi_stack,
                     )?;
-                    bidi_stack.pop();
-                    let fallback_metrics = self.compute_strut_metrics(&child.style);
-                    let metrics = compute_inline_box_metrics(
-                        &child_items,
-                        content_offset_y,
-                        padding_bottom + border_bottom,
-                        fallback_metrics,
-                    );
+            bidi_stack.pop();
+            let fallback_metrics = self.compute_strut_metrics(&child.style);
+            let metrics = compute_inline_box_metrics(
+                &child_items,
+                content_offset_y,
+                padding_bottom + border_bottom,
+                fallback_metrics,
+            );
 
-                    let mut inline_box = InlineBoxItem::new(
-                        start_edge,
-                        end_edge,
-                        content_offset_y,
-                        metrics,
-                        child.style.clone(),
-                        0,
-                        child.style.direction,
-                        child.style.unicode_bidi,
-                    );
-                    inline_box.vertical_align = self.convert_vertical_align(
-                        child.style.vertical_align,
-                        child.style.font_size,
+            let mut inline_box = InlineBoxItem::new(
+                start_edge,
+                end_edge,
+                content_offset_y,
+                metrics,
+                child.style.clone(),
+                0,
+                if matches!(child.style.unicode_bidi, UnicodeBidi::Plaintext) {
+                    let mut logical = String::new();
+                    collect_logical_text_for_direction(child, &mut logical);
+                    first_strong_direction(&logical).unwrap_or(child.style.direction)
+                } else {
+                    child.style.direction
+                },
+                child.style.unicode_bidi,
+            );
+            inline_box.vertical_align = self.convert_vertical_align(
+                child.style.vertical_align,
+                child.style.font_size,
                         metrics.line_height,
                     );
                     for item in child_items {
@@ -948,6 +954,13 @@ impl InlineFormattingContext {
             ..
         } = normalized;
 
+        let mut effective_base_direction = base_direction;
+        if matches!(box_node.style.unicode_bidi, UnicodeBidi::Plaintext) {
+            if let Some(strong) = first_strong_direction(&normalized_text) {
+                effective_base_direction = strong;
+            }
+        }
+
         if !normalized_text.contains('\t') {
             if normalized_text.is_empty() {
                 return Ok(Vec::new());
@@ -958,7 +971,7 @@ impl InlineFormattingContext {
                 forced_breaks,
                 allow_soft_wrap,
                 is_marker,
-                base_direction,
+                effective_base_direction,
                 bidi_stack,
             );
         }
@@ -1151,6 +1164,13 @@ impl InlineFormattingContext {
         base_direction: crate::style::types::Direction,
         bidi_stack: &[(UnicodeBidi, Direction)],
     ) -> Result<Vec<InlineItem>, LayoutError> {
+        let mut effective_base = base_direction;
+        if matches!(style.unicode_bidi, UnicodeBidi::Plaintext) {
+            if let Some(strong) = first_strong_direction(text) {
+                effective_base = strong;
+            }
+        }
+
         if !is_vertical_writing_mode(style.writing_mode)
             || matches!(style.text_combine_upright, TextCombineUpright::None)
         {
@@ -1160,7 +1180,7 @@ impl InlineFormattingContext {
                 forced_breaks,
                 allow_soft_wrap,
                 is_marker,
-                base_direction,
+                effective_base,
                 bidi_stack,
             )?;
             return Ok(vec![InlineItem::Text(item)]);
@@ -2571,6 +2591,18 @@ fn apply_text_transform(text: &str, transform: TextTransform, white_space: White
     out
 }
 
+fn first_strong_direction(text: &str) -> Option<crate::style::types::Direction> {
+    use unicode_bidi::BidiClass;
+    for ch in text.chars() {
+        match unicode_bidi::bidi_class(ch) {
+            BidiClass::L => return Some(crate::style::types::Direction::Ltr),
+            BidiClass::R | BidiClass::AL => return Some(crate::style::types::Direction::Rtl),
+            _ => {}
+        }
+    }
+    None
+}
+
 fn map_to_full_width(ch: char) -> Option<char> {
     const FULL_WIDTH_TABLE: &[(u32, u32)] = &[
         (0x0020, 0x3000),
@@ -3694,15 +3726,14 @@ impl InlineFormattingContext {
             if pending.is_empty() {
                 return None;
             }
-            let paragraph_direction = match style.unicode_bidi {
-                crate::style::types::UnicodeBidi::Plaintext => {
-                    determine_paragraph_direction(pending).unwrap_or(base_direction)
-                }
-                _ => base_direction,
+            let paragraph_direction = base_direction;
+            let paragraph_base_level = match style.unicode_bidi {
+                crate::style::types::UnicodeBidi::Plaintext => None,
+                _ => match paragraph_direction {
+                    crate::style::types::Direction::Rtl => Some(unicode_bidi::Level::rtl()),
+                    _ => Some(unicode_bidi::Level::ltr()),
+                },
             };
-            if matches!(style.unicode_bidi, crate::style::types::UnicodeBidi::Plaintext) {
-                apply_plaintext_paragraph_direction(pending, paragraph_direction);
-            }
             let start_idx = lines_out.len();
             let seg_lines = self.layout_segment_lines(
                 pending,
@@ -3710,10 +3741,7 @@ impl InlineFormattingContext {
                 first_line_width,
                 subsequent_line_width,
                 &strut_metrics,
-                match paragraph_direction {
-                    crate::style::types::Direction::Rtl => Some(unicode_bidi::Level::rtl()),
-                    _ => Some(unicode_bidi::Level::ltr()),
-                },
+                paragraph_base_level,
                 paragraph_direction,
                 style.unicode_bidi,
                 ctx_ref,
@@ -4492,9 +4520,8 @@ pub(crate) fn bidi_controls(unicode_bidi: UnicodeBidi, direction: Direction) -> 
             ];
             (open, vec!['\u{202c}', '\u{2069}'])
         }
-        // Plaintext acts like a first-strong isolate: wrap in FSI/PDI so the isolate picks
-        // its own base direction from content while staying isolated from surrounding text.
-        UnicodeBidi::Plaintext => (vec!['\u{2068}'], vec!['\u{2069}']),
+        // Plaintext relies on first-strong base direction and does not inject additional controls.
+        UnicodeBidi::Plaintext => (Vec::new(), Vec::new()),
     }
 }
 
@@ -4545,12 +4572,17 @@ fn strip_bidi_wrapper_runs(
             continue;
         }
 
+        let original_start = run.start;
+        let new_start = original_start.saturating_sub(prefix_len);
         let mut glyphs = Vec::new();
-        for mut glyph in run.glyphs {
-            if glyph.cluster < content_start as u32 || glyph.cluster >= content_end as u32 {
+        for glyph in run.glyphs {
+            let global_cluster = original_start + glyph.cluster as usize;
+            if global_cluster < content_start || global_cluster >= content_end {
                 continue;
             }
-            glyph.cluster -= prefix_len as u32;
+            let adjusted = global_cluster.saturating_sub(prefix_len).saturating_sub(new_start);
+            let mut glyph = glyph;
+            glyph.cluster = adjusted as u32;
             glyphs.push(glyph);
         }
 
@@ -4558,7 +4590,7 @@ fn strip_bidi_wrapper_runs(
             continue;
         }
 
-        run.start = run.start.saturating_sub(prefix_len);
+        run.start = new_start;
         run.end = run.end.min(content_end).saturating_sub(prefix_len);
         run.text = content_text.to_string();
         run.advance = glyphs.iter().map(|g| g.x_advance).sum();
@@ -4569,6 +4601,7 @@ fn strip_bidi_wrapper_runs(
     filtered
 }
 
+#[allow(dead_code)]
 pub(crate) fn apply_plaintext_paragraph_direction(items: &mut [InlineItem], direction: crate::style::types::Direction) {
     for item in items {
         match item {
@@ -5725,6 +5758,101 @@ mod tests {
         assert!(
             !texts.iter().skip(1).any(|t| t.contains('…')),
             "ellipsis should only appear on the inline-start edge"
+        );
+    }
+
+    #[test]
+    fn unicode_bidi_plaintext_uses_per_paragraph_base_direction() {
+        let mut container_style = ComputedStyle::default();
+        container_style.unicode_bidi = crate::style::types::UnicodeBidi::Plaintext;
+        container_style.direction = crate::style::types::Direction::Ltr;
+        container_style.white_space = WhiteSpace::Pre;
+        let container_style = Arc::new(container_style);
+        let mut text_style = ComputedStyle::default();
+        text_style.unicode_bidi = crate::style::types::UnicodeBidi::Plaintext;
+        text_style.direction = crate::style::types::Direction::Ltr;
+        text_style.white_space = WhiteSpace::Pre;
+        let text_style = Arc::new(text_style);
+        let root = BoxNode::new_block(
+            container_style.clone(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(text_style.clone(), "ABC\nאבג".to_string())],
+        );
+        let constraints = LayoutConstraints::definite_width(200.0);
+        let ifc = InlineFormattingContext::new();
+
+        let debug_item = ifc
+            .create_text_item(&BoxNode::new_text(text_style.clone(), "ABC\nאבג".to_string()), "ABC\nאבג")
+            .expect("text item");
+        assert!(
+            debug_item.break_opportunities.iter().any(|b| b.is_mandatory()),
+            "plaintext newline should produce a mandatory break opportunity"
+        );
+        assert!(
+            debug_item
+                .break_opportunities
+                .iter()
+                .any(|b| b.is_mandatory() && b.byte_offset == 3),
+            "mandatory break should sit at the newline boundary"
+        );
+
+        let inline_items = ifc
+            .collect_inline_items(&root, 200.0, Some(200.0))
+            .expect("collect items");
+        assert!(
+            inline_items.iter().any(|item| matches!(item, InlineItem::Text(t) if t.break_opportunities.iter().any(|b| b.is_mandatory()))),
+            "mandatory breaks should survive inline item collection"
+        );
+
+        let strut = ifc.compute_strut_metrics(&container_style);
+        let lines = ifc.layout_segment_lines(
+            &inline_items,
+            true,
+            200.0,
+            200.0,
+            &strut,
+            None,
+            crate::style::types::Direction::Ltr,
+            crate::style::types::UnicodeBidi::Plaintext,
+            None,
+            0.0,
+            0.0,
+            0.0,
+        );
+        assert_eq!(lines.len(), 2, "mandatory breaks should split lines");
+        assert_eq!(lines[0].resolved_direction, crate::style::types::Direction::Ltr);
+        assert_eq!(lines[1].resolved_direction, crate::style::types::Direction::Rtl);
+
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+        fn collect_lines<'a>(node: &'a FragmentNode, out: &mut Vec<&'a FragmentNode>) {
+            if matches!(node.content, FragmentContent::Line { .. }) {
+                out.push(node);
+            }
+            for child in &node.children {
+                collect_lines(child, out);
+            }
+        }
+
+        let mut line_fragments = Vec::new();
+        collect_lines(&fragment, &mut line_fragments);
+        assert_eq!(line_fragments.len(), 2);
+
+        let _first_text = line_fragments[0]
+            .children
+            .iter()
+            .find(|c| matches!(c.content, FragmentContent::Text { .. }))
+            .expect("first line text");
+        let second_text = line_fragments[1]
+            .children
+            .iter()
+            .find(|c| matches!(c.content, FragmentContent::Text { .. }))
+            .expect("second line text");
+
+        let expected_start = line_fragments[1].bounds.width() - second_text.bounds.width();
+        assert!(
+            (second_text.bounds.x() - expected_start).abs() < 1.0,
+            "second paragraph should align toward the inline end when its first strong character is RTL"
         );
     }
 
