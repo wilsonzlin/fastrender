@@ -405,6 +405,14 @@ impl AbsoluteLayout {
 
         width = width.clamp(min_width, max_width);
 
+        // If the leading edge was auto-resolved from the opposite inset, keep the specified inset
+        // satisfied after clamping width (CSS 2.1 constraint equation).
+        if left.is_none() {
+            if let Some(r) = right {
+                x = cb_width - r - margin_right - border_right - padding_right - width;
+            }
+        }
+
         // Apply auto margin resolution only when both edges participate in the constraint (CSS 2.1 §10.3.7).
         if left.is_some() && right.is_some() && specified_width.is_some() {
             let left_edge = x - (margin_left + border_left + padding_left);
@@ -502,6 +510,7 @@ impl AbsoluteLayout {
             // Only top specified - shrink-to-fit
             (Some(t), None, None) => {
                 let available = cb_height - t - margin_top - margin_bottom - total_vertical_spacing;
+                // For an unspecified opposite inset, CSS 2.1 treats bottom as auto; shrink-to-fit against the available CB height.
                 let height = shrink(available);
                 let y = t + margin_top + border_top + padding_top;
                 (y, height)
@@ -521,16 +530,23 @@ impl AbsoluteLayout {
                 (y, h)
             }
 
-            // None specified - shrink against containing height
+            // None specified - use preferred block size (shrink-to-fit without constraints)
             (None, None, None) => {
-                let available = cb_height - margin_top - margin_bottom - total_vertical_spacing;
-                let height = shrink(available);
+                let height = preferred;
                 let y = static_y + margin_top + border_top + padding_top;
                 (y, height)
             }
         };
 
         height = height.clamp(min_height, max_height);
+
+        // If the top edge was auto-resolved from the bottom inset, keep the authored bottom inset
+        // satisfied after clamping height (CSS 2.1 constraint equation).
+        if top.is_none() {
+            if let Some(b) = bottom {
+                y = cb_height - b - margin_bottom - border_bottom - padding_bottom - height;
+            }
+        }
 
         if top.is_some() && bottom.is_some() && specified_height.is_some() {
             let top_edge = y - (margin_top + border_top + padding_top);
@@ -850,6 +866,59 @@ mod tests {
         assert!(
             (result.position.y - 20.0).abs() < 0.001,
             "top inset should remain at 20"
+        );
+    }
+
+    #[test]
+    fn layout_absolute_auto_height_respects_min_height_in_shrink_case() {
+        let layout = AbsoluteLayout::new();
+
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.top = LengthOrAuto::px(10.0);
+        style.height = LengthOrAuto::Auto;
+        style.min_height = Length::px(150.0);
+
+        let mut input = AbsoluteLayoutInput::new(style, Size::new(0.0, 0.0), Point::ZERO);
+        input.preferred_min_block_size = Some(20.0);
+        input.preferred_block_size = Some(40.0); // would shrink to 190 without min-height clamp
+        let cb = create_containing_block(200.0, 200.0);
+
+        let result = layout.layout_absolute(&input, &cb).unwrap();
+        assert!(
+            (result.size.height - 150.0).abs() < 0.001,
+            "min-height should clamp auto height when shrink-to-fit yields smaller"
+        );
+        assert!(
+            (result.position.y - 10.0).abs() < 0.001,
+            "top inset should be preserved even when min-height expands the box"
+        );
+    }
+
+    #[test]
+    fn layout_absolute_auto_height_respects_max_height_in_shrink_case() {
+        let layout = AbsoluteLayout::new();
+
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.bottom = LengthOrAuto::px(10.0);
+        style.height = LengthOrAuto::Auto;
+        style.max_height = Length::px(60.0);
+        style.border_width = crate::geometry::EdgeOffsets::ZERO;
+
+        let mut input = AbsoluteLayoutInput::new(style, Size::new(0.0, 0.0), Point::ZERO);
+        input.preferred_min_block_size = Some(50.0);
+        input.preferred_block_size = Some(120.0); // would shrink to 190 without max-height clamp
+        let cb = create_containing_block(200.0, 200.0);
+
+        let result = layout.layout_absolute(&input, &cb).unwrap();
+        assert!(
+            (result.size.height - 60.0).abs() < 0.001,
+            "max-height should clamp auto height when shrink-to-fit exceeds cap"
+        );
+        assert!(
+            (result.position.y - (200.0 - 10.0 - 60.0)).abs() < 0.001,
+            "bottom inset should position the clamped box"
         );
     }
 
