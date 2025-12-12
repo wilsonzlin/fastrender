@@ -4837,7 +4837,7 @@ fn filter_outset(filters: &[ResolvedFilter]) -> (f32, f32, f32, f32) {
                 spread,
                 ..
             } => {
-                let delta = blur_radius.abs() * 3.0 + spread.max(0.0);
+                let delta = (blur_radius.abs() * 3.0 + spread).max(0.0);
                 left = left.max(delta - offset_x.min(0.0));
                 right = right.max(delta + offset_x.max(0.0));
                 top = top.max(delta - offset_y.min(0.0));
@@ -6536,6 +6536,31 @@ mod tests {
         style.filter = vec![FilterFunction::Blur(Length::px(-2.0))];
         let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
         assert!(filters.is_empty(), "negative blur should drop the filter");
+    }
+
+    #[test]
+    fn drop_shadow_negative_spread_reduces_outset() {
+        let filters = vec![ResolvedFilter::DropShadow {
+            offset_x: 0.0,
+            offset_y: 0.0,
+            blur_radius: 4.0,
+            spread: -2.0,
+            color: Rgba::BLACK,
+        }];
+        let (l, t, r, b) = filter_outset(&filters);
+        let with_zero_spread = vec![ResolvedFilter::DropShadow {
+            offset_x: 0.0,
+            offset_y: 0.0,
+            blur_radius: 4.0,
+            spread: 0.0,
+            color: Rgba::BLACK,
+        }];
+        let (l0, t0, r0, b0) = filter_outset(&with_zero_spread);
+        assert!(
+            (l - 10.0).abs() < 0.01 && (t - 10.0).abs() < 0.01 && (r - 10.0).abs() < 0.01 && (b - 10.0).abs() < 0.01,
+            "negative spread should reduce blur outset (got {l},{t},{r},{b})"
+        );
+        assert!(l < l0 && t < t0 && r < r0 && b < b0, "reduced spread should shrink outsets");
     }
 
     #[test]
