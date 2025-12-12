@@ -7741,6 +7741,8 @@ fn parse_list_style_type(value: &PropertyValue) -> Option<ListStyleType> {
             "lower-armenian" => Some(ListStyleType::LowerArmenian),
             "georgian" => Some(ListStyleType::Georgian),
             "lower-greek" => Some(ListStyleType::LowerGreek),
+            "disclosure-open" => Some(ListStyleType::DisclosureOpen),
+            "disclosure-closed" => Some(ListStyleType::DisclosureClosed),
             "none" => Some(ListStyleType::None),
             _ => None,
         },
@@ -9694,6 +9696,24 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.list_style_type, ListStyleType::Georgian);
+
+        let decl = Declaration {
+            property: "list-style-type".to_string(),
+            value: PropertyValue::Keyword("disclosure-open".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert_eq!(style.list_style_type, ListStyleType::DisclosureOpen);
+
+        let decl = Declaration {
+            property: "list-style-type".to_string(),
+            value: PropertyValue::Keyword("disclosure-closed".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert_eq!(style.list_style_type, ListStyleType::DisclosureClosed);
     }
 
     #[test]

@@ -3497,6 +3497,52 @@ mod tests {
     }
 
     #[test]
+    fn markers_support_disclosure_styles() {
+        let generator = BoxGenerator::new();
+
+        let mut open_style = ComputedStyle::default();
+        open_style.display = Display::ListItem;
+        open_style.list_style_type = ListStyleType::DisclosureOpen;
+        let open_style = Arc::new(open_style);
+
+        let mut closed_style = ComputedStyle::default();
+        closed_style.display = Display::ListItem;
+        closed_style.list_style_type = ListStyleType::DisclosureClosed;
+        let closed_style = Arc::new(closed_style);
+
+        let open = DOMNode::new_element(
+            "li",
+            open_style.clone(),
+            vec![DOMNode::new_text("Open".to_string(), open_style.clone())],
+        );
+        let closed = DOMNode::new_element(
+            "li",
+            closed_style.clone(),
+            vec![DOMNode::new_text("Closed".to_string(), closed_style.clone())],
+        );
+        let ul = DOMNode::new_element("ul", style_with_display(Display::Block), vec![open, closed]);
+
+        let tree = generator.generate(&ul).unwrap();
+        let open_marker = match &tree.root.children[0].children[0].box_type {
+            BoxType::Marker(marker) => match &marker.content {
+                MarkerContent::Text(t) => t.clone(),
+                other => panic!("expected text marker, got {:?}", other),
+            },
+            other => panic!("expected marker, got {:?}", other),
+        };
+        let closed_marker = match &tree.root.children[1].children[0].box_type {
+            BoxType::Marker(marker) => match &marker.content {
+                MarkerContent::Text(t) => t.clone(),
+                other => panic!("expected text marker, got {:?}", other),
+            },
+            other => panic!("expected marker, got {:?}", other),
+        };
+
+        assert_eq!(open_marker, "▾ ");
+        assert_eq!(closed_marker, "▸ ");
+    }
+
+    #[test]
     fn list_counters_respect_resets_and_custom_increments() {
         let generator = BoxGenerator::new();
 
@@ -3711,6 +3757,8 @@ fn list_marker_text(list_style: ListStyleType, counters: &CounterManager) -> Str
         ListStyleType::LowerArmenian => counters.format("list-item", CounterStyle::LowerArmenian),
         ListStyleType::Georgian => counters.format("list-item", CounterStyle::Georgian),
         ListStyleType::LowerGreek => counters.format("list-item", CounterStyle::LowerGreek),
+        ListStyleType::DisclosureOpen => "▾".to_string(),
+        ListStyleType::DisclosureClosed => "▸".to_string(),
     };
 
     if core.is_empty() {

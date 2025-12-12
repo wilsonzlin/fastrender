@@ -1593,6 +1593,8 @@ pub enum ListStyleType {
     LowerArmenian,
     Georgian,
     LowerGreek,
+    DisclosureOpen,
+    DisclosureClosed,
     None,
 }
 
