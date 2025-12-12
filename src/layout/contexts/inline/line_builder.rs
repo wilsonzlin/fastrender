@@ -38,11 +38,10 @@ use crate::style::types::{Direction, ListStylePosition, OverflowWrap, UnicodeBid
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::text::line_break::{BreakOpportunity, BreakType};
-use crate::layout::contexts::inline::bidi_controls;
 use crate::text::pipeline::{ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use unicode_bidi::{BidiInfo, Level};
 
@@ -1744,9 +1743,24 @@ fn reorder_paragraph(
     shaper: &ShapingPipeline,
     font_context: &FontContext,
 ) {
-    let max_depth = unicode_bidi::level::MAX_EXPLICIT_DEPTH as usize;
     if lines.is_empty() {
         return;
+    }
+
+    #[derive(Clone, Copy)]
+    struct ByteMapping {
+        leaf_index: usize,
+        start: usize,
+        end: usize,
+        isolate_group: Option<usize>,
+    }
+
+    #[derive(Clone, Copy)]
+    struct VisualSegment {
+        leaf_index: usize,
+        start: usize,
+        end: usize,
+        level: Level,
     }
 
     let mut box_counter = 0usize;
@@ -1759,209 +1773,245 @@ fn reorder_paragraph(
         line_leaves.push(leaves);
     }
 
-    #[derive(Clone)]
-    struct ActiveCtx {
-        id: usize,
-        closers: Vec<char>,
-        depth_added: usize,
+    let paragraph_level = if let Some(level) = base_level {
+        level
+    } else {
+        let mut text = String::new();
+        for leaves in &line_leaves {
+            for leaf in leaves {
+                match &leaf.item {
+                    InlineItem::Text(t) => text.push_str(&t.text),
+                    InlineItem::Tab(_) => text.push('\t'),
+                    _ => text.push('\u{FFFC}'),
+                }
+            }
+        }
+
+        if text.is_empty() {
+            Level::ltr()
+        } else {
+            let info = BidiInfo::new(&text, None);
+            info.paragraphs.first().map(|p| p.level).unwrap_or_else(Level::ltr)
+        }
+    };
+
+    let paragraph_direction = if paragraph_level.is_rtl() {
+        Direction::Rtl
+    } else {
+        Direction::Ltr
+    };
+    for line in lines.iter_mut() {
+        line.resolved_direction = paragraph_direction;
     }
 
-    let mut logical_text = String::new();
+    let base_dir = paragraph_direction;
     let mut paragraph_leaves: Vec<ParagraphLeaf> = Vec::new();
+    let mut byte_map: Vec<ByteMapping> = Vec::new();
     let mut line_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(lines.len());
-    let mut active_stack: Vec<ActiveCtx> = Vec::new();
-    let mut current_depth: usize = 0;
-    let mut global_idx = 0usize;
+    let mut global_offset = 0usize;
+    let mut paragraph_text = String::new();
 
-    let push_controls =
-        |opens: &[char], closes: &[char], depth: &mut usize, buffer: &mut String| -> Option<(usize, Vec<char>)> {
-            if opens.is_empty() {
-                return None;
-            }
-            // UAX#9 counts explicit depth per embedding/isolate context, not per control codepoint.
-            let added = 1usize;
-            if *depth + added > max_depth {
-                return None;
-            }
-            for ch in opens {
-                buffer.push(*ch);
-            }
-            *depth += added;
-            Some((added, closes.to_vec()))
-        };
-
-    // Seed root unicode-bidi context if needed.
-    if !matches!(root_unicode_bidi, UnicodeBidi::Normal | UnicodeBidi::Plaintext) {
-        let (opens, closes) = crate::layout::contexts::inline::bidi_controls(root_unicode_bidi, root_direction);
-        if let Some((depth_added, closer_vec)) = push_controls(&opens, &closes, &mut current_depth, &mut logical_text) {
-            active_stack.push(ActiveCtx {
-                id: usize::MAX,
-                closers: closer_vec,
-                depth_added,
-            });
-        }
-    }
-
-    for (line_idx, leaves) in line_leaves.iter().enumerate() {
-        let line_start = logical_text.len();
+    for (_line_idx, leaves) in line_leaves.into_iter().enumerate() {
+        let line_start = global_offset;
         for leaf in leaves {
-            // Find common prefix with previous stack
-            let shared = active_stack
+            let mut stack: Vec<(UnicodeBidi, Direction)> = vec![(root_unicode_bidi, root_direction)];
+            stack.extend(leaf.box_stack.iter().map(|c| (c.unicode_bidi, c.direction)));
+            stack.push((leaf.item.unicode_bidi(), leaf.item.direction()));
+            let bidi_context = crate::layout::contexts::inline::explicit_bidi_context(base_dir, &stack);
+
+            let leaf_index = paragraph_leaves.len();
+            paragraph_leaves.push(ParagraphLeaf {
+                leaf: leaf.clone(),
+                bidi_context,
+            });
+
+            let isolate_group = leaf
+                .box_stack
                 .iter()
-                .zip(leaf.box_stack.iter())
-                .take_while(|(a, b)| a.id == b.id)
-                .count();
-
-            // Close contexts that are no longer shared
-            for _ in 0..active_stack.len().saturating_sub(shared) {
-                if let Some(ctx) = active_stack.pop() {
-                    for ch in ctx.closers {
-                        logical_text.push(ch);
+                .rev()
+                .find(|ctx| matches!(ctx.unicode_bidi, UnicodeBidi::Isolate | UnicodeBidi::IsolateOverride))
+                .map(|ctx| ctx.id)
+                .or_else(|| {
+                    if matches!(
+                        leaf.item.unicode_bidi(),
+                        UnicodeBidi::Isolate | UnicodeBidi::IsolateOverride
+                    ) {
+                        Some(leaf_index)
+                    } else {
+                        None
                     }
-                    current_depth = current_depth.saturating_sub(ctx.depth_added);
-                }
-            }
-
-            // Open new contexts
-            for ctx in leaf.box_stack.iter().skip(shared) {
-                let (opens, closes) = bidi_controls(ctx.unicode_bidi, ctx.direction);
-                if let Some((depth_added, closer_vec)) =
-                    push_controls(&opens, &closes, &mut current_depth, &mut logical_text)
-                {
-                    active_stack.push(ActiveCtx {
-                        id: ctx.id,
-                        closers: closer_vec,
-                        depth_added,
-                    });
-                }
-            }
-
-            // Leaf-local controls
-            let (leaf_opens, leaf_closes) = bidi_controls(leaf.item.unicode_bidi(), leaf.item.direction());
-            let (leaf_depth_added, leaf_closers) =
-                match push_controls(&leaf_opens, &leaf_closes, &mut current_depth, &mut logical_text) {
-                    Some((d, closers)) => (d, closers),
-                    None => (0, Vec::new()),
-                };
-
-            let content_start = logical_text.len();
-            match &leaf.item {
-                InlineItem::Text(t) => logical_text.push_str(&t.text),
-                InlineItem::Tab(_) => logical_text.push('\t'),
-                _ => logical_text.push('\u{FFFC}'),
-            }
-            let content_end = logical_text.len();
-
-            if leaf_depth_added > 0 {
-                for ch in leaf_closers {
-                    logical_text.push(ch);
-                }
-                current_depth = current_depth.saturating_sub(leaf_depth_added);
-            }
-
-            if content_start < content_end {
-                paragraph_leaves.push(ParagraphLeaf {
-                    id: global_idx,
-                    line_index: line_idx,
-                    logical_range: content_start..content_end,
-                    leaf: leaf.clone(),
                 });
-                global_idx += 1;
+
+            match &leaf.item {
+                InlineItem::Text(t) => {
+                    for (byte_idx, ch) in t.text.char_indices() {
+                        let end = byte_idx + ch.len_utf8();
+                        byte_map.push(ByteMapping {
+                            leaf_index,
+                            start: byte_idx,
+                            end,
+                            isolate_group,
+                        });
+                        paragraph_text.push(ch);
+                        global_offset += 1;
+                    }
+                }
+                InlineItem::Tab(_) => {
+                    byte_map.push(ByteMapping {
+                        leaf_index,
+                        start: 0,
+                        end: 0,
+                        isolate_group,
+                    });
+                    paragraph_text.push('\t');
+                    global_offset += 1;
+                }
+                InlineItem::InlineBox(_) => {}
+                _ => {
+                    byte_map.push(ByteMapping {
+                        leaf_index,
+                        start: 0,
+                        end: 0,
+                        isolate_group,
+                    });
+                    paragraph_text.push('\u{FFFC}');
+                    global_offset += 1;
+                }
             }
         }
-        line_ranges.push(line_start..logical_text.len());
+        line_ranges.push(line_start..global_offset);
     }
 
-    // Close any remaining contexts
-    while let Some(ctx) = active_stack.pop() {
-        for ch in ctx.closers {
-            logical_text.push(ch);
-        }
-    }
-
-    if logical_text.is_empty() {
+    if paragraph_text.is_empty() {
         return;
     }
 
-    let bidi = BidiInfo::new(&logical_text, base_level);
+    let bidi = unicode_bidi::BidiInfo::new(&paragraph_text, Some(paragraph_level));
+    let mut paragraph_levels: Vec<Level> = paragraph_text
+        .char_indices()
+        .map(|(idx, _)| bidi.levels.get(idx).copied().unwrap_or(paragraph_level))
+        .collect();
+    let paragraph_chars: Vec<char> = paragraph_text.chars().collect();
 
-    for (line_idx, line_range) in line_ranges.iter().enumerate() {
+    for (idx, mapping) in byte_map.iter().enumerate() {
+        if let Some(ctx) = paragraph_leaves
+            .get(mapping.leaf_index)
+            .and_then(|p| p.bidi_context)
+        {
+            if let Some(current) = paragraph_levels.get_mut(idx) {
+                if ctx.override_all || ctx.level > *current {
+                    *current = ctx.level;
+                }
+            }
+        }
+    }
+
+    for (line_idx, line_range) in line_ranges.into_iter().enumerate() {
         if line_range.is_empty() {
             continue;
         }
 
-        let para = bidi
-            .paragraphs
-            .iter()
-            .find(|p| p.range.start <= line_range.start && p.range.end >= line_range.end)
-            .unwrap_or_else(|| bidi.paragraphs.last().unwrap());
-        let para_direction = if para.level.is_rtl() {
-            Direction::Rtl
-        } else {
-            Direction::Ltr
+        let levels_slice = &paragraph_levels[line_range.clone()];
+        let index_map = unicode_bidi::BidiInfo::reorder_visual(levels_slice);
+
+        let mut segments: Vec<VisualSegment> = Vec::new();
+        let push_segment = |mapping: &ByteMapping, level: Level, segments: &mut Vec<VisualSegment>| {
+            if let Some(last) = segments.last_mut() {
+                if last.leaf_index == mapping.leaf_index && last.level == level {
+                    last.start = last.start.min(mapping.start);
+                    last.end = last.end.max(mapping.end);
+                    return;
+                }
+            }
+
+            segments.push(VisualSegment {
+                leaf_index: mapping.leaf_index,
+                start: mapping.start,
+                end: mapping.end,
+                level,
+            });
         };
-        lines[line_idx].resolved_direction = para_direction;
 
-        let (reordered_levels, runs) = bidi.visual_runs(para, line_range.clone());
-        let mut visual_fragments: Vec<BidiLeaf> = Vec::new();
-        let mut seen_non_text: HashSet<usize> = HashSet::new();
+        let mut map_iter = index_map.into_iter().peekable();
+        while let Some(visual) = map_iter.next() {
+            let global_idx = line_range.start + visual;
+            let mapping = &byte_map[global_idx];
+            let level = paragraph_levels[global_idx];
 
-        for run in runs {
-            let mut run_parts: Vec<BidiLeaf> = paragraph_leaves
-                .iter()
-                .filter(|p| {
-                    p.line_index == line_idx && p.logical_range.start < run.end && p.logical_range.end > run.start
-                })
-                .filter_map(|para_leaf| {
-                    let overlap_start = run.start.max(para_leaf.logical_range.start) - para_leaf.logical_range.start;
-                    let overlap_end = run.end.min(para_leaf.logical_range.end) - para_leaf.logical_range.start;
+            if let Some(group) = mapping.isolate_group {
+                let mut grouped: Vec<(usize, Level, &ByteMapping)> = vec![(global_idx, level, mapping)];
+                while let Some(&next) = map_iter.peek() {
+                    let next_global = line_range.start + next;
+                    if byte_map[next_global].isolate_group == Some(group) {
+                        map_iter.next();
+                        grouped.push((next_global, paragraph_levels[next_global], &byte_map[next_global]));
+                    } else {
+                        break;
+                    }
+                }
 
-                    let base_dir = base_level
-                        .map(|l| if l.is_rtl() { Direction::Rtl } else { Direction::Ltr })
-                        .unwrap_or(root_direction);
-                    let bidi_context = {
-                        let mut stack: Vec<(UnicodeBidi, Direction)> =
-                            vec![(root_unicode_bidi, root_direction)];
-                        stack.extend(para_leaf.leaf.box_stack.iter().map(|c| (c.unicode_bidi, c.direction)));
-                        stack.push((para_leaf.leaf.item.unicode_bidi(), para_leaf.leaf.item.direction()));
-                        crate::layout::contexts::inline::explicit_bidi_context(base_dir, &stack)
-                    };
-
-                    match &para_leaf.leaf.item {
-                        InlineItem::Text(text_item) => {
-                            let sliced = slice_text_item(
-                                text_item,
-                                overlap_start..overlap_end,
-                                shaper,
-                                font_context,
-                                base_dir,
-                                bidi_context,
-                            )
-                            .unwrap_or_else(|| text_item.clone());
-
-                            Some(BidiLeaf {
-                                item: InlineItem::Text(sliced),
-                                baseline_offset: para_leaf.leaf.baseline_offset,
-                                box_stack: para_leaf.leaf.box_stack.clone(),
-                            })
-                        }
-                        _ => {
-                            if seen_non_text.insert(para_leaf.id) {
-                                Some(para_leaf.leaf.clone())
+                grouped.sort_by_key(|(idx, _, _)| *idx);
+                let isolate_text: String = grouped
+                    .iter()
+                    .map(|(idx, _, _)| paragraph_chars.get(*idx).copied().unwrap_or('\u{FFFD}'))
+                    .collect();
+                let isolate_levels: Vec<Level> = if let Some(ctx) = paragraph_leaves
+                    .get(mapping.leaf_index)
+                    .and_then(|p| p.bidi_context)
+                {
+                    unicode_bidi::BidiInfo::new(&isolate_text, Some(ctx.level))
+                        .levels
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(byte_idx, lvl)| {
+                            // levels indexed by byte; take the start of each char
+                            if isolate_text.is_char_boundary(byte_idx) {
+                                Some(*lvl)
                             } else {
                                 None
                             }
-                        }
-                    }
-                })
-                .collect();
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let reorder = if isolate_levels.is_empty() {
+                    (0..grouped.len()).collect()
+                } else {
+                    unicode_bidi::BidiInfo::reorder_visual(&isolate_levels)
+                };
 
-            let level = reordered_levels.get(run.start).copied().unwrap_or_else(Level::ltr);
-            if level.is_rtl() {
-                run_parts.reverse();
+                for visual_pos in reorder {
+                    if let Some((_, lvl, map_ref)) = grouped.get(visual_pos) {
+                        push_segment(*map_ref, *lvl, &mut segments);
+                    }
+                }
+                continue;
             }
 
-            visual_fragments.extend(run_parts);
+            push_segment(mapping, level, &mut segments);
+        }
+
+        let mut visual_fragments: Vec<BidiLeaf> = Vec::new();
+        for seg in segments {
+            if let Some(para_leaf) = paragraph_leaves.get(seg.leaf_index) {
+                let mut frag = para_leaf.leaf.clone();
+                if let InlineItem::Text(text_item) = &para_leaf.leaf.item {
+                    if let Some(sliced) = slice_text_item(
+                        text_item,
+                        seg.start..seg.end,
+                        shaper,
+                        font_context,
+                        base_dir,
+                        para_leaf.bidi_context,
+                    ) {
+                        frag.item = InlineItem::Text(sliced);
+                    } else {
+                        continue;
+                    }
+                }
+                visual_fragments.push(frag);
+            }
         }
 
         if visual_fragments.is_empty() {
@@ -2092,7 +2142,7 @@ fn slice_text_item(
     }
 
     let slice_text = &item.text[range.clone()];
-        let mut runs = pipeline
+    let mut runs = pipeline
         .shape_with_context(
             slice_text,
             &item.style,
@@ -2165,10 +2215,8 @@ struct BidiLeaf {
 
 #[derive(Clone)]
 struct ParagraphLeaf {
-    id: usize,
-    line_index: usize,
-    logical_range: std::ops::Range<usize>,
     leaf: BidiLeaf,
+    bidi_context: Option<crate::text::pipeline::ExplicitBidiContext>,
 }
 
 fn flatten_positioned_item(
@@ -2223,7 +2271,7 @@ mod tests {
     use crate::text::line_break::find_break_opportunities;
     use crate::text::pipeline::ShapingPipeline;
     use std::sync::Arc;
-    use unicode_bidi::{level, BidiInfo};
+    use unicode_bidi::{level, BidiInfo, Level};
 
     fn make_strut_metrics() -> BaselineMetrics {
         BaselineMetrics::new(12.0, 16.0, 12.0, 4.0)
