@@ -430,8 +430,7 @@ impl AbsoluteLayout {
 
             // top and bottom specified, height is auto (shrink-to-fit)
             (Some(t), None, Some(b)) => {
-                let available = cb_height - t - b - margin_top - margin_bottom - total_vertical_spacing;
-                let height = intrinsic_height.min(available.max(0.0));
+                let height = (cb_height - t - b - margin_top - margin_bottom - total_vertical_spacing).max(0.0);
                 let y = t + margin_top + border_top + padding_top;
                 (y, height)
             }
@@ -690,23 +689,25 @@ mod tests {
     }
 
     #[test]
-    fn test_layout_absolute_shrink_height_between_insets() {
+    fn test_layout_absolute_height_fills_between_insets() {
         let layout = AbsoluteLayout::new();
 
         let mut style = default_style();
         style.position = Position::Absolute;
         style.top = LengthOrAuto::px(25.0);
         style.bottom = LengthOrAuto::px(25.0);
-        // height auto - should shrink-to-fit intrinsic height
+        // height auto - should fill the remaining space between top/bottom
 
         let input = AbsoluteLayoutInput::new(style, Size::new(100.0, 100.0), Point::ZERO);
         let cb = create_containing_block(400.0, 300.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
 
-        // intrinsic height 100px should win over 250px available
+        assert!(
+            (result.size.height - 250.0).abs() < 0.001,
+            "auto height should fill the space between top and bottom"
+        );
         assert_eq!(result.position.y, 25.0);
-        assert_eq!(result.size.height, 100.0);
     }
 
     #[test]
@@ -986,7 +987,7 @@ mod tests {
     }
 
     #[test]
-    fn test_layout_absolute_height_auto_shrink_to_fit_between_insets() {
+    fn test_layout_absolute_height_auto_fills_between_insets() {
         let layout = AbsoluteLayout::new();
         let mut style = default_style();
         style.position = Position::Absolute;
@@ -998,8 +999,8 @@ mod tests {
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
         assert!(
-            (result.size.height - 120.0).abs() < 0.001,
-            "auto height should shrink-to-fit intrinsic height between top/bottom"
+            (result.size.height - 170.0).abs() < 0.001,
+            "auto height should fill the space between top and bottom"
         );
         assert!(
             (result.position.y - 10.0).abs() < 0.001,
