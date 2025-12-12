@@ -6,7 +6,7 @@
 //! Reference: CSS Cascading and Inheritance Level 4
 //! <https://www.w3.org/TR/css-cascade-4/>
 
-use crate::css::properties::parse_length;
+use crate::css::properties::{parse_calc_function_length, parse_length};
 use crate::css::types::{Declaration, PropertyValue};
 use crate::style::color::Rgba;
 use crate::style::content::{parse_content, ContentValue};
@@ -4640,14 +4640,36 @@ fn parse_font_shorthand(
                     }
                 }
             }
-            Phase::AfterSlash => {
-                if let Some(parsed) = parse_line_height_token(&token) {
-                    line_height = Some(parsed);
-                    phase = Phase::AfterSize;
-                } else {
-                    return None;
+            Phase::AfterSlash => match token {
+                Token::Function(ref name)
+                    if name.eq_ignore_ascii_case("calc")
+                        || name.eq_ignore_ascii_case("min")
+                        || name.eq_ignore_ascii_case("max")
+                        || name.eq_ignore_ascii_case("clamp") =>
+                {
+                    // Parse calc()/min()/max()/clamp() as a length/percentage line-height.
+                    let parsed = parse_calc_function_length(&mut parser);
+                    match parsed {
+                        Ok(len) if len.value >= 0.0 => {
+                            if len.unit == LengthUnit::Percent {
+                                line_height = Some(LineHeight::Percentage(len.value));
+                            } else {
+                                line_height = Some(LineHeight::Length(len));
+                            }
+                            phase = Phase::AfterSize;
+                        }
+                        _ => return None,
+                    }
                 }
-            }
+                _ => {
+                    if let Some(parsed) = parse_line_height_token(&token) {
+                        line_height = Some(parsed);
+                        phase = Phase::AfterSize;
+                    } else {
+                        return None;
+                    }
+                }
+            },
             Phase::AfterSize => match token {
                 Token::Delim('/') => {
                     if line_height.is_some() {
@@ -8406,6 +8428,23 @@ mod tests {
     }
 
     #[test]
+    fn parses_font_shorthand_with_calc_line_height() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font".to_string(),
+            value: PropertyValue::Keyword("bold 20px/calc(50% + 25%) serif".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_weight, FontWeight::Bold));
+        assert!((style.font_size - 20.0).abs() < 0.01);
+        assert!(matches!(style.line_height, LineHeight::Percentage(p) if (p - 75.0).abs() < 0.001));
+        assert_eq!(style.font_family, vec!["serif".to_string()]);
+    }
+
+    #[test]
     fn font_shorthand_with_negative_line_height_is_ignored() {
         let mut style = ComputedStyle::default();
         let decl = Declaration {
@@ -8581,6 +8620,52 @@ mod tests {
 
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert!(matches!(style.line_height, LineHeight::Percentage(p) if (p - 150.0).abs() < 0.001));
+    }
+
+    #[test]
+    fn line_height_calc_lengths_are_accepted() {
+        let mut style = ComputedStyle::default();
+        let len = parse_length("calc(10px + 20px)").expect("calc length");
+        let decl = Declaration {
+            property: "line-height".to_string(),
+            value: PropertyValue::Length(len),
+            raw_value: String::new(),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.line_height, LineHeight::Length(l) if (l.to_px() - 30.0).abs() < 0.001));
+    }
+
+    #[test]
+    fn line_height_calc_percentages_are_normalized() {
+        let mut style = ComputedStyle::default();
+        let len = parse_length("calc(50% + 25%)").expect("calc percent");
+        let decl = Declaration {
+            property: "line-height".to_string(),
+            value: PropertyValue::Length(len),
+            raw_value: String::new(),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.line_height, LineHeight::Percentage(p) if (p - 75.0).abs() < 0.001));
+    }
+
+    #[test]
+    fn line_height_negative_calc_is_ignored() {
+        let mut style = ComputedStyle::default();
+        style.line_height = LineHeight::Number(1.2);
+        let len = parse_length("calc(5px - 10px)").expect("calc length");
+        let decl = Declaration {
+            property: "line-height".to_string(),
+            value: PropertyValue::Length(len),
+            raw_value: String::new(),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.line_height, LineHeight::Number(n) if (n - 1.2).abs() < 0.001));
     }
 
     #[test]
