@@ -7749,7 +7749,11 @@ mod tests {
         let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 2.0, 2.0), vec![], Arc::new(style));
         let pixmap = paint_tree(&FragmentTree::new(fragment), 2, 2, Rgba::WHITE).expect("paint");
         let (r, g, b, _) = color_at(&pixmap, 0, 0);
-        assert_eq!((r, g, b), (255, 100, 100), "plus-lighter background blend should add colors");
+        assert_eq!(
+            (r, g, b),
+            (255, 100, 100),
+            "plus-lighter background blend should add colors"
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@
 
 ## Recent changes (this branch)
 - Filter functions follow the spec defaults/validation: blur/hue-rotate default to 0 when arguments are omitted, the rest default to 1, negative parameters are invalid, unit-interval filters clamp to [0,1] at resolution, and brightness/contrast/saturate keep values above 1. Added painter/display-list regressions for clamping and defaults.
-- Filter drop-shadow now follows the CSS grammar (no spread length); four-length shadows are rejected during parsing with a regression to lock the invalid case.
+- Filter drop-shadow now follows the CSS grammar (offsets + optional blur + optional spread); four-length shadows parse and the spread is preserved.
 - Angle math now honors calc/min/max/clamp for filters and font oblique angles: hue-rotate accepts calc() with mixed angle units, and oblique angles in the font shorthand validate range after calc evaluation (regressions added for both).
 - mix-blend-mode supports the spec `plus-lighter` keyword across parse/layout/paint/display-list; painter/display-list/canvas map it to additive blending and regression covers additive compositing.
 - background-blend-mode plus-lighter is exercised in painter: additive blending of background layers now has regression coverage.
