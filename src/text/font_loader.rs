@@ -184,7 +184,7 @@ impl FontContext {
     /// ```
     pub fn get_font(&self, families: &[String], weight: u16, italic: bool, oblique: bool) -> Option<LoadedFont> {
         let font_weight = FontWeight::new(weight);
-        let font_style = if italic {
+        let requested_style = if italic {
             FontStyle::Italic
         } else if oblique {
             FontStyle::Oblique
@@ -192,8 +192,14 @@ impl FontContext {
             FontStyle::Normal
         };
 
-        let id = self.db.resolve_family_list(families, font_weight, font_style)?;
-        self.db.load_font(id)
+        for slope in crate::text::pipeline::slope_preference_order(requested_style) {
+            if let Some(id) = self.db.resolve_family_list(families, font_weight, *slope) {
+                if let Some(font) = self.db.load_font(id) {
+                    return Some(font);
+                }
+            }
+        }
+        None
     }
 
     /// Gets a font with full CSS properties
@@ -590,6 +596,19 @@ mod tests {
         if let Some(font) = font {
             assert!(!font.data.is_empty());
         }
+    }
+
+    #[test]
+    fn test_get_font_falls_back_when_slope_missing() {
+        let mut db = FontDatabase::empty();
+        db.load_font_data(EMBEDDED_FALLBACK_FONT.to_vec())
+            .expect("load embedded font");
+        let ctx = FontContext::with_database(Arc::new(db));
+
+        let families = vec!["Roboto".to_string()];
+        // Request italic even though only a normal face exists; should still return a font.
+        let font = ctx.get_font(&families, 400, true, false);
+        assert!(font.is_some());
     }
 
     #[test]
