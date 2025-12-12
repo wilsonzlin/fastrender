@@ -191,6 +191,7 @@ fn apply_styles_internal(
         &mut styles,
         matching_rules,
         inline_decls,
+        parent_styles,
         parent_styles.font_size,
         root_font_size,
         |_| true,
@@ -285,6 +286,7 @@ fn apply_styles_internal_with_ancestors(
         &mut styles,
         matching_rules,
         inline_decls,
+        parent_styles,
         parent_styles.font_size,
         root_font_size,
         |_| true,
@@ -520,10 +522,11 @@ mod tests {
     use crate::style::display::Display;
     use crate::style::float::Float;
     use crate::style::types::{
-        LineBreak, ListStylePosition, ListStyleType, TextCombineUpright, TextDecorationLine, TextUnderlineOffset,
-        TextUnderlinePosition, UnicodeBidi, WhiteSpace, WillChange, WillChangeHint,
+        BorderStyle, LineBreak, ListStylePosition, ListStyleType, TextCombineUpright, TextDecorationLine,
+        TextUnderlineOffset, TextUnderlinePosition, UnicodeBidi, WhiteSpace, WillChange, WillChangeHint,
     };
     use crate::style::CursorKeyword;
+    use crate::style::values::Length;
 
     fn element_with_style(style: &str) -> DomNode {
         DomNode {
@@ -606,7 +609,10 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
-                attributes: vec![("style".to_string(), r#"font-variation-settings: "wght" 600;"#.to_string())],
+                attributes: vec![(
+                    "style".to_string(),
+                    r#"font-variation-settings: "wght" 600;"#.to_string(),
+                )],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
@@ -1342,6 +1348,73 @@ mod tests {
     }
 
     #[test]
+    fn inherit_keyword_applies_to_non_inherited_width() {
+        let child = element_with_style("width: inherit;");
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), "width: 80px;".to_string())],
+            },
+            children: vec![child],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let child_styles = &styled.children[0].styles;
+        assert_eq!(child_styles.width, Some(Length::px(80.0)));
+    }
+
+    #[test]
+    fn unset_keyword_inherits_for_inherited_properties() {
+        let child = element_with_style("color: unset;");
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), "color: red;".to_string())],
+            },
+            children: vec![child],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let child_styles = &styled.children[0].styles;
+        assert_eq!(child_styles.color, Rgba::RED);
+    }
+
+    #[test]
+    fn unset_keyword_resets_non_inherited_border_style() {
+        let child = element_with_style("border-style: unset; border-width: 4px;");
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), "border-style: solid; border-width: 2px;".to_string())],
+            },
+            children: vec![child],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let child_styles = &styled.children[0].styles;
+        assert!(matches!(child_styles.border_top_style, BorderStyle::None));
+        assert!(matches!(child_styles.border_right_style, BorderStyle::None));
+        assert!(matches!(child_styles.border_bottom_style, BorderStyle::None));
+        assert!(matches!(child_styles.border_left_style, BorderStyle::None));
+    }
+
+    #[test]
+    fn initial_keyword_resets_background_color() {
+        let child = element_with_style("background-color: initial;");
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), "background-color: red;".to_string())],
+            },
+            children: vec![child],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let child_styles = &styled.children[0].styles;
+        assert_eq!(child_styles.background_color, Rgba::TRANSPARENT);
+    }
+
+    #[test]
     fn text_align_match_parent_sets_last_to_match_parent_and_resolves() {
         let parent = DomNode {
             node_type: DomNodeType::Element {
@@ -1425,7 +1498,7 @@ mod tests {
         inherit_styles(&mut manual, &ComputedStyle::default());
         let fs = manual.font_size;
         for decl in parse_declarations("color: red;") {
-            apply_declaration(&mut manual, &decl, fs, fs);
+            apply_declaration(&mut manual, &decl, &ComputedStyle::default(), fs, fs);
         }
         assert_eq!(manual.color, Rgba::RED);
         let lone_styled = apply_styles(&lone_li, &StyleSheet::new());
@@ -1976,6 +2049,7 @@ fn apply_cascaded_declarations<F>(
     styles: &mut ComputedStyle,
     matched_rules: Vec<MatchedRule>,
     inline_declarations: Option<Vec<Declaration>>,
+    parent_styles: &ComputedStyle,
     parent_font_size: f32,
     root_font_size: f32,
     filter: F,
@@ -2021,7 +2095,13 @@ fn apply_cascaded_declarations<F>(
 
     for entry in flattened {
         if filter(&entry.declaration) {
-            apply_declaration(styles, &entry.declaration, parent_font_size, root_font_size);
+            apply_declaration(
+                styles,
+                &entry.declaration,
+                parent_styles,
+                parent_font_size,
+                root_font_size,
+            );
         }
     }
     resolve_pending_logical_properties(styles);
@@ -2220,6 +2300,7 @@ fn compute_pseudo_element_styles(
         &mut styles,
         matching_rules,
         None,
+        parent_styles,
         parent_styles.font_size,
         root_font_size,
         |_| true,
@@ -2268,6 +2349,7 @@ fn compute_marker_styles(
         &mut styles,
         matching_rules,
         None,
+        list_item_styles,
         list_item_styles.font_size,
         root_font_size,
         |decl| marker_allows_property(&decl.property),

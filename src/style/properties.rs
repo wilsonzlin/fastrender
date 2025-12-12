@@ -869,7 +869,1273 @@ fn set_axis_max_dimension(
     }
 }
 
-pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_font_size: f32, root_font_size: f32) {
+fn global_keyword(value: &PropertyValue) -> Option<&'static str> {
+    if let PropertyValue::Keyword(kw) = value {
+        if kw.eq_ignore_ascii_case("inherit") {
+            return Some("inherit");
+        }
+        if kw.eq_ignore_ascii_case("initial") {
+            return Some("initial");
+        }
+        if kw.eq_ignore_ascii_case("unset") {
+            return Some("unset");
+        }
+        if kw.eq_ignore_ascii_case("revert") || kw.eq_ignore_ascii_case("revert-layer") {
+            return Some("revert");
+        }
+    }
+    None
+}
+
+fn is_inherited_property(name: &str) -> bool {
+    matches!(
+        name,
+        "color"
+            | "cursor"
+            | "visibility"
+            | "direction"
+            | "writing-mode"
+            | "font"
+            | "font-family"
+            | "font-size"
+            | "font-size-adjust"
+            | "font-style"
+            | "font-weight"
+            | "font-stretch"
+            | "font-variant"
+            | "font-variant-caps"
+            | "font-variant-alternates"
+            | "font-variant-position"
+            | "font-variant-east-asian"
+            | "font-variant-numeric"
+            | "font-variant-ligatures"
+            | "font-variant-emoji"
+            | "font-feature-settings"
+            | "font-variation-settings"
+            | "font-optical-sizing"
+            | "font-language-override"
+            | "font-synthesis"
+            | "font-synthesis-weight"
+            | "font-synthesis-style"
+            | "font-synthesis-small-caps"
+            | "font-synthesis-position"
+            | "font-kerning"
+            | "line-height"
+            | "text-align"
+            | "text-align-all"
+            | "text-align-last"
+            | "text-justify"
+            | "text-indent"
+            | "text-decoration-skip-ink"
+            | "text-underline-offset"
+            | "text-underline-position"
+            | "text-emphasis-style"
+            | "text-emphasis-color"
+            | "text-emphasis-position"
+            | "text-transform"
+            | "text-combine-upright"
+            | "letter-spacing"
+            | "word-spacing"
+            | "white-space"
+            | "line-break"
+            | "tab-size"
+            | "hyphens"
+            | "word-break"
+            | "overflow-wrap"
+            | "text-emphasis"
+            | "justify-items"
+            | "caption-side"
+            | "empty-cells"
+            | "list-style-type"
+            | "list-style-position"
+            | "list-style-image"
+            | "list-style"
+            | "quotes"
+    )
+}
+
+fn global_keyword_source<'a>(
+    keyword: &str,
+    property: &str,
+    parent: &'a ComputedStyle,
+    defaults: &'a ComputedStyle,
+) -> Option<&'a ComputedStyle> {
+    match keyword {
+        "inherit" => Some(parent),
+        "initial" => Some(defaults),
+        "unset" => {
+            if is_inherited_property(property) {
+                Some(parent)
+            } else {
+                Some(defaults)
+            }
+        }
+        "revert" => Some(defaults),
+        _ => None,
+    }
+}
+
+fn inset_for_side(style: &ComputedStyle, side: crate::style::PhysicalSide) -> Option<Length> {
+    match side {
+        crate::style::PhysicalSide::Top => style.top,
+        crate::style::PhysicalSide::Right => style.right,
+        crate::style::PhysicalSide::Bottom => style.bottom,
+        crate::style::PhysicalSide::Left => style.left,
+    }
+}
+
+fn margin_for_side(style: &ComputedStyle, side: crate::style::PhysicalSide) -> Option<Length> {
+    match side {
+        crate::style::PhysicalSide::Top => style.margin_top,
+        crate::style::PhysicalSide::Right => style.margin_right,
+        crate::style::PhysicalSide::Bottom => style.margin_bottom,
+        crate::style::PhysicalSide::Left => style.margin_left,
+    }
+}
+
+fn padding_for_side(style: &ComputedStyle, side: crate::style::PhysicalSide) -> Length {
+    match side {
+        crate::style::PhysicalSide::Top => style.padding_top,
+        crate::style::PhysicalSide::Right => style.padding_right,
+        crate::style::PhysicalSide::Bottom => style.padding_bottom,
+        crate::style::PhysicalSide::Left => style.padding_left,
+    }
+}
+
+fn border_width_for_side(style: &ComputedStyle, side: crate::style::PhysicalSide) -> Length {
+    match side {
+        crate::style::PhysicalSide::Top => style.border_top_width,
+        crate::style::PhysicalSide::Right => style.border_right_width,
+        crate::style::PhysicalSide::Bottom => style.border_bottom_width,
+        crate::style::PhysicalSide::Left => style.border_left_width,
+    }
+}
+
+fn border_style_for_side(style: &ComputedStyle, side: crate::style::PhysicalSide) -> BorderStyle {
+    match side {
+        crate::style::PhysicalSide::Top => style.border_top_style,
+        crate::style::PhysicalSide::Right => style.border_right_style,
+        crate::style::PhysicalSide::Bottom => style.border_bottom_style,
+        crate::style::PhysicalSide::Left => style.border_left_style,
+    }
+}
+
+fn border_color_for_side(style: &ComputedStyle, side: crate::style::PhysicalSide) -> Rgba {
+    match side {
+        crate::style::PhysicalSide::Top => style.border_top_color,
+        crate::style::PhysicalSide::Right => style.border_right_color,
+        crate::style::PhysicalSide::Bottom => style.border_bottom_color,
+        crate::style::PhysicalSide::Left => style.border_left_color,
+    }
+}
+
+fn radius_for_corner(style: &ComputedStyle, corner: PhysicalCorner) -> Length {
+    match corner {
+        PhysicalCorner::TopLeft => style.border_top_left_radius,
+        PhysicalCorner::TopRight => style.border_top_right_radius,
+        PhysicalCorner::BottomRight => style.border_bottom_right_radius,
+        PhysicalCorner::BottomLeft => style.border_bottom_left_radius,
+    }
+}
+
+fn apply_property_from_source(
+    styles: &mut ComputedStyle,
+    source: &ComputedStyle,
+    property: &str,
+    order: i32,
+) -> bool {
+    let inline_sides = inline_physical_sides(source);
+    let block_sides = block_physical_sides(source);
+    match property {
+        "display" => styles.display = source.display,
+        "visibility" => styles.visibility = source.visibility,
+        "float" => styles.float = source.float,
+        "clear" => styles.clear = source.clear,
+        "overflow" => {
+            styles.overflow_x = source.overflow_x;
+            styles.overflow_y = source.overflow_y;
+        }
+        "overflow-x" => styles.overflow_x = source.overflow_x,
+        "overflow-y" => styles.overflow_y = source.overflow_y,
+        "position" => styles.position = source.position,
+        "box-sizing" => styles.box_sizing = source.box_sizing,
+        "top" => set_inset_side(styles, crate::style::PhysicalSide::Top, source.top, order),
+        "right" => set_inset_side(styles, crate::style::PhysicalSide::Right, source.right, order),
+        "bottom" => set_inset_side(styles, crate::style::PhysicalSide::Bottom, source.bottom, order),
+        "left" => set_inset_side(styles, crate::style::PhysicalSide::Left, source.left, order),
+        "inset" => {
+            set_inset_side(styles, crate::style::PhysicalSide::Top, source.top, order);
+            set_inset_side(styles, crate::style::PhysicalSide::Right, source.right, order);
+            set_inset_side(styles, crate::style::PhysicalSide::Bottom, source.bottom, order);
+            set_inset_side(styles, crate::style::PhysicalSide::Left, source.left, order);
+        }
+        "inset-inline-start" => {
+            let start_side = inline_sides.0;
+            let value = inset_for_side(source, start_side);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Inset {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: Some(value),
+                    end: None,
+                },
+                order,
+            );
+        }
+        "inset-inline-end" => {
+            let end_side = inline_sides.1;
+            let value = inset_for_side(source, end_side);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Inset {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: None,
+                    end: Some(value),
+                },
+                order,
+            );
+        }
+        "inset-block-start" => {
+            let start_side = block_sides.0;
+            let value = inset_for_side(source, start_side);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Inset {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: Some(value),
+                    end: None,
+                },
+                order,
+            );
+        }
+        "inset-block-end" => {
+            let end_side = block_sides.1;
+            let value = inset_for_side(source, end_side);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Inset {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: None,
+                    end: Some(value),
+                },
+                order,
+            );
+        }
+        "inset-inline" => {
+            let start = inset_for_side(source, inline_sides.0);
+            let end = inset_for_side(source, inline_sides.1);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Inset {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: Some(start),
+                    end: Some(end),
+                },
+                order,
+            );
+        }
+        "inset-block" => {
+            let start = inset_for_side(source, block_sides.0);
+            let end = inset_for_side(source, block_sides.1);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Inset {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: Some(start),
+                    end: Some(end),
+                },
+                order,
+            );
+        }
+        "z-index" => styles.z_index = source.z_index,
+        "outline-color" => styles.outline_color = source.outline_color,
+        "outline-style" => styles.outline_style = source.outline_style,
+        "outline-width" => styles.outline_width = source.outline_width,
+        "outline-offset" => styles.outline_offset = source.outline_offset,
+        "outline" => {
+            styles.outline_color = source.outline_color;
+            styles.outline_style = source.outline_style;
+            styles.outline_width = source.outline_width;
+            styles.outline_offset = source.outline_offset;
+        }
+        "width" => set_length_with_order(&mut styles.width, &mut styles.logical.width_order, source.width, order),
+        "height" => set_length_with_order(&mut styles.height, &mut styles.logical.height_order, source.height, order),
+        "min-width" => {
+            set_length_with_order(&mut styles.min_width, &mut styles.logical.min_width_order, source.min_width, order)
+        }
+        "min-height" => set_length_with_order(
+            &mut styles.min_height,
+            &mut styles.logical.min_height_order,
+            source.min_height,
+            order,
+        ),
+        "max-width" => {
+            set_length_with_order(&mut styles.max_width, &mut styles.logical.max_width_order, source.max_width, order)
+        }
+        "max-height" => set_length_with_order(
+            &mut styles.max_height,
+            &mut styles.logical.max_height_order,
+            source.max_height,
+            order,
+        ),
+        "inline-size" => {
+            let value = if inline_axis_is_horizontal(source.writing_mode) {
+                source.width
+            } else {
+                source.height
+            };
+            set_axis_dimension(styles, crate::style::LogicalAxis::Inline, value, order);
+        }
+        "block-size" => {
+            let value = if block_axis_is_horizontal(source.writing_mode) {
+                source.width
+            } else {
+                source.height
+            };
+            set_axis_dimension(styles, crate::style::LogicalAxis::Block, value, order);
+        }
+        "min-inline-size" => {
+            let value = if inline_axis_is_horizontal(source.writing_mode) {
+                source.min_width
+            } else {
+                source.min_height
+            };
+            set_axis_min_dimension(styles, crate::style::LogicalAxis::Inline, value, order);
+        }
+        "min-block-size" => {
+            let value = if block_axis_is_horizontal(source.writing_mode) {
+                source.min_width
+            } else {
+                source.min_height
+            };
+            set_axis_min_dimension(styles, crate::style::LogicalAxis::Block, value, order);
+        }
+        "max-inline-size" => {
+            let value = if inline_axis_is_horizontal(source.writing_mode) {
+                source.max_width
+            } else {
+                source.max_height
+            };
+            set_axis_max_dimension(styles, crate::style::LogicalAxis::Inline, value, order);
+        }
+        "max-block-size" => {
+            let value = if block_axis_is_horizontal(source.writing_mode) {
+                source.max_width
+            } else {
+                source.max_height
+            };
+            set_axis_max_dimension(styles, crate::style::LogicalAxis::Block, value, order);
+        }
+        "margin" => {
+            set_margin_side(styles, crate::style::PhysicalSide::Top, source.margin_top, order);
+            set_margin_side(styles, crate::style::PhysicalSide::Right, source.margin_right, order);
+            set_margin_side(styles, crate::style::PhysicalSide::Bottom, source.margin_bottom, order);
+            set_margin_side(styles, crate::style::PhysicalSide::Left, source.margin_left, order);
+        }
+        "margin-top" => set_margin_side(styles, crate::style::PhysicalSide::Top, source.margin_top, order),
+        "margin-right" => set_margin_side(styles, crate::style::PhysicalSide::Right, source.margin_right, order),
+        "margin-bottom" => set_margin_side(styles, crate::style::PhysicalSide::Bottom, source.margin_bottom, order),
+        "margin-left" => set_margin_side(styles, crate::style::PhysicalSide::Left, source.margin_left, order),
+        "margin-inline-start" => {
+            let value = margin_for_side(source, inline_sides.0);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Margin {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: Some(value),
+                    end: None,
+                },
+                order,
+            );
+        }
+        "margin-inline-end" => {
+            let value = margin_for_side(source, inline_sides.1);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Margin {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: None,
+                    end: Some(value),
+                },
+                order,
+            );
+        }
+        "margin-block-start" => {
+            let value = margin_for_side(source, block_sides.0);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Margin {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: Some(value),
+                    end: None,
+                },
+                order,
+            );
+        }
+        "margin-block-end" => {
+            let value = margin_for_side(source, block_sides.1);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Margin {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: None,
+                    end: Some(value),
+                },
+                order,
+            );
+        }
+        "margin-inline" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Margin {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: Some(margin_for_side(source, inline_sides.0)),
+                    end: Some(margin_for_side(source, inline_sides.1)),
+                },
+                order,
+            );
+        }
+        "margin-block" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Margin {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: Some(margin_for_side(source, block_sides.0)),
+                    end: Some(margin_for_side(source, block_sides.1)),
+                },
+                order,
+            );
+        }
+        "padding" => {
+            set_padding_side(styles, crate::style::PhysicalSide::Top, source.padding_top, order);
+            set_padding_side(styles, crate::style::PhysicalSide::Right, source.padding_right, order);
+            set_padding_side(styles, crate::style::PhysicalSide::Bottom, source.padding_bottom, order);
+            set_padding_side(styles, crate::style::PhysicalSide::Left, source.padding_left, order);
+        }
+        "padding-top" => set_padding_side(styles, crate::style::PhysicalSide::Top, source.padding_top, order),
+        "padding-right" => set_padding_side(styles, crate::style::PhysicalSide::Right, source.padding_right, order),
+        "padding-bottom" => set_padding_side(styles, crate::style::PhysicalSide::Bottom, source.padding_bottom, order),
+        "padding-left" => set_padding_side(styles, crate::style::PhysicalSide::Left, source.padding_left, order),
+        "padding-inline-start" => {
+            let value = padding_for_side(source, inline_sides.0);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Padding {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: Some(value),
+                    end: None,
+                },
+                order,
+            );
+        }
+        "padding-inline-end" => {
+            let value = padding_for_side(source, inline_sides.1);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Padding {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: None,
+                    end: Some(value),
+                },
+                order,
+            );
+        }
+        "padding-block-start" => {
+            let value = padding_for_side(source, block_sides.0);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Padding {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: Some(value),
+                    end: None,
+                },
+                order,
+            );
+        }
+        "padding-block-end" => {
+            let value = padding_for_side(source, block_sides.1);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Padding {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: None,
+                    end: Some(value),
+                },
+                order,
+            );
+        }
+        "padding-inline" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Padding {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: Some(padding_for_side(source, inline_sides.0)),
+                    end: Some(padding_for_side(source, inline_sides.1)),
+                },
+                order,
+            );
+        }
+        "padding-block" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::Padding {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: Some(padding_for_side(source, block_sides.0)),
+                    end: Some(padding_for_side(source, block_sides.1)),
+                },
+                order,
+            );
+        }
+        "border-width" => {
+            set_border_width_side(styles, crate::style::PhysicalSide::Top, source.border_top_width, order);
+            set_border_width_side(styles, crate::style::PhysicalSide::Right, source.border_right_width, order);
+            set_border_width_side(styles, crate::style::PhysicalSide::Bottom, source.border_bottom_width, order);
+            set_border_width_side(styles, crate::style::PhysicalSide::Left, source.border_left_width, order);
+        }
+        "border-top-width" => {
+            set_border_width_side(styles, crate::style::PhysicalSide::Top, source.border_top_width, order)
+        }
+        "border-right-width" => {
+            set_border_width_side(styles, crate::style::PhysicalSide::Right, source.border_right_width, order)
+        }
+        "border-bottom-width" => {
+            set_border_width_side(styles, crate::style::PhysicalSide::Bottom, source.border_bottom_width, order)
+        }
+        "border-left-width" => {
+            set_border_width_side(styles, crate::style::PhysicalSide::Left, source.border_left_width, order)
+        }
+        "border-inline-start-width" => {
+            let value = border_width_for_side(source, inline_sides.0);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::BorderWidth {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: Some(value),
+                    end: None,
+                },
+                order,
+            );
+        }
+        "border-inline-end-width" => {
+            let value = border_width_for_side(source, inline_sides.1);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::BorderWidth {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: None,
+                    end: Some(value),
+                },
+                order,
+            );
+        }
+        "border-block-start-width" => {
+            let value = border_width_for_side(source, block_sides.0);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::BorderWidth {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: Some(value),
+                    end: None,
+                },
+                order,
+            );
+        }
+        "border-block-end-width" => {
+            let value = border_width_for_side(source, block_sides.1);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::BorderWidth {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: None,
+                    end: Some(value),
+                },
+                order,
+            );
+        }
+        "border-inline-width" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::BorderWidth {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: Some(border_width_for_side(source, inline_sides.0)),
+                    end: Some(border_width_for_side(source, inline_sides.1)),
+                },
+                order,
+            );
+        }
+        "border-block-width" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::BorderWidth {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: Some(border_width_for_side(source, block_sides.0)),
+                    end: Some(border_width_for_side(source, block_sides.1)),
+                },
+                order,
+            );
+        }
+        "border-color" => {
+            set_border_color_side(styles, crate::style::PhysicalSide::Top, source.border_top_color, order);
+            set_border_color_side(
+                styles,
+                crate::style::PhysicalSide::Right,
+                source.border_right_color,
+                order,
+            );
+            set_border_color_side(
+                styles,
+                crate::style::PhysicalSide::Bottom,
+                source.border_bottom_color,
+                order,
+            );
+            set_border_color_side(styles, crate::style::PhysicalSide::Left, source.border_left_color, order);
+        }
+        "border-top-color" => {
+            set_border_color_side(styles, crate::style::PhysicalSide::Top, source.border_top_color, order)
+        }
+        "border-right-color" => {
+            set_border_color_side(styles, crate::style::PhysicalSide::Right, source.border_right_color, order)
+        }
+        "border-bottom-color" => {
+            set_border_color_side(styles, crate::style::PhysicalSide::Bottom, source.border_bottom_color, order)
+        }
+        "border-left-color" => {
+            set_border_color_side(styles, crate::style::PhysicalSide::Left, source.border_left_color, order)
+        }
+        "border-inline-start-color" => {
+            let value = border_color_for_side(source, inline_sides.0);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::BorderColor {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: Some(value),
+                    end: None,
+                },
+                order,
+            );
+        }
+        "border-inline-end-color" => {
+            let value = border_color_for_side(source, inline_sides.1);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::BorderColor {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: None,
+                    end: Some(value),
+                },
+                order,
+            );
+        }
+        "border-block-start-color" => {
+            let value = border_color_for_side(source, block_sides.0);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::BorderColor {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: Some(value),
+                    end: None,
+                },
+                order,
+            );
+        }
+        "border-block-end-color" => {
+            let value = border_color_for_side(source, block_sides.1);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::BorderColor {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: None,
+                    end: Some(value),
+                },
+                order,
+            );
+        }
+        "border-inline-color" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::BorderColor {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: Some(border_color_for_side(source, inline_sides.0)),
+                    end: Some(border_color_for_side(source, inline_sides.1)),
+                },
+                order,
+            );
+        }
+        "border-block-color" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::BorderColor {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: Some(border_color_for_side(source, block_sides.0)),
+                    end: Some(border_color_for_side(source, block_sides.1)),
+                },
+                order,
+            );
+        }
+        "border-style" => {
+            set_border_style_side(styles, crate::style::PhysicalSide::Top, source.border_top_style, order);
+            set_border_style_side(
+                styles,
+                crate::style::PhysicalSide::Right,
+                source.border_right_style,
+                order,
+            );
+            set_border_style_side(
+                styles,
+                crate::style::PhysicalSide::Bottom,
+                source.border_bottom_style,
+                order,
+            );
+            set_border_style_side(styles, crate::style::PhysicalSide::Left, source.border_left_style, order);
+        }
+        "border-top-style" => {
+            set_border_style_side(styles, crate::style::PhysicalSide::Top, source.border_top_style, order)
+        }
+        "border-right-style" => {
+            set_border_style_side(styles, crate::style::PhysicalSide::Right, source.border_right_style, order)
+        }
+        "border-bottom-style" => {
+            set_border_style_side(
+                styles,
+                crate::style::PhysicalSide::Bottom,
+                source.border_bottom_style,
+                order,
+            )
+        }
+        "border-left-style" => {
+            set_border_style_side(styles, crate::style::PhysicalSide::Left, source.border_left_style, order)
+        }
+        "border-inline-start-style" => {
+            let value = border_style_for_side(source, inline_sides.0);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::BorderStyle {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: Some(value),
+                    end: None,
+                },
+                order,
+            );
+        }
+        "border-inline-end-style" => {
+            let value = border_style_for_side(source, inline_sides.1);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::BorderStyle {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: None,
+                    end: Some(value),
+                },
+                order,
+            );
+        }
+        "border-block-start-style" => {
+            let value = border_style_for_side(source, block_sides.0);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::BorderStyle {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: Some(value),
+                    end: None,
+                },
+                order,
+            );
+        }
+        "border-block-end-style" => {
+            let value = border_style_for_side(source, block_sides.1);
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::BorderStyle {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: None,
+                    end: Some(value),
+                },
+                order,
+            );
+        }
+        "border-inline-style" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::BorderStyle {
+                    axis: crate::style::LogicalAxis::Inline,
+                    start: Some(border_style_for_side(source, inline_sides.0)),
+                    end: Some(border_style_for_side(source, inline_sides.1)),
+                },
+                order,
+            );
+        }
+        "border-block-style" => {
+            push_logical(
+                styles,
+                crate::style::LogicalProperty::BorderStyle {
+                    axis: crate::style::LogicalAxis::Block,
+                    start: Some(border_style_for_side(source, block_sides.0)),
+                    end: Some(border_style_for_side(source, block_sides.1)),
+                },
+                order,
+            );
+        }
+        "border" => {
+            styles.border_top_width = source.border_top_width;
+            styles.border_right_width = source.border_right_width;
+            styles.border_bottom_width = source.border_bottom_width;
+            styles.border_left_width = source.border_left_width;
+            styles.border_top_color = source.border_top_color;
+            styles.border_right_color = source.border_right_color;
+            styles.border_bottom_color = source.border_bottom_color;
+            styles.border_left_color = source.border_left_color;
+            styles.border_top_style = source.border_top_style;
+            styles.border_right_style = source.border_right_style;
+            styles.border_bottom_style = source.border_bottom_style;
+            styles.border_left_style = source.border_left_style;
+            styles.logical.border_width_orders = source.logical.border_width_orders.clone();
+            styles.logical.border_style_orders = source.logical.border_style_orders.clone();
+            styles.logical.border_color_orders = source.logical.border_color_orders.clone();
+        }
+        "border-inline" => {
+            let start_side = inline_sides.0;
+            let end_side = inline_sides.1;
+            set_border_width_side(styles, start_side, border_width_for_side(source, start_side), order);
+            set_border_width_side(styles, end_side, border_width_for_side(source, end_side), order);
+            set_border_color_side(styles, start_side, border_color_for_side(source, start_side), order);
+            set_border_color_side(styles, end_side, border_color_for_side(source, end_side), order);
+            set_border_style_side(styles, start_side, border_style_for_side(source, start_side), order);
+            set_border_style_side(styles, end_side, border_style_for_side(source, end_side), order);
+        }
+        "border-block" => {
+            let start_side = block_sides.0;
+            let end_side = block_sides.1;
+            set_border_width_side(styles, start_side, border_width_for_side(source, start_side), order);
+            set_border_width_side(styles, end_side, border_width_for_side(source, end_side), order);
+            set_border_color_side(styles, start_side, border_color_for_side(source, start_side), order);
+            set_border_color_side(styles, end_side, border_color_for_side(source, end_side), order);
+            set_border_style_side(styles, start_side, border_style_for_side(source, start_side), order);
+            set_border_style_side(styles, end_side, border_style_for_side(source, end_side), order);
+        }
+        "border-radius" => {
+            styles.border_top_left_radius = source.border_top_left_radius;
+            styles.border_top_right_radius = source.border_top_right_radius;
+            styles.border_bottom_left_radius = source.border_bottom_left_radius;
+            styles.border_bottom_right_radius = source.border_bottom_right_radius;
+            styles.logical.corner_orders = source.logical.corner_orders.clone();
+        }
+        "border-top-left-radius" => {
+            set_corner_radius(styles, PhysicalCorner::TopLeft, Some(source.border_top_left_radius), order)
+        }
+        "border-top-right-radius" => {
+            set_corner_radius(styles, PhysicalCorner::TopRight, Some(source.border_top_right_radius), order)
+        }
+        "border-bottom-left-radius" => {
+            set_corner_radius(
+                styles,
+                PhysicalCorner::BottomLeft,
+                Some(source.border_bottom_left_radius),
+                order,
+            )
+        }
+        "border-bottom-right-radius" => {
+            set_corner_radius(
+                styles,
+                PhysicalCorner::BottomRight,
+                Some(source.border_bottom_right_radius),
+                order,
+            )
+        }
+        "border-start-start-radius" => {
+            let target_corner =
+                corner_from_logical_sides(block_sides.0, inline_sides.0).unwrap_or(PhysicalCorner::TopLeft);
+            let source_corner =
+                corner_from_logical_sides(block_physical_sides(source).0, inline_physical_sides(source).0)
+                    .unwrap_or(PhysicalCorner::TopLeft);
+            set_corner_radius(styles, target_corner, Some(radius_for_corner(source, source_corner)), order);
+        }
+        "border-start-end-radius" => {
+            let target_corner =
+                corner_from_logical_sides(block_sides.0, inline_sides.1).unwrap_or(PhysicalCorner::TopRight);
+            let source_corner =
+                corner_from_logical_sides(block_physical_sides(source).0, inline_physical_sides(source).1)
+                    .unwrap_or(PhysicalCorner::TopRight);
+            set_corner_radius(styles, target_corner, Some(radius_for_corner(source, source_corner)), order);
+        }
+        "border-end-start-radius" => {
+            let target_corner =
+                corner_from_logical_sides(block_sides.1, inline_sides.0).unwrap_or(PhysicalCorner::BottomLeft);
+            let source_corner =
+                corner_from_logical_sides(block_physical_sides(source).1, inline_physical_sides(source).0)
+                    .unwrap_or(PhysicalCorner::BottomLeft);
+            set_corner_radius(styles, target_corner, Some(radius_for_corner(source, source_corner)), order);
+        }
+        "border-end-end-radius" => {
+            let target_corner =
+                corner_from_logical_sides(block_sides.1, inline_sides.1).unwrap_or(PhysicalCorner::BottomRight);
+            let source_corner =
+                corner_from_logical_sides(block_physical_sides(source).1, inline_physical_sides(source).1)
+                    .unwrap_or(PhysicalCorner::BottomRight);
+            set_corner_radius(styles, target_corner, Some(radius_for_corner(source, source_corner)), order);
+        }
+        "flex-direction" => styles.flex_direction = source.flex_direction,
+        "flex-wrap" => styles.flex_wrap = source.flex_wrap,
+        "justify-content" => styles.justify_content = source.justify_content,
+        "align-items" => styles.align_items = source.align_items,
+        "align-self" => styles.align_self = source.align_self,
+        "align-content" => styles.align_content = source.align_content,
+        "justify-items" => styles.justify_items = source.justify_items,
+        "justify-self" => styles.justify_self = source.justify_self,
+        "place-items" => {
+            styles.align_items = source.align_items;
+            styles.justify_items = source.justify_items;
+        }
+        "place-self" => {
+            styles.align_self = source.align_self;
+            styles.justify_self = source.justify_self;
+        }
+        "place-content" => {
+            styles.align_content = source.align_content;
+            styles.justify_content = source.justify_content;
+        }
+        "flex-grow" => styles.flex_grow = source.flex_grow,
+        "flex-shrink" => styles.flex_shrink = source.flex_shrink,
+        "flex-basis" => styles.flex_basis = source.flex_basis.clone(),
+        "grid-template-columns" => {
+            styles.grid_template_columns = source.grid_template_columns.clone();
+            styles.grid_column_line_names = source.grid_column_line_names.clone();
+            styles.grid_column_names = source.grid_column_names.clone();
+        }
+        "grid-template-rows" => {
+            styles.grid_template_rows = source.grid_template_rows.clone();
+            styles.grid_row_line_names = source.grid_row_line_names.clone();
+            styles.grid_row_names = source.grid_row_names.clone();
+        }
+        "grid-template-areas" => styles.grid_template_areas = source.grid_template_areas.clone(),
+        "grid-template" => {
+            styles.grid_template_columns = source.grid_template_columns.clone();
+            styles.grid_template_rows = source.grid_template_rows.clone();
+            styles.grid_template_areas = source.grid_template_areas.clone();
+            styles.grid_column_line_names = source.grid_column_line_names.clone();
+            styles.grid_row_line_names = source.grid_row_line_names.clone();
+            styles.grid_column_names = source.grid_column_names.clone();
+            styles.grid_row_names = source.grid_row_names.clone();
+        }
+        "grid" => {
+            styles.grid_template_columns = source.grid_template_columns.clone();
+            styles.grid_template_rows = source.grid_template_rows.clone();
+            styles.grid_template_areas = source.grid_template_areas.clone();
+            styles.grid_auto_rows = source.grid_auto_rows.clone();
+            styles.grid_auto_columns = source.grid_auto_columns.clone();
+            styles.grid_auto_flow = source.grid_auto_flow;
+            styles.grid_row_gap = source.grid_row_gap;
+            styles.grid_column_gap = source.grid_column_gap;
+            styles.grid_gap = source.grid_gap;
+            styles.grid_column_line_names = source.grid_column_line_names.clone();
+            styles.grid_row_line_names = source.grid_row_line_names.clone();
+            styles.grid_column_names = source.grid_column_names.clone();
+            styles.grid_row_names = source.grid_row_names.clone();
+        }
+        "grid-auto-rows" => styles.grid_auto_rows = source.grid_auto_rows.clone(),
+        "grid-auto-columns" => styles.grid_auto_columns = source.grid_auto_columns.clone(),
+        "grid-auto-flow" => styles.grid_auto_flow = source.grid_auto_flow,
+        "grid-column" => {
+            styles.grid_column_start = source.grid_column_start;
+            styles.grid_column_end = source.grid_column_end;
+            styles.grid_column_raw = source.grid_column_raw.clone();
+        }
+        "grid-row" => {
+            styles.grid_row_start = source.grid_row_start;
+            styles.grid_row_end = source.grid_row_end;
+            styles.grid_row_raw = source.grid_row_raw.clone();
+        }
+        "grid-column-start" => styles.grid_column_start = source.grid_column_start,
+        "grid-column-end" => styles.grid_column_end = source.grid_column_end,
+        "grid-row-start" => styles.grid_row_start = source.grid_row_start,
+        "grid-row-end" => styles.grid_row_end = source.grid_row_end,
+        "grid-area" => {
+            styles.grid_row_start = source.grid_row_start;
+            styles.grid_row_end = source.grid_row_end;
+            styles.grid_column_start = source.grid_column_start;
+            styles.grid_column_end = source.grid_column_end;
+            styles.grid_row_raw = source.grid_row_raw.clone();
+            styles.grid_column_raw = source.grid_column_raw.clone();
+        }
+        "font" => {
+            styles.font_style = source.font_style;
+            styles.font_weight = source.font_weight;
+            styles.font_variant = source.font_variant.clone();
+            styles.font_variant_caps = source.font_variant_caps;
+            styles.font_variant_alternates = source.font_variant_alternates.clone();
+            styles.font_variant_numeric = source.font_variant_numeric;
+            styles.font_variant_east_asian = source.font_variant_east_asian;
+            styles.font_variant_ligatures = source.font_variant_ligatures;
+            styles.font_variant_position = source.font_variant_position;
+            styles.font_size = source.font_size;
+            styles.line_height = source.line_height.clone();
+            styles.font_family = source.font_family.clone();
+            styles.font_stretch = source.font_stretch;
+            styles.font_kerning = source.font_kerning;
+            styles.font_synthesis = source.font_synthesis;
+            styles.font_feature_settings = source.font_feature_settings.clone();
+            styles.font_variation_settings = source.font_variation_settings.clone();
+            styles.font_optical_sizing = source.font_optical_sizing;
+            styles.font_language_override = source.font_language_override.clone();
+            styles.font_variant_emoji = source.font_variant_emoji;
+            styles.font_size_adjust = source.font_size_adjust;
+            styles.root_font_size = source.root_font_size;
+        }
+        "font-family" => styles.font_family = source.font_family.clone(),
+        "font-size" => {
+            styles.font_size = source.font_size;
+            styles.root_font_size = source.root_font_size;
+        }
+        "font-size-adjust" => styles.font_size_adjust = source.font_size_adjust,
+        "font-weight" => styles.font_weight = source.font_weight,
+        "font-style" => styles.font_style = source.font_style,
+        "font-variant" => styles.font_variant = source.font_variant.clone(),
+        "font-variant-caps" => styles.font_variant_caps = source.font_variant_caps,
+        "font-variant-alternates" => styles.font_variant_alternates = source.font_variant_alternates.clone(),
+        "font-variant-position" => styles.font_variant_position = source.font_variant_position,
+        "font-variant-east-asian" => styles.font_variant_east_asian = source.font_variant_east_asian,
+        "font-variant-numeric" => styles.font_variant_numeric = source.font_variant_numeric,
+        "font-variant-ligatures" => styles.font_variant_ligatures = source.font_variant_ligatures,
+        "font-feature-settings" => styles.font_feature_settings = source.font_feature_settings.clone(),
+        "font-optical-sizing" => styles.font_optical_sizing = source.font_optical_sizing,
+        "font-language-override" => styles.font_language_override = source.font_language_override.clone(),
+        "font-variant-emoji" => styles.font_variant_emoji = source.font_variant_emoji,
+        "font-variation-settings" => styles.font_variation_settings = source.font_variation_settings.clone(),
+        "font-stretch" => styles.font_stretch = source.font_stretch,
+        "font-kerning" => styles.font_kerning = source.font_kerning,
+        "font-synthesis" => styles.font_synthesis = source.font_synthesis,
+        "font-synthesis-weight" => styles.font_synthesis.weight = source.font_synthesis.weight,
+        "font-synthesis-style" => styles.font_synthesis.style = source.font_synthesis.style,
+        "font-synthesis-small-caps" => styles.font_synthesis.small_caps = source.font_synthesis.small_caps,
+        "font-synthesis-position" => styles.font_synthesis.position = source.font_synthesis.position,
+        "line-height" => styles.line_height = source.line_height.clone(),
+        "table-layout" => styles.table_layout = source.table_layout,
+        "empty-cells" => styles.empty_cells = source.empty_cells,
+        "caption-side" => styles.caption_side = source.caption_side,
+        "vertical-align" => styles.vertical_align = source.vertical_align,
+        "text-align" => {
+            styles.text_align = source.text_align;
+            styles.text_align_last = source.text_align_last;
+        }
+        "text-align-all" => {
+            styles.text_align = source.text_align;
+            styles.text_align_last = source.text_align_last;
+        }
+        "text-align-last" => styles.text_align_last = source.text_align_last,
+        "text-justify" => styles.text_justify = source.text_justify,
+        "text-orientation" => styles.text_orientation = source.text_orientation,
+        "text-combine-upright" => styles.text_combine_upright = source.text_combine_upright,
+        "text-indent" => styles.text_indent = source.text_indent.clone(),
+        "direction" => styles.direction = source.direction,
+        "text-decoration-line" => {
+            styles.text_decoration.lines = source.text_decoration.lines.clone();
+            styles.text_decoration_line_specified = source.text_decoration_line_specified;
+        }
+        "text-decoration-style" => styles.text_decoration.style = source.text_decoration.style,
+        "text-decoration-color" => styles.text_decoration.color = source.text_decoration.color,
+        "text-decoration-thickness" => styles.text_decoration.thickness = source.text_decoration.thickness.clone(),
+        "text-decoration-skip-ink" => styles.text_decoration_skip_ink = source.text_decoration_skip_ink,
+        "text-underline-offset" => styles.text_underline_offset = source.text_underline_offset,
+        "text-underline-position" => styles.text_underline_position = source.text_underline_position,
+        "text-emphasis-style" => styles.text_emphasis_style = source.text_emphasis_style.clone(),
+        "text-emphasis-color" => styles.text_emphasis_color = source.text_emphasis_color,
+        "text-emphasis-position" => styles.text_emphasis_position = source.text_emphasis_position,
+        "text-emphasis" => {
+            styles.text_emphasis_style = source.text_emphasis_style.clone();
+            styles.text_emphasis_color = source.text_emphasis_color;
+            styles.text_emphasis_position = source.text_emphasis_position;
+        }
+        "text-decoration" => {
+            styles.text_decoration = source.text_decoration.clone();
+            styles.text_decoration_line_specified = source.text_decoration_line_specified;
+        }
+        "list-style-type" => styles.list_style_type = source.list_style_type,
+        "list-style-position" => styles.list_style_position = source.list_style_position,
+        "list-style-image" => styles.list_style_image = source.list_style_image.clone(),
+        "list-style" => {
+            styles.list_style_type = source.list_style_type;
+            styles.list_style_position = source.list_style_position;
+            styles.list_style_image = source.list_style_image.clone();
+        }
+        "counter-reset" => styles.counters.counter_reset = source.counters.counter_reset.clone(),
+        "counter-increment" => styles.counters.counter_increment = source.counters.counter_increment.clone(),
+        "counter-set" => styles.counters.counter_set = source.counters.counter_set.clone(),
+        "text-transform" => styles.text_transform = source.text_transform,
+        "letter-spacing" => styles.letter_spacing = source.letter_spacing,
+        "word-spacing" => styles.word_spacing = source.word_spacing,
+        "white-space" => styles.white_space = source.white_space,
+        "line-break" => styles.line_break = source.line_break,
+        "tab-size" => styles.tab_size = source.tab_size.clone(),
+        "hyphens" => styles.hyphens = source.hyphens,
+        "word-break" => styles.word_break = source.word_break,
+        "unicode-bidi" => styles.unicode_bidi = source.unicode_bidi,
+        "writing-mode" => styles.writing_mode = source.writing_mode,
+        "cursor" => {
+            styles.cursor = source.cursor;
+            styles.cursor_images = source.cursor_images.clone();
+        }
+        "color" => styles.color = source.color,
+        "background-color" => styles.background_color = source.background_color,
+        "background-image" => {
+            styles.background_images = source.background_images.clone();
+            styles.rebuild_background_layers();
+        }
+        "background-size" => {
+            styles.background_sizes = source.background_sizes.clone();
+            styles.rebuild_background_layers();
+        }
+        "background-repeat" => {
+            styles.background_repeats = source.background_repeats.clone();
+            styles.rebuild_background_layers();
+        }
+        "background-position" => {
+            styles.background_positions = source.background_positions.clone();
+            styles.rebuild_background_layers();
+        }
+        "background-position-x" => {
+            let mut xs: Vec<_> = source
+                .background_positions
+                .iter()
+                .map(|p| match p {
+                    BackgroundPosition::Position { x, .. } => x.clone(),
+                })
+                .collect();
+            if xs.is_empty() {
+                xs.push(match BackgroundLayer::default().position {
+                    BackgroundPosition::Position { x, .. } => x,
+                });
+            }
+            styles.ensure_background_lists();
+            let layer_count = xs.len().max(styles.background_positions.len()).max(1);
+            let mut positions = Vec::with_capacity(layer_count);
+            for idx in 0..layer_count {
+                let source_idx = styles.background_positions.len().saturating_sub(1).min(idx);
+                let source_pos = styles
+                    .background_positions
+                    .get(source_idx)
+                    .cloned()
+                    .unwrap_or_else(|| BackgroundLayer::default().position.clone());
+                let x_comp = xs
+                    .get(idx)
+                    .cloned()
+                    .unwrap_or_else(|| xs.last().cloned().unwrap());
+                let BackgroundPosition::Position { y, .. } = source_pos;
+                positions.push(BackgroundPosition::Position { x: x_comp, y });
+            }
+            styles.background_positions = positions;
+            styles.rebuild_background_layers();
+        }
+        "background-position-y" => {
+            let mut ys: Vec<_> = source
+                .background_positions
+                .iter()
+                .map(|p| match p {
+                    BackgroundPosition::Position { y, .. } => y.clone(),
+                })
+                .collect();
+            if ys.is_empty() {
+                ys.push(match BackgroundLayer::default().position {
+                    BackgroundPosition::Position { y, .. } => y,
+                });
+            }
+            styles.ensure_background_lists();
+            let layer_count = ys.len().max(styles.background_positions.len()).max(1);
+            let mut positions = Vec::with_capacity(layer_count);
+            for idx in 0..layer_count {
+                let source_idx = styles.background_positions.len().saturating_sub(1).min(idx);
+                let source_pos = styles
+                    .background_positions
+                    .get(source_idx)
+                    .cloned()
+                    .unwrap_or_else(|| BackgroundLayer::default().position.clone());
+                let y_comp = ys
+                    .get(idx)
+                    .cloned()
+                    .unwrap_or_else(|| ys.last().cloned().unwrap());
+                let BackgroundPosition::Position { x, .. } = source_pos;
+                positions.push(BackgroundPosition::Position { x, y: y_comp });
+            }
+            styles.background_positions = positions;
+            styles.rebuild_background_layers();
+        }
+        "background-attachment" => {
+            styles.background_attachments = source.background_attachments.clone();
+            styles.rebuild_background_layers();
+        }
+        "background-origin" => {
+            styles.background_origins = source.background_origins.clone();
+            styles.rebuild_background_layers();
+        }
+        "background-clip" => {
+            styles.background_clips = source.background_clips.clone();
+            styles.rebuild_background_layers();
+        }
+        "background-blend-mode" => {
+            styles.background_blend_modes = source.background_blend_modes.clone();
+            styles.rebuild_background_layers();
+        }
+        "background" => {
+            styles.background_color = source.background_color;
+            styles.background_images = source.background_images.clone();
+            styles.background_positions = source.background_positions.clone();
+            styles.background_sizes = source.background_sizes.clone();
+            styles.background_repeats = source.background_repeats.clone();
+            styles.background_attachments = source.background_attachments.clone();
+            styles.background_origins = source.background_origins.clone();
+            styles.background_clips = source.background_clips.clone();
+            styles.background_blend_modes = source.background_blend_modes.clone();
+            styles.rebuild_background_layers();
+        }
+        "opacity" => styles.opacity = source.opacity,
+        "box-shadow" => styles.box_shadow = source.box_shadow.clone(),
+        "text-shadow" => styles.text_shadow = source.text_shadow.clone(),
+        "transform" => styles.transform = source.transform.clone(),
+        "filter" => styles.filter = source.filter.clone(),
+        "backdrop-filter" => styles.backdrop_filter = source.backdrop_filter.clone(),
+        "transform-origin" => styles.transform_origin = source.transform_origin.clone(),
+        "mix-blend-mode" => styles.mix_blend_mode = source.mix_blend_mode,
+        "isolation" => styles.isolation = source.isolation,
+        "will-change" => styles.will_change = source.will_change.clone(),
+        "contain" => styles.containment = source.containment,
+        "border-collapse" => styles.border_collapse = source.border_collapse,
+        "border-spacing" => {
+            styles.border_spacing_horizontal = source.border_spacing_horizontal;
+            styles.border_spacing_vertical = source.border_spacing_vertical;
+        }
+        "content" => {
+            styles.content_value = source.content_value.clone();
+            styles.content = source.content.clone();
+        }
+        "quotes" => styles.quotes = source.quotes.clone(),
+        "image-rendering" => styles.image_rendering = source.image_rendering,
+        "aspect-ratio" => styles.aspect_ratio = source.aspect_ratio,
+        "object-fit" => styles.object_fit = source.object_fit,
+        "object-position" => styles.object_position = source.object_position.clone(),
+        _ => return false,
+    }
+    true
+}
+
+fn apply_global_keyword(
+    styles: &mut ComputedStyle,
+    parent: &ComputedStyle,
+    defaults: &ComputedStyle,
+    property: &str,
+    keyword: &str,
+    order: i32,
+) -> bool {
+    let Some(source) = global_keyword_source(keyword, property, parent, defaults) else {
+        return false;
+    };
+    apply_property_from_source(styles, source, property, order)
+}
+
+pub fn apply_declaration(
+    styles: &mut ComputedStyle,
+    decl: &Declaration,
+    parent_styles: &ComputedStyle,
+    parent_font_size: f32,
+    root_font_size: f32,
+) {
     // Handle CSS Custom Properties (--*)
     if decl.property.starts_with("--") {
         // Preserve the raw custom property value verbatim.
@@ -886,6 +2152,19 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
         _ => return,
     };
     let order = styles.logical.next_order();
+    if let Some(global) = global_keyword(&resolved_value) {
+        let defaults = ComputedStyle::default();
+        if apply_global_keyword(
+            styles,
+            parent_styles,
+            &defaults,
+            decl.property.as_str(),
+            global,
+            order,
+        ) {
+            return;
+        }
+    }
 
     let resolve_color_value = |value: &PropertyValue| -> Option<Rgba> {
         match value {
@@ -2739,20 +4018,18 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 };
             }
         }
-        "font-language-override" => {
-            match &resolved_value {
-                PropertyValue::Keyword(raw) if raw.eq_ignore_ascii_case("normal") => {
-                    styles.font_language_override = FontLanguageOverride::Normal;
-                }
-                PropertyValue::Keyword(raw) | PropertyValue::String(raw) => {
-                    let tag = raw.trim_matches('"').trim();
-                    if (1..=4).contains(&tag.len()) && tag.is_ascii() {
-                        styles.font_language_override = FontLanguageOverride::Override(tag.to_string());
-                    }
-                }
-                _ => {}
+        "font-language-override" => match &resolved_value {
+            PropertyValue::Keyword(raw) if raw.eq_ignore_ascii_case("normal") => {
+                styles.font_language_override = FontLanguageOverride::Normal;
             }
-        }
+            PropertyValue::Keyword(raw) | PropertyValue::String(raw) => {
+                let tag = raw.trim_matches('"').trim();
+                if (1..=4).contains(&tag.len()) && tag.is_ascii() {
+                    styles.font_language_override = FontLanguageOverride::Override(tag.to_string());
+                }
+            }
+            _ => {}
+        },
         "font-variant-emoji" => {
             if let PropertyValue::Keyword(raw) = &resolved_value {
                 styles.font_variant_emoji = match raw.to_ascii_lowercase().as_str() {
@@ -4602,7 +5879,9 @@ fn parse_font_shorthand(
                                 let parsed = parse_calc_function_length(&mut parser);
                                 match parsed {
                                     Ok(len) if len.value >= 0.0 => {
-                                        if let Some(sz) = resolve_font_size_length(len, parent_font_size, root_font_size) {
+                                        if let Some(sz) =
+                                            resolve_font_size_length(len, parent_font_size, root_font_size)
+                                        {
                                             font_size = Some(sz);
                                             phase = Phase::AfterSize;
                                             continue;
@@ -6143,74 +7422,52 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.object_fit, ObjectFit::Cover);
     }
 
     #[test]
     fn parses_image_rendering_keywords() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "image-rendering".to_string(),
                 value: PropertyValue::Keyword("pixelated".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.image_rendering, ImageRendering::Pixelated);
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "image-rendering".to_string(),
                 value: PropertyValue::Keyword("crisp-edges".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.image_rendering, ImageRendering::CrispEdges);
     }
 
     #[test]
     fn parses_containment_values() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "contain".to_string(),
                 value: PropertyValue::Keyword("paint".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert!(style.containment.paint);
         assert!(!style.containment.layout);
         assert!(!style.containment.size);
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "contain".to_string(),
                 value: PropertyValue::Keyword("strict".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert!(style.containment.paint && style.containment.layout && style.containment.size);
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "contain".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Keyword("layout".into()),
@@ -6218,10 +7475,7 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert!(style.containment.layout && style.containment.style);
         assert!(!style.containment.paint);
     }
@@ -6280,80 +7534,53 @@ mod tests {
     #[test]
     fn parses_text_orientation_keywords() {
         let mut styles = ComputedStyle::default();
-        apply_declaration(
-            &mut styles,
-            &Declaration {
+        apply_declaration(&mut styles, &Declaration {
                 property: "text-orientation".into(),
                 value: PropertyValue::Keyword("upright".into()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(styles.text_orientation, TextOrientation::Upright);
 
-        apply_declaration(
-            &mut styles,
-            &Declaration {
+        apply_declaration(&mut styles, &Declaration {
                 property: "text-orientation".into(),
                 value: PropertyValue::Keyword("sideways-right".into()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(styles.text_orientation, TextOrientation::SidewaysRight);
     }
 
     #[test]
     fn leaves_text_orientation_unchanged_on_unknown_keyword() {
         let mut styles = ComputedStyle::default();
-        apply_declaration(
-            &mut styles,
-            &Declaration {
+        apply_declaration(&mut styles, &Declaration {
                 property: "text-orientation".into(),
                 value: PropertyValue::Keyword("upright".into()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
-        apply_declaration(
-            &mut styles,
-            &Declaration {
+            }, &ComputedStyle::default(), 16.0, 16.0);
+        apply_declaration(&mut styles, &Declaration {
                 property: "text-orientation".into(),
                 value: PropertyValue::Keyword("invalid".into()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(styles.text_orientation, TextOrientation::Upright);
     }
 
     #[test]
     fn parses_text_combine_upright_values() {
         let mut styles = ComputedStyle::default();
-        apply_declaration(
-            &mut styles,
-            &Declaration {
+        apply_declaration(&mut styles, &Declaration {
                 property: "text-combine-upright".into(),
                 value: PropertyValue::Keyword("digits".into()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(styles.text_combine_upright, TextCombineUpright::Digits(2));
 
-        apply_declaration(
-            &mut styles,
-            &Declaration {
+        apply_declaration(&mut styles, &Declaration {
                 property: "text-combine-upright".into(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Keyword("digits".into()),
@@ -6361,23 +7588,15 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(styles.text_combine_upright, TextCombineUpright::Digits(3));
 
-        apply_declaration(
-            &mut styles,
-            &Declaration {
+        apply_declaration(&mut styles, &Declaration {
                 property: "text-combine-upright".into(),
                 value: PropertyValue::Keyword("all".into()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(styles.text_combine_upright, TextCombineUpright::All);
     }
 
@@ -6390,7 +7609,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut styles, &prop, 16.0, 16.0);
+        apply_declaration(&mut styles, &prop, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(
             styles.text_transform,
             TextTransform::with_case(CaseTransform::Uppercase)
@@ -6400,112 +7619,72 @@ mod tests {
     #[test]
     fn parses_aspect_ratio_keywords_and_numbers() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "aspect-ratio".to_string(),
                 value: PropertyValue::Keyword("16/9".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.aspect_ratio, AspectRatio::Ratio(r) if (r - (16.0/9.0)).abs() < 0.0001));
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "aspect-ratio".to_string(),
                 value: PropertyValue::Number(2.0),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.aspect_ratio, AspectRatio::Ratio(r) if (r - 2.0).abs() < 0.0001));
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "aspect-ratio".to_string(),
                 value: PropertyValue::Keyword("auto".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.aspect_ratio, AspectRatio::Auto));
     }
 
     #[test]
     fn parses_alignment_keywords_with_start_variants() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "align-items".to_string(),
                 value: PropertyValue::Keyword("start".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.align_items, AlignItems::Start);
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "align-self".to_string(),
                 value: PropertyValue::Keyword("self-end".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.align_self, Some(AlignItems::SelfEnd));
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "justify-items".to_string(),
                 value: PropertyValue::Keyword("right".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.justify_items, AlignItems::End);
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "justify-self".to_string(),
                 value: PropertyValue::Keyword("auto".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert!(style.justify_self.is_none());
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "justify-self".to_string(),
                 value: PropertyValue::Keyword("center".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.justify_self, Some(AlignItems::Center));
     }
 
@@ -6513,45 +7692,30 @@ mod tests {
     fn parses_place_shorthands() {
         let mut style = ComputedStyle::default();
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "place-items".to_string(),
                 value: PropertyValue::Keyword("center stretch".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.align_items, AlignItems::Center);
         assert_eq!(style.justify_items, AlignItems::Stretch);
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "place-self".to_string(),
                 value: PropertyValue::Keyword("end start".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.align_self, Some(AlignItems::End));
         assert_eq!(style.justify_self, Some(AlignItems::Start));
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "place-content".to_string(),
                 value: PropertyValue::Keyword("space-between center".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.align_content, AlignContent::SpaceBetween);
         assert_eq!(style.justify_content, JustifyContent::Center);
     }
@@ -6559,30 +7723,20 @@ mod tests {
     #[test]
     fn parses_writing_mode_keywords() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "writing-mode".to_string(),
                 value: PropertyValue::Keyword("vertical-rl".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.writing_mode, WritingMode::VerticalRl);
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "writing-mode".to_string(),
                 value: PropertyValue::Keyword("sideways-lr".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.writing_mode, WritingMode::SidewaysLr);
     }
 
@@ -6599,7 +7753,7 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(
             style.object_position.x,
             PositionComponent::Keyword(PositionKeyword::End)
@@ -6613,17 +7767,12 @@ mod tests {
     #[test]
     fn parses_box_sizing_keyword() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "box-sizing".to_string(),
                 value: PropertyValue::Keyword("border-box".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
 
         assert!(matches!(style.box_sizing, BoxSizing::BorderBox));
     }
@@ -6631,64 +7780,44 @@ mod tests {
     #[test]
     fn parses_grid_auto_rows_and_columns() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "grid-auto-rows".into(),
                 value: PropertyValue::Keyword("10px minmax(0,1fr)".into()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.grid_auto_rows.len(), 2);
         assert!(matches!(style.grid_auto_rows[0], GridTrack::Length(_)));
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "grid-auto-columns".into(),
                 value: PropertyValue::Keyword("20%".into()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.grid_auto_columns.len(), 1);
     }
 
     #[test]
     fn parses_grid_auto_flow() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "grid-auto-flow".into(),
                 value: PropertyValue::Keyword("column dense".into()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.grid_auto_flow, GridAutoFlow::ColumnDense);
     }
 
     #[test]
     fn parses_grid_area_named_area() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "grid-area".into(),
                 value: PropertyValue::Keyword("hero".into()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.grid_row_raw.as_deref(), Some("hero-start / hero-end"));
         assert_eq!(style.grid_column_raw.as_deref(), Some("hero-start / hero-end"));
     }
@@ -6696,17 +7825,12 @@ mod tests {
     #[test]
     fn parses_grid_shorthand_auto_flow_form() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "grid".into(),
                 value: PropertyValue::Keyword("auto-flow 10px / 20px".into()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.grid_auto_flow, GridAutoFlow::Row);
         assert_eq!(style.grid_auto_rows.len(), 1);
         assert_eq!(style.grid_auto_columns.len(), 1);
@@ -6715,17 +7839,12 @@ mod tests {
     #[test]
     fn parses_grid_shorthand_template_form() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "grid".into(),
                 value: PropertyValue::Keyword("\"a a\" \"b b\" / 1fr 2fr".into()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.grid_template_rows.len(), 2);
         assert_eq!(style.grid_template_columns.len(), 2);
         assert_eq!(style.grid_template_areas.len(), 2);
@@ -6734,17 +7853,12 @@ mod tests {
     #[test]
     fn gap_shorthand_parses_two_values_and_percent() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "gap".to_string(),
                 value: PropertyValue::Keyword("10px 20%".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
 
         assert_eq!(style.grid_row_gap, Length::px(10.0));
         assert_eq!(style.grid_column_gap, Length::percent(20.0));
@@ -6753,31 +7867,21 @@ mod tests {
     #[test]
     fn row_and_column_gap_accept_percent_and_normal() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "row-gap".to_string(),
                 value: PropertyValue::Keyword("normal".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.grid_row_gap, Length::px(0.0));
 
         let mut style2 = ComputedStyle::default();
-        apply_declaration(
-            &mut style2,
-            &Declaration {
+        apply_declaration(&mut style2, &Declaration {
                 property: "column-gap".to_string(),
                 value: PropertyValue::Percentage(15.0),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style2.grid_column_gap, Length::percent(15.0));
     }
 
@@ -6788,17 +7892,12 @@ mod tests {
         style.outline_width = Length::px(8.0);
         style.outline_color = OutlineColor::Color(Rgba::GREEN);
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "outline".to_string(),
                 value: PropertyValue::Color(Rgba::RED),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
 
         assert_eq!(style.outline_style, OutlineStyle::None);
         assert_eq!(style.outline_width, Length::px(3.0)); // medium
@@ -6811,9 +7910,7 @@ mod tests {
         style.color = Rgba::BLUE;
         style.outline_color = OutlineColor::Color(Rgba::GREEN);
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "outline".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Keyword("solid".to_string()),
@@ -6821,10 +7918,7 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
 
         assert_eq!(style.outline_style, OutlineStyle::Solid);
         assert_eq!(style.outline_width, Length::px(1.0));
@@ -6836,17 +7930,12 @@ mod tests {
     fn negative_outline_width_is_ignored() {
         let mut style = ComputedStyle::default();
         style.outline_width = Length::px(5.0);
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "outline-width".to_string(),
                 value: PropertyValue::Number(-3.0),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
 
         assert_eq!(style.outline_width, Length::px(5.0));
     }
@@ -6854,17 +7943,12 @@ mod tests {
     #[test]
     fn overflow_clip_sets_both_axes() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "overflow".to_string(),
                 value: PropertyValue::Keyword("clip".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
 
         assert_eq!(style.overflow_x, Overflow::Clip);
         assert_eq!(style.overflow_y, Overflow::Clip);
@@ -6883,7 +7967,7 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
         assert!((x.alignment - 0.0).abs() < 0.01);
         assert!((y.alignment - 0.0).abs() < 0.01);
@@ -6894,9 +7978,7 @@ mod tests {
     #[test]
     fn background_position_two_value_second_length_is_vertical() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-position".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Keyword("left".to_string()),
@@ -6904,10 +7986,7 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
         assert!((x.alignment - 0.0).abs() < 0.01);
         assert!(x.offset.is_zero());
@@ -6918,9 +7997,7 @@ mod tests {
     #[test]
     fn background_position_two_keywords_swapped_axes() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-position".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Keyword("top".to_string()),
@@ -6928,10 +8005,7 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
         assert!((x.alignment - 1.0).abs() < 0.01);
         assert!(x.offset.is_zero());
@@ -6941,9 +8015,7 @@ mod tests {
     #[test]
     fn background_position_center_left_swaps_axes() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-position".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Keyword("center".to_string()),
@@ -6951,10 +8023,7 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
         assert!((x.alignment - 0.0).abs() < 0.01);
         assert!((y.alignment - 0.5).abs() < 0.01);
@@ -6963,9 +8032,7 @@ mod tests {
     #[test]
     fn background_position_center_bottom_keeps_vertical() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-position".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Keyword("center".to_string()),
@@ -6973,10 +8040,7 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
         assert!((x.alignment - 0.5).abs() < 0.01);
         assert!((y.alignment - 1.0).abs() < 0.01);
@@ -6985,9 +8049,7 @@ mod tests {
     #[test]
     fn background_position_three_values_horizontal_pair() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-position".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Keyword("left".to_string()),
@@ -6996,10 +8058,7 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
         assert!((x.alignment - 0.0).abs() < 0.01);
         assert_eq!(x.offset, Length::px(10.0));
@@ -7010,9 +8069,7 @@ mod tests {
     #[test]
     fn background_position_three_values_vertical_pair() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-position".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Keyword("bottom".to_string()),
@@ -7021,10 +8078,7 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
         assert!((y.alignment - 1.0).abs() < 0.01);
         assert_eq!(y.offset, Length::px(-5.0));
@@ -7035,9 +8089,7 @@ mod tests {
     #[test]
     fn background_position_four_values() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-position".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Keyword("right".to_string()),
@@ -7047,10 +8099,7 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
         assert!((x.alignment - 1.0).abs() < 0.01);
         assert_eq!(x.offset, Length::px(-20.0));
@@ -7061,9 +8110,7 @@ mod tests {
     #[test]
     fn background_position_four_values_vertical_first() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-position".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Keyword("top".to_string()),
@@ -7073,10 +8120,7 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
         assert!((y.alignment - 0.0).abs() < 0.01);
         assert_eq!(y.offset, Length::px(10.0));
@@ -7087,9 +8131,7 @@ mod tests {
     #[test]
     fn background_position_x_and_y_longhands_merge_layers() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-image".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Url("a.png".to_string()),
@@ -7098,26 +8140,16 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-position-y".to_string(),
                 value: PropertyValue::Keyword("bottom".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-position-x".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Keyword("left".to_string()),
@@ -7126,10 +8158,7 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
 
         let BackgroundPosition::Position { x: x0, y: y0 } = style.background_layers[0].position;
         assert!((x0.alignment - 0.0).abs() < 0.01);
@@ -7145,9 +8174,7 @@ mod tests {
     #[test]
     fn background_position_y_longhand_repeats_for_layers() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-image".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Url("a.png".to_string()),
@@ -7156,22 +8183,14 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-position-y".to_string(),
                 value: PropertyValue::Percentage(10.0),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
 
         let BackgroundPosition::Position { y: y0, .. } = style.background_layers[0].position;
         let BackgroundPosition::Position { y: y1, .. } = style.background_layers[1].position;
@@ -7193,7 +8212,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
         assert!((x.alignment - 1.0).abs() < 0.01);
         assert!((y.alignment - 1.0).abs() < 0.01);
@@ -7215,7 +8234,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
         assert!((x.alignment - 1.0).abs() < 0.01);
         assert!((y.alignment - 0.0).abs() < 0.01);
@@ -7229,7 +8248,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
         assert!((x.alignment - 0.5).abs() < 0.01);
         assert!(x.offset.is_zero());
@@ -7249,7 +8268,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(style.text_decoration.lines.contains(TextDecorationLine::UNDERLINE));
         assert!(style.text_decoration.lines.contains(TextDecorationLine::OVERLINE));
 
@@ -7259,7 +8278,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.text_decoration.style, TextDecorationStyle::Dashed);
 
         let decl = Declaration {
@@ -7268,7 +8287,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.text_decoration.color, Some(Rgba::BLUE));
 
         let decl = Declaration {
@@ -7277,7 +8296,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(
             style.text_decoration.thickness,
             TextDecorationThickness::Length(l) if (l.to_px() - 3.0).abs() < 0.01
@@ -7289,7 +8308,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(
             style.text_decoration.thickness,
             TextDecorationThickness::FromFont
@@ -7301,7 +8320,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.text_underline_position, TextUnderlinePosition::Under));
 
         let decl = Declaration {
@@ -7313,7 +8332,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(
             style.text_underline_position,
             TextUnderlinePosition::UnderLeft
@@ -7333,7 +8352,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(
             style.text_emphasis_style,
             TextEmphasisStyle::Mark {
@@ -7348,7 +8367,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.text_emphasis_color, Some(Rgba::RED));
 
         let decl = Declaration {
@@ -7360,7 +8379,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.text_emphasis_position, TextEmphasisPosition::UnderRight));
 
         let decl = Declaration {
@@ -7372,7 +8391,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(
             style.text_emphasis_style,
             TextEmphasisStyle::Mark {
@@ -7397,7 +8416,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
 
         assert!(
             matches!(style.text_underline_position, TextUnderlinePosition::Under),
@@ -7423,7 +8442,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
 
         assert!(style.text_decoration.lines.contains(TextDecorationLine::UNDERLINE));
         assert!(!style.text_decoration.lines.contains(TextDecorationLine::LINE_THROUGH));
@@ -7442,7 +8461,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(style.text_decoration.lines.contains(TextDecorationLine::LINE_THROUGH));
         assert_eq!(style.text_decoration.style, TextDecorationStyle::Wavy);
         assert_eq!(style.text_decoration.color, None);
@@ -7460,7 +8479,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(style.text_decoration.lines.contains(TextDecorationLine::OVERLINE));
         assert_eq!(style.text_decoration.style, TextDecorationStyle::Double);
         assert_eq!(style.text_decoration.color, Some(Rgba::GREEN));
@@ -7479,7 +8498,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.list_style_type, ListStyleType::Square);
 
         let decl = Declaration {
@@ -7488,7 +8507,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.list_style_position, ListStylePosition::Inside);
 
         let decl = Declaration {
@@ -7497,7 +8516,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.list_style_image, ListStyleImage::Url("marker.png".to_string()));
 
         let decl = Declaration {
@@ -7509,7 +8528,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.list_style_type, ListStyleType::UpperRoman);
         assert_eq!(style.list_style_position, ListStylePosition::Outside);
         assert_eq!(style.list_style_image, ListStyleImage::None);
@@ -7520,7 +8539,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.list_style_image, ListStyleImage::Url("img.png".to_string()));
         assert_eq!(style.list_style_type, ListStyleType::Disc);
         assert_eq!(style.list_style_position, ListStylePosition::Outside);
@@ -7531,7 +8550,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.list_style_type, ListStyleType::None);
         assert_eq!(style.list_style_image, ListStyleImage::None);
 
@@ -7541,7 +8560,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.list_style_type, ListStyleType::LowerGreek);
 
         let decl = Declaration {
@@ -7550,7 +8569,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.list_style_type, ListStyleType::Armenian);
 
         let decl = Declaration {
@@ -7559,7 +8578,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.list_style_type, ListStyleType::LowerArmenian);
 
         let decl = Declaration {
@@ -7568,16 +8587,14 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.list_style_type, ListStyleType::Georgian);
     }
 
     #[test]
     fn cursor_keyword_parses() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "cursor".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Keyword("pointer".to_string()),
@@ -7585,10 +8602,7 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.cursor, CursorKeyword::Pointer);
         assert!(style.cursor_images.is_empty());
     }
@@ -7596,9 +8610,7 @@ mod tests {
     #[test]
     fn cursor_allows_custom_image_and_hotspot_with_fallback() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "cursor".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Url("cursor.cur".to_string()),
@@ -7609,10 +8621,7 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
 
         assert_eq!(style.cursor, CursorKeyword::Move);
         assert_eq!(style.cursor_images.len(), 1);
@@ -7623,9 +8632,7 @@ mod tests {
     #[test]
     fn cursor_accepts_image_set_and_fallback_keyword() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "cursor".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Keyword("image-set(url(\"c1.cur\") 1x, url(\"c2.cur\") 2x)".to_string()),
@@ -7634,10 +8641,7 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
 
         assert_eq!(style.cursor, CursorKeyword::Crosshair);
         assert_eq!(style.cursor_images.len(), 1);
@@ -7647,19 +8651,14 @@ mod tests {
     #[test]
     fn list_style_image_accepts_image_set() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "list-style-image".to_string(),
                 value: PropertyValue::Keyword(
                     "image-set(url(\"marker-1x.png\") 1x, url(\"marker-2x.png\") 2x)".to_string(),
                 ),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
 
         assert_eq!(style.list_style_image, ListStyleImage::Url("marker-1x.png".to_string()));
     }
@@ -7678,7 +8677,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(
             style.quotes,
             vec![("«".to_string(), "»".to_string()), ("‹".to_string(), "›".to_string())]
@@ -7690,7 +8689,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(style.quotes.is_empty());
     }
 
@@ -7706,7 +8705,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.letter_spacing, 0.0);
 
         let decl = Declaration {
@@ -7715,7 +8714,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!((style.letter_spacing - 5.0).abs() < 0.01);
 
         let decl = Declaration {
@@ -7724,7 +8723,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!((style.word_spacing - 10.0).abs() < 0.01);
 
         let decl = Declaration {
@@ -7733,7 +8732,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!((style.word_spacing + 10.0).abs() < 0.01);
     }
 
@@ -7746,7 +8745,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         let reset = style.counters.counter_reset.as_ref().unwrap();
         assert_eq!(reset.items.len(), 2);
         assert_eq!(reset.items[0].name, "chapter");
@@ -7763,7 +8762,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         let increment = style.counters.counter_increment.as_ref().unwrap();
         assert_eq!(increment.items.len(), 1);
         assert_eq!(increment.items[0].name, "item");
@@ -7775,7 +8774,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         let set = style.counters.counter_set.as_ref().unwrap();
         assert_eq!(set.items.len(), 1);
         assert_eq!(set.items[0].name, "item");
@@ -7787,7 +8786,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(style
             .counters
             .counter_increment
@@ -7837,7 +8836,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
 
         assert_eq!(style.background_color, Rgba::RED);
         let layer = &style.background_layers[0];
@@ -7858,9 +8857,7 @@ mod tests {
     fn background_longhand_lists_expand_layers() {
         let mut style = ComputedStyle::default();
         // Two images
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-image".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Url("a.png".to_string()),
@@ -7869,15 +8866,10 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.background_layers.len(), 2);
         // Only one size provided; values repeat across layers
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-size".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Length(Length::px(10.0)),
@@ -7885,10 +8877,7 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(
             style.background_layers[0].size,
             BackgroundSize::Explicit(
@@ -7904,9 +8893,7 @@ mod tests {
             )
         );
         // Two repeats; both layers updated
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-repeat".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Keyword("no-repeat".to_string()),
@@ -7915,10 +8902,7 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.background_layers[0].repeat, BackgroundRepeat::no_repeat());
         assert_eq!(style.background_layers[1].repeat.x, BackgroundRepeatKeyword::Space);
     }
@@ -7926,21 +8910,14 @@ mod tests {
     #[test]
     fn background_longhand_extra_values_drop_with_single_image_layer() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-image".to_string(),
                 value: PropertyValue::Url("one.png".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         // Two positions, but only one image -> second is ignored for layer construction
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-position".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Keyword("left".to_string()),
@@ -7951,10 +8928,7 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.background_layers.len(), 1);
         let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
         assert!((x.alignment - 0.0).abs() < 0.01);
@@ -7964,17 +8938,12 @@ mod tests {
     #[test]
     fn background_image_image_set_picks_1x_candidate() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-image".to_string(),
                 value: PropertyValue::Keyword("image-set(url(\"low.png\") 1x, url(\"retina.png\") 2x)".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
 
         let layer = &style.background_layers[0];
         assert!(matches!(
@@ -7987,17 +8956,12 @@ mod tests {
     fn background_image_image_set_honors_device_pixel_ratio() {
         let mut style = ComputedStyle::default();
         with_image_set_dpr(2.0, || {
-            apply_declaration(
-                &mut style,
-                &Declaration {
+            apply_declaration(&mut style, &Declaration {
                     property: "background-image".to_string(),
                     value: PropertyValue::Keyword("image-set(url(\"low.png\") 1x, url(\"retina.png\") 2x)".to_string()),
                     raw_value: String::new(),
                     important: false,
-                },
-                16.0,
-                16.0,
-            );
+                }, &ComputedStyle::default(), 16.0, 16.0);
         });
 
         assert!(matches!(
@@ -8009,35 +8973,25 @@ mod tests {
     #[test]
     fn background_image_image_set_uses_best_available_resolution() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-image".to_string(),
                 value: PropertyValue::Keyword("image-set(url(\"hi.png\") 192dpi)".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(
             style.background_layers[0].image,
             Some(BackgroundImage::Url(ref url)) if url == "hi.png"
         ));
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-image".to_string(),
                 value: PropertyValue::Keyword(
                     "image-set(url(\"smaller.png\") 0.5x, url(\"bigger.png\") 0.75x)".to_string(),
                 ),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(
             style.background_layers[0].image,
             Some(BackgroundImage::Url(ref url)) if url == "bigger.png"
@@ -8047,9 +9001,7 @@ mod tests {
     #[test]
     fn background_shorthand_accepts_image_set() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Keyword("image-set(url(\"one-x.png\") 1x, url(\"two-x.png\") 2x)".to_string()),
@@ -8057,10 +9009,7 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
 
         let layer = &style.background_layers[0];
         assert!(matches!(
@@ -8073,9 +9022,7 @@ mod tests {
     #[test]
     fn background_blend_mode_repeats_and_truncates() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-image".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Url("a.png".to_string()),
@@ -8084,28 +9031,18 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-blend-mode".to_string(),
                 value: PropertyValue::Keyword("screen".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.background_layers[0].blend_mode, MixBlendMode::Screen);
         assert_eq!(style.background_layers[1].blend_mode, MixBlendMode::Screen);
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-blend-mode".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Keyword("multiply".to_string()),
@@ -8114,27 +9051,17 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.background_layers[0].blend_mode, MixBlendMode::Multiply);
         assert_eq!(style.background_layers[1].blend_mode, MixBlendMode::Overlay);
 
-        apply_declaration(
-            &mut style,
-            &Declaration {
+        apply_declaration(&mut style, &Declaration {
                 property: "background-image".to_string(),
                 value: PropertyValue::Url("single.png".to_string()),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
-        apply_declaration(
-            &mut style,
-            &Declaration {
+            }, &ComputedStyle::default(), 16.0, 16.0);
+        apply_declaration(&mut style, &Declaration {
                 property: "background-blend-mode".to_string(),
                 value: PropertyValue::Multiple(vec![
                     PropertyValue::Keyword("darken".to_string()),
@@ -8143,10 +9070,7 @@ mod tests {
                 ]),
                 raw_value: String::new(),
                 important: false,
-            },
-            16.0,
-            16.0,
-        );
+            }, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.background_layers.len(), 1);
         assert_eq!(style.background_layers[0].blend_mode, MixBlendMode::Darken);
     }
@@ -8171,7 +9095,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
 
         assert_eq!(style.background_color, Rgba::RED);
         assert!(style.background_layers.first().and_then(|l| l.image.as_ref()).is_none());
@@ -8206,7 +9130,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
 
         assert_eq!(style.background_color, Rgba::TRANSPARENT);
         assert_eq!(style.background_layers.len(), 1);
@@ -8226,7 +9150,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.background_layers[0].repeat.x, BackgroundRepeatKeyword::Space);
         assert_eq!(style.background_layers[0].repeat.y, BackgroundRepeatKeyword::Space);
 
@@ -8236,7 +9160,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.background_layers[0].repeat.x, BackgroundRepeatKeyword::Repeat);
         assert_eq!(style.background_layers[0].repeat.y, BackgroundRepeatKeyword::NoRepeat);
 
@@ -8249,7 +9173,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.background_layers[0].repeat.x, BackgroundRepeatKeyword::Space);
         assert_eq!(style.background_layers[0].repeat.y, BackgroundRepeatKeyword::Round);
     }
@@ -8263,7 +9187,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(
             style.background_layers[0].size,
             BackgroundSize::Explicit(
@@ -8281,7 +9205,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(
             style.background_layers[0].size,
             BackgroundSize::Explicit(
@@ -8296,7 +9220,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(
             style.background_layers[0].size,
             BackgroundSize::Keyword(BackgroundSizeKeyword::Contain)
@@ -8313,7 +9237,7 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.white_space, WhiteSpace::BreakSpaces);
     }
 
@@ -8327,7 +9251,7 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.line_break, LineBreak::Anywhere);
     }
 
@@ -8341,7 +9265,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &origin_decl, 16.0, 16.0);
+        apply_declaration(&mut style, &origin_decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.background_layers[0].origin, BackgroundBox::ContentBox);
 
         let clip_decl = Declaration {
@@ -8350,7 +9274,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &clip_decl, 16.0, 16.0);
+        apply_declaration(&mut style, &clip_decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.background_layers[0].clip, BackgroundBox::PaddingBox);
     }
 
@@ -8394,7 +9318,7 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.backdrop_filter.len(), 1);
         match &style.backdrop_filter[0] {
             FilterFunction::Blur(len) => assert!((len.to_px() - 5.0).abs() < 0.01),
@@ -8411,7 +9335,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &number_decl, 16.0, 16.0);
+        apply_declaration(&mut style, &number_decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.tab_size, TabSize::Number(n) if (n - 4.0).abs() < 0.001));
 
         let length_decl = Declaration {
@@ -8420,7 +9344,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &length_decl, 16.0, 16.0);
+        apply_declaration(&mut style, &length_decl, &ComputedStyle::default(), 16.0, 16.0);
         match style.tab_size {
             TabSize::Length(len) => assert!((len.to_px() - 20.0).abs() < 0.001),
             other => panic!("expected length tab size, got {:?}", other),
@@ -8437,7 +9361,7 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_style, FontStyle::Italic));
         assert!(matches!(style.font_weight, FontWeight::Number(700)));
         assert!(matches!(
@@ -8462,7 +9386,7 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 20.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 20.0, 16.0);
         assert!(matches!(style.font_weight, FontWeight::Bold));
         assert!((style.font_stretch.to_percentage() - 100.0).abs() < 0.01);
         assert!((style.font_size - 24.0).abs() < 0.01);
@@ -8480,7 +9404,7 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_weight, FontWeight::Bold));
         assert!((style.font_size - 20.0).abs() < 0.01);
         assert!(matches!(style.line_height, LineHeight::Percentage(p) if (p - 75.0).abs() < 0.001));
@@ -8497,7 +9421,7 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_weight, FontWeight::Bold));
         assert!((style.font_size - 15.0).abs() < 0.01);
         assert!(matches!(style.line_height, LineHeight::Normal));
@@ -8514,7 +9438,7 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         // Invalid size leaves defaults
         assert!(matches!(style.font_weight, FontWeight::Normal));
         assert!((style.font_size - 16.0).abs() < 0.01);
@@ -8532,7 +9456,7 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 20.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 20.0, 16.0);
         // Invalid shorthand should leave defaults intact.
         assert!(matches!(style.font_weight, FontWeight::Normal));
         assert!((style.font_size - 16.0).abs() < 0.01);
@@ -8550,12 +9474,15 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         // Defaults stay intact because the shorthand is invalid.
         assert!(matches!(style.font_style, FontStyle::Normal));
         assert!((style.font_size - 16.0).abs() < 0.01);
         assert!(matches!(style.font_optical_sizing, FontOpticalSizing::Auto));
-        assert!(matches!(style.font_language_override, crate::style::types::FontLanguageOverride::Normal));
+        assert!(matches!(
+            style.font_language_override,
+            crate::style::types::FontLanguageOverride::Normal
+        ));
     }
 
     #[test]
@@ -8568,7 +9495,7 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.font_variation_settings.len(), 2);
         assert_eq!(style.font_variation_settings[0].tag, *b"wght");
         assert!((style.font_variation_settings[0].value - 600.0).abs() < 0.001);
@@ -8590,7 +9517,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(style.font_variation_settings.is_empty());
     }
 
@@ -8603,7 +9530,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_optical_sizing, FontOpticalSizing::None));
 
         let decl2 = Declaration {
@@ -8612,7 +9539,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl2, 16.0, 16.0);
+        apply_declaration(&mut style, &decl2, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_optical_sizing, FontOpticalSizing::Auto));
     }
 
@@ -8625,7 +9552,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(
             style.font_language_override,
             crate::style::types::FontLanguageOverride::Override(ref tag) if tag == "SRB"
@@ -8637,7 +9564,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl2, 16.0, 16.0);
+        apply_declaration(&mut style, &decl2, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(
             style.font_language_override,
             crate::style::types::FontLanguageOverride::Normal
@@ -8675,7 +9602,7 @@ mod tests {
         ];
 
         for decl in decls {
-            apply_declaration(&mut style, &decl, 16.0, 16.0);
+            apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         }
 
         assert_eq!(style.font_feature_settings.len(), 1);
@@ -8696,7 +9623,7 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.line_height, LineHeight::Percentage(p) if (p - 150.0).abs() < 0.001));
     }
 
@@ -8711,7 +9638,7 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.line_height, LineHeight::Length(l) if (l.to_px() - 30.0).abs() < 0.001));
     }
 
@@ -8726,7 +9653,7 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.line_height, LineHeight::Percentage(p) if (p - 75.0).abs() < 0.001));
     }
 
@@ -8742,7 +9669,7 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.line_height, LineHeight::Number(n) if (n - 1.2).abs() < 0.001));
     }
 
@@ -8756,7 +9683,7 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.line_height, LineHeight::Percentage(p) if (p - 125.0).abs() < 0.001));
     }
 
@@ -8771,7 +9698,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &negative_number, 16.0, 16.0);
+        apply_declaration(&mut style, &negative_number, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.line_height, LineHeight::Number(n) if (n - 1.2).abs() < 0.001));
 
         let negative_percent = Declaration {
@@ -8780,7 +9707,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &negative_percent, 16.0, 16.0);
+        apply_declaration(&mut style, &negative_percent, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.line_height, LineHeight::Number(n) if (n - 1.2).abs() < 0.001));
 
         let negative_length = Declaration {
@@ -8789,7 +9716,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &negative_length, 16.0, 16.0);
+        apply_declaration(&mut style, &negative_length, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.line_height, LineHeight::Number(n) if (n - 1.2).abs() < 0.001));
     }
 
@@ -8803,7 +9730,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!((style.font_size - 19.2).abs() < 0.01);
 
         let decl = Declaration {
@@ -8812,7 +9739,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 20.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 20.0, 16.0);
         assert!((style.font_size - 30.0).abs() < 0.01);
 
         let decl = Declaration {
@@ -8821,7 +9748,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 10.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 10.0, 16.0);
         assert!((style.font_size - 20.0).abs() < 0.01);
 
         let decl = Declaration {
@@ -8830,7 +9757,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!((style.font_size - 15.0).abs() < 0.01);
 
         let decl = Declaration {
@@ -8839,7 +9766,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 20.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 20.0, 16.0);
         assert!((style.font_size - 10.0).abs() < 0.01);
 
         let decl = Declaration {
@@ -8848,7 +9775,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         // Negative calc is ignored; previous value (10.0 from percent) stays.
         assert!((style.font_size - 10.0).abs() < 0.01);
     }
@@ -8862,7 +9789,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_style, FontStyle::Oblique(Some(a)) if (a - 20.0).abs() < 0.01));
 
         let invalid = Declaration {
@@ -8871,7 +9798,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &invalid, 16.0, 16.0);
+        apply_declaration(&mut style, &invalid, &ComputedStyle::default(), 16.0, 16.0);
         // Out-of-range angle invalidates the declaration; previous value remains.
         assert!(matches!(style.font_style, FontStyle::Oblique(Some(a)) if (a - 20.0).abs() < 0.01));
     }
@@ -8885,7 +9812,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_style, FontStyle::Oblique(Some(a)) if (a - 15.0).abs() < 0.01));
         assert!((style.font_size - 16.0).abs() < 0.01);
 
@@ -8895,7 +9822,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &invalid, 16.0, 16.0);
+        apply_declaration(&mut style, &invalid, &ComputedStyle::default(), 16.0, 16.0);
         // Invalid oblique angle makes the declaration invalid; style stays unchanged.
         assert!(matches!(style.font_style, FontStyle::Oblique(Some(a)) if (a - 15.0).abs() < 0.01));
         assert!((style.font_size - 16.0).abs() < 0.01);
@@ -8910,7 +9837,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_stretch, FontStretch::Expanded));
 
         let decl = Declaration {
@@ -8919,7 +9846,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!((style.font_stretch.to_percentage() - 125.0).abs() < 0.01);
     }
 
@@ -8933,7 +9860,7 @@ mod tests {
             important: false,
         };
 
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!((style.font_stretch.to_percentage() - FontStretch::Condensed.to_percentage()).abs() < 0.01);
         assert!(matches!(style.font_weight, FontWeight::Bold));
         assert!(matches!(style.font_style, FontStyle::Italic));
@@ -8950,7 +9877,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_variant, FontVariant::SmallCaps));
 
         let decl = Declaration {
@@ -8959,7 +9886,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_variant, FontVariant::SmallCaps));
     }
 
@@ -8972,7 +9899,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_variant_caps, FontVariantCaps::AllSmallCaps));
 
         let decl = Declaration {
@@ -8981,7 +9908,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_variant_caps, FontVariantCaps::TitlingCaps));
     }
 
@@ -8994,7 +9921,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_variant_position, FontVariantPosition::Super));
 
         let decl = Declaration {
@@ -9003,7 +9930,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_variant_position, FontVariantPosition::Normal));
     }
 
@@ -9016,7 +9943,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_size_adjust, FontSizeAdjust::Number(v) if (v - 0.7).abs() < 1e-6));
 
         let decl = Declaration {
@@ -9025,7 +9952,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_size_adjust, FontSizeAdjust::FromFont));
 
         let decl = Declaration {
@@ -9034,7 +9961,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_size_adjust, FontSizeAdjust::None));
     }
 
@@ -9047,7 +9974,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(style.font_synthesis.weight);
         assert!(style.font_synthesis.style);
         assert!(!style.font_synthesis.small_caps);
@@ -9059,7 +9986,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(!style.font_synthesis.weight);
         assert!(!style.font_synthesis.style);
         assert!(!style.font_synthesis.small_caps);
@@ -9075,8 +10002,11 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
-        assert!(matches!(style.font_variant_emoji, crate::style::types::FontVariantEmoji::Emoji));
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert!(matches!(
+            style.font_variant_emoji,
+            crate::style::types::FontVariantEmoji::Emoji
+        ));
 
         let decl = Declaration {
             property: "font-variant-emoji".to_string(),
@@ -9084,8 +10014,11 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
-        assert!(matches!(style.font_variant_emoji, crate::style::types::FontVariantEmoji::Text));
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert!(matches!(
+            style.font_variant_emoji,
+            crate::style::types::FontVariantEmoji::Text
+        ));
 
         let decl = Declaration {
             property: "font-variant-emoji".to_string(),
@@ -9093,8 +10026,11 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
-        assert!(matches!(style.font_variant_emoji, crate::style::types::FontVariantEmoji::Unicode));
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert!(matches!(
+            style.font_variant_emoji,
+            crate::style::types::FontVariantEmoji::Unicode
+        ));
 
         let decl = Declaration {
             property: "font-variant-emoji".to_string(),
@@ -9102,8 +10038,11 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
-        assert!(matches!(style.font_variant_emoji, crate::style::types::FontVariantEmoji::Normal));
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert!(matches!(
+            style.font_variant_emoji,
+            crate::style::types::FontVariantEmoji::Normal
+        ));
     }
 
     #[test]
@@ -9116,7 +10055,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(!style.font_synthesis.weight);
 
         let decl = Declaration {
@@ -9125,7 +10064,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(!style.font_synthesis.style);
 
         let decl = Declaration {
@@ -9134,7 +10073,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(!style.font_synthesis.small_caps);
 
         let decl = Declaration {
@@ -9143,7 +10082,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(!style.font_synthesis.position);
 
         let reset = Declaration {
@@ -9152,7 +10091,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &reset, 16.0, 16.0);
+        apply_declaration(&mut style, &reset, &ComputedStyle::default(), 16.0, 16.0);
         assert!(style.font_synthesis.weight);
         assert!(style.font_synthesis.style);
         assert!(style.font_synthesis.small_caps);
@@ -9168,7 +10107,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(
             style.font_variant_east_asian.variant,
             Some(EastAsianVariant::Jis90)
@@ -9185,7 +10124,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(style.font_variant_east_asian.variant.is_none());
         assert!(style.font_variant_east_asian.width.is_none());
         assert!(!style.font_variant_east_asian.ruby);
@@ -9202,7 +10141,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_variant_numeric.figure, NumericFigure::Oldstyle));
         assert!(matches!(style.font_variant_numeric.spacing, NumericSpacing::Tabular));
         assert!(matches!(style.font_variant_numeric.fraction, NumericFraction::Stacked));
@@ -9215,7 +10154,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_variant_numeric.figure, NumericFigure::Normal));
         assert!(matches!(style.font_variant_numeric.spacing, NumericSpacing::Normal));
         assert!(matches!(style.font_variant_numeric.fraction, NumericFraction::Normal));
@@ -9232,7 +10171,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_kerning, FontKerning::None));
 
         let decl = Declaration {
@@ -9241,7 +10180,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_kerning, FontKerning::Normal));
     }
 
@@ -9254,7 +10193,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.float, crate::style::float::Float::Left));
 
         let decl = Declaration {
@@ -9263,7 +10202,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.clear, crate::style::float::Clear::Both));
 
         let decl = Declaration {
@@ -9272,7 +10211,7 @@ mod tests {
             raw_value: String::new(),
             important: false,
         };
-        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         // Invalid value leaves previous value unchanged
         assert!(matches!(style.float, crate::style::float::Float::Left));
     }
@@ -9603,10 +10542,7 @@ fn parse_variation_setting<'i, 't>(
     parser.skip_whitespace();
     let value = parser.expect_number()?;
 
-    Ok(FontVariationSetting {
-        tag: tag_bytes,
-        value,
-    })
+    Ok(FontVariationSetting { tag: tag_bytes, value })
 }
 
 fn inline_axis_is_horizontal(wm: WritingMode) -> bool {
