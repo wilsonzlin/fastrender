@@ -3361,6 +3361,9 @@ impl FormattingContext for TableFormattingContext {
             if let Some(max) = max_len {
                 row_heights[idx] = row_heights[idx].min(max);
             }
+            if let Some(SpecifiedHeight::Fixed(px)) = row.specified_height {
+                row_heights[idx] = row_heights[idx].max(px);
+            }
             if let (Some(base), Some(SpecifiedHeight::Percent(pct))) = (percent_height_base, row.specified_height) {
                 let target = (pct / 100.0) * base;
                 row_heights[idx] = row_heights[idx].max(target);
@@ -6248,6 +6251,78 @@ mod tests {
 
         assert!((structure.rows[0].computed_height - 100.0).abs() < 0.01);
         assert!((structure.rows[1].computed_height - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn row_groups_reordered_header_body_footer() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut head_group_style = ComputedStyle::default();
+        head_group_style.display = Display::TableHeaderGroup;
+
+        let mut body_group_style = ComputedStyle::default();
+        body_group_style.display = Display::TableRowGroup;
+
+        let mut foot_group_style = ComputedStyle::default();
+        foot_group_style.display = Display::TableFooterGroup;
+
+        let mut row_style_head = ComputedStyle::default();
+        row_style_head.display = Display::TableRow;
+        row_style_head.height = Some(Length::px(10.0));
+
+        let mut row_style_body = ComputedStyle::default();
+        row_style_body.display = Display::TableRow;
+        row_style_body.height = Some(Length::px(30.0));
+
+        let mut row_style_foot = ComputedStyle::default();
+        row_style_foot.display = Display::TableRow;
+        row_style_foot.height = Some(Length::px(15.0));
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+
+        let make_row = |style: &ComputedStyle| {
+            BoxNode::new_block(
+                Arc::new(style.clone()),
+                FormattingContextType::Block,
+                vec![BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![])],
+            )
+        };
+
+        let head_group =
+            BoxNode::new_block(Arc::new(head_group_style), FormattingContextType::Block, vec![make_row(&row_style_head)]);
+        let body_group =
+            BoxNode::new_block(Arc::new(body_group_style), FormattingContextType::Block, vec![make_row(&row_style_body)]);
+        let foot_group =
+            BoxNode::new_block(Arc::new(foot_group_style), FormattingContextType::Block, vec![make_row(&row_style_foot)]);
+
+        // Intentionally shuffle DOM order: footer, body, header
+        let table = BoxNode::new_block(
+            Arc::new(table_style),
+            FormattingContextType::Table,
+            vec![foot_group, body_group, head_group],
+        );
+
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(&table, &LayoutConstraints::definite_width(100.0))
+            .expect("table layout");
+
+        let mut tops = Vec::new();
+        collect_table_cell_tops(&fragment, &mut tops);
+        tops.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        assert_eq!(tops.len(), 3, "expected three rows");
+        let h0 = tops[1] - tops[0];
+        let h1 = tops[2] - tops[1];
+        let h2 = fragment.bounds.height() - tops[2];
+
+        assert!(h0 >= 9.0 && h0 <= 11.5, "header row should stay first with its height");
+        assert!(h1 >= 28.0 && h1 <= 32.0, "body row should remain in the middle with its height");
+        assert!(h2 >= 14.0 && h2 <= 17.0, "footer row should move to the end with its height");
     }
 
     #[test]
