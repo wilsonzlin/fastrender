@@ -2061,6 +2061,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "text-orientation" => styles.text_orientation = source.text_orientation,
         "text-combine-upright" => styles.text_combine_upright = source.text_combine_upright,
         "text-indent" => styles.text_indent = source.text_indent.clone(),
+        "text-overflow" => styles.text_overflow = source.text_overflow.clone(),
         "direction" => styles.direction = source.direction,
         "text-decoration-line" => {
             styles.text_decoration.lines = source.text_decoration.lines.clone();
@@ -4773,6 +4774,34 @@ pub fn apply_declaration_with_base(
                     "break-word" => OverflowWrap::BreakWord,
                     "anywhere" => OverflowWrap::Anywhere,
                     _ => styles.overflow_wrap,
+                };
+            }
+        }
+        "text-overflow" => {
+            let parse_side = |value: &PropertyValue| -> Option<TextOverflowSide> {
+                match value {
+                    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("clip") => Some(TextOverflowSide::Clip),
+                    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("ellipsis") => {
+                        Some(TextOverflowSide::Ellipsis)
+                    }
+                    PropertyValue::String(s) => Some(TextOverflowSide::String(s.clone())),
+                    _ => None,
+                }
+            };
+
+            let mut sides: Vec<TextOverflowSide> = match &resolved_value {
+                PropertyValue::Multiple(values) => values.iter().filter_map(parse_side).collect(),
+                other => parse_side(other).into_iter().collect(),
+            };
+
+            if sides.len() == 1 {
+                sides.push(sides[0].clone());
+            }
+
+            if sides.len() == 2 {
+                styles.text_overflow = TextOverflow {
+                    inline_start: sides[0].clone(),
+                    inline_end: sides[1].clone(),
                 };
             }
         }
@@ -8034,7 +8063,8 @@ mod tests {
         FontVariant, GridAutoFlow, GridTrack, ImageOrientation, ImageRendering, ImageResolution, JustifyContent,
         ListStylePosition, ListStyleType, MixBlendMode, OutlineColor, OutlineStyle, PositionComponent, PositionKeyword,
         TextCombineUpright, TextDecorationLine, TextDecorationStyle, TextDecorationThickness, TextEmphasisFill,
-        TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle, TextOrientation, TextTransform, WritingMode,
+        TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle, TextOrientation, TextOverflowSide, TextTransform,
+        WritingMode,
     };
     use cssparser::{Parser, ParserInput};
 
@@ -8170,6 +8200,69 @@ mod tests {
         };
         // device 3 / 1.6 = 1.875 -> round to 2 => used resolution 1.5dppx
         assert!((res.used_resolution(None, 3.0) - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parses_text_overflow_keywords() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-overflow".to_string(),
+                value: PropertyValue::Keyword("ellipsis".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_overflow.inline_start, TextOverflowSide::Ellipsis));
+        assert!(matches!(style.text_overflow.inline_end, TextOverflowSide::Ellipsis));
+
+        let mut two_value = ComputedStyle::default();
+        apply_declaration(
+            &mut two_value,
+            &Declaration {
+                property: "text-overflow".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("clip".to_string()),
+                    PropertyValue::Keyword("ellipsis".to_string()),
+                ]),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(two_value.text_overflow.inline_start, TextOverflowSide::Clip));
+        assert!(matches!(two_value.text_overflow.inline_end, TextOverflowSide::Ellipsis));
+    }
+
+    #[test]
+    fn parses_text_overflow_string_value() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-overflow".to_string(),
+                value: PropertyValue::String("--".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(
+            style.text_overflow.inline_start,
+            TextOverflowSide::String(ref s) if s == "--"
+        ));
+        assert!(matches!(
+            style.text_overflow.inline_end,
+            TextOverflowSide::String(ref s) if s == "--"
+        ));
     }
 
     #[test]

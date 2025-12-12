@@ -40,7 +40,7 @@ use types::{
     LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast,
     TextCombineUpright, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent,
-    TextJustify, TextOrientation, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TransformOrigin,
+    TextJustify, TextOrientation, TextOverflow, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TransformOrigin,
     UnicodeBidi, VerticalAlign, WhiteSpace, WillChange, WordBreak, WritingMode,
 };
 use values::Length;
@@ -363,6 +363,7 @@ pub struct ComputedStyle {
     pub text_align_last: TextAlignLast,
     pub text_justify: TextJustify,
     pub text_indent: TextIndent,
+    pub text_overflow: TextOverflow,
     pub text_decoration: TextDecoration,
     /// Whether a text-decoration line declaration was authored (shorthand or longhand).
     pub text_decoration_line_specified: bool,
@@ -573,6 +574,7 @@ impl Default for ComputedStyle {
             text_align_last: TextAlignLast::Auto,
             text_justify: TextJustify::Auto,
             text_indent: TextIndent::default(),
+            text_overflow: TextOverflow::clip(),
             text_decoration: TextDecoration::default(),
             text_decoration_line_specified: false,
             applied_text_decorations: Vec::new(),

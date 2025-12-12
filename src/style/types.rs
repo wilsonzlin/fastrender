@@ -1406,6 +1406,50 @@ impl Default for TextIndent {
     }
 }
 
+/// CSS `text-overflow`
+///
+/// Reference: CSS Overflow Module Level 3 / Text Overflow
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextOverflow {
+    pub inline_start: TextOverflowSide,
+    pub inline_end: TextOverflowSide,
+}
+
+impl TextOverflow {
+    pub fn clip() -> Self {
+        Self {
+            inline_start: TextOverflowSide::Clip,
+            inline_end: TextOverflowSide::Clip,
+        }
+    }
+
+    pub fn start_for_direction(&self, direction: Direction) -> &TextOverflowSide {
+        match direction {
+            Direction::Ltr => &self.inline_start,
+            Direction::Rtl => &self.inline_end,
+        }
+    }
+
+    pub fn end_for_direction(&self, direction: Direction) -> &TextOverflowSide {
+        match direction {
+            Direction::Ltr => &self.inline_end,
+            Direction::Rtl => &self.inline_start,
+        }
+    }
+
+    pub fn is_clip_only(&self) -> bool {
+        matches!(self.inline_start, TextOverflowSide::Clip) && matches!(self.inline_end, TextOverflowSide::Clip)
+    }
+}
+
+/// Per-side text overflow behavior
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextOverflowSide {
+    Clip,
+    Ellipsis,
+    String(String),
+}
+
 /// Text decoration lines
 ///
 /// CSS: `text-decoration`

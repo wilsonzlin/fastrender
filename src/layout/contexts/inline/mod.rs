@@ -69,7 +69,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::text::font_db::ScaledMetrics;
-use baseline::{compute_line_height_with_metrics, BaselineMetrics};
+use baseline::{compute_line_height_with_metrics, BaselineMetrics, LineBaselineAccumulator, VerticalAlign};
 use line_builder::{InlineBlockItem, InlineItem, Line, LineBuilder, PositionedItem, ReplacedItem, TabItem, TextItem};
 
 /// Inline Formatting Context implementation
@@ -3307,6 +3307,298 @@ impl InlineFormattingContext {
         Ok((fragment, fy, bottom_rel))
     }
 
+    fn apply_text_overflow(
+        &self,
+        mut lines: Vec<Line>,
+        style: &Arc<ComputedStyle>,
+        strut_metrics: &BaselineMetrics,
+        inline_vertical: bool,
+    ) -> Result<Vec<Line>, LayoutError> {
+        let overflow_axis = if inline_vertical { style.overflow_y } else { style.overflow_x };
+        let clipping = matches!(overflow_axis, crate::style::types::Overflow::Hidden | crate::style::types::Overflow::Scroll | crate::style::types::Overflow::Auto | crate::style::types::Overflow::Clip);
+        if !clipping {
+            return Ok(lines);
+        }
+
+        let mut out = Vec::with_capacity(lines.len());
+        for line in lines.drain(..) {
+            let limit = line.available_width;
+            let overflowed = limit.is_finite() && line.width > limit + 0.01;
+            if !overflowed {
+                let mut clamped = line;
+                if limit.is_finite() {
+                    clamped.width = clamped.width.min(limit.max(0.0));
+                }
+                out.push(clamped);
+                continue;
+            }
+
+            let start_side = style.text_overflow.start_for_direction(line.resolved_direction);
+            let end_side = style.text_overflow.end_for_direction(line.resolved_direction);
+            let mut adjusted = match self.apply_text_overflow_to_line(&line, start_side, end_side, style, strut_metrics)? {
+                Some(line) => line,
+                None => {
+                    let mut clipped = line.clone();
+                    clipped.width = limit.max(0.0).min(clipped.width);
+                    clipped
+                }
+            };
+            if adjusted.available_width.is_finite() {
+                adjusted.width = adjusted.width.min(adjusted.available_width.max(0.0));
+            }
+            out.push(adjusted);
+        }
+
+        Ok(out)
+    }
+
+    fn apply_text_overflow_to_line(
+        &self,
+        line: &Line,
+        start_side: &crate::style::types::TextOverflowSide,
+        end_side: &crate::style::types::TextOverflowSide,
+        style: &Arc<ComputedStyle>,
+        strut_metrics: &BaselineMetrics,
+    ) -> Result<Option<Line>, LayoutError> {
+        let limit = line.available_width;
+        if !limit.is_finite() || limit <= 0.0 {
+            return Ok(None);
+        }
+
+        let start_marker = self.build_overflow_marker_item(start_side, style, line.resolved_direction)?;
+        let end_marker = self.build_overflow_marker_item(end_side, style, line.resolved_direction)?;
+        let start_width = start_marker.as_ref().map(|m| m.width()).unwrap_or(0.0);
+        let end_width = end_marker.as_ref().map(|m| m.width()).unwrap_or(0.0);
+
+        let mut items: Vec<InlineItem> = line.items.iter().map(|p| p.item.clone()).collect();
+        let markers_total = start_width + end_width;
+
+        if markers_total >= limit - 0.01 {
+            // Prefer end marker, then start marker if only one can fit.
+            let mut single: Option<InlineItem> = None;
+            if end_width > 0.0 && end_width <= limit {
+                single = end_marker;
+            } else if start_width > 0.0 && start_width <= limit {
+                single = start_marker;
+            }
+            if let Some(marker) = single {
+                let rebuilt = self.rebuild_line_with_items(vec![marker], line, strut_metrics);
+                return Ok(Some(rebuilt));
+            }
+            return Ok(None);
+        }
+
+        let mut budget = (limit - markers_total).max(0.0);
+        if start_marker.is_some() {
+            self.trim_line_start(&mut items, budget);
+            let used = self.line_items_width(&items);
+            budget = budget.min(used);
+        }
+        if end_marker.is_some() {
+            self.trim_line_end(&mut items, budget);
+        } else if self.line_items_width(&items) > budget + 0.01 {
+            self.trim_line_end(&mut items, budget);
+        }
+
+        if let Some(marker) = start_marker {
+            items.insert(0, marker);
+        }
+        if let Some(marker) = end_marker {
+            items.push(marker);
+        }
+
+        let rebuilt = self.rebuild_line_with_items(items, line, strut_metrics);
+        Ok(Some(rebuilt))
+    }
+
+    fn build_overflow_marker_item(
+        &self,
+        side: &crate::style::types::TextOverflowSide,
+        style: &Arc<ComputedStyle>,
+        direction: crate::style::types::Direction,
+    ) -> Result<Option<InlineItem>, LayoutError> {
+        let text = match side {
+            crate::style::types::TextOverflowSide::Clip => return Ok(None),
+            crate::style::types::TextOverflowSide::Ellipsis => "…",
+            crate::style::types::TextOverflowSide::String(s) => {
+                if s.is_empty() {
+                    return Ok(None);
+                }
+                s.as_str()
+            }
+        };
+
+        let mut item = self.create_text_item_from_normalized(
+            style,
+            text,
+            Vec::new(),
+            false,
+            false,
+            direction,
+            &[(style.unicode_bidi, style.direction)],
+        )?;
+        item.advance_for_layout = item.advance;
+        Ok(Some(InlineItem::Text(item)))
+    }
+
+    fn trim_line_end(&self, items: &mut Vec<InlineItem>, target_width: f32) {
+        const WIDTH_EPS: f32 = 0.01;
+        while self.line_items_width(items) > target_width + WIDTH_EPS {
+            let Some(item) = items.pop() else { break };
+            let remaining = target_width - self.line_items_width(items);
+            if remaining <= WIDTH_EPS {
+                continue;
+            }
+
+            if let InlineItem::Text(text) = item {
+                if let Some(truncated) = self.truncate_text_item_to_width(&text, remaining) {
+                    items.push(InlineItem::Text(truncated));
+                    break;
+                }
+            }
+        }
+    }
+
+    fn trim_line_start(&self, items: &mut Vec<InlineItem>, target_width: f32) {
+        const WIDTH_EPS: f32 = 0.01;
+        while self.line_items_width(items) > target_width + WIDTH_EPS {
+            if items.is_empty() {
+                break;
+            }
+            let item = items.remove(0);
+            let remaining = target_width - self.line_items_width(items);
+            if remaining <= WIDTH_EPS {
+                continue;
+            }
+
+            if let InlineItem::Text(text) = item {
+                if let Some(kept) = self.truncate_text_item_from_start(&text, remaining) {
+                    items.insert(0, InlineItem::Text(kept));
+                    break;
+                }
+            }
+        }
+    }
+
+    fn truncate_text_item_to_width(&self, item: &TextItem, max_width: f32) -> Option<TextItem> {
+        const WIDTH_EPS: f32 = 0.01;
+        if max_width <= WIDTH_EPS {
+            return None;
+        }
+
+        let mut best: Option<usize> = None;
+        for offset in item.cluster_byte_offsets() {
+            let advance = item.advance_at_offset(offset);
+            if advance <= max_width + WIDTH_EPS {
+                best = Some(offset);
+            } else {
+                break;
+            }
+        }
+
+        if best.is_none() && item.advance_at_offset(item.text.len()) <= max_width + WIDTH_EPS {
+            best = Some(item.text.len());
+        }
+
+        let offset = best?;
+        if offset == 0 {
+            return None;
+        }
+        if offset >= item.text.len() {
+            return Some(item.clone());
+        }
+
+        item.split_at(offset, false, &self.pipeline, &self.font_context)
+            .map(|(before, _)| before)
+    }
+
+    fn truncate_text_item_from_start(&self, item: &TextItem, max_width: f32) -> Option<TextItem> {
+        const WIDTH_EPS: f32 = 0.01;
+        if max_width <= WIDTH_EPS {
+            return None;
+        }
+        let total = item.advance_for_layout;
+        if total <= max_width + WIDTH_EPS {
+            return Some(item.clone());
+        }
+
+        let mut best: Option<usize> = None;
+        for offset in item.cluster_byte_offsets() {
+            let prefix = item.advance_at_offset(offset);
+            let suffix_width = total - prefix;
+            if suffix_width <= max_width + WIDTH_EPS {
+                best = Some(offset);
+                break;
+            }
+        }
+
+        let offset = best?;
+        item.split_at(offset, false, &self.pipeline, &self.font_context)
+            .map(|(_, after)| after)
+    }
+
+    fn line_items_width(&self, items: &[InlineItem]) -> f32 {
+        items.iter().map(|i| i.width()).sum()
+    }
+
+    fn rebuild_line_with_items(&self, items: Vec<InlineItem>, template: &Line, strut_metrics: &BaselineMetrics) -> Line {
+        let mut acc = LineBaselineAccumulator::new(strut_metrics);
+        let mut positioned = Vec::with_capacity(items.len());
+        let mut x = 0.0;
+
+        for item in items {
+            let metrics = item.baseline_metrics();
+            let align = item.vertical_align();
+            let baseline_offset = if align.is_line_relative() {
+                acc.add_line_relative(&metrics, align);
+                0.0
+            } else {
+                acc.add_baseline_relative(&metrics, align, None)
+            };
+
+            positioned.push(PositionedItem {
+                item,
+                x,
+                baseline_offset,
+            });
+            x += positioned.last().map(|p| p.item.width()).unwrap_or(0.0);
+        }
+
+        let mut line = Line {
+            items: positioned,
+            resolved_direction: template.resolved_direction,
+            available_width: template.available_width,
+            box_width: template.box_width,
+            left_offset: template.left_offset,
+            y_offset: template.y_offset,
+            width: x,
+            height: acc.line_height(),
+            baseline: acc.baseline_position(),
+            ends_with_hard_break: template.ends_with_hard_break,
+        };
+
+        for positioned in &mut line.items {
+            match positioned.item.vertical_align() {
+                VerticalAlign::Top => {
+                    positioned.baseline_offset =
+                        positioned.item.baseline_metrics().baseline_offset - line.baseline;
+                }
+                VerticalAlign::Bottom => {
+                    let metrics = positioned.item.baseline_metrics();
+                    positioned.baseline_offset =
+                        line.height - metrics.height - (line.baseline - metrics.baseline_offset);
+                }
+                _ => {}
+            }
+        }
+
+        if line.available_width.is_finite() {
+            line.width = line.width.min(line.available_width.max(0.0));
+        }
+
+        line
+    }
+
     pub fn layout_with_floats(
         &self,
         box_node: &BoxNode,
@@ -3594,6 +3886,8 @@ impl InlineFormattingContext {
             final_ctx,
             &mut flow_order,
         );
+
+        let lines = self.apply_text_overflow(lines, style, &strut_metrics, inline_vertical)?;
 
         // Calculate total height
         let total_height_lines: f32 = lines.iter().map(|l| l.y_offset + l.height).fold(0.0, f32::max);
@@ -4412,8 +4706,8 @@ mod tests {
     use crate::style::display::{Display, FormattingContextType};
     use crate::style::types::FontSizeAdjust;
     use crate::style::types::{
-        CaseTransform, HyphensMode, ListStylePosition, OverflowWrap, TextCombineUpright, TextTransform, WhiteSpace,
-        WordBreak, WritingMode,
+        CaseTransform, HyphensMode, ListStylePosition, Overflow, OverflowWrap, TextCombineUpright, TextOverflow,
+        TextOverflowSide, TextTransform, WhiteSpace, WordBreak, WritingMode,
     };
     use crate::style::values::{Length, LengthUnit};
     use crate::style::ComputedStyle;
@@ -4459,6 +4753,15 @@ mod tests {
             }
         }
         (marker_x, text_x)
+    }
+
+    fn collect_text_fragments(fragment: &FragmentNode, out: &mut Vec<String>) {
+        if let FragmentContent::Text { ref text, .. } = fragment.content {
+            out.push(text.clone());
+        }
+        for child in &fragment.children {
+            collect_text_fragments(child, out);
+        }
     }
 
     #[test]
@@ -5347,6 +5650,81 @@ mod tests {
         assert!(
             fragment.children.len() > 1,
             "line-break:anywhere should allow breaking long tokens when they overflow"
+        );
+    }
+
+    #[test]
+    fn text_overflow_ellipsis_truncates_overflowing_line() {
+        let mut container_style = ComputedStyle::default();
+        container_style.white_space = WhiteSpace::Nowrap;
+        container_style.overflow_x = Overflow::Hidden;
+        container_style.text_overflow = TextOverflow {
+            inline_start: TextOverflowSide::Clip,
+            inline_end: TextOverflowSide::Ellipsis,
+        };
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = container_style.white_space;
+        let root = BoxNode::new_block(
+            Arc::new(container_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "overflowing content that will not fit in the box".to_string(),
+            )],
+        );
+        let constraints = LayoutConstraints::definite_width(60.0);
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+        let mut texts = Vec::new();
+        collect_text_fragments(&fragment, &mut texts);
+        assert!(
+            texts.iter().any(|t| t.contains('…')),
+            "expected ellipsis fragment when inline content overflows"
+        );
+        let line_fragment = fragment
+            .children
+            .iter()
+            .find(|c| matches!(c.content, FragmentContent::Line { .. }))
+            .expect("line fragment");
+        assert!(
+            line_fragment.bounds.width() <= 60.1,
+            "line width should clamp to the available inline size when clipped"
+        );
+    }
+
+    #[test]
+    fn text_overflow_start_value_elides_from_inline_start() {
+        let mut container_style = ComputedStyle::default();
+        container_style.white_space = WhiteSpace::Nowrap;
+        container_style.overflow_x = Overflow::Hidden;
+        container_style.text_overflow = TextOverflow {
+            inline_start: TextOverflowSide::Ellipsis,
+            inline_end: TextOverflowSide::Clip,
+        };
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = container_style.white_space;
+        let root = BoxNode::new_block(
+            Arc::new(container_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "leading text that will be trimmed at the start".to_string(),
+            )],
+        );
+        let constraints = LayoutConstraints::definite_width(80.0);
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+        let mut texts = Vec::new();
+        collect_text_fragments(&fragment, &mut texts);
+        assert!(
+            texts.first().map(|t| t.contains('…')).unwrap_or(false),
+            "inline-start ellipsis should appear at the beginning of the line"
+        );
+        assert!(
+            !texts.iter().skip(1).any(|t| t.contains('…')),
+            "ellipsis should only appear on the inline-start edge"
         );
     }
 
