@@ -2613,9 +2613,7 @@ mod tests {
         use crate::css::types::TextShadow;
         use crate::style::color::Rgba;
         use crate::style::counters::CounterManager;
-        use crate::style::types::{
-            ListStyleType, TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
-        };
+        use crate::style::types::{ListStyleType, TextDecorationLine, TextDecorationStyle, TextDecorationThickness};
         use crate::style::values::Length;
 
         let mut li_style = ComputedStyle::default();
@@ -2654,8 +2652,7 @@ mod tests {
             children: vec![],
         };
 
-        let marker_box =
-            create_marker_box(&styled, &CounterManager::default()).expect("marker should be generated");
+        let marker_box = create_marker_box(&styled, &CounterManager::default()).expect("marker should be generated");
         let style = marker_box.style.as_ref();
         assert!(style.text_decoration.lines.contains(TextDecorationLine::UNDERLINE));
         assert_eq!(style.text_decoration.style, TextDecorationStyle::Wavy);

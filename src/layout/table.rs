@@ -293,9 +293,18 @@ fn distribute_rowspan_targets(
         if !flexible.is_empty() {
             let finite_sum: f32 = flexible
                 .iter()
-                .filter_map(|(_, cap_left)| if *cap_left == f32::INFINITY { None } else { Some(*cap_left) })
+                .filter_map(|(_, cap_left)| {
+                    if *cap_left == f32::INFINITY {
+                        None
+                    } else {
+                        Some(*cap_left)
+                    }
+                })
                 .sum();
-            let unbounded: Vec<_> = flexible.iter().filter(|(_, cap_left)| *cap_left == f32::INFINITY).collect();
+            let unbounded: Vec<_> = flexible
+                .iter()
+                .filter(|(_, cap_left)| *cap_left == f32::INFINITY)
+                .collect();
 
             if finite_sum > 0.0 {
                 for (idx, cap_left) in flexible {
@@ -321,7 +330,12 @@ fn distribute_rowspan_targets(
     }
 }
 
-fn distribute_remaining_height_with_caps(computed: &mut [f32], rows: &[RowInfo], remaining: f32, percent_base: Option<f32>) {
+fn distribute_remaining_height_with_caps(
+    computed: &mut [f32],
+    rows: &[RowInfo],
+    remaining: f32,
+    percent_base: Option<f32>,
+) {
     if remaining <= 0.0 || computed.is_empty() {
         return;
     }
@@ -394,8 +408,15 @@ fn distribute_extra_row_height_with_groups(
             .iter()
             .map(|g| {
                 let count = (g.start..g.end).count();
-                let spacing = if count > 0 { v_spacing * count.saturating_sub(1) as f32 } else { 0.0 };
-                let current: f32 = (g.start..g.end).filter_map(|i| row_metrics.get(i)).map(|r| r.height).sum();
+                let spacing = if count > 0 {
+                    v_spacing * count.saturating_sub(1) as f32
+                } else {
+                    0.0
+                };
+                let current: f32 = (g.start..g.end)
+                    .filter_map(|i| row_metrics.get(i))
+                    .map(|r| r.height)
+                    .sum();
                 let (_, max_cap) = resolve_row_group_min_max(g, percent_base);
                 max_cap.map(|cap| (cap - current - spacing).max(0.0))
             })
@@ -580,7 +601,11 @@ fn distribute_row_group_extra_with_caps(
                 if headroom <= 0.0 {
                     continue;
                 }
-                let weight = if headroom.is_finite() { headroom } else { current.max(1.0) };
+                let weight = if headroom.is_finite() {
+                    headroom
+                } else {
+                    current.max(1.0)
+                };
                 eligible.push((idx, headroom, weight));
             }
         }
@@ -928,22 +953,12 @@ impl TableStructure {
         for child in &table_box.children {
             match Self::get_table_element_type(child) {
                 TableElementType::Column => {
-                    let span = child
-                        .debug_info
-                        .as_ref()
-                        .map(|d| d.column_span)
-                        .unwrap_or(1)
-                        .max(1);
+                    let span = child.debug_info.as_ref().map(|d| d.column_span).unwrap_or(1).max(1);
                     explicit_columns += span;
                 }
                 TableElementType::ColumnGroup => {
                     if child.children.is_empty() {
-                        let span = child
-                            .debug_info
-                            .as_ref()
-                            .map(|d| d.column_span)
-                            .unwrap_or(1)
-                            .max(1);
+                        let span = child.debug_info.as_ref().map(|d| d.column_span).unwrap_or(1).max(1);
                         explicit_columns += span;
                     } else {
                         for group_child in &child.children {
@@ -1075,12 +1090,7 @@ impl TableStructure {
         for child in &table_box.children {
             match Self::get_table_element_type(child) {
                 TableElementType::Column => {
-                    let span = child
-                        .debug_info
-                        .as_ref()
-                        .map(|d| d.column_span)
-                        .unwrap_or(1)
-                        .max(1);
+                    let span = child.debug_info.as_ref().map(|d| d.column_span).unwrap_or(1).max(1);
                     for _ in 0..span {
                         if col_cursor >= structure.columns.len() {
                             structure.columns.push(ColumnInfo::new(col_cursor));
@@ -1125,12 +1135,7 @@ impl TableStructure {
                             }
                         }
                     } else {
-                        let span = child
-                            .debug_info
-                            .as_ref()
-                            .map(|d| d.column_span)
-                            .unwrap_or(1)
-                            .max(1);
+                        let span = child.debug_info.as_ref().map(|d| d.column_span).unwrap_or(1).max(1);
                         for _ in 0..span {
                             if col_cursor >= structure.columns.len() {
                                 structure.columns.push(ColumnInfo::new(col_cursor));
@@ -2534,7 +2539,14 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
                     .map(|idx| row_floor_fn(idx, *mins.get(idx).unwrap_or(&0.0)))
                     .sum();
                 let remaining = (span_height - non_target_sum).max(0.0);
-                distribute_rowspan_targets(&targets, &mut mins, &structure.rows, remaining, percent_base, &row_floor_fn);
+                distribute_rowspan_targets(
+                    &targets,
+                    &mut mins,
+                    &structure.rows,
+                    remaining,
+                    percent_base,
+                    &row_floor_fn,
+                );
                 for (idx, val) in mins.into_iter().enumerate() {
                     if let Some(row) = structure.rows.get_mut(idx) {
                         row.min_height = row.min_height.max(val);
@@ -2598,7 +2610,13 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
         } else if remaining < 0.0 && !percent_rows.is_empty() {
             // Percent rows over-commit the available space; reduce them using headroom-aware weights.
             let percent_indices: Vec<usize> = percent_rows.iter().map(|(i, _)| *i).collect();
-            reduce_rows_with_headroom(&mut computed, &structure.rows, base, &percent_indices, content_available);
+            reduce_rows_with_headroom(
+                &mut computed,
+                &structure.rows,
+                base,
+                &percent_indices,
+                content_available,
+            );
         }
     }
 
@@ -3488,7 +3506,11 @@ impl FormattingContext for TableFormattingContext {
         for laid in &laid_out_cells {
             let row = &mut row_metrics[laid.cell.row];
             let row_height = row_heights.get(laid.cell.row).copied().unwrap_or(row.height);
-            let contribution = if laid.cell.rowspan == 1 { laid.height } else { row_height };
+            let contribution = if laid.cell.rowspan == 1 {
+                laid.height
+            } else {
+                row_height
+            };
             row.max_cell_height = row.max_cell_height.max(contribution);
 
             if laid.vertical_align.is_baseline_relative() {
@@ -3872,14 +3894,7 @@ impl FormattingContext for TableFormattingContext {
                     let baseline = laid.baseline.unwrap_or(laid.height).min(laid.height);
                     let baseline = if laid.cell.rowspan > 1 {
                         let span_end = (cell.row + cell.rowspan).min(row_metrics.len());
-                        spanning_baseline_allocation(
-                            laid.height,
-                            baseline,
-                            row_start,
-                            span_end,
-                            &row_metric_heights,
-                        )
-                        .0
+                        spanning_baseline_allocation(laid.height, baseline, row_start, span_end, &row_metric_heights).0
                     } else {
                         let row_h = row_metrics.get(row_start).map(|r| r.height).unwrap_or(baseline);
                         baseline.min(row_h)
@@ -4273,10 +4288,16 @@ impl FormattingContext for TableFormattingContext {
 
         // Apply authored min/max width to intrinsic size per CSS preferred width clamping.
         let font_size = box_node.style.font_size;
-        let min_w =
-            resolve_opt_length_against(box_node.style.min_width.as_ref(), font_size, None /* no containing width */);
-        let max_w =
-            resolve_opt_length_against(box_node.style.max_width.as_ref(), font_size, None /* no containing width */);
+        let min_w = resolve_opt_length_against(
+            box_node.style.min_width.as_ref(),
+            font_size,
+            None, /* no containing width */
+        );
+        let max_w = resolve_opt_length_against(
+            box_node.style.max_width.as_ref(),
+            font_size,
+            None, /* no containing width */
+        );
         let clamped = clamp_to_min_max(width, min_w, max_w);
 
         Ok(clamped.max(0.0))
@@ -5171,7 +5192,11 @@ mod tests {
         collect_cell_widths(&fragment, &mut widths);
         assert_eq!(widths.len(), 2);
         // Percent width should consume 80% of the available space when table width resolves from containing block.
-        assert!((79.0..81.5).contains(&widths[0]), "expected ~80% width, got {:?}", widths);
+        assert!(
+            (79.0..81.5).contains(&widths[0]),
+            "expected ~80% width, got {:?}",
+            widths
+        );
         assert!((18.0..22.0).contains(&widths[1]));
     }
 
@@ -6201,7 +6226,10 @@ mod tests {
         assert!((structure.columns[0].computed_width - 150.0).abs() < 0.01);
         assert!((structure.columns[1].computed_width - 150.0).abs() < 0.01);
         let total: f32 = structure.columns.iter().map(|c| c.computed_width).sum();
-        assert!(total > 299.0, "percent columns should not be scaled down when exceeding 100%");
+        assert!(
+            total > 299.0,
+            "percent columns should not be scaled down when exceeding 100%"
+        );
     }
 
     #[test]
@@ -6468,16 +6496,29 @@ mod tests {
             BoxNode::new_block(
                 Arc::new(style.clone()),
                 FormattingContextType::Block,
-                vec![BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![])],
+                vec![BoxNode::new_block(
+                    Arc::new(cell_style.clone()),
+                    FormattingContextType::Block,
+                    vec![],
+                )],
             )
         };
 
-        let head_group =
-            BoxNode::new_block(Arc::new(head_group_style), FormattingContextType::Block, vec![make_row(&row_style_head)]);
-        let body_group =
-            BoxNode::new_block(Arc::new(body_group_style), FormattingContextType::Block, vec![make_row(&row_style_body)]);
-        let foot_group =
-            BoxNode::new_block(Arc::new(foot_group_style), FormattingContextType::Block, vec![make_row(&row_style_foot)]);
+        let head_group = BoxNode::new_block(
+            Arc::new(head_group_style),
+            FormattingContextType::Block,
+            vec![make_row(&row_style_head)],
+        );
+        let body_group = BoxNode::new_block(
+            Arc::new(body_group_style),
+            FormattingContextType::Block,
+            vec![make_row(&row_style_body)],
+        );
+        let foot_group = BoxNode::new_block(
+            Arc::new(foot_group_style),
+            FormattingContextType::Block,
+            vec![make_row(&row_style_foot)],
+        );
 
         // Intentionally shuffle DOM order: footer, body, header
         let table = BoxNode::new_block(
@@ -6501,8 +6542,14 @@ mod tests {
         let h2 = fragment.bounds.height() - tops[2];
 
         assert!(h0 >= 9.0 && h0 <= 11.5, "header row should stay first with its height");
-        assert!(h1 >= 28.0 && h1 <= 32.0, "body row should remain in the middle with its height");
-        assert!(h2 >= 14.0 && h2 <= 17.0, "footer row should move to the end with its height");
+        assert!(
+            h1 >= 28.0 && h1 <= 32.0,
+            "body row should remain in the middle with its height"
+        );
+        assert!(
+            h2 >= 14.0 && h2 <= 17.0,
+            "footer row should move to the end with its height"
+        );
     }
 
     #[test]
@@ -6529,20 +6576,40 @@ mod tests {
             BoxNode::new_block(
                 Arc::new(style.clone()),
                 FormattingContextType::Block,
-                vec![BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![])],
+                vec![BoxNode::new_block(
+                    Arc::new(cell_style.clone()),
+                    FormattingContextType::Block,
+                    vec![],
+                )],
             )
         };
 
-        let head_a =
-            BoxNode::new_block(Arc::new(head_group_style.clone()), FormattingContextType::Block, vec![make_row(&row_style)]);
-        let head_b =
-            BoxNode::new_block(Arc::new(head_group_style), FormattingContextType::Block, vec![make_row(&row_style)]);
-        let body = BoxNode::new_block(Arc::new(body_group_style), FormattingContextType::Block, vec![make_row(&row_style)]);
+        let head_a = BoxNode::new_block(
+            Arc::new(head_group_style.clone()),
+            FormattingContextType::Block,
+            vec![make_row(&row_style)],
+        );
+        let head_b = BoxNode::new_block(
+            Arc::new(head_group_style),
+            FormattingContextType::Block,
+            vec![make_row(&row_style)],
+        );
+        let body = BoxNode::new_block(
+            Arc::new(body_group_style),
+            FormattingContextType::Block,
+            vec![make_row(&row_style)],
+        );
         let loose_row = make_row(&row_style);
-        let foot_a =
-            BoxNode::new_block(Arc::new(foot_group_style.clone()), FormattingContextType::Block, vec![make_row(&row_style)]);
-        let foot_b =
-            BoxNode::new_block(Arc::new(foot_group_style), FormattingContextType::Block, vec![make_row(&row_style)]);
+        let foot_a = BoxNode::new_block(
+            Arc::new(foot_group_style.clone()),
+            FormattingContextType::Block,
+            vec![make_row(&row_style)],
+        );
+        let foot_b = BoxNode::new_block(
+            Arc::new(foot_group_style),
+            FormattingContextType::Block,
+            vec![make_row(&row_style)],
+        );
 
         // DOM order: footer, header, body, loose row, header, footer.
         // Layout order should be: header rows (DOM order), body/loose rows, footer rows (DOM order).
@@ -6683,7 +6750,10 @@ mod tests {
             .layout(&table, &LayoutConstraints::definite_width(100.0))
             .expect("table layout");
 
-        assert!(fragment.bounds.width() >= 399.0, "caption min width should expand the table");
+        assert!(
+            fragment.bounds.width() >= 399.0,
+            "caption min width should expand the table"
+        );
     }
 
     #[test]
@@ -6709,7 +6779,10 @@ mod tests {
             .compute_intrinsic_inline_size(&table, IntrinsicSizingMode::MinContent)
             .expect("intrinsic width");
 
-        assert!(min >= 119.0, "table intrinsic width should be at least the caption min width");
+        assert!(
+            min >= 119.0,
+            "table intrinsic width should be at least the caption min width"
+        );
     }
 
     #[test]
@@ -6734,7 +6807,10 @@ mod tests {
             .layout(&table, &LayoutConstraints::definite_width(50.0))
             .expect("table layout");
 
-        assert!(fragment.bounds.width() >= 179.0, "caption-only table should size to the caption");
+        assert!(
+            fragment.bounds.width() >= 179.0,
+            "caption-only table should size to the caption"
+        );
     }
 
     #[test]
@@ -6791,7 +6867,10 @@ mod tests {
             .layout(&table, &LayoutConstraints::definite_width(800.0))
             .expect("table layout");
 
-        assert!(fragment.bounds.width() <= 200.1, "caption should not force table past its max width");
+        assert!(
+            fragment.bounds.width() <= 200.1,
+            "caption should not force table past its max width"
+        );
     }
 
     #[test]
@@ -7053,10 +7132,13 @@ mod tests {
 
         let row0_cell = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![]);
         let row1_cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-        let row0 = BoxNode::new_block(Arc::new(row_style.clone()), FormattingContextType::Block, vec![row0_cell]);
+        let row0 = BoxNode::new_block(
+            Arc::new(row_style.clone()),
+            FormattingContextType::Block,
+            vec![row0_cell],
+        );
         let row1 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![row1_cell]);
-        let tbody =
-            BoxNode::new_block(Arc::new(group_style), FormattingContextType::Block, vec![row0, row1]);
+        let tbody = BoxNode::new_block(Arc::new(group_style), FormattingContextType::Block, vec![row0, row1]);
         let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![tbody]);
 
         let fc = TableFormattingContext::new();
@@ -7068,11 +7150,17 @@ mod tests {
         collect_table_cell_tops(&fragment, &mut tops);
         tops.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-        assert!(fragment.bounds.height() >= 99.0, "row group height should contribute to table height");
+        assert!(
+            fragment.bounds.height() >= 99.0,
+            "row group height should contribute to table height"
+        );
         assert!(tops.len() >= 2);
         let row0_height = tops[1] - tops[0];
         let row1_height = fragment.bounds.height() - tops[1];
-        assert!(row0_height > 30.0 && row1_height > 30.0, "extra height should be shared across rows");
+        assert!(
+            row0_height > 30.0 && row1_height > 30.0,
+            "extra height should be shared across rows"
+        );
     }
 
     #[test]
@@ -7096,10 +7184,13 @@ mod tests {
 
         let row0_cell = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![]);
         let row1_cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-        let row0 = BoxNode::new_block(Arc::new(row_style.clone()), FormattingContextType::Block, vec![row0_cell]);
+        let row0 = BoxNode::new_block(
+            Arc::new(row_style.clone()),
+            FormattingContextType::Block,
+            vec![row0_cell],
+        );
         let row1 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![row1_cell]);
-        let tbody =
-            BoxNode::new_block(Arc::new(group_style), FormattingContextType::Block, vec![row0, row1]);
+        let tbody = BoxNode::new_block(Arc::new(group_style), FormattingContextType::Block, vec![row0, row1]);
         let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![tbody]);
 
         let fc = TableFormattingContext::new();
@@ -7111,7 +7202,10 @@ mod tests {
         collect_table_cell_tops(&fragment, &mut tops);
         tops.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-        assert!(fragment.bounds.height() >= 199.0, "explicit table height should remain intact");
+        assert!(
+            fragment.bounds.height() >= 199.0,
+            "explicit table height should remain intact"
+        );
         assert!(tops.len() >= 2);
         let rows_sum = (tops[1] - tops[0]) + (fragment.bounds.height() - tops[1]);
         assert!(
@@ -7146,19 +7240,29 @@ mod tests {
             BoxNode::new_block(
                 Arc::new(row_style.clone()),
                 FormattingContextType::Block,
-                vec![BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![])],
+                vec![BoxNode::new_block(
+                    Arc::new(cell_style.clone()),
+                    FormattingContextType::Block,
+                    vec![],
+                )],
             )
         };
 
         let row0 = make_row(&cell_style);
         let row1 = make_row(&cell_style);
-        let capped_group =
-            BoxNode::new_block(Arc::new(capped_group_style), FormattingContextType::Block, vec![row0, row1]);
+        let capped_group = BoxNode::new_block(
+            Arc::new(capped_group_style),
+            FormattingContextType::Block,
+            vec![row0, row1],
+        );
 
         let row2 = make_row(&cell_style);
         let row3 = make_row(&cell_style);
-        let free_group =
-            BoxNode::new_block(Arc::new(free_group_style), FormattingContextType::Block, vec![row2, row3]);
+        let free_group = BoxNode::new_block(
+            Arc::new(free_group_style),
+            FormattingContextType::Block,
+            vec![row2, row3],
+        );
 
         let table = BoxNode::new_block(
             Arc::new(table_style),
@@ -7182,9 +7286,18 @@ mod tests {
 
         let capped_sum = h0 + h1;
         let free_sum = h2 + h3;
-        assert!(capped_sum <= 81.0, "capped group should not exceed its max height: {capped_sum}");
-        assert!(free_sum >= 110.0, "remaining extra height should flow into uncapped rows");
-        assert!((fragment.bounds.height() - 200.0).abs() < 0.5, "table height should stay at 200px");
+        assert!(
+            capped_sum <= 81.0,
+            "capped group should not exceed its max height: {capped_sum}"
+        );
+        assert!(
+            free_sum >= 110.0,
+            "remaining extra height should flow into uncapped rows"
+        );
+        assert!(
+            (fragment.bounds.height() - 200.0).abs() < 0.5,
+            "table height should stay at 200px"
+        );
     }
 
     #[test]
@@ -7901,13 +8014,13 @@ mod tests {
         let row = BoxNode::new_block(
             Arc::new(row_style),
             FormattingContextType::Block,
-            vec![BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![])],
+            vec![BoxNode::new_block(
+                Arc::new(cell_style),
+                FormattingContextType::Block,
+                vec![],
+            )],
         );
-        let table = BoxNode::new_block(
-            Arc::new(table_style),
-            FormattingContextType::Table,
-            vec![colgroup, row],
-        );
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![colgroup, row]);
 
         let structure = TableStructure::from_box_tree(&table);
         assert_eq!(
@@ -7926,13 +8039,8 @@ mod tests {
         colgroup_style.display = Display::TableColumnGroup;
         colgroup_style.width = Some(Length::px(7.0));
         colgroup_style.visibility = Visibility::Visible;
-        let colgroup =
-            BoxNode::new_block(Arc::new(colgroup_style), FormattingContextType::Block, Vec::new());
-        let table = BoxNode::new_block(
-            Arc::new(table_style),
-            FormattingContextType::Table,
-            vec![colgroup],
-        );
+        let colgroup = BoxNode::new_block(Arc::new(colgroup_style), FormattingContextType::Block, Vec::new());
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![colgroup]);
 
         let structure = TableStructure::from_box_tree(&table);
         assert_eq!(structure.column_count, 1, "empty colgroup implies a single column");
@@ -7958,7 +8066,11 @@ mod tests {
         let mut col_style = ComputedStyle::default();
         col_style.display = Display::TableColumn;
         let mut col = BoxNode::new_block(Arc::new(col_style.clone()), FormattingContextType::Block, vec![]);
-        col.debug_info = Some(DebugInfo::new(Some("col".to_string()), None, vec![]).with_dom_path("").with_spans(1, 1));
+        col.debug_info = Some(
+            DebugInfo::new(Some("col".to_string()), None, vec![])
+                .with_dom_path("")
+                .with_spans(1, 1),
+        );
         col.debug_info.as_mut().unwrap().column_span = 3;
 
         let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![col]);

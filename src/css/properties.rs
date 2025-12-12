@@ -244,7 +244,11 @@ fn parse_text_shadow_list(value_str: &str) -> Option<Vec<TextShadow>> {
             return None;
         }
 
-        let blur = if lengths.len() == 3 { lengths[2] } else { Length::px(0.0) };
+        let blur = if lengths.len() == 3 {
+            lengths[2]
+        } else {
+            Length::px(0.0)
+        };
         shadows.push(TextShadow {
             offset_x: lengths[0],
             offset_y: lengths[1],

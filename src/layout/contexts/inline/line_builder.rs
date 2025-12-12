@@ -1720,7 +1720,9 @@ impl<'a> LineBuilder<'a> {
     fn paragraph_all_plaintext(lines: &[Line]) -> bool {
         let mut saw_plaintext = false;
         let all_plain = lines.iter().all(|line| {
-            line.items.iter().all(|p| Self::item_allows_plaintext(&p.item, &mut saw_plaintext))
+            line.items
+                .iter()
+                .all(|p| Self::item_allows_plaintext(&p.item, &mut saw_plaintext))
         });
         all_plain && saw_plaintext
     }

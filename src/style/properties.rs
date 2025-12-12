@@ -8279,8 +8279,7 @@ mod tests {
         assert_eq!(shadows[0].blur_radius, Length::px(3.0));
         assert_eq!(shadows[0].color, Some(Rgba::from_rgba8(10, 20, 30, 255)));
 
-        let multiple =
-            parse_property_value("text-shadow", "1px -1px red, 0 2px").expect("valid multi-shadow");
+        let multiple = parse_property_value("text-shadow", "1px -1px red, 0 2px").expect("valid multi-shadow");
         let PropertyValue::TextShadow(shadows) = multiple else {
             panic!("expected text-shadow value");
         };

@@ -443,34 +443,34 @@ impl InlineFormattingContext {
                         positioned_children,
                         bidi_stack,
                     )?;
-            bidi_stack.pop();
-            let fallback_metrics = self.compute_strut_metrics(&child.style);
-            let metrics = compute_inline_box_metrics(
-                &child_items,
-                content_offset_y,
-                padding_bottom + border_bottom,
-                fallback_metrics,
-            );
+                    bidi_stack.pop();
+                    let fallback_metrics = self.compute_strut_metrics(&child.style);
+                    let metrics = compute_inline_box_metrics(
+                        &child_items,
+                        content_offset_y,
+                        padding_bottom + border_bottom,
+                        fallback_metrics,
+                    );
 
-            let mut inline_box = InlineBoxItem::new(
-                start_edge,
-                end_edge,
-                content_offset_y,
-                metrics,
-                child.style.clone(),
-                0,
-                if matches!(child.style.unicode_bidi, UnicodeBidi::Plaintext) {
-                    let mut logical = String::new();
-                    collect_logical_text_for_direction(child, &mut logical);
-                    first_strong_direction(&logical).unwrap_or(child.style.direction)
-                } else {
-                    child.style.direction
-                },
-                child.style.unicode_bidi,
-            );
-            inline_box.vertical_align = self.convert_vertical_align(
-                child.style.vertical_align,
-                child.style.font_size,
+                    let mut inline_box = InlineBoxItem::new(
+                        start_edge,
+                        end_edge,
+                        content_offset_y,
+                        metrics,
+                        child.style.clone(),
+                        0,
+                        if matches!(child.style.unicode_bidi, UnicodeBidi::Plaintext) {
+                            let mut logical = String::new();
+                            collect_logical_text_for_direction(child, &mut logical);
+                            first_strong_direction(&logical).unwrap_or(child.style.direction)
+                        } else {
+                            child.style.direction
+                        },
+                        child.style.unicode_bidi,
+                    );
+                    inline_box.vertical_align = self.convert_vertical_align(
+                        child.style.vertical_align,
+                        child.style.font_size,
                         metrics.line_height,
                     );
                     for item in child_items {
@@ -3349,8 +3349,18 @@ impl InlineFormattingContext {
         strut_metrics: &BaselineMetrics,
         inline_vertical: bool,
     ) -> Result<Vec<Line>, LayoutError> {
-        let overflow_axis = if inline_vertical { style.overflow_y } else { style.overflow_x };
-        let clipping = matches!(overflow_axis, crate::style::types::Overflow::Hidden | crate::style::types::Overflow::Scroll | crate::style::types::Overflow::Auto | crate::style::types::Overflow::Clip);
+        let overflow_axis = if inline_vertical {
+            style.overflow_y
+        } else {
+            style.overflow_x
+        };
+        let clipping = matches!(
+            overflow_axis,
+            crate::style::types::Overflow::Hidden
+                | crate::style::types::Overflow::Scroll
+                | crate::style::types::Overflow::Auto
+                | crate::style::types::Overflow::Clip
+        );
         if !clipping {
             return Ok(lines);
         }
@@ -3370,14 +3380,15 @@ impl InlineFormattingContext {
 
             let start_side = style.text_overflow.start_for_direction(line.resolved_direction);
             let end_side = style.text_overflow.end_for_direction(line.resolved_direction);
-            let mut adjusted = match self.apply_text_overflow_to_line(&line, start_side, end_side, style, strut_metrics)? {
-                Some(line) => line,
-                None => {
-                    let mut clipped = line.clone();
-                    clipped.width = limit.max(0.0).min(clipped.width);
-                    clipped
-                }
-            };
+            let mut adjusted =
+                match self.apply_text_overflow_to_line(&line, start_side, end_side, style, strut_metrics)? {
+                    Some(line) => line,
+                    None => {
+                        let mut clipped = line.clone();
+                        clipped.width = limit.max(0.0).min(clipped.width);
+                        clipped
+                    }
+                };
             if adjusted.available_width.is_finite() {
                 adjusted.width = adjusted.width.min(adjusted.available_width.max(0.0));
             }
@@ -3576,7 +3587,12 @@ impl InlineFormattingContext {
         items.iter().map(|i| i.width()).sum()
     }
 
-    fn rebuild_line_with_items(&self, items: Vec<InlineItem>, template: &Line, strut_metrics: &BaselineMetrics) -> Line {
+    fn rebuild_line_with_items(
+        &self,
+        items: Vec<InlineItem>,
+        template: &Line,
+        strut_metrics: &BaselineMetrics,
+    ) -> Line {
         let mut acc = LineBaselineAccumulator::new(strut_metrics);
         let mut positioned = Vec::with_capacity(items.len());
         let mut x = 0.0;
@@ -3615,8 +3631,7 @@ impl InlineFormattingContext {
         for positioned in &mut line.items {
             match positioned.item.vertical_align() {
                 VerticalAlign::Top => {
-                    positioned.baseline_offset =
-                        positioned.item.baseline_metrics().baseline_offset - line.baseline;
+                    positioned.baseline_offset = positioned.item.baseline_metrics().baseline_offset - line.baseline;
                 }
                 VerticalAlign::Bottom => {
                     let metrics = positioned.item.baseline_metrics();
@@ -5790,7 +5805,10 @@ mod tests {
         let ifc = InlineFormattingContext::new();
 
         let debug_item = ifc
-            .create_text_item(&BoxNode::new_text(text_style.clone(), "ABC\nאבג".to_string()), "ABC\nאבג")
+            .create_text_item(
+                &BoxNode::new_text(text_style.clone(), "ABC\nאבג".to_string()),
+                "ABC\nאבג",
+            )
             .expect("text item");
         assert!(
             debug_item.break_opportunities.iter().any(|b| b.is_mandatory()),
@@ -5808,7 +5826,9 @@ mod tests {
             .collect_inline_items(&root, 200.0, Some(200.0))
             .expect("collect items");
         assert!(
-            inline_items.iter().any(|item| matches!(item, InlineItem::Text(t) if t.break_opportunities.iter().any(|b| b.is_mandatory()))),
+            inline_items.iter().any(
+                |item| matches!(item, InlineItem::Text(t) if t.break_opportunities.iter().any(|b| b.is_mandatory()))
+            ),
             "mandatory breaks should survive inline item collection"
         );
 
@@ -6756,7 +6776,10 @@ mod tests {
         let root = BoxNode::new_block(
             Arc::new(root_style),
             FormattingContextType::Block,
-            vec![BoxNode::new_text(Arc::new(text_style), "word word\nword word".to_string())],
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "word word\nword word".to_string(),
+            )],
         );
         let constraints = LayoutConstraints::definite_width(120.0);
 

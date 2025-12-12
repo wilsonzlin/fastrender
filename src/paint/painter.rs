@@ -876,11 +876,25 @@ impl Painter {
                 let shaped_runs = runs
                     .clone()
                     .or_else(|| self.shaper.shape(&text, &style, &self.font_ctx).ok());
+                let baseline_block = rect.x() + baseline_offset;
                 let baseline_y = rect.y() + baseline_offset;
+                let inline_vertical = matches!(
+                    style.writing_mode,
+                    crate::style::types::WritingMode::VerticalRl | crate::style::types::WritingMode::VerticalLr
+                );
                 if let Some(ref shaped) = shaped_runs {
-                    self.paint_shaped_runs(shaped, rect.x(), baseline_y, color, Some(&style));
+                    if inline_vertical {
+                        self.paint_shaped_runs_vertical(shaped, baseline_block, rect.y(), color, Some(&style));
+                    } else {
+                        self.paint_shaped_runs(shaped, rect.x(), baseline_y, color, Some(&style));
+                    }
                 } else {
-                    self.paint_text(&text, Some(&style), rect.x(), baseline_y, style.font_size, color);
+                    if inline_vertical {
+                        // Fallback: approximate vertical flow by painting horizontal text at the inline start.
+                        self.paint_text(&text, Some(&style), rect.x(), rect.y(), style.font_size, color);
+                    } else {
+                        self.paint_text(&text, Some(&style), rect.x(), baseline_y, style.font_size, color);
+                    }
                 }
                 self.paint_text_decoration(&style, shaped_runs.as_deref(), rect.x(), baseline_y, rect.width());
                 self.paint_text_emphasis(&style, shaped_runs.as_deref(), rect.x(), baseline_y);
@@ -1655,14 +1669,10 @@ impl Painter {
         if quality == FilterQuality::Nearest
             && (tile_rect.width() > pixmap.width() as f32 || tile_rect.height() > pixmap.height() as f32)
         {
-            let (snapped_w, offset_x) = snap_upscale(tile_rect.width(), pixmap.width() as f32).unwrap_or((
-                tile_rect.width(),
-                0.0,
-            ));
-            let (snapped_h, offset_y) = snap_upscale(tile_rect.height(), pixmap.height() as f32).unwrap_or((
-                tile_rect.height(),
-                0.0,
-            ));
+            let (snapped_w, offset_x) =
+                snap_upscale(tile_rect.width(), pixmap.width() as f32).unwrap_or((tile_rect.width(), 0.0));
+            let (snapped_h, offset_y) =
+                snap_upscale(tile_rect.height(), pixmap.height() as f32).unwrap_or((tile_rect.height(), 0.0));
             tile_rect = Rect::from_xywh(tile_rect.x() + offset_x, tile_rect.y() + offset_y, snapped_w, snapped_h);
         }
 
@@ -2454,6 +2464,26 @@ impl Painter {
         }
     }
 
+    fn paint_shaped_runs_vertical(
+        &mut self,
+        runs: &[ShapedRun],
+        block_origin: f32,
+        inline_origin: f32,
+        color: Rgba,
+        style: Option<&ComputedStyle>,
+    ) {
+        let mut pen_inline = inline_origin;
+        for run in runs {
+            let run_origin_inline = if run.direction.is_rtl() {
+                pen_inline + run.advance
+            } else {
+                pen_inline
+            };
+            self.paint_shaped_run_vertical(run, block_origin, run_origin_inline, color, style);
+            pen_inline += run.advance;
+        }
+    }
+
     fn paint_shaped_run(
         &mut self,
         run: &ShapedRun,
@@ -2533,6 +2563,93 @@ impl Painter {
                     if let Some(mapped) = tiny_skia::Rect::from_ltrb(min_x, min_y, max_x, max_y) {
                         rotated_bounds.include(&mapped);
                     }
+                    rotated_paths.push(rotated);
+                }
+            }
+            if rotated_bounds.is_valid() && !rotated_paths.is_empty() {
+                glyph_paths = rotated_paths;
+                bounds = rotated_bounds;
+            } else {
+                glyph_paths = rotated_paths;
+            }
+        }
+
+        if let Some(style) = style {
+            if !style.text_shadow.is_empty() {
+                let shadows = resolve_text_shadows(style);
+                if !shadows.is_empty() {
+                    self.paint_text_shadows(&glyph_paths, &bounds, &shadows);
+                }
+            }
+        }
+
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
+        paint.anti_alias = true;
+
+        for path in &glyph_paths {
+            self.pixmap
+                .fill_path(path, &paint, tiny_skia::FillRule::EvenOdd, Transform::identity(), None);
+        }
+    }
+
+    fn paint_shaped_run_vertical(
+        &mut self,
+        run: &ShapedRun,
+        block_origin: f32,
+        inline_origin: f32,
+        color: Rgba,
+        style: Option<&ComputedStyle>,
+    ) {
+        let block_origin = block_origin * self.scale;
+        let inline_origin = inline_origin * self.scale;
+
+        let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+        let units_per_em = face.units_per_em() as f32;
+        let mut scale = run.font_size / units_per_em;
+        scale *= run.scale * self.scale;
+
+        let mut glyph_paths = Vec::with_capacity(run.glyphs.len());
+        let mut bounds = PathBounds::new();
+
+        for glyph in &run.glyphs {
+            let inline_pos = match run.direction {
+                crate::text::pipeline::Direction::RightToLeft => inline_origin - glyph.x_offset * self.scale,
+                _ => inline_origin + glyph.x_offset * self.scale,
+            };
+            let block_pos = block_origin - glyph.y_offset * self.scale;
+            let glyph_id: u16 = glyph.glyph_id as u16;
+
+            if let Some(path) = Self::build_glyph_path(&face, glyph_id, block_pos, inline_pos, scale) {
+                bounds.include(&path.bounds());
+                glyph_paths.push(path);
+            }
+        }
+
+        if glyph_paths.is_empty() || !bounds.is_valid() {
+            return;
+        }
+
+        if !matches!(run.rotation, crate::text::pipeline::RunRotation::None) {
+            let angle = match run.rotation {
+                crate::text::pipeline::RunRotation::Ccw90 => -90.0_f32.to_radians(),
+                crate::text::pipeline::RunRotation::Cw90 => 90.0_f32.to_radians(),
+                crate::text::pipeline::RunRotation::None => 0.0,
+            };
+            let (sin, cos) = angle.sin_cos();
+            let tx = block_origin - block_origin * cos + inline_origin * sin;
+            let ty = inline_origin - block_origin * sin - inline_origin * cos;
+            let rotate = tiny_skia::Transform::from_row(cos, sin, -sin, cos, tx, ty);
+
+            let mut rotated_paths = Vec::with_capacity(glyph_paths.len());
+            let mut rotated_bounds = PathBounds::new();
+            for path in glyph_paths.drain(..) {
+                if let Some(rotated) = path.clone().transform(rotate) {
+                    let mapped = rotated.bounds();
+                    rotated_bounds.include(&mapped);
                     rotated_paths.push(rotated);
                 }
             }

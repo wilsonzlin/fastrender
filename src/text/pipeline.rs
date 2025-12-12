@@ -984,11 +984,7 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
                 }
                 continue;
             }
-            let emoji_pref = emoji_preference_with_selector(
-                ch,
-                next_peek.map(|(_, c)| c),
-                style.font_variant_emoji,
-            );
+            let emoji_pref = emoji_preference_with_selector(ch, next_peek.map(|(_, c)| c), style.font_variant_emoji);
             let mut picker = FontPreferencePicker::new(emoji_pref);
             let font = resolve_font_for_char(
                 ch,
@@ -1348,23 +1344,13 @@ impl FontPreferencePicker {
     }
 
     fn finish(&mut self) -> Option<LoadedFont> {
-        let first_emoji = self
-            .first_emoji
-            .take()
-            .or_else(|| self.first_emoji_any.take());
-        let first_text = self
-            .first_text
-            .take()
-            .or_else(|| self.first_text_any.take());
+        let first_emoji = self.first_emoji.take().or_else(|| self.first_emoji_any.take());
+        let first_text = self.first_text.take().or_else(|| self.first_text_any.take());
 
         if self.prefer_emoji && !self.avoid_emoji {
-            first_emoji
-                .map(|(f, _)| f)
-                .or_else(|| first_text.map(|(f, _)| f))
+            first_emoji.map(|(f, _)| f).or_else(|| first_text.map(|(f, _)| f))
         } else if self.avoid_emoji {
-            first_text
-                .map(|(f, _)| f)
-                .or_else(|| first_emoji.map(|(f, _)| f))
+            first_text.map(|(f, _)| f).or_else(|| first_emoji.map(|(f, _)| f))
         } else {
             match (first_text, first_emoji) {
                 (Some((text, ti)), Some((emoji, ei))) => {
@@ -1403,11 +1389,7 @@ fn emoji_preference_for_char(ch: char, variant: FontVariantEmoji) -> EmojiPrefer
     }
 }
 
-fn emoji_preference_with_selector(
-    ch: char,
-    next: Option<char>,
-    variant: FontVariantEmoji,
-) -> EmojiPreference {
+fn emoji_preference_with_selector(ch: char, next: Option<char>, variant: FontVariantEmoji) -> EmojiPreference {
     if let Some(sel) = next {
         if sel == '\u{FE0F}' {
             return EmojiPreference::PreferEmoji;
@@ -1528,22 +1510,22 @@ fn resolve_font_for_char(
                                 weight: fontdb::Weight(*weight_choice),
                                 stretch: (*stretch_choice).into(),
                                 style: (*slope).into(),
-                    };
-                    if let Some(id) = db.inner().query(&query) {
-                        if let Some(font) = db.load_font(id) {
-                            let is_emoji_font = font_is_emoji_font(&font);
-                            let idx = picker.bump_order();
-                            picker.record_any(&font, is_emoji_font, idx);
-                            if db.has_glyph(id, ch) {
-                                if let Some(font) = picker.consider(font, is_emoji_font, idx) {
-                                    return Some(font);
+                            };
+                            if let Some(id) = db.inner().query(&query) {
+                                if let Some(font) = db.load_font(id) {
+                                    let is_emoji_font = font_is_emoji_font(&font);
+                                    let idx = picker.bump_order();
+                                    picker.record_any(&font, is_emoji_font, idx);
+                                    if db.has_glyph(id, ch) {
+                                        if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+                                            return Some(font);
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
-        }
             }
         }
     }
@@ -3289,19 +3271,11 @@ mod tests {
         let mut picker = FontPreferencePicker::new(EmojiPreference::PreferEmoji);
         let idx = picker.bump_order();
         assert!(picker
-            .consider(
-                text_font.clone(),
-                font_is_emoji_font(&text_font),
-                idx
-            )
+            .consider(text_font.clone(), font_is_emoji_font(&text_font), idx)
             .is_none());
         let idx = picker.bump_order();
         let chosen = picker
-            .consider(
-                emoji_font.clone(),
-                font_is_emoji_font(&emoji_font),
-                idx
-            )
+            .consider(emoji_font.clone(), font_is_emoji_font(&emoji_font), idx)
             .expect("should pick emoji font");
         assert_eq!(chosen.family, emoji_font.family);
     }
@@ -3312,11 +3286,7 @@ mod tests {
         let mut picker = FontPreferencePicker::new(EmojiPreference::PreferEmoji);
         let idx = picker.bump_order();
         assert!(picker
-            .consider(
-                text_font.clone(),
-                font_is_emoji_font(&text_font),
-                idx
-            )
+            .consider(text_font.clone(), font_is_emoji_font(&text_font), idx)
             .is_none());
         let chosen = picker.finish().expect("fallback text font");
         assert_eq!(chosen.family, text_font.family);
@@ -3328,11 +3298,7 @@ mod tests {
         let mut picker = FontPreferencePicker::new(EmojiPreference::AvoidEmoji);
         let idx = picker.bump_order();
         assert!(picker
-            .consider(
-                emoji_font.clone(),
-                font_is_emoji_font(&emoji_font),
-                idx
-            )
+            .consider(emoji_font.clone(), font_is_emoji_font(&emoji_font), idx)
             .is_none());
         let chosen = picker.finish().expect("fallback emoji font");
         assert_eq!(chosen.family, emoji_font.family);

@@ -2158,7 +2158,8 @@ mod tests {
         let marker = li.marker_styles.as_ref().expect("marker styles");
 
         assert!(
-            marker.text_decoration
+            marker
+                .text_decoration
                 .lines
                 .contains(crate::style::types::TextDecorationLine::UNDERLINE),
             "authored text decorations should apply to ::marker"
@@ -2167,11 +2168,7 @@ mod tests {
             marker.applied_text_decorations.len() == 1,
             "resolved text decorations should be captured for ::marker"
         );
-        assert_eq!(
-            marker.text_shadow.len(),
-            1,
-            "text-shadow should apply to ::marker"
-        );
+        assert_eq!(marker.text_shadow.len(), 1, "text-shadow should apply to ::marker");
     }
 
     #[test]

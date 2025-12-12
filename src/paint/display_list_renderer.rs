@@ -4,6 +4,7 @@
 //! rasterization utilities. This path keeps the display list as the
 //! paint-time contract while still reusing the shared `FontContext`.
 
+use crate::css::types::{ColorStop, RadialGradientShape, RadialGradientSize};
 use crate::error::{RenderError, Result};
 use crate::geometry::{Point, Rect};
 use crate::paint::blur::apply_gaussian_blur;
@@ -11,8 +12,9 @@ use crate::paint::canvas::Canvas;
 use crate::paint::display_list::{
     BlendMode, BorderImageItem, BorderImageSourceItem, BorderItem, BorderRadii, BorderSide, BoxShadowItem, ClipItem,
     ConicGradientItem, DecorationPaint, DecorationStroke, DisplayItem, DisplayList, EmphasisMark, FillRectItem, FontId,
-    GlyphInstance, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, ListMarkerItem, OpacityItem, OutlineItem,
-    RadialGradientItem, ResolvedFilter, StrokeRectItem, TextEmphasis, TextItem, TextShadowItem, TransformItem,
+    GlyphInstance, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, ListMarkerItem, OpacityItem,
+    OutlineItem, RadialGradientItem, ResolvedFilter, StrokeRectItem, TextEmphasis, TextItem, TextShadowItem,
+    TransformItem,
 };
 use crate::paint::rasterize::{fill_rounded_rect, render_box_shadow, BoxShadow};
 use crate::paint::text_shadow::PathBounds;
@@ -23,14 +25,13 @@ use crate::style::types::{
     TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
 };
 use crate::style::values::{Length, LengthUnit};
-use crate::css::types::{ColorStop, RadialGradientShape, RadialGradientSize};
 use crate::text::font_db::{FontStretch, FontStyle as DbFontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
 use crate::text::shaper::GlyphPosition;
 use tiny_skia::{
-    BlendMode as SkiaBlendMode, GradientStop as SkiaGradientStop, LinearGradient, Mask, PathBuilder, Pixmap,
-    PixmapPaint, Point as SkiaPoint, PremultipliedColorU8, RadialGradient, SpreadMode, Stroke, StrokeDash, Transform,
-    Pattern, IntSize,
+    BlendMode as SkiaBlendMode, GradientStop as SkiaGradientStop, IntSize, LinearGradient, Mask, PathBuilder, Pattern,
+    Pixmap, PixmapPaint, Point as SkiaPoint, PremultipliedColorU8, RadialGradient, SpreadMode, Stroke, StrokeDash,
+    Transform,
 };
 
 fn map_blend_mode(mode: BlendMode) -> tiny_skia::BlendMode {
@@ -1142,8 +1143,14 @@ impl DisplayListRenderer {
         clip: Option<&Mask>,
         transform: Transform,
     ) -> bool {
-        let border_widths = BorderImageWidths { top, right, bottom, left };
-        let target_widths = resolve_border_image_widths(&border_image.width, border_widths, rect.width(), rect.height());
+        let border_widths = BorderImageWidths {
+            top,
+            right,
+            bottom,
+            left,
+        };
+        let target_widths =
+            resolve_border_image_widths(&border_image.width, border_widths, rect.width(), rect.height());
         let outsets = resolve_border_image_outset(&border_image.outset, target_widths);
 
         let outer_rect = Rect::from_xywh(
@@ -1635,9 +1642,7 @@ impl DisplayListRenderer {
                 );
                 paint.anti_alias = false;
                 paint.blend_mode = self.canvas.blend_mode();
-                self.canvas
-                    .pixmap_mut()
-                    .fill_rect(src_rect, &paint, transform, clip);
+                self.canvas.pixmap_mut().fill_rect(src_rect, &paint, transform, clip);
             }
         }
     }
@@ -2548,16 +2553,10 @@ impl DisplayListRenderer {
         if matches!(item.filter_quality, ImageFilterQuality::Nearest)
             && (dest_rect.width() > pixmap.width() as f32 || dest_rect.height() > pixmap.height() as f32)
         {
-            let (snapped_w, offset_x) =
-                crate::paint::painter::snap_upscale(dest_rect.width(), pixmap.width() as f32).unwrap_or((
-                    dest_rect.width(),
-                    0.0,
-                ));
-            let (snapped_h, offset_y) =
-                crate::paint::painter::snap_upscale(dest_rect.height(), pixmap.height() as f32).unwrap_or((
-                    dest_rect.height(),
-                    0.0,
-                ));
+            let (snapped_w, offset_x) = crate::paint::painter::snap_upscale(dest_rect.width(), pixmap.width() as f32)
+                .unwrap_or((dest_rect.width(), 0.0));
+            let (snapped_h, offset_y) = crate::paint::painter::snap_upscale(dest_rect.height(), pixmap.height() as f32)
+                .unwrap_or((dest_rect.height(), 0.0));
             dest_rect = Rect::from_xywh(dest_rect.x() + offset_x, dest_rect.y() + offset_y, snapped_w, snapped_h);
         }
 
@@ -2786,7 +2785,10 @@ fn resolve_border_image_widths(
     }
 }
 
-fn resolve_border_image_outset(outset: &crate::style::types::BorderImageOutset, border: BorderImageWidths) -> BorderImageWidths {
+fn resolve_border_image_outset(
+    outset: &crate::style::types::BorderImageOutset,
+    border: BorderImageWidths,
+) -> BorderImageWidths {
     fn resolve_single(value: BorderImageOutsetValue, border: f32) -> f32 {
         match value {
             BorderImageOutsetValue::Number(n) => (n * border).max(0.0),
@@ -2936,10 +2938,12 @@ fn normalize_color_stops_unclamped(stops: &[ColorStop], current_color: Rgba) -> 
 fn gradient_stops(stops: &[(f32, Rgba)]) -> Vec<tiny_skia::GradientStop> {
     stops
         .iter()
-        .map(|(p, c)| tiny_skia::GradientStop::new(
-            *p,
-            tiny_skia::Color::from_rgba8(c.r, c.g, c.b, (c.a * 255.0).round().clamp(0.0, 255.0) as u8),
-        ))
+        .map(|(p, c)| {
+            tiny_skia::GradientStop::new(
+                *p,
+                tiny_skia::Color::from_rgba8(c.r, c.g, c.b, (c.a * 255.0).round().clamp(0.0, 255.0) as u8),
+            )
+        })
         .collect()
 }
 
@@ -3021,7 +3025,10 @@ fn radial_geometry(
     };
 
     if matches!(shape, RadialGradientShape::Circle) {
-        let r = if matches!(size, RadialGradientSize::ClosestCorner | RadialGradientSize::FarthestCorner) {
+        let r = if matches!(
+            size,
+            RadialGradientSize::ClosestCorner | RadialGradientSize::FarthestCorner
+        ) {
             let r_corner = ((radius_x * radius_x + radius_y * radius_y) / 2.0).sqrt();
             r_corner
         } else {
@@ -3306,8 +3313,8 @@ mod tests {
     };
     use crate::style::color::Rgba;
     use crate::style::types::{
-        BorderImageSlice, BorderImageSliceValue, BorderImageWidth, BorderImageWidthValue, BorderStyle as CssBorderStyle,
-        TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
+        BorderImageSlice, BorderImageSliceValue, BorderImageWidth, BorderImageWidthValue,
+        BorderStyle as CssBorderStyle, TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
     };
     use std::sync::Arc;
 
@@ -3400,7 +3407,10 @@ mod tests {
                 left: BorderImageWidthValue::Number(1.0),
             },
             outset: crate::style::types::BorderImageOutset::default(),
-            repeat: (crate::style::types::BorderImageRepeat::Stretch, crate::style::types::BorderImageRepeat::Stretch),
+            repeat: (
+                crate::style::types::BorderImageRepeat::Stretch,
+                crate::style::types::BorderImageRepeat::Stretch,
+            ),
             current_color: Rgba::BLACK,
         };
 

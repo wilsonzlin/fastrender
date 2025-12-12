@@ -1128,8 +1128,17 @@ impl DisplayListBuilder {
                 let style_opt = fragment.style.as_deref();
                 let color = style_opt.map(|s| s.color).unwrap_or(Rgba::BLACK);
                 let shadows = Self::text_shadows_from_style(style_opt);
-                let baseline = rect.origin.y + baseline_offset;
-                let start_x = rect.origin.x;
+                let inline_vertical = style_opt.map_or(false, |s| {
+                    matches!(
+                        s.writing_mode,
+                        crate::style::types::WritingMode::VerticalRl | crate::style::types::WritingMode::VerticalLr
+                    )
+                });
+                let (baseline_block, baseline_inline) = if inline_vertical {
+                    (rect.origin.x + baseline_offset, rect.origin.y)
+                } else {
+                    (rect.origin.x, rect.origin.y + baseline_offset)
+                };
 
                 let mut shaped_storage: Option<Vec<ShapedRun>> = None;
                 let runs_ref: Option<&[ShapedRun]> = if let Some(runs) = shaped {
@@ -1150,29 +1159,68 @@ impl DisplayListBuilder {
                 };
 
                 if let Some(runs) = runs_ref {
-                    if *is_marker {
-                        self.emit_list_marker_runs(runs, color, baseline, start_x, &shadows, style_opt);
+                    if inline_vertical {
+                        if *is_marker {
+                            self.emit_list_marker_runs_vertical(
+                                runs,
+                                color,
+                                baseline_block,
+                                baseline_inline,
+                                &shadows,
+                                style_opt,
+                            );
+                        } else {
+                            self.emit_shaped_runs_vertical(
+                                runs,
+                                color,
+                                baseline_block,
+                                baseline_inline,
+                                &shadows,
+                                style_opt,
+                            );
+                        }
+                    } else if *is_marker {
+                        self.emit_list_marker_runs(runs, color, baseline_inline, baseline_block, &shadows, style_opt);
                     } else {
-                        self.emit_shaped_runs(runs, color, baseline, start_x, &shadows, style_opt);
+                        self.emit_shaped_runs(runs, color, baseline_inline, baseline_block, &shadows, style_opt);
                     }
                 } else {
                     // Fallback: naive glyphs when shaping fails or no style is present
                     let font_size = style_opt.map(|s| s.font_size).unwrap_or(16.0);
                     let char_width = font_size * 0.6;
-                    let glyphs: Vec<GlyphInstance> = text
-                        .chars()
-                        .enumerate()
-                        .map(|(i, _c)| GlyphInstance {
-                            glyph_id: i as u32,
-                            offset: Point::new(i as f32 * char_width, 0.0),
-                            advance: char_width,
-                        })
-                        .collect();
-                    let advance_width = text.len() as f32 * char_width;
+                    let glyphs: Vec<GlyphInstance> = if inline_vertical {
+                        text.chars()
+                            .enumerate()
+                            .map(|(i, _c)| GlyphInstance {
+                                glyph_id: i as u32,
+                                offset: Point::new(0.0, i as f32 * char_width),
+                                advance: 0.0,
+                            })
+                            .collect()
+                    } else {
+                        text.chars()
+                            .enumerate()
+                            .map(|(i, _c)| GlyphInstance {
+                                glyph_id: i as u32,
+                                offset: Point::new(i as f32 * char_width, 0.0),
+                                advance: char_width,
+                            })
+                            .collect()
+                    };
+                    let advance_width = if inline_vertical {
+                        0.0
+                    } else {
+                        text.len() as f32 * char_width
+                    };
+                    let origin = if inline_vertical {
+                        Point::new(baseline_block, baseline_inline)
+                    } else {
+                        Point::new(baseline_block, baseline_inline)
+                    };
 
                     if *is_marker {
                         self.list.push(DisplayItem::ListMarker(ListMarkerItem {
-                            origin: Point::new(start_x, baseline),
+                            origin,
                             glyphs,
                             color,
                             shadows: shadows.clone(),
@@ -1186,7 +1234,7 @@ impl DisplayListBuilder {
                         }));
                     } else {
                         self.list.push(DisplayItem::Text(TextItem {
-                            origin: Point::new(start_x, baseline),
+                            origin,
                             glyphs,
                             color,
                             shadows: shadows.clone(),
@@ -1202,7 +1250,8 @@ impl DisplayListBuilder {
                 }
 
                 if let Some(style) = style_opt {
-                    self.emit_text_decorations(style, runs_ref, rect.x(), rect.width(), baseline);
+                    let decoration_baseline = baseline_inline;
+                    self.emit_text_decorations(style, runs_ref, rect.x(), rect.width(), decoration_baseline);
                 }
             }
 
@@ -1707,7 +1756,9 @@ impl DisplayListBuilder {
         let border_image = match &style.border_image.source {
             BorderImageSource::Image(bg) => {
                 let source = match bg {
-                    BackgroundImage::Url(src) => self.decode_image(src, Some(style), true).map(BorderImageSourceItem::Raster),
+                    BackgroundImage::Url(src) => self
+                        .decode_image(src, Some(style), true)
+                        .map(BorderImageSourceItem::Raster),
                     BackgroundImage::LinearGradient { .. }
                     | BackgroundImage::RepeatingLinearGradient { .. }
                     | BackgroundImage::RadialGradient { .. }
@@ -1825,6 +1876,44 @@ impl DisplayListBuilder {
         }
     }
 
+    fn emit_shaped_runs_vertical(
+        &mut self,
+        runs: &[ShapedRun],
+        color: Rgba,
+        block_baseline: f32,
+        inline_start: f32,
+        shadows: &[TextShadowItem],
+        style: Option<&ComputedStyle>,
+    ) {
+        let mut pen_inline = inline_start;
+        for run in runs {
+            let run_origin_inline = if run.direction.is_rtl() {
+                pen_inline + run.advance
+            } else {
+                pen_inline
+            };
+            let glyphs = self.glyphs_from_run_vertical(run, block_baseline, run_origin_inline, inline_start);
+            let font_id = self.font_id_from_run(run);
+            let emphasis = style.and_then(|s| self.build_emphasis(run, s, block_baseline, run_origin_inline));
+
+            self.list.push(DisplayItem::Text(TextItem {
+                origin: Point::new(block_baseline, inline_start),
+                glyphs,
+                color,
+                shadows: shadows.to_vec(),
+                font_size: run.font_size,
+                advance_width: run.advance,
+                font_id: Some(font_id),
+                synthetic_bold: run.synthetic_bold,
+                synthetic_oblique: run.synthetic_oblique,
+                emphasis,
+                decorations: Vec::new(),
+            }));
+
+            pen_inline += run.advance;
+        }
+    }
+
     fn emit_list_marker_runs(
         &mut self,
         runs: &[ShapedRun],
@@ -1859,6 +1948,43 @@ impl DisplayListBuilder {
             }));
 
             pen_x += run.advance;
+        }
+    }
+
+    fn emit_list_marker_runs_vertical(
+        &mut self,
+        runs: &[ShapedRun],
+        color: Rgba,
+        block_baseline: f32,
+        inline_start: f32,
+        shadows: &[TextShadowItem],
+        style: Option<&ComputedStyle>,
+    ) {
+        let mut pen_inline = inline_start;
+        for run in runs {
+            let run_origin_inline = if run.direction.is_rtl() {
+                pen_inline + run.advance
+            } else {
+                pen_inline
+            };
+            let glyphs = self.glyphs_from_run_vertical(run, block_baseline, run_origin_inline, inline_start);
+            let font_id = self.font_id_from_run(run);
+            let emphasis = style.and_then(|s| self.build_emphasis(run, s, block_baseline, run_origin_inline));
+            self.list.push(DisplayItem::ListMarker(ListMarkerItem {
+                origin: Point::new(block_baseline, inline_start),
+                glyphs,
+                font_size: run.font_size,
+                color,
+                shadows: shadows.to_vec(),
+                advance_width: run.advance,
+                font_id: Some(font_id),
+                synthetic_bold: run.synthetic_bold,
+                synthetic_oblique: run.synthetic_oblique,
+                emphasis,
+                background: None,
+            }));
+
+            pen_inline += run.advance;
         }
     }
 
@@ -2174,6 +2300,31 @@ impl DisplayListBuilder {
                 glyph_id: glyph.glyph_id,
                 offset: Point::new(x - origin_x, y - baseline_y),
                 advance: glyph.x_advance,
+            });
+        }
+
+        glyphs
+    }
+
+    fn glyphs_from_run_vertical(
+        &self,
+        run: &ShapedRun,
+        block_baseline: f32,
+        inline_origin: f32,
+        inline_start: f32,
+    ) -> Vec<GlyphInstance> {
+        let mut glyphs = Vec::with_capacity(run.glyphs.len());
+
+        for glyph in &run.glyphs {
+            let inline_pos = match run.direction {
+                crate::text::pipeline::Direction::RightToLeft => inline_origin - glyph.x_offset,
+                _ => inline_origin + glyph.x_offset,
+            };
+            let block_pos = block_baseline - glyph.y_offset;
+            glyphs.push(GlyphInstance {
+                glyph_id: glyph.glyph_id,
+                offset: Point::new(block_pos - block_baseline, inline_pos - inline_start),
+                advance: 0.0,
             });
         }
 
@@ -3018,7 +3169,10 @@ mod tests {
 
         let builder = DisplayListBuilder::new();
         let list = builder.build(&fragment);
-        assert!(list.items().iter().any(|item| matches!(item, DisplayItem::Outline(_))), "outline should emit outline item");
+        assert!(
+            list.items().iter().any(|item| matches!(item, DisplayItem::Outline(_))),
+            "outline should emit outline item"
+        );
     }
 
     #[test]
@@ -3031,7 +3185,10 @@ mod tests {
         let clips = vec![None].into_iter().collect();
         let builder = DisplayListBuilder::new();
         let list = builder.build_with_clips(&fragment, &clips);
-        assert!(list.items().iter().any(|item| matches!(item, DisplayItem::Outline(_))), "outline should be emitted even when fragment is clipped");
+        assert!(
+            list.items().iter().any(|item| matches!(item, DisplayItem::Outline(_))),
+            "outline should be emitted even when fragment is clipped"
+        );
     }
 
     #[test]

@@ -446,13 +446,7 @@ impl TableStructureFixer {
         row.children
             .iter()
             .filter(|c| Self::is_table_cell(c))
-            .map(|_cell| {
-                _cell
-                    .debug_info
-                    .as_ref()
-                    .map(|info| info.colspan.max(1))
-                    .unwrap_or(1)
-            })
+            .map(|_cell| _cell.debug_info.as_ref().map(|info| info.colspan.max(1)).unwrap_or(1))
             .sum()
     }
 

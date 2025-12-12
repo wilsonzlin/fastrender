@@ -40,8 +40,8 @@ use types::{
     LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast,
     TextCombineUpright, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent,
-    TextJustify, TextOrientation, TextOverflow, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TransformOrigin,
-    UnicodeBidi, VerticalAlign, WhiteSpace, WillChange, WordBreak, WritingMode,
+    TextJustify, TextOrientation, TextOverflow, TextTransform, TextUnderlineOffset, TextUnderlinePosition,
+    TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WillChange, WordBreak, WritingMode,
 };
 use values::Length;
 

@@ -795,10 +795,7 @@ pub fn distribute_spanning_cell_width(
             }
         } else {
             // No headroom left—fall back to weighting by current widths.
-            let weights: Vec<f32> = indices
-                .iter()
-                .map(|&i| cols[i].min_width.max(1.0))
-                .collect();
+            let weights: Vec<f32> = indices.iter().map(|&i| cols[i].min_width.max(1.0)).collect();
             let total_weight: f32 = weights.iter().sum();
             if total_weight <= 0.0 {
                 return need;
@@ -884,10 +881,7 @@ pub fn distribute_spanning_cell_width(
             }
 
             if remaining > 0.0 {
-                let weights: Vec<f32> = indices
-                    .iter()
-                    .map(|&i| cols[i].max_width.max(1.0))
-                    .collect();
+                let weights: Vec<f32> = indices.iter().map(|&i| cols[i].max_width.max(1.0)).collect();
                 let total_weight: f32 = weights.iter().sum();
                 if total_weight > 0.0 {
                     let mut distributed = 0.0;
@@ -910,7 +904,13 @@ pub fn distribute_spanning_cell_width(
         let adjustable: Vec<usize> = spanned
             .iter()
             .enumerate()
-            .filter_map(|(i, c)| if c.max_width > c.min_width + 0.01 { Some(i) } else { None })
+            .filter_map(|(i, c)| {
+                if c.max_width > c.min_width + 0.01 {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
             .collect();
         if !adjustable.is_empty() {
             extra = distribute_max(spanned, &adjustable, extra);
@@ -955,10 +955,7 @@ pub fn distribute_spanning_percentage(columns: &mut [ColumnConstraints], start_c
     }
 
     let remaining = target_pct - existing_pct;
-    let weights: Vec<f32> = auto_indices
-        .iter()
-        .map(|&i| span[i].min_width.max(1.0))
-        .collect();
+    let weights: Vec<f32> = auto_indices.iter().map(|&i| span[i].min_width.max(1.0)).collect();
     let total_weight: f32 = weights.iter().sum();
     if total_weight > 0.0 {
         for (idx, weight) in auto_indices.iter().zip(weights.iter()) {
