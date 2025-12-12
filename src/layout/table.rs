@@ -391,6 +391,7 @@ impl TableStructure {
         // Phase 1: Count rows and discover maximum column count
         let mut current_row = 0;
         let mut max_cols = 0;
+        let mut explicit_columns = 0;
         let mut row_heights: Vec<Option<SpecifiedHeight>> = Vec::new();
         let mut row_min_heights: Vec<Option<SpecifiedHeight>> = Vec::new();
         let mut row_max_heights: Vec<Option<SpecifiedHeight>> = Vec::new();
@@ -398,6 +399,26 @@ impl TableStructure {
 
         // Collect all cells first
         let mut cell_data: Vec<(usize, usize, usize, usize, usize)> = Vec::new(); // (row, col, rowspan, colspan, box_idx)
+
+        // Track explicit columns from <col>/<colgroup> to honor Tables spec that the number of columns
+        // is the maximum of col elements and the actual grid.
+        for child in &table_box.children {
+            match Self::get_table_element_type(child) {
+                TableElementType::Column => explicit_columns += 1,
+                TableElementType::ColumnGroup => {
+                    if child.children.is_empty() {
+                        explicit_columns += 1;
+                    } else {
+                        explicit_columns += child
+                            .children
+                            .iter()
+                            .filter(|c| Self::get_table_element_type(c) == TableElementType::Column)
+                            .count();
+                    }
+                }
+                _ => {}
+            }
+        }
 
         for (child_idx, child) in table_box.children.iter().enumerate() {
             match Self::get_table_element_type(child) {
@@ -430,10 +451,7 @@ impl TableStructure {
                             let row_cells =
                                 Self::process_row(row_child, current_row, row_child_idx, &mut structure.grid);
                             for cell in row_cells {
-                                let col_end = cell.1 + cell.3;
-                                if col_end > max_cols {
-                                    max_cols = col_end;
-                                }
+                                max_cols = max_cols.max(cell.1 + cell.3);
                                 cell_data.push(cell);
                             }
                             current_row += 1;
@@ -453,10 +471,7 @@ impl TableStructure {
                     row_max_heights.push(max_h);
                     let row_cells = Self::process_row(child, current_row, child_idx, &mut structure.grid);
                     for cell in row_cells {
-                        let col_end = cell.1 + cell.3;
-                        if col_end > max_cols {
-                            max_cols = col_end;
-                        }
+                        max_cols = max_cols.max(cell.1 + cell.3);
                         cell_data.push(cell);
                     }
                     current_row += 1;
@@ -466,7 +481,7 @@ impl TableStructure {
         }
 
         structure.row_count = current_row;
-        structure.column_count = max_cols;
+        structure.column_count = max_cols.max(explicit_columns);
 
         // Initialize columns
         for i in 0..structure.column_count {
@@ -478,6 +493,9 @@ impl TableStructure {
         for child in &table_box.children {
             match Self::get_table_element_type(child) {
                 TableElementType::Column => {
+                    if col_cursor >= structure.columns.len() {
+                        structure.columns.push(ColumnInfo::new(col_cursor));
+                    }
                     if let Some(col) = structure.columns.get_mut(col_cursor) {
                         col.visibility = child.style.visibility;
                         if let Some(width) = &child.style.width {
@@ -492,6 +510,9 @@ impl TableStructure {
                     if !child.children.is_empty() {
                         for group_child in &child.children {
                             if Self::get_table_element_type(group_child) == TableElementType::Column {
+                                if col_cursor >= structure.columns.len() {
+                                    structure.columns.push(ColumnInfo::new(col_cursor));
+                                }
                                 if let Some(col) = structure.columns.get_mut(col_cursor) {
                                     col.visibility = if matches!(group_visibility, Visibility::Collapse) {
                                         Visibility::Collapse
@@ -506,6 +527,9 @@ impl TableStructure {
                             }
                         }
                     } else {
+                        if col_cursor >= structure.columns.len() {
+                            structure.columns.push(ColumnInfo::new(col_cursor));
+                        }
                         if let Some(col) = structure.columns.get_mut(col_cursor) {
                             col.visibility = child.style.visibility;
                             if let Some(width) = &child.style.width {
@@ -6349,6 +6373,60 @@ mod tests {
 
         assert_eq!(structure.row_count, 1);
         assert_eq!(structure.column_count, 5);
+    }
+
+    #[test]
+    fn test_explicit_columns_from_colgroup_children_expand_column_count() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        let mut colgroup_style = ComputedStyle::default();
+        colgroup_style.display = Display::TableColumnGroup;
+        let mut col_style = ComputedStyle::default();
+        col_style.display = Display::TableColumn;
+        let col = BoxNode::new_block(Arc::new(col_style.clone()), FormattingContextType::Block, vec![]);
+        let colgroup = BoxNode::new_block(
+            Arc::new(colgroup_style),
+            FormattingContextType::Block,
+            vec![col.clone(), col.clone()],
+        );
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        let row = BoxNode::new_block(
+            Arc::new(row_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![])],
+        );
+        let table = BoxNode::new_block(
+            Arc::new(table_style),
+            FormattingContextType::Table,
+            vec![colgroup, row],
+        );
+
+        let structure = TableStructure::from_box_tree(&table);
+        assert_eq!(
+            structure.column_count, 2,
+            "explicit columns should increase table column count beyond the row cells"
+        );
+    }
+
+    #[test]
+    fn test_colgroup_without_columns_still_counts_as_one_column() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        let mut colgroup_style = ComputedStyle::default();
+        colgroup_style.display = Display::TableColumnGroup;
+        let colgroup =
+            BoxNode::new_block(Arc::new(colgroup_style), FormattingContextType::Block, Vec::new());
+        let table = BoxNode::new_block(
+            Arc::new(table_style),
+            FormattingContextType::Table,
+            vec![colgroup],
+        );
+
+        let structure = TableStructure::from_box_tree(&table);
+        assert_eq!(structure.column_count, 1, "empty colgroup implies a single column");
     }
 
     #[test]

@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Table structure now accounts for explicit columns: `TableStructure::from_box_tree` sets column_count to the max of inferred grid columns and `<col>/<colgroup>` declarations (including empty colgroups), extending column info when colgroups add more columns than rows imply. Added regressions to ensure explicit columns expand the count even with fewer cells or with empty colgroups.
 - text-align-last now feeds per-line alignment: the line fragment builder applies the resolved line alignment (including text-align-last) and respects text-justify when deciding to expand gaps. The last-line justify path now honors `text-justify: none` and a regression locks the non-justified last line.
 - Table fixup now counts colspan when inferring column count: column inference sums `debug_info.colspan` for cells so first-row colspans expand the inferred grid width instead of assuming 1 per cell. Added a regression to lock column counting with a spanning cell.
 - Box shadows now rasterize with a true gaussian blur: outset shadows expand rect+radii by spread, render into a padded offscreen, blur via `apply_gaussian_blur`, and composite without clipping; inset shadows shrink the inner rect by spread/offset, blur, clip to the box to keep the shadow inside, and draw back at the element origin. Legacy multi-layer blur helpers remain gated with `allow(dead_code)` for now.
