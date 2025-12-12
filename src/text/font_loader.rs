@@ -183,7 +183,6 @@ impl FontContext {
     /// );
     /// ```
     pub fn get_font(&self, families: &[String], weight: u16, italic: bool, oblique: bool) -> Option<LoadedFont> {
-        let font_weight = FontWeight::new(weight);
         let requested_style = if italic {
             FontStyle::Italic
         } else if oblique {
