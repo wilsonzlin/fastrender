@@ -842,66 +842,26 @@ pub fn distribute_spanning_cell_width(
     // Then ensure the span can satisfy the cell's maximum width request, preferring flexible and percentage columns.
     let current_max_sum: f32 = spanned.iter().map(|c| c.max_width).sum();
     if cell_max > current_max_sum {
-        let mut extra = cell_max - current_max_sum;
-        let distribute_max = |cols: &mut [ColumnConstraints], indices: &[usize], mut remaining: f32| -> f32 {
-            if indices.is_empty() || remaining <= 0.0 {
-                return remaining;
-            }
-            for _ in 0..4 {
-                let headrooms: Vec<f32> = indices
-                    .iter()
-                    .map(|&i| (cols[i].max_width - cols[i].min_width).max(0.0).max(0.01))
-                    .collect();
-                let total_headroom: f32 = headrooms.iter().sum();
-                if total_headroom <= 0.0 || remaining <= 0.0 {
-                    break;
-                }
-                for (&idx, headroom) in indices.iter().zip(headrooms.iter()) {
-                    if *headroom <= 0.0 {
-                        continue;
-                    }
-                    let delta = remaining * (*headroom / total_headroom);
-                    cols[idx].max_width += delta;
-                    if cols[idx].max_width < cols[idx].min_width {
-                        cols[idx].max_width = cols[idx].min_width;
-                    }
-                }
-                let new_sum: f32 = cols.iter().map(|c| c.max_width).sum();
-                let new_extra = (cell_max - new_sum).max(0.0);
-                if (new_extra - remaining).abs() < 0.01 {
-                    remaining = new_extra;
-                    break;
-                }
-                remaining = new_extra;
-            }
-            remaining
-        };
-
-        let flex_indices: Vec<usize> = spanned
+        let extra = cell_max - current_max_sum;
+        let mut adjustable: Vec<usize> = spanned
             .iter()
             .enumerate()
-            .filter_map(|(i, c)| if c.is_flexible { Some(i) } else { None })
+            .filter_map(|(i, c)| if c.max_width > c.min_width + 0.01 { Some(i) } else { None })
             .collect();
-        extra = distribute_max(spanned, &flex_indices, extra);
-
-        if extra > 0.0 {
-            let percent_indices: Vec<usize> = spanned
-                .iter()
-                .enumerate()
-                .filter_map(|(i, c)| if c.percentage.is_some() { Some(i) } else { None })
-                .collect();
-            extra = distribute_max(spanned, &percent_indices, extra);
+        if adjustable.is_empty() {
+            adjustable = (0..spanned.len()).collect();
         }
 
-        if extra > 0.0 {
-            let all_indices: Vec<usize> = (0..spanned.len()).collect();
-            extra = distribute_max(spanned, &all_indices, extra);
-        }
-
-        if extra > 0.0 {
-            let per = extra / spanned.len() as f32;
-            for col in spanned.iter_mut() {
-                col.max_width += per;
+        let weights: Vec<f32> = adjustable
+            .iter()
+            .map(|&i| spanned[i].max_width.max(1.0))
+            .collect();
+        let total_weight: f32 = weights.iter().sum();
+        if total_weight > 0.0 {
+            for (&idx, weight) in adjustable.iter().zip(weights.iter()) {
+                let delta = extra * (*weight / total_weight);
+                let col = &mut spanned[idx];
+                col.max_width += delta;
                 if col.max_width < col.min_width {
                     col.max_width = col.min_width;
                 }
@@ -1560,6 +1520,18 @@ mod tests {
         let total_min: f32 = columns.iter().map(|c| c.min_width).sum();
         assert!((total_min - 120.0).abs() < 0.5);
         assert!(columns[1].min_width > columns[0].min_width + 15.0);
+    }
+
+    #[test]
+    fn distribute_spanning_max_scales_by_existing_widths() {
+        let mut columns = vec![
+            ColumnConstraints::new(20.0, 60.0), // smaller max
+            ColumnConstraints::new(20.0, 100.0),
+        ];
+        // Sum max = 160; need 200 -> extra 40 should favor second column.
+        distribute_spanning_cell_width(&mut columns, 0, 2, 80.0, 200.0);
+        assert!((columns.iter().map(|c| c.max_width).sum::<f32>() - 200.0).abs() < 0.5);
+        assert!(columns[1].max_width > columns[0].max_width + 10.0);
     }
 
     #[test]
