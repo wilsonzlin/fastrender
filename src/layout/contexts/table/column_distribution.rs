@@ -492,10 +492,7 @@ impl ColumnDistributor {
         for (idx, pct) in percent_indices {
             let col = &columns[idx];
             let raw = (pct / 100.0) * available_width * percent_scale;
-            let width = raw
-                .max(col.min_width)
-                .max(self.min_column_width)
-                .min(col.max_width.max(col.min_width));
+            let width = raw.max(col.min_width).max(self.min_column_width);
             widths[idx] = width;
             remaining_width -= width;
         }
@@ -541,6 +538,7 @@ impl ColumnDistributor {
         // Step 1: Compute sum of min and max widths
         let total_min: f32 = columns.iter().map(|c| c.min_width.max(self.min_column_width)).sum();
         let total_max: f32 = columns.iter().map(|c| c.max_width.max(self.min_column_width)).sum();
+        let has_percentage = columns.iter().any(|c| c.percentage.is_some());
 
         // Step 2: Handle edge cases
         if available_width <= 0.0 {
@@ -548,7 +546,7 @@ impl ColumnDistributor {
             return self.distribute_at_minimum(columns);
         }
 
-        if available_width >= total_max {
+        if available_width >= total_max && !has_percentage {
             // Plenty of space, give each column its max
             return self.distribute_at_maximum(columns);
         }
@@ -636,10 +634,7 @@ impl ColumnDistributor {
             for (idx, pct) in percent_indices {
                 let col = &columns[idx];
                 let raw = (pct / 100.0) * available_width * percent_scale;
-                let width = raw
-                    .max(col.min_width)
-                    .max(self.min_column_width)
-                    .min(col.max_width.max(col.min_width));
+                let width = raw.max(col.min_width).max(self.min_column_width);
                 widths[idx] = width;
                 remaining_width -= width;
             }

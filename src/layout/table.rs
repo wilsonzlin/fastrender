@@ -2359,11 +2359,11 @@ impl FormattingContext for TableFormattingContext {
         let min_width = resolve_opt_length_against(box_node.style.min_width.as_ref(), font_size, containing_width);
         let max_width = resolve_opt_length_against(box_node.style.max_width.as_ref(), font_size, containing_width);
 
-        // Table width for sizing; percentages on columns are only honored when the table has an explicit width.
+        // Table width for sizing; percentages on columns use a definite table width when available (specified or containing).
         let table_width = specified_width
             .or(containing_width)
             .map(|w| clamp_to_min_max(w, min_width, max_width));
-        let percent_base_width = specified_width.map(|w| clamp_to_min_max(w, min_width, max_width));
+        let percent_base_width = table_width;
         // Table padding and borders (ignored for box sizing under collapsed model per CSS 2.1),
         // but we still track outer borders for percentage-height resolution.
         let resolve_abs = |l: &crate::style::values::Length| match l.unit {
@@ -4298,7 +4298,7 @@ mod tests {
     }
 
     #[test]
-    fn percentage_columns_are_ignored_when_table_width_auto() {
+    fn percentage_columns_apply_with_definite_available_width() {
         let mut table_style = ComputedStyle::default();
         table_style.display = Display::Table;
         table_style.border_spacing_horizontal = Length::px(0.0);
@@ -4348,12 +4348,9 @@ mod tests {
         let mut widths = Vec::new();
         collect_cell_widths(&fragment, &mut widths);
         assert_eq!(widths.len(), 2);
-        // Percent width is ignored when table width is auto; distribution should be roughly even.
-        assert!(
-            (45.0..55.0).contains(&widths[0]),
-            "expected first column to ignore percentage and share space: {:?}",
-            widths
-        );
+        // Percent width should consume 80% of the available space when table width resolves from containing block.
+        assert!((79.0..81.5).contains(&widths[0]), "expected ~80% width, got {:?}", widths);
+        assert!((18.0..22.0).contains(&widths[1]));
     }
 
     #[test]
