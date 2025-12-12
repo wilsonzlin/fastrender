@@ -7724,6 +7724,35 @@ mod tests {
     }
 
     #[test]
+    fn background_blend_mode_plus_lighter_adds_layers() {
+        let mut style = ComputedStyle::default();
+        style.background_color = Rgba::from_rgba8(100, 100, 100, 255);
+        style.set_background_layers(vec![BackgroundLayer {
+            image: Some(BackgroundImage::LinearGradient {
+                angle: 0.0,
+                stops: vec![
+                    crate::css::types::ColorStop {
+                        color: Color::Rgba(Rgba::from_rgba8(200, 0, 0, 255)),
+                        position: Some(0.0),
+                    },
+                    crate::css::types::ColorStop {
+                        color: Color::Rgba(Rgba::from_rgba8(200, 0, 0, 255)),
+                        position: Some(1.0),
+                    },
+                ],
+            }),
+            repeat: BackgroundRepeat::no_repeat(),
+            blend_mode: MixBlendMode::PlusLighter,
+            ..BackgroundLayer::default()
+        }]);
+
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 2.0, 2.0), vec![], Arc::new(style));
+        let pixmap = paint_tree(&FragmentTree::new(fragment), 2, 2, Rgba::WHITE).expect("paint");
+        let (r, g, b, _) = color_at(&pixmap, 0, 0);
+        assert_eq!((r, g, b), (255, 100, 100), "plus-lighter background blend should add colors");
+    }
+
+    #[test]
     fn mix_blend_mode_hue_preserves_hsl_components() {
         let dst = (30u8, 120u8, 220u8);
         let src = (200u8, 30u8, 30u8);
