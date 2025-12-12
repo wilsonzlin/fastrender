@@ -934,6 +934,27 @@ fn horizontal_padding(style: &crate::style::ComputedStyle) -> f32 {
     resolve_abs(&style.padding_left) + resolve_abs(&style.padding_right)
 }
 
+/// Splits a spanning cell's baseline so the portion below the baseline is
+/// satisfied by later rows when possible, only charging the first row for the
+/// remaining descent.
+fn spanning_baseline_allocation(
+    cell_height: f32,
+    baseline: f32,
+    span_start: usize,
+    span_end: usize,
+    row_heights: &[f32],
+) -> (f32, f32) {
+    let clamped_baseline = baseline.min(cell_height);
+    let below = (cell_height - clamped_baseline).max(0.0);
+    let other_rows = if span_end > span_start + 1 && span_end <= row_heights.len() {
+        row_heights[span_start + 1..span_end].iter().sum::<f32>()
+    } else {
+        0.0
+    };
+    let bottom_here = (below - other_rows).max(0.0);
+    (clamped_baseline, bottom_here.min(cell_height))
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ResolvedBorder {
     width: f32,
@@ -2769,48 +2790,27 @@ impl FormattingContext for TableFormattingContext {
 
         let mut row_metrics: Vec<RowMetrics> = row_heights.iter().map(|h| RowMetrics::new(*h)).collect();
 
-        let clamp_baseline = |laid: &LaidOutCell, row_height: f32| -> f32 {
-            let baseline = laid.baseline.unwrap_or(laid.height);
-            if row_height.is_finite() && row_height > 0.0 {
-                baseline.min(row_height)
-            } else {
-                baseline
-            }
-        };
-
         for laid in &laid_out_cells {
             let row = &mut row_metrics[laid.cell.row];
             let row_height = row_heights.get(laid.cell.row).copied().unwrap_or(row.height);
-            let contribution = if laid.cell.rowspan == 1 {
-                laid.height
-            } else {
-                row_height
-            };
+            let contribution = if laid.cell.rowspan == 1 { laid.height } else { row_height };
             row.max_cell_height = row.max_cell_height.max(contribution);
 
             if laid.vertical_align.is_baseline_relative() {
-                let baseline = clamp_baseline(laid, row_height);
-                let top = baseline.min(row_height);
-                let bottom = (row_height - top).max(0.0);
+                let baseline = laid.baseline.unwrap_or(laid.height).min(laid.height);
+                let (top, bottom) = if laid.cell.rowspan > 1 {
+                    let span_end = (laid.cell.row + laid.cell.rowspan).min(structure.row_count);
+                    spanning_baseline_allocation(laid.height, baseline, laid.cell.row, span_end, &row_heights)
+                } else {
+                    let clamped = baseline.min(row_height);
+                    let bottom = (row_height - clamped).max(0.0);
+                    (clamped, bottom)
+                };
                 row.has_baseline = true;
                 row.baseline_top = row.baseline_top.max(top);
                 row.baseline_bottom = row.baseline_bottom.max(bottom);
+                row.max_cell_height = row.max_cell_height.max(top + bottom);
             }
-        }
-
-        // Spanning baseline-aligned cells reserve baseline space in the first row of the span.
-        for laid in &laid_out_cells {
-            if laid.cell.rowspan <= 1 || !laid.vertical_align.is_baseline_relative() {
-                continue;
-            }
-            let row = &mut row_metrics[laid.cell.row];
-            let row_height = row_heights.get(laid.cell.row).copied().unwrap_or(row.height);
-            let baseline = clamp_baseline(laid, row_height);
-            let top = baseline.min(row_height);
-            let bottom = (row_height - top).max(0.0);
-            row.has_baseline = true;
-            row.baseline_top = row.baseline_top.max(top);
-            row.baseline_bottom = row.baseline_bottom.max(bottom);
         }
 
         for (idx, row) in row_metrics.iter_mut().enumerate() {
@@ -3147,6 +3147,7 @@ impl FormattingContext for TableFormattingContext {
         }
 
         // Position cell fragments with vertical alignment within their row block
+        let row_metric_heights: Vec<f32> = row_metrics.iter().map(|r| r.height).collect();
         for laid in laid_out_cells {
             let cell = laid.cell;
             // Compute horizontal position
@@ -3179,7 +3180,21 @@ impl FormattingContext for TableFormattingContext {
                 VerticalAlign::Bottom => (spanned_height - laid.height).max(0.0),
                 VerticalAlign::Middle => ((spanned_height - laid.height) / 2.0).max(0.0),
                 _ => {
-                    let baseline = clamp_baseline(&laid, row_metrics.get(row_start).map(|r| r.height).unwrap_or(0.0));
+                    let baseline = laid.baseline.unwrap_or(laid.height).min(laid.height);
+                    let baseline = if laid.cell.rowspan > 1 {
+                        let span_end = (cell.row + cell.rowspan).min(row_metrics.len());
+                        spanning_baseline_allocation(
+                            laid.height,
+                            baseline,
+                            row_start,
+                            span_end,
+                            &row_metric_heights,
+                        )
+                        .0
+                    } else {
+                        let row_h = row_metrics.get(row_start).map(|r| r.height).unwrap_or(baseline);
+                        baseline.min(row_h)
+                    };
                     let row_base = row_metrics
                         .get(row_start)
                         .map(|r| if r.has_baseline { r.baseline_top } else { r.height })
@@ -5961,6 +5976,25 @@ mod tests {
         // After baseline reservation, row 0 should carry baseline metrics and a non-zero height.
         assert!(structure.rows[0].computed_height >= 1.0);
         assert!(structure.rows[0].min_height >= 0.0);
+    }
+
+    #[test]
+    fn spanning_baseline_prefers_later_rows_for_descent() {
+        let row_heights = vec![5.0, 15.0];
+        // Cell height 30, baseline at 10 -> 20px below-baseline content.
+        // The second row already provides 15px, so only 5px of descent remains in the first row.
+        let (top, bottom) = spanning_baseline_allocation(30.0, 10.0, 0, 2, &row_heights);
+        assert!((top - 10.0).abs() < 0.01);
+        assert!((bottom - 5.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn spanning_baseline_avoids_overcharging_first_row() {
+        let row_heights = vec![8.0, 25.0];
+        // Below-baseline content fits entirely in later rows; first row only keeps the baseline.
+        let (top, bottom) = spanning_baseline_allocation(30.0, 12.0, 0, 2, &row_heights);
+        assert!((top - 12.0).abs() < 0.01);
+        assert!(bottom.abs() < 0.01);
     }
 
     #[test]
