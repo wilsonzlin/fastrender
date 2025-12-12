@@ -1779,43 +1779,6 @@ impl Painter {
             repeat,
         } = &style.border_image;
 
-        let bg = match source {
-            BorderImageSource::Image(img) => img,
-            BorderImageSource::None => return false,
-        };
-
-        let image = match bg {
-            BackgroundImage::Url(src) => match self.image_cache.load(src) {
-                Ok(img) => img,
-                Err(_) => return false,
-            },
-            BackgroundImage::LinearGradient { .. }
-            | BackgroundImage::RepeatingLinearGradient { .. }
-            | BackgroundImage::RadialGradient { .. }
-            | BackgroundImage::RepeatingRadialGradient { .. }
-            | BackgroundImage::ConicGradient { .. }
-            | BackgroundImage::RepeatingConicGradient { .. } => {
-                // Gradients as border images are not yet supported.
-                return false;
-            }
-            BackgroundImage::None => return false,
-        };
-
-        let orientation = style.image_orientation.resolve(image.orientation, true);
-        let Some(pixmap) = Self::dynamic_image_to_pixmap(&image, orientation) else {
-            return false;
-        };
-        let img_w = pixmap.width();
-        let img_h = pixmap.height();
-        if img_w == 0 || img_h == 0 {
-            return false;
-        }
-
-        let slice_top = resolve_slice_value(slice.top, img_h);
-        let slice_right = resolve_slice_value(slice.right, img_w);
-        let slice_bottom = resolve_slice_value(slice.bottom, img_h);
-        let slice_left = resolve_slice_value(slice.left, img_w);
-
         let border_widths = BorderWidths {
             top,
             right,
@@ -1841,6 +1804,49 @@ impl Painter {
         if inner_rect.width() <= 0.0 || inner_rect.height() <= 0.0 {
             return true;
         }
+
+        let bg = match source {
+            BorderImageSource::Image(img) => img,
+            BorderImageSource::None => return false,
+        };
+
+        let (pixmap, img_w, img_h) = match bg {
+            BackgroundImage::Url(src) => {
+                let image = match self.image_cache.load(src) {
+                    Ok(img) => img,
+                    Err(_) => return false,
+                };
+                let orientation = style.image_orientation.resolve(image.orientation, true);
+                let Some(pixmap) = Self::dynamic_image_to_pixmap(&image, orientation) else {
+                    return false;
+                };
+                let img_w = pixmap.width();
+                let img_h = pixmap.height();
+                if img_w == 0 || img_h == 0 {
+                    return false;
+                }
+                (pixmap, img_w, img_h)
+            }
+            BackgroundImage::LinearGradient { .. }
+            | BackgroundImage::RepeatingLinearGradient { .. }
+            | BackgroundImage::RadialGradient { .. }
+            | BackgroundImage::RepeatingRadialGradient { .. }
+            | BackgroundImage::ConicGradient { .. }
+            | BackgroundImage::RepeatingConicGradient { .. } => {
+                let img_w = outer_rect.width().max(1.0).round() as u32;
+                let img_h = outer_rect.height().max(1.0).round() as u32;
+                let Some(pixmap) = self.render_generated_border_image(bg, style, img_w, img_h) else {
+                    return false;
+                };
+                (pixmap, img_w, img_h)
+            }
+            BackgroundImage::None => return false,
+        };
+
+        let slice_top = resolve_slice_value(slice.top, img_h);
+        let slice_right = resolve_slice_value(slice.right, img_w);
+        let slice_bottom = resolve_slice_value(slice.bottom, img_h);
+        let slice_left = resolve_slice_value(slice.left, img_w);
 
         let sx0 = 0.0;
         let sx1 = slice_left.min(img_w as f32);
@@ -3130,6 +3136,219 @@ impl Painter {
 
         let size = IntSize::from_wh(width, height)?;
         Pixmap::from_vec(data, size)
+    }
+
+    fn render_generated_border_image(
+        &self,
+        bg: &BackgroundImage,
+        style: &ComputedStyle,
+        width: u32,
+        height: u32,
+    ) -> Option<Pixmap> {
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        let rect = Rect::from_xywh(0.0, 0.0, width as f32, height as f32);
+        match bg {
+            BackgroundImage::LinearGradient { angle, stops } => {
+                let resolved = normalize_color_stops(stops, style.color);
+                if resolved.is_empty() {
+                    return None;
+                }
+                let gradient_rect = rect;
+                let skia_stops = gradient_stops(&resolved);
+                let rad = angle.to_radians();
+                let dx = rad.sin();
+                let dy = -rad.cos();
+                let len = 0.5 * (gradient_rect.width() * dx.abs() + gradient_rect.height() * dy.abs());
+                let cx = gradient_rect.x() + gradient_rect.width() / 2.0;
+                let cy = gradient_rect.y() + gradient_rect.height() / 2.0;
+
+                let start = tiny_skia::Point::from_xy(cx - dx * len, cy - dy * len);
+                let end = tiny_skia::Point::from_xy(cx + dx * len, cy + dy * len);
+                let shader = LinearGradient::new(start, end, skia_stops, SpreadMode::Pad, Transform::identity())?;
+
+                let mut pixmap = Pixmap::new(width, height)?;
+                let Some(skia_rect) = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
+                    return None;
+                };
+                let path = PathBuilder::from_rect(skia_rect);
+
+                let mut paint = Paint::default();
+                paint.shader = shader;
+                paint.anti_alias = true;
+                pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+                Some(pixmap)
+            }
+            BackgroundImage::RepeatingLinearGradient { angle, stops } => {
+                let resolved = normalize_color_stops(stops, style.color);
+                if resolved.is_empty() {
+                    return None;
+                }
+                let gradient_rect = rect;
+                let skia_stops = gradient_stops(&resolved);
+                let rad = angle.to_radians();
+                let dx = rad.sin();
+                let dy = -rad.cos();
+                let len = 0.5 * (gradient_rect.width() * dx.abs() + gradient_rect.height() * dy.abs());
+                let cx = gradient_rect.x() + gradient_rect.width() / 2.0;
+                let cy = gradient_rect.y() + gradient_rect.height() / 2.0;
+
+                let start = tiny_skia::Point::from_xy(cx - dx * len, cy - dy * len);
+                let end = tiny_skia::Point::from_xy(cx + dx * len, cy + dy * len);
+                let shader = LinearGradient::new(start, end, skia_stops, SpreadMode::Repeat, Transform::identity())?;
+
+                let mut pixmap = Pixmap::new(width, height)?;
+                let Some(skia_rect) = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
+                    return None;
+                };
+                let path = PathBuilder::from_rect(skia_rect);
+
+                let mut paint = Paint::default();
+                paint.shader = shader;
+                paint.anti_alias = true;
+                pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+                Some(pixmap)
+            }
+            BackgroundImage::RadialGradient {
+                shape,
+                size,
+                position,
+                stops,
+            } => {
+                let resolved = normalize_color_stops(stops, style.color);
+                if resolved.is_empty() {
+                    return None;
+                }
+                let skia_stops = gradient_stops(&resolved);
+                let (cx, cy, radius_x, radius_y) = radial_geometry(rect, position, size, *shape, style.font_size);
+                let transform = Transform::from_translate(cx, cy).pre_scale(radius_x, radius_y);
+                let shader = RadialGradient::new(
+                    tiny_skia::Point::from_xy(0.0, 0.0),
+                    tiny_skia::Point::from_xy(0.0, 0.0),
+                    1.0,
+                    skia_stops,
+                    SpreadMode::Pad,
+                    transform,
+                )?;
+
+                let mut pixmap = Pixmap::new(width, height)?;
+                let Some(skia_rect) = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
+                    return None;
+                };
+                let path = PathBuilder::from_rect(skia_rect);
+                let mut paint = Paint::default();
+                paint.shader = shader;
+                paint.anti_alias = true;
+                pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+                Some(pixmap)
+            }
+            BackgroundImage::RepeatingRadialGradient {
+                shape,
+                size,
+                position,
+                stops,
+            } => {
+                let resolved = normalize_color_stops(stops, style.color);
+                if resolved.is_empty() {
+                    return None;
+                }
+                let skia_stops = gradient_stops(&resolved);
+                let (cx, cy, radius_x, radius_y) = radial_geometry(rect, position, size, *shape, style.font_size);
+                let transform = Transform::from_translate(cx, cy).pre_scale(radius_x, radius_y);
+                let shader = RadialGradient::new(
+                    tiny_skia::Point::from_xy(0.0, 0.0),
+                    tiny_skia::Point::from_xy(0.0, 0.0),
+                    1.0,
+                    skia_stops,
+                    SpreadMode::Repeat,
+                    transform,
+                )?;
+
+                let mut pixmap = Pixmap::new(width, height)?;
+                let Some(skia_rect) = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
+                    return None;
+                };
+                let path = PathBuilder::from_rect(skia_rect);
+                let mut paint = Paint::default();
+                paint.shader = shader;
+                paint.anti_alias = true;
+                pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+                Some(pixmap)
+            }
+            BackgroundImage::ConicGradient {
+                from_angle,
+                position,
+                stops,
+            } => {
+                let resolved = normalize_color_stops_unclamped(stops, style.color);
+                if resolved.is_empty() {
+                    return None;
+                }
+                let mut pixmap = Pixmap::new(width, height)?;
+                let center = resolve_gradient_center(rect, position, rect, style.font_size);
+                let start_angle = from_angle.to_radians();
+                let period = 1.0;
+                let data = pixmap.pixels_mut();
+                let transparent = PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
+                for y in 0..height {
+                    for x in 0..width {
+                        let dx = x as f32 + 0.5 - center.x;
+                        let dy = y as f32 + 0.5 - center.y;
+                        let angle = dx.atan2(-dy) + start_angle;
+                        let mut t = (angle / (2.0 * std::f32::consts::PI)).rem_euclid(1.0);
+                        t *= period;
+                        let color = sample_stops(&resolved, t, false, period);
+                        let idx = (y * width + x) as usize;
+                        data[idx] = PremultipliedColorU8::from_rgba(
+                            color.r,
+                            color.g,
+                            color.b,
+                            (color.a * 255.0).round().clamp(0.0, 255.0) as u8,
+                        )
+                        .unwrap_or(transparent);
+                    }
+                }
+                Some(pixmap)
+            }
+            BackgroundImage::RepeatingConicGradient {
+                from_angle,
+                position,
+                stops,
+            } => {
+                let resolved = normalize_color_stops_unclamped(stops, style.color);
+                if resolved.is_empty() {
+                    return None;
+                }
+                let mut pixmap = Pixmap::new(width, height)?;
+                let center = resolve_gradient_center(rect, position, rect, style.font_size);
+                let start_angle = from_angle.to_radians();
+                let period = resolved.last().map(|(p, _)| *p).unwrap_or(1.0).max(1e-6);
+                let data = pixmap.pixels_mut();
+                let transparent = PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
+                for y in 0..height {
+                    for x in 0..width {
+                        let dx = x as f32 + 0.5 - center.x;
+                        let dy = y as f32 + 0.5 - center.y;
+                        let angle = dx.atan2(-dy) + start_angle;
+                        let mut t = (angle / (2.0 * std::f32::consts::PI)).rem_euclid(1.0);
+                        t *= period;
+                        let color = sample_stops(&resolved, t, true, period);
+                        let idx = (y * width + x) as usize;
+                        data[idx] = PremultipliedColorU8::from_rgba(
+                            color.r,
+                            color.g,
+                            color.b,
+                            (color.a * 255.0).round().clamp(0.0, 255.0) as u8,
+                        )
+                        .unwrap_or(transparent);
+                    }
+                }
+                Some(pixmap)
+            }
+            BackgroundImage::Url(_) | BackgroundImage::None => None,
+        }
     }
 
     fn paint_text_decoration(
@@ -5430,13 +5649,15 @@ fn resolve_border_image_outset(outset: &crate::style::types::BorderImageOutset, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::css::types::ColorStop;
     use crate::css::types::TextShadow;
     use crate::geometry::Rect;
     use crate::image_loader::ImageCache;
     use crate::paint::display_list::BorderRadii;
     use crate::style::types::{
-        BackgroundAttachment, BackgroundBox, BackgroundRepeat, BorderImage, BorderImageSlice, BorderImageSliceValue,
-        BorderImageSource, BorderImageRepeat, Isolation, MixBlendMode, OutlineColor, OutlineStyle, Overflow,
+        BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundRepeat, BorderImage, BorderImageRepeat,
+        BorderImageSlice, BorderImageSliceValue, BorderImageSource, Isolation, MixBlendMode, OutlineColor,
+        OutlineStyle, Overflow,
     };
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
@@ -7208,14 +7429,62 @@ mod tests {
 
         // Left edge similarly spaces tiles vertically.
         let gap_left = painter.pixmap.pixel(1, 7).unwrap();
-        assert_eq!(
-            (gap_left.red(), gap_left.green(), gap_left.blue()),
-            (255, 255, 255)
-        );
+        assert_eq!((gap_left.red(), gap_left.green(), gap_left.blue()), (255, 255, 255));
         let painted_left = painter.pixmap.pixel(1, 4).unwrap();
         assert_eq!(
             (painted_left.red(), painted_left.green(), painted_left.blue()),
             (255, 0, 255)
+        );
+    }
+
+    #[test]
+    fn border_image_accepts_gradients() {
+        let mut style = ComputedStyle::default();
+        style.border_top_width = Length::px(4.0);
+        style.border_right_width = Length::px(4.0);
+        style.border_bottom_width = Length::px(4.0);
+        style.border_left_width = Length::px(4.0);
+        style.border_image = BorderImage {
+            source: BorderImageSource::Image(BackgroundImage::LinearGradient {
+                angle: 180.0,
+                stops: vec![
+                    ColorStop {
+                        position: Some(0.0),
+                        color: crate::style::color::Color::Rgba(Rgba::new(255, 0, 0, 1.0)),
+                    },
+                    ColorStop {
+                        position: Some(1.0),
+                        color: crate::style::color::Color::Rgba(Rgba::new(0, 0, 255, 1.0)),
+                    },
+                ],
+            }),
+            slice: BorderImageSlice {
+                top: BorderImageSliceValue::Number(1.0),
+                right: BorderImageSliceValue::Number(1.0),
+                bottom: BorderImageSliceValue::Number(1.0),
+                left: BorderImageSliceValue::Number(1.0),
+                fill: false,
+            },
+            ..BorderImage::default()
+        };
+
+        let mut painter = Painter::new(16, 16, Rgba::WHITE).expect("painter");
+        painter.fill_background();
+        painter.paint_borders(0.0, 0.0, 16.0, 16.0, &style);
+
+        let top = painter.pixmap.pixel(8, 0).unwrap();
+        assert!(top.red() > top.blue(), "top should be red-ish, got {:?}", top);
+        let bottom = painter.pixmap.pixel(8, 15).unwrap();
+        assert!(
+            bottom.blue() > bottom.red(),
+            "bottom should be blue-ish, got {:?}",
+            bottom
+        );
+        let center = painter.pixmap.pixel(8, 8).unwrap();
+        assert_eq!(
+            (center.red(), center.green(), center.blue()),
+            (255, 255, 255),
+            "center should remain unfilled without border-image fill"
         );
     }
 }
