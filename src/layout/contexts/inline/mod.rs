@@ -1114,22 +1114,9 @@ impl InlineFormattingContext {
         }
 
         if is_marker {
-            let raw_gap = style
-                .margin_right
-                .as_ref()
-                .map(|m| resolve_length_for_width(*m, 0.0, style, &self.font_context, self.viewport_size))
-                .unwrap_or(0.0);
-            let gap = if raw_gap.abs() > f32::EPSILON {
-                raw_gap
-            } else {
-                style.font_size * 0.5
-            };
+            let gap = marker_inline_gap(style, &self.font_context, self.viewport_size);
             let marker_extent = item.advance + gap;
-            let sign = if style.direction == crate::style::types::Direction::Rtl {
-                1.0
-            } else {
-                -1.0
-            };
+            let sign = marker_inline_start_sign(style.writing_mode, style.direction);
             if style.list_style_position == ListStylePosition::Outside {
                 item.advance_for_layout = 0.0;
                 item.paint_offset = sign * marker_extent;
@@ -4612,6 +4599,52 @@ fn is_justify_align(text_align: TextAlign) -> bool {
     matches!(text_align, TextAlign::Justify | TextAlign::JustifyAll)
 }
 
+fn marker_inline_end_margin(style: &ComputedStyle) -> Option<Length> {
+    use crate::style::types::WritingMode::*;
+    match style.writing_mode {
+        HorizontalTb => {
+            if matches!(style.direction, crate::style::types::Direction::Rtl) {
+                style.margin_left
+            } else {
+                style.margin_right
+            }
+        }
+        VerticalRl | SidewaysRl => style.margin_bottom,
+        VerticalLr | SidewaysLr => style.margin_top,
+    }
+}
+
+fn marker_inline_gap(
+    style: &ComputedStyle,
+    font_context: &FontContext,
+    viewport_size: Size,
+) -> f32 {
+    let resolved = marker_inline_end_margin(style)
+        .and_then(|m| Some(resolve_length_for_width(m, 0.0, style, font_context, viewport_size)))
+        .unwrap_or(0.0);
+
+    if resolved.abs() > f32::EPSILON {
+        resolved
+    } else {
+        style.font_size * 0.5
+    }
+}
+
+fn marker_inline_start_sign(writing_mode: crate::style::types::WritingMode, direction: crate::style::types::Direction) -> f32 {
+    use crate::style::types::WritingMode::*;
+    match writing_mode {
+        HorizontalTb => {
+            if matches!(direction, crate::style::types::Direction::Rtl) {
+                1.0
+            } else {
+                -1.0
+            }
+        }
+        VerticalRl | SidewaysRl => -1.0,
+        VerticalLr | SidewaysLr => 1.0,
+    }
+}
+
 fn compute_paragraph_line_flags(lines: &[Line]) -> Vec<(bool, bool)> {
     let mut flags = Vec::with_capacity(lines.len());
     let mut para_start = 0;
@@ -4902,7 +4935,7 @@ mod tests {
     use crate::style::values::{Length, LengthUnit};
     use crate::style::ComputedStyle;
     use crate::text::line_break::BreakType;
-    use crate::tree::box_tree::ReplacedType;
+    use crate::tree::box_tree::{MarkerContent, ReplacedType};
     use crate::tree::fragment_tree::FragmentContent;
     use std::sync::Arc;
 
@@ -4931,8 +4964,10 @@ mod tests {
                         marker_x = Some(node.bounds.x());
                     }
                 }
-                FragmentContent::Text { .. } => {
-                    if text_x.is_none() {
+                FragmentContent::Text { is_marker, .. } => {
+                    if is_marker && marker_x.is_none() {
+                        marker_x = Some(node.bounds.x());
+                    } else if !is_marker && text_x.is_none() {
                         text_x = Some(node.bounds.x());
                     }
                 }
@@ -4943,6 +4978,33 @@ mod tests {
             }
         }
         (marker_x, text_x)
+    }
+
+    fn marker_and_text_positions_vertical(fragment: &FragmentNode) -> (Option<f32>, Option<f32>) {
+        let mut marker_y = None;
+        let mut text_y = None;
+        let mut stack = vec![fragment];
+        while let Some(node) = stack.pop() {
+            match node.content {
+                FragmentContent::Replaced { .. } => {
+                    if marker_y.is_none() {
+                        marker_y = Some(node.bounds.y());
+                    }
+                }
+                FragmentContent::Text { is_marker, .. } => {
+                    if is_marker && marker_y.is_none() {
+                        marker_y = Some(node.bounds.y());
+                    } else if !is_marker && text_y.is_none() {
+                        text_y = Some(node.bounds.y());
+                    }
+                }
+                _ => {}
+            }
+            for child in &node.children {
+                stack.push(child);
+            }
+        }
+        (marker_y, text_y)
     }
 
     fn collect_text_fragments(fragment: &FragmentNode, out: &mut Vec<String>) {
@@ -5131,6 +5193,70 @@ mod tests {
         // 10px intrinsic width + 0.5em gap (8px at 16px font size)
         let x = text_x.expect("text position");
         assert!(x > 17.0 && x < 19.5, "expected text after marker gap, got {}", x);
+    }
+
+    #[test]
+    fn marker_outside_positions_inline_start_in_vertical_rl() {
+        let ifc = InlineFormattingContext::new();
+        let mut root_style = ComputedStyle::default();
+        root_style.writing_mode = WritingMode::VerticalRl;
+        let root_style = Arc::new(root_style);
+
+        let mut marker_style = (*root_style).clone();
+        marker_style.list_style_position = ListStylePosition::Outside;
+        let marker_style = Arc::new(marker_style);
+
+        let text_style = Arc::new((*root_style).clone());
+
+        let marker = BoxNode::new_marker(marker_style, MarkerContent::Text("•".to_string()));
+        let text = BoxNode::new_text(text_style, "content".to_string());
+        let root = BoxNode::new_block(root_style, FormattingContextType::Block, vec![marker, text]);
+        let constraints = LayoutConstraints::definite(200.0, 200.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let line = fragment.children.first().expect("line fragment");
+        let (marker_y, text_y) = marker_and_text_positions_vertical(line);
+
+        let marker_y = marker_y.expect("marker y");
+        let text_y = text_y.expect("text y");
+        assert!(
+            marker_y < text_y,
+            "marker should sit at inline-start (top) in vertical-rl; marker_y={}, text_y={}",
+            marker_y,
+            text_y
+        );
+    }
+
+    #[test]
+    fn marker_outside_positions_inline_start_in_vertical_lr() {
+        let ifc = InlineFormattingContext::new();
+        let mut root_style = ComputedStyle::default();
+        root_style.writing_mode = WritingMode::VerticalLr;
+        let root_style = Arc::new(root_style);
+
+        let mut marker_style = (*root_style).clone();
+        marker_style.list_style_position = ListStylePosition::Outside;
+        let marker_style = Arc::new(marker_style);
+
+        let text_style = Arc::new((*root_style).clone());
+
+        let marker = BoxNode::new_marker(marker_style, MarkerContent::Text("•".to_string()));
+        let text = BoxNode::new_text(text_style, "content".to_string());
+        let root = BoxNode::new_block(root_style, FormattingContextType::Block, vec![marker, text]);
+        let constraints = LayoutConstraints::definite(200.0, 200.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let line = fragment.children.first().expect("line fragment");
+        let (marker_y, text_y) = marker_and_text_positions_vertical(line);
+
+        let marker_y = marker_y.expect("marker y");
+        let text_y = text_y.expect("text y");
+        assert!(
+            marker_y > text_y,
+            "marker should sit at inline-start (bottom) in vertical-lr; marker_y={}, text_y={}",
+            marker_y,
+            text_y
+        );
     }
 
     #[test]
