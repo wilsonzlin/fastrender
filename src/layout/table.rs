@@ -1044,10 +1044,6 @@ impl TableStructure {
         for (new_idx, old_idx) in row_order.iter().enumerate() {
             row_index_map[*old_idx] = new_idx;
         }
-        let mut row_index_map = vec![0usize; current_row];
-        for (new_idx, old_idx) in row_order.iter().enumerate() {
-            row_index_map[*old_idx] = new_idx;
-        }
 
         let reorder_vec = |vec: &mut Vec<Option<SpecifiedHeight>>| {
             let mut reordered = Vec::with_capacity(vec.len());
@@ -6324,6 +6320,72 @@ mod tests {
         assert!(h0 >= 9.0 && h0 <= 11.5, "header row should stay first with its height");
         assert!(h1 >= 28.0 && h1 <= 32.0, "body row should remain in the middle with its height");
         assert!(h2 >= 14.0 && h2 <= 17.0, "footer row should move to the end with its height");
+    }
+
+    #[test]
+    fn multiple_row_groups_keep_dom_order_with_header_footer_reordering() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+
+        let mut head_group_style = ComputedStyle::default();
+        head_group_style.display = Display::TableHeaderGroup;
+
+        let mut body_group_style = ComputedStyle::default();
+        body_group_style.display = Display::TableRowGroup;
+
+        let mut foot_group_style = ComputedStyle::default();
+        foot_group_style.display = Display::TableFooterGroup;
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+
+        let make_row = |style: &ComputedStyle| {
+            BoxNode::new_block(
+                Arc::new(style.clone()),
+                FormattingContextType::Block,
+                vec![BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![])],
+            )
+        };
+
+        let head_a =
+            BoxNode::new_block(Arc::new(head_group_style.clone()), FormattingContextType::Block, vec![make_row(&row_style)]);
+        let head_b =
+            BoxNode::new_block(Arc::new(head_group_style), FormattingContextType::Block, vec![make_row(&row_style)]);
+        let body = BoxNode::new_block(Arc::new(body_group_style), FormattingContextType::Block, vec![make_row(&row_style)]);
+        let loose_row = make_row(&row_style);
+        let foot_a =
+            BoxNode::new_block(Arc::new(foot_group_style.clone()), FormattingContextType::Block, vec![make_row(&row_style)]);
+        let foot_b =
+            BoxNode::new_block(Arc::new(foot_group_style), FormattingContextType::Block, vec![make_row(&row_style)]);
+
+        // DOM order: footer, header, body, loose row, header, footer.
+        // Layout order should be: header rows (DOM order), body/loose rows, footer rows (DOM order).
+        let table = BoxNode::new_block(
+            Arc::new(table_style),
+            FormattingContextType::Table,
+            vec![foot_a, head_a, body, loose_row, head_b, foot_b],
+        );
+
+        let structure = TableStructure::from_box_tree(&table);
+        assert_eq!(structure.row_count, 6);
+
+        let row_sources: Vec<usize> = structure.rows.iter().map(|r| r.source_index).collect();
+        let cell_sources: Vec<usize> = (0..structure.row_count)
+            .map(|row| structure.get_cell_at(row, 0).unwrap().source_row)
+            .collect();
+
+        let expected = vec![1, 4, 2, 3, 0, 5];
+        assert_eq!(
+            row_sources, expected,
+            "row ordering should pull headers first, then bodies/loose rows, then footers while preserving DOM order"
+        );
+        assert_eq!(
+            cell_sources, expected,
+            "grid mapping should follow the reordered rows while keeping source indices intact"
+        );
     }
 
     #[test]
