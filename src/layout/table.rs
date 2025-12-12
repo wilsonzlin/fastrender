@@ -3174,6 +3174,22 @@ impl FormattingContext for TableFormattingContext {
             let max_content = (max_w - spacing - edge_consumption).max(0.0);
             available_content = available_content.min(max_content);
         }
+        if !captions.is_empty() {
+            let mut caption_min: f32 = 0.0;
+            for caption in &captions {
+                let fc_type = caption
+                    .formatting_context()
+                    .unwrap_or(crate::style::display::FormattingContextType::Block);
+                let fc = self.factory.create(fc_type);
+                if let Ok(w) = fc.compute_intrinsic_inline_size(caption, IntrinsicSizingMode::MinContent) {
+                    caption_min = caption_min.max(w);
+                }
+            }
+            if caption_min > 0.0 {
+                let required_content = (caption_min - edge_consumption).max(0.0);
+                available_content = available_content.max(required_content);
+            }
+        }
 
         let distributor = ColumnDistributor::new(mode).with_min_column_width(0.0);
         let distribution = distributor.distribute(&column_constraints, available_content);
@@ -4210,7 +4226,7 @@ impl FormattingContext for TableFormattingContext {
                 + resolve_abs(&box_node.style.border_left_width)
                 + resolve_abs(&box_node.style.border_right_width)
         };
-        let width = match mode {
+        let base = match mode {
             IntrinsicSizingMode::MinContent => {
                 column_constraints.iter().map(|c| c.min_width).sum::<f32>() + spacing + edges
             }
@@ -4218,6 +4234,22 @@ impl FormattingContext for TableFormattingContext {
                 column_constraints.iter().map(|c| c.max_width).sum::<f32>() + spacing + edges
             }
         };
+        let mut caption_min: f32 = 0.0;
+        for child in box_node.children.iter().filter(|child| {
+            !matches!(
+                child.style.position,
+                crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
+            ) && matches!(child.style.display, Display::TableCaption)
+        }) {
+            let fc_type = child
+                .formatting_context()
+                .unwrap_or(crate::style::display::FormattingContextType::Block);
+            let fc = self.factory.create(fc_type);
+            if let Ok(w) = fc.compute_intrinsic_inline_size(child, mode) {
+                caption_min = caption_min.max(w);
+            }
+        }
+        let width = base.max(caption_min);
 
         Ok(width.max(0.0))
     }
@@ -6541,6 +6573,75 @@ mod tests {
         assert!(caption_frag.bounds.y() <= 0.0 + 1e-3);
         assert!((table_frag.bounds.y() - caption_frag.bounds.height()).abs() < 0.2);
         assert!((fragment.bounds.height() - (caption_frag.bounds.height() + table_frag.bounds.height())).abs() < 0.2);
+    }
+
+    #[test]
+    fn caption_min_width_expands_table_width() {
+        let mut caption_style = ComputedStyle::default();
+        caption_style.display = Display::TableCaption;
+        caption_style.width = Some(Length::px(400.0));
+        let caption = BoxNode::new_block(
+            Arc::new(caption_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(make_style(Display::Inline), "caption".to_string())],
+        );
+
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.width = Some(Length::px(10.0));
+
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+        let tbody = BoxNode::new_block(
+            make_style(Display::TableRowGroup),
+            FormattingContextType::Block,
+            vec![row],
+        );
+        let table = BoxNode::new_block(
+            Arc::new(table_style),
+            FormattingContextType::Table,
+            vec![caption, tbody],
+        );
+
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(&table, &LayoutConstraints::definite_width(100.0))
+            .expect("table layout");
+
+        assert!(fragment.bounds.width() >= 399.0, "caption min width should expand the table");
+    }
+
+    #[test]
+    fn caption_intrinsic_width_influences_table_intrinsic_size() {
+        let mut caption_style = ComputedStyle::default();
+        caption_style.display = Display::TableCaption;
+        caption_style.width = Some(Length::px(120.0));
+        let caption = BoxNode::new_block(
+            Arc::new(caption_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(make_style(Display::Inline), "caption".to_string())],
+        );
+
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![caption]);
+
+        let tfc = TableFormattingContext::new();
+        let min = tfc
+            .compute_intrinsic_inline_size(&table, IntrinsicSizingMode::MinContent)
+            .expect("intrinsic width");
+
+        assert!(min >= 119.0, "table intrinsic width should be at least the caption min width");
     }
 
     #[test]
