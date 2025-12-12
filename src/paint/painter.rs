@@ -5100,7 +5100,7 @@ fn apply_drop_shadow(pixmap: &mut Pixmap, offset_x: f32, offset_y: f32, blur_rad
         }
     }
 
-    if spread > 0.0 {
+    if spread != 0.0 {
         apply_spread(&mut shadow, spread);
     }
 
@@ -5129,10 +5129,11 @@ fn apply_drop_shadow(pixmap: &mut Pixmap, offset_x: f32, offset_y: f32, blur_rad
 }
 
 fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
-    let radius = spread.ceil() as i32;
-    if radius <= 0 {
+    let radius = spread.abs().ceil() as i32;
+    if radius <= 0 || spread == 0.0 {
         return;
     }
+    let expand = spread > 0.0;
     let width = pixmap.width() as i32;
     let height = pixmap.height() as i32;
     let original = pixmap.clone();
@@ -5141,21 +5142,28 @@ fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
 
     for y in 0..height {
         for x in 0..width {
-            let mut max = [0u8; 4];
+            let mut agg = if expand { [0u8; 4] } else { [255u8; 4] };
             for dy in -radius..=radius {
                 for dx in -radius..=radius {
                     let ny = (y + dy).clamp(0, height - 1);
                     let nx = (x + dx).clamp(0, width - 1);
                     let idx = (ny as usize) * (width as usize) + nx as usize;
                     let px = src[idx];
-                    max[0] = max[0].max(px.red());
-                    max[1] = max[1].max(px.green());
-                    max[2] = max[2].max(px.blue());
-                    max[3] = max[3].max(px.alpha());
+                    if expand {
+                        agg[0] = agg[0].max(px.red());
+                        agg[1] = agg[1].max(px.green());
+                        agg[2] = agg[2].max(px.blue());
+                        agg[3] = agg[3].max(px.alpha());
+                    } else {
+                        agg[0] = agg[0].min(px.red());
+                        agg[1] = agg[1].min(px.green());
+                        agg[2] = agg[2].min(px.blue());
+                        agg[3] = agg[3].min(px.alpha());
+                    }
                 }
             }
             let idx = (y as usize) * (width as usize) + x as usize;
-            dst[idx] = PremultipliedColorU8::from_rgba(max[0], max[1], max[2], max[3])
+            dst[idx] = PremultipliedColorU8::from_rgba(agg[0], agg[1], agg[2], agg[3])
                 .unwrap_or(PremultipliedColorU8::TRANSPARENT);
         }
     }
@@ -6118,7 +6126,7 @@ mod tests {
     use crate::style::types::{
         BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundRepeat, BackgroundSize,
         BackgroundSizeComponent, BorderImage, BorderImageRepeat, BorderImageSlice, BorderImageSliceValue,
-        BorderImageSource, Isolation, MixBlendMode, OutlineColor, OutlineStyle, Overflow,
+        BorderImageSource, FilterShadow, Isolation, MixBlendMode, OutlineColor, OutlineStyle, Overflow,
     };
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
@@ -6528,6 +6536,29 @@ mod tests {
         style.filter = vec![FilterFunction::Blur(Length::px(-2.0))];
         let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
         assert!(filters.is_empty(), "negative blur should drop the filter");
+    }
+
+    #[test]
+    fn drop_shadow_negative_spread_erodes_shadow() {
+        let mut style = ComputedStyle::default();
+        style.background_color = Rgba::BLACK;
+        style.filter = vec![FilterFunction::DropShadow(FilterShadow {
+            offset_x: Length::px(6.0),
+            offset_y: Length::px(6.0),
+            blur_radius: Length::px(0.0),
+            spread: Length::px(-2.0),
+            color: FilterColor::Color(Rgba::from_rgba8(255, 0, 0, 255)),
+        })];
+        let mut root = FragmentNode::new_block(Rect::from_xywh(10.0, 10.0, 20.0, 10.0), Vec::new());
+        root.style = Some(Arc::new(style));
+
+        let pixmap = paint_tree(&FragmentTree::new(root), 60, 40, Rgba::WHITE).expect("paint");
+        let shadow_bbox = bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > g && r > b).expect("shadow");
+        let width = shadow_bbox.2 - shadow_bbox.0 + 1;
+        assert!(
+            width < 20,
+            "negative spread should shrink shadow width (got width {width})"
+        );
     }
 
     #[test]

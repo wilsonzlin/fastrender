@@ -443,7 +443,7 @@ fn apply_drop_shadow(pixmap: &mut Pixmap, offset_x: f32, offset_y: f32, blur_rad
         }
     }
 
-    if spread > 0.0 {
+    if spread != 0.0 {
         apply_spread(&mut shadow, spread);
     }
 
@@ -472,10 +472,11 @@ fn apply_drop_shadow(pixmap: &mut Pixmap, offset_x: f32, offset_y: f32, blur_rad
 }
 
 fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
-    let radius = spread.ceil() as i32;
-    if radius <= 0 {
+    let radius = spread.abs().ceil() as i32;
+    if radius <= 0 || spread == 0.0 {
         return;
     }
+    let expand = spread > 0.0;
     let width = pixmap.width() as i32;
     let height = pixmap.height() as i32;
     let original = pixmap.clone();
@@ -484,21 +485,28 @@ fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
 
     for y in 0..height {
         for x in 0..width {
-            let mut max = [0u8; 4];
+            let mut agg = if expand { [0u8; 4] } else { [255u8; 4] };
             for dy in -radius..=radius {
                 for dx in -radius..=radius {
                     let ny = (y + dy).clamp(0, height - 1);
                     let nx = (x + dx).clamp(0, width - 1);
                     let idx = (ny as usize) * (width as usize) + nx as usize;
                     let px = src[idx];
-                    max[0] = max[0].max(px.red());
-                    max[1] = max[1].max(px.green());
-                    max[2] = max[2].max(px.blue());
-                    max[3] = max[3].max(px.alpha());
+                    if expand {
+                        agg[0] = agg[0].max(px.red());
+                        agg[1] = agg[1].max(px.green());
+                        agg[2] = agg[2].max(px.blue());
+                        agg[3] = agg[3].max(px.alpha());
+                    } else {
+                        agg[0] = agg[0].min(px.red());
+                        agg[1] = agg[1].min(px.green());
+                        agg[2] = agg[2].min(px.blue());
+                        agg[3] = agg[3].min(px.alpha());
+                    }
                 }
             }
             let idx = (y as usize) * (width as usize) + x as usize;
-            dst[idx] = PremultipliedColorU8::from_rgba(max[0], max[1], max[2], max[3])
+            dst[idx] = PremultipliedColorU8::from_rgba(agg[0], agg[1], agg[2], agg[3])
                 .unwrap_or(PremultipliedColorU8::TRANSPARENT);
         }
     }
@@ -3362,8 +3370,8 @@ mod tests {
     use crate::paint::display_list::{
         BorderImageItem, BorderImageSourceItem, BorderItem, BorderRadii, BorderSide, BoxShadowItem, DecorationPaint,
         DecorationStroke, DisplayItem, DisplayList, FillRectItem, GlyphInstance, GradientSpread, GradientStop,
-        ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem,
-        TextDecorationItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
+        ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem, BlendMode,
+        StackingContextItem, TextDecorationItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
     };
     use crate::paint::display_list_builder::DisplayListBuilder;
     use crate::style::color::Rgba;
@@ -3955,6 +3963,42 @@ mod tests {
         let pixmap = renderer.render(&list).unwrap();
         // Center of the box should have darkened pixels due to shadow.
         assert!(pixel(&pixmap, 3, 3).3 > 200);
+    }
+
+    #[test]
+    fn drop_shadow_negative_spread_erodes_shadow() {
+        let renderer = DisplayListRenderer::new(60, 40, Rgba::WHITE, FontContext::new()).unwrap();
+        let mut list = DisplayList::new();
+        list.push(DisplayItem::PushStackingContext(StackingContextItem {
+            z_index: 0,
+            creates_stacking_context: true,
+            bounds: Rect::from_xywh(10.0, 10.0, 20.0, 10.0),
+            mix_blend_mode: BlendMode::Normal,
+            is_isolated: false,
+            transform: None,
+            filters: vec![ResolvedFilter::DropShadow {
+                offset_x: 6.0,
+                offset_y: 6.0,
+                blur_radius: 0.0,
+                spread: -2.0,
+                color: Rgba::from_rgba8(255, 0, 0, 255),
+            }],
+            backdrop_filters: Vec::new(),
+            radii: BorderRadii::ZERO,
+        }));
+        list.push(DisplayItem::FillRect(FillRectItem {
+            rect: Rect::from_xywh(10.0, 10.0, 20.0, 10.0),
+            color: Rgba::BLACK,
+        }));
+        list.push(DisplayItem::PopStackingContext);
+
+        let pixmap = renderer.render(&list).unwrap();
+        let shadow_bbox = bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > g && r > b).expect("shadow");
+        let width = shadow_bbox.2 - shadow_bbox.0 + 1;
+        assert!(
+            width < 20,
+            "negative spread should shrink shadow width (got width {width})"
+        );
     }
 
     #[test]
