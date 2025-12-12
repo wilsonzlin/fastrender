@@ -1065,6 +1065,21 @@ fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f
     (synthetic_bold, synthetic_oblique)
 }
 
+fn is_bidi_control_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{202a}' // LRE
+            | '\u{202b}' // RLE
+            | '\u{202c}' // PDF
+            | '\u{202d}' // LRO
+            | '\u{202e}' // RLO
+            | '\u{2066}' // LRI
+            | '\u{2067}' // RLI
+            | '\u{2068}' // FSI
+            | '\u{2069}' // PDI
+    )
+}
+
 #[cfg(test)]
 fn is_emoji_dominant(text: &str) -> bool {
     let mut saw_emoji = false;
@@ -1491,21 +1506,29 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     let mut x_position = 0.0_f32;
 
     for (info, pos) in glyph_infos.iter().zip(glyph_positions.iter()) {
-        let x_offset = x_position + (pos.x_offset as f32 * scale);
-        let y_offset = pos.y_offset as f32 * scale;
+        let cluster = info.cluster as usize;
+        let is_bidi_control = run
+            .text
+            .get(cluster..)
+            .and_then(|s| s.chars().next())
+            .map_or(false, is_bidi_control_char);
+
         let x_advance = pos.x_advance as f32 * scale;
-        let y_advance = pos.y_advance as f32 * scale;
+        if !is_bidi_control {
+            let x_offset = x_position + (pos.x_offset as f32 * scale);
+            let y_offset = pos.y_offset as f32 * scale;
+            let y_advance = pos.y_advance as f32 * scale;
 
-        glyphs.push(GlyphPosition {
-            glyph_id: info.glyph_id,
-            cluster: info.cluster,
-            x_offset,
-            y_offset,
-            x_advance,
-            y_advance,
-        });
-
-        x_position += x_advance;
+            glyphs.push(GlyphPosition {
+                glyph_id: info.glyph_id,
+                cluster: info.cluster,
+                x_offset,
+                y_offset,
+                x_advance,
+                y_advance,
+            });
+            x_position += x_advance;
+        }
     }
 
     Ok(ShapedRun {
@@ -2013,6 +2036,26 @@ mod tests {
         assert!(
             bidi_ltr.base_level().is_ltr(),
             "plaintext should pick LTR base from first strong"
+        );
+    }
+
+    #[test]
+    fn bidi_controls_do_not_contribute_advance() {
+        let style = ComputedStyle::default();
+        let ctx = FontContext::new();
+        let pipeline = ShapingPipeline::new();
+        let clean = pipeline.shape("abc", &style, &ctx).expect("shape clean");
+        // Inject an isolate sequence around b.
+        let isolated = pipeline
+            .shape("a\u{2067}b\u{2069}c", &style, &ctx)
+            .expect("shape with controls");
+        let clean_adv: f32 = clean.iter().map(|r| r.advance).sum();
+        let iso_adv: f32 = isolated.iter().map(|r| r.advance).sum();
+        assert!(
+            (clean_adv - iso_adv).abs() < 0.1,
+            "bidi controls should not change advance ({} vs {})",
+            clean_adv,
+            iso_adv
         );
     }
 
