@@ -1650,11 +1650,12 @@ impl InlineFormattingContext {
         first_line_indent: f32,
         subsequent_line_indent: f32,
         paragraph_info: &[(bool, bool)],
+        inline_vertical: bool,
     ) -> Vec<FragmentNode> {
         let mut fragments = Vec::new();
 
         for (idx, line) in lines.into_iter().enumerate() {
-            let line_y = start_y + line.y_offset;
+            let line_block_offset = start_y + line.y_offset;
             let line_direction = line.resolved_direction;
             let (is_last_line, _is_single_line) = paragraph_info[idx];
             let line_width = if line.available_width > 0.0 {
@@ -1703,13 +1704,14 @@ impl InlineFormattingContext {
             }
             let line_fragment = self.create_line_fragment(
                 &line,
-                line_y,
+                line_block_offset,
                 line_width,
                 line_box_width,
                 effective_align,
                 line_direction,
                 resolved_justify,
                 indent_offset,
+                inline_vertical,
             );
             fragments.push(line_fragment);
         }
@@ -1721,13 +1723,14 @@ impl InlineFormattingContext {
     fn create_line_fragment(
         &self,
         line: &Line,
-        y: f32,
+        block_offset: f32,
         available_width: f32,
         line_box_width: f32,
         line_align: TextAlign,
         direction: crate::style::types::Direction,
         resolved_justify: TextJustify,
         indent_offset: f32,
+        inline_vertical: bool,
     ) -> FragmentNode {
         let should_justify = matches!(line_align, TextAlign::Justify) && !matches!(resolved_justify, TextJustify::None);
         let items: Vec<PositionedItem> = if should_justify {
@@ -1766,11 +1769,19 @@ impl InlineFormattingContext {
 
         for (i, positioned) in items.iter().enumerate() {
             let item_width = positioned.item.width();
-            let item_x = if rtl { cursor - item_width } else { cursor };
-            let item_y =
-                line.baseline + positioned.baseline_offset - positioned.item.baseline_metrics().baseline_offset;
+            let (block_pos, inline_pos) = if inline_vertical {
+                let inline_pos = if rtl { cursor - item_width } else { cursor };
+                let block_pos =
+                    line.baseline + positioned.baseline_offset - positioned.item.baseline_metrics().baseline_offset;
+                (block_pos, inline_pos)
+            } else {
+                let inline_pos = if rtl { cursor - item_width } else { cursor };
+                let block_pos =
+                    line.baseline + positioned.baseline_offset - positioned.item.baseline_metrics().baseline_offset;
+                (block_pos, inline_pos)
+            };
 
-            let fragment = self.create_item_fragment(&positioned.item, item_x, item_y);
+            let fragment = self.create_item_fragment_oriented(&positioned.item, block_pos, inline_pos, inline_vertical);
             children.push(fragment);
 
             if rtl {
@@ -1786,7 +1797,11 @@ impl InlineFormattingContext {
             }
         }
 
-        let bounds = Rect::from_xywh(line.left_offset, y, line_box_width, line.height);
+        let bounds = if inline_vertical {
+            Rect::from_xywh(block_offset, line.left_offset, line.height, line_box_width)
+        } else {
+            Rect::from_xywh(line.left_offset, block_offset, line_box_width, line.height)
+        };
         FragmentNode::new_line(bounds, line.baseline, children)
     }
 
@@ -1924,6 +1939,169 @@ impl InlineFormattingContext {
 
         segments.push(remaining);
         segments
+    }
+
+    /// Creates a fragment for an inline item in block/inline coordinates.
+    #[allow(clippy::only_used_in_recursion)]
+    fn create_item_fragment_oriented(
+        &self,
+        item: &InlineItem,
+        block_pos: f32,
+        inline_pos: f32,
+        inline_vertical: bool,
+    ) -> FragmentNode {
+        match item {
+            InlineItem::Text(text_item) => {
+                let paint_offset = text_item.paint_offset;
+                if inline_vertical {
+                    let width = text_item.metrics.height;
+                    let height = text_item.advance + paint_offset.abs();
+                    let bounds = Rect::from_xywh(block_pos, inline_pos + paint_offset, width, height);
+                    FragmentNode::new_with_style(
+                        bounds,
+                        FragmentContent::Text {
+                            text: text_item.text.clone(),
+                            box_id: None,
+                            baseline_offset: text_item.metrics.baseline_offset,
+                            shaped: Some(text_item.runs.clone()),
+                            is_marker: text_item.is_marker,
+                        },
+                        vec![],
+                        text_item.style.clone(),
+                    )
+                } else {
+                    let bounds = Rect::from_xywh(
+                        inline_pos + paint_offset,
+                        block_pos,
+                        text_item.advance + paint_offset.abs(),
+                        text_item.metrics.height,
+                    );
+                    FragmentNode::new_with_style(
+                        bounds,
+                        FragmentContent::Text {
+                            text: text_item.text.clone(),
+                            box_id: None,
+                            baseline_offset: text_item.metrics.baseline_offset,
+                            shaped: Some(text_item.runs.clone()),
+                            is_marker: text_item.is_marker,
+                        },
+                        vec![],
+                        text_item.style.clone(),
+                    )
+                }
+            }
+            InlineItem::Tab(tab_item) => {
+                let metrics = tab_item.metrics();
+                if inline_vertical {
+                    let bounds = Rect::from_xywh(block_pos, inline_pos, metrics.height, tab_item.width());
+                    FragmentNode::new_text_shaped(
+                        bounds,
+                        String::new(),
+                        metrics.baseline_offset,
+                        Vec::new(),
+                        tab_item.style().clone(),
+                    )
+                } else {
+                    let bounds = Rect::from_xywh(inline_pos, block_pos, tab_item.width(), metrics.height);
+                    FragmentNode::new_text_shaped(
+                        bounds,
+                        String::new(),
+                        metrics.baseline_offset,
+                        Vec::new(),
+                        tab_item.style().clone(),
+                    )
+                }
+            }
+            InlineItem::InlineBox(box_item) => {
+                if inline_vertical {
+                    let mut child_inline = inline_pos + box_item.start_edge;
+                    let child_block = block_pos + box_item.content_offset_y;
+                    let children: Vec<_> = box_item
+                        .children
+                        .iter()
+                        .map(|child| {
+                            let fragment =
+                                self.create_item_fragment_oriented(child, child_block, child_inline, inline_vertical);
+                            child_inline += child.width();
+                            fragment
+                        })
+                        .collect();
+                    let bounds = Rect::from_xywh(block_pos, inline_pos, box_item.metrics.height, box_item.width());
+                    FragmentNode::new_inline_styled(bounds, box_item.box_index, children, box_item.style.clone())
+                } else {
+                    let mut child_x = inline_pos + box_item.start_edge;
+                    let child_y = block_pos + box_item.content_offset_y;
+                    let children: Vec<_> = box_item
+                        .children
+                        .iter()
+                        .map(|child| {
+                            let fragment = self.create_item_fragment(child, child_x, child_y);
+                            child_x += child.width();
+                            fragment
+                        })
+                        .collect();
+
+                    let bounds = Rect::from_xywh(inline_pos, block_pos, box_item.width(), box_item.metrics.height);
+                    FragmentNode::new_inline_styled(bounds, box_item.box_index, children, box_item.style.clone())
+                }
+            }
+            InlineItem::InlineBlock(block_item) => {
+                let mut fragment = block_item.fragment.clone();
+                if inline_vertical {
+                    fragment.bounds = Rect::from_xywh(
+                        block_pos + block_item.margin_left,
+                        inline_pos,
+                        block_item.height,
+                        block_item.width,
+                    );
+                } else {
+                    fragment.bounds = Rect::from_xywh(
+                        inline_pos + block_item.margin_left,
+                        block_pos,
+                        block_item.width,
+                        block_item.height,
+                    );
+                }
+                fragment
+            }
+            InlineItem::Replaced(replaced_item) => {
+                let paint_offset = replaced_item.paint_offset;
+                if inline_vertical {
+                    let bounds = Rect::from_xywh(
+                        block_pos + replaced_item.margin_left,
+                        inline_pos + paint_offset,
+                        replaced_item.height,
+                        replaced_item.width,
+                    );
+                    FragmentNode::new_with_style(
+                        bounds,
+                        FragmentContent::Replaced {
+                            replaced_type: replaced_item.replaced_type.clone(),
+                            box_id: None,
+                        },
+                        vec![],
+                        replaced_item.style.clone(),
+                    )
+                } else {
+                    let bounds = Rect::from_xywh(
+                        inline_pos + replaced_item.margin_left + paint_offset,
+                        block_pos,
+                        replaced_item.width,
+                        replaced_item.height,
+                    );
+                    FragmentNode::new_with_style(
+                        bounds,
+                        FragmentContent::Replaced {
+                            replaced_type: replaced_item.replaced_type.clone(),
+                            box_id: None,
+                        },
+                        vec![],
+                        replaced_item.style.clone(),
+                    )
+                }
+            }
+            InlineItem::Floating(_) => unreachable!("Floating items are handled before fragment creation"),
+        }
     }
 
     /// Creates a fragment for an inline item
@@ -4007,7 +4185,11 @@ impl InlineFormattingContext {
                 // Anchor static position to the hypothetical inline box origin: start of the line and
                 // the strut baseline offset applied to the line's baseline.
                 let start_y = first_line.y_offset + first_line.baseline - strut_metrics.baseline_offset;
-                Point::new(start_x, start_y)
+                if inline_vertical {
+                    Point::new(start_y, start_x)
+                } else {
+                    Point::new(start_x, start_y)
+                }
             } else {
                 Point::ZERO
             };
@@ -4022,6 +4204,7 @@ impl InlineFormattingContext {
             if indent_applies_first { indent_value } else { 0.0 },
             if indent_applies_subsequent { indent_value } else { 0.0 },
             &paragraph_info,
+            inline_vertical,
         );
 
         let mut merged_children = Vec::new();
@@ -4044,30 +4227,11 @@ impl InlineFormattingContext {
         }
 
         // Create containing fragment
-        let mut bounds = Rect::from_xywh(0.0, 0.0, max_width.min(available_inline), total_height);
-
-        // For vertical writing modes, rotate the inline content so the inline axis is vertical and
-        // lines advance along the block axis (horizontal).
-        let mut static_position = static_position;
-        match style.writing_mode {
-            crate::style::types::WritingMode::VerticalRl => {
-                let (w, h) = (bounds.height(), bounds.width());
-                for child in &mut merged_children {
-                    Self::rotate_fragment_ccw(child, h);
-                }
-                bounds = Rect::from_xywh(0.0, 0.0, w, h);
-                static_position = Point::new(static_position.y, h - static_position.x);
-            }
-            crate::style::types::WritingMode::VerticalLr => {
-                let (w, h) = (bounds.height(), bounds.width());
-                for child in &mut merged_children {
-                    Self::rotate_fragment_cw(child, h);
-                }
-                bounds = Rect::from_xywh(0.0, 0.0, w, h);
-                static_position = Point::new(h - static_position.y, static_position.x);
-            }
-            _ => {}
-        }
+        let bounds = if inline_vertical {
+            Rect::from_xywh(0.0, 0.0, total_height, max_width.min(available_inline))
+        } else {
+            Rect::from_xywh(0.0, 0.0, max_width.min(available_inline), total_height)
+        };
 
         // Position out-of-flow abs/fixed children against the containing block.
         if !positioned_children.is_empty() {
