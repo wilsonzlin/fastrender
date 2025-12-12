@@ -3158,12 +3158,22 @@ impl FormattingContext for TableFormattingContext {
 
         let min_content_sum: f32 = column_constraints.iter().map(|c| c.min_width).sum();
         let max_content_sum: f32 = column_constraints.iter().map(|c| c.max_width).sum();
-        let available_content = match (table_width, constraints.available_width) {
+        let mut available_content = match (table_width, constraints.available_width) {
             (Some(w), _) => (w - spacing - edge_consumption).max(0.0),
             (None, AvailableSpace::Definite(w)) => (w - spacing - edge_consumption).max(0.0),
             (None, AvailableSpace::MinContent) => min_content_sum,
             (None, AvailableSpace::MaxContent) | (None, AvailableSpace::Indefinite) => max_content_sum,
         };
+        // Honor min/max width constraints even when the table width is auto: expand or clamp the content
+        // box before column distribution so columns and fragment bounds agree with the final border box.
+        if let Some(min_w) = min_width {
+            let min_content = (min_w - spacing - edge_consumption).max(0.0);
+            available_content = available_content.max(min_content);
+        }
+        if let Some(max_w) = max_width {
+            let max_content = (max_w - spacing - edge_consumption).max(0.0);
+            available_content = available_content.min(max_content);
+        }
 
         let distributor = ColumnDistributor::new(mode).with_min_column_width(0.0);
         let distribution = distributor.distribute(&column_constraints, available_content);
