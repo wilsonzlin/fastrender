@@ -433,6 +433,103 @@ fn distribute_remaining_height_with_caps(computed: &mut [f32], rows: &[RowInfo],
     }
 }
 
+fn distribute_extra_row_height_with_groups(
+    row_metrics: &mut [RowMetrics],
+    rows: &[RowInfo],
+    flex_indices: &[usize],
+    extra: f32,
+    percent_base: Option<f32>,
+    row_to_group: &[Option<usize>],
+    groups: &[RowGroupConstraints],
+    v_spacing: f32,
+) {
+    if flex_indices.is_empty() || extra <= 0.0 {
+        return;
+    }
+
+    let mut remaining = extra;
+    let mut iterations = 0;
+    while remaining > 0.01 && iterations < flex_indices.len().saturating_mul(2).max(1) {
+        let mut group_remaining: Vec<Option<f32>> = groups
+            .iter()
+            .map(|g| {
+                let count = (g.start..g.end).count();
+                let spacing = if count > 0 { v_spacing * count.saturating_sub(1) as f32 } else { 0.0 };
+                let current: f32 = (g.start..g.end).filter_map(|i| row_metrics.get(i)).map(|r| r.height).sum();
+                let (_, max_cap) = resolve_row_group_min_max(g, percent_base);
+                max_cap.map(|cap| (cap - current - spacing).max(0.0))
+            })
+            .collect();
+
+        let mut eligible = Vec::new();
+        for &idx in flex_indices {
+            if let Some(row) = row_metrics.get(idx) {
+                let (_, max_opt) = resolve_row_min_max(&rows[idx], percent_base);
+                let row_headroom = max_opt.map(|m| (m - row.height).max(0.0)).unwrap_or(f32::INFINITY);
+                if row_headroom <= 0.0 {
+                    continue;
+                }
+                let group_cap = row_to_group
+                    .get(idx)
+                    .and_then(|g| g.and_then(|gi| group_remaining.get(gi).copied()).flatten())
+                    .unwrap_or(f32::INFINITY);
+                if group_cap <= 0.0 {
+                    continue;
+                }
+                let effective_headroom = row_headroom.min(group_cap);
+                let weight = if effective_headroom.is_finite() {
+                    effective_headroom
+                } else {
+                    row.height.max(1.0)
+                };
+                eligible.push((idx, effective_headroom, weight));
+            }
+        }
+
+        if eligible.is_empty() {
+            break;
+        }
+
+        let total_weight: f32 = eligible.iter().map(|(_, _, w)| *w).sum();
+        if total_weight <= 0.0 {
+            break;
+        }
+
+        let mut consumed = 0.0;
+        let mut group_consumed: Vec<f32> = vec![0.0; groups.len()];
+        for (idx, headroom, weight) in &eligible {
+            if let Some(row) = row_metrics.get_mut(*idx) {
+                let mut delta = remaining * (*weight / total_weight);
+                if headroom.is_finite() {
+                    delta = delta.min(*headroom);
+                }
+                row.height += delta;
+                consumed += delta;
+                if let Some(g) = row_to_group
+                    .get(*idx)
+                    .and_then(|g| g.map(|gi| gi.min(group_consumed.len().saturating_sub(1))))
+                {
+                    group_consumed[g] += delta;
+                }
+            }
+        }
+
+        for (g_idx, used) in group_consumed.into_iter().enumerate() {
+            if let Some(rem) = group_remaining.get_mut(g_idx) {
+                if let Some(val) = rem {
+                    *val = (*val - used).max(0.0);
+                }
+            }
+        }
+
+        if consumed <= 0.001 {
+            break;
+        }
+        remaining = (remaining - consumed).max(0.0);
+        iterations += 1;
+    }
+}
+
 fn reduce_rows_with_headroom(
     computed: &mut [f32],
     rows: &[RowInfo],
@@ -2906,6 +3003,14 @@ impl FormattingContext for TableFormattingContext {
         }
 
         let row_group_constraints = self.collect_row_group_constraints(box_node, &source_row_to_visible);
+        let mut row_to_group: Vec<Option<usize>> = vec![None; structure.row_count];
+        for (idx, group) in row_group_constraints.iter().enumerate() {
+            for row in group.start..group.end {
+                if let Some(slot) = row_to_group.get_mut(row) {
+                    *slot = Some(idx);
+                }
+            }
+        }
 
         let containing_width = match constraints.available_width {
             AvailableSpace::Definite(w) => Some(w),
@@ -3412,12 +3517,15 @@ impl FormattingContext for TableFormattingContext {
                     flex_indices
                 };
 
-                distribute_extra_row_height(
+                distribute_extra_row_height_with_groups(
                     &mut row_metrics,
                     &structure.rows,
                     &targets,
                     extra,
                     percent_height_base,
+                    &row_to_group,
+                    &row_group_constraints,
+                    v_spacing,
                 );
             }
         }
@@ -6546,6 +6654,73 @@ mod tests {
             rows_sum >= 99.0,
             "row group percentage height should resolve against the table height"
         );
+    }
+
+    #[test]
+    fn row_group_max_caps_extra_table_height() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+        table_style.height = Some(Length::px(200.0));
+
+        let mut capped_group_style = ComputedStyle::default();
+        capped_group_style.display = Display::TableRowGroup;
+        capped_group_style.max_height = Some(Length::px(80.0));
+
+        let mut free_group_style = ComputedStyle::default();
+        free_group_style.display = Display::TableRowGroup;
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.min_height = Some(Length::px(10.0));
+
+        let make_row = |cell_style: &ComputedStyle| {
+            BoxNode::new_block(
+                Arc::new(row_style.clone()),
+                FormattingContextType::Block,
+                vec![BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![])],
+            )
+        };
+
+        let row0 = make_row(&cell_style);
+        let row1 = make_row(&cell_style);
+        let capped_group =
+            BoxNode::new_block(Arc::new(capped_group_style), FormattingContextType::Block, vec![row0, row1]);
+
+        let row2 = make_row(&cell_style);
+        let row3 = make_row(&cell_style);
+        let free_group =
+            BoxNode::new_block(Arc::new(free_group_style), FormattingContextType::Block, vec![row2, row3]);
+
+        let table = BoxNode::new_block(
+            Arc::new(table_style),
+            FormattingContextType::Table,
+            vec![capped_group, free_group],
+        );
+
+        let fc = TableFormattingContext::new();
+        let fragment = fc
+            .layout(&table, &LayoutConstraints::definite_width(160.0))
+            .expect("table layout");
+
+        let mut tops = Vec::new();
+        collect_table_cell_tops(&fragment, &mut tops);
+        tops.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(tops.len(), 4, "expected four rows");
+        let h0 = tops[1] - tops[0];
+        let h1 = tops[2] - tops[1];
+        let h2 = tops[3] - tops[2];
+        let h3 = fragment.bounds.height() - tops[3];
+
+        let capped_sum = h0 + h1;
+        let free_sum = h2 + h3;
+        assert!(capped_sum <= 81.0, "capped group should not exceed its max height: {capped_sum}");
+        assert!(free_sum >= 110.0, "remaining extra height should flow into uncapped rows");
+        assert!((fragment.bounds.height() - 200.0).abs() < 0.5, "table height should stay at 200px");
     }
 
     #[test]
