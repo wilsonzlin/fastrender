@@ -404,16 +404,36 @@ impl TableStructure {
         // is the maximum of col elements and the actual grid.
         for child in &table_box.children {
             match Self::get_table_element_type(child) {
-                TableElementType::Column => explicit_columns += 1,
+                TableElementType::Column => {
+                    let span = child
+                        .debug_info
+                        .as_ref()
+                        .map(|d| d.column_span)
+                        .unwrap_or(1)
+                        .max(1);
+                    explicit_columns += span;
+                }
                 TableElementType::ColumnGroup => {
                     if child.children.is_empty() {
-                        explicit_columns += 1;
+                        let span = child
+                            .debug_info
+                            .as_ref()
+                            .map(|d| d.column_span)
+                            .unwrap_or(1)
+                            .max(1);
+                        explicit_columns += span;
                     } else {
-                        explicit_columns += child
-                            .children
-                            .iter()
-                            .filter(|c| Self::get_table_element_type(c) == TableElementType::Column)
-                            .count();
+                        for group_child in &child.children {
+                            if Self::get_table_element_type(group_child) == TableElementType::Column {
+                                let span = group_child
+                                    .debug_info
+                                    .as_ref()
+                                    .map(|d| d.column_span)
+                                    .unwrap_or(1)
+                                    .max(1);
+                                explicit_columns += span;
+                            }
+                        }
                     }
                 }
                 _ => {}
@@ -493,40 +513,13 @@ impl TableStructure {
         for child in &table_box.children {
             match Self::get_table_element_type(child) {
                 TableElementType::Column => {
-                    if col_cursor >= structure.columns.len() {
-                        structure.columns.push(ColumnInfo::new(col_cursor));
-                    }
-                    if let Some(col) = structure.columns.get_mut(col_cursor) {
-                        col.visibility = child.style.visibility;
-                        if let Some(width) = &child.style.width {
-                            col.specified_width = Some(Self::length_to_specified_width(width));
-                        }
-                    }
-                    col_cursor += 1;
-                }
-                TableElementType::ColumnGroup => {
-                    let group_visibility = child.style.visibility;
-                    // Apply group width to contained columns (or next column if none)
-                    if !child.children.is_empty() {
-                        for group_child in &child.children {
-                            if Self::get_table_element_type(group_child) == TableElementType::Column {
-                                if col_cursor >= structure.columns.len() {
-                                    structure.columns.push(ColumnInfo::new(col_cursor));
-                                }
-                                if let Some(col) = structure.columns.get_mut(col_cursor) {
-                                    col.visibility = if matches!(group_visibility, Visibility::Collapse) {
-                                        Visibility::Collapse
-                                    } else {
-                                        group_child.style.visibility
-                                    };
-                                    if let Some(width) = &group_child.style.width {
-                                        col.specified_width = Some(Self::length_to_specified_width(width));
-                                    }
-                                }
-                                col_cursor += 1;
-                            }
-                        }
-                    } else {
+                    let span = child
+                        .debug_info
+                        .as_ref()
+                        .map(|d| d.column_span)
+                        .unwrap_or(1)
+                        .max(1);
+                    for _ in 0..span {
                         if col_cursor >= structure.columns.len() {
                             structure.columns.push(ColumnInfo::new(col_cursor));
                         }
@@ -537,6 +530,57 @@ impl TableStructure {
                             }
                         }
                         col_cursor += 1;
+                    }
+                }
+                TableElementType::ColumnGroup => {
+                    let group_visibility = child.style.visibility;
+                    // Apply group width to contained columns (or next column if none)
+                    if !child.children.is_empty() {
+                        for group_child in &child.children {
+                            if Self::get_table_element_type(group_child) == TableElementType::Column {
+                                let span = group_child
+                                    .debug_info
+                                    .as_ref()
+                                    .map(|d| d.column_span)
+                                    .unwrap_or(1)
+                                    .max(1);
+                                for _ in 0..span {
+                                    if col_cursor >= structure.columns.len() {
+                                        structure.columns.push(ColumnInfo::new(col_cursor));
+                                    }
+                                    if let Some(col) = structure.columns.get_mut(col_cursor) {
+                                        col.visibility = if matches!(group_visibility, Visibility::Collapse) {
+                                            Visibility::Collapse
+                                        } else {
+                                            group_child.style.visibility
+                                        };
+                                        if let Some(width) = &group_child.style.width {
+                                            col.specified_width = Some(Self::length_to_specified_width(width));
+                                        }
+                                    }
+                                    col_cursor += 1;
+                                }
+                            }
+                        }
+                    } else {
+                        let span = child
+                            .debug_info
+                            .as_ref()
+                            .map(|d| d.column_span)
+                            .unwrap_or(1)
+                            .max(1);
+                        for _ in 0..span {
+                            if col_cursor >= structure.columns.len() {
+                                structure.columns.push(ColumnInfo::new(col_cursor));
+                            }
+                            if let Some(col) = structure.columns.get_mut(col_cursor) {
+                                col.visibility = child.style.visibility;
+                                if let Some(width) = &child.style.width {
+                                    col.specified_width = Some(Self::length_to_specified_width(width));
+                                }
+                            }
+                            col_cursor += 1;
+                        }
                     }
                 }
                 _ => {}
@@ -6383,6 +6427,7 @@ mod tests {
         colgroup_style.display = Display::TableColumnGroup;
         let mut col_style = ComputedStyle::default();
         col_style.display = Display::TableColumn;
+        col_style.width = Some(Length::px(10.0));
         let col = BoxNode::new_block(Arc::new(col_style.clone()), FormattingContextType::Block, vec![]);
         let colgroup = BoxNode::new_block(
             Arc::new(colgroup_style),
@@ -6409,6 +6454,8 @@ mod tests {
             structure.column_count, 2,
             "explicit columns should increase table column count beyond the row cells"
         );
+        assert_eq!(structure.columns.len(), 2);
+        assert!(structure.columns.iter().all(|c| c.specified_width.is_some()));
     }
 
     #[test]
@@ -6417,6 +6464,8 @@ mod tests {
         table_style.display = Display::Table;
         let mut colgroup_style = ComputedStyle::default();
         colgroup_style.display = Display::TableColumnGroup;
+        colgroup_style.width = Some(Length::px(7.0));
+        colgroup_style.visibility = Visibility::Visible;
         let colgroup =
             BoxNode::new_block(Arc::new(colgroup_style), FormattingContextType::Block, Vec::new());
         let table = BoxNode::new_block(
@@ -6427,6 +6476,8 @@ mod tests {
 
         let structure = TableStructure::from_box_tree(&table);
         assert_eq!(structure.column_count, 1, "empty colgroup implies a single column");
+        assert_eq!(structure.columns.len(), 1);
+        assert!(structure.columns[0].specified_width.is_some());
     }
 
     #[test]
@@ -6437,6 +6488,23 @@ mod tests {
         assert_eq!(structure.row_count, 100);
         assert_eq!(structure.column_count, 50);
         assert_eq!(structure.cells.len(), 5000);
+    }
+
+    #[test]
+    fn test_col_span_attribute_expands_column_count() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+
+        let mut col_style = ComputedStyle::default();
+        col_style.display = Display::TableColumn;
+        let mut col = BoxNode::new_block(Arc::new(col_style.clone()), FormattingContextType::Block, vec![]);
+        col.debug_info = Some(DebugInfo::new(Some("col".to_string()), None, vec![]).with_dom_path("").with_spans(1, 1));
+        col.debug_info.as_mut().unwrap().column_span = 3;
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![col]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        assert_eq!(structure.column_count, 3, "col span should expand column count");
     }
 
     #[test]

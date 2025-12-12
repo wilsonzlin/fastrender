@@ -85,6 +85,9 @@ pub struct DebugInfo {
 
     /// Table cell rowspan attribute (default 1)
     pub rowspan: usize,
+
+    /// Table column / colgroup span (default 1)
+    pub column_span: usize,
 }
 
 impl DebugInfo {
@@ -113,6 +116,7 @@ impl DebugInfo {
             dom_path: None,
             colspan: 1,
             rowspan: 1,
+            column_span: 1,
         }
     }
 
@@ -141,6 +145,7 @@ impl DebugInfo {
             dom_path: None,
             colspan: 1,
             rowspan: 1,
+            column_span: 1,
         }
     }
 
@@ -162,6 +167,7 @@ impl DebugInfo {
             dom_path: None,
             colspan: 1,
             rowspan: 1,
+            column_span: 1,
         }
     }
 

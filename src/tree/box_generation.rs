@@ -1231,7 +1231,7 @@ fn generate_boxes_for_styled(styled: &StyledNode, counters: &mut CounterManager,
 
 fn attach_debug_info(mut box_node: BoxNode, styled: &StyledNode) -> BoxNode {
     if let Some(tag) = styled.node.tag_name() {
-        // Extract colspan and rowspan for table cells
+        // Extract colspan/rowspan for table cells and span for columns/colgroups
         let colspan = styled
             .node
             .get_attribute("colspan")
@@ -1244,6 +1244,16 @@ fn attach_debug_info(mut box_node: BoxNode, styled: &StyledNode) -> BoxNode {
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(1)
             .max(1);
+        let column_span = if matches!(styled.styles.display, Display::TableColumn | Display::TableColumnGroup) {
+            styled
+                .node
+                .get_attribute("span")
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(1)
+                .max(1)
+        } else {
+            1
+        };
 
         let id = styled.node.get_attribute("id");
         let classes = styled
@@ -1252,8 +1262,9 @@ fn attach_debug_info(mut box_node: BoxNode, styled: &StyledNode) -> BoxNode {
             .map(|c| c.split_whitespace().map(|s| s.to_string()).collect())
             .unwrap_or_default();
 
-        box_node =
-            box_node.with_debug_info(DebugInfo::new(Some(tag.to_string()), id, classes).with_spans(colspan, rowspan));
+        let mut dbg = DebugInfo::new(Some(tag.to_string()), id, classes).with_spans(colspan, rowspan);
+        dbg.column_span = column_span;
+        box_node = box_node.with_debug_info(dbg);
     }
     box_node
 }
