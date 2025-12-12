@@ -251,6 +251,18 @@ impl AbsoluteLayout {
             }
         }
 
+        // Re-apply min/max constraints after aspect-ratio adjustments.
+        let horizontal_spacing =
+            style.padding.left + style.padding.right + style.border_width.left + style.border_width.right;
+        let vertical_spacing =
+            style.padding.top + style.padding.bottom + style.border_width.top + style.border_width.bottom;
+        let min_width = content_size_from_box_sizing(style.min_width.to_px(), horizontal_spacing, style.box_sizing);
+        let max_width = content_size_from_box_sizing(style.max_width.to_px(), horizontal_spacing, style.box_sizing);
+        width = width.clamp(min_width, max_width);
+        let min_height = content_size_from_box_sizing(style.min_height.to_px(), vertical_spacing, style.box_sizing);
+        let max_height = content_size_from_box_sizing(style.max_height.to_px(), vertical_spacing, style.box_sizing);
+        height = height.clamp(min_height, max_height);
+
         // Position relative to containing block origin
         let position = Point::new(containing_block.origin().x + x, containing_block.origin().y + y);
 
@@ -1105,6 +1117,26 @@ mod tests {
         assert!(
             (result.size.width - 50.0).abs() < 0.001,
             "max-width should clamp shrink-to-fit width down to the authored maximum"
+        );
+    }
+
+    #[test]
+    fn aspect_ratio_honors_min_height_after_adjustment() {
+        let layout = AbsoluteLayout::new();
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.width = LengthOrAuto::px(100.0);
+        style.height = LengthOrAuto::Auto;
+        style.aspect_ratio = crate::style::types::AspectRatio::Ratio(2.0); // width/height = 2
+        style.min_height = Length::px(70.0); // taller than the 50px aspect height
+
+        let input = AbsoluteLayoutInput::new(style, Size::new(0.0, 0.0), Point::ZERO);
+        let cb = create_containing_block(300.0, 300.0);
+        let result = layout.layout_absolute(&input, &cb).unwrap();
+
+        assert!(
+            (result.size.height - 70.0).abs() < 0.001,
+            "min-height should clamp aspect-ratio derived height"
         );
     }
 
