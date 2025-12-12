@@ -2548,21 +2548,16 @@ impl DisplayListRenderer {
         if matches!(item.filter_quality, ImageFilterQuality::Nearest)
             && (dest_rect.width() > pixmap.width() as f32 || dest_rect.height() > pixmap.height() as f32)
         {
-            let snap = |dest: f32, raw: f32| -> (f32, f32) {
-                if raw <= 0.0 {
-                    return (dest, 0.0);
-                }
-                let scale = dest / raw;
-                if scale <= 1.0 {
-                    return (dest, 0.0);
-                }
-                let snapped = (scale.floor().max(1.0)) * raw;
-                let snapped = snapped.min(dest);
-                let offset = (dest - snapped) * 0.5;
-                (snapped, offset)
-            };
-            let (snapped_w, offset_x) = snap(dest_rect.width(), pixmap.width() as f32);
-            let (snapped_h, offset_y) = snap(dest_rect.height(), pixmap.height() as f32);
+            let (snapped_w, offset_x) =
+                crate::paint::painter::snap_upscale(dest_rect.width(), pixmap.width() as f32).unwrap_or((
+                    dest_rect.width(),
+                    0.0,
+                ));
+            let (snapped_h, offset_y) =
+                crate::paint::painter::snap_upscale(dest_rect.height(), pixmap.height() as f32).unwrap_or((
+                    dest_rect.height(),
+                    0.0,
+                ));
             dest_rect = Rect::from_xywh(dest_rect.x() + offset_x, dest_rect.y() + offset_y, snapped_w, snapped_h);
         }
 

@@ -267,6 +267,20 @@ fn shade_color(color: &Rgba, factor: f32) -> Rgba {
     Rgba::new(r, g, b, color.a)
 }
 
+pub(crate) fn snap_upscale(target: f32, raw: f32) -> Option<(f32, f32)> {
+    if target <= 0.0 || raw <= 0.0 || target <= raw {
+        return None;
+    }
+    let scale = target / raw;
+    if scale <= 1.0 {
+        return None;
+    }
+    let snapped = (scale.floor().max(1.0)) * raw;
+    let snapped = snapped.min(target);
+    let offset = (target - snapped) * 0.5;
+    Some((snapped, offset))
+}
+
 impl Painter {
     fn resolve_scaled_metrics(&self, style: &ComputedStyle) -> Option<ScaledMetrics> {
         let italic = matches!(style.font_style, crate::style::types::FontStyle::Italic);
@@ -1629,13 +1643,27 @@ impl Painter {
             return;
         }
 
-        let tile_rect = self.device_rect(Rect::from_xywh(tile_x, tile_y, tile_w, tile_h));
+        let mut tile_rect = self.device_rect(Rect::from_xywh(tile_x, tile_y, tile_w, tile_h));
         let clip_rect = self.device_rect(clip);
         let Some(intersection) = tile_rect.intersection(clip_rect) else {
             return;
         };
         if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
             return;
+        }
+
+        if quality == FilterQuality::Nearest
+            && (tile_rect.width() > pixmap.width() as f32 || tile_rect.height() > pixmap.height() as f32)
+        {
+            let (snapped_w, offset_x) = snap_upscale(tile_rect.width(), pixmap.width() as f32).unwrap_or((
+                tile_rect.width(),
+                0.0,
+            ));
+            let (snapped_h, offset_y) = snap_upscale(tile_rect.height(), pixmap.height() as f32).unwrap_or((
+                tile_rect.height(),
+                0.0,
+            ));
+            tile_rect = Rect::from_xywh(tile_rect.x() + offset_x, tile_rect.y() + offset_y, snapped_w, snapped_h);
         }
 
         let scale_x = tile_rect.width() / pixmap.width() as f32;
@@ -2824,21 +2852,8 @@ impl Painter {
             Some(ImageRendering::Pixelated | ImageRendering::CrispEdges)
         ) && (dest_w > img_w_raw as f32 || dest_h > img_h_raw as f32)
         {
-            let snap = |dest: f32, raw: f32| -> (f32, f32) {
-                if raw <= 0.0 {
-                    return (dest, 0.0);
-                }
-                let scale = dest / raw;
-                if scale <= 1.0 {
-                    return (dest, 0.0);
-                }
-                let snapped = (scale.floor().max(1.0)) * raw;
-                let snapped = snapped.min(dest);
-                let offset = (dest - snapped) * 0.5;
-                (snapped, offset)
-            };
-            let (snapped_w, offset_x) = snap(dest_w, img_w_raw as f32);
-            let (snapped_h, offset_y) = snap(dest_h, img_h_raw as f32);
+            let (snapped_w, offset_x) = snap_upscale(dest_w, img_w_raw as f32).unwrap_or((dest_w, 0.0));
+            let (snapped_h, offset_y) = snap_upscale(dest_h, img_h_raw as f32).unwrap_or((dest_h, 0.0));
             dest_w = snapped_w;
             dest_h = snapped_h;
             let dest_x = dest_x + offset_x;
@@ -2959,21 +2974,8 @@ impl Painter {
             Some(ImageRendering::Pixelated | ImageRendering::CrispEdges)
         ) && (dest_w > img_w_raw as f32 || dest_h > img_h_raw as f32)
         {
-            let snap = |dest: f32, raw: f32| -> (f32, f32) {
-                if raw <= 0.0 {
-                    return (dest, 0.0);
-                }
-                let scale = dest / raw;
-                if scale <= 1.0 {
-                    return (dest, 0.0);
-                }
-                let snapped = (scale.floor().max(1.0)) * raw;
-                let snapped = snapped.min(dest);
-                let offset = (dest - snapped) * 0.5;
-                (snapped, offset)
-            };
-            let (snapped_w, offset_x) = snap(dest_w, img_w_raw as f32);
-            let (snapped_h, offset_y) = snap(dest_h, img_h_raw as f32);
+            let (snapped_w, offset_x) = snap_upscale(dest_w, img_w_raw as f32).unwrap_or((dest_w, 0.0));
+            let (snapped_h, offset_y) = snap_upscale(dest_h, img_h_raw as f32).unwrap_or((dest_h, 0.0));
             dest_w = snapped_w;
             dest_h = snapped_h;
             let dest_x = dest_x + offset_x;
@@ -7691,5 +7693,12 @@ mod tests {
             "second tile should repeat starting red, got {:?}",
             next_tile
         );
+    }
+
+    #[test]
+    fn snap_upscale_prefers_integer_factor() {
+        assert_eq!(snap_upscale(5.0, 2.0), Some((4.0, 0.5)));
+        assert_eq!(snap_upscale(2.0, 2.0), None);
+        assert_eq!(snap_upscale(1.0, 3.0), None);
     }
 }
