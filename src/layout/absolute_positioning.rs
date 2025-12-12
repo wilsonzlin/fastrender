@@ -322,11 +322,10 @@ impl AbsoluteLayout {
                 (x, w)
             }
 
-            // Case 4: left and right specified, width is auto (stretch)
+            // Case 4: left and right specified, width is auto (shrink-to-fit)
             (Some(l), None, Some(r)) => {
-                // Check for auto margin centering - not applicable when width is auto
                 let available = cb_width - l - r - margin_left - margin_right - total_horizontal_spacing;
-                let width = available.max(0.0);
+                let width = intrinsic_width.min(available.max(0.0));
                 let x = l + margin_left + border_left + padding_left;
                 (x, width)
             }
@@ -429,10 +428,10 @@ impl AbsoluteLayout {
                 (y, h)
             }
 
-            // top and bottom specified, height is auto (stretch)
+            // top and bottom specified, height is auto (shrink-to-fit)
             (Some(t), None, Some(b)) => {
                 let available = cb_height - t - b - margin_top - margin_bottom - total_vertical_spacing;
-                let height = available.max(0.0);
+                let height = intrinsic_height.min(available.max(0.0));
                 let y = t + margin_top + border_top + padding_top;
                 (y, height)
             }
@@ -671,43 +670,43 @@ mod tests {
     }
 
     #[test]
-    fn test_layout_absolute_stretch_width() {
+    fn test_layout_absolute_shrink_width_between_insets() {
         let layout = AbsoluteLayout::new();
 
         let mut style = default_style();
         style.position = Position::Absolute;
         style.left = LengthOrAuto::px(50.0);
         style.right = LengthOrAuto::px(50.0);
-        // width auto - should stretch
+        // width auto - should shrink-to-fit intrinsic width
 
         let input = AbsoluteLayoutInput::new(style, Size::new(100.0, 100.0), Point::ZERO);
         let cb = create_containing_block(500.0, 400.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
 
-        // width = 500 - 50 - 50 = 400
+        // width should honor intrinsic 100px even though 400px is available
         assert_eq!(result.position.x, 50.0);
-        assert_eq!(result.size.width, 400.0);
+        assert_eq!(result.size.width, 100.0);
     }
 
     #[test]
-    fn test_layout_absolute_stretch_height() {
+    fn test_layout_absolute_shrink_height_between_insets() {
         let layout = AbsoluteLayout::new();
 
         let mut style = default_style();
         style.position = Position::Absolute;
         style.top = LengthOrAuto::px(25.0);
         style.bottom = LengthOrAuto::px(25.0);
-        // height auto - should stretch
+        // height auto - should shrink-to-fit intrinsic height
 
         let input = AbsoluteLayoutInput::new(style, Size::new(100.0, 100.0), Point::ZERO);
         let cb = create_containing_block(400.0, 300.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
 
-        // height = 300 - 25 - 25 = 250
+        // intrinsic height 100px should win over 250px available
         assert_eq!(result.position.y, 25.0);
-        assert_eq!(result.size.height, 250.0);
+        assert_eq!(result.size.height, 100.0);
     }
 
     #[test]
@@ -938,6 +937,74 @@ mod tests {
             result.position.x
         );
         assert!((result.margins.right - 250.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_layout_absolute_shrink_to_fit_when_width_auto_and_both_insets() {
+        let layout = AbsoluteLayout::new();
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.left = LengthOrAuto::px(20.0);
+        style.right = LengthOrAuto::px(20.0);
+        style.width = LengthOrAuto::Auto;
+        // intrinsic width is 150, available is 200 - shrink should keep 150
+        let input = AbsoluteLayoutInput::new(style, Size::new(150.0, 40.0), Point::ZERO);
+        let cb = create_containing_block(400.0, 200.0);
+
+        let result = layout.layout_absolute(&input, &cb).unwrap();
+        assert!(
+            (result.size.width - 150.0).abs() < 0.001,
+            "auto width with both insets should shrink-to-fit intrinsic width"
+        );
+        assert!(
+            (result.position.x - 20.0).abs() < 0.001,
+            "left inset should stay at 20 when margins are zero"
+        );
+    }
+
+    #[test]
+    fn test_layout_absolute_shrink_to_available_when_intrinsic_exceeds_space() {
+        let layout = AbsoluteLayout::new();
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.left = LengthOrAuto::px(30.0);
+        style.right = LengthOrAuto::px(30.0);
+        style.width = LengthOrAuto::Auto;
+        // intrinsic 300, available 300 -> keep 300; shrink-to-fit should not exceed
+        let input = AbsoluteLayoutInput::new(style, Size::new(320.0, 60.0), Point::ZERO);
+        let cb = create_containing_block(390.0, 200.0);
+
+        let result = layout.layout_absolute(&input, &cb).unwrap();
+        assert!(
+            (result.size.width - 320.0).abs() < 0.001,
+            "auto width should clamp to available space when intrinsic is larger"
+        );
+        assert!(
+            (result.position.x - 30.0).abs() < 0.001,
+            "left inset should remain unchanged by shrinking width"
+        );
+    }
+
+    #[test]
+    fn test_layout_absolute_height_auto_shrink_to_fit_between_insets() {
+        let layout = AbsoluteLayout::new();
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.top = LengthOrAuto::px(10.0);
+        style.bottom = LengthOrAuto::px(20.0);
+        style.height = LengthOrAuto::Auto;
+        let input = AbsoluteLayoutInput::new(style, Size::new(80.0, 120.0), Point::ZERO);
+        let cb = create_containing_block(300.0, 200.0);
+
+        let result = layout.layout_absolute(&input, &cb).unwrap();
+        assert!(
+            (result.size.height - 120.0).abs() < 0.001,
+            "auto height should shrink-to-fit intrinsic height between top/bottom"
+        );
+        assert!(
+            (result.position.y - 10.0).abs() < 0.001,
+            "top inset should remain at 10 when margins are zero"
+        );
     }
 
     #[test]
