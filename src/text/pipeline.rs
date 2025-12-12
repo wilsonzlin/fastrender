@@ -57,6 +57,7 @@ use crate::style::ComputedStyle;
 use crate::text::font_db::font_has_feature;
 use crate::text::font_db::{FontStretch as DbFontStretch, FontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
+use crate::text::emoji;
 use rustybuzz::{Direction as HbDirection, Face, Feature, Language as HbLanguage, UnicodeBuffer, Variation};
 use std::collections::HashSet;
 use std::iter::FromIterator;
@@ -858,7 +859,6 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
     };
     let font_stretch = DbFontStretch::from_percentage(style.font_stretch.to_percentage());
     let families = build_family_entries(style);
-    let avoid_emoji_fonts = matches!(style.font_variant_emoji, FontVariantEmoji::Text);
 
     let mut font_runs = Vec::new();
     for run in runs {
@@ -867,6 +867,27 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
 
         while let Some((byte_idx, ch)) = iter.next() {
             let next_idx = iter.peek().map(|(i, _)| *i).unwrap_or_else(|| run.text.len());
+            if (emoji::is_variation_selector(ch) || emoji::is_zwj(ch)) && current.is_some() {
+                if iter.peek().is_none() {
+                    if let Some((font, bold, oblique, size, start)) = current.take() {
+                        push_font_run(
+                            &mut font_runs,
+                            run,
+                            start,
+                            next_idx,
+                            font,
+                            bold,
+                            oblique,
+                            size,
+                            &features,
+                            &authored_variations,
+                            style,
+                        );
+                    }
+                }
+                continue;
+            }
+            let emoji_pref = emoji_preference_for_char(ch, style.font_variant_emoji);
             let font = resolve_font_for_char(
                 ch,
                 &families,
@@ -874,7 +895,7 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
                 font_style,
                 font_stretch,
                 font_context,
-                avoid_emoji_fonts,
+                emoji_pref,
             )
             .ok_or_else(|| TextError::ShapingFailed {
                 text: run.text.clone(),
@@ -1065,6 +1086,34 @@ fn font_is_emoji_font(font: &LoadedFont) -> bool {
     name.contains("emoji") || name.contains("color") || name.contains("twemoji") || name.contains("symbola")
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EmojiPreference {
+    PreferEmoji,
+    AvoidEmoji,
+    Neutral,
+}
+
+fn emoji_preference_for_char(ch: char, variant: FontVariantEmoji) -> EmojiPreference {
+    match variant {
+        FontVariantEmoji::Emoji => EmojiPreference::PreferEmoji,
+        FontVariantEmoji::Text => EmojiPreference::AvoidEmoji,
+        FontVariantEmoji::Unicode => {
+            if emoji::is_emoji_presentation(ch) {
+                EmojiPreference::PreferEmoji
+            } else {
+                EmojiPreference::AvoidEmoji
+            }
+        }
+        FontVariantEmoji::Normal => {
+            if emoji::is_emoji_presentation(ch) {
+                EmojiPreference::PreferEmoji
+            } else {
+                EmojiPreference::Neutral
+            }
+        }
+    }
+}
+
 fn build_family_entries(style: &ComputedStyle) -> Vec<crate::text::font_fallback::FamilyEntry> {
     use crate::text::font_fallback::FamilyEntry;
     let mut entries = Vec::new();
@@ -1108,11 +1157,13 @@ fn resolve_font_for_char(
     style: FontStyle,
     stretch: DbFontStretch,
     font_context: &FontContext,
-    avoid_emoji_fonts: bool,
+    emoji_pref: EmojiPreference,
 ) -> Option<LoadedFont> {
     use crate::text::font_fallback::FamilyEntry;
     use fontdb::Family;
     let db = font_context.database();
+    let avoid_emoji_fonts = matches!(emoji_pref, EmojiPreference::AvoidEmoji);
+    let prefer_emoji_fonts = matches!(emoji_pref, EmojiPreference::PreferEmoji);
     let mut fallback_non_emoji: Option<LoadedFont> = None;
     let mut fallback_emoji: Option<LoadedFont> = None;
 
@@ -1121,6 +1172,12 @@ fn resolve_font_for_char(
         if avoid_emoji_fonts {
             if let FamilyEntry::Generic(crate::text::font_db::GenericFamily::Emoji) = entry {
                 continue;
+            }
+        }
+
+        if prefer_emoji_fonts {
+            if let FamilyEntry::Generic(crate::text::font_db::GenericFamily::Emoji) = entry {
+                // keep priority order but still try query below
             }
         }
 
@@ -1221,7 +1278,13 @@ fn resolve_font_for_char(
         }
     }
 
-    fallback_non_emoji.or(fallback_emoji)
+    if avoid_emoji_fonts {
+        fallback_non_emoji
+    } else if prefer_emoji_fonts {
+        fallback_emoji.or(fallback_non_emoji)
+    } else {
+        fallback_non_emoji.or(fallback_emoji)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2458,6 +2521,48 @@ mod tests {
         };
         assert!(font_is_emoji_font(&emoji_font));
         assert!(!font_is_emoji_font(&text_font));
+    }
+
+    #[test]
+    fn variation_selector_stays_with_current_font_run() {
+        let ctx = FontContext::new();
+        let style = ComputedStyle::default();
+        let runs = assign_fonts(
+            &[ItemizedRun {
+                text: "A\u{fe0f}".to_string(),
+                start: 0,
+                end: "A\u{fe0f}".len(),
+                script: Script::Latin,
+                direction: Direction::LeftToRight,
+                level: 0,
+            }],
+            &style,
+            &ctx,
+        )
+        .expect("assign fonts");
+        assert_eq!(runs.len(), 1, "variation selector should not split font runs");
+        assert_eq!(runs[0].text, "A\u{fe0f}");
+    }
+
+    #[test]
+    fn emoji_preference_matches_variant_and_character() {
+        assert_eq!(
+            emoji_preference_for_char('😀', FontVariantEmoji::Emoji),
+            EmojiPreference::PreferEmoji
+        );
+        assert_eq!(
+            emoji_preference_for_char('😀', FontVariantEmoji::Text),
+            EmojiPreference::AvoidEmoji
+        );
+        assert_eq!(
+            emoji_preference_for_char('😀', FontVariantEmoji::Unicode),
+            EmojiPreference::PreferEmoji
+        );
+        // '#' defaults to text presentation.
+        assert_eq!(
+            emoji_preference_for_char('#', FontVariantEmoji::Unicode),
+            EmojiPreference::AvoidEmoji
+        );
     }
 }
 fn number_tag(prefix: &[u8; 2], n: u8) -> Option<[u8; 4]> {
