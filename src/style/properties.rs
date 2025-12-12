@@ -2792,23 +2792,46 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                         weight: false,
                         style: false,
                         small_caps: false,
+                        position: false,
                     };
                 } else if !tokens.is_empty() {
                     let mut synth = FontSynthesis {
                         weight: false,
                         style: false,
                         small_caps: false,
+                        position: false,
                     };
                     for tok in tokens {
                         match tok {
                             "weight" => synth.weight = true,
                             "style" => synth.style = true,
                             "small-caps" => synth.small_caps = true,
+                            "position" => synth.position = true,
                             _ => {}
                         }
                     }
                     styles.font_synthesis = synth;
                 }
+            }
+        }
+        "font-synthesis-weight" => {
+            if let PropertyValue::Keyword(raw) = &resolved_value {
+                styles.font_synthesis.weight = !raw.eq_ignore_ascii_case("none");
+            }
+        }
+        "font-synthesis-style" => {
+            if let PropertyValue::Keyword(raw) = &resolved_value {
+                styles.font_synthesis.style = !raw.eq_ignore_ascii_case("none");
+            }
+        }
+        "font-synthesis-small-caps" => {
+            if let PropertyValue::Keyword(raw) = &resolved_value {
+                styles.font_synthesis.small_caps = !raw.eq_ignore_ascii_case("none");
+            }
+        }
+        "font-synthesis-position" => {
+            if let PropertyValue::Keyword(raw) = &resolved_value {
+                styles.font_synthesis.position = !raw.eq_ignore_ascii_case("none");
             }
         }
         "line-height" => match &resolved_value {
@@ -8686,7 +8709,7 @@ mod tests {
         let mut style = ComputedStyle::default();
         let decl = Declaration {
             property: "font-synthesis".to_string(),
-            value: PropertyValue::Keyword("weight style".to_string()),
+            value: PropertyValue::Keyword("weight style position".to_string()),
             raw_value: String::new(),
             important: false,
         };
@@ -8694,6 +8717,7 @@ mod tests {
         assert!(style.font_synthesis.weight);
         assert!(style.font_synthesis.style);
         assert!(!style.font_synthesis.small_caps);
+        assert!(style.font_synthesis.position);
 
         let decl = Declaration {
             property: "font-synthesis".to_string(),
@@ -8705,6 +8729,60 @@ mod tests {
         assert!(!style.font_synthesis.weight);
         assert!(!style.font_synthesis.style);
         assert!(!style.font_synthesis.small_caps);
+        assert!(!style.font_synthesis.position);
+    }
+
+    #[test]
+    fn parses_font_synthesis_longhands() {
+        let mut style = ComputedStyle::default();
+
+        let decl = Declaration {
+            property: "font-synthesis-weight".to_string(),
+            value: PropertyValue::Keyword("none".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(!style.font_synthesis.weight);
+
+        let decl = Declaration {
+            property: "font-synthesis-style".to_string(),
+            value: PropertyValue::Keyword("none".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(!style.font_synthesis.style);
+
+        let decl = Declaration {
+            property: "font-synthesis-small-caps".to_string(),
+            value: PropertyValue::Keyword("none".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(!style.font_synthesis.small_caps);
+
+        let decl = Declaration {
+            property: "font-synthesis-position".to_string(),
+            value: PropertyValue::Keyword("none".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(!style.font_synthesis.position);
+
+        let reset = Declaration {
+            property: "font-synthesis".to_string(),
+            value: PropertyValue::Keyword("weight style small-caps position".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &reset, 16.0, 16.0);
+        assert!(style.font_synthesis.weight);
+        assert!(style.font_synthesis.style);
+        assert!(style.font_synthesis.small_caps);
+        assert!(style.font_synthesis.position);
     }
 
     #[test]

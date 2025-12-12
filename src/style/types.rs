@@ -912,6 +912,7 @@ pub struct FontSynthesis {
     pub weight: bool,
     pub style: bool,
     pub small_caps: bool,
+    pub position: bool,
 }
 
 impl Default for FontSynthesis {
@@ -920,6 +921,7 @@ impl Default for FontSynthesis {
             weight: true,
             style: true,
             small_caps: true,
+            position: true,
         }
     }
 }
