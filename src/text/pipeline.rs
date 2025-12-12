@@ -1094,6 +1094,14 @@ fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f
     (synthetic_bold, synthetic_oblique)
 }
 
+fn slope_preference_order(style: FontStyle) -> &'static [FontStyle] {
+    match style {
+        FontStyle::Normal => &[FontStyle::Normal],
+        FontStyle::Italic => &[FontStyle::Italic, FontStyle::Oblique],
+        FontStyle::Oblique => &[FontStyle::Oblique, FontStyle::Italic],
+    }
+}
+
 fn is_bidi_control_char(ch: char) -> bool {
     matches!(
         ch,
@@ -1213,6 +1221,7 @@ fn resolve_font_for_char(
     let prefer_emoji_fonts = matches!(emoji_pref, EmojiPreference::PreferEmoji);
     let mut fallback_non_emoji: Option<LoadedFont> = None;
     let mut fallback_emoji: Option<LoadedFont> = None;
+    let slope_preferences = slope_preference_order(style);
 
     let is_emoji = crate::text::font_db::FontDatabase::is_emoji(ch);
     for entry in families {
@@ -1228,63 +1237,67 @@ fn resolve_font_for_char(
             }
         }
 
-        let query = match entry {
-            FamilyEntry::Named(name) => fontdb::Query {
-                families: &[Family::Name(name)],
-                weight: fontdb::Weight(weight),
-                stretch: stretch.into(),
-                style: style.into(),
-            },
-            FamilyEntry::Generic(generic) => fontdb::Query {
-                families: &[generic.to_fontdb()],
-                weight: fontdb::Weight(weight),
-                stretch: stretch.into(),
-                style: style.into(),
-            },
-        };
+        for slope in slope_preferences {
+            let query = match entry {
+                FamilyEntry::Named(name) => fontdb::Query {
+                    families: &[Family::Name(name)],
+                    weight: fontdb::Weight(weight),
+                    stretch: stretch.into(),
+                    style: (*slope).into(),
+                },
+                FamilyEntry::Generic(generic) => fontdb::Query {
+                    families: &[generic.to_fontdb()],
+                    weight: fontdb::Weight(weight),
+                    stretch: stretch.into(),
+                    style: (*slope).into(),
+                },
+            };
 
-        if let Some(id) = db.inner().query(&query) {
-            if let Some(font) = db.load_font(id) {
-                let is_emoji_font = font_is_emoji_font(&font);
-                if is_emoji_font {
-                    if fallback_emoji.is_none() {
-                        fallback_emoji = Some(font.clone());
+            if let Some(id) = db.inner().query(&query) {
+                if let Some(font) = db.load_font(id) {
+                    let is_emoji_font = font_is_emoji_font(&font);
+                    if is_emoji_font {
+                        if fallback_emoji.is_none() {
+                            fallback_emoji = Some(font.clone());
+                        }
+                    } else if fallback_non_emoji.is_none() {
+                        fallback_non_emoji = Some(font.clone());
                     }
-                } else if fallback_non_emoji.is_none() {
-                    fallback_non_emoji = Some(font.clone());
-                }
-                if avoid_emoji_fonts && is_emoji_font {
-                    continue;
-                }
-                if db.has_glyph(id, ch) {
-                    return Some(font);
+                    if avoid_emoji_fonts && is_emoji_font {
+                        continue;
+                    }
+                    if db.has_glyph(id, ch) {
+                        return Some(font);
+                    }
                 }
             }
         }
 
         if let FamilyEntry::Generic(generic) = entry {
             for name in generic.fallback_families() {
-                let query = fontdb::Query {
-                    families: &[Family::Name(name)],
-                    weight: fontdb::Weight(weight),
-                    stretch: stretch.into(),
-                    style: style.into(),
-                };
-                if let Some(id) = db.inner().query(&query) {
-                    if let Some(font) = db.load_font(id) {
-                        let is_emoji_font = font_is_emoji_font(&font);
-                        if is_emoji_font {
-                            if fallback_emoji.is_none() {
-                                fallback_emoji = Some(font.clone());
+                for slope in slope_preferences {
+                    let query = fontdb::Query {
+                        families: &[Family::Name(name)],
+                        weight: fontdb::Weight(weight),
+                        stretch: stretch.into(),
+                        style: (*slope).into(),
+                    };
+                    if let Some(id) = db.inner().query(&query) {
+                        if let Some(font) = db.load_font(id) {
+                            let is_emoji_font = font_is_emoji_font(&font);
+                            if is_emoji_font {
+                                if fallback_emoji.is_none() {
+                                    fallback_emoji = Some(font.clone());
+                                }
+                            } else if fallback_non_emoji.is_none() {
+                                fallback_non_emoji = Some(font.clone());
                             }
-                        } else if fallback_non_emoji.is_none() {
-                            fallback_non_emoji = Some(font.clone());
-                        }
-                        if avoid_emoji_fonts && is_emoji_font {
-                            continue;
-                        }
-                        if db.has_glyph(id, ch) {
-                            return Some(font);
+                            if avoid_emoji_fonts && is_emoji_font {
+                                continue;
+                            }
+                            if db.has_glyph(id, ch) {
+                                return Some(font);
+                            }
                         }
                     }
                 }
@@ -2664,6 +2677,20 @@ mod tests {
             .expect("load font with slnt axis");
         let (_, synthetic_slant) = compute_synthetic_styles(&style, &font);
         assert_eq!(synthetic_slant, 0.0, "slnt axis should satisfy slant without synthesis");
+    }
+
+    #[test]
+    fn slope_preferences_follow_css_slope_order() {
+        use crate::text::font_db::FontStyle as DbStyle;
+        assert_eq!(slope_preference_order(DbStyle::Normal), &[DbStyle::Normal]);
+        assert_eq!(
+            slope_preference_order(DbStyle::Italic),
+            &[DbStyle::Italic, DbStyle::Oblique]
+        );
+        assert_eq!(
+            slope_preference_order(DbStyle::Oblique),
+            &[DbStyle::Oblique, DbStyle::Italic]
+        );
     }
 
     #[test]
