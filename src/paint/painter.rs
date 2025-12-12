@@ -2244,6 +2244,13 @@ impl Painter {
 
         match style {
             CssBorderStyle::Double => {
+                // When too thin to draw two strokes and a gap, fall back to a solid line.
+                if width < 3.0 {
+                    self.pixmap
+                        .stroke_path(&base_path, &paint, &stroke, Transform::identity(), None);
+                    return;
+                }
+
                 let third = width / 3.0;
                 let offset = third + third * 0.5;
 
@@ -7386,6 +7393,38 @@ mod tests {
             ),
             (0, 255, 255)
         );
+    }
+
+    #[test]
+    fn thin_double_border_falls_back_to_solid() {
+        let mut style = ComputedStyle::default();
+        style.border_top_width = Length::px(1.0);
+        style.border_right_width = Length::px(1.0);
+        style.border_bottom_width = Length::px(1.0);
+        style.border_left_width = Length::px(1.0);
+        style.border_top_style = CssBorderStyle::Double;
+        style.border_right_style = CssBorderStyle::Double;
+        style.border_bottom_style = CssBorderStyle::Double;
+        style.border_left_style = CssBorderStyle::Double;
+        style.border_top_color = Rgba::from_rgba8(0, 0, 0, 255);
+        style.border_right_color = Rgba::from_rgba8(0, 0, 0, 255);
+        style.border_bottom_color = Rgba::from_rgba8(0, 0, 0, 255);
+        style.border_left_color = Rgba::from_rgba8(0, 0, 0, 255);
+
+        let mut painter = Painter::new(6, 6, Rgba::WHITE).expect("painter");
+        painter.paint_borders(0.0, 0.0, 6.0, 6.0, &style);
+
+        // The top edge should paint a solid 1px line when double is too thin.
+        for x in 0..6 {
+            let pixel = painter.pixmap.pixel(x, 0).unwrap();
+            assert_eq!((pixel.red(), pixel.green(), pixel.blue()), (0, 0, 0));
+            assert!(
+                pixel.alpha() >= 180,
+                "expected visible solid stroke at ({},0) with alpha >= 180, got {}",
+                x,
+                pixel.alpha()
+            );
+        }
     }
 
     #[test]
