@@ -50,8 +50,8 @@
 use crate::error::{Result, TextError};
 use crate::style::types::{
     Direction as CssDirection, EastAsianVariant, EastAsianWidth, FontKerning, FontLanguageOverride, FontSizeAdjust,
-    FontStyle as CssFontStyle, FontVariant, FontVariantCaps, FontVariantPosition, NumericFigure, NumericFraction,
-    NumericSpacing,
+    FontStyle as CssFontStyle, FontVariant, FontVariantCaps, FontVariantEmoji, FontVariantPosition, NumericFigure,
+    NumericFraction, NumericSpacing,
 };
 use crate::style::ComputedStyle;
 use crate::text::font_db::font_has_feature;

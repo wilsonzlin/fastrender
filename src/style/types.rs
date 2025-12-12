@@ -864,6 +864,15 @@ pub enum FontOpticalSizing {
     None,
 }
 
+/// Emoji rendering preference (`font-variant-emoji`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontVariantEmoji {
+    Normal,
+    Emoji,
+    Text,
+    Unicode,
+}
+
 /// East Asian variants (`font-variant-east-asian`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EastAsianVariant {

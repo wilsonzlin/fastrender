@@ -2749,6 +2749,17 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 _ => {}
             }
         }
+        "font-variant-emoji" => {
+            if let PropertyValue::Keyword(raw) = &resolved_value {
+                styles.font_variant_emoji = match raw.to_ascii_lowercase().as_str() {
+                    "emoji" => crate::style::types::FontVariantEmoji::Emoji,
+                    "text" => crate::style::types::FontVariantEmoji::Text,
+                    "unicode" => crate::style::types::FontVariantEmoji::Unicode,
+                    "normal" => crate::style::types::FontVariantEmoji::Normal,
+                    _ => styles.font_variant_emoji,
+                };
+            }
+        }
         "font-variation-settings" => {
             if let PropertyValue::Keyword(raw) = &resolved_value {
                 let trimmed = raw.trim();
@@ -8730,6 +8741,46 @@ mod tests {
         assert!(!style.font_synthesis.style);
         assert!(!style.font_synthesis.small_caps);
         assert!(!style.font_synthesis.position);
+    }
+
+    #[test]
+    fn parses_font_variant_emoji() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font-variant-emoji".to_string(),
+            value: PropertyValue::Keyword("emoji".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_variant_emoji, crate::style::types::FontVariantEmoji::Emoji));
+
+        let decl = Declaration {
+            property: "font-variant-emoji".to_string(),
+            value: PropertyValue::Keyword("text".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_variant_emoji, crate::style::types::FontVariantEmoji::Text));
+
+        let decl = Declaration {
+            property: "font-variant-emoji".to_string(),
+            value: PropertyValue::Keyword("unicode".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_variant_emoji, crate::style::types::FontVariantEmoji::Unicode));
+
+        let decl = Declaration {
+            property: "font-variant-emoji".to_string(),
+            value: PropertyValue::Keyword("normal".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_variant_emoji, crate::style::types::FontVariantEmoji::Normal));
     }
 
     #[test]

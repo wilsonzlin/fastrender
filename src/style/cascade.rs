@@ -384,6 +384,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.font_optical_sizing = parent.font_optical_sizing;
     styles.font_variation_settings = parent.font_variation_settings.clone();
     styles.font_language_override = parent.font_language_override.clone();
+    styles.font_variant_emoji = parent.font_variant_emoji;
     styles.font_stretch = parent.font_stretch;
     styles.font_kerning = parent.font_kerning;
     styles.line_height = parent.line_height.clone();
