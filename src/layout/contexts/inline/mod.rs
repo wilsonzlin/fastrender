@@ -3414,12 +3414,18 @@ impl InlineFormattingContext {
                     }
 
                     let percentage_base = available_inline;
-                    let margin_left = block_node
+                    let _margin_left = block_node
                         .style
                         .margin_left
                         .as_ref()
                         .map(|m| {
-                            resolve_length_for_width(*m, percentage_base, &block_node.style, &self.font_context, self.viewport_size)
+                            resolve_length_for_width(
+                                *m,
+                                percentage_base,
+                                &block_node.style,
+                                &self.font_context,
+                                self.viewport_size,
+                            )
                         })
                         .unwrap_or(0.0);
                     let margin_right = block_node
@@ -3467,16 +3473,12 @@ impl InlineFormattingContext {
                         AvailableSpace::Definite(available_inline),
                         constraints.available_height,
                     );
-                    let mut fragment = fc.layout(&block_node, &child_constraints)?;
-                    fragment.bounds = Rect::from_xywh(
-                        margin_left,
-                        line_offset + margin_top,
-                        fragment.bounds.width(),
-                        fragment.bounds.height(),
-                    );
-                    let translated = fragment;
-                    block_run_max_width = block_run_max_width.max(margin_left + translated.bounds.width() + margin_right);
-                    line_offset = translated.bounds.max_y() + margin_bottom;
+                    let fragment = fc.layout(&block_node, &child_constraints)?;
+                    let translate_y = line_offset + margin_top - fragment.bounds.y();
+                    let translated = fragment.translate(Point::new(0.0, translate_y));
+                    block_run_max_width =
+                        block_run_max_width.max(translated.bounds.x() + translated.bounds.width() + margin_right);
+                    line_offset += margin_top + translated.bounds.height() + margin_bottom;
                     flow_order.push(FlowChunk::Block {
                         index: block_fragments.len(),
                     });
