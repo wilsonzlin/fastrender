@@ -52,8 +52,8 @@ use crate::layout::inline::float_integration::InlineFloatIntegration;
 use crate::layout::utils::{border_size_from_box_sizing, compute_replaced_size, resolve_font_relative_length};
 use crate::style::display::FormattingContextType;
 use crate::style::types::{
-    FontStyle, HyphensMode, LineBreak, ListStylePosition, OverflowWrap, TabSize, TextAlign, TextCombineUpright,
-    TextJustify, TextTransform, WhiteSpace, WordBreak, WritingMode,
+    Direction, FontStyle, HyphensMode, LineBreak, ListStylePosition, OverflowWrap, TabSize, TextAlign,
+    TextCombineUpright, TextJustify, TextTransform, UnicodeBidi, WhiteSpace, WordBreak, WritingMode,
 };
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
@@ -1408,6 +1408,8 @@ impl InlineFormattingContext {
         subsequent_line_width: f32,
         strut_metrics: &BaselineMetrics,
         base_level: Option<unicode_bidi::Level>,
+        root_direction: Direction,
+        root_unicode_bidi: UnicodeBidi,
         float_ctx: Option<&'a FloatContext>,
         float_base_y: f32,
         first_line_indent_cut: f32,
@@ -1421,6 +1423,8 @@ impl InlineFormattingContext {
             self.pipeline.clone(),
             self.font_context.clone(),
             base_level,
+            root_unicode_bidi,
+            root_direction,
             float_integration,
             float_base_y,
             first_line_indent_cut,
@@ -3012,6 +3016,8 @@ impl InlineFormattingContext {
         subsequent_line_width: f32,
         strut_metrics: &BaselineMetrics,
         base_level: Option<unicode_bidi::Level>,
+        root_direction: Direction,
+        root_unicode_bidi: UnicodeBidi,
         float_ctx: Option<&FloatContext>,
         float_base_y: f32,
         first_line_indent_cut: f32,
@@ -3033,6 +3039,8 @@ impl InlineFormattingContext {
             subsequent_line_width,
             strut_metrics,
             base_level,
+            root_direction,
+            root_unicode_bidi,
             float_ctx,
             float_base_y,
             first_cut,
@@ -3346,6 +3354,8 @@ impl InlineFormattingContext {
                     crate::style::types::Direction::Rtl => Some(unicode_bidi::Level::rtl()),
                     _ => Some(unicode_bidi::Level::ltr()),
                 },
+                paragraph_direction,
+                style.unicode_bidi,
                 ctx_ref,
                 float_base_y + *line_offset,
                 first_line_indent_cut,
@@ -4078,6 +4088,42 @@ fn resolve_base_direction_for_box(box_node: &BoxNode) -> crate::style::types::Di
     }
 }
 
+pub(crate) fn bidi_controls(unicode_bidi: UnicodeBidi, direction: Direction) -> (Vec<char>, Vec<char>) {
+    match unicode_bidi {
+        UnicodeBidi::Normal => (Vec::new(), Vec::new()),
+        UnicodeBidi::Embed => {
+            let open = vec![if direction == Direction::Rtl { '\u{202b}' } else { '\u{202a}' }];
+            (open, vec!['\u{202c}'])
+        }
+        UnicodeBidi::BidiOverride => {
+            let open = vec![if direction == Direction::Rtl { '\u{202e}' } else { '\u{202d}' }];
+            (open, vec!['\u{202c}'])
+        }
+        UnicodeBidi::Isolate => {
+            let open = vec![if direction == Direction::Rtl { '\u{2067}' } else { '\u{2066}' }];
+            (open, vec!['\u{2069}'])
+        }
+        UnicodeBidi::IsolateOverride => {
+            let open = vec![
+                if direction == Direction::Rtl {
+                    '\u{2067}'
+                } else {
+                    '\u{2066}'
+                },
+                if direction == Direction::Rtl {
+                    '\u{202e}'
+                } else {
+                    '\u{202d}'
+                },
+            ];
+            (open, vec!['\u{202c}', '\u{2069}'])
+        }
+        // Plaintext acts like a first-strong isolate: wrap in FSI/PDI so the isolate picks
+        // its own base direction from content while staying isolated from surrounding text.
+        UnicodeBidi::Plaintext => (vec!['\u{2068}'], vec!['\u{2069}']),
+    }
+}
+
 pub(crate) fn apply_plaintext_paragraph_direction(items: &mut [InlineItem], direction: crate::style::types::Direction) {
     for item in items {
         match item {
@@ -4570,6 +4616,8 @@ mod tests {
             constraints.width().unwrap(),
             &strut,
             Some(unicode_bidi::Level::ltr()),
+            root.style.direction,
+            root.style.unicode_bidi,
             None,
             0.0,
             0.0,
@@ -4656,6 +4704,8 @@ mod tests {
             constraints.width().unwrap(),
             &strut,
             Some(unicode_bidi::Level::ltr()),
+            root.style.direction,
+            root.style.unicode_bidi,
             None,
             0.0,
             0.0,
@@ -5379,6 +5429,8 @@ mod tests {
             1000.0,
             &strut,
             None,
+            node.style.direction,
+            node.style.unicode_bidi,
             None,
             0.0,
             0.0,
@@ -5428,6 +5480,8 @@ mod tests {
             200.0,
             &strut,
             Some(unicode_bidi::Level::ltr()),
+            container.style.direction,
+            container.style.unicode_bidi,
             Some(&float_ctx),
             0.0,
             0.0,

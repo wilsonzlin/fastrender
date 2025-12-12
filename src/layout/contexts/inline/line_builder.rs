@@ -1281,6 +1281,11 @@ pub struct LineBuilder<'a> {
 
     /// Base paragraph level for bidi ordering (None = auto/first strong)
     base_level: Option<Level>,
+
+    /// Root unicode-bidi on the paragraph container.
+    root_unicode_bidi: UnicodeBidi,
+    /// Root direction on the paragraph container.
+    root_direction: Direction,
 }
 
 impl<'a> LineBuilder<'a> {
@@ -1292,6 +1297,8 @@ impl<'a> LineBuilder<'a> {
         shaper: ShapingPipeline,
         font_context: FontContext,
         base_level: Option<Level>,
+        root_unicode_bidi: UnicodeBidi,
+        root_direction: Direction,
         float_integration: Option<InlineFloatIntegration<'a>>,
         float_base_y: f32,
         first_line_indent_cut: f32,
@@ -1324,6 +1331,8 @@ impl<'a> LineBuilder<'a> {
             shaper,
             font_context,
             base_level,
+            root_unicode_bidi,
+            root_direction,
             first_line_indent_cut,
             subsequent_line_indent_cut,
         };
@@ -1597,7 +1606,14 @@ impl<'a> LineBuilder<'a> {
         let font_context = self.font_context.clone();
 
         for (start, end) in ranges {
-            reorder_paragraph(&mut self.lines[start..end], base_level, &shaper, &font_context);
+            reorder_paragraph(
+                &mut self.lines[start..end],
+                base_level,
+                self.root_unicode_bidi,
+                self.root_direction,
+                &shaper,
+                &font_context,
+            );
         }
     }
 
@@ -1624,6 +1640,8 @@ impl<'a> LineBuilder<'a> {
 fn reorder_paragraph(
     lines: &mut [Line],
     base_level: Option<Level>,
+    root_unicode_bidi: UnicodeBidi,
+    root_direction: Direction,
     shaper: &ShapingPipeline,
     font_context: &FontContext,
 ) {
@@ -1672,6 +1690,20 @@ fn reorder_paragraph(
             *depth += added;
             Some((added, closes.to_vec()))
         };
+
+    // Seed root unicode-bidi context if needed.
+    if !matches!(root_unicode_bidi, UnicodeBidi::Normal) {
+        let (opens, closes) = crate::layout::contexts::inline::bidi_controls(root_unicode_bidi, root_direction);
+        if let Some((depth_added, closer_vec)) =
+            push_controls(&opens, &closes, &mut current_depth, &mut logical_text)
+        {
+            active_stack.push(ActiveCtx {
+                id: usize::MAX,
+                closers: closer_vec,
+                depth_added,
+            });
+        }
+    }
 
     for (line_idx, leaves) in line_leaves.iter().enumerate() {
         let line_start = logical_text.len();
@@ -1993,51 +2025,7 @@ fn slice_text_item(
 }
 
 fn bidi_controls(unicode_bidi: UnicodeBidi, direction: Direction) -> (Vec<char>, Vec<char>) {
-    match unicode_bidi {
-        UnicodeBidi::Normal => (Vec::new(), Vec::new()),
-        UnicodeBidi::Embed => {
-            let open = vec![if direction == Direction::Rtl {
-                '\u{202b}'
-            } else {
-                '\u{202a}'
-            }];
-            (open, vec!['\u{202c}'])
-        }
-        UnicodeBidi::BidiOverride => {
-            let open = vec![if direction == Direction::Rtl {
-                '\u{202e}'
-            } else {
-                '\u{202d}'
-            }];
-            (open, vec!['\u{202c}'])
-        }
-        UnicodeBidi::Isolate => {
-            let open = vec![if direction == Direction::Rtl {
-                '\u{2067}'
-            } else {
-                '\u{2066}'
-            }];
-            (open, vec!['\u{2069}'])
-        }
-        UnicodeBidi::IsolateOverride => {
-            let open = vec![
-                if direction == Direction::Rtl {
-                    '\u{2067}'
-                } else {
-                    '\u{2066}'
-                },
-                if direction == Direction::Rtl {
-                    '\u{202e}'
-                } else {
-                    '\u{202d}'
-                },
-            ];
-            (open, vec!['\u{202c}', '\u{2069}'])
-        }
-        // Plaintext acts like a first-strong isolate: wrap in FSI/PDI so the isolate picks
-        // its own base direction from content while staying isolated from surrounding text.
-        UnicodeBidi::Plaintext => (vec!['\u{2068}'], vec!['\u{2069}']),
-    }
+    crate::layout::contexts::inline::bidi_controls(unicode_bidi, direction)
 }
 
 #[derive(Clone)]
@@ -2136,6 +2124,8 @@ mod tests {
             ShapingPipeline::new(),
             FontContext::new(),
             Some(Level::ltr()),
+            UnicodeBidi::Normal,
+            Direction::Ltr,
             None,
             0.0,
             0.0,
@@ -2159,6 +2149,8 @@ mod tests {
             ShapingPipeline::new(),
             FontContext::new(),
             Some(base),
+            UnicodeBidi::Normal,
+            Direction::Ltr,
             None,
             0.0,
             0.0,
@@ -2612,6 +2604,8 @@ mod tests {
         reorder_paragraph(
             &mut lines,
             Some(Level::ltr()),
+            UnicodeBidi::Normal,
+            Direction::Ltr,
             &ShapingPipeline::new(),
             &FontContext::new(),
         );
@@ -2666,6 +2660,8 @@ mod tests {
         reorder_paragraph(
             &mut lines,
             Some(Level::ltr()),
+            UnicodeBidi::Normal,
+            Direction::Ltr,
             &ShapingPipeline::new(),
             &FontContext::new(),
         );
