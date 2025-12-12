@@ -3318,6 +3318,7 @@ impl InlineFormattingContext {
         let mut use_first_line_width = true;
         let mut local_float_ctx: Option<FloatContext> = None;
         let mut flow_order: Vec<FlowChunk> = Vec::new();
+        let mut block_run_max_width: f32 = 0.0;
 
         let flush_pending = |pending: &mut Vec<InlineItem>,
                              use_first_line_width: &mut bool,
@@ -3412,6 +3413,40 @@ impl InlineFormattingContext {
                         local_float_ctx = Some(FloatContext::new(available_inline.max(0.0)));
                     }
 
+                    let percentage_base = available_inline;
+                    let margin_left = block_node
+                        .style
+                        .margin_left
+                        .as_ref()
+                        .map(|m| {
+                            resolve_length_for_width(*m, percentage_base, &block_node.style, &self.font_context, self.viewport_size)
+                        })
+                        .unwrap_or(0.0);
+                    let margin_right = block_node
+                        .style
+                        .margin_right
+                        .as_ref()
+                        .map(|m| {
+                            resolve_length_for_width(*m, percentage_base, &block_node.style, &self.font_context, self.viewport_size)
+                        })
+                        .unwrap_or(0.0);
+                    let margin_top = block_node
+                        .style
+                        .margin_top
+                        .as_ref()
+                        .map(|m| {
+                            resolve_length_for_width(*m, percentage_base, &block_node.style, &self.font_context, self.viewport_size)
+                        })
+                        .unwrap_or(0.0);
+                    let margin_bottom = block_node
+                        .style
+                        .margin_bottom
+                        .as_ref()
+                        .map(|m| {
+                            resolve_length_for_width(*m, percentage_base, &block_node.style, &self.font_context, self.viewport_size)
+                        })
+                        .unwrap_or(0.0);
+
                     let _ = flush_pending(
                         &mut pending,
                         &mut use_first_line_width,
@@ -3432,9 +3467,16 @@ impl InlineFormattingContext {
                         AvailableSpace::Definite(available_inline),
                         constraints.available_height,
                     );
-                    let fragment = fc.layout(&block_node, &child_constraints)?;
-                    let translated = fragment.translate(Point::new(0.0, line_offset));
-                    line_offset = translated.bounds.max_y();
+                    let mut fragment = fc.layout(&block_node, &child_constraints)?;
+                    fragment.bounds = Rect::from_xywh(
+                        margin_left,
+                        line_offset + margin_top,
+                        fragment.bounds.width(),
+                        fragment.bounds.height(),
+                    );
+                    let translated = fragment;
+                    block_run_max_width = block_run_max_width.max(margin_left + translated.bounds.width() + margin_right);
+                    line_offset = translated.bounds.max_y() + margin_bottom;
                     flow_order.push(FlowChunk::Block {
                         index: block_fragments.len(),
                     });
@@ -3470,14 +3512,10 @@ impl InlineFormattingContext {
             .iter()
             .map(|f| f.bounds.x() + f.bounds.width())
             .fold(0.0, f32::max);
-        let block_max_width = block_fragments
-            .iter()
-            .map(|f| f.bounds.x() + f.bounds.width())
-            .fold(0.0, f32::max);
         let max_width: f32 = if available_inline.is_finite() {
             available_inline
         } else {
-            line_max_width.max(float_max_width).max(block_max_width)
+            line_max_width.max(float_max_width).max(block_run_max_width)
         };
 
         // Create fragments
@@ -3550,25 +3588,19 @@ impl InlineFormattingContext {
         );
 
         let mut merged_children = Vec::new();
-        if flow_order.is_empty() {
-            merged_children.extend(float_fragments.clone());
-            merged_children.extend(line_fragments.clone());
-            merged_children.extend(block_fragments.clone());
-        } else {
-            for chunk in flow_order {
-                match chunk {
-                    FlowChunk::Inline { start, end } => {
-                        merged_children.extend(line_fragments[start..end].iter().cloned());
+        for chunk in flow_order {
+            match chunk {
+                FlowChunk::Inline { start, end } => {
+                    merged_children.extend(line_fragments[start..end].iter().cloned());
+                }
+                FlowChunk::Float { index } => {
+                    if let Some(f) = float_fragments.get(index) {
+                        merged_children.push(f.clone());
                     }
-                    FlowChunk::Float { index } => {
-                        if let Some(f) = float_fragments.get(index) {
-                            merged_children.push(f.clone());
-                        }
-                    }
-                    FlowChunk::Block { index } => {
-                        if let Some(b) = block_fragments.get(index) {
-                            merged_children.push(b.clone());
-                        }
+                }
+                FlowChunk::Block { index } => {
+                    if let Some(b) = block_fragments.get(index) {
+                        merged_children.push(b.clone());
                     }
                 }
             }
@@ -4658,6 +4690,41 @@ mod tests {
         assert!(
             kinds.iter().filter(|k| k.0).count() >= 2,
             "lines before and after block should remain"
+        );
+    }
+
+    #[test]
+    fn block_margins_inside_inline_affect_flow() {
+        let ifc = InlineFormattingContext::new();
+        let before = BoxNode::new_text(default_style(), "before".to_string());
+        let mut block_style = (*default_style()).clone();
+        block_style.display = crate::style::display::Display::Block;
+        block_style.margin_top = Some(Length::px(10.0));
+        block_style.margin_bottom = Some(Length::px(15.0));
+        let block_child =
+            BoxNode::new_block(Arc::new(block_style), FormattingContextType::Block, vec![make_text_box("block")]);
+        let after = BoxNode::new_text(default_style(), "after".to_string());
+        let root = BoxNode::new_inline(default_style(), vec![before, block_child, after]);
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let mut children = Vec::new();
+        for child in &fragment.children {
+            children.push((child.content.is_line(), child.content.is_block(), child.bounds.y(), child.bounds.max_y()));
+        }
+        assert_eq!(children.len(), 3, "expected line, block, line");
+        let first_line = &children[0];
+        let block = &children[1];
+        let second_line = &children[2];
+        assert!(
+            block.2 >= first_line.3 + 9.9,
+            "block should be offset by margin-top from previous line: {:?}",
+            children
+        );
+        assert!(
+            second_line.2 >= block.3 + 14.9,
+            "next line should start after block margin-bottom: {:?}",
+            children
         );
     }
 
