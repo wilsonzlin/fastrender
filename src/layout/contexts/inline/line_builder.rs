@@ -1148,6 +1148,10 @@ impl TabItem {
         self.allow_wrap
     }
 
+    pub fn set_direction(&mut self, direction: Direction) {
+        self.direction = direction;
+    }
+
     fn used_width(&self) -> f32 {
         if self.resolved_width > 0.0 {
             self.resolved_width
@@ -2455,6 +2459,33 @@ mod tests {
             .collect();
 
         assert_eq!(texts, vec!["אבג".to_string(), " xyz".to_string()]);
+    }
+
+    #[test]
+    fn bidi_plaintext_sets_base_direction_on_items() {
+        let mut items = vec![
+            InlineItem::Text(make_text_item_with_bidi("אבג", 30.0, UnicodeBidi::Plaintext)),
+            InlineItem::Tab(TabItem::new(
+                Arc::new(ComputedStyle::default()),
+                BaselineMetrics::new(10.0, 12.0, 8.0, 2.0),
+                8.0,
+                true,
+            )),
+        ];
+
+        crate::layout::contexts::inline::apply_plaintext_paragraph_direction(&mut items, Direction::Rtl);
+
+        let dir_text = match &items[0] {
+            InlineItem::Text(t) => t.base_direction,
+            _ => Direction::Ltr,
+        };
+        let dir_tab = match &items[1] {
+            InlineItem::Tab(t) => t.direction,
+            _ => Direction::Ltr,
+        };
+
+        assert_eq!(dir_text, Direction::Rtl);
+        assert_eq!(dir_tab, Direction::Rtl);
     }
 
     #[test]

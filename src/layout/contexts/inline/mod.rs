@@ -3322,9 +3322,18 @@ impl InlineFormattingContext {
                              lines_out: &mut Vec<Line>,
                              ctx_ref: Option<&FloatContext>,
                              order: &mut Vec<FlowChunk>|
-         -> Option<(f32, f32, f32)> {
+             -> Option<(f32, f32, f32)> {
             if pending.is_empty() {
                 return None;
+            }
+            let paragraph_direction = match style.unicode_bidi {
+                crate::style::types::UnicodeBidi::Plaintext => {
+                    determine_paragraph_direction(pending).unwrap_or(base_direction)
+                }
+                _ => base_direction,
+            };
+            if matches!(style.unicode_bidi, crate::style::types::UnicodeBidi::Plaintext) {
+                apply_plaintext_paragraph_direction(pending, paragraph_direction);
             }
             let start_idx = lines_out.len();
             let seg_lines = self.layout_segment_lines(
@@ -3333,19 +3342,9 @@ impl InlineFormattingContext {
                 first_line_width,
                 subsequent_line_width,
                 &strut_metrics,
-                match style.unicode_bidi {
-                    crate::style::types::UnicodeBidi::Plaintext => {
-                        let dir = determine_paragraph_direction(pending).unwrap_or(base_direction);
-                        if matches!(dir, crate::style::types::Direction::Rtl) {
-                            Some(unicode_bidi::Level::rtl())
-                        } else {
-                            Some(unicode_bidi::Level::ltr())
-                        }
-                    }
-                    _ => match base_direction {
-                        crate::style::types::Direction::Rtl => Some(unicode_bidi::Level::rtl()),
-                        _ => Some(unicode_bidi::Level::ltr()),
-                    },
+                match paragraph_direction {
+                    crate::style::types::Direction::Rtl => Some(unicode_bidi::Level::rtl()),
+                    _ => Some(unicode_bidi::Level::ltr()),
                 },
                 ctx_ref,
                 float_base_y + *line_offset,
@@ -4076,6 +4075,32 @@ fn resolve_base_direction_for_box(box_node: &BoxNode) -> crate::style::types::Di
         }
     } else {
         box_node.style.direction
+    }
+}
+
+pub(crate) fn apply_plaintext_paragraph_direction(items: &mut [InlineItem], direction: crate::style::types::Direction) {
+    for item in items {
+        match item {
+            InlineItem::Text(t) => {
+                t.base_direction = direction;
+            }
+            InlineItem::Tab(t) => {
+                t.set_direction(direction);
+            }
+            InlineItem::InlineBox(b) => {
+                b.direction = direction;
+                apply_plaintext_paragraph_direction(&mut b.children, direction);
+            }
+            InlineItem::InlineBlock(b) => {
+                b.direction = direction;
+            }
+            InlineItem::Replaced(r) => {
+                r.direction = direction;
+            }
+            InlineItem::Floating(f) => {
+                f.direction = direction;
+            }
+        }
     }
 }
 
