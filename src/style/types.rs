@@ -219,6 +219,73 @@ pub enum ImageRendering {
     Pixelated,
 }
 
+/// Orientation applied to decoded images
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct OrientationTransform {
+    /// Number of quarter turns clockwise (0–3)
+    pub quarter_turns: u8,
+    /// Whether to flip horizontally after rotation
+    pub flip_x: bool,
+}
+
+impl OrientationTransform {
+    pub const IDENTITY: Self = Self {
+        quarter_turns: 0,
+        flip_x: false,
+    };
+
+    /// Returns the oriented dimensions for a given image size.
+    pub fn oriented_dimensions(self, width: u32, height: u32) -> (u32, u32) {
+        if self.quarter_turns % 2 == 1 {
+            (height, width)
+        } else {
+            (width, height)
+        }
+    }
+
+    /// Whether the orientation swaps the x/y axes.
+    pub fn swaps_axes(self) -> bool {
+        self.quarter_turns % 2 == 1
+    }
+}
+
+/// CSS `image-orientation`
+///
+/// Reference: CSS Images Module Level 3 §5.1
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageOrientation {
+    FromImage,
+    None,
+    Angle { quarter_turns: u8, flip: bool },
+}
+
+impl Default for ImageOrientation {
+    fn default() -> Self {
+        ImageOrientation::FromImage
+    }
+}
+
+impl ImageOrientation {
+    /// Compute the effective transform for a given image, considering whether the
+    /// image is decorative (background/border) or content.
+    pub fn resolve(self, metadata: Option<OrientationTransform>, decorative: bool) -> OrientationTransform {
+        match self {
+            ImageOrientation::None => OrientationTransform::IDENTITY,
+            ImageOrientation::FromImage => metadata.unwrap_or(OrientationTransform::IDENTITY),
+            ImageOrientation::Angle { quarter_turns, flip } => {
+                if decorative {
+                    metadata.unwrap_or(OrientationTransform::IDENTITY)
+                } else {
+                    OrientationTransform {
+                        quarter_turns: quarter_turns % 4,
+                        flip_x: flip,
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Computed aspect-ratio value
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AspectRatio {
@@ -1494,14 +1561,20 @@ pub enum OverflowWrap {
 pub enum BackgroundImage {
     None,
     Url(String),
-    LinearGradient { angle: f32, stops: Vec<ColorStop> },
+    LinearGradient {
+        angle: f32,
+        stops: Vec<ColorStop>,
+    },
     RadialGradient {
         shape: RadialGradientShape,
         size: RadialGradientSize,
         position: BackgroundPosition,
         stops: Vec<ColorStop>,
     },
-    RepeatingLinearGradient { angle: f32, stops: Vec<ColorStop> },
+    RepeatingLinearGradient {
+        angle: f32,
+        stops: Vec<ColorStop>,
+    },
     RepeatingRadialGradient {
         shape: RadialGradientShape,
         size: RadialGradientSize,

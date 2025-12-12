@@ -27,13 +27,14 @@
 //! ```
 
 use crate::css::types::ColorStop;
+use crate::css::types::{RadialGradientShape, RadialGradientSize};
 use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::paint::display_list::{
-    BlendMode, BlendModeItem, BorderItem, BorderSide, BoxShadowItem, ClipItem, DecorationPaint, DecorationStroke,
-    ConicGradientItem, DisplayItem, DisplayList, EmphasisMark, EmphasisText, FillRectItem, FontId, GlyphInstance,
+    BlendMode, BlendModeItem, BorderItem, BorderSide, BoxShadowItem, ClipItem, ConicGradientItem, DecorationPaint,
+    DecorationStroke, DisplayItem, DisplayList, EmphasisMark, EmphasisText, FillRectItem, FontId, GlyphInstance,
     GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, OpacityItem,
     RadialGradientItem, ResolvedFilter, StackingContextItem, StrokeRectItem, TextDecorationItem, TextEmphasis,
     TextItem, TextShadowItem, Transform2D,
@@ -41,13 +42,12 @@ use crate::paint::display_list::{
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
 use crate::paint::text_shadow::resolve_text_shadows;
-use crate::css::types::{RadialGradientShape, RadialGradientSize};
 use crate::style::color::Rgba;
 use crate::style::types::{
     BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeatKeyword,
-    BackgroundSize, BackgroundSizeComponent, BackgroundSizeKeyword, ImageRendering, Isolation, MixBlendMode, ObjectFit,
-    ResolvedTextDecoration, TextDecorationLine, TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness,
-    TextEmphasisPosition, TextEmphasisStyle, TextUnderlineOffset, TextUnderlinePosition,
+    BackgroundSize, BackgroundSizeComponent, BackgroundSizeKeyword, ImageOrientation, ImageRendering, Isolation,
+    MixBlendMode, ObjectFit, ResolvedTextDecoration, TextDecorationLine, TextDecorationSkipInk, TextDecorationStyle,
+    TextDecorationThickness, TextEmphasisPosition, TextEmphasisStyle, TextUnderlineOffset, TextUnderlinePosition,
 };
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
@@ -56,7 +56,6 @@ use crate::text::font_loader::FontContext;
 use crate::text::pipeline::{ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
-use image::GenericImageView;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -739,7 +738,10 @@ impl DisplayListBuilder {
                         best_pair = (dx, dy);
                     }
                 }
-                (best_pair.0 * std::f32::consts::SQRT_2, best_pair.1 * std::f32::consts::SQRT_2)
+                (
+                    best_pair.0 * std::f32::consts::SQRT_2,
+                    best_pair.1 * std::f32::consts::SQRT_2,
+                )
             }
             RadialGradientSize::FarthestCorner => {
                 let corners = [
@@ -757,7 +759,10 @@ impl DisplayListBuilder {
                         best_pair = (dx, dy);
                     }
                 }
-                (best_pair.0 * std::f32::consts::SQRT_2, best_pair.1 * std::f32::consts::SQRT_2)
+                (
+                    best_pair.0 * std::f32::consts::SQRT_2,
+                    best_pair.1 * std::f32::consts::SQRT_2,
+                )
             }
             RadialGradientSize::Explicit { x, y } => {
                 let rx = Self::resolve_length_for_paint(x, font_size, rect.width()).max(0.0);
@@ -770,7 +775,10 @@ impl DisplayListBuilder {
         };
 
         if matches!(shape, RadialGradientShape::Circle) {
-            let r = if matches!(size, RadialGradientSize::ClosestCorner | RadialGradientSize::FarthestCorner) {
+            let r = if matches!(
+                size,
+                RadialGradientSize::ClosestCorner | RadialGradientSize::FarthestCorner
+            ) {
                 let avg = (rx * rx + ry * ry) / 2.0;
                 avg.sqrt()
             } else {
@@ -783,12 +791,7 @@ impl DisplayListBuilder {
         (cx, cy, rx, ry)
     }
 
-    fn resolve_gradient_center(
-        rect: Rect,
-        position: &BackgroundPosition,
-        font_size: f32,
-        clip_rect: Rect,
-    ) -> Point {
+    fn resolve_gradient_center(rect: Rect, position: &BackgroundPosition, font_size: f32, clip_rect: Rect) -> Point {
         let (align_x, off_x, align_y, off_y) = match position {
             BackgroundPosition::Position { x, y } => {
                 let ox = Self::resolve_length_for_paint(&x.offset, font_size, rect.width());
@@ -1185,6 +1188,7 @@ impl DisplayListBuilder {
                 let media_ctx = self.viewport.map(|(w, h)| {
                     crate::style::media::MediaContext::screen(w, h).with_device_pixel_ratio(self.device_pixel_ratio)
                 });
+                let style_for_image = fragment.style.as_deref();
                 let sources = replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
                     scale: self.device_pixel_ratio,
                     slot_width: Some(rect.width()),
@@ -1193,7 +1197,11 @@ impl DisplayListBuilder {
                     font_size: fragment.style.as_deref().map(|s| s.font_size),
                 });
 
-                if let Some(image) = sources.iter().filter_map(|s| self.decode_image(s)).next() {
+                if let Some(image) = sources
+                    .iter()
+                    .filter_map(|s| self.decode_image(s, style_for_image, false))
+                    .next()
+                {
                     let (dest_x, dest_y, dest_w, dest_h) = {
                         let (fit, position, font_size) = if let Some(style) = fragment.style.as_deref() {
                             (style.object_fit, style.object_position, style.font_size)
@@ -1484,7 +1492,7 @@ impl DisplayListBuilder {
                 }
             }
             BackgroundImage::Url(src) => {
-                if let Some(image) = self.decode_image(src) {
+                if let Some(image) = self.decode_image(src, Some(style), true) {
                     let img_w = image.width as f32;
                     let img_h = image.height as f32;
                     if img_w > 0.0 && img_h > 0.0 {
@@ -2356,15 +2364,21 @@ impl DisplayListBuilder {
         true
     }
 
-    fn decode_image(&self, src: &str) -> Option<ImageData> {
+    fn decode_image(&self, src: &str, style: Option<&ComputedStyle>, decorative: bool) -> Option<ImageData> {
         let cache = self.image_cache.as_ref()?;
         let image = match cache.load(src) {
             Ok(img) => img,
             Err(_) if src.trim_start().starts_with('<') => cache.render_svg(src).ok()?,
             Err(_) => return None,
         };
-        let (w, h) = image.dimensions();
-        let rgba = image.to_rgba8();
+        let orientation = style
+            .map(|s| s.image_orientation.resolve(image.orientation, decorative))
+            .unwrap_or_else(|| ImageOrientation::default().resolve(image.orientation, decorative));
+        let rgba = image.to_oriented_rgba(orientation);
+        let (w, h) = rgba.dimensions();
+        if w == 0 || h == 0 {
+            return None;
+        }
         Some(ImageData::new(w, h, rgba.into_raw()))
     }
 

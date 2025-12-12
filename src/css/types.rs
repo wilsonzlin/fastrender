@@ -139,7 +139,10 @@ fn collect_rules_recursive<'a>(
                 } else {
                     current_layer.to_vec()
                 };
-                out.push(CollectedRule { rule: style_rule, layer_order });
+                out.push(CollectedRule {
+                    rule: style_rule,
+                    layer_order,
+                });
             }
             CssRule::Media(media_rule) => {
                 // Only include rules from @media blocks that match

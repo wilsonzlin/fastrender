@@ -22,9 +22,10 @@
 //! using the system's default font.
 
 use crate::css::types::ColorStop;
+use crate::css::types::{RadialGradientShape, RadialGradientSize};
 use crate::error::{RenderError, Result};
 use crate::geometry::{Point, Rect, Size};
-use crate::image_loader::ImageCache;
+use crate::image_loader::{CachedImage, ImageCache};
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem;
 use crate::paint::blur::apply_gaussian_blur;
@@ -35,14 +36,14 @@ use crate::paint::stacking::creates_stacking_context;
 use crate::paint::text_shadow::{resolve_text_shadows, PathBounds, ResolvedTextShadow};
 #[cfg(test)]
 use crate::style::color::Color;
-use crate::css::types::{RadialGradientShape, RadialGradientSize};
 use crate::style::color::Rgba;
 use crate::style::display::Display;
 use crate::style::position::Position;
 use crate::style::types::{
     BackgroundAttachment, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeatKeyword,
-    BackgroundSize, BackgroundSizeComponent, BackgroundSizeKeyword, BorderStyle as CssBorderStyle, ImageRendering,
-    ObjectFit, TextDecorationLine, TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness,
+    BackgroundSize, BackgroundSizeComponent, BackgroundSizeKeyword, BorderStyle as CssBorderStyle, ImageOrientation,
+    ImageRendering, ObjectFit, OrientationTransform, TextDecorationLine, TextDecorationSkipInk, TextDecorationStyle,
+    TextDecorationThickness,
 };
 use crate::style::types::{FilterColor, FilterFunction, MixBlendMode, Overflow};
 use crate::style::values::{Length, LengthUnit};
@@ -52,7 +53,6 @@ use crate::text::font_loader::FontContext;
 use crate::text::pipeline::{ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
-use image::DynamicImage;
 use std::borrow::Cow;
 use std::sync::Arc;
 use tiny_skia::{
@@ -1289,15 +1289,18 @@ impl Painter {
                     Err(_) => return,
                 };
 
-                let pixmap = match Self::dynamic_image_to_pixmap(&image) {
-                    Some(p) => p,
-                    None => return,
-                };
-                let img_w = pixmap.width() as f32;
-                let img_h = pixmap.height() as f32;
+                let orientation = style.image_orientation.resolve(image.orientation, true);
+                let (img_w, img_h) = image.oriented_dimensions(orientation);
+                let img_w = img_w as f32;
+                let img_h = img_h as f32;
                 if img_w <= 0.0 || img_h <= 0.0 {
                     return;
                 }
+
+                let pixmap = match Self::dynamic_image_to_pixmap(&image, orientation) {
+                    Some(p) => p,
+                    None => return,
+                };
 
                 let (mut tile_w, mut tile_h) = compute_background_size(
                     layer,
@@ -1548,8 +1551,7 @@ impl Painter {
         let gradient_rect = self.device_rect(gradient_rect);
         let paint_rect = self.device_rect(paint_rect);
         let skia_stops = gradient_stops(stops);
-        let (cx, cy, radius_x, radius_y) =
-            radial_geometry(gradient_rect, position, size, shape, font_size);
+        let (cx, cy, radius_x, radius_y) = radial_geometry(gradient_rect, position, size, shape, font_size);
         let transform = Transform::from_translate(cx, cy).pre_scale(radius_x, radius_y);
         let Some(shader) = RadialGradient::new(
             tiny_skia::Point::from_xy(0.0, 0.0),
@@ -1558,8 +1560,7 @@ impl Painter {
             skia_stops,
             spread,
             transform,
-        )
-        else {
+        ) else {
             return;
         };
 
@@ -2341,17 +2342,20 @@ impl Painter {
             }
         };
 
-        let pixmap = match Self::dynamic_image_to_pixmap(&image) {
+        let orientation = style
+            .map(|s| s.image_orientation.resolve(image.orientation, false))
+            .unwrap_or_else(|| ImageOrientation::default().resolve(image.orientation, false));
+        let (img_w_raw, img_h_raw) = image.oriented_dimensions(orientation);
+        if img_w_raw == 0 || img_h_raw == 0 {
+            return false;
+        }
+        let img_w = img_w_raw as f32;
+        let img_h = img_h_raw as f32;
+
+        let pixmap = match Self::dynamic_image_to_pixmap(&image, orientation) {
             Some(pixmap) => pixmap,
             None => return false,
         };
-
-        if pixmap.width() == 0 || pixmap.height() == 0 {
-            return false;
-        }
-
-        let img_w = pixmap.width() as f32;
-        let img_h = pixmap.height() as f32;
         let fit = style.map(|s| s.object_fit).unwrap_or(ObjectFit::Fill);
         let pos = style.map(|s| s.object_position).unwrap_or(default_object_position());
 
@@ -2420,17 +2424,20 @@ impl Painter {
             }
         };
 
-        let pixmap = match Self::dynamic_image_to_pixmap(&image) {
+        let orientation = style
+            .map(|s| s.image_orientation.resolve(image.orientation, false))
+            .unwrap_or_else(|| ImageOrientation::default().resolve(image.orientation, false));
+        let (img_w_raw, img_h_raw) = image.oriented_dimensions(orientation);
+        if img_w_raw == 0 || img_h_raw == 0 {
+            return false;
+        }
+        let img_w = img_w_raw as f32;
+        let img_h = img_h_raw as f32;
+
+        let pixmap = match Self::dynamic_image_to_pixmap(&image, orientation) {
             Some(pixmap) => pixmap,
             None => return false,
         };
-
-        if pixmap.width() == 0 || pixmap.height() == 0 {
-            return false;
-        }
-
-        let img_w = pixmap.width() as f32;
-        let img_h = pixmap.height() as f32;
         let fit = style.map(|s| s.object_fit).unwrap_or(ObjectFit::Fill);
         let pos = style.map(|s| s.object_position).unwrap_or(default_object_position());
 
@@ -2683,8 +2690,8 @@ impl Painter {
         metrics.underline_position_with_offset(base, offset)
     }
 
-    fn dynamic_image_to_pixmap(image: &DynamicImage) -> Option<Pixmap> {
-        let rgba = image.to_rgba8();
+    fn dynamic_image_to_pixmap(image: &CachedImage, orientation: OrientationTransform) -> Option<Pixmap> {
+        let rgba = image.to_oriented_rgba(orientation);
         let (width, height) = rgba.dimensions();
         if width == 0 || height == 0 {
             return None;
@@ -4692,7 +4699,10 @@ fn radial_geometry(
                     best_pair = (dx, dy);
                 }
             }
-            (best_pair.0 * std::f32::consts::SQRT_2, best_pair.1 * std::f32::consts::SQRT_2)
+            (
+                best_pair.0 * std::f32::consts::SQRT_2,
+                best_pair.1 * std::f32::consts::SQRT_2,
+            )
         }
         RadialGradientSize::FarthestCorner => {
             let corners = [
@@ -4710,7 +4720,10 @@ fn radial_geometry(
                     best_pair = (dx, dy);
                 }
             }
-            (best_pair.0 * std::f32::consts::SQRT_2, best_pair.1 * std::f32::consts::SQRT_2)
+            (
+                best_pair.0 * std::f32::consts::SQRT_2,
+                best_pair.1 * std::f32::consts::SQRT_2,
+            )
         }
         RadialGradientSize::Explicit { x, y } => {
             let rx = resolve_length_for_paint(x, font_size, rect.width()).max(0.0);
@@ -4723,7 +4736,10 @@ fn radial_geometry(
     };
 
     if matches!(shape, RadialGradientShape::Circle) {
-        let r = if matches!(size, RadialGradientSize::ClosestCorner | RadialGradientSize::FarthestCorner) {
+        let r = if matches!(
+            size,
+            RadialGradientSize::ClosestCorner | RadialGradientSize::FarthestCorner
+        ) {
             // Corner-based sizes already yield isotropic radii; use hypotenuse distance instead.
             let r_corner = ((radius_x * radius_x + radius_y * radius_y) / 2.0).sqrt();
             r_corner
@@ -4757,7 +4773,11 @@ fn sample_stops(stops: &[(f32, Rgba)], t: f32, repeating: bool, period: f32) -> 
     if stops.len() == 1 {
         return stops[0].1;
     }
-    let total = if repeating { period } else { stops.last().map(|(p, _)| *p).unwrap_or(1.0) };
+    let total = if repeating {
+        period
+    } else {
+        stops.last().map(|(p, _)| *p).unwrap_or(1.0)
+    };
     let mut pos = t;
     if repeating && total > 0.0 {
         pos = pos.rem_euclid(total);
@@ -4768,25 +4788,31 @@ fn sample_stops(stops: &[(f32, Rgba)], t: f32, repeating: bool, period: f32) -> 
     if pos >= stops.last().unwrap().0 && !repeating {
         return stops.last().unwrap().1;
     }
-        for window in stops.windows(2) {
-            let (p0, c0) = window[0];
-            let (p1, c1) = window[1];
-            if pos < p0 {
-                return c0;
-            }
-            if pos <= p1 || (repeating && (p1 - p0).abs() < f32::EPSILON) {
-                let span = (p1 - p0).max(1e-6);
-                let frac = ((pos - p0) / span).clamp(0.0, 1.0);
-                return Rgba {
-                    r: ((1.0 - frac) * c0.r as f32 + frac * c1.r as f32).round().clamp(0.0, 255.0) as u8,
-                    g: ((1.0 - frac) * c0.g as f32 + frac * c1.g as f32).round().clamp(0.0, 255.0) as u8,
-                    b: ((1.0 - frac) * c0.b as f32 + frac * c1.b as f32).round().clamp(0.0, 255.0) as u8,
-                    a: ((1.0 - frac) * c0.a + frac * c1.a),
-                };
-            }
+    for window in stops.windows(2) {
+        let (p0, c0) = window[0];
+        let (p1, c1) = window[1];
+        if pos < p0 {
+            return c0;
         }
-        stops.last().unwrap().1
+        if pos <= p1 || (repeating && (p1 - p0).abs() < f32::EPSILON) {
+            let span = (p1 - p0).max(1e-6);
+            let frac = ((pos - p0) / span).clamp(0.0, 1.0);
+            return Rgba {
+                r: ((1.0 - frac) * c0.r as f32 + frac * c1.r as f32)
+                    .round()
+                    .clamp(0.0, 255.0) as u8,
+                g: ((1.0 - frac) * c0.g as f32 + frac * c1.g as f32)
+                    .round()
+                    .clamp(0.0, 255.0) as u8,
+                b: ((1.0 - frac) * c0.b as f32 + frac * c1.b as f32)
+                    .round()
+                    .clamp(0.0, 255.0) as u8,
+                a: ((1.0 - frac) * c0.a + frac * c1.a),
+            };
+        }
     }
+    stops.last().unwrap().1
+}
 
 fn gradient_stops(stops: &[(f32, Rgba)]) -> Vec<tiny_skia::GradientStop> {
     stops
@@ -5762,8 +5788,7 @@ mod tests {
             ..BackgroundLayer::default()
         }]);
 
-        let fragment =
-            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
         let tree = FragmentTree::new(fragment);
         let pixmap = paint_tree(&tree, 20, 10, Rgba::WHITE).expect("paint");
 
@@ -5816,8 +5841,7 @@ mod tests {
             ..BackgroundLayer::default()
         }]);
 
-        let fragment =
-            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
         let tree = FragmentTree::new(fragment);
         let pixmap = paint_tree(&tree, 20, 10, Rgba::WHITE).expect("paint");
 
@@ -5863,8 +5887,7 @@ mod tests {
             ..BackgroundLayer::default()
         }]);
 
-        let fragment =
-            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
         let tree = FragmentTree::new(fragment);
         let pixmap = paint_tree(&tree, 20, 20, Rgba::WHITE).expect("paint");
 
@@ -6524,5 +6547,62 @@ mod tests {
 
         let pixmap = paint_tree(&tree, 20, 20, Rgba::WHITE).expect("paint");
         assert_eq!(color_at(&pixmap, 5, 5), (255, 255, 255, 255));
+    }
+
+    #[test]
+    fn exif_orientation_rotates_images_by_default() {
+        let mut painter =
+            Painter::with_resources(1, 2, Rgba::WHITE, FontContext::new(), ImageCache::new()).expect("painter");
+        let style = ComputedStyle::default();
+        let ok = painter.paint_image_from_src(
+            "tests/fixtures/image_orientation/orientation-6.jpg",
+            Some(&style),
+            0.0,
+            0.0,
+            1.0,
+            2.0,
+        );
+        assert!(ok, "image should paint");
+        let top = color_at(&painter.pixmap, 0, 0);
+        let bottom = color_at(&painter.pixmap, 0, 1);
+        assert!(
+            top.0 > top.1 && top.0 > top.2,
+            "expected red-dominant pixel at top after orientation, got {:?}",
+            top
+        );
+        assert!(
+            bottom.1 > bottom.0 && bottom.1 > bottom.2,
+            "expected green-dominant pixel at bottom after orientation, got {:?}",
+            bottom
+        );
+    }
+
+    #[test]
+    fn image_orientation_none_ignores_metadata() {
+        let mut painter =
+            Painter::with_resources(2, 1, Rgba::WHITE, FontContext::new(), ImageCache::new()).expect("painter");
+        let mut style = ComputedStyle::default();
+        style.image_orientation = ImageOrientation::None;
+        let ok = painter.paint_image_from_src(
+            "tests/fixtures/image_orientation/orientation-6.jpg",
+            Some(&style),
+            0.0,
+            0.0,
+            2.0,
+            1.0,
+        );
+        assert!(ok, "image should paint");
+        let left = color_at(&painter.pixmap, 0, 0);
+        let right = color_at(&painter.pixmap, 1, 0);
+        assert!(
+            left.0 > left.1 && left.0 > left.2,
+            "expected red-dominant pixel on the left without orientation, got {:?}",
+            left
+        );
+        assert!(
+            right.1 > right.0 && right.1 > right.2,
+            "expected green-dominant pixel on the right without orientation, got {:?}",
+            right
+        );
     }
 }

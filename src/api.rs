@@ -76,7 +76,6 @@ use crate::text::pipeline::ShapingPipeline;
 use crate::tree::box_generation::generate_box_tree;
 use crate::tree::box_tree::{BoxNode, BoxType, MarkerContent, ReplacedBox, ReplacedType};
 use crate::tree::fragment_tree::FragmentTree;
-use image::GenericImageView;
 use std::io;
 use std::path::Path;
 use url::Url;
@@ -787,7 +786,8 @@ impl FastRender {
 
                 if let Some(chosen_src) = chosen_src {
                     if let Ok(image) = self.image_cache.load(&chosen_src) {
-                        let (w, h) = image.dimensions();
+                        let orientation = style.image_orientation.resolve(image.orientation, false);
+                        let (w, h) = image.oriented_dimensions(orientation);
                         if w > 0 && h > 0 {
                             let size = Size::new(w as f32, h as f32);
                             if needs_intrinsic {
@@ -831,7 +831,8 @@ impl FastRender {
                             self.image_cache.load(candidate)
                         };
                         if let Ok(image) = image {
-                            let (w, h) = image.dimensions();
+                            let orientation = style.image_orientation.resolve(image.orientation, false);
+                            let (w, h) = image.oriented_dimensions(orientation);
                             if w > 0 && h > 0 {
                                 let size = Size::new(w as f32, h as f32);
                                 if needs_intrinsic {
@@ -864,7 +865,8 @@ impl FastRender {
                     };
 
                     if let Ok(image) = image {
-                        let (w, h) = image.dimensions();
+                        let orientation = style.image_orientation.resolve(image.orientation, false);
+                        let (w, h) = image.oriented_dimensions(orientation);
                         if w > 0 && h > 0 {
                             let size = Size::new(w as f32, h as f32);
                             if needs_intrinsic {
@@ -887,7 +889,8 @@ impl FastRender {
                         self.image_cache.load(&src)
                     };
                     if let Ok(image) = image {
-                        let (w, h) = image.dimensions();
+                        let orientation = style.image_orientation.resolve(image.orientation, false);
+                        let (w, h) = image.oriented_dimensions(orientation);
                         if w > 0 && h > 0 {
                             let size = Size::new(w as f32, h as f32);
                             if needs_intrinsic {

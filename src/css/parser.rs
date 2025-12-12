@@ -238,7 +238,8 @@ fn parse_layer_rule<'i, 't>(
     }
 
     let rules = if saw_block {
-        parser.parse_nested_block(|nested| Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list(nested)))?
+        parser
+            .parse_nested_block(|nested| Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list(nested)))?
     } else {
         Vec::new()
     };

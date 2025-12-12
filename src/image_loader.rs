@@ -1,13 +1,58 @@
 use crate::error::{Error, ImageError, RenderError, Result};
-use image::DynamicImage;
+use crate::style::types::OrientationTransform;
+use exif;
+use image::{imageops, DynamicImage, GenericImageView, RgbaImage};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use url::Url;
 
+/// Decoded image plus orientation metadata.
+pub struct CachedImage {
+    pub image: Arc<DynamicImage>,
+    pub orientation: Option<OrientationTransform>,
+}
+
+impl CachedImage {
+    pub fn dimensions(&self) -> (u32, u32) {
+        self.image.dimensions()
+    }
+
+    pub fn width(&self) -> u32 {
+        self.image.width()
+    }
+
+    pub fn height(&self) -> u32 {
+        self.image.height()
+    }
+
+    pub fn oriented_dimensions(&self, transform: OrientationTransform) -> (u32, u32) {
+        let (w, h) = self.dimensions();
+        transform.oriented_dimensions(w, h)
+    }
+
+    pub fn to_oriented_rgba(&self, transform: OrientationTransform) -> RgbaImage {
+        let mut rgba = self.image.to_rgba8();
+
+        match transform.quarter_turns % 4 {
+            0 => {}
+            1 => rgba = imageops::rotate90(&rgba),
+            2 => rgba = imageops::rotate180(&rgba),
+            3 => rgba = imageops::rotate270(&rgba),
+            _ => {}
+        }
+
+        if transform.flip_x {
+            rgba = imageops::flip_horizontal(&rgba);
+        }
+
+        rgba
+    }
+}
+
 /// Cache for loaded images
 pub struct ImageCache {
-    cache: Arc<Mutex<HashMap<String, Arc<DynamicImage>>>>,
+    cache: Arc<Mutex<HashMap<String, Arc<CachedImage>>>>,
     base_url: Option<String>,
 }
 
@@ -62,7 +107,7 @@ impl ImageCache {
     }
 
     /// Load an image from a URL or file path
-    pub fn load(&self, url: &str) -> Result<Arc<DynamicImage>> {
+    pub fn load(&self, url: &str) -> Result<Arc<CachedImage>> {
         // Resolve the URL first
         let resolved_url = self.resolve_url(url);
 
@@ -75,7 +120,7 @@ impl ImageCache {
         }
 
         // Load image using resolved URL
-        let img = if resolved_url.starts_with("http://") || resolved_url.starts_with("https://") {
+        let (img, orientation) = if resolved_url.starts_with("http://") || resolved_url.starts_with("https://") {
             // Fetch from network
             let (bytes, content_type) = self.load_from_url(&resolved_url)?;
             self.decode_image_bytes(&bytes, content_type.as_deref(), None, &resolved_url)?
@@ -94,7 +139,10 @@ impl ImageCache {
         };
 
         // Cache it (using resolved URL as key)
-        let img_arc = Arc::new(img);
+        let img_arc = Arc::new(CachedImage {
+            image: Arc::new(img),
+            orientation,
+        });
         {
             let mut cache = self.cache.lock().unwrap();
             cache.insert(resolved_url, Arc::clone(&img_arc));
@@ -104,9 +152,12 @@ impl ImageCache {
     }
 
     /// Render raw SVG content to an image (uncached).
-    pub fn render_svg(&self, svg_content: &str) -> Result<Arc<DynamicImage>> {
+    pub fn render_svg(&self, svg_content: &str) -> Result<Arc<CachedImage>> {
         let img = self.render_svg_to_image(svg_content)?;
-        Ok(Arc::new(img))
+        Ok(Arc::new(CachedImage {
+            image: Arc::new(img),
+            orientation: None,
+        }))
     }
 
     fn load_from_url(&self, url: &str) -> Result<(Vec<u8>, Option<String>)> {
@@ -154,7 +205,7 @@ impl ImageCache {
             })
     }
 
-    fn load_from_data_url(&self, data_url: &str) -> Result<DynamicImage> {
+    fn load_from_data_url(&self, data_url: &str) -> Result<(DynamicImage, Option<OrientationTransform>)> {
         // Parse data URL: data:image/png;base64,iVBORw0KG... or data:image/svg+xml,%3Csvg...
         if !data_url.starts_with("data:") {
             return Err(Error::Image(ImageError::InvalidDataUrl {
@@ -181,12 +232,15 @@ impl ImageCache {
                 })
             })?;
 
-            image::load_from_memory(&bytes).map_err(|e| {
-                Error::Image(ImageError::DecodeFailed {
-                    url: "data URL".to_string(),
-                    reason: e.to_string(),
+            let orientation = Self::exif_orientation(&bytes);
+            image::load_from_memory(&bytes)
+                .map(|img| (img, orientation))
+                .map_err(|e| {
+                    Error::Image(ImageError::DecodeFailed {
+                        url: "data URL".to_string(),
+                        reason: e.to_string(),
+                    })
                 })
-            })
         } else if header.contains("image/svg+xml") {
             // Handle URL-encoded SVG
             let decoded = urlencoding::decode(data).map_err(|e| {
@@ -196,7 +250,7 @@ impl ImageCache {
             })?;
 
             // Use resvg to render SVG to bitmap
-            self.render_svg_to_image(&decoded)
+            self.render_svg_to_image(&decoded).map(|img| (img, None))
         } else {
             Err(Error::Image(ImageError::InvalidDataUrl {
                 reason: "Unsupported data URL format (not base64 or SVG)".to_string(),
@@ -210,7 +264,7 @@ impl ImageCache {
         mime_hint: Option<&str>,
         extension_hint: Option<&str>,
         url: &str,
-    ) -> Result<DynamicImage> {
+    ) -> Result<(DynamicImage, Option<OrientationTransform>)> {
         let mime_is_svg = mime_hint.map(|m| m.contains("image/svg")).unwrap_or(false);
         let ext_is_svg = extension_hint.map(|e| e.eq_ignore_ascii_case("svg")).unwrap_or(false);
 
@@ -228,15 +282,63 @@ impl ImageCache {
                     reason: format!("SVG not valid UTF-8: {}", e),
                 })
             })?;
-            return self.render_svg_to_image(content);
+            return self.render_svg_to_image(content).map(|img| (img, None));
         }
 
-        image::load_from_memory(bytes).map_err(|e| {
-            Error::Image(ImageError::DecodeFailed {
-                url: url.to_string(),
-                reason: e.to_string(),
+        let orientation = Self::exif_orientation(bytes);
+        image::load_from_memory(bytes)
+            .map(|img| (img, orientation))
+            .map_err(|e| {
+                Error::Image(ImageError::DecodeFailed {
+                    url: url.to_string(),
+                    reason: e.to_string(),
+                })
             })
-        })
+    }
+
+    fn orientation_from_exif(value: u16) -> Option<OrientationTransform> {
+        match value {
+            1 => Some(OrientationTransform::IDENTITY),
+            2 => Some(OrientationTransform {
+                quarter_turns: 0,
+                flip_x: true,
+            }),
+            3 => Some(OrientationTransform {
+                quarter_turns: 2,
+                flip_x: false,
+            }),
+            4 => Some(OrientationTransform {
+                quarter_turns: 2,
+                flip_x: true,
+            }),
+            5 => Some(OrientationTransform {
+                quarter_turns: 1,
+                flip_x: true,
+            }),
+            6 => Some(OrientationTransform {
+                quarter_turns: 1,
+                flip_x: false,
+            }),
+            7 => Some(OrientationTransform {
+                quarter_turns: 3,
+                flip_x: true,
+            }),
+            8 => Some(OrientationTransform {
+                quarter_turns: 3,
+                flip_x: false,
+            }),
+            _ => None,
+        }
+    }
+
+    fn exif_orientation(bytes: &[u8]) -> Option<OrientationTransform> {
+        let mut cursor = std::io::Cursor::new(bytes);
+        let Ok(exif) = exif::Reader::new().read_from_container(&mut cursor) else {
+            return None;
+        };
+        let field = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?;
+        let value = field.value.get_uint(0)? as u16;
+        Self::orientation_from_exif(value)
     }
 
     /// Renders raw SVG content to a raster image.
@@ -341,6 +443,21 @@ mod tests {
         let image = cache.load(data_url).expect("decode data URL");
         assert_eq!(image.width(), 1);
         assert_eq!(image.height(), 1);
+    }
+
+    #[test]
+    fn exposes_exif_orientation() {
+        let cache = ImageCache::new();
+        let image = cache
+            .load("tests/fixtures/image_orientation/orientation-6.jpg")
+            .expect("load oriented image");
+        assert_eq!(
+            image.orientation,
+            Some(OrientationTransform {
+                quarter_turns: 1,
+                flip_x: false
+            })
+        );
     }
 
     #[test]

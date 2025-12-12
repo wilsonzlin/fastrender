@@ -15,9 +15,7 @@ use crate::style::defaults::{get_default_styles_for_element, parse_color_attribu
 use crate::style::display::Display;
 use crate::style::grid::finalize_grid_placement;
 use crate::style::media::MediaContext;
-use crate::style::properties::{
-    apply_declaration_with_base, resolve_pending_logical_properties, with_image_set_dpr,
-};
+use crate::style::properties::{apply_declaration_with_base, resolve_pending_logical_properties, with_image_set_dpr};
 use crate::style::{normalize_language_tag, ComputedStyle};
 use selectors::context::{QuirksMode, SelectorCaches};
 use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
@@ -223,7 +221,11 @@ fn apply_styles_internal(
     propagate_text_decorations(&mut ua_styles, parent_ua_styles);
 
     let is_root = ancestors.is_empty();
-    let current_ua_root_font_size = if is_root { ua_styles.font_size } else { ua_root_font_size };
+    let current_ua_root_font_size = if is_root {
+        ua_styles.font_size
+    } else {
+        ua_root_font_size
+    };
     ua_styles.root_font_size = current_ua_root_font_size;
 
     let mut styles = get_default_styles_for_element(node);
@@ -378,7 +380,11 @@ fn apply_styles_internal_with_ancestors(
     propagate_text_decorations(&mut ua_styles, parent_ua_styles);
 
     let is_root = ancestors.is_empty();
-    let current_ua_root_font_size = if is_root { ua_styles.font_size } else { ua_root_font_size };
+    let current_ua_root_font_size = if is_root {
+        ua_styles.font_size
+    } else {
+        ua_root_font_size
+    };
     ua_styles.root_font_size = current_ua_root_font_size;
 
     let mut styles = get_default_styles_for_element(node);
@@ -657,13 +663,13 @@ mod tests {
     use crate::style::display::Display;
     use crate::style::float::Float;
     use crate::style::properties::apply_declaration;
-    use crate::style::ComputedStyle;
     use crate::style::types::{
         BorderStyle, LineBreak, ListStylePosition, ListStyleType, TextCombineUpright, TextDecorationLine,
         TextUnderlineOffset, TextUnderlinePosition, UnicodeBidi, WhiteSpace, WillChange, WillChangeHint,
     };
-    use crate::style::CursorKeyword;
     use crate::style::values::Length;
+    use crate::style::ComputedStyle;
+    use crate::style::CursorKeyword;
 
     fn element_with_style(style: &str) -> DomNode {
         DomNode {
@@ -910,7 +916,10 @@ mod tests {
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "span".to_string(),
-                    attributes: vec![("id".to_string(), "target".to_string()), ("style".to_string(), "all: inherit;".to_string())],
+                    attributes: vec![
+                        ("id".to_string(), "target".to_string()),
+                        ("style".to_string(), "all: inherit;".to_string()),
+                    ],
                 },
                 children: vec![],
             }],
@@ -1723,7 +1732,10 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
-                attributes: vec![("style".to_string(), "border-style: solid; border-width: 2px;".to_string())],
+                attributes: vec![(
+                    "style".to_string(),
+                    "border-style: solid; border-width: 2px;".to_string(),
+                )],
             },
             children: vec![child],
         };
@@ -2370,16 +2382,16 @@ fn find_pseudo_element_rules(
             }
         }
 
-            if matched {
-                matches.push(MatchedRule {
-                    origin: rule.origin,
-                    specificity: max_specificity,
-                    order: rule.order,
-                    layer_order: rule.layer_order.clone(),
-                    declarations: rule.rule.declarations.clone(),
-                });
-            }
+        if matched {
+            matches.push(MatchedRule {
+                origin: rule.origin,
+                specificity: max_specificity,
+                order: rule.order,
+                layer_order: rule.layer_order.clone(),
+                declarations: rule.rule.declarations.clone(),
+            });
         }
+    }
 
     matches.sort_by(|a, b| a.specificity.cmp(&b.specificity).then(a.order.cmp(&b.order)));
 
