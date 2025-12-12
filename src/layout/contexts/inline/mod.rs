@@ -4553,6 +4553,40 @@ mod tests {
     }
 
     #[test]
+    fn bidi_wrappers_are_stripped_from_shaped_runs() {
+        let ifc = InlineFormattingContext::new();
+        let mut style = ComputedStyle::default();
+        style.unicode_bidi = UnicodeBidi::IsolateOverride;
+        style.direction = Direction::Rtl;
+        let style = Arc::new(style);
+
+        let item = ifc
+            .create_text_item_from_normalized(
+                &style,
+                "abc",
+                Vec::new(),
+                true,
+                false,
+                Direction::Ltr,
+                &[(UnicodeBidi::Isolate, Direction::Ltr)],
+            )
+            .expect("text item");
+
+        assert_eq!(item.text, "abc");
+        for run in &item.runs {
+            assert_eq!(run.text, "abc");
+            for glyph in &run.glyphs {
+                assert!(
+                    (glyph.cluster as usize) < item.text.len(),
+                    "cluster {} should be within content len {}",
+                    glyph.cluster,
+                    item.text.len()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn marker_image_inside_consumes_inline_space() {
         let ifc = InlineFormattingContext::new();
         let mut marker_style = ComputedStyle::default();
