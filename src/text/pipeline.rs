@@ -351,12 +351,22 @@ pub struct BidiAnalysis {
     text: String,
     /// Bidi levels for each byte position (matching BidiInfo).
     levels: Vec<Level>,
+    /// Paragraph boundaries in byte offsets with their base level.
+    paragraphs: Vec<ParagraphBoundary>,
     /// Byte offsets for each character in the source text.
     char_starts: Vec<usize>,
     /// Base paragraph level.
     base_level: Level,
     /// Whether the text contains RTL content requiring reordering.
     needs_reordering: bool,
+}
+
+/// Paragraph boundaries derived from bidi analysis.
+#[derive(Debug, Clone, Copy)]
+pub struct ParagraphBoundary {
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub level: Level,
 }
 
 impl BidiAnalysis {
@@ -394,6 +404,7 @@ impl BidiAnalysis {
             return Self {
                 text: String::new(),
                 levels: Vec::new(),
+                paragraphs: Vec::new(),
                 char_starts: Vec::new(),
                 base_level,
                 needs_reordering: false,
@@ -430,9 +441,29 @@ impl BidiAnalysis {
             needs_reordering = false;
         }
 
+        let text_len = text.len();
+        let paragraphs = bidi_info
+            .paragraphs
+            .iter()
+            .map(|p| {
+                let start_byte = *char_starts.get(p.range.start).unwrap_or(&text_len);
+                let end_byte = if p.range.end < char_starts.len() {
+                    char_starts[p.range.end]
+                } else {
+                    text_len
+                };
+                ParagraphBoundary {
+                    start_byte,
+                    end_byte,
+                    level: p.level,
+                }
+            })
+            .collect();
+
         Self {
             text,
             levels,
+            paragraphs,
             char_starts,
             base_level,
             needs_reordering,
@@ -474,6 +505,12 @@ impl BidiAnalysis {
     #[inline]
     pub fn base_direction(&self) -> Direction {
         Direction::from_level(self.base_level)
+    }
+
+    /// Paragraph boundaries detected during bidi analysis.
+    #[inline]
+    pub fn paragraphs(&self) -> &[ParagraphBoundary] {
+        &self.paragraphs
     }
 }
 
@@ -1773,7 +1810,7 @@ impl ShapingPipeline {
 
         // Step 5: Reorder for bidi if needed
         if bidi.needs_reordering() {
-            reorder_runs(&mut shaped_runs);
+            reorder_runs(&mut shaped_runs, bidi.paragraphs());
         }
 
         Ok(shaped_runs)
@@ -1892,33 +1929,55 @@ impl ShapingPipeline {
 /// Reorders shaped runs for bidi display.
 ///
 /// Implements visual reordering based on bidi levels.
-fn reorder_runs(runs: &mut [ShapedRun]) {
+fn reorder_runs(runs: &mut [ShapedRun], paragraphs: &[ParagraphBoundary]) {
     if runs.is_empty() {
         return;
     }
 
-    // Find the maximum level
-    let max_level = runs.iter().map(|r| r.level).max().unwrap_or(0);
+    fn reorder_slice(slice: &mut [ShapedRun]) {
+        if slice.is_empty() {
+            return;
+        }
 
-    // Reverse runs at each level, from highest to lowest
-    for level in (1..=max_level).rev() {
-        let mut start: Option<usize> = None;
-
-        for i in 0..runs.len() {
-            if runs[i].level >= level {
-                if start.is_none() {
-                    start = Some(i);
+        let max_level = slice.iter().map(|r| r.level).max().unwrap_or(0);
+        for level in (1..=max_level).rev() {
+            let mut start: Option<usize> = None;
+            for i in 0..slice.len() {
+                if slice[i].level >= level {
+                    start.get_or_insert(i);
+                } else if let Some(s) = start {
+                    slice[s..i].reverse();
+                    start = None;
                 }
-            } else if let Some(s) = start {
-                runs[s..i].reverse();
-                start = None;
+            }
+            if let Some(s) = start {
+                slice[s..].reverse();
             }
         }
+    }
 
-        // Handle end of runs
-        if let Some(s) = start {
-            runs[s..].reverse();
+    if paragraphs.is_empty() {
+        reorder_slice(runs);
+        return;
+    }
+
+    let mut idx = 0;
+    for para in paragraphs {
+        while idx < runs.len() && runs[idx].end <= para.start_byte {
+            idx += 1;
         }
+        let mut end = idx;
+        while end < runs.len() && runs[end].start < para.end_byte {
+            end += 1;
+        }
+        if idx < end {
+            reorder_slice(&mut runs[idx..end]);
+        }
+        idx = end;
+    }
+
+    if idx < runs.len() {
+        reorder_slice(&mut runs[idx..]);
     }
 }
 
@@ -2002,6 +2061,7 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use ttf_parser::name_id;
+    use unicode_bidi::Level;
 
     fn load_variable_font() -> (FontContext, String) {
         let font_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fonts/RobotoFlex-VF.ttf");
@@ -2333,8 +2393,75 @@ mod tests {
     #[test]
     fn test_reorder_runs_empty() {
         let mut runs: Vec<ShapedRun> = Vec::new();
-        reorder_runs(&mut runs);
+        reorder_runs(&mut runs, &[]);
         assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn bidi_analysis_records_paragraph_boundaries() {
+        let mut style = ComputedStyle::default();
+        style.direction = CssDirection::Ltr;
+        let text = "abc\nאבג";
+
+        let analysis = BidiAnalysis::analyze(text, &style);
+        let paragraphs = analysis.paragraphs();
+        assert_eq!(paragraphs.len(), 2);
+        assert_eq!(paragraphs[0].start_byte, 0);
+        assert!(paragraphs[0].end_byte > paragraphs[0].start_byte);
+        assert_eq!(paragraphs[1].start_byte, paragraphs[0].end_byte);
+        assert_eq!(paragraphs[1].end_byte, text.len());
+    }
+
+    #[test]
+    fn reorder_runs_respects_paragraph_boundaries() {
+        fn run(start: usize, end: usize, level: u8) -> ShapedRun {
+            ShapedRun {
+                text: String::new(),
+                start,
+                end,
+                glyphs: Vec::new(),
+                direction: if level % 2 == 0 {
+                    Direction::LeftToRight
+                } else {
+                    Direction::RightToLeft
+                },
+                level,
+                advance: 0.0,
+                font: Arc::new(LoadedFont {
+                    family: "Test".to_string(),
+                    data: Arc::new(Vec::new()),
+                    index: 0,
+                    weight: FontWeight::NORMAL,
+                    style: DbFontStyle::Normal,
+                    stretch: DbFontStretch::Normal,
+                }),
+                font_size: 16.0,
+                language: None,
+                synthetic_bold: 0.0,
+                synthetic_oblique: 0.0,
+                rotation: RunRotation::None,
+                scale: 1.0,
+            }
+        }
+
+        // Two paragraphs whose runs all share the same level; reordering should not swap paragraphs.
+        let mut runs = vec![run(0, 3, 1), run(3, 6, 1)];
+        let paragraphs = vec![
+            ParagraphBoundary {
+                start_byte: 0,
+                end_byte: 3,
+                level: Level::ltr(),
+            },
+            ParagraphBoundary {
+                start_byte: 3,
+                end_byte: 6,
+                level: Level::ltr(),
+            },
+        ];
+
+        reorder_runs(&mut runs, &paragraphs);
+        assert_eq!(runs[0].start, 0);
+        assert_eq!(runs[1].start, 3);
     }
 
     #[test]
