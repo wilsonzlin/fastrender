@@ -910,9 +910,16 @@ impl TableStructure {
         let mut row_min_heights: Vec<Option<SpecifiedHeight>> = Vec::new();
         let mut row_max_heights: Vec<Option<SpecifiedHeight>> = Vec::new();
         let mut row_visibilities: Vec<Visibility> = Vec::new();
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        enum RowGroupKind {
+            Head,
+            Body,
+            Foot,
+        }
+        let mut row_kinds: Vec<RowGroupKind> = Vec::new();
 
         // Collect all cells first
-        let mut cell_data: Vec<(usize, usize, usize, usize, usize)> = Vec::new(); // (row, col, rowspan, colspan, box_idx)
+        let mut cell_data: Vec<(usize, usize, usize, usize, usize)> = Vec::new(); // (source_row, col, rowspan, colspan, box_idx)
 
         // Track explicit columns from <col>/<colgroup> to honor Tables spec that the number of columns
         // is the maximum of col elements and the actual grid.
@@ -957,6 +964,11 @@ impl TableStructure {
         for (child_idx, child) in table_box.children.iter().enumerate() {
             match Self::get_table_element_type(child) {
                 TableElementType::RowGroup | TableElementType::HeaderGroup | TableElementType::FooterGroup => {
+                    let kind = match Self::get_table_element_type(child) {
+                        TableElementType::HeaderGroup => RowGroupKind::Head,
+                        TableElementType::FooterGroup => RowGroupKind::Foot,
+                        _ => RowGroupKind::Body,
+                    };
                     let group_visibility = child.style.visibility;
                     // Process rows within the group
                     for (row_child_idx, row_child) in child.children.iter().enumerate() {
@@ -979,6 +991,7 @@ impl TableStructure {
                                 row_child.style.visibility
                             };
                             row_visibilities.push(row_visibility);
+                            row_kinds.push(kind);
                             row_heights.push(spec_height);
                             row_min_heights.push(min_h);
                             row_max_heights.push(max_h);
@@ -1000,6 +1013,7 @@ impl TableStructure {
                     let max_h =
                         Self::length_to_specified_height_opt(child.style.max_height.as_ref(), child.style.font_size);
                     row_visibilities.push(child.style.visibility);
+                    row_kinds.push(RowGroupKind::Body);
                     row_heights.push(spec_height);
                     row_min_heights.push(min_h);
                     row_max_heights.push(max_h);
@@ -1013,6 +1027,43 @@ impl TableStructure {
                 _ => {}
             }
         }
+
+        // Reorder rows to honor header/footer placement: headers first, then bodies, then footers (each in DOM order).
+        let mut header_rows = Vec::new();
+        let mut body_rows = Vec::new();
+        let mut footer_rows = Vec::new();
+        for (idx, kind) in row_kinds.iter().enumerate() {
+            match kind {
+                RowGroupKind::Head => header_rows.push(idx),
+                RowGroupKind::Foot => footer_rows.push(idx),
+                RowGroupKind::Body => body_rows.push(idx),
+            }
+        }
+        let mut row_order: Vec<usize> = Vec::with_capacity(current_row);
+        row_order.extend(header_rows);
+        row_order.extend(body_rows);
+        row_order.extend(footer_rows);
+        let mut row_index_map = vec![0usize; current_row];
+        for (new_idx, old_idx) in row_order.iter().enumerate() {
+            row_index_map[*old_idx] = new_idx;
+        }
+
+        let reorder_vec = |vec: &mut Vec<Option<SpecifiedHeight>>| {
+            let mut reordered = Vec::with_capacity(vec.len());
+            for idx in &row_order {
+                reordered.push(vec.get(*idx).cloned().unwrap_or(None));
+            }
+            *vec = reordered;
+        };
+        reorder_vec(&mut row_heights);
+        reorder_vec(&mut row_min_heights);
+        reorder_vec(&mut row_max_heights);
+
+        let mut reordered_vis = Vec::with_capacity(row_visibilities.len());
+        for idx in &row_order {
+            reordered_vis.push(row_visibilities.get(*idx).cloned().unwrap_or(Visibility::Visible));
+        }
+        row_visibilities = reordered_vis;
 
         structure.row_count = current_row;
         structure.column_count = max_cols.max(explicit_columns);
@@ -1108,7 +1159,9 @@ impl TableStructure {
             row.author_min_height = row_min_heights.get(i).cloned().unwrap_or(None);
             row.author_max_height = row_max_heights.get(i).cloned().unwrap_or(None);
             row.visibility = row_visibilities.get(i).cloned().unwrap_or(Visibility::Visible);
-            row.source_index = i;
+            // Preserve the original DOM order for source_index so style lookups remain stable.
+            let source_idx = row_order.get(i).copied().unwrap_or(i);
+            row.source_index = source_idx;
             structure.rows.push(row);
         }
 
@@ -1116,14 +1169,23 @@ impl TableStructure {
         structure.grid = vec![vec![None; structure.column_count]; structure.row_count];
 
         // Create cells and populate grid
-        for (idx, (row, col, rowspan, colspan, box_idx)) in cell_data.iter().enumerate() {
-            let mut cell = CellInfo::new(idx, *row, *col);
+        let remapped_cells: Vec<(usize, usize, usize, usize, usize, usize)> = cell_data
+            .iter()
+            .map(|(source_row, col, rowspan, colspan, box_idx)| {
+                let new_row = row_index_map.get(*source_row).copied().unwrap_or(*source_row);
+                (*source_row, new_row, *col, *rowspan, *colspan, *box_idx)
+            })
+            .collect();
+
+        for (idx, (source_row, new_row, col, rowspan, colspan, box_idx)) in remapped_cells.iter().enumerate() {
+            let mut cell = CellInfo::new(idx, *source_row, *col);
+            cell.row = *new_row;
             cell.rowspan = *rowspan;
             cell.colspan = *colspan;
             cell.box_index = *box_idx;
 
             // Mark grid cells
-            for r in *row..(*row + *rowspan).min(structure.row_count) {
+            for r in *new_row..(*new_row + *rowspan).min(structure.row_count) {
                 for c in *col..(*col + *colspan).min(structure.column_count) {
                     structure.grid[r][c] = Some(idx);
                 }
@@ -3213,9 +3275,7 @@ impl FormattingContext for TableFormattingContext {
             content_base
         };
 
-        let percent_height_base = table_height
-            .or(containing_height)
-            .map(|base| compute_percent_height_base(base));
+        let percent_height_base = table_height.map(|base| compute_percent_height_base(base));
 
         let row_floor = |idx: usize, current: f32| -> f32 {
             let row = structure.rows.get(idx);
@@ -3290,9 +3350,7 @@ impl FormattingContext for TableFormattingContext {
         // Preserve the content-driven minimums so later distribution never shrinks below cell content.
         let content_min_heights = row_heights.clone();
 
-        let percent_height_base = table_height
-            .or(containing_height)
-            .map(|base| compute_percent_height_base(base));
+        let percent_height_base = table_height.map(|base| compute_percent_height_base(base));
 
         // Enforce row-specified minimums (length or percentage of table height) and percent targets.
         for (idx, row) in structure.rows.iter().enumerate() {
@@ -6457,10 +6515,11 @@ mod tests {
         structure.rows[0].specified_height = Some(SpecifiedHeight::Percent(50.0));
         structure.rows[1].specified_height = Some(SpecifiedHeight::Auto);
 
-        calculate_row_heights(&mut structure, Some(200.0));
+        // Without an explicit table height, percentage rows should not resolve against an available height.
+        calculate_row_heights(&mut structure, None);
 
-        assert!((structure.rows[0].computed_height - 100.0).abs() < 0.5);
-        assert!((structure.rows[1].computed_height - 100.0).abs() < 0.5);
+        assert!(structure.rows[0].computed_height < 5.0);
+        assert!(structure.rows[1].computed_height < 5.0);
     }
 
     #[test]
