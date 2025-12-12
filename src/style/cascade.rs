@@ -2175,6 +2175,41 @@ mod tests {
     }
 
     #[test]
+    fn marker_allows_font_shorthand() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "ul".to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            }],
+        };
+
+        let stylesheet = parse_stylesheet(
+            r#"
+            li::marker {
+                font: italic 700 18px/2 "Example";
+            }
+        "#,
+        )
+        .unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        let li = styled.children.first().expect("li");
+        let marker = li.marker_styles.as_ref().expect("marker styles");
+
+        assert_eq!(marker.font_size, 18.0);
+        assert!(matches!(marker.font_style, crate::style::types::FontStyle::Italic));
+        assert_eq!(marker.font_weight.to_u16(), 700);
+        assert_eq!(marker.font_family.first().map(|s| s.as_str()), Some("Example"));
+    }
+
+    #[test]
     fn marker_author_overrides_ua_defaults() {
         let dom = DomNode {
             node_type: DomNodeType::Element {
@@ -2906,6 +2941,11 @@ fn marker_allows_property(property: &str) -> bool {
         p.as_str(),
         "content" | "direction" | "unicode-bidi" | "text-combine-upright"
     ) {
+        return true;
+    }
+
+    // Font shorthand is allowed; individual font-* longhands are covered below.
+    if p == "font" {
         return true;
     }
 
