@@ -11,7 +11,7 @@ use crate::paint::canvas::Canvas;
 use crate::paint::display_list::{
     BlendMode, BorderImageItem, BorderImageSourceItem, BorderItem, BorderRadii, BorderSide, BoxShadowItem, ClipItem,
     ConicGradientItem, DecorationPaint, DecorationStroke, DisplayItem, DisplayList, EmphasisMark, FillRectItem, FontId,
-    GlyphInstance, ImageData, ImageItem, LinearGradientItem, ListMarkerItem, OpacityItem, OutlineItem,
+    GlyphInstance, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, ListMarkerItem, OpacityItem, OutlineItem,
     RadialGradientItem, ResolvedFilter, StrokeRectItem, TextEmphasis, TextItem, TextShadowItem, TransformItem,
 };
 use crate::paint::rasterize::{fill_rounded_rect, render_box_shadow, BoxShadow};
@@ -2530,7 +2530,7 @@ impl DisplayListRenderer {
     }
 
     fn render_image(&mut self, item: &ImageItem) -> Result<()> {
-        let dest_rect = self.ds_rect(item.dest_rect);
+        let mut dest_rect = self.ds_rect(item.dest_rect);
         if let Some(clip) = self.canvas.clip_bounds() {
             if clip.width() <= 0.0 || clip.height() <= 0.0 || clip.intersection(dest_rect).is_none() {
                 return Ok(());
@@ -2543,6 +2543,27 @@ impl DisplayListRenderer {
 
         if dest_rect.width() <= 0.0 || dest_rect.height() <= 0.0 {
             return Ok(());
+        }
+
+        if matches!(item.filter_quality, ImageFilterQuality::Nearest)
+            && (dest_rect.width() > pixmap.width() as f32 || dest_rect.height() > pixmap.height() as f32)
+        {
+            let snap = |dest: f32, raw: f32| -> (f32, f32) {
+                if raw <= 0.0 {
+                    return (dest, 0.0);
+                }
+                let scale = dest / raw;
+                if scale <= 1.0 {
+                    return (dest, 0.0);
+                }
+                let snapped = (scale.floor().max(1.0)) * raw;
+                let snapped = snapped.min(dest);
+                let offset = (dest - snapped) * 0.5;
+                (snapped, offset)
+            };
+            let (snapped_w, offset_x) = snap(dest_rect.width(), pixmap.width() as f32);
+            let (snapped_h, offset_y) = snap(dest_rect.height(), pixmap.height() as f32);
+            dest_rect = Rect::from_xywh(dest_rect.x() + offset_x, dest_rect.y() + offset_y, snapped_w, snapped_h);
         }
 
         let paint = tiny_skia::PixmapPaint {
@@ -3558,6 +3579,32 @@ mod tests {
         assert_eq!(pixel(&pixmap, 0, 0), (0, 255, 0, 255));
         // Bottom-left pixel should come from yellow.
         assert_eq!(pixel(&pixmap, 0, 3), (255, 255, 0, 255));
+    }
+
+    #[test]
+    fn pixelated_nearest_snaps_upscale_to_integer_factor() {
+        let pixels = vec![
+            0, 0, 0, 255, 0, 0, 0, 255, // 2x1 black strip
+        ];
+        let image = Arc::new(ImageData::new_pixels(2, 1, pixels));
+
+        let mut list = DisplayList::new();
+        list.push(DisplayItem::Image(ImageItem {
+            dest_rect: Rect::from_xywh(0.0, 0.0, 5.0, 1.0),
+            image: image.clone(),
+            filter_quality: ImageFilterQuality::Nearest,
+            src_rect: None,
+        }));
+
+        let pixmap = DisplayListRenderer::new(5, 1, Rgba::WHITE, FontContext::new())
+            .unwrap()
+            .render(&list)
+            .unwrap();
+
+        // Snapped scaling shrinks to a 2x integer factor (4px) centered in the 5px box.
+        assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
+        assert_eq!(pixel(&pixmap, 1, 0), (0, 0, 0, 255));
+        assert_eq!(pixel(&pixmap, 4, 0), (0, 0, 0, 255));
     }
 
     #[test]

@@ -2805,7 +2805,7 @@ impl Painter {
         let fit = style.map(|s| s.object_fit).unwrap_or(ObjectFit::Fill);
         let pos = style.map(|s| s.object_position).unwrap_or(default_object_position());
 
-        let (dest_x, dest_y, dest_w, dest_h) = match compute_object_fit(
+        let (dest_x, dest_y, mut dest_w, mut dest_h) = match compute_object_fit(
             fit,
             pos,
             width,
@@ -2818,6 +2818,56 @@ impl Painter {
             Some(v) => v,
             None => return false,
         };
+
+        if matches!(
+            style.map(|s| s.image_rendering),
+            Some(ImageRendering::Pixelated | ImageRendering::CrispEdges)
+        ) && (dest_w > img_w_raw as f32 || dest_h > img_h_raw as f32)
+        {
+            let snap = |dest: f32, raw: f32| -> (f32, f32) {
+                if raw <= 0.0 {
+                    return (dest, 0.0);
+                }
+                let scale = dest / raw;
+                if scale <= 1.0 {
+                    return (dest, 0.0);
+                }
+                let snapped = (scale.floor().max(1.0)) * raw;
+                let snapped = snapped.min(dest);
+                let offset = (dest - snapped) * 0.5;
+                (snapped, offset)
+            };
+            let (snapped_w, offset_x) = snap(dest_w, img_w_raw as f32);
+            let (snapped_h, offset_y) = snap(dest_h, img_h_raw as f32);
+            dest_w = snapped_w;
+            dest_h = snapped_h;
+            let dest_x = dest_x + offset_x;
+            let dest_y = dest_y + offset_y;
+            let dest_x = self.device_length(dest_x);
+            let dest_y = self.device_length(dest_y);
+            let dest_w = self.device_length(dest_w);
+            let dest_h = self.device_length(dest_h);
+
+            let scale_x = dest_w / img_w_raw as f32;
+            let scale_y = dest_h / img_h_raw as f32;
+            if !scale_x.is_finite() || !scale_y.is_finite() || dest_w <= 0.0 || dest_h <= 0.0 {
+                return false;
+            }
+
+            let mut paint = PixmapPaint::default();
+            paint.quality = Self::filter_quality_for_image(style);
+
+            let transform = Transform::from_row(
+                scale_x,
+                0.0,
+                0.0,
+                scale_y,
+                self.device_length(x) + dest_x,
+                self.device_length(y) + dest_y,
+            );
+            self.pixmap.draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);
+            return true;
+        }
 
         let dest_x = self.device_length(dest_x);
         let dest_y = self.device_length(dest_y);
@@ -2890,7 +2940,7 @@ impl Painter {
         let fit = style.map(|s| s.object_fit).unwrap_or(ObjectFit::Fill);
         let pos = style.map(|s| s.object_position).unwrap_or(default_object_position());
 
-        let (dest_x, dest_y, dest_w, dest_h) = match compute_object_fit(
+        let (dest_x, dest_y, mut dest_w, mut dest_h) = match compute_object_fit(
             fit,
             pos,
             width,
@@ -2903,6 +2953,56 @@ impl Painter {
             Some(v) => v,
             None => return false,
         };
+
+        if matches!(
+            style.map(|s| s.image_rendering),
+            Some(ImageRendering::Pixelated | ImageRendering::CrispEdges)
+        ) && (dest_w > img_w_raw as f32 || dest_h > img_h_raw as f32)
+        {
+            let snap = |dest: f32, raw: f32| -> (f32, f32) {
+                if raw <= 0.0 {
+                    return (dest, 0.0);
+                }
+                let scale = dest / raw;
+                if scale <= 1.0 {
+                    return (dest, 0.0);
+                }
+                let snapped = (scale.floor().max(1.0)) * raw;
+                let snapped = snapped.min(dest);
+                let offset = (dest - snapped) * 0.5;
+                (snapped, offset)
+            };
+            let (snapped_w, offset_x) = snap(dest_w, img_w_raw as f32);
+            let (snapped_h, offset_y) = snap(dest_h, img_h_raw as f32);
+            dest_w = snapped_w;
+            dest_h = snapped_h;
+            let dest_x = dest_x + offset_x;
+            let dest_y = dest_y + offset_y;
+            let dest_x = self.device_length(dest_x);
+            let dest_y = self.device_length(dest_y);
+            let dest_w = self.device_length(dest_w);
+            let dest_h = self.device_length(dest_h);
+
+            let scale_x = dest_w / img_w_raw as f32;
+            let scale_y = dest_h / img_h_raw as f32;
+            if !scale_x.is_finite() || !scale_y.is_finite() || dest_w <= 0.0 || dest_h <= 0.0 {
+                return false;
+            }
+
+            let mut paint = PixmapPaint::default();
+            paint.quality = Self::filter_quality_for_image(style);
+
+            let transform = Transform::from_row(
+                scale_x,
+                0.0,
+                0.0,
+                scale_y,
+                self.device_length(x) + dest_x,
+                self.device_length(y) + dest_y,
+            );
+            self.pixmap.draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);
+            return true;
+        }
 
         let dest_x = self.device_length(dest_x);
         let dest_y = self.device_length(dest_y);
