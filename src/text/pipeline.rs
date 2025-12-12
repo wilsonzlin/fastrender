@@ -1097,8 +1097,8 @@ fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f
 fn slope_preference_order(style: FontStyle) -> &'static [FontStyle] {
     match style {
         FontStyle::Normal => &[FontStyle::Normal],
-        FontStyle::Italic => &[FontStyle::Italic, FontStyle::Oblique],
-        FontStyle::Oblique => &[FontStyle::Oblique, FontStyle::Italic],
+        FontStyle::Italic => &[FontStyle::Italic, FontStyle::Oblique, FontStyle::Normal],
+        FontStyle::Oblique => &[FontStyle::Oblique, FontStyle::Italic, FontStyle::Normal],
     }
 }
 
@@ -2685,11 +2685,11 @@ mod tests {
         assert_eq!(slope_preference_order(DbStyle::Normal), &[DbStyle::Normal]);
         assert_eq!(
             slope_preference_order(DbStyle::Italic),
-            &[DbStyle::Italic, DbStyle::Oblique]
+            &[DbStyle::Italic, DbStyle::Oblique, DbStyle::Normal]
         );
         assert_eq!(
             slope_preference_order(DbStyle::Oblique),
-            &[DbStyle::Oblique, DbStyle::Italic]
+            &[DbStyle::Oblique, DbStyle::Italic, DbStyle::Normal]
         );
     }
 
