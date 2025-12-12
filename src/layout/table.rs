@@ -1039,6 +1039,11 @@ impl TableStructure {
         row_order.extend(header_rows);
         row_order.extend(body_rows);
         row_order.extend(footer_rows);
+        // Store mapping so row order influences grid mapping and painting while source indices remain DOM-ordered.
+        let mut row_index_map = vec![0usize; current_row];
+        for (new_idx, old_idx) in row_order.iter().enumerate() {
+            row_index_map[*old_idx] = new_idx;
+        }
         let mut row_index_map = vec![0usize; current_row];
         for (new_idx, old_idx) in row_order.iter().enumerate() {
             row_index_map[*old_idx] = new_idx;
