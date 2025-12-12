@@ -4117,18 +4117,34 @@ impl InlineFormattingContext {
         let total_height_lines: f32 = lines.iter().map(|l| l.y_offset + l.height).fold(0.0, f32::max);
         let blocks_bottom = block_fragments.iter().map(|f| f.bounds.max_y()).fold(0.0, f32::max);
         let total_height = total_height_lines.max(max_float_bottom).max(blocks_bottom);
-        let line_max_width = lines
+        let line_max_inline = lines
             .iter()
             .map(|l| (l.left_offset + l.box_width).max(l.left_offset + l.width + indent_value.abs()))
             .fold(0.0, f32::max);
-        let float_max_width = float_fragments
+        let float_max_inline = float_fragments
             .iter()
             .map(|f| f.bounds.x() + f.bounds.width())
             .fold(0.0, f32::max);
-        let max_width: f32 = if available_inline.is_finite() {
+        let inline_extent = if available_inline.is_finite() {
             available_inline
         } else {
-            line_max_width.max(float_max_width).max(block_run_max_width)
+            line_max_inline.max(float_max_inline)
+        };
+        let block_extent = total_height.max(block_run_max_width);
+        let container_block_extent = if inline_vertical {
+            constraints.width().unwrap_or(block_extent)
+        } else {
+            block_extent.min(available_inline)
+        };
+
+        // Compute block shift for vertical-rl so block-start aligns to the right edge when a definite block size exists.
+        let block_shift = if inline_vertical
+            && matches!(style.writing_mode, crate::style::types::WritingMode::VerticalRl)
+            && container_block_extent.is_finite()
+        {
+            (container_block_extent - block_extent).max(0.0)
+        } else {
+            0.0
         };
 
         // Create fragments
@@ -4185,11 +4201,18 @@ impl InlineFormattingContext {
                 // Anchor static position to the hypothetical inline box origin: start of the line and
                 // the strut baseline offset applied to the line's baseline.
                 let start_y = first_line.y_offset + first_line.baseline - strut_metrics.baseline_offset;
-                if inline_vertical {
+                let mut pos = if inline_vertical {
                     Point::new(start_y, start_x)
                 } else {
                     Point::new(start_x, start_y)
+                };
+                if inline_vertical
+                    && matches!(style.writing_mode, crate::style::types::WritingMode::VerticalRl)
+                    && block_shift.abs() > f32::EPSILON
+                {
+                    pos = Point::new(pos.x + block_shift, pos.y);
                 }
+                pos
             } else {
                 Point::ZERO
             };
@@ -4227,10 +4250,15 @@ impl InlineFormattingContext {
         }
 
         // Create containing fragment
+        if block_shift.abs() > f32::EPSILON {
+            for child in &mut merged_children {
+                *child = child.translate(Point::new(block_shift, 0.0));
+            }
+        }
         let bounds = if inline_vertical {
-            Rect::from_xywh(0.0, 0.0, total_height, max_width.min(available_inline))
+            Rect::from_xywh(0.0, 0.0, container_block_extent.max(block_extent), inline_extent)
         } else {
-            Rect::from_xywh(0.0, 0.0, max_width.min(available_inline), total_height)
+            Rect::from_xywh(0.0, 0.0, inline_extent.min(available_inline), total_height)
         };
 
         // Position out-of-flow abs/fixed children against the containing block.
