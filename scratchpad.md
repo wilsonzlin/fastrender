@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Table intrinsic sizing now honors column hints even without rows: fixed/percent column widths feed min/max constraints, spans expand intrinsic width, and new regressions cover empty tables with column hints and span-driven intrinsic width expansion.
 - Column and column-group spans now expand table column counts: `span` attributes on `<col>`/`<colgroup>` inflate `column_count`, grow ColumnInfo vector, and propagate widths/visibility across each spanned column even when no rows exist. Added regressions for colgroup children, empty colgroups, and col span expansion.
 - Table structure now accounts for explicit columns: `TableStructure::from_box_tree` sets column_count to the max of inferred grid columns and `<col>/<colgroup>` declarations (including empty colgroups), extending column info when colgroups add more columns than rows imply. Added regressions to ensure explicit columns expand the count even with fewer cells or with empty colgroups.
 - text-align-last now feeds per-line alignment: the line fragment builder applies the resolved line alignment (including text-align-last) and respects text-justify when deciding to expand gaps. The last-line justify path now honors `text-justify: none` and a regression locks the non-justified last line.

@@ -2197,9 +2197,15 @@ impl TableFormattingContext {
                     SpecifiedWidth::Fixed(px) => {
                         constraint.fixed_width = Some(px.max(constraint.min_width));
                         constraint.is_flexible = false;
+                        constraint.min_width = constraint.min_width.max(px);
+                        constraint.max_width = constraint.max_width.max(px);
                     }
                     SpecifiedWidth::Percent(pct) if percent_base.is_some() => {
+                        let base = percent_base.unwrap();
+                        let px = (pct / 100.0) * base;
                         constraint.set_percentage(pct);
+                        constraint.min_width = constraint.min_width.max(px);
+                        constraint.max_width = constraint.max_width.max(px);
                     }
                     SpecifiedWidth::Percent(_) => {}
                     SpecifiedWidth::Auto => {}
@@ -6395,6 +6401,50 @@ mod tests {
 
         let width = result.unwrap();
         assert!(width >= 0.0);
+    }
+
+    #[test]
+    fn test_intrinsic_widths_use_column_widths_with_no_rows() {
+        let tfc = TableFormattingContext::new();
+        let mut col_style = ComputedStyle::default();
+        col_style.display = Display::TableColumn;
+        col_style.width = Some(Length::px(25.0));
+        let col = BoxNode::new_block(Arc::new(col_style), FormattingContextType::Block, vec![]);
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![col]);
+
+        let min = tfc
+            .compute_intrinsic_inline_size(&table, IntrinsicSizingMode::MinContent)
+            .unwrap();
+        let max = tfc
+            .compute_intrinsic_inline_size(&table, IntrinsicSizingMode::MaxContent)
+            .unwrap();
+        assert!(min >= 25.0 - 0.1, "min-content should include column width");
+        assert!(max >= 25.0 - 0.1, "max-content should include column width");
+    }
+
+    #[test]
+    fn test_intrinsic_widths_respect_column_span_widths() {
+        let tfc = TableFormattingContext::new();
+        let mut col_style = ComputedStyle::default();
+        col_style.display = Display::TableColumn;
+        col_style.width = Some(Length::px(10.0));
+        let mut col = BoxNode::new_block(Arc::new(col_style), FormattingContextType::Block, vec![]);
+        col.debug_info = Some(DebugInfo::new(Some("col".to_string()), None, vec![]).with_spans(1, 1));
+        col.debug_info.as_mut().unwrap().column_span = 3;
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![col]);
+
+        let min = tfc
+            .compute_intrinsic_inline_size(&table, IntrinsicSizingMode::MinContent)
+            .unwrap();
+        assert!(
+            min >= 30.0 - 0.1,
+            "column span width should expand intrinsic min width; got {}",
+            min
+        );
     }
 
     // -------------------------------------------------------------------------
