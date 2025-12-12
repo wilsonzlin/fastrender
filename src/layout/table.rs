@@ -3187,7 +3187,13 @@ impl FormattingContext for TableFormattingContext {
             }
             if caption_min > 0.0 {
                 let required_content = (caption_min - edge_consumption).max(0.0);
-                available_content = available_content.max(required_content);
+                let capped_required = if let Some(max_w) = max_width {
+                    let max_content = (max_w - spacing - edge_consumption).max(0.0);
+                    required_content.min(max_content)
+                } else {
+                    required_content
+                };
+                available_content = available_content.max(capped_required);
             }
         }
 
@@ -6642,6 +6648,32 @@ mod tests {
             .expect("intrinsic width");
 
         assert!(min >= 119.0, "table intrinsic width should be at least the caption min width");
+    }
+
+    #[test]
+    fn caption_respects_table_max_width() {
+        let mut caption_style = ComputedStyle::default();
+        caption_style.display = Display::TableCaption;
+        caption_style.width = Some(Length::px(400.0));
+        let caption = BoxNode::new_block(
+            Arc::new(caption_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(make_style(Display::Inline), "caption".to_string())],
+        );
+
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.max_width = Some(Length::px(200.0));
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![caption]);
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(&table, &LayoutConstraints::definite_width(800.0))
+            .expect("table layout");
+
+        assert!(fragment.bounds.width() <= 200.1, "caption should not force table past its max width");
     }
 
     #[test]
