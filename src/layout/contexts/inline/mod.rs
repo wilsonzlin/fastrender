@@ -4197,11 +4197,15 @@ fn build_bidi_wrappers(stack: &[(UnicodeBidi, Direction)]) -> (String, String) {
 
     let mut prefix = String::new();
     let mut closers: Vec<Vec<char>> = Vec::new();
+    let mut current_depth = 0usize;
+    let max_depth = unicode_bidi::level::MAX_EXPLICIT_DEPTH as usize;
+
     for (ub, dir) in stack {
         let (opens, closes) = bidi_controls(*ub, *dir);
-        if !opens.is_empty() {
+        if !opens.is_empty() && current_depth < max_depth {
             prefix.extend(opens);
             closers.push(closes);
+            current_depth += 1;
         }
     }
 
@@ -4246,9 +4250,16 @@ fn strip_bidi_wrapper_runs(
             continue;
         }
 
+        let mut cumulative = 0.0;
+        for glyph in &mut glyphs {
+            glyph.x_offset = cumulative;
+            cumulative += glyph.x_advance;
+        }
+
         run.start = run.start.saturating_sub(prefix_len);
         run.end = run.end.min(content_end).saturating_sub(prefix_len);
         run.text = content_text.to_string();
+        run.advance = cumulative;
         run.glyphs = glyphs;
         filtered.push(run);
     }
@@ -4573,6 +4584,7 @@ mod tests {
             .expect("text item");
 
         assert_eq!(item.text, "abc");
+        assert!(item.advance > 0.0);
         for run in &item.runs {
             assert_eq!(run.text, "abc");
             for glyph in &run.glyphs {
