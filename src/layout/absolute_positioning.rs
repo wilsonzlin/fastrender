@@ -296,7 +296,7 @@ impl AbsoluteLayout {
             .resolve_against(cb_width)
             .map(|w| content_size_from_box_sizing(w, total_horizontal_spacing, style.box_sizing));
 
-        // Default margin values (auto resolved after constraint solving)
+        // Default margin values (auto resolved only when the constraint equation includes both edges)
         let margin_left_auto = style.margin_left_auto;
         let margin_right_auto = style.margin_right_auto;
         let mut margin_left = if margin_left_auto { 0.0 } else { style.margin.left };
@@ -357,21 +357,23 @@ impl AbsoluteLayout {
             }
         };
 
-        // Apply auto margin resolution after initial positioning (CSS 2.1 §10.3.7).
-        let left_edge = x - (margin_left + border_left + padding_left);
-        let remaining_without_margins =
-            cb_width - (left_edge + border_left + padding_left + width + padding_right + border_right);
+        // Apply auto margin resolution only when both edges participate in the constraint (CSS 2.1 §10.3.7).
+        if left.is_some() && right.is_some() && specified_width.is_some() {
+            let left_edge = x - (margin_left + border_left + padding_left);
+            let remaining_without_margins =
+                cb_width - (left_edge + border_left + padding_left + width + padding_right + border_right);
 
-        if margin_left_auto && margin_right_auto {
-            let remaining = remaining_without_margins.max(0.0);
-            margin_left = remaining / 2.0;
-            margin_right = remaining - margin_left;
-            x = left_edge + margin_left + border_left + padding_left;
-        } else if margin_left_auto {
-            margin_left = remaining_without_margins - margin_right;
-            x = left_edge + margin_left + border_left + padding_left;
-        } else if margin_right_auto {
-            margin_right = remaining_without_margins - margin_left;
+            if margin_left_auto && margin_right_auto {
+                let remaining = remaining_without_margins.max(0.0);
+                margin_left = remaining / 2.0;
+                margin_right = remaining - margin_left;
+                x = left_edge + margin_left + border_left + padding_left;
+            } else if margin_left_auto {
+                margin_left = remaining_without_margins - margin_right;
+                x = left_edge + margin_left + border_left + padding_left;
+            } else if margin_right_auto {
+                margin_right = remaining_without_margins - margin_left;
+            }
         }
 
         Ok((x, width, margin_left, margin_right))
@@ -460,20 +462,22 @@ impl AbsoluteLayout {
             }
         };
 
-        let top_edge = y - (margin_top + border_top + padding_top);
-        let remaining_without_margins =
-            cb_height - (top_edge + border_top + padding_top + height + padding_bottom + border_bottom);
+        if top.is_some() && bottom.is_some() && specified_height.is_some() {
+            let top_edge = y - (margin_top + border_top + padding_top);
+            let remaining_without_margins =
+                cb_height - (top_edge + border_top + padding_top + height + padding_bottom + border_bottom);
 
-        if margin_top_auto && margin_bottom_auto {
-            let remaining = remaining_without_margins.max(0.0);
-            margin_top = remaining / 2.0;
-            margin_bottom = remaining - margin_top;
-            y = top_edge + margin_top + border_top + padding_top;
-        } else if margin_top_auto {
-            margin_top = remaining_without_margins - margin_bottom;
-            y = top_edge + margin_top + border_top + padding_top;
-        } else if margin_bottom_auto {
-            margin_bottom = remaining_without_margins - margin_top;
+            if margin_top_auto && margin_bottom_auto {
+                let remaining = remaining_without_margins.max(0.0);
+                margin_top = remaining / 2.0;
+                margin_bottom = remaining - margin_top;
+                y = top_edge + margin_top + border_top + padding_top;
+            } else if margin_top_auto {
+                margin_top = remaining_without_margins - margin_bottom;
+                y = top_edge + margin_top + border_top + padding_top;
+            } else if margin_bottom_auto {
+                margin_bottom = remaining_without_margins - margin_top;
+            }
         }
 
         Ok((y, height, margin_top, margin_bottom))
