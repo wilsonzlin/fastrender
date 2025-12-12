@@ -491,10 +491,10 @@ impl AbsoluteLayout {
                 (y, h)
             }
 
-            // top and bottom specified, height is auto (shrink-to-fit)
+            // top and bottom specified, height is auto (fill available space per CSS 2.1)
             (Some(t), None, Some(b)) => {
                 let available = cb_height - t - b - margin_top - margin_bottom - total_vertical_spacing;
-                let height = shrink(available);
+                let height = available.max(0.0);
                 let y = t + margin_top + border_top + padding_top;
                 (y, height)
             }
@@ -782,6 +782,28 @@ mod tests {
             "auto height should fill the space between top and bottom"
         );
         assert_eq!(result.position.y, 25.0);
+    }
+
+    #[test]
+    fn layout_absolute_top_bottom_auto_height_ignores_preferred_block_shrink() {
+        let layout = AbsoluteLayout::new();
+
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.top = LengthOrAuto::px(10.0);
+        style.bottom = LengthOrAuto::px(10.0);
+        style.height = LengthOrAuto::Auto;
+
+        let mut input = AbsoluteLayoutInput::new(style, Size::new(50.0, 50.0), Point::ZERO);
+        input.preferred_min_block_size = Some(20.0);
+        input.preferred_block_size = Some(30.0); // smaller than available
+        let cb = create_containing_block(200.0, 200.0); // available height = 180
+
+        let result = layout.layout_absolute(&input, &cb).unwrap();
+        assert!(
+            (result.size.height - 180.0).abs() < 0.001,
+            "height auto with top/bottom should use available space, not shrink-to-fit preferred block size"
+        );
     }
 
     #[test]
