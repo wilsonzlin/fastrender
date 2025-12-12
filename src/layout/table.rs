@@ -916,7 +916,9 @@ impl TableStructure {
             Body,
             Foot,
         }
-        let mut row_kinds: Vec<RowGroupKind> = Vec::new();
+        let mut header_rows: Vec<usize> = Vec::new();
+        let mut body_rows: Vec<usize> = Vec::new();
+        let mut footer_rows: Vec<usize> = Vec::new();
 
         // Collect all cells first
         let mut cell_data: Vec<(usize, usize, usize, usize, usize)> = Vec::new(); // (source_row, col, rowspan, colspan, box_idx)
@@ -991,10 +993,14 @@ impl TableStructure {
                                 row_child.style.visibility
                             };
                             row_visibilities.push(row_visibility);
-                            row_kinds.push(kind);
                             row_heights.push(spec_height);
                             row_min_heights.push(min_h);
                             row_max_heights.push(max_h);
+                            match kind {
+                                RowGroupKind::Head => header_rows.push(current_row),
+                                RowGroupKind::Foot => footer_rows.push(current_row),
+                                RowGroupKind::Body => body_rows.push(current_row),
+                            }
                             let row_cells =
                                 Self::process_row(row_child, current_row, row_child_idx, &mut structure.grid);
                             for cell in row_cells {
@@ -1013,10 +1019,10 @@ impl TableStructure {
                     let max_h =
                         Self::length_to_specified_height_opt(child.style.max_height.as_ref(), child.style.font_size);
                     row_visibilities.push(child.style.visibility);
-                    row_kinds.push(RowGroupKind::Body);
                     row_heights.push(spec_height);
                     row_min_heights.push(min_h);
                     row_max_heights.push(max_h);
+                    body_rows.push(current_row);
                     let row_cells = Self::process_row(child, current_row, child_idx, &mut structure.grid);
                     for cell in row_cells {
                         max_cols = max_cols.max(cell.1 + cell.3);
@@ -1029,16 +1035,6 @@ impl TableStructure {
         }
 
         // Reorder rows to honor header/footer placement: headers first, then bodies, then footers (each in DOM order).
-        let mut header_rows = Vec::new();
-        let mut body_rows = Vec::new();
-        let mut footer_rows = Vec::new();
-        for (idx, kind) in row_kinds.iter().enumerate() {
-            match kind {
-                RowGroupKind::Head => header_rows.push(idx),
-                RowGroupKind::Foot => footer_rows.push(idx),
-                RowGroupKind::Body => body_rows.push(idx),
-            }
-        }
         let mut row_order: Vec<usize> = Vec::with_capacity(current_row);
         row_order.extend(header_rows);
         row_order.extend(body_rows);
