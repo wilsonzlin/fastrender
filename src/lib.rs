@@ -230,10 +230,10 @@ pub use style::float::{Clear, Float};
 // Paint
 pub use paint::canvas::Canvas;
 pub use paint::display_list::{
-    BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem,
-    FillRoundedRectItem, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem,
-    LinearGradientItem, OpacityItem, RadialGradientItem, StackingContextItem, StrokeRectItem, StrokeRoundedRectItem,
-    TextItem as PaintTextItem, Transform2D, TransformItem,
+    BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, ConicGradientItem, DisplayItem, DisplayList,
+    FillRectItem, FillRoundedRectItem, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality,
+    ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem, StackingContextItem, StrokeRectItem,
+    StrokeRoundedRectItem, TextItem as PaintTextItem, Transform2D, TransformItem,
 };
 pub use paint::optimize::{DisplayListOptimizer, OptimizationConfig};
 pub use paint::stacking::{

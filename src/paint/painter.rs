@@ -1244,6 +1244,42 @@ impl Painter {
                     layer.blend_mode,
                 );
             }
+            BackgroundImage::ConicGradient {
+                from_angle,
+                position,
+                stops,
+            } => {
+                let resolved = normalize_color_stops_unclamped(stops, style.color);
+                self.paint_conic_gradient(
+                    origin_rect_css,
+                    clip_rect_css,
+                    clip_mask.as_ref(),
+                    position,
+                    *from_angle,
+                    &resolved,
+                    false,
+                    style.font_size,
+                    layer.blend_mode,
+                );
+            }
+            BackgroundImage::RepeatingConicGradient {
+                from_angle,
+                position,
+                stops,
+            } => {
+                let resolved = normalize_color_stops_unclamped(stops, style.color);
+                self.paint_conic_gradient(
+                    origin_rect_css,
+                    clip_rect_css,
+                    clip_mask.as_ref(),
+                    position,
+                    *from_angle,
+                    &resolved,
+                    true,
+                    style.font_size,
+                    layer.blend_mode,
+                );
+            }
             BackgroundImage::None => {
                 return;
             }
@@ -1426,6 +1462,70 @@ impl Painter {
                 clip_mask,
             );
         }
+    }
+
+    fn paint_conic_gradient(
+        &mut self,
+        gradient_rect: Rect,
+        paint_rect: Rect,
+        clip_mask: Option<&Mask>,
+        position: &BackgroundPosition,
+        from_angle_deg: f32,
+        stops: &[(f32, Rgba)],
+        repeating: bool,
+        font_size: f32,
+        blend_mode: MixBlendMode,
+    ) {
+        if stops.is_empty() {
+            return;
+        }
+        let paint_rect = self.device_rect(paint_rect);
+        let gradient_rect = self.device_rect(gradient_rect);
+        let width = paint_rect.width().ceil() as u32;
+        let height = paint_rect.height().ceil() as u32;
+        if width == 0 || height == 0 {
+            return;
+        }
+
+        let center = resolve_gradient_center(gradient_rect, position, paint_rect, font_size);
+        let mut pix = match Pixmap::new(width, height) {
+            Some(p) => p,
+            None => return,
+        };
+
+        let start_angle = from_angle_deg.to_radians();
+        let period = if repeating {
+            stops.last().map(|(p, _)| *p).unwrap_or(1.0).max(1e-6)
+        } else {
+            1.0
+        };
+
+        let data = pix.pixels_mut();
+        let transparent = PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
+        for y in 0..height {
+            for x in 0..width {
+                let dx = x as f32 + 0.5 - center.x;
+                let dy = y as f32 + 0.5 - center.y;
+                let angle = dx.atan2(-dy) + start_angle;
+                let mut t = (angle / (2.0 * std::f32::consts::PI)).rem_euclid(1.0);
+                t *= period;
+                let color = sample_stops(stops, t, repeating, period);
+                let idx = (y * width + x) as usize;
+                data[idx] = PremultipliedColorU8::from_rgba(
+                    color.r,
+                    color.g,
+                    color.b,
+                    (color.a * 255.0).round().clamp(0.0, 255.0) as u8,
+                )
+                .unwrap_or(transparent);
+            }
+        }
+
+        let mut paint = PixmapPaint::default();
+        paint.blend_mode = map_blend_mode(blend_mode);
+        let transform = Transform::from_translate(paint_rect.x(), paint_rect.y());
+        self.pixmap
+            .draw_pixmap(0, 0, pix.as_ref(), &paint, transform, clip_mask.cloned().as_ref());
     }
 
     fn paint_radial_gradient(
@@ -4519,6 +4619,62 @@ fn normalize_color_stops(stops: &[ColorStop], current_color: Rgba) -> Vec<(f32, 
     output
 }
 
+fn normalize_color_stops_unclamped(stops: &[ColorStop], current_color: Rgba) -> Vec<(f32, Rgba)> {
+    if stops.is_empty() {
+        return Vec::new();
+    }
+    let mut positions: Vec<Option<f32>> = stops.iter().map(|s| s.position).collect();
+    if positions.iter().all(|p| p.is_none()) {
+        if stops.len() == 1 {
+            return vec![(0.0, stops[0].color.to_rgba(current_color))];
+        }
+        let denom = (stops.len() - 1) as f32;
+        return stops
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (i as f32 / denom, s.color.to_rgba(current_color)))
+            .collect();
+    }
+    if positions.first().and_then(|p| *p).is_none() {
+        positions[0] = Some(0.0);
+    }
+    if positions.last().and_then(|p| *p).is_none() {
+        if let Some(last) = positions.last_mut() {
+            *last = Some(1.0);
+        }
+    }
+    let mut last_known: Option<(usize, f32)> = None;
+    for i in 0..positions.len() {
+        if let Some(pos) = positions[i] {
+            if let Some((start_idx, start_pos)) = last_known {
+                let gap = i.saturating_sub(start_idx + 1);
+                if gap > 0 {
+                    let step = (pos - start_pos) / (gap as f32 + 1.0);
+                    for j in 1..=gap {
+                        positions[start_idx + j] = Some(start_pos + step * j as f32);
+                    }
+                }
+            } else if i > 0 {
+                let gap = i;
+                let step = pos / gap as f32;
+                for j in 0..i {
+                    positions[j] = Some(step * j as f32);
+                }
+            }
+            last_known = Some((i, pos));
+        }
+    }
+    let mut output = Vec::with_capacity(stops.len());
+    let mut prev = 0.0;
+    for (idx, pos_opt) in positions.into_iter().enumerate() {
+        let pos = pos_opt.unwrap_or(prev);
+        let monotonic = pos.max(prev);
+        prev = monotonic;
+        output.push((monotonic, stops[idx].color.to_rgba(current_color)));
+    }
+    output
+}
+
 fn radial_geometry(
     rect: Rect,
     position: &BackgroundPosition,
@@ -4604,6 +4760,57 @@ fn radial_geometry(
 
     (cx, cy, radius_x.max(0.0), radius_y.max(0.0))
 }
+
+fn resolve_gradient_center(rect: Rect, position: &BackgroundPosition, paint_rect: Rect, font_size: f32) -> Point {
+    let (align_x, off_x, align_y, off_y) = match position {
+        BackgroundPosition::Position { x, y } => {
+            let ox = resolve_length_for_paint(&x.offset, font_size, rect.width());
+            let oy = resolve_length_for_paint(&y.offset, font_size, rect.height());
+            (x.alignment, ox, y.alignment, oy)
+        }
+    };
+    let cx = rect.x() + align_x * rect.width() + off_x - paint_rect.x();
+    let cy = rect.y() + align_y * rect.height() + off_y - paint_rect.y();
+    Point::new(cx, cy)
+}
+
+fn sample_stops(stops: &[(f32, Rgba)], t: f32, repeating: bool, period: f32) -> Rgba {
+    if stops.is_empty() {
+        return Rgba::TRANSPARENT;
+    }
+    if stops.len() == 1 {
+        return stops[0].1;
+    }
+    let total = if repeating { period } else { stops.last().map(|(p, _)| *p).unwrap_or(1.0) };
+    let mut pos = t;
+    if repeating && total > 0.0 {
+        pos = pos.rem_euclid(total);
+    }
+    if pos <= stops[0].0 {
+        return stops[0].1;
+    }
+    if pos >= stops.last().unwrap().0 && !repeating {
+        return stops.last().unwrap().1;
+    }
+        for window in stops.windows(2) {
+            let (p0, c0) = window[0];
+            let (p1, c1) = window[1];
+            if pos < p0 {
+                return c0;
+            }
+            if pos <= p1 || (repeating && (p1 - p0).abs() < f32::EPSILON) {
+                let span = (p1 - p0).max(1e-6);
+                let frac = ((pos - p0) / span).clamp(0.0, 1.0);
+                return Rgba {
+                    r: ((1.0 - frac) * c0.r as f32 + frac * c1.r as f32).round().clamp(0.0, 255.0) as u8,
+                    g: ((1.0 - frac) * c0.g as f32 + frac * c1.g as f32).round().clamp(0.0, 255.0) as u8,
+                    b: ((1.0 - frac) * c0.b as f32 + frac * c1.b as f32).round().clamp(0.0, 255.0) as u8,
+                    a: ((1.0 - frac) * c0.a + frac * c1.a),
+                };
+            }
+        }
+        stops.last().unwrap().1
+    }
 
 fn gradient_stops(stops: &[(f32, Rgba)]) -> Vec<tiny_skia::GradientStop> {
     stops
@@ -5648,6 +5855,47 @@ mod tests {
             corner.2 > corner.0,
             "gradient centered at top-left should reach final stop toward far corner"
         );
+    }
+
+    #[test]
+    fn conic_gradient_respects_angles() {
+        let mut style = ComputedStyle::default();
+        style.set_background_layers(vec![BackgroundLayer {
+            image: Some(BackgroundImage::ConicGradient {
+                from_angle: 0.0,
+                position: BackgroundPosition::Position {
+                    x: crate::style::types::BackgroundPositionComponent {
+                        alignment: 0.5,
+                        offset: Length::px(0.0),
+                    },
+                    y: crate::style::types::BackgroundPositionComponent {
+                        alignment: 0.5,
+                        offset: Length::px(0.0),
+                    },
+                },
+                stops: vec![
+                    crate::css::types::ColorStop {
+                        color: Color::Rgba(Rgba::RED),
+                        position: Some(0.0),
+                    },
+                    crate::css::types::ColorStop {
+                        color: Color::Rgba(Rgba::BLUE),
+                        position: Some(0.5),
+                    },
+                ],
+            }),
+            ..BackgroundLayer::default()
+        }]);
+
+        let fragment =
+            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
+        let tree = FragmentTree::new(fragment);
+        let pixmap = paint_tree(&tree, 20, 20, Rgba::WHITE).expect("paint");
+
+        let top = color_at(&pixmap, 10, 0);
+        let bottom = color_at(&pixmap, 10, 19);
+        assert!(top.0 > top.2, "top should be dominated by first stop (red)");
+        assert!(bottom.2 > bottom.0, "bottom should reflect halfway stop (blue)");
     }
 
     #[test]

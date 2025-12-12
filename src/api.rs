@@ -54,8 +54,8 @@
 //! caches that are not thread-safe. For multi-threaded use, create one
 //! instance per thread.
 
-use crate::css::parser::extract_css;
 use crate::css::encoding::decode_css_bytes;
+use crate::css::parser::extract_css;
 use crate::css::types::CssImportLoader;
 use crate::dom::{self, DomNode};
 use crate::error::{Error, RenderError, Result};
@@ -759,16 +759,16 @@ impl FastRender {
     ) {
         let replaced_type_snapshot = replaced_box.replaced_type.clone();
         match replaced_type_snapshot {
-            ReplacedType::Image { src, alt: stored_alt, .. } => {
+            ReplacedType::Image {
+                src, alt: stored_alt, ..
+            } => {
                 let needs_intrinsic = replaced_box.intrinsic_size.is_none();
                 let needs_ratio = replaced_box.aspect_ratio.is_none();
                 let mut have_resource_dimensions = false;
 
                 let chosen_src = if (needs_intrinsic || needs_ratio) && !src.is_empty() {
-                    let media_ctx =
-                        crate::style::media::MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(
-                            self.device_pixel_ratio,
-                        );
+                    let media_ctx = crate::style::media::MediaContext::screen(viewport.width, viewport.height)
+                        .with_device_pixel_ratio(self.device_pixel_ratio);
                     Some(
                         replaced_box
                             .replaced_type
@@ -1034,10 +1034,12 @@ impl CssImportLoader for CssImportFetcher {
             return decode_data_url_to_string(url);
         }
 
-        let resolved = self
-            .resolve_url(url)
-            .or_else(|| Url::parse(url).ok())
-            .ok_or_else(|| Error::Io(io::Error::new(io::ErrorKind::InvalidInput, format!("Cannot resolve @import URL '{}'", url))))?;
+        let resolved = self.resolve_url(url).or_else(|| Url::parse(url).ok()).ok_or_else(|| {
+            Error::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Cannot resolve @import URL '{}'", url),
+            ))
+        })?;
 
         match resolved.scheme() {
             "file" => {
@@ -1114,9 +1116,12 @@ fn decode_data_url_to_string(data_url: &str) -> Result<String> {
 
     let bytes = if is_base64 {
         use base64::Engine;
-        base64::engine::general_purpose::STANDARD
-            .decode(payload)
-            .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::InvalidData, format!("Invalid base64 data URL: {}", e))))?
+        base64::engine::general_purpose::STANDARD.decode(payload).map_err(|e| {
+            Error::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Invalid base64 data URL: {}", e),
+            ))
+        })?
     } else {
         percent_decode_bytes(payload)?
     };
@@ -1354,10 +1359,7 @@ mod tests {
     fn layout_document_resolves_data_url_imports() {
         let mut renderer = FastRender::new().unwrap();
         let data_css = "data:text/css,body%7Bcolor:rgb(11,12,13);%7D";
-        let html = format!(
-            r#"<style>@import url("{}");</style><body>data import</body>"#,
-            data_css
-        );
+        let html = format!(r#"<style>@import url("{}");</style><body>data import</body>"#, data_css);
         let dom = renderer.parse_html(&html).unwrap();
         let styled = renderer.layout_document(&dom, 320, 200).unwrap();
         let color = text_color_for(&styled, "data").expect("text color");

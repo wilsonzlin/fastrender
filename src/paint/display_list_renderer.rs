@@ -9,10 +9,10 @@ use crate::geometry::{Point, Rect};
 use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::canvas::Canvas;
 use crate::paint::display_list::{
-    BlendMode, BorderItem, BorderRadii, BorderSide, BoxShadowItem, ClipItem, DecorationPaint, DecorationStroke,
-    DisplayItem, DisplayList, EmphasisMark, FillRectItem, FontId, GlyphInstance, ImageItem, LinearGradientItem,
-    OpacityItem, RadialGradientItem, ResolvedFilter, StrokeRectItem, TextEmphasis, TextItem, TextShadowItem,
-    TransformItem,
+    BlendMode, BorderItem, BorderRadii, BorderSide, BoxShadowItem, ClipItem, ConicGradientItem, DecorationPaint,
+    DecorationStroke, DisplayItem, DisplayList, EmphasisMark, FillRectItem, FontId, GlyphInstance, ImageItem,
+    LinearGradientItem, OpacityItem, RadialGradientItem, ResolvedFilter, StrokeRectItem, TextEmphasis, TextItem,
+    TextShadowItem, TransformItem,
 };
 use crate::paint::rasterize::{fill_rounded_rect, render_box_shadow, BoxShadow};
 use crate::paint::text_shadow::PathBounds;
@@ -819,6 +819,71 @@ impl DisplayListRenderer {
             .fill_path(&path, &paint, tiny_skia::FillRule::Winding, transform, clip.as_ref());
     }
 
+    fn render_conic_gradient(&mut self, item: &ConicGradientItem) {
+        let rect = self.ds_rect(item.rect);
+        let width = rect.width().ceil() as u32;
+        let height = rect.height().ceil() as u32;
+        if width == 0 || height == 0 {
+            return;
+        }
+
+        let opacity = self.canvas.opacity().clamp(0.0, 1.0);
+        let stops: Vec<(f32, crate::style::color::Rgba)> = item
+            .stops
+            .iter()
+            .map(|s| (s.position, crate::style::color::Rgba { a: s.color.a * opacity, ..s.color }))
+            .collect();
+        if stops.is_empty() {
+            return;
+        }
+
+        let center = SkiaPoint::from_xy(self.ds_len(item.center.x), self.ds_len(item.center.y));
+        let start_angle = item.from_angle.to_radians();
+        let period = if item.repeating {
+            stops.last().map(|s| s.0).unwrap_or(1.0).max(1e-6)
+        } else {
+            1.0
+        };
+
+        let mut pix = match Pixmap::new(width, height) {
+            Some(p) => p,
+            None => return,
+        };
+        let data = pix.pixels_mut();
+        let transparent = PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
+        for y in 0..height {
+            for x in 0..width {
+                let dx = x as f32 + 0.5 - center.x;
+                let dy = y as f32 + 0.5 - center.y;
+                let angle = dx.atan2(-dy) + start_angle;
+                let mut t = (angle / (2.0 * std::f32::consts::PI)).rem_euclid(1.0);
+                t *= period;
+                let color = sample_conic_stops(&stops, t, item.repeating, period);
+                let idx = (y * width + x) as usize;
+                data[idx] = PremultipliedColorU8::from_rgba(
+                    color.r,
+                    color.g,
+                    color.b,
+                    (color.a * 255.0).round().clamp(0.0, 255.0) as u8,
+                )
+                .unwrap_or(transparent);
+            }
+        }
+
+        let paint = tiny_skia::PixmapPaint {
+            opacity: 1.0,
+            blend_mode: self.canvas.blend_mode(),
+            ..Default::default()
+        };
+        let dest_x = rect.x().floor() as i32;
+        let dest_y = rect.y().floor() as i32;
+        let frac_x = rect.x() - dest_x as f32;
+        let frac_y = rect.y() - dest_y as f32;
+        let transform = Transform::from_translate(frac_x, frac_y).post_concat(self.canvas.transform());
+        let clip = self.canvas.clip_mask().cloned();
+        self.canvas.pixmap_mut().draw_pixmap(dest_x, dest_y, pix.as_ref(), &paint, transform, clip.as_ref());
+    }
+
     fn render_border(&mut self, item: &BorderItem) {
         let opacity = self.canvas.opacity().clamp(0.0, 1.0);
         if opacity <= 0.0 {
@@ -1172,6 +1237,7 @@ impl DisplayListRenderer {
             ),
             DisplayItem::LinearGradient(item) => self.render_linear_gradient(item),
             DisplayItem::RadialGradient(item) => self.render_radial_gradient(item),
+            DisplayItem::ConicGradient(item) => self.render_conic_gradient(item),
             DisplayItem::Border(item) => self.render_border(item),
             DisplayItem::TextDecoration(item) => {
                 let scaled = self.scale_decoration_item(item);
@@ -2004,6 +2070,49 @@ impl DisplayListRenderer {
     }
 }
 
+fn sample_conic_stops(
+    stops: &[(f32, crate::style::color::Rgba)],
+    t: f32,
+    repeating: bool,
+    period: f32,
+) -> crate::style::color::Rgba {
+    if stops.is_empty() {
+        return crate::style::color::Rgba::TRANSPARENT;
+    }
+    if stops.len() == 1 {
+        return stops[0].1;
+    }
+    let total = if repeating { period } else { stops.last().map(|s| s.0).unwrap_or(1.0) };
+    let mut pos = t;
+    if repeating && total > 0.0 {
+        pos = pos.rem_euclid(total);
+    }
+    if pos <= stops[0].0 {
+        return stops[0].1;
+    }
+    if pos >= stops.last().unwrap().0 && !repeating {
+        return stops.last().unwrap().1;
+    }
+    for window in stops.windows(2) {
+        let (p0, c0) = window[0];
+        let (p1, c1) = window[1];
+        if pos < p0 {
+            return c0;
+        }
+        if pos <= p1 || (repeating && (p1 - p0).abs() < f32::EPSILON) {
+            let span = (p1 - p0).max(1e-6);
+            let frac = ((pos - p0) / span).clamp(0.0, 1.0);
+            return crate::style::color::Rgba {
+                r: ((1.0 - frac) * c0.r as f32 + frac * c1.r as f32).round().clamp(0.0, 255.0) as u8,
+                g: ((1.0 - frac) * c0.g as f32 + frac * c1.g as f32).round().clamp(0.0, 255.0) as u8,
+                b: ((1.0 - frac) * c0.b as f32 + frac * c1.b as f32).round().clamp(0.0, 255.0) as u8,
+                a: (1.0 - frac) * c0.a + frac * c1.a,
+            };
+        }
+    }
+    stops.last().unwrap().1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2282,6 +2391,32 @@ mod tests {
 
         let pixmap = renderer.render(&list).unwrap();
         assert_eq!(pixel(&pixmap, 1, 1).1, 255);
+    }
+
+    #[test]
+    fn renders_conic_gradient_angles() {
+        let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
+        let mut list = DisplayList::new();
+        list.push(DisplayItem::ConicGradient(ConicGradientItem {
+            rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+            center: Point::new(2.0, 2.0),
+            from_angle: 0.0,
+            repeating: false,
+            stops: vec![
+                GradientStop {
+                    position: 0.0,
+                    color: Rgba::rgb(255, 0, 0),
+                },
+                GradientStop {
+                    position: 0.5,
+                    color: Rgba::rgb(0, 0, 255),
+                },
+            ],
+        }));
+
+        let pixmap = renderer.render(&list).unwrap();
+        assert!(pixel(&pixmap, 2, 0).0 > pixel(&pixmap, 2, 0).2);
+        assert!(pixel(&pixmap, 2, 3).2 > pixel(&pixmap, 2, 3).0);
     }
 
     #[test]

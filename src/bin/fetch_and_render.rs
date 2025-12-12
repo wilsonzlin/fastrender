@@ -2,11 +2,11 @@
 #![allow(clippy::redundant_closure)]
 #![allow(clippy::len_zero)]
 
-use fastrender::{Error, FastRender, Result};
-use fastrender::css::encoding::decode_css_bytes;
 use encoding_rs::{Encoding, WINDOWS_1252};
-use std::env;
+use fastrender::css::encoding::decode_css_bytes;
+use fastrender::{Error, FastRender, Result};
 use std::collections::HashSet;
+use std::env;
 use std::path::Path;
 use url::Url;
 
@@ -302,10 +302,7 @@ fn absolutize_css_urls(css: &str, base_url: &str) -> String {
                             out.push_str(&css[last_emit..i]);
 
                             let raw = css[content_start..content_end].trim();
-                            let unquoted = raw
-                                .trim_matches('"')
-                                .trim_matches('\'')
-                                .to_string();
+                            let unquoted = raw.trim_matches('"').trim_matches('\'').to_string();
                             if let Some(resolved) = resolve_href(base_url, &unquoted) {
                                 out.push_str(&format!("url(\"{}\")", resolved));
                             } else {
@@ -424,9 +421,7 @@ fn inline_imports(
 
                 if bytes[i] == b'@' {
                     let remainder = &css[i..];
-                    if remainder.len() >= 7
-                        && remainder[1..].to_lowercase().starts_with("import")
-                    {
+                    if remainder.len() >= 7 && remainder[1..].to_lowercase().starts_with("import") {
                         // Find end of import statement (;)
                         let mut j = i;
                         let mut inner_state = State::Normal;
@@ -672,10 +667,9 @@ mod tests {
 
     #[test]
     fn decode_html_uses_meta_charset() {
-        let mut encoded = encoding_rs::WINDOWS_1252.encode(
-            "<html><head><meta charset=\"windows-1252\"></head><body>\u{00a3}</body></html>",
-        )
-        .0;
+        let mut encoded = encoding_rs::WINDOWS_1252
+            .encode("<html><head><meta charset=\"windows-1252\"></head><body>\u{00a3}</body></html>")
+            .0;
         let decoded = decode_html_bytes(&encoded, None);
         assert!(
             decoded.contains('£'),
@@ -683,10 +677,9 @@ mod tests {
             decoded
         );
 
-        encoded = encoding_rs::SHIFT_JIS.encode(
-            "<html><head><meta charset='shift_jis'></head><body>デ</body></html>",
-        )
-        .0;
+        encoded = encoding_rs::SHIFT_JIS
+            .encode("<html><head><meta charset='shift_jis'></head><body>デ</body></html>")
+            .0;
         let decoded = decode_html_bytes(&encoded, None);
         assert!(
             decoded.contains('デ'),
@@ -758,9 +751,12 @@ fn main() -> Result<()> {
             Ok((bytes, content_type)) => {
                 let css_text = decode_css_bytes(&bytes, content_type.as_deref());
                 let rewritten = absolutize_css_urls(&css_text, &css_url);
-                let inlined = inline_imports(&rewritten, &css_url, &|u| {
-                    fetch_bytes(u).map(|(b, ct)| decode_css_bytes(&b, ct.as_deref()))
-                }, &mut seen_imports);
+                let inlined = inline_imports(
+                    &rewritten,
+                    &css_url,
+                    &|u| fetch_bytes(u).map(|(b, ct)| decode_css_bytes(&b, ct.as_deref())),
+                    &mut seen_imports,
+                );
                 combined_css.push_str(&inlined);
                 combined_css.push('\n');
             }

@@ -271,6 +271,16 @@ pub enum PropertyValue {
         position: GradientPosition,
         stops: Vec<ColorStop>,
     },
+    ConicGradient {
+        from_angle: f32,
+        position: GradientPosition,
+        stops: Vec<ColorStop>,
+    },
+    RepeatingConicGradient {
+        from_angle: f32,
+        position: GradientPosition,
+        stops: Vec<ColorStop>,
+    },
     /// Raw custom property value (stored unparsed)
     Custom(String),
 }

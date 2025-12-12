@@ -8,7 +8,7 @@ use super::types::{CssRule, Declaration, ImportRule, MediaRule, StyleRule, Style
 use crate::dom::DomNode;
 use crate::error::Result;
 use crate::style::media::MediaQuery;
-use cssparser::{ParseError, Parser, ParserInput, Token, ToCss};
+use cssparser::{ParseError, Parser, ParserInput, ToCss, Token};
 use selectors::parser::{SelectorList, SelectorParseErrorKind};
 
 // ============================================================================
@@ -104,14 +104,13 @@ fn parse_import_rule<'i, 't>(
 
     // Import target can be url() or string
     let href = match parser.next_including_whitespace() {
-        Ok(Token::Function(f)) if f.as_ref().eq_ignore_ascii_case("url") => parser
-            .parse_nested_block(|p| {
-                p.skip_whitespace();
-                match p.next_including_whitespace() {
-                    Ok(Token::QuotedString(s)) | Ok(Token::Ident(s)) => Ok(s.to_string()),
-                    _ => Err(p.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected url".into()))),
-                }
-            })?,
+        Ok(Token::Function(f)) if f.as_ref().eq_ignore_ascii_case("url") => parser.parse_nested_block(|p| {
+            p.skip_whitespace();
+            match p.next_including_whitespace() {
+                Ok(Token::QuotedString(s)) | Ok(Token::Ident(s)) => Ok(s.to_string()),
+                _ => Err(p.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected url".into()))),
+            }
+        })?,
         Ok(Token::QuotedString(s)) => s.to_string(),
         _ => return Ok(None),
     };
@@ -135,7 +134,10 @@ fn parse_import_rule<'i, 't>(
     // Skip until semicolon
     // (already consumed above)
 
-    Ok(Some(CssRule::Import(ImportRule { href, media: media_queries })))
+    Ok(Some(CssRule::Import(ImportRule {
+        href,
+        media: media_queries,
+    })))
 }
 
 /// Parse a @media rule
@@ -374,8 +376,8 @@ pub fn extract_css(dom: &DomNode) -> Result<StyleSheet> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::PropertyValue;
     use crate::css::types::CssImportLoader;
+    use crate::PropertyValue;
 
     #[test]
     fn test_parse_simple_stylesheet() {

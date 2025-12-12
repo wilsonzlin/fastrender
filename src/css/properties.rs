@@ -252,6 +252,12 @@ fn parse_gradient(value: &str) -> Option<PropertyValue> {
     if lower.starts_with("repeating-radial-gradient(") {
         return parse_radial_gradient(&lower, true);
     }
+    if lower.starts_with("conic-gradient(") {
+        return parse_conic_gradient(&lower, false);
+    }
+    if lower.starts_with("repeating-conic-gradient(") {
+        return parse_conic_gradient(&lower, true);
+    }
     None
 }
 
@@ -541,6 +547,88 @@ fn parse_radial_position(text: &str) -> Option<GradientPosition> {
     Some(GradientPosition { x, y })
 }
 
+fn parse_conic_gradient(value: &str, repeating: bool) -> Option<PropertyValue> {
+    let inner = value
+        .strip_prefix("conic-gradient(")
+        .or_else(|| value.strip_prefix("repeating-conic-gradient("))?
+        .strip_suffix(')')?;
+    let parts = split_top_level_commas(inner);
+    if parts.len() < 2 {
+        return None;
+    }
+
+    let mut from_angle = 0.0;
+    let mut position = GradientPosition {
+        x: GradientPositionComponent {
+            alignment: 0.5,
+            offset: Length::px(0.0),
+        },
+        y: GradientPositionComponent {
+            alignment: 0.5,
+            offset: Length::px(0.0),
+        },
+    };
+
+    let prelude = parts[0].trim();
+    let mut first_stop_idx = 0;
+    if let Some(_cs) = parse_color_stop(prelude) {
+        // No prelude; this is a stop.
+    } else {
+        first_stop_idx = 1;
+        let tokens: Vec<&str> = prelude.split_whitespace().collect();
+        let mut idx = 0;
+        while idx < tokens.len() {
+            match tokens[idx] {
+                "from" if idx + 1 < tokens.len() => {
+                    if let Some(angle) = parse_stop_angle(tokens[idx + 1]) {
+                        from_angle = angle;
+                    }
+                    idx += 2;
+                }
+                "at" if idx + 1 < tokens.len() => {
+                    let pos_text = tokens[idx + 1..].join(" ");
+                    if let Some(pos) = parse_radial_position(&pos_text) {
+                        position = pos;
+                        idx = tokens.len();
+                    } else {
+                        idx += 1;
+                    }
+                }
+                _ => idx += 1,
+            }
+        }
+    }
+
+    let mut stops = Vec::new();
+    if first_stop_idx == 0 {
+        if let Some(cs) = parse_color_stop(parts[0]) {
+            stops.push(cs);
+        }
+    }
+    for part in parts.iter().skip(first_stop_idx) {
+        if let Some(cs) = parse_color_stop(part) {
+            stops.push(cs);
+        }
+    }
+    if stops.len() < 2 {
+        return None;
+    }
+
+    if repeating {
+        Some(PropertyValue::RepeatingConicGradient {
+            from_angle,
+            position,
+            stops,
+        })
+    } else {
+        Some(PropertyValue::ConicGradient {
+            from_angle,
+            position,
+            stops,
+        })
+    }
+}
+
 fn split_top_level_commas(input: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut paren = 0i32;
@@ -689,12 +777,41 @@ fn parse_stop_position(token: &str) -> Option<f32> {
             .parse::<f32>()
             .ok()
             .map(|p| (p / 100.0).clamp(0.0, 1.0))
+    } else if let Some(angle) = parse_stop_angle(t) {
+        Some((angle.rem_euclid(360.0)) / 360.0)
     } else if let Some(num) = t.parse::<f32>().ok() {
         if num > 1.0 {
             Some((num / 100.0).clamp(0.0, 1.0))
         } else {
             Some(num.clamp(0.0, 1.0))
         }
+    } else {
+        None
+    }
+}
+
+fn parse_stop_angle(token: &str) -> Option<f32> {
+    let t = token.trim();
+    if t.ends_with("deg") {
+        t[..t.len() - 3].trim().parse::<f32>().ok()
+    } else if t.ends_with("turn") {
+        t[..t.len() - 4]
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|v| v * 360.0)
+    } else if t.ends_with("rad") {
+        t[..t.len() - 3]
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|v| v.to_degrees())
+    } else if t.ends_with("grad") {
+        t[..t.len() - 4]
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|v| v * 0.9)
     } else {
         None
     }
@@ -830,6 +947,27 @@ mod tests {
             Color::Mix { .. } => panic!("second stop should not be a mix"),
         }
         assert_eq!(stops[1].position, Some(0.90));
+    }
+
+    #[test]
+    fn parses_conic_gradient_with_from_and_at() {
+        let value = "conic-gradient(from 90deg at 25% 75%, red 0deg, blue 180deg)";
+        let PropertyValue::ConicGradient {
+            from_angle,
+            position,
+            stops,
+        } = parse_property_value("background-image", value).expect("gradient")
+        else {
+            panic!("expected conic gradient");
+        };
+        assert!((from_angle - 90.0).abs() < 0.01);
+        assert_eq!(stops.len(), 2);
+        assert_eq!(position.x.offset.unit, LengthUnit::Percent);
+        assert!((position.x.offset.value - 25.0).abs() < 0.01);
+        assert_eq!(position.y.offset.unit, LengthUnit::Percent);
+        assert!((position.y.offset.value - 75.0).abs() < 0.01);
+        assert_eq!(stops[0].position, Some(0.0));
+        assert!(stops[1].position.unwrap() > 0.49 && stops[1].position.unwrap() < 0.51);
     }
 
     #[test]

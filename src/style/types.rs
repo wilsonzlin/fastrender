@@ -1473,6 +1473,16 @@ pub enum BackgroundImage {
         position: BackgroundPosition,
         stops: Vec<ColorStop>,
     },
+    ConicGradient {
+        from_angle: f32,
+        position: BackgroundPosition,
+        stops: Vec<ColorStop>,
+    },
+    RepeatingConicGradient {
+        from_angle: f32,
+        position: BackgroundPosition,
+        stops: Vec<ColorStop>,
+    },
 }
 
 /// Background sizing keywords

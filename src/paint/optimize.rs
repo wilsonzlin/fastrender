@@ -552,6 +552,7 @@ impl DisplayListOptimizer {
             }
             DisplayItem::LinearGradient(i) => Some(i.rect),
             DisplayItem::RadialGradient(i) => Some(i.rect),
+            DisplayItem::ConicGradient(i) => Some(i.rect),
             _ => None,
         }
     }

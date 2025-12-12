@@ -83,6 +83,9 @@ pub enum DisplayItem {
     /// Draw a radial gradient
     RadialGradient(RadialGradientItem),
 
+    /// Draw a conic gradient
+    ConicGradient(ConicGradientItem),
+
     /// Draw CSS borders with per-side styles
     Border(BorderItem),
 
@@ -138,6 +141,7 @@ impl DisplayItem {
             }
             DisplayItem::LinearGradient(item) => Some(item.rect),
             DisplayItem::RadialGradient(item) => Some(item.rect),
+            DisplayItem::ConicGradient(item) => Some(item.rect),
             DisplayItem::Border(item) => Some(item.rect),
             DisplayItem::PushClip(item) => Some(item.rect),
             DisplayItem::TextDecoration(item) => Some(item.bounds),
@@ -674,6 +678,25 @@ pub struct RadialGradientItem {
     pub spread: GradientSpread,
 }
 
+/// Draw a conic gradient
+#[derive(Debug, Clone)]
+pub struct ConicGradientItem {
+    /// Rectangle to fill
+    pub rect: Rect,
+
+    /// Gradient center (relative to rect)
+    pub center: Point,
+
+    /// Start angle in degrees
+    pub from_angle: f32,
+
+    /// Color stops
+    pub stops: Vec<GradientStop>,
+
+    /// Repeating?
+    pub repeating: bool,
+}
+
 /// Gradient color stop
 #[derive(Debug, Clone)]
 pub struct GradientStop {
@@ -1157,6 +1180,24 @@ impl DisplayList {
             radii,
             stops,
             spread,
+        }));
+    }
+
+    /// Convenience for conic gradients
+    pub fn push_conic_gradient(
+        &mut self,
+        rect: Rect,
+        center: Point,
+        from_angle: f32,
+        stops: Vec<GradientStop>,
+        repeating: bool,
+    ) {
+        self.push(DisplayItem::ConicGradient(ConicGradientItem {
+            rect,
+            center,
+            from_angle,
+            stops,
+            repeating,
         }));
     }
 

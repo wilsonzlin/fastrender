@@ -33,10 +33,10 @@ use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::paint::display_list::{
     BlendMode, BlendModeItem, BorderItem, BorderSide, BoxShadowItem, ClipItem, DecorationPaint, DecorationStroke,
-    DisplayItem, DisplayList, EmphasisMark, EmphasisText, FillRectItem, FontId, GlyphInstance, GradientSpread,
-    GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem,
-    ResolvedFilter, StackingContextItem, StrokeRectItem, TextDecorationItem, TextEmphasis, TextItem, TextShadowItem,
-    Transform2D,
+    ConicGradientItem, DisplayItem, DisplayList, EmphasisMark, EmphasisText, FillRectItem, FontId, GlyphInstance,
+    GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, OpacityItem,
+    RadialGradientItem, ResolvedFilter, StackingContextItem, StrokeRectItem, TextDecorationItem, TextEmphasis,
+    TextItem, TextShadowItem, Transform2D,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
@@ -605,11 +605,81 @@ impl DisplayListBuilder {
         output
     }
 
+    fn normalize_color_stops_unclamped(stops: &[ColorStop], current_color: Rgba) -> Vec<(f32, Rgba)> {
+        if stops.is_empty() {
+            return Vec::new();
+        }
+
+        let mut positions: Vec<Option<f32>> = stops.iter().map(|s| s.position).collect();
+        if positions.iter().all(|p| p.is_none()) {
+            if stops.len() == 1 {
+                return vec![(0.0, stops[0].color.to_rgba(current_color))];
+            }
+            let denom = (stops.len() - 1) as f32;
+            return stops
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (i as f32 / denom, s.color.to_rgba(current_color)))
+                .collect();
+        }
+
+        if positions.first().and_then(|p| *p).is_none() {
+            positions[0] = Some(0.0);
+        }
+        if positions.last().and_then(|p| *p).is_none() {
+            if let Some(last) = positions.last_mut() {
+                *last = Some(1.0);
+            }
+        }
+
+        let mut last_known: Option<(usize, f32)> = None;
+        for i in 0..positions.len() {
+            if let Some(pos) = positions[i] {
+                if let Some((start_idx, start_pos)) = last_known {
+                    let gap = i.saturating_sub(start_idx + 1);
+                    if gap > 0 {
+                        let step = (pos - start_pos) / (gap as f32 + 1.0);
+                        for j in 1..=gap {
+                            positions[start_idx + j] = Some(start_pos + step * j as f32);
+                        }
+                    }
+                } else if i > 0 {
+                    let gap = i;
+                    let step = pos / gap as f32;
+                    for j in 0..i {
+                        positions[j] = Some(step * j as f32);
+                    }
+                }
+                last_known = Some((i, pos));
+            }
+        }
+
+        let mut output = Vec::with_capacity(stops.len());
+        let mut prev = 0.0;
+        for (idx, pos_opt) in positions.into_iter().enumerate() {
+            let pos = pos_opt.unwrap_or(prev);
+            let monotonic = pos.max(prev);
+            prev = monotonic;
+            output.push((monotonic, stops[idx].color.to_rgba(current_color)));
+        }
+        output
+    }
+
     fn gradient_stops(stops: &[(f32, Rgba)]) -> Vec<GradientStop> {
         stops
             .iter()
             .map(|(pos, color)| GradientStop {
                 position: pos.clamp(0.0, 1.0),
+                color: *color,
+            })
+            .collect()
+    }
+
+    fn gradient_stops_unclamped(stops: &[(f32, Rgba)]) -> Vec<GradientStop> {
+        stops
+            .iter()
+            .map(|(pos, color)| GradientStop {
+                position: *pos,
                 color: *color,
             })
             .collect()
@@ -698,6 +768,24 @@ impl DisplayListBuilder {
         }
 
         (cx, cy, rx, ry)
+    }
+
+    fn resolve_gradient_center(
+        rect: Rect,
+        position: &BackgroundPosition,
+        font_size: f32,
+        clip_rect: Rect,
+    ) -> Point {
+        let (align_x, off_x, align_y, off_y) = match position {
+            BackgroundPosition::Position { x, y } => {
+                let ox = Self::resolve_length_for_paint(&x.offset, font_size, rect.width());
+                let oy = Self::resolve_length_for_paint(&y.offset, font_size, rect.height());
+                (x.alignment, ox, y.alignment, oy)
+            }
+        };
+        let cx = rect.x() + align_x * rect.width() + off_x - clip_rect.x();
+        let cy = rect.y() + align_y * rect.height() + off_y - clip_rect.y();
+        Point::new(cx, cy)
     }
 
     fn resolve_filters(filters: &[crate::style::types::FilterFunction], style: &ComputedStyle) -> Vec<ResolvedFilter> {
@@ -1325,6 +1413,40 @@ impl DisplayListBuilder {
                         end,
                         stops: Self::gradient_stops(&resolved),
                         spread: GradientSpread::Repeat,
+                    }));
+                }
+            }
+            BackgroundImage::ConicGradient {
+                from_angle,
+                position,
+                stops,
+            } => {
+                let resolved = Self::normalize_color_stops_unclamped(stops, style.color);
+                if !resolved.is_empty() {
+                    let center = Self::resolve_gradient_center(origin_rect, position, style.font_size, clip_rect);
+                    self.list.push(DisplayItem::ConicGradient(ConicGradientItem {
+                        rect: clip_rect,
+                        center,
+                        from_angle: *from_angle,
+                        stops: Self::gradient_stops_unclamped(&resolved),
+                        repeating: false,
+                    }));
+                }
+            }
+            BackgroundImage::RepeatingConicGradient {
+                from_angle,
+                position,
+                stops,
+            } => {
+                let resolved = Self::normalize_color_stops_unclamped(stops, style.color);
+                if !resolved.is_empty() {
+                    let center = Self::resolve_gradient_center(origin_rect, position, style.font_size, clip_rect);
+                    self.list.push(DisplayItem::ConicGradient(ConicGradientItem {
+                        rect: clip_rect,
+                        center,
+                        from_angle: *from_angle,
+                        stops: Self::gradient_stops_unclamped(&resolved),
+                        repeating: true,
                     }));
                 }
             }

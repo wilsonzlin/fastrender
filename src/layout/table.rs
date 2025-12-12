@@ -986,11 +986,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
             .fold(0.0f32, |acc, w| if w > acc { w } else { acc });
         contenders.retain(|c| (c.width - max_width).abs() < 0.01);
 
-        let best_origin = contenders
-            .iter()
-            .map(|c| origin_priority(c.origin))
-            .max()
-            .unwrap_or(0);
+        let best_origin = contenders.iter().map(|c| origin_priority(c.origin)).max().unwrap_or(0);
         contenders.retain(|c| origin_priority(c.origin) == best_origin);
 
         let default_candidate = BorderCandidate::none();
@@ -3879,7 +3875,10 @@ mod tests {
 
         assert_eq!(borders.vertical.len(), 3);
         let middle = &borders.vertical[1][0];
-        assert!((middle.width - 4.0).abs() < f32::EPSILON, "empty-cells is ignored when borders are collapsed");
+        assert!(
+            (middle.width - 4.0).abs() < f32::EPSILON,
+            "empty-cells is ignored when borders are collapsed"
+        );
     }
 
     fn find_cell_fragment<'a>(fragment: &'a FragmentNode) -> Option<&'a FragmentNode> {
