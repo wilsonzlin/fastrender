@@ -309,6 +309,14 @@ impl AbsoluteLayout {
         let max_width =
             content_size_from_box_sizing(style.max_width.to_px(), total_horizontal_spacing, style.box_sizing);
 
+        // Compute shrink-to-fit candidates for auto width.
+        let preferred_min = preferred_min_inline_size.unwrap_or(intrinsic_width);
+        let preferred = preferred_inline_size.unwrap_or(preferred_min);
+        let shrink = |available: f32| -> f32 {
+            let available = available.max(0.0);
+            preferred.min(available.max(preferred_min))
+        };
+
         // Default margin values (auto resolved only when the constraint equation includes both edges)
         let margin_left_auto = style.margin_left_auto;
         let margin_right_auto = style.margin_right_auto;
@@ -338,24 +346,25 @@ impl AbsoluteLayout {
             // Case 4: left and right specified, width is auto (shrink-to-fit)
             (Some(l), None, Some(r)) => {
                 let available = cb_width - l - r - margin_left - margin_right - total_horizontal_spacing;
-                let preferred_min = preferred_min_inline_size.unwrap_or(intrinsic_width);
-                let preferred = preferred_inline_size.unwrap_or(preferred_min);
-                let shrink = preferred.min(available.max(preferred_min).max(0.0));
-                let width = shrink;
+                let width = shrink(available);
                 let x = l + margin_left + border_left + padding_left;
                 (x, width)
             }
 
-            // Case 5: Only left specified
+            // Case 5: Only left specified - width auto shrink-to-fit
             (Some(l), None, None) => {
+                let available = cb_width - l - margin_left - margin_right - total_horizontal_spacing;
+                let width = shrink(available);
                 let x = l + margin_left + border_left + padding_left;
-                (x, intrinsic_width)
+                (x, width)
             }
 
-            // Case 6: Only right specified
+            // Case 6: Only right specified - width auto shrink-to-fit
             (None, None, Some(r)) => {
-                let x = cb_width - r - margin_right - border_right - padding_right - intrinsic_width;
-                (x, intrinsic_width)
+                let available = cb_width - r - margin_left - margin_right - total_horizontal_spacing;
+                let width = shrink(available);
+                let x = cb_width - r - margin_right - border_right - padding_right - width;
+                (x, width)
             }
 
             // Case 7: Only width specified - use static position for left
@@ -365,10 +374,12 @@ impl AbsoluteLayout {
                 (x, w)
             }
 
-            // Case 8: None specified - use static position and intrinsic width
+            // Case 8: None specified - shrink-to-fit using available space
             (None, None, None) => {
+                let available = cb_width - margin_left - margin_right - total_horizontal_spacing;
+                let width = shrink(available);
                 let x = static_x + margin_left + border_left + padding_left;
-                (x, intrinsic_width)
+                (x, width)
             }
         };
 
