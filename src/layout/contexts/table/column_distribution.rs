@@ -457,7 +457,6 @@ impl ColumnDistributor {
         let mut remaining_width = available_width;
         let mut flexible_count = 0;
         let mut percent_indices = Vec::new();
-        let mut fixed_total = 0.0;
 
         // Phase 1: Apply fixed widths
         for (i, col) in columns.iter().enumerate() {
@@ -468,7 +467,6 @@ impl ColumnDistributor {
                     .min(col.max_width.max(col.min_width));
                 widths[i] = width;
                 remaining_width -= width;
-                fixed_total += width;
             } else if let Some(pct) = col.percentage {
                 percent_indices.push((i, pct));
             } else {
@@ -476,23 +474,15 @@ impl ColumnDistributor {
             }
         }
 
-        // Phase 2: Allocate percentage columns. Percentages are relative to the table width,
-        // but they are scaled down when their total demand exceeds the post-fixed budget.
-        let percent_budget = (available_width - fixed_total).max(0.0);
-        let requested_percent: f32 = percent_indices
-            .iter()
-            .map(|(_, pct)| (pct / 100.0) * available_width)
-            .sum();
-        let percent_scale = if requested_percent > 0.0 && requested_percent > percent_budget && percent_budget > 0.0 {
-            percent_budget / requested_percent
-        } else {
-            1.0
-        };
-
+        // Phase 2: Allocate percentage columns. Percentages are relative to the table width and
+        // can overrun the available width; the table expands when columns over-commit.
         for (idx, pct) in percent_indices {
             let col = &columns[idx];
-            let raw = (pct / 100.0) * available_width * percent_scale;
-            let width = raw.max(col.min_width).max(self.min_column_width);
+            let raw = (pct / 100.0) * available_width;
+            let width = raw
+                .max(col.min_width)
+                .max(self.min_column_width)
+                .min(col.max_width.max(col.min_width));
             widths[idx] = width;
             remaining_width -= width;
         }
@@ -518,7 +508,7 @@ impl ColumnDistributor {
 
         ColumnWidthDistributionResult {
             widths,
-            total_width: total.min(available_width),
+            total_width: total,
             is_over_constrained,
             overflow_amount,
         }

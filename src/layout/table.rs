@@ -6022,6 +6022,25 @@ mod tests {
     }
 
     #[test]
+    fn fixed_layout_percentages_can_overrun_table_width() {
+        let mut structure = TableStructure::new();
+        structure.column_count = 2;
+        let mut col0 = ColumnInfo::new(0);
+        col0.specified_width = Some(SpecifiedWidth::Percent(75.0));
+        let mut col1 = ColumnInfo::new(1);
+        col1.specified_width = Some(SpecifiedWidth::Percent(75.0));
+        structure.columns = vec![col0, col1];
+        structure.border_spacing = (0.0, 0.0);
+
+        calculate_fixed_layout_widths(&mut structure, 200.0);
+
+        assert!((structure.columns[0].computed_width - 150.0).abs() < 0.01);
+        assert!((structure.columns[1].computed_width - 150.0).abs() < 0.01);
+        let total: f32 = structure.columns.iter().map(|c| c.computed_width).sum();
+        assert!(total > 299.0, "percent columns should not be scaled down when exceeding 100%");
+    }
+
+    #[test]
     fn test_auto_layout_minimum_widths() {
         let mut structure = TableStructure::new();
         structure.column_count = 2;
