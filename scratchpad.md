@@ -8,6 +8,7 @@
 ## Recent changes (this branch)
 - Video posters now honor media context when selecting poster sources, and audio replacements get labeled placeholders in both painter and display list builder. Added tests for audio placeholders and builder labels.
 - List marker positioning is writing-mode aware: outside markers offset to inline-start in vertical flows (vertical-rl/lr) and gaps resolve against inline-end margins instead of always margin-right. Added vertical marker layout tests.
+- Vertical marker inline-start offsets now match for vertical-rl and vertical-lr, and inline-end gaps pull from logical margins in sideways flows; updated the vertical-lr marker test.
 - list-style-type now accepts strings per CSS Lists: parsing stores `ListStyleType::String`, and marker generation renders the string marker (with trailing space) instead of counters. Added parsing and marker-generation tests.
 - text-align parsing now preserves `justify-all` as a distinct computed value and sets `text-align-last` to justify per CSS Text; `text-align-all` no longer resets `text-align-last`, keeping the longhand split faithful to the spec. Inline layout treats `justify-all` as justification on all lines. Added cascade coverage.
 - ::marker now follows the CSS Lists/Pseudo supported property set more closely: cursor is honored, while text-align/text-align-last/text-indent are reset to defaults even when inherited. Added cascade tests to lock cursor support and ignore alignment on markers.

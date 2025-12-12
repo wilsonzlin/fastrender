@@ -4609,8 +4609,9 @@ fn marker_inline_end_margin(style: &ComputedStyle) -> Option<Length> {
                 style.margin_right
             }
         }
-        VerticalRl | SidewaysRl => style.margin_bottom,
-        VerticalLr | SidewaysLr => style.margin_top,
+        VerticalRl | VerticalLr => style.margin_bottom,
+        SidewaysRl => style.margin_left,
+        SidewaysLr => style.margin_right,
     }
 }
 
@@ -4640,8 +4641,9 @@ fn marker_inline_start_sign(writing_mode: crate::style::types::WritingMode, dire
                 -1.0
             }
         }
-        VerticalRl | SidewaysRl => -1.0,
-        VerticalLr | SidewaysLr => 1.0,
+        VerticalRl | VerticalLr => -1.0,
+        SidewaysRl => 1.0,
+        SidewaysLr => -1.0,
     }
 }
 
@@ -5252,8 +5254,8 @@ mod tests {
         let marker_y = marker_y.expect("marker y");
         let text_y = text_y.expect("text y");
         assert!(
-            marker_y > text_y,
-            "marker should sit at inline-start (bottom) in vertical-lr; marker_y={}, text_y={}",
+            marker_y < text_y,
+            "marker should sit at inline-start (top) in vertical-lr; marker_y={}, text_y={}",
             marker_y,
             text_y
         );
