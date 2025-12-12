@@ -841,6 +841,41 @@ mod tests {
     }
 
     #[test]
+    fn dotted_layer_names_create_nested_paths() {
+        let dom = element_with_id_and_class("target", "", None);
+        let stylesheet = parse_stylesheet(
+            r#"
+            @layer ui.controls { #target { color: rgb(1, 2, 3); } }
+            @layer ui { #target { color: rgb(9, 9, 9); } }
+        "#,
+        )
+        .unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        // The child layer ui.controls should override its parent ui declarations.
+        assert_eq!(styled.styles.color, Rgba::rgb(1, 2, 3));
+    }
+
+    #[test]
+    fn revert_layer_uses_nearest_layer_base() {
+        let dom = element_with_id_and_class("target", "", None);
+        let stylesheet = parse_stylesheet(
+            r#"
+            @layer theme {
+              #target { color: rgb(1, 2, 3); }
+              @layer accents {
+                #target { color: rgb(10, 20, 30); color: revert-layer; }
+              }
+            }
+        "#,
+        )
+        .unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        assert_eq!(styled.styles.color, Rgba::rgb(1, 2, 3));
+    }
+
+    #[test]
     fn all_initial_resets_properties_but_preserves_direction() {
         let dom = DomNode {
             node_type: DomNodeType::Element {
