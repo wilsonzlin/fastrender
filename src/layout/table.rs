@@ -3181,7 +3181,7 @@ impl FormattingContext for TableFormattingContext {
                     .formatting_context()
                     .unwrap_or(crate::style::display::FormattingContextType::Block);
                 let fc = self.factory.create(fc_type);
-                if let Ok(w) = fc.compute_intrinsic_inline_size(caption, IntrinsicSizingMode::MinContent) {
+                if let Ok(w) = fc.compute_intrinsic_inline_size(caption, IntrinsicSizingMode::MaxContent) {
                     caption_min = caption_min.max(w);
                 }
             }
