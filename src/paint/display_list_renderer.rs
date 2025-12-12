@@ -3364,11 +3364,16 @@ mod tests {
         ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem,
         TextDecorationItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
     };
+    use crate::paint::display_list_builder::DisplayListBuilder;
     use crate::style::color::Rgba;
     use crate::style::types::{
         BorderImageSlice, BorderImageSliceValue, BorderImageWidth, BorderImageWidthValue,
-        BorderStyle as CssBorderStyle, TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
+        BorderStyle as CssBorderStyle, TextDecorationLine, TextDecorationThickness, TextEmphasisFill,
+        TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
     };
+    use crate::style::values::Length;
+    use crate::style::ComputedStyle;
+    use crate::tree::fragment_tree::FragmentNode;
     use std::sync::Arc;
 
     fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
@@ -3723,6 +3728,36 @@ mod tests {
         assert_eq!(pixel(&pixmap, 16, 5), (0, 0, 255, 255));
         // Gap should remain white.
         assert_eq!(pixel(&pixmap, 10, 5), (255, 255, 255, 255));
+    }
+
+    #[test]
+    fn text_decoration_percentage_thickness_paints_font_relative_size() {
+        let mut style = ComputedStyle::default();
+        style.color = Rgba::BLACK;
+        style.font_size = 20.0;
+        style.text_decoration.lines = TextDecorationLine::UNDERLINE;
+        style.text_decoration.color = Some(Rgba::from_rgba8(255, 0, 0, 255));
+        style.text_decoration.thickness = TextDecorationThickness::Length(Length::percent(50.0));
+        let style = Arc::new(style);
+
+        let text_rect = Rect::from_xywh(10.0, 10.0, 80.0, 30.0);
+        let fragment = FragmentNode::new_text_styled(text_rect, "Hi".to_string(), 22.0, style);
+        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 120.0, 60.0), vec![fragment]);
+
+        let font_ctx = FontContext::new();
+        let list = DisplayListBuilder::new().with_font_context(font_ctx.clone()).build(&root);
+        let pixmap = DisplayListRenderer::new(120, 60, Rgba::WHITE, font_ctx)
+            .expect("renderer")
+            .render(&list)
+            .expect("rendered");
+
+        let red_bbox = bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80)
+            .expect("underline");
+        let height = red_bbox.3 - red_bbox.1 + 1;
+        assert!(
+            (9..=11).contains(&height),
+            "expected underline thickness around 10px (50% of 20px font), got {height}"
+        );
     }
 
     #[test]
