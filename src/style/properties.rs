@@ -8266,6 +8266,44 @@ mod tests {
     }
 
     #[test]
+    fn parses_text_shadow_layers() {
+        use crate::css::properties::parse_property_value;
+
+        let single = parse_property_value("text-shadow", "1px 2px 3px rgb(10 20 30)").unwrap();
+        let PropertyValue::TextShadow(shadows) = single else {
+            panic!("expected text-shadow value");
+        };
+        assert_eq!(shadows.len(), 1);
+        assert_eq!(shadows[0].offset_x, Length::px(1.0));
+        assert_eq!(shadows[0].offset_y, Length::px(2.0));
+        assert_eq!(shadows[0].blur_radius, Length::px(3.0));
+        assert_eq!(shadows[0].color, Some(Rgba::from_rgba8(10, 20, 30, 255)));
+
+        let multiple =
+            parse_property_value("text-shadow", "1px -1px red, 0 2px").expect("valid multi-shadow");
+        let PropertyValue::TextShadow(shadows) = multiple else {
+            panic!("expected text-shadow value");
+        };
+        assert_eq!(shadows.len(), 2);
+        assert_eq!(shadows[0].offset_x, Length::px(1.0));
+        assert_eq!(shadows[0].offset_y, Length::px(-1.0));
+        assert_eq!(shadows[0].blur_radius, Length::px(0.0));
+        assert_eq!(shadows[0].color, Some(Rgba::RED));
+        assert_eq!(shadows[1].offset_x, Length::px(0.0));
+        assert_eq!(shadows[1].offset_y, Length::px(2.0));
+        assert_eq!(shadows[1].blur_radius, Length::px(0.0));
+        assert_eq!(shadows[1].color, None); // defaults to currentColor
+    }
+
+    #[test]
+    fn rejects_invalid_text_shadow() {
+        use crate::css::properties::parse_property_value;
+        assert!(parse_property_value("text-shadow", "1px").is_none());
+        assert!(parse_property_value("text-shadow", ",").is_none());
+        assert!(parse_property_value("text-shadow", "1px 2px 3px 4px").is_none());
+    }
+
+    #[test]
     fn parses_image_orientation_values() {
         let mut style = ComputedStyle::default();
         apply_declaration(
