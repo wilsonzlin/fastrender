@@ -418,6 +418,64 @@ fn distribute_remaining_height_with_caps(computed: &mut [f32], rows: &[RowInfo],
     }
 }
 
+fn reduce_rows_with_headroom(
+    computed: &mut [f32],
+    rows: &[RowInfo],
+    target_total: f32,
+    indices: &[usize],
+    percent_base: Option<f32>,
+) {
+    if indices.is_empty() {
+        return;
+    }
+
+    let mut overflow = computed.iter().sum::<f32>() - target_total;
+    if overflow <= 0.0 {
+        return;
+    }
+
+    // Iteratively shave overflow proportionally to available headroom.
+    let mut iterations = 0;
+    while overflow > 0.01 && iterations < indices.len().saturating_mul(2).max(1) {
+        let mut headrooms = Vec::new();
+        for &idx in indices {
+            if let Some(cur) = computed.get(idx).copied() {
+                let (min_cap, _) = resolve_row_min_max(&rows[idx], percent_base);
+                let min_floor = min_cap.unwrap_or(rows[idx].min_height);
+                let room = (cur - min_floor).max(0.0);
+                if room > 0.0 {
+                    headrooms.push((idx, room));
+                }
+            }
+        }
+
+        if headrooms.is_empty() {
+            break;
+        }
+
+        let total_headroom: f32 = headrooms.iter().map(|(_, room)| *room).sum();
+        if total_headroom <= 0.0 {
+            break;
+        }
+
+        let mut shaved = 0.0;
+        for (idx, room) in headrooms {
+            if let Some(slot) = computed.get_mut(idx) {
+                let mut delta = overflow * (room / total_headroom);
+                delta = delta.min(*slot); // avoid negative heights
+                *slot -= delta.min(room);
+                shaved += delta.min(room);
+            }
+        }
+
+        if shaved <= 0.001 {
+            break;
+        }
+        overflow = (computed.iter().sum::<f32>() - target_total).max(0.0);
+        iterations += 1;
+    }
+}
+
 fn resolve_row_min_max(row: &RowInfo, percent_base: Option<f32>) -> (Option<f32>, Option<f32>) {
     let min = match row.author_min_height {
         Some(SpecifiedHeight::Fixed(h)) => Some(h),
@@ -2220,18 +2278,9 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
                 }
             }
         } else if remaining < 0.0 && !percent_rows.is_empty() {
-            // Percent rows over-commit the available space; scale them down proportionally.
+            // Percent rows over-commit the available space; reduce them using headroom-aware weights.
             let percent_indices: Vec<usize> = percent_rows.iter().map(|(i, _)| *i).collect();
-            let percent_total: f32 = percent_indices.iter().map(|i| computed[*i]).sum();
-            if percent_total > 0.0 {
-                let reduce = (-remaining).min(percent_total);
-                for idx in percent_indices {
-                    let share = computed[idx] / percent_total;
-                    let reduction = reduce * share;
-                    let floor = structure.rows[idx].min_height;
-                    computed[idx] = (computed[idx] - reduction).max(floor);
-                }
-            }
+            reduce_rows_with_headroom(&mut computed, &structure.rows, base, &percent_indices, content_available);
         }
     }
 
