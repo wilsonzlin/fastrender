@@ -3761,6 +3761,36 @@ mod tests {
     }
 
     #[test]
+    fn text_decoration_scales_with_device_pixel_ratio() {
+        let mut style = ComputedStyle::default();
+        style.color = Rgba::BLACK;
+        style.font_size = 20.0;
+        style.text_decoration.lines = TextDecorationLine::UNDERLINE;
+        style.text_decoration.color = Some(Rgba::from_rgba8(255, 0, 0, 255));
+        style.text_decoration.thickness = TextDecorationThickness::Length(Length::px(4.0));
+        let style = Arc::new(style);
+
+        let text_rect = Rect::from_xywh(10.0, 10.0, 80.0, 30.0);
+        let fragment = FragmentNode::new_text_styled(text_rect, "Hi".to_string(), 22.0, style);
+        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 120.0, 60.0), vec![fragment]);
+
+        let font_ctx = FontContext::new();
+        let list = DisplayListBuilder::new().with_font_context(font_ctx.clone()).build(&root);
+        let pixmap = DisplayListRenderer::new_scaled(120, 60, Rgba::WHITE, font_ctx, 2.0)
+            .expect("renderer")
+            .render(&list)
+            .expect("rendered");
+
+        let red_bbox = bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80)
+            .expect("underline");
+        let height = red_bbox.3 - red_bbox.1 + 1;
+        assert!(
+            (7..=9).contains(&height),
+            "expected underline thickness around 8 device px (4 CSS px at 2x), got {height}"
+        );
+    }
+
+    #[test]
     fn renders_linear_gradient() {
         let renderer = DisplayListRenderer::new(2, 1, Rgba::WHITE, FontContext::new()).unwrap();
         let mut list = DisplayList::new();
