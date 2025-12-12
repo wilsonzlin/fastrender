@@ -5657,9 +5657,9 @@ mod tests {
     use crate::image_loader::ImageCache;
     use crate::paint::display_list::BorderRadii;
     use crate::style::types::{
-        BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundRepeat, BackgroundSize, BackgroundSizeComponent,
-        BorderImage, BorderImageRepeat, BorderImageSlice, BorderImageSliceValue, BorderImageSource, Isolation,
-        MixBlendMode, OutlineColor, OutlineStyle, Overflow,
+        BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundRepeat, BackgroundSize,
+        BackgroundSizeComponent, BorderImage, BorderImageRepeat, BorderImageSlice, BorderImageSliceValue,
+        BorderImageSource, Isolation, MixBlendMode, OutlineColor, OutlineStyle, Overflow,
     };
     use crate::style::values::Length;
     use crate::style::ComputedStyle;

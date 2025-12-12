@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Box shadows now rasterize with a true gaussian blur: outset shadows expand rect+radii by spread, render into a padded offscreen, blur via `apply_gaussian_blur`, and composite without clipping; inset shadows shrink the inner rect by spread/offset, blur, clip to the box to keep the shadow inside, and draw back at the element origin. Legacy multi-layer blur helpers remain gated with `allow(dead_code)` for now.
 - CSS `border-image` implemented: styles hold source/slice/width/outset/repeat, longhands/shorthand parse, painter nine-slices images (URL only) honoring repeat/round/space, border widths, and outsets; device scale respected. Fixed painting bug where border tiles were drawn at the origin (edges overwriting corners) by using absolute device coordinates for each patch. Added a regression covering nine-slice painting.
   - Space repeat now follows the spec: tiles are counted to avoid clipping and the leftover space is distributed between tiles (centered when only one fits). New regression checks both axes for gaps.
   - Border images now accept gradients: linear/radial/conic and repeating variants are rasterized into a generated image sized to the border area before slicing. Added a regression to ensure gradient sources paint and the border interior stays empty when fill is false.

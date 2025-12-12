@@ -32,9 +32,12 @@
 //! ```
 
 use crate::geometry::Rect;
+use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::display_list::BorderRadii;
 use crate::style::color::Rgba;
-use tiny_skia::{FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{
+    FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, PixmapPaint, PremultipliedColorU8, Stroke, Transform,
+};
 
 /// Border widths for all four sides
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -872,44 +875,66 @@ fn render_outset_shadow(
     radii: &BorderRadii,
     shadow: &BoxShadow,
 ) -> bool {
-    // Calculate shadow rectangle (offset + spread)
-    let shadow_x = x + shadow.offset_x - shadow.spread_radius;
-    let shadow_y = y + shadow.offset_y - shadow.spread_radius;
-    let shadow_width = width + shadow.spread_radius * 2.0;
-    let shadow_height = height + shadow.spread_radius * 2.0;
-
-    // Expand radii by spread
-    let shadow_radii = BorderRadii {
-        top_left: (radii.top_left + shadow.spread_radius).max(0.0),
-        top_right: (radii.top_right + shadow.spread_radius).max(0.0),
-        bottom_right: (radii.bottom_right + shadow.spread_radius).max(0.0),
-        bottom_left: (radii.bottom_left + shadow.spread_radius).max(0.0),
+    let sigma = shadow.blur_radius.max(0.0);
+    let spread = shadow.spread_radius;
+    let shadow_rect = Rect::from_xywh(
+        x + shadow.offset_x - spread,
+        y + shadow.offset_y - spread,
+        width + spread * 2.0,
+        height + spread * 2.0,
+    );
+    let radii = BorderRadii {
+        top_left: (radii.top_left + spread).max(0.0),
+        top_right: (radii.top_right + spread).max(0.0),
+        bottom_right: (radii.bottom_right + spread).max(0.0),
+        bottom_left: (radii.bottom_left + spread).max(0.0),
     };
 
-    if shadow.blur_radius <= 0.0 {
-        // No blur - just draw solid shadow
-        fill_rounded_rect(
-            pixmap,
-            shadow_x,
-            shadow_y,
-            shadow_width,
-            shadow_height,
-            &shadow_radii,
-            shadow.color,
-        )
-    } else {
-        // Approximate blur by drawing multiple layers with decreasing opacity
-        render_blurred_shadow(
-            pixmap,
-            shadow_x,
-            shadow_y,
-            shadow_width,
-            shadow_height,
-            &shadow_radii,
-            shadow.blur_radius,
-            shadow.color,
-        )
+    let blur_pad = (sigma * 3.0).ceil();
+    let min_x = (shadow_rect.x() - blur_pad).floor();
+    let min_y = (shadow_rect.y() - blur_pad).floor();
+    let max_x = (shadow_rect.x() + shadow_rect.width() + blur_pad).ceil();
+    let max_y = (shadow_rect.y() + shadow_rect.height() + blur_pad).ceil();
+
+    if max_x <= min_x || max_y <= min_y {
+        return false;
     }
+
+    let canvas_w = (max_x - min_x).max(1.0) as u32;
+    let canvas_h = (max_y - min_y).max(1.0) as u32;
+    let mut tmp = match Pixmap::new(canvas_w, canvas_h) {
+        Some(p) => p,
+        None => return false,
+    };
+
+    let draw_x = shadow_rect.x() - min_x;
+    let draw_y = shadow_rect.y() - min_y;
+
+    let _ = fill_rounded_rect(
+        &mut tmp,
+        draw_x,
+        draw_y,
+        shadow_rect.width(),
+        shadow_rect.height(),
+        &radii,
+        shadow.color,
+    );
+
+    if sigma > 0.0 {
+        apply_gaussian_blur(&mut tmp, sigma);
+    }
+
+    let mut paint = PixmapPaint::default();
+    paint.blend_mode = tiny_skia::BlendMode::SourceOver;
+    pixmap.draw_pixmap(
+        min_x as i32,
+        min_y as i32,
+        tmp.as_ref(),
+        &paint,
+        Transform::identity(),
+        None,
+    );
+    true
 }
 
 /// Renders an inset box shadow
@@ -922,64 +947,77 @@ fn render_inset_shadow(
     radii: &BorderRadii,
     shadow: &BoxShadow,
 ) -> bool {
-    // For inset shadows, we draw inside the box
-    // Calculate inner rectangle (shrunk by spread, offset applied)
-    let inner_x = x + shadow.offset_x + shadow.spread_radius;
-    let inner_y = y + shadow.offset_y + shadow.spread_radius;
-    let inner_width = (width - shadow.spread_radius * 2.0).max(0.0);
-    let inner_height = (height - shadow.spread_radius * 2.0).max(0.0);
+    let sigma = shadow.blur_radius.max(0.0);
+    let blur_pad = (sigma * 3.0).ceil();
+    let spread = shadow.spread_radius;
 
-    // Shrink radii
-    let inner_radii = radii.shrink(shadow.spread_radius);
+    let pad_x = (blur_pad + shadow.offset_x.abs() + spread.abs()).ceil();
+    let pad_y = (blur_pad + shadow.offset_y.abs() + spread.abs()).ceil();
 
-    if shadow.blur_radius <= 0.0 {
-        // For sharp inset shadow, we need to clip and draw
-        // This is complex - for now, draw a border-like effect
-        let widths = BorderWidths::new(
-            if shadow.offset_y > 0.0 {
-                shadow.spread_radius + shadow.offset_y
-            } else {
-                shadow.spread_radius
-            },
-            if shadow.offset_x < 0.0 {
-                shadow.spread_radius - shadow.offset_x
-            } else {
-                shadow.spread_radius
-            },
-            if shadow.offset_y < 0.0 {
-                shadow.spread_radius - shadow.offset_y
-            } else {
-                shadow.spread_radius
-            },
-            if shadow.offset_x > 0.0 {
-                shadow.spread_radius + shadow.offset_x
-            } else {
-                shadow.spread_radius
-            },
-        );
-        let colors = BorderColors::uniform(shadow.color);
-        render_borders(pixmap, x, y, width, height, &widths, &colors, radii)
-    } else {
-        // Blurred inset shadow - approximate with gradient-like effect
-        render_blurred_inset_shadow(
-            pixmap,
-            x,
-            y,
-            width,
-            height,
-            radii,
-            inner_x,
-            inner_y,
-            inner_width,
-            inner_height,
-            &inner_radii,
-            shadow.blur_radius,
-            shadow.color,
-        )
+    let canvas_w = (width + pad_x * 2.0).max(1.0) as u32;
+    let canvas_h = (height + pad_y * 2.0).max(1.0) as u32;
+    let mut tmp = match Pixmap::new(canvas_w, canvas_h) {
+        Some(p) => p,
+        None => return false,
+    };
+
+    let outer_x = pad_x + shadow.offset_x + spread;
+    let outer_y = pad_y + shadow.offset_y + spread;
+    let outer_w = (width - 2.0 * spread).max(0.0);
+    let outer_h = (height - 2.0 * spread).max(0.0);
+
+    let adjusted_radii = radii.shrink(spread).clamped(outer_w, outer_h);
+    let _ = fill_rounded_rect(
+        &mut tmp,
+        outer_x,
+        outer_y,
+        outer_w,
+        outer_h,
+        &adjusted_radii,
+        shadow.color,
+    );
+
+    if sigma > 0.0 {
+        apply_gaussian_blur(&mut tmp, sigma);
     }
+
+    // Clip to the outer box to keep inset shadows inside
+    let width_px = tmp.width() as usize;
+    let height_px = tmp.height() as usize;
+    let pixels_ptr = tmp.pixels_mut().as_mut_ptr();
+    for y_idx in 0..height_px {
+        let row = unsafe { std::slice::from_raw_parts_mut(pixels_ptr.add(y_idx * width_px), width_px) };
+        let y_coord = y_idx as f32;
+        let outside_y = y_coord < outer_y || y_coord > outer_y + outer_h;
+        if outside_y {
+            for px in row {
+                *px = PremultipliedColorU8::TRANSPARENT;
+            }
+            continue;
+        }
+        for (x_idx, px) in row.iter_mut().enumerate() {
+            let x_coord = x_idx as f32;
+            if x_coord < outer_x || x_coord > outer_x + outer_w {
+                *px = PremultipliedColorU8::TRANSPARENT;
+            }
+        }
+    }
+
+    let mut final_paint = PixmapPaint::default();
+    final_paint.blend_mode = tiny_skia::BlendMode::SourceOver;
+    pixmap.draw_pixmap(
+        (x - pad_x) as i32,
+        (y - pad_y) as i32,
+        tmp.as_ref(),
+        &final_paint,
+        Transform::identity(),
+        None,
+    );
+    true
 }
 
 /// Renders a blurred shadow by drawing multiple layers
+#[allow(dead_code)]
 fn render_blurred_shadow(
     pixmap: &mut Pixmap,
     x: f32,
@@ -1039,6 +1077,7 @@ fn render_blurred_shadow(
 }
 
 /// Renders a blurred inset shadow
+#[allow(dead_code)]
 fn render_blurred_inset_shadow(
     pixmap: &mut Pixmap,
     outer_x: f32,
