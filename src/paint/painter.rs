@@ -3346,14 +3346,10 @@ impl Painter {
             crate::style::types::TextUnderlineOffset::Length(l) => {
                 if l.unit == LengthUnit::Percent {
                     l.resolve_against(style.font_size)
-                } else if l.unit.is_font_relative() {
-                    l.resolve_with_font_size(style.font_size)
                 } else if l.unit.is_viewport_relative() {
                     l.resolve_with_viewport(self.css_width, self.css_height)
-                } else if l.unit.is_absolute() {
-                    l.to_px()
                 } else {
-                    l.value * style.font_size
+                    resolve_font_relative_length(l, style, &self.font_ctx)
                 }
             }
         };
@@ -6428,6 +6424,37 @@ mod tests {
         assert!(
             height >= 9 && height <= 11,
             "expected underline thickness around 10px (50% of 20px font), got {height}"
+        );
+    }
+
+    #[test]
+    fn underline_offset_accepts_ex_units() {
+        let mut style = ComputedStyle::default();
+        style.text_decoration.lines = crate::style::types::TextDecorationLine::UNDERLINE;
+        style.text_decoration.color = Some(Rgba::BLACK);
+        style.font_size = 20.0;
+
+        let painter = Painter::new(60, 40, Rgba::WHITE).expect("painter");
+        let runs = painter.shaper.shape("Hi", &style, &painter.font_ctx).expect("shape");
+        let metrics = painter.decoration_metrics(Some(&runs), &style).expect("metrics");
+        let thickness = match style.text_decoration.thickness {
+            crate::style::types::TextDecorationThickness::Length(l) => l.to_px(),
+            _ => metrics.underline_thickness,
+        };
+        let baseline = 24.0;
+
+        let base_center =
+            baseline - painter.underline_position(&metrics, style.text_underline_position, 0.0, thickness);
+
+        let mut ex_style = style;
+        ex_style.text_underline_offset = crate::style::types::TextUnderlineOffset::Length(Length::ex(1.0));
+        let offset = painter.resolve_underline_offset_value(ex_style.text_underline_offset, &ex_style);
+        let ex_center =
+            baseline - painter.underline_position(&metrics, ex_style.text_underline_position, offset, thickness);
+
+        assert!(
+            ex_center > base_center,
+            "ex-based underline offset should push the line farther from the baseline"
         );
     }
 

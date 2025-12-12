@@ -2182,7 +2182,7 @@ impl DisplayListBuilder {
                 if l.unit == LengthUnit::Percent {
                     l.resolve_against(style.font_size)
                 } else if l.unit.is_font_relative() {
-                    l.resolve_with_font_size(style.font_size)
+                    resolve_font_relative_length(l, style, &self.font_ctx)
                 } else if l.unit.is_viewport_relative() {
                     match self.viewport {
                         Some((vw, vh)) => l.resolve_with_viewport(vw, vh),
@@ -2941,6 +2941,66 @@ mod tests {
         assert!(
             list.items().iter().any(|i| matches!(i, DisplayItem::TextDecoration(_))),
             "display list should include text decoration items"
+        );
+    }
+
+    #[test]
+    fn builder_resolves_font_relative_underline_offset() {
+        let mut style = ComputedStyle::default();
+        style.text_decoration.lines = TextDecorationLine::UNDERLINE;
+        style.text_decoration.color = Some(Rgba::BLACK);
+        style.font_size = 20.0;
+
+        let fragment = FragmentNode::new_text_styled(
+            Rect::from_xywh(0.0, 0.0, 50.0, 16.0),
+            "Hi".to_string(),
+            12.0,
+            Arc::new(style.clone()),
+        );
+
+        let list_auto = DisplayListBuilder::new().build(&fragment);
+        let auto_center = list_auto
+            .items()
+            .iter()
+            .find_map(|item| {
+                if let DisplayItem::TextDecoration(dec) = item {
+                    dec.decorations
+                        .first()
+                        .and_then(|d| d.underline.as_ref())
+                        .map(|u| u.center)
+                } else {
+                    None
+                }
+            })
+            .expect("underline present");
+
+        let mut ex_style = style;
+        ex_style.text_underline_offset = TextUnderlineOffset::Length(Length::ex(1.0));
+        let fragment_ex = FragmentNode::new_text_styled(
+            Rect::from_xywh(0.0, 0.0, 50.0, 16.0),
+            "Hi".to_string(),
+            12.0,
+            Arc::new(ex_style),
+        );
+        let list_ex = DisplayListBuilder::new().build(&fragment_ex);
+        let ex_center = list_ex
+            .items()
+            .iter()
+            .find_map(|item| {
+                if let DisplayItem::TextDecoration(dec) = item {
+                    dec.decorations
+                        .first()
+                        .and_then(|d| d.underline.as_ref())
+                        .map(|u| u.center)
+                } else {
+                    None
+                }
+            })
+            .expect("underline present");
+
+        assert!(
+            ex_center > auto_center,
+            "font-relative underline offset should move the underline further from the baseline"
         );
     }
 
