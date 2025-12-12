@@ -269,10 +269,10 @@ fn filter_outset(filters: &[ResolvedFilter], scale: f32) -> (f32, f32, f32, f32)
         match *filter {
             ResolvedFilter::Blur(radius) => {
                 let delta = (radius * scale).abs() * 3.0;
-                left = left.max(delta);
-                right = right.max(delta);
-                top = top.max(delta);
-                bottom = bottom.max(delta);
+                left += delta;
+                right += delta;
+                top += delta;
+                bottom += delta;
             }
             ResolvedFilter::DropShadow {
                 offset_x,
@@ -286,10 +286,14 @@ fn filter_outset(filters: &[ResolvedFilter], scale: f32) -> (f32, f32, f32, f32)
                 let blur = blur_radius * scale;
                 let spread = spread * scale;
                 let delta = (blur.abs() * 3.0 + spread).max(0.0);
-                left = left.max(delta - dx.min(0.0));
-                right = right.max(delta + dx.max(0.0));
-                top = top.max(delta - dy.min(0.0));
-                bottom = bottom.max(delta + dy.max(0.0));
+                let shadow_left = left + delta - dx;
+                let shadow_right = right + delta + dx;
+                let shadow_top = top + delta - dy;
+                let shadow_bottom = bottom + delta + dy;
+                left = left.max(shadow_left);
+                right = right.max(shadow_right);
+                top = top.max(shadow_top);
+                bottom = bottom.max(shadow_bottom);
             }
             _ => {}
         }
@@ -4024,6 +4028,35 @@ mod tests {
             "negative spread should reduce blur outset (got {l},{t},{r},{b})"
         );
         assert!(l < l0 && t < t0 && r < r0 && b < b0, "reduced spread should shrink outsets");
+    }
+
+    #[test]
+    fn filter_outset_accumulates_blurs() {
+        let filters = vec![ResolvedFilter::Blur(2.0), ResolvedFilter::Blur(3.0)];
+        let (l, t, r, b) = filter_outset(&filters, 1.0);
+        assert!(
+            (l - 15.0).abs() < 0.01 && (t - 15.0).abs() < 0.01 && (r - 15.0).abs() < 0.01 && (b - 15.0).abs() < 0.01,
+            "blur outsets should add up across filter chain"
+        );
+    }
+
+    #[test]
+    fn filter_outset_accumulates_drop_shadow_offsets() {
+        let filters = vec![
+            ResolvedFilter::Blur(2.0),
+            ResolvedFilter::DropShadow {
+                offset_x: -4.0,
+                offset_y: 3.0,
+                blur_radius: 1.0,
+                spread: 0.0,
+                color: Rgba::BLACK,
+            },
+        ];
+        let (l, t, r, b) = filter_outset(&filters, 1.0);
+        assert!(
+            (l - 13.0).abs() < 0.01 && (t - 6.0).abs() < 0.01 && (r - 6.0).abs() < 0.01 && (b - 12.0).abs() < 0.01,
+            "expected accumulated outsets to be l=13,t=6,r=6,b=12 but got {l},{t},{r},{b}"
+        );
     }
 
     #[test]
