@@ -4702,53 +4702,6 @@ fn resolve_base_direction_for_box(box_node: &BoxNode) -> crate::style::types::Di
     }
 }
 
-pub(crate) fn bidi_controls(unicode_bidi: UnicodeBidi, direction: Direction) -> (Vec<char>, Vec<char>) {
-    match unicode_bidi {
-        UnicodeBidi::Normal => (Vec::new(), Vec::new()),
-        UnicodeBidi::Embed => {
-            let open = vec![if direction == Direction::Rtl {
-                '\u{202b}'
-            } else {
-                '\u{202a}'
-            }];
-            (open, vec!['\u{202c}'])
-        }
-        UnicodeBidi::BidiOverride => {
-            let open = vec![if direction == Direction::Rtl {
-                '\u{202e}'
-            } else {
-                '\u{202d}'
-            }];
-            (open, vec!['\u{202c}'])
-        }
-        UnicodeBidi::Isolate => {
-            let open = vec![if direction == Direction::Rtl {
-                '\u{2067}'
-            } else {
-                '\u{2066}'
-            }];
-            (open, vec!['\u{2069}'])
-        }
-        UnicodeBidi::IsolateOverride => {
-            let open = vec![
-                if direction == Direction::Rtl {
-                    '\u{2067}'
-                } else {
-                    '\u{2066}'
-                },
-                if direction == Direction::Rtl {
-                    '\u{202e}'
-                } else {
-                    '\u{202d}'
-                },
-            ];
-            (open, vec!['\u{202c}', '\u{2069}'])
-        }
-        // Plaintext relies on first-strong base direction and does not inject additional controls.
-        UnicodeBidi::Plaintext => (Vec::new(), Vec::new()),
-    }
-}
-
 pub(crate) fn push_embedding_level(level: unicode_bidi::Level, dir: Direction) -> unicode_bidi::Level {
     let mut next = level.number().saturating_add(1);
     if dir == Direction::Rtl && next % 2 == 0 {
