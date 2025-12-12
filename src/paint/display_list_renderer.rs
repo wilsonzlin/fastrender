@@ -2397,10 +2397,17 @@ impl DisplayListRenderer {
                     })
                     .collect();
                 for mark in &emphasis.marks {
-                    let mark_origin = Point::new(
-                        mark.center.x - text.width * 0.5,
-                        mark.center.y - text.height * 0.5 + text.baseline_offset,
-                    );
+                    let mark_origin = if inline_vertical {
+                        Point::new(
+                            mark.center.x - text.height * 0.5 + text.baseline_offset,
+                            mark.center.y - text.width * 0.5,
+                        )
+                    } else {
+                        Point::new(
+                            mark.center.x - text.width * 0.5,
+                            mark.center.y - text.height * 0.5 + text.baseline_offset,
+                        )
+                    };
                     self.canvas
                         .draw_text(mark_origin, &glyphs, &font, text.font_size, emphasis.color, 0.0, 0.0);
                 }

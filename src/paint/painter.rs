@@ -4118,8 +4118,13 @@ impl Painter {
                             paint.anti_alias = true;
                             paint.set_color(color_to_skia(emphasis_color));
 
-                            let offset_x = mark_center_x - width * 0.5;
-                            let offset_y = mark_center_y - height * 0.5;
+                            let (draw_w, draw_h) = if inline_vertical {
+                                (height, width)
+                            } else {
+                                (width, height)
+                            };
+                            let offset_x = mark_center_x - draw_w * 0.5;
+                            let offset_y = mark_center_y - draw_h * 0.5;
                             for path in paths {
                                 let translated = path.clone().transform(Transform::from_translate(offset_x, offset_y));
                                 if let Some(p) = translated {
