@@ -962,7 +962,8 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
         let mut iter = run.text.char_indices().peekable();
 
         while let Some((byte_idx, ch)) = iter.next() {
-            let next_idx = iter.peek().map(|(i, _)| *i).unwrap_or_else(|| run.text.len());
+            let next_peek = iter.peek().cloned();
+            let next_idx = next_peek.map(|(i, _)| i).unwrap_or_else(|| run.text.len());
             if (emoji::is_variation_selector(ch) || emoji::is_zwj(ch)) && current.is_some() {
                 if iter.peek().is_none() {
                     if let Some((font, bold, oblique, size, start)) = current.take() {
@@ -983,7 +984,11 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
                 }
                 continue;
             }
-            let emoji_pref = emoji_preference_for_char(ch, style.font_variant_emoji);
+            let emoji_pref = emoji_preference_with_selector(
+                ch,
+                next_peek.map(|(_, c)| c),
+                style.font_variant_emoji,
+            );
             let mut picker = FontPreferencePicker::new(emoji_pref);
             let font = resolve_font_for_char(
                 ch,
@@ -1396,6 +1401,31 @@ fn emoji_preference_for_char(ch: char, variant: FontVariantEmoji) -> EmojiPrefer
             }
         }
     }
+}
+
+fn emoji_preference_with_selector(
+    ch: char,
+    next: Option<char>,
+    variant: FontVariantEmoji,
+) -> EmojiPreference {
+    if let Some(sel) = next {
+        if sel == '\u{FE0F}' {
+            return EmojiPreference::PreferEmoji;
+        }
+        if sel == '\u{FE0E}' {
+            return EmojiPreference::AvoidEmoji;
+        }
+    }
+
+    let base_pref = emoji_preference_for_char(ch, variant);
+
+    if let Some('\u{200d}') = next {
+        if emoji::is_emoji(ch) || emoji::is_emoji_presentation(ch) {
+            return EmojiPreference::PreferEmoji;
+        }
+    }
+
+    base_pref
 }
 
 fn build_family_entries(style: &ComputedStyle) -> Vec<crate::text::font_fallback::FamilyEntry> {
@@ -3218,6 +3248,26 @@ mod tests {
         assert_eq!(
             emoji_preference_for_char('#', FontVariantEmoji::Unicode),
             EmojiPreference::AvoidEmoji
+        );
+    }
+
+    #[test]
+    fn emoji_variation_selectors_override_property_preference() {
+        assert_eq!(
+            emoji_preference_with_selector('😀', Some('\u{fe0e}'), FontVariantEmoji::Emoji),
+            EmojiPreference::AvoidEmoji
+        );
+        assert_eq!(
+            emoji_preference_with_selector('😀', Some('\u{fe0f}'), FontVariantEmoji::Text),
+            EmojiPreference::PreferEmoji
+        );
+    }
+
+    #[test]
+    fn zwj_sequences_prefer_emoji_fonts() {
+        assert_eq!(
+            emoji_preference_with_selector('👩', Some('\u{200d}'), FontVariantEmoji::Text),
+            EmojiPreference::PreferEmoji
         );
     }
 
