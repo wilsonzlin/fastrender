@@ -321,66 +321,6 @@ fn distribute_rowspan_targets(
     }
 }
 
-fn distribute_extra_row_height(
-    row_metrics: &mut [RowMetrics],
-    rows: &[RowInfo],
-    flex_indices: &[usize],
-    extra: f32,
-    percent_base: Option<f32>,
-) {
-    if flex_indices.is_empty() || extra <= 0.0 {
-        return;
-    }
-
-    let mut remaining = extra;
-    let mut iterations = 0;
-    while remaining > 0.01 && iterations < flex_indices.len().saturating_mul(2).max(1) {
-        let mut eligible = Vec::new();
-        for &idx in flex_indices {
-            if let Some(row) = row_metrics.get(idx) {
-                let (_, max_opt) = resolve_row_min_max(&rows[idx], percent_base);
-                let headroom = max_opt.map(|m| (m - row.height).max(0.0)).unwrap_or(f32::INFINITY);
-                if headroom <= 0.0 {
-                    continue;
-                }
-                let weight = if headroom.is_finite() {
-                    headroom
-                } else {
-                    row.height.max(1.0)
-                };
-                eligible.push((idx, headroom, weight));
-            }
-        }
-
-        if eligible.is_empty() {
-            break;
-        }
-
-        let total_weight: f32 = eligible.iter().map(|(_, _, w)| *w).sum();
-        if total_weight <= 0.0 {
-            break;
-        }
-
-        let mut consumed = 0.0;
-        for (idx, headroom, weight) in &eligible {
-            if let Some(row) = row_metrics.get_mut(*idx) {
-                let mut delta = remaining * (*weight / total_weight);
-                if headroom.is_finite() {
-                    delta = delta.min(*headroom);
-                }
-                row.height += delta;
-                consumed += delta;
-            }
-        }
-
-        if consumed <= 0.001 {
-            break;
-        }
-        remaining = (remaining - consumed).max(0.0);
-        iterations += 1;
-    }
-}
-
 fn distribute_remaining_height_with_caps(computed: &mut [f32], rows: &[RowInfo], remaining: f32, percent_base: Option<f32>) {
     if remaining <= 0.0 || computed.is_empty() {
         return;
@@ -3260,20 +3200,22 @@ impl FormattingContext for TableFormattingContext {
             }
         }
 
+        let compute_percent_height_base = |base: f32| {
+            let mut content_base = if structure.border_collapse == BorderCollapse::Collapse {
+                (base - padding_v - outer_border_v).max(0.0)
+            } else {
+                (base - padding_v - border_v).max(0.0)
+            };
+            if structure.border_collapse != BorderCollapse::Collapse {
+                let spacing_total = v_spacing * (structure.row_count as f32 + 1.0);
+                content_base = (content_base - spacing_total).max(0.0);
+            }
+            content_base
+        };
+
         let percent_height_base = table_height
             .or(containing_height)
-            .map(|base| {
-                let mut content_base = if structure.border_collapse == BorderCollapse::Collapse {
-                    (base - padding_v - outer_border_v).max(0.0)
-                } else {
-                    (base - padding_v - border_v).max(0.0)
-                };
-                if structure.border_collapse != BorderCollapse::Collapse {
-                    let spacing_total = v_spacing * (structure.row_count as f32 + 1.0);
-                    content_base = (content_base - spacing_total).max(0.0);
-                }
-                content_base
-            });
+            .map(|base| compute_percent_height_base(base));
 
         let row_floor = |idx: usize, current: f32| -> f32 {
             let row = structure.rows.get(idx);
@@ -3348,18 +3290,9 @@ impl FormattingContext for TableFormattingContext {
         // Preserve the content-driven minimums so later distribution never shrinks below cell content.
         let content_min_heights = row_heights.clone();
 
-        let percent_height_base = table_height.map(|base| {
-            let mut content_base = if structure.border_collapse == BorderCollapse::Collapse {
-                (base - padding_v - outer_border_v).max(0.0)
-            } else {
-                (base - padding_v - border_v).max(0.0)
-            };
-            if structure.border_collapse != BorderCollapse::Collapse {
-                let spacing_total = v_spacing * (structure.row_count as f32 + 1.0);
-                content_base = (content_base - spacing_total).max(0.0);
-            }
-            content_base
-        });
+        let percent_height_base = table_height
+            .or(containing_height)
+            .map(|base| compute_percent_height_base(base));
 
         // Enforce row-specified minimums (length or percentage of table height) and percent targets.
         for (idx, row) in structure.rows.iter().enumerate() {
