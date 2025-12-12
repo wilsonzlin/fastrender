@@ -816,16 +816,18 @@ impl DisplayListBuilder {
         filters
             .iter()
             .filter_map(|f| match f {
-                crate::style::types::FilterFunction::Blur(len) => Self::resolve_filter_length(len, style, viewport, font_ctx)
-                    .map(|r| ResolvedFilter::Blur(r.max(0.0))),
-                crate::style::types::FilterFunction::Brightness(v) => Some(ResolvedFilter::Brightness(*v)),
-                crate::style::types::FilterFunction::Contrast(v) => Some(ResolvedFilter::Contrast(*v)),
-                crate::style::types::FilterFunction::Grayscale(v) => Some(ResolvedFilter::Grayscale(*v)),
-                crate::style::types::FilterFunction::Sepia(v) => Some(ResolvedFilter::Sepia(*v)),
-                crate::style::types::FilterFunction::Saturate(v) => Some(ResolvedFilter::Saturate(*v)),
+                crate::style::types::FilterFunction::Blur(len) => {
+                    let radius = Self::resolve_filter_length(len, style, viewport, font_ctx)?;
+                    (radius >= 0.0).then_some(ResolvedFilter::Blur(radius))
+                }
+                crate::style::types::FilterFunction::Brightness(v) => Some(ResolvedFilter::Brightness((*v).max(0.0))),
+                crate::style::types::FilterFunction::Contrast(v) => Some(ResolvedFilter::Contrast((*v).max(0.0))),
+                crate::style::types::FilterFunction::Grayscale(v) => Some(ResolvedFilter::Grayscale(v.clamp(0.0, 1.0))),
+                crate::style::types::FilterFunction::Sepia(v) => Some(ResolvedFilter::Sepia(v.clamp(0.0, 1.0))),
+                crate::style::types::FilterFunction::Saturate(v) => Some(ResolvedFilter::Saturate((*v).max(0.0))),
                 crate::style::types::FilterFunction::HueRotate(deg) => Some(ResolvedFilter::HueRotate(*deg)),
-                crate::style::types::FilterFunction::Invert(v) => Some(ResolvedFilter::Invert(*v)),
-                crate::style::types::FilterFunction::Opacity(v) => Some(ResolvedFilter::Opacity(*v)),
+                crate::style::types::FilterFunction::Invert(v) => Some(ResolvedFilter::Invert(v.clamp(0.0, 1.0))),
+                crate::style::types::FilterFunction::Opacity(v) => Some(ResolvedFilter::Opacity(v.clamp(0.0, 1.0))),
                 crate::style::types::FilterFunction::DropShadow(shadow) => {
                     let color = match shadow.color {
                         crate::style::types::FilterColor::CurrentColor => style.color,
@@ -833,8 +835,10 @@ impl DisplayListBuilder {
                     };
                     let offset_x = Self::resolve_filter_length(&shadow.offset_x, style, viewport, font_ctx)?;
                     let offset_y = Self::resolve_filter_length(&shadow.offset_y, style, viewport, font_ctx)?;
-                    let blur_radius =
-                        Self::resolve_filter_length(&shadow.blur_radius, style, viewport, font_ctx).map(|r| r.max(0.0))?;
+                    let blur_radius = Self::resolve_filter_length(&shadow.blur_radius, style, viewport, font_ctx)?;
+                    if blur_radius < 0.0 {
+                        return None;
+                    }
                     let spread = Self::resolve_filter_length(&shadow.spread, style, viewport, font_ctx)?;
                     Some(ResolvedFilter::DropShadow {
                         offset_x,
@@ -1319,11 +1323,11 @@ impl DisplayListBuilder {
                     .next()
                 {
                     let (dest_x, dest_y, dest_w, dest_h) = {
-                    let (fit, position, font_size) = if let Some(style) = fragment.style.as_deref() {
-                        (style.object_fit, style.object_position, style.font_size)
-                    } else {
-                        (ObjectFit::Fill, default_object_position(), 16.0)
-                    };
+                        let (fit, position, font_size) = if let Some(style) = fragment.style.as_deref() {
+                            (style.object_fit, style.object_position, style.font_size)
+                        } else {
+                            (ObjectFit::Fill, default_object_position(), 16.0)
+                        };
 
                         compute_object_fit(
                             fit,
@@ -3618,7 +3622,10 @@ mod tests {
     fn filters_resolve_font_relative_lengths_in_display_list() {
         let mut style = ComputedStyle::default();
         style.font_size = 20.0;
-        style.filter = vec![crate::style::types::FilterFunction::Blur(Length::new(1.0, LengthUnit::Ex))];
+        style.filter = vec![crate::style::types::FilterFunction::Blur(Length::new(
+            1.0,
+            LengthUnit::Ex,
+        ))];
 
         let filters =
             DisplayListBuilder::resolve_filters(&style.filter, &style, Some((200.0, 100.0)), &FontContext::new());
@@ -3630,6 +3637,50 @@ mod tests {
             ),
             other => panic!("expected blur filter, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn unit_interval_filters_clamp_in_display_list() {
+        let mut style = ComputedStyle::default();
+        style.filter = vec![
+            crate::style::types::FilterFunction::Grayscale(2.0),
+            crate::style::types::FilterFunction::Sepia(1.5),
+            crate::style::types::FilterFunction::Invert(1.3),
+            crate::style::types::FilterFunction::Opacity(1.8),
+        ];
+
+        let filters =
+            DisplayListBuilder::resolve_filters(&style.filter, &style, Some((200.0, 100.0)), &FontContext::new());
+        assert_eq!(filters.len(), 4);
+        assert!(filters.iter().all(|f| match f {
+            ResolvedFilter::Grayscale(v) | ResolvedFilter::Sepia(v) | ResolvedFilter::Invert(v) =>
+                (*v - 1.0).abs() < 0.001,
+            ResolvedFilter::Opacity(v) => (*v - 1.0).abs() < 0.001,
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn multiplicative_filters_keep_values_in_display_list() {
+        let mut style = ComputedStyle::default();
+        style.filter = vec![
+            crate::style::types::FilterFunction::Brightness(2.25),
+            crate::style::types::FilterFunction::Contrast(1.5),
+            crate::style::types::FilterFunction::Saturate(3.75),
+        ];
+
+        let filters =
+            DisplayListBuilder::resolve_filters(&style.filter, &style, Some((200.0, 100.0)), &FontContext::new());
+        assert_eq!(filters.len(), 3);
+        assert!(filters
+            .iter()
+            .any(|f| matches!(f, ResolvedFilter::Brightness(v) if (*v - 2.25).abs() < 0.001)));
+        assert!(filters
+            .iter()
+            .any(|f| matches!(f, ResolvedFilter::Contrast(v) if (*v - 1.5).abs() < 0.001)));
+        assert!(filters
+            .iter()
+            .any(|f| matches!(f, ResolvedFilter::Saturate(v) if (*v - 3.75).abs() < 0.001)));
     }
 
     #[test]

@@ -3745,14 +3745,16 @@ mod tests {
         let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 120.0, 60.0), vec![fragment]);
 
         let font_ctx = FontContext::new();
-        let list = DisplayListBuilder::new().with_font_context(font_ctx.clone()).build(&root);
+        let list = DisplayListBuilder::new()
+            .with_font_context(font_ctx.clone())
+            .build(&root);
         let pixmap = DisplayListRenderer::new(120, 60, Rgba::WHITE, font_ctx)
             .expect("renderer")
             .render(&list)
             .expect("rendered");
 
-        let red_bbox = bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80)
-            .expect("underline");
+        let red_bbox =
+            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80).expect("underline");
         let height = red_bbox.3 - red_bbox.1 + 1;
         assert!(
             (9..=11).contains(&height),
@@ -3775,14 +3777,16 @@ mod tests {
         let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 120.0, 60.0), vec![fragment]);
 
         let font_ctx = FontContext::new();
-        let list = DisplayListBuilder::new().with_font_context(font_ctx.clone()).build(&root);
+        let list = DisplayListBuilder::new()
+            .with_font_context(font_ctx.clone())
+            .build(&root);
         let pixmap = DisplayListRenderer::new_scaled(120, 60, Rgba::WHITE, font_ctx, 2.0)
             .expect("renderer")
             .render(&list)
             .expect("rendered");
 
-        let red_bbox = bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80)
-            .expect("underline");
+        let red_bbox =
+            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80).expect("underline");
         let height = red_bbox.3 - red_bbox.1 + 1;
         assert!(
             (7..=9).contains(&height),
@@ -4220,8 +4224,8 @@ mod tests {
 
         let black_bbox =
             bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32).expect("text pixels");
-        let red_bbox = bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80)
-            .expect("shadow");
+        let red_bbox =
+            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80).expect("shadow");
 
         let dx = red_bbox.0 as i32 - black_bbox.0 as i32;
         let dy = red_bbox.1 as i32 - black_bbox.1 as i32;
@@ -4229,7 +4233,10 @@ mod tests {
             (9..=11).contains(&dx),
             "percent offset_x should resolve to ~10px (got {dx})"
         );
-        assert!((19..=21).contains(&dy), "1em offset_y should resolve to ~20px (got {dy})");
+        assert!(
+            (19..=21).contains(&dy),
+            "1em offset_y should resolve to ~20px (got {dy})"
+        );
     }
 
     #[test]

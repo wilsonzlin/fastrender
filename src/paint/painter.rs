@@ -4764,16 +4764,18 @@ fn resolve_filters(
     filters
         .iter()
         .filter_map(|f| match f {
-            FilterFunction::Blur(len) => resolve_filter_length(len, style, viewport, font_ctx)
-                .map(|r| ResolvedFilter::Blur(r.max(0.0))),
-            FilterFunction::Brightness(v) => Some(ResolvedFilter::Brightness(*v)),
-            FilterFunction::Contrast(v) => Some(ResolvedFilter::Contrast(*v)),
-            FilterFunction::Grayscale(v) => Some(ResolvedFilter::Grayscale(*v)),
-            FilterFunction::Sepia(v) => Some(ResolvedFilter::Sepia(*v)),
-            FilterFunction::Saturate(v) => Some(ResolvedFilter::Saturate(*v)),
+            FilterFunction::Blur(len) => {
+                let radius = resolve_filter_length(len, style, viewport, font_ctx)?;
+                (radius >= 0.0).then_some(ResolvedFilter::Blur(radius))
+            }
+            FilterFunction::Brightness(v) => Some(ResolvedFilter::Brightness((*v).max(0.0))),
+            FilterFunction::Contrast(v) => Some(ResolvedFilter::Contrast((*v).max(0.0))),
+            FilterFunction::Grayscale(v) => Some(ResolvedFilter::Grayscale(v.clamp(0.0, 1.0))),
+            FilterFunction::Sepia(v) => Some(ResolvedFilter::Sepia(v.clamp(0.0, 1.0))),
+            FilterFunction::Saturate(v) => Some(ResolvedFilter::Saturate((*v).max(0.0))),
             FilterFunction::HueRotate(deg) => Some(ResolvedFilter::HueRotate(*deg)),
-            FilterFunction::Invert(v) => Some(ResolvedFilter::Invert(*v)),
-            FilterFunction::Opacity(v) => Some(ResolvedFilter::Opacity(*v)),
+            FilterFunction::Invert(v) => Some(ResolvedFilter::Invert(v.clamp(0.0, 1.0))),
+            FilterFunction::Opacity(v) => Some(ResolvedFilter::Opacity(v.clamp(0.0, 1.0))),
             FilterFunction::DropShadow(shadow) => {
                 let color = match shadow.color {
                     FilterColor::CurrentColor => style.color,
@@ -4781,8 +4783,10 @@ fn resolve_filters(
                 };
                 let offset_x = resolve_filter_length(&shadow.offset_x, style, viewport, font_ctx)?;
                 let offset_y = resolve_filter_length(&shadow.offset_y, style, viewport, font_ctx)?;
-                let blur_radius =
-                    resolve_filter_length(&shadow.blur_radius, style, viewport, font_ctx).map(|r| r.max(0.0))?;
+                let blur_radius = resolve_filter_length(&shadow.blur_radius, style, viewport, font_ctx)?;
+                if blur_radius < 0.0 {
+                    return None;
+                }
                 let spread = resolve_filter_length(&shadow.spread, style, viewport, font_ctx)?;
                 Some(ResolvedFilter::DropShadow {
                     offset_x,
@@ -6380,8 +6384,7 @@ mod tests {
             .count();
         assert!(shadow_pixels > 0, "expected shadow pixels to be present");
 
-        let red_bbox =
-            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > g && r > b).expect("shadow");
+        let red_bbox = bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > g && r > b).expect("shadow");
 
         let dx = red_bbox.0.saturating_sub(black_bbox.0);
         assert!(
@@ -6423,8 +6426,7 @@ mod tests {
             .count();
         assert!(shadow_pixels > 0, "expected shadow pixels to be present");
 
-        let red_bbox =
-            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > g && r > b).expect("shadow");
+        let red_bbox = bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > g && r > b).expect("shadow");
 
         let mut outside = 0;
         let width = pixmap.width();
@@ -6479,7 +6481,10 @@ mod tests {
             (9..=11).contains(&dx),
             "percent offset_x should resolve to ~10px (got {dx})"
         );
-        assert!((19..=21).contains(&dy), "1em offset_y should resolve to ~20px (got {dy})");
+        assert!(
+            (19..=21).contains(&dy),
+            "1em offset_y should resolve to ~20px (got {dy})"
+        );
     }
 
     #[test]
@@ -6514,6 +6519,54 @@ mod tests {
             ),
             other => panic!("expected blur filter, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn negative_blur_lengths_resolve_to_no_filter() {
+        let mut style = ComputedStyle::default();
+        style.filter = vec![FilterFunction::Blur(Length::px(-2.0))];
+        let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+        assert!(filters.is_empty(), "negative blur should drop the filter");
+    }
+
+    #[test]
+    fn unit_interval_filters_clamp_to_one() {
+        let mut style = ComputedStyle::default();
+        style.filter = vec![
+            FilterFunction::Grayscale(2.0),
+            FilterFunction::Sepia(1.5),
+            FilterFunction::Invert(1.3),
+            FilterFunction::Opacity(1.7),
+        ];
+        let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+        assert_eq!(filters.len(), 4);
+        assert!(filters.iter().all(|f| match f {
+            ResolvedFilter::Grayscale(v) | ResolvedFilter::Sepia(v) | ResolvedFilter::Invert(v) =>
+                (*v - 1.0).abs() < 0.001,
+            ResolvedFilter::Opacity(v) => (*v - 1.0).abs() < 0.001,
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn multiplicative_filters_keep_values_above_one() {
+        let mut style = ComputedStyle::default();
+        style.filter = vec![
+            FilterFunction::Brightness(2.5),
+            FilterFunction::Contrast(1.7),
+            FilterFunction::Saturate(3.2),
+        ];
+        let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+        assert_eq!(filters.len(), 3);
+        assert!(filters
+            .iter()
+            .any(|f| matches!(f, ResolvedFilter::Brightness(v) if (*v - 2.5).abs() < 0.001)));
+        assert!(filters
+            .iter()
+            .any(|f| matches!(f, ResolvedFilter::Contrast(v) if (*v - 1.7).abs() < 0.001)));
+        assert!(filters
+            .iter()
+            .any(|f| matches!(f, ResolvedFilter::Saturate(v) if (*v - 3.2).abs() < 0.001)));
     }
 
     #[test]
@@ -6655,12 +6708,8 @@ mod tests {
         style.text_decoration_skip_ink = crate::style::types::TextDecorationSkipInk::None;
         let style = Arc::new(style);
 
-        let fragment = FragmentNode::new_text_styled(
-            Rect::from_xywh(10.0, 10.0, 80.0, 30.0),
-            "Hi".to_string(),
-            22.0,
-            style,
-        );
+        let fragment =
+            FragmentNode::new_text_styled(Rect::from_xywh(10.0, 10.0, 80.0, 30.0), "Hi".to_string(), 22.0, style);
         let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 120.0, 60.0), vec![fragment]);
         let pixmap = paint_tree_scaled(&FragmentTree::new(root), 120, 60, Rgba::WHITE, 2.0).expect("paint");
 

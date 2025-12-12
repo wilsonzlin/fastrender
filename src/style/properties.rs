@@ -6304,9 +6304,26 @@ fn parse_filter_function<'i, 't>(
     name: &str,
     input: &mut Parser<'i, 't>,
 ) -> Result<FilterFunction, cssparser::ParseError<'i, ()>> {
-    fn parse_filter_length<'i, 't>(
+    fn parse_number_or_percentage_with_default<'i, 't>(
         input: &mut Parser<'i, 't>,
-    ) -> Result<Length, cssparser::ParseError<'i, ()>> {
+        default: f32,
+    ) -> Result<f32, cssparser::ParseError<'i, ()>> {
+        input.skip_whitespace();
+        if input.is_exhausted() {
+            return Ok(default);
+        }
+        let v = parse_number_or_percentage(input)?;
+        if v < 0.0 {
+            return Err(input.new_custom_error(()));
+        }
+        input.skip_whitespace();
+        if !input.is_exhausted() {
+            return Err(input.new_custom_error(()));
+        }
+        Ok(v)
+    }
+
+    fn parse_filter_length<'i, 't>(input: &mut Parser<'i, 't>) -> Result<Length, cssparser::ParseError<'i, ()>> {
         let len = parse_length_component(input)?;
         if matches!(len.unit, LengthUnit::Percent) {
             return Err(input.new_custom_error(()));
@@ -6314,77 +6331,71 @@ fn parse_filter_function<'i, 't>(
         Ok(len)
     }
 
+    fn parse_non_negative_filter_length<'i, 't>(
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Length, cssparser::ParseError<'i, ()>> {
+        let len = parse_filter_length(input)?;
+        if len.value < 0.0 {
+            return Err(input.new_custom_error(()));
+        }
+        Ok(len)
+    }
+
     match name {
         "blur" => {
-            let len = parse_filter_length(input)?;
             input.skip_whitespace();
-            if !input.is_exhausted() {
-                return Err(input.new_custom_error(()));
-            }
+            let len = if input.is_exhausted() {
+                Length::px(0.0)
+            } else {
+                let len = parse_non_negative_filter_length(input)?;
+                input.skip_whitespace();
+                if !input.is_exhausted() {
+                    return Err(input.new_custom_error(()));
+                }
+                len
+            };
             Ok(FilterFunction::Blur(len))
         }
         "brightness" => {
-            let v = parse_number_or_percentage(input)?;
-            input.skip_whitespace();
-            if !input.is_exhausted() {
-                return Err(input.new_custom_error(()));
-            }
+            let v = parse_number_or_percentage_with_default(input, 1.0)?;
             Ok(FilterFunction::Brightness(v))
         }
         "contrast" => {
-            let v = parse_number_or_percentage(input)?;
-            input.skip_whitespace();
-            if !input.is_exhausted() {
-                return Err(input.new_custom_error(()));
-            }
+            let v = parse_number_or_percentage_with_default(input, 1.0)?;
             Ok(FilterFunction::Contrast(v))
         }
         "grayscale" => {
-            let v = parse_number_or_percentage(input)?;
-            input.skip_whitespace();
-            if !input.is_exhausted() {
-                return Err(input.new_custom_error(()));
-            }
+            let v = parse_number_or_percentage_with_default(input, 1.0)?;
             Ok(FilterFunction::Grayscale(v))
         }
         "sepia" => {
-            let v = parse_number_or_percentage(input)?;
-            input.skip_whitespace();
-            if !input.is_exhausted() {
-                return Err(input.new_custom_error(()));
-            }
+            let v = parse_number_or_percentage_with_default(input, 1.0)?;
             Ok(FilterFunction::Sepia(v))
         }
         "saturate" => {
-            let v = parse_number_or_percentage(input)?;
-            input.skip_whitespace();
-            if !input.is_exhausted() {
-                return Err(input.new_custom_error(()));
-            }
+            let v = parse_number_or_percentage_with_default(input, 1.0)?;
             Ok(FilterFunction::Saturate(v))
         }
         "hue-rotate" => {
-            let v = parse_angle_degrees(input)?;
             input.skip_whitespace();
-            if !input.is_exhausted() {
-                return Err(input.new_custom_error(()));
-            }
+            let v = if input.is_exhausted() {
+                0.0
+            } else {
+                let v = parse_angle_degrees(input)?;
+                input.skip_whitespace();
+                if !input.is_exhausted() {
+                    return Err(input.new_custom_error(()));
+                }
+                v
+            };
             Ok(FilterFunction::HueRotate(v))
         }
         "invert" => {
-            let v = parse_number_or_percentage(input)?;
-            input.skip_whitespace();
-            if !input.is_exhausted() {
-                return Err(input.new_custom_error(()));
-            }
+            let v = parse_number_or_percentage_with_default(input, 1.0)?;
             Ok(FilterFunction::Invert(v))
         }
         "opacity" => {
-            let v = parse_number_or_percentage(input)?;
-            input.skip_whitespace();
-            if !input.is_exhausted() {
-                return Err(input.new_custom_error(()));
-            }
+            let v = parse_number_or_percentage_with_default(input, 1.0)?;
             Ok(FilterFunction::Opacity(v))
         }
         "drop-shadow" => parse_drop_shadow(input),
@@ -6929,6 +6940,9 @@ fn parse_drop_shadow<'i, 't>(input: &mut Parser<'i, 't>) -> Result<FilterFunctio
 
     let blur = lengths.get(2).copied().unwrap_or_else(|| Length::px(0.0));
     let spread = lengths.get(3).copied().unwrap_or_else(|| Length::px(0.0));
+    if blur.value < 0.0 {
+        return Err(input.new_custom_error(()));
+    }
 
     Ok(FilterFunction::DropShadow(FilterShadow {
         offset_x: lengths[0],
@@ -10681,6 +10695,51 @@ mod tests {
     }
 
     #[test]
+    fn filter_arguments_default_when_omitted() {
+        let filters = parse_filter_list(&PropertyValue::Keyword(
+            "blur() brightness() contrast() grayscale() sepia() saturate() invert() opacity() hue-rotate()".to_string(),
+        ))
+        .expect("filters");
+        assert_eq!(filters.len(), 9);
+        match &filters[0] {
+            FilterFunction::Blur(len) => assert!(len.to_px().abs() < 0.001),
+            other => panic!("expected blur default, got {:?}", other),
+        }
+        match &filters[1] {
+            FilterFunction::Brightness(v) => assert!((*v - 1.0).abs() < 0.001),
+            other => panic!("expected brightness default, got {:?}", other),
+        }
+        match &filters[2] {
+            FilterFunction::Contrast(v) => assert!((*v - 1.0).abs() < 0.001),
+            other => panic!("expected contrast default, got {:?}", other),
+        }
+        match &filters[3] {
+            FilterFunction::Grayscale(v) => assert!((*v - 1.0).abs() < 0.001),
+            other => panic!("expected grayscale default, got {:?}", other),
+        }
+        match &filters[4] {
+            FilterFunction::Sepia(v) => assert!((*v - 1.0).abs() < 0.001),
+            other => panic!("expected sepia default, got {:?}", other),
+        }
+        match &filters[5] {
+            FilterFunction::Saturate(v) => assert!((*v - 1.0).abs() < 0.001),
+            other => panic!("expected saturate default, got {:?}", other),
+        }
+        match &filters[6] {
+            FilterFunction::Invert(v) => assert!((*v - 1.0).abs() < 0.001),
+            other => panic!("expected invert default, got {:?}", other),
+        }
+        match &filters[7] {
+            FilterFunction::Opacity(v) => assert!((*v - 1.0).abs() < 0.001),
+            other => panic!("expected opacity default, got {:?}", other),
+        }
+        match &filters[8] {
+            FilterFunction::HueRotate(v) => assert!((*v).abs() < 0.001),
+            other => panic!("expected hue-rotate default, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn parses_drop_shadow_defaulting_to_current_color() {
         let filters =
             parse_filter_list(&PropertyValue::Keyword("drop-shadow(2px 3px 4px)".to_string())).expect("filters");
@@ -10722,6 +10781,18 @@ mod tests {
         assert!(
             parse_filter_list(&PropertyValue::Keyword("drop-shadow(1px 2px 10%)".to_string())).is_none(),
             "percentage drop-shadow blur should be invalid"
+        );
+    }
+
+    #[test]
+    fn negative_blur_lengths_are_invalid() {
+        assert!(
+            parse_filter_list(&PropertyValue::Keyword("blur(-1px)".to_string())).is_none(),
+            "negative blur should be invalid"
+        );
+        assert!(
+            parse_filter_list(&PropertyValue::Keyword("drop-shadow(1px 2px -5px)".to_string())).is_none(),
+            "negative drop-shadow blur should be invalid"
         );
     }
 
