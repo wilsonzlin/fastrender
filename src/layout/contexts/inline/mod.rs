@@ -61,10 +61,11 @@ use crate::text::font_loader::FontContext;
 use crate::text::hyphenation::Hyphenator;
 use crate::text::justify::is_cjk_character;
 use crate::text::line_break::{find_break_opportunities, BreakOpportunity, BreakType};
-use crate::text::pipeline::{compute_adjusted_font_size, preferred_font_aspect, ShapedRun, ShapingPipeline};
+use crate::text::pipeline::{
+    compute_adjusted_font_size, preferred_font_aspect, ExplicitBidiContext, ShapedRun, ShapingPipeline,
+};
 use crate::tree::box_tree::{BoxNode, BoxType, MarkerContent, ReplacedBox};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
-use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -1072,21 +1073,9 @@ impl InlineFormattingContext {
 
         let forced_break_offsets: Vec<usize> = forced_breaks.iter().map(|b| b.byte_offset).collect();
 
-        let (prefix_controls, suffix_controls) = build_bidi_wrappers(&bidi_stack);
-        let (shape_text, prefix_len) = if prefix_controls.is_empty() && suffix_controls.is_empty() {
-            (Cow::Borrowed(hyphen_free.as_str()), 0usize)
-        } else {
-            let mut buf = String::with_capacity(prefix_controls.len() + hyphen_free.len() + suffix_controls.len());
-            buf.push_str(&prefix_controls);
-            buf.push_str(&hyphen_free);
-            buf.push_str(&suffix_controls);
-            (Cow::Owned(buf), prefix_controls.len())
-        };
+        let bidi_context = explicit_bidi_context(base_direction, &bidi_stack);
 
-        let mut shaped_runs = self.shape_with_fallback(&shape_text, style, base_direction)?;
-        if matches!(shape_text, Cow::Owned(_)) {
-            shaped_runs = strip_bidi_wrapper_runs(shaped_runs, prefix_len, hyphen_free.len(), &hyphen_free);
-        }
+        let mut shaped_runs = self.shape_with_fallback(hyphen_free.as_str(), style, base_direction, bidi_context)?;
         TextItem::apply_spacing_to_runs(&mut shaped_runs, &hyphen_free, style.letter_spacing, style.word_spacing);
 
         let metrics = TextItem::metrics_from_runs(&shaped_runs, line_height, style.font_size);
@@ -1313,10 +1302,17 @@ impl InlineFormattingContext {
         text: &str,
         style: &ComputedStyle,
         base_direction: crate::style::types::Direction,
+        bidi_context: Option<ExplicitBidiContext>,
     ) -> Result<Vec<ShapedRun>, LayoutError> {
         match self
             .pipeline
-            .shape_with_direction(text, style, &self.font_context, pipeline_direction(base_direction))
+            .shape_with_context(
+                text,
+                style,
+                &self.font_context,
+                pipeline_direction(base_direction),
+                bidi_context,
+            )
         {
             Ok(runs) => Ok(runs),
             Err(err) => {
@@ -1324,11 +1320,12 @@ impl InlineFormattingContext {
                     let mut fallback_style = style.clone();
                     fallback_style.font_family = vec![fallback_font.family.clone()];
                     self.pipeline
-                        .shape_with_direction(
+                        .shape_with_context(
                             text,
                             &fallback_style,
                             &self.font_context,
                             pipeline_direction(base_direction),
+                            bidi_context,
                         )
                         .map_err(|e| {
                             LayoutError::MissingContext(format!(
@@ -1349,7 +1346,7 @@ impl InlineFormattingContext {
     }
 
     fn space_advance(&self, style: &ComputedStyle) -> Result<f32, LayoutError> {
-        let mut runs = self.shape_with_fallback(" ", style, style.direction)?;
+        let mut runs = self.shape_with_fallback(" ", style, style.direction, None)?;
         TextItem::apply_spacing_to_runs(&mut runs, " ", style.letter_spacing, style.word_spacing);
         Ok(runs.iter().map(|r| r.advance).sum())
     }
@@ -4752,80 +4749,54 @@ pub(crate) fn bidi_controls(unicode_bidi: UnicodeBidi, direction: Direction) -> 
     }
 }
 
-fn build_bidi_wrappers(stack: &[(UnicodeBidi, Direction)]) -> (String, String) {
-    if stack.is_empty() {
-        return (String::new(), String::new());
+fn push_embedding_level(level: unicode_bidi::Level, dir: Direction) -> unicode_bidi::Level {
+    let mut next = level.number().saturating_add(1);
+    if dir == Direction::Rtl && next % 2 == 0 {
+        next = next.saturating_add(1);
+    } else if dir == Direction::Ltr && next % 2 == 1 {
+        next = next.saturating_add(1);
     }
-
-    let mut prefix = String::new();
-    let mut closers: Vec<Vec<char>> = Vec::new();
-    let mut current_depth = 0usize;
-    let max_depth = unicode_bidi::level::MAX_EXPLICIT_DEPTH as usize;
-
-    for (ub, dir) in stack {
-        let (opens, closes) = bidi_controls(*ub, *dir);
-        if !opens.is_empty() && current_depth < max_depth {
-            prefix.extend(opens);
-            closers.push(closes);
-            current_depth += 1;
-        }
+    let max = unicode_bidi::level::MAX_EXPLICIT_DEPTH as u8;
+    if next > max {
+        return level;
     }
-
-    let mut suffix = String::new();
-    for closer_set in closers.into_iter().rev() {
-        for ch in closer_set {
-            suffix.push(ch);
-        }
-    }
-
-    (prefix, suffix)
+    unicode_bidi::Level::new(next).unwrap_or(level)
 }
 
-fn strip_bidi_wrapper_runs(
-    runs: Vec<ShapedRun>,
-    prefix_len: usize,
-    content_len: usize,
-    content_text: &str,
-) -> Vec<ShapedRun> {
-    if prefix_len == 0 && content_len == 0 {
-        return runs;
+fn explicit_bidi_context(
+    base_direction: Direction,
+    stack: &[(UnicodeBidi, Direction)],
+) -> Option<crate::text::pipeline::ExplicitBidiContext> {
+    if stack.is_empty() || stack.iter().any(|(ub, _)| matches!(ub, UnicodeBidi::Plaintext)) {
+        return None;
     }
-    let content_start = prefix_len;
-    let content_end = prefix_len + content_len;
-    let mut filtered = Vec::with_capacity(runs.len());
-
-    for mut run in runs {
-        if run.end <= content_start || run.start >= content_end {
-            continue;
-        }
-
-        let original_start = run.start;
-        let new_start = original_start.saturating_sub(prefix_len);
-        let mut glyphs = Vec::new();
-        for glyph in run.glyphs {
-            let global_cluster = original_start + glyph.cluster as usize;
-            if global_cluster < content_start || global_cluster >= content_end {
-                continue;
+    let mut level = match base_direction {
+        Direction::Ltr => unicode_bidi::Level::ltr(),
+        Direction::Rtl => unicode_bidi::Level::rtl(),
+    };
+    let mut override_all = false;
+    let mut changed = false;
+    for (ub, dir) in stack {
+        match ub {
+            UnicodeBidi::Normal | UnicodeBidi::Plaintext => {}
+            UnicodeBidi::Embed | UnicodeBidi::Isolate | UnicodeBidi::BidiOverride | UnicodeBidi::IsolateOverride => {
+                let next = push_embedding_level(level, *dir);
+                if next != level {
+                    level = next;
+                    changed = true;
+                }
+                if matches!(ub, UnicodeBidi::BidiOverride | UnicodeBidi::IsolateOverride) {
+                    override_all = true;
+                }
             }
-            let adjusted = global_cluster.saturating_sub(prefix_len).saturating_sub(new_start);
-            let mut glyph = glyph;
-            glyph.cluster = adjusted as u32;
-            glyphs.push(glyph);
         }
-
-        if glyphs.is_empty() {
-            continue;
-        }
-
-        run.start = new_start;
-        run.end = run.end.min(content_end).saturating_sub(prefix_len);
-        run.text = content_text.to_string();
-        run.advance = glyphs.iter().map(|g| g.x_advance).sum();
-        run.glyphs = glyphs;
-        filtered.push(run);
     }
 
-    filtered
+    if !changed && !override_all {
+        None
+    } else {
+        Some(crate::text::pipeline::ExplicitBidiContext { level, override_all })
+    }
 }
 
 #[allow(dead_code)]

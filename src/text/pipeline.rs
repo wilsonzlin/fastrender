@@ -340,6 +340,15 @@ impl Script {
 // Bidi Analysis
 // ============================================================================
 
+/// Explicit bidi context passed in by layout when `unicode-bidi` establishes
+/// embedding/override/isolation scopes that should affect the entire text run
+/// without injecting control characters.
+#[derive(Clone, Copy, Debug)]
+pub struct ExplicitBidiContext {
+    pub level: Level,
+    pub override_all: bool,
+}
+
 /// Result of bidirectional text analysis.
 ///
 /// Contains the bidi levels for each character and metadata about
@@ -384,7 +393,7 @@ impl BidiAnalysis {
             CssDirection::Ltr => Direction::LeftToRight,
             CssDirection::Rtl => Direction::RightToLeft,
         };
-        Self::analyze_with_base(text, style, base_direction)
+        Self::analyze_with_base(text, style, base_direction, None)
     }
 
     /// Analyzes text for bidirectional properties with an explicit base direction.
@@ -392,12 +401,22 @@ impl BidiAnalysis {
     /// This mirrors CSS paragraph base resolution while allowing callers (e.g. layout)
     /// to supply the containing block's resolved direction when it differs from the
     /// style value.
-    pub fn analyze_with_base(text: &str, style: &ComputedStyle, base_direction: Direction) -> Self {
+    pub fn analyze_with_base(
+        text: &str,
+        style: &ComputedStyle,
+        base_direction: Direction,
+        explicit: Option<ExplicitBidiContext>,
+    ) -> Self {
         // Determine base direction from CSS direction property (inherited, initial LTR)
-        let base_level = match base_direction {
+        let mut base_level = match base_direction {
             Direction::LeftToRight => Level::ltr(),
             Direction::RightToLeft => Level::rtl(),
         };
+        let mut override_all = false;
+        if let Some(ctx) = explicit {
+            base_level = ctx.level;
+            override_all = ctx.override_all;
+        }
 
         // Handle empty text
         if text.is_empty() {
@@ -433,10 +452,12 @@ impl BidiAnalysis {
 
         // CSS bidi overrides force all characters to the element's direction.
         use crate::style::types::UnicodeBidi;
-        if matches!(
-            style.unicode_bidi,
-            UnicodeBidi::BidiOverride | UnicodeBidi::IsolateOverride
-        ) {
+        if override_all
+            || matches!(
+                style.unicode_bidi,
+                UnicodeBidi::BidiOverride | UnicodeBidi::IsolateOverride
+            )
+        {
             levels = vec![base_level; levels.len()];
             needs_reordering = false;
         }
@@ -1885,7 +1906,7 @@ impl ShapingPipeline {
     ///
     /// Returns an error if font matching or shaping fails.
     pub fn shape(&self, text: &str, style: &ComputedStyle, font_context: &FontContext) -> Result<Vec<ShapedRun>> {
-        self.shape_core(text, style, font_context, None)
+        self.shape_core(text, style, font_context, None, None)
     }
 
     fn shape_core(
@@ -1894,6 +1915,7 @@ impl ShapingPipeline {
         style: &ComputedStyle,
         font_context: &FontContext,
         base_direction: Option<Direction>,
+        explicit_bidi: Option<ExplicitBidiContext>,
     ) -> Result<Vec<ShapedRun>> {
         // Handle empty text
         if text.is_empty() {
@@ -1907,13 +1929,13 @@ impl ShapingPipeline {
             )
         {
             if !has_native_small_caps(style, font_context) && style.font_synthesis.small_caps {
-                return self.shape_small_caps(text, style, font_context, base_direction);
+                return self.shape_small_caps(text, style, font_context, base_direction, explicit_bidi);
             }
         }
 
         // Step 1: Bidi analysis
         let bidi = if let Some(dir) = base_direction {
-            BidiAnalysis::analyze_with_base(text, style, dir)
+            BidiAnalysis::analyze_with_base(text, style, dir, explicit_bidi)
         } else {
             BidiAnalysis::analyze(text, style)
         };
@@ -1956,7 +1978,19 @@ impl ShapingPipeline {
         font_context: &FontContext,
         base_direction: Direction,
     ) -> Result<Vec<ShapedRun>> {
-        self.shape_core(text, style, font_context, Some(base_direction))
+        self.shape_core(text, style, font_context, Some(base_direction), None)
+    }
+
+    /// Shapes text with an explicit bidi context (embedding level/override).
+    pub fn shape_with_context(
+        &self,
+        text: &str,
+        style: &ComputedStyle,
+        font_context: &FontContext,
+        base_direction: Direction,
+        bidi_context: Option<ExplicitBidiContext>,
+    ) -> Result<Vec<ShapedRun>> {
+        self.shape_core(text, style, font_context, Some(base_direction), bidi_context)
     }
 
     /// Measures the total advance width of shaped text.
@@ -1973,6 +2007,7 @@ impl ShapingPipeline {
         style: &ComputedStyle,
         font_context: &FontContext,
         base_direction: Option<Direction>,
+        explicit_bidi: Option<ExplicitBidiContext>,
     ) -> Result<Vec<ShapedRun>> {
         const SMALL_CAPS_SCALE: f32 = 0.8;
 
@@ -1995,6 +2030,7 @@ impl ShapingPipeline {
                         font_context,
                         SMALL_CAPS_SCALE,
                         base_direction,
+                        explicit_bidi,
                     )?;
                     buffer.clear();
                     segment_start = idx;
@@ -2023,6 +2059,7 @@ impl ShapingPipeline {
                 font_context,
                 SMALL_CAPS_SCALE,
                 base_direction,
+                explicit_bidi,
             )?;
         }
 
@@ -2039,6 +2076,7 @@ impl ShapingPipeline {
         font_context: &FontContext,
         scale: f32,
         base_direction: Option<Direction>,
+        explicit_bidi: Option<ExplicitBidiContext>,
     ) -> Result<()> {
         let mut seg_style = style.clone();
         seg_style.font_variant = FontVariant::Normal;
@@ -2046,7 +2084,7 @@ impl ShapingPipeline {
         if is_small {
             seg_style.font_size *= scale;
         }
-        let mut shaped = self.shape_core(segment_text, &seg_style, font_context, base_direction)?;
+        let mut shaped = self.shape_core(segment_text, &seg_style, font_context, base_direction, explicit_bidi)?;
         for run in &mut shaped {
             run.start += base_offset;
             run.end += base_offset;
