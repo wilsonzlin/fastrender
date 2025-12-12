@@ -209,7 +209,7 @@ impl ReplacedType {
                 let primary = self.image_source_for_context(ctx);
                 let mut seen = std::collections::HashSet::new();
                 let mut ordered = Vec::new();
-                let mut push_unique =
+                let push_unique =
                     |url: &str, out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
                         if seen.insert(url.to_string()) {
                             out.push(url.to_string());
