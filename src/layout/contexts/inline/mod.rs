@@ -361,7 +361,11 @@ impl InlineFormattingContext {
                         continue;
                     }
 
-                    let percentage_base = if available_width.is_finite() { available_width } else { 0.0 };
+                    let percentage_base = if available_width.is_finite() {
+                        available_width
+                    } else {
+                        0.0
+                    };
                     let padding_left = resolve_length_for_width(
                         child.style.padding_left,
                         percentage_base,
@@ -3300,14 +3304,6 @@ impl InlineFormattingContext {
         let first_line_indent_cut = if indent_applies_first { indent_value } else { 0.0 };
         let subsequent_line_indent_cut = if indent_applies_subsequent { indent_value } else { 0.0 };
 
-        let base_level = match style.unicode_bidi {
-            crate::style::types::UnicodeBidi::Plaintext => None,
-            _ => match base_direction {
-                crate::style::types::Direction::Rtl => Some(unicode_bidi::Level::rtl()),
-                _ => Some(unicode_bidi::Level::ltr()),
-            },
-        };
-
         // Build lines, interleaving float placement
         let mut lines = Vec::new();
         let mut float_fragments: Vec<FragmentNode> = Vec::new();
@@ -3337,7 +3333,20 @@ impl InlineFormattingContext {
                 first_line_width,
                 subsequent_line_width,
                 &strut_metrics,
-                base_level,
+                match style.unicode_bidi {
+                    crate::style::types::UnicodeBidi::Plaintext => {
+                        let dir = determine_paragraph_direction(pending).unwrap_or(base_direction);
+                        if matches!(dir, crate::style::types::Direction::Rtl) {
+                            Some(unicode_bidi::Level::rtl())
+                        } else {
+                            Some(unicode_bidi::Level::ltr())
+                        }
+                    }
+                    _ => match base_direction {
+                        crate::style::types::Direction::Rtl => Some(unicode_bidi::Level::rtl()),
+                        _ => Some(unicode_bidi::Level::ltr()),
+                    },
+                },
                 ctx_ref,
                 float_base_y + *line_offset,
                 first_line_indent_cut,
@@ -3351,7 +3360,10 @@ impl InlineFormattingContext {
                 lines_out.push(line);
             }
             let end_idx = lines_out.len();
-            order.push(FlowChunk::Inline { start: start_idx, end: end_idx });
+            order.push(FlowChunk::Inline {
+                start: start_idx,
+                end: end_idx,
+            });
             *line_offset += seg_height;
             *use_first_line_width = false;
             pending.clear();
@@ -3422,7 +3434,13 @@ impl InlineFormattingContext {
                         .margin_right
                         .as_ref()
                         .map(|m| {
-                            resolve_length_for_width(*m, percentage_base, &block_node.style, &self.font_context, self.viewport_size)
+                            resolve_length_for_width(
+                                *m,
+                                percentage_base,
+                                &block_node.style,
+                                &self.font_context,
+                                self.viewport_size,
+                            )
                         })
                         .unwrap_or(0.0);
                     let margin_top = block_node
@@ -3430,7 +3448,13 @@ impl InlineFormattingContext {
                         .margin_top
                         .as_ref()
                         .map(|m| {
-                            resolve_length_for_width(*m, percentage_base, &block_node.style, &self.font_context, self.viewport_size)
+                            resolve_length_for_width(
+                                *m,
+                                percentage_base,
+                                &block_node.style,
+                                &self.font_context,
+                                self.viewport_size,
+                            )
                         })
                         .unwrap_or(0.0);
                     let margin_bottom = block_node
@@ -3438,7 +3462,13 @@ impl InlineFormattingContext {
                         .margin_bottom
                         .as_ref()
                         .map(|m| {
-                            resolve_length_for_width(*m, percentage_base, &block_node.style, &self.font_context, self.viewport_size)
+                            resolve_length_for_width(
+                                *m,
+                                percentage_base,
+                                &block_node.style,
+                                &self.font_context,
+                                self.viewport_size,
+                            )
                         })
                         .unwrap_or(0.0);
 
@@ -3490,10 +3520,7 @@ impl InlineFormattingContext {
 
         // Calculate total height
         let total_height_lines: f32 = lines.iter().map(|l| l.y_offset + l.height).fold(0.0, f32::max);
-        let blocks_bottom = block_fragments
-            .iter()
-            .map(|f| f.bounds.max_y())
-            .fold(0.0, f32::max);
+        let blocks_bottom = block_fragments.iter().map(|f| f.bounds.max_y()).fold(0.0, f32::max);
         let total_height = total_height_lines.max(max_float_bottom).max(blocks_bottom);
         let line_max_width = lines
             .iter()
@@ -4654,7 +4681,11 @@ mod tests {
         let before = BoxNode::new_text(default_style(), "before".to_string());
         let mut block_style = (*default_style()).clone();
         block_style.display = crate::style::display::Display::Block;
-        let block_child = BoxNode::new_block(Arc::new(block_style), FormattingContextType::Block, vec![make_text_box("block")]);
+        let block_child = BoxNode::new_block(
+            Arc::new(block_style),
+            FormattingContextType::Block,
+            vec![make_text_box("block")],
+        );
         let after = BoxNode::new_text(default_style(), "after".to_string());
         let root = BoxNode::new_inline(default_style(), vec![before, block_child, after]);
         let constraints = LayoutConstraints::definite_width(200.0);
@@ -4692,8 +4723,11 @@ mod tests {
         block_style.display = crate::style::display::Display::Block;
         block_style.margin_top = Some(Length::px(10.0));
         block_style.margin_bottom = Some(Length::px(15.0));
-        let block_child =
-            BoxNode::new_block(Arc::new(block_style), FormattingContextType::Block, vec![make_text_box("block")]);
+        let block_child = BoxNode::new_block(
+            Arc::new(block_style),
+            FormattingContextType::Block,
+            vec![make_text_box("block")],
+        );
         let after = BoxNode::new_text(default_style(), "after".to_string());
         let root = BoxNode::new_inline(default_style(), vec![before, block_child, after]);
         let constraints = LayoutConstraints::definite_width(200.0);
@@ -4701,7 +4735,12 @@ mod tests {
         let fragment = ifc.layout(&root, &constraints).unwrap();
         let mut children = Vec::new();
         for child in &fragment.children {
-            children.push((child.content.is_line(), child.content.is_block(), child.bounds.y(), child.bounds.max_y()));
+            children.push((
+                child.content.is_line(),
+                child.content.is_block(),
+                child.bounds.y(),
+                child.bounds.max_y(),
+            ));
         }
         assert_eq!(children.len(), 3, "expected line, block, line");
         let first_line = &children[0];
