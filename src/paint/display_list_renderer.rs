@@ -934,30 +934,34 @@ impl DisplayListRenderer {
             pushed_clip = true;
         }
 
+        let top_center = rect.y() + top.width * 0.5;
+        let bottom_center = rect.y() + rect.height() - bottom.width * 0.5;
+        let left_center = rect.x() + left.width * 0.5;
+        let right_center = rect.x() + rect.width() - right.width * 0.5;
         let edges: [(_, _, _, _); 4] = [
             (
                 BorderEdge::Top,
                 &top,
-                (rect.x(), rect.y() + top.width * 0.5),
-                (rect.x() + rect.width(), rect.y() + top.width * 0.5),
+                (left_center, top_center),
+                (right_center, top_center),
             ),
             (
                 BorderEdge::Right,
                 &right,
-                (rect.x() + rect.width() - right.width * 0.5, rect.y()),
-                (rect.x() + rect.width() - right.width * 0.5, rect.y() + rect.height()),
+                (right_center, top_center),
+                (right_center, bottom_center),
             ),
             (
                 BorderEdge::Bottom,
                 &bottom,
-                (rect.x(), rect.y() + rect.height() - bottom.width * 0.5),
-                (rect.x() + rect.width(), rect.y() + rect.height() - bottom.width * 0.5),
+                (left_center, bottom_center),
+                (right_center, bottom_center),
             ),
             (
                 BorderEdge::Left,
                 &left,
-                (rect.x() + left.width * 0.5, rect.y()),
-                (rect.x() + left.width * 0.5, rect.y() + rect.height()),
+                (left_center, top_center),
+                (left_center, bottom_center),
             ),
         ];
 
@@ -1034,6 +1038,12 @@ impl DisplayListRenderer {
 
         match side.style {
             CssBorderStyle::Double => {
+                // When the stroke is too thin to draw two lines and a gap, fall back to a solid stroke.
+                if side.width < 3.0 {
+                    pixmap.stroke_path(&base_path, &paint, &stroke, transform, clip);
+                    return;
+                }
+
                 let third = side.width / 3.0;
                 let offset = third + third * 0.5;
 
@@ -2143,12 +2153,15 @@ mod tests {
     use super::*;
     use crate::geometry::{Point, Rect};
     use crate::paint::display_list::{
-        BoxShadowItem, DecorationPaint, DecorationStroke, DisplayItem, DisplayList, FillRectItem, GlyphInstance,
-        GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, OpacityItem,
-        RadialGradientItem, TextDecorationItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
+        BorderItem, BorderRadii, BorderSide, BoxShadowItem, DecorationPaint, DecorationStroke, DisplayItem, DisplayList,
+        FillRectItem, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem,
+        LinearGradientItem, OpacityItem, RadialGradientItem, TextDecorationItem, TextEmphasis, TextItem, TextShadowItem,
+        Transform2D,
     };
     use crate::style::color::Rgba;
-    use crate::style::types::{TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle};
+    use crate::style::types::{
+        BorderStyle as CssBorderStyle, TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
+    };
     use std::sync::Arc;
 
     fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
@@ -2182,6 +2195,65 @@ mod tests {
         } else {
             Some((min_x, min_y, max_x, max_y))
         }
+    }
+
+    #[test]
+    fn border_strokes_stay_within_border_box() {
+        let renderer = DisplayListRenderer::new(15, 8, Rgba::WHITE, FontContext::new()).unwrap();
+        let mut list = DisplayList::new();
+        let side = BorderSide {
+            width: 2.0,
+            style: CssBorderStyle::Dotted,
+            color: Rgba::BLACK,
+        };
+        list.push(DisplayItem::Border(BorderItem {
+            rect: Rect::from_xywh(2.0, 1.0, 10.0, 4.0),
+            top: side.clone(),
+            right: side.clone(),
+            bottom: side.clone(),
+            left: side,
+            radii: BorderRadii::ZERO,
+        }));
+
+        let pixmap = renderer.render(&list).unwrap();
+        // Outside the border box should stay untouched when strokes are centered on the edges.
+        assert_eq!(pixel(&pixmap, 1, 2), (255, 255, 255, 255));
+        assert_eq!(pixel(&pixmap, 13, 2), (255, 255, 255, 255));
+        assert_eq!(pixel(&pixmap, 2, 0), (255, 255, 255, 255));
+        // Border still paints along the edges of the box.
+        assert_eq!(pixel(&pixmap, 3, 2), (0, 0, 0, 255));
+    }
+
+    #[test]
+    fn double_border_thinner_than_three_falls_back_to_solid() {
+        let make_list = |style| {
+            let mut list = DisplayList::new();
+            let side = BorderSide {
+                width: 1.0,
+                style,
+                color: Rgba::BLACK,
+            };
+            list.push(DisplayItem::Border(BorderItem {
+                rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+                top: side.clone(),
+                right: side.clone(),
+                bottom: side.clone(),
+                left: side,
+                radii: BorderRadii::ZERO,
+            }));
+            list
+        };
+
+        let pix_double = DisplayListRenderer::new(6, 6, Rgba::WHITE, FontContext::new())
+            .unwrap()
+            .render(&make_list(CssBorderStyle::Double))
+            .unwrap();
+        let pix_solid = DisplayListRenderer::new(6, 6, Rgba::WHITE, FontContext::new())
+            .unwrap()
+            .render(&make_list(CssBorderStyle::Solid))
+            .unwrap();
+
+        assert_eq!(pix_double.data(), pix_solid.data());
     }
 
     #[test]
