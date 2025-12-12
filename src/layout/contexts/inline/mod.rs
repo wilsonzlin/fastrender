@@ -1701,15 +1701,14 @@ impl InlineFormattingContext {
         y: f32,
         available_width: f32,
         line_box_width: f32,
-        text_align: TextAlign,
+        line_align: TextAlign,
         direction: crate::style::types::Direction,
-        text_justify: TextJustify,
+        resolved_justify: TextJustify,
         indent_offset: f32,
     ) -> FragmentNode {
-        let text_align = map_text_align(text_align, direction);
-        let should_justify = matches!(text_align, TextAlign::Justify) && !matches!(text_justify, TextJustify::None);
+        let should_justify = matches!(line_align, TextAlign::Justify) && !matches!(resolved_justify, TextJustify::None);
         let items: Vec<PositionedItem> = if should_justify {
-            self.expand_items_for_justification(&line.items, text_justify)
+            self.expand_items_for_justification(&line.items, resolved_justify)
         } else {
             line.items.clone()
         };
@@ -1721,11 +1720,11 @@ impl InlineFormattingContext {
         };
         let total_width: f32 = items.iter().map(|p| p.item.width()).sum();
         let extra_space = (usable_width - total_width).max(0.0);
-        let (lead, gap_extra) = match text_align {
+        let (lead, gap_extra) = match line_align {
             TextAlign::Right => (extra_space, 0.0),
             TextAlign::Center => (extra_space * 0.5, 0.0),
             TextAlign::Justify if should_justify && items.len() > 1 => {
-                let gap_count = Self::count_justifiable_gaps(&items, text_justify);
+                let gap_count = Self::count_justifiable_gaps(&items, resolved_justify);
                 if gap_count > 0 {
                     (0.0, extra_space / gap_count as f32)
                 } else {
@@ -1753,12 +1752,12 @@ impl InlineFormattingContext {
 
             if rtl {
                 cursor -= item_width;
-                if should_justify && gap_extra > 0.0 && Self::is_justifiable_gap(&items, i, text_justify) {
+                if should_justify && gap_extra > 0.0 && Self::is_justifiable_gap(&items, i, resolved_justify) {
                     cursor -= gap_extra;
                 }
             } else {
                 cursor += item_width;
-                if should_justify && gap_extra > 0.0 && Self::is_justifiable_gap(&items, i, text_justify) {
+                if should_justify && gap_extra > 0.0 && Self::is_justifiable_gap(&items, i, resolved_justify) {
                     cursor += gap_extra;
                 }
             }
@@ -6223,6 +6222,34 @@ mod tests {
         assert!(
             first_x < 1.0 && second_x < 1.0,
             "justify-last with no expansion opportunities should fall back to start alignment"
+        );
+    }
+
+    #[test]
+    fn text_align_last_justify_respects_text_justify_none() {
+        let mut root_style = ComputedStyle::default();
+        root_style.font_size = 16.0;
+        root_style.text_align = TextAlign::Justify;
+        root_style.text_align_last = crate::style::types::TextAlignLast::Justify;
+        root_style.text_justify = TextJustify::None;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(text_style), "word word\nword word".to_string())],
+        );
+        let constraints = LayoutConstraints::definite_width(120.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        let last_line = fragment.children.last().expect("last line");
+        let first_child = last_line.children.first().expect("text fragment");
+        let last_child = last_line.children.last().expect("text fragment");
+        let right_edge = last_child.bounds.x() + last_child.bounds.width();
+        assert!(
+            first_child.bounds.x() < 1.0 && right_edge < last_line.bounds.width() * 0.7,
+            "text-justify:none should prevent last-line justification even when text-align-last is justify"
         );
     }
 
