@@ -2018,36 +2018,104 @@ impl Painter {
             scale_y = tile_h / height as f32;
         }
 
-        let positions_x = if repeat_x == BorderImageRepeat::Stretch {
-            vec![dest_rect.x()]
-        } else {
-            let mut pos = Vec::new();
-            let mut cursor = dest_rect.x();
-            let end = dest_rect.x() + dest_rect.width();
-            if tile_w <= 0.0 {
-                return;
+        let positions_x = match repeat_x {
+            BorderImageRepeat::Stretch => vec![dest_rect.x()],
+            BorderImageRepeat::Round => {
+                let mut pos = Vec::new();
+                let mut cursor = dest_rect.x();
+                let end = dest_rect.x() + dest_rect.width();
+                if tile_w <= 0.0 {
+                    return;
+                }
+                while cursor < end - 1e-3 {
+                    pos.push(cursor);
+                    cursor += tile_w;
+                }
+                pos
             }
-            while cursor < end - 1e-3 {
-                pos.push(cursor);
-                cursor += tile_w;
+            BorderImageRepeat::Space => {
+                if tile_w <= 0.0 {
+                    return;
+                }
+                let count = (dest_rect.width() / tile_w).floor();
+                if count < 1.0 {
+                    vec![dest_rect.x() + (dest_rect.width() - tile_w) * 0.5]
+                } else if count < 2.0 {
+                    vec![dest_rect.x() + (dest_rect.width() - tile_w) * 0.5]
+                } else {
+                    let spacing = (dest_rect.width() - tile_w * count) / (count - 1.0);
+                    let mut pos = Vec::with_capacity(count as usize);
+                    let mut cursor = dest_rect.x();
+                    for _ in 0..(count as usize) {
+                        pos.push(cursor);
+                        cursor += tile_w + spacing;
+                    }
+                    pos
+                }
             }
-            pos
+            BorderImageRepeat::Repeat => {
+                let mut pos = Vec::new();
+                let mut cursor = dest_rect.x();
+                let end = dest_rect.x() + dest_rect.width();
+                if tile_w <= 0.0 {
+                    return;
+                }
+                while cursor < end - 1e-3 {
+                    pos.push(cursor);
+                    cursor += tile_w;
+                }
+                pos
+            }
         };
 
-        let positions_y = if repeat_y == BorderImageRepeat::Stretch {
-            vec![dest_rect.y()]
-        } else {
-            let mut pos = Vec::new();
-            let mut cursor = dest_rect.y();
-            let end = dest_rect.y() + dest_rect.height();
-            if tile_h <= 0.0 {
-                return;
+        let positions_y = match repeat_y {
+            BorderImageRepeat::Stretch => vec![dest_rect.y()],
+            BorderImageRepeat::Round => {
+                let mut pos = Vec::new();
+                let mut cursor = dest_rect.y();
+                let end = dest_rect.y() + dest_rect.height();
+                if tile_h <= 0.0 {
+                    return;
+                }
+                while cursor < end - 1e-3 {
+                    pos.push(cursor);
+                    cursor += tile_h;
+                }
+                pos
             }
-            while cursor < end - 1e-3 {
-                pos.push(cursor);
-                cursor += tile_h;
+            BorderImageRepeat::Space => {
+                if tile_h <= 0.0 {
+                    return;
+                }
+                let count = (dest_rect.height() / tile_h).floor();
+                if count < 1.0 {
+                    vec![dest_rect.y() + (dest_rect.height() - tile_h) * 0.5]
+                } else if count < 2.0 {
+                    vec![dest_rect.y() + (dest_rect.height() - tile_h) * 0.5]
+                } else {
+                    let spacing = (dest_rect.height() - tile_h * count) / (count - 1.0);
+                    let mut pos = Vec::with_capacity(count as usize);
+                    let mut cursor = dest_rect.y();
+                    for _ in 0..(count as usize) {
+                        pos.push(cursor);
+                        cursor += tile_h + spacing;
+                    }
+                    pos
+                }
             }
-            pos
+            BorderImageRepeat::Repeat => {
+                let mut pos = Vec::new();
+                let mut cursor = dest_rect.y();
+                let end = dest_rect.y() + dest_rect.height();
+                if tile_h <= 0.0 {
+                    return;
+                }
+                while cursor < end - 1e-3 {
+                    pos.push(cursor);
+                    cursor += tile_h;
+                }
+                pos
+            }
         };
 
         let clip = dest_rect;
@@ -5368,7 +5436,7 @@ mod tests {
     use crate::paint::display_list::BorderRadii;
     use crate::style::types::{
         BackgroundAttachment, BackgroundBox, BackgroundRepeat, BorderImage, BorderImageSlice, BorderImageSliceValue,
-        BorderImageSource, Isolation, MixBlendMode, OutlineColor, OutlineStyle, Overflow,
+        BorderImageSource, BorderImageRepeat, Isolation, MixBlendMode, OutlineColor, OutlineStyle, Overflow,
     };
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
@@ -7080,6 +7148,74 @@ mod tests {
                 edge_sample_left.blue()
             ),
             (0, 255, 255)
+        );
+    }
+
+    #[test]
+    fn border_image_space_distributes_gaps() {
+        let mut img = RgbaImage::new(3, 3);
+        let magenta = image::Rgba([255, 0, 255, 255]);
+        // Fill edges
+        for x in 0..3 {
+            img.put_pixel(x, 0, magenta);
+            img.put_pixel(x, 2, magenta);
+        }
+        for y in 0..3 {
+            img.put_pixel(0, y, magenta);
+            img.put_pixel(2, y, magenta);
+        }
+        img.put_pixel(1, 1, image::Rgba([255, 255, 255, 255])); // center
+
+        let mut buf = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut buf)
+            .write_image(img.as_raw(), 3, 3, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        let data_url = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&buf)
+        );
+
+        let mut style = ComputedStyle::default();
+        style.border_top_width = Length::px(3.0);
+        style.border_right_width = Length::px(3.0);
+        style.border_bottom_width = Length::px(3.0);
+        style.border_left_width = Length::px(3.0);
+        style.border_image = BorderImage {
+            source: BorderImageSource::Image(BackgroundImage::Url(data_url)),
+            slice: BorderImageSlice {
+                top: BorderImageSliceValue::Number(1.0),
+                right: BorderImageSliceValue::Number(1.0),
+                bottom: BorderImageSliceValue::Number(1.0),
+                left: BorderImageSliceValue::Number(1.0),
+                fill: false,
+            },
+            repeat: (BorderImageRepeat::Space, BorderImageRepeat::Space),
+            ..BorderImage::default()
+        };
+
+        let mut painter = Painter::new(14, 14, Rgba::WHITE).expect("painter");
+        painter.fill_background();
+        painter.paint_borders(0.0, 0.0, 14.0, 14.0, &style);
+
+        // Top edge has a gap between tiles when spaced.
+        let gap_top = painter.pixmap.pixel(7, 1).unwrap();
+        assert_eq!((gap_top.red(), gap_top.green(), gap_top.blue()), (255, 255, 255));
+        let painted_top = painter.pixmap.pixel(4, 1).unwrap();
+        assert_eq!(
+            (painted_top.red(), painted_top.green(), painted_top.blue()),
+            (255, 0, 255)
+        );
+
+        // Left edge similarly spaces tiles vertically.
+        let gap_left = painter.pixmap.pixel(1, 7).unwrap();
+        assert_eq!(
+            (gap_left.red(), gap_left.green(), gap_left.blue()),
+            (255, 255, 255)
+        );
+        let painted_left = painter.pixmap.pixel(1, 4).unwrap();
+        assert_eq!(
+            (painted_left.red(), painted_left.green(), painted_left.blue()),
+            (255, 0, 255)
         );
     }
 }
