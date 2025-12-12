@@ -2010,6 +2010,19 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
                     computed[idx] = computed[idx].max(per);
                 }
             }
+        } else if remaining < 0.0 && !percent_rows.is_empty() {
+            // Percent rows over-commit the available space; scale them down proportionally.
+            let percent_indices: Vec<usize> = percent_rows.iter().map(|(i, _)| *i).collect();
+            let percent_total: f32 = percent_indices.iter().map(|i| computed[*i]).sum();
+            if percent_total > 0.0 {
+                let reduce = (-remaining).min(percent_total);
+                for idx in percent_indices {
+                    let share = computed[idx] / percent_total;
+                    let reduction = reduce * share;
+                    let floor = structure.rows[idx].min_height;
+                    computed[idx] = (computed[idx] - reduction).max(floor);
+                }
+            }
         }
     }
 
@@ -5824,6 +5837,25 @@ mod tests {
 
         assert!((structure.rows[0].computed_height - 100.0).abs() < 0.5);
         assert!((structure.rows[1].computed_height - 100.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn percent_rows_scale_down_when_over_budget() {
+        let mut structure = TableStructure::new();
+        structure.border_collapse = BorderCollapse::Separate;
+        structure.border_spacing = (0.0, 0.0);
+        structure.row_count = 2;
+        structure.rows = vec![RowInfo::new(0), RowInfo::new(1)];
+        structure.rows[0].specified_height = Some(SpecifiedHeight::Percent(80.0));
+        structure.rows[1].specified_height = Some(SpecifiedHeight::Percent(80.0));
+
+        calculate_row_heights(&mut structure, Some(100.0));
+
+        // Both rows should be scaled down to fit within 100px.
+        let total = structure.rows[0].computed_height + structure.rows[1].computed_height;
+        assert!(total <= 101.0);
+        assert!(structure.rows[0].computed_height > 0.0);
+        assert!(structure.rows[1].computed_height > 0.0);
     }
 
     #[test]
