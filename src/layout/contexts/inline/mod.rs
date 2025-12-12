@@ -64,6 +64,7 @@ use crate::text::line_break::{find_break_opportunities, BreakOpportunity, BreakT
 use crate::text::pipeline::{compute_adjusted_font_size, preferred_font_aspect, ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::{BoxNode, BoxType, MarkerContent, ReplacedBox};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -1047,8 +1048,6 @@ impl InlineFormattingContext {
             contextual_stack.push(current_context);
         }
         let bidi_stack = contextual_stack;
-        let _ = &bidi_stack;
-
         let metrics = self.resolve_scaled_metrics(style);
         let line_height = compute_line_height_with_metrics(style, metrics.as_ref());
         let (hyphen_free, hyphen_breaks) = if is_marker {
@@ -1060,7 +1059,23 @@ impl InlineFormattingContext {
 
         let forced_break_offsets: Vec<usize> = forced_breaks.iter().map(|b| b.byte_offset).collect();
 
-        let mut shaped_runs = self.shape_with_fallback(&hyphen_free, style, base_direction)?;
+        let (prefix_controls, suffix_controls) = build_bidi_wrappers(&bidi_stack);
+        let (shape_text, prefix_len) = if prefix_controls.is_empty() && suffix_controls.is_empty() {
+            (Cow::Borrowed(hyphen_free.as_str()), 0usize)
+        } else {
+            let mut buf =
+                String::with_capacity(prefix_controls.len() + hyphen_free.len() + suffix_controls.len());
+            buf.push_str(&prefix_controls);
+            buf.push_str(&hyphen_free);
+            buf.push_str(&suffix_controls);
+            (Cow::Owned(buf), prefix_controls.len())
+        };
+
+        let mut shaped_runs = self.shape_with_fallback(&shape_text, style, base_direction)?;
+        if matches!(shape_text, Cow::Owned(_)) {
+            shaped_runs =
+                strip_bidi_wrapper_runs(shaped_runs, prefix_len, hyphen_free.len(), &hyphen_free);
+        }
         TextItem::apply_spacing_to_runs(&mut shaped_runs, &hyphen_free, style.letter_spacing, style.word_spacing);
 
         let metrics = TextItem::metrics_from_runs(&shaped_runs, line_height, style.font_size);
@@ -4173,6 +4188,72 @@ pub(crate) fn bidi_controls(unicode_bidi: UnicodeBidi, direction: Direction) -> 
         // its own base direction from content while staying isolated from surrounding text.
         UnicodeBidi::Plaintext => (vec!['\u{2068}'], vec!['\u{2069}']),
     }
+}
+
+fn build_bidi_wrappers(stack: &[(UnicodeBidi, Direction)]) -> (String, String) {
+    if stack.is_empty() {
+        return (String::new(), String::new());
+    }
+
+    let mut prefix = String::new();
+    let mut closers: Vec<Vec<char>> = Vec::new();
+    for (ub, dir) in stack {
+        let (opens, closes) = bidi_controls(*ub, *dir);
+        if !opens.is_empty() {
+            prefix.extend(opens);
+            closers.push(closes);
+        }
+    }
+
+    let mut suffix = String::new();
+    for closer_set in closers.into_iter().rev() {
+        for ch in closer_set {
+            suffix.push(ch);
+        }
+    }
+
+    (prefix, suffix)
+}
+
+fn strip_bidi_wrapper_runs(
+    runs: Vec<ShapedRun>,
+    prefix_len: usize,
+    content_len: usize,
+    content_text: &str,
+) -> Vec<ShapedRun> {
+    if prefix_len == 0 && content_len == 0 {
+        return runs;
+    }
+    let content_start = prefix_len;
+    let content_end = prefix_len + content_len;
+    let mut filtered = Vec::with_capacity(runs.len());
+
+    for mut run in runs {
+        if run.end <= content_start || run.start >= content_end {
+            continue;
+        }
+
+        let mut glyphs = Vec::new();
+        for mut glyph in run.glyphs {
+            if glyph.cluster < content_start as u32 || glyph.cluster >= content_end as u32 {
+                continue;
+            }
+            glyph.cluster -= prefix_len as u32;
+            glyphs.push(glyph);
+        }
+
+        if glyphs.is_empty() {
+            continue;
+        }
+
+        run.start = run.start.saturating_sub(prefix_len);
+        run.end = run.end.min(content_end).saturating_sub(prefix_len);
+        run.text = content_text.to_string();
+        run.glyphs = glyphs;
+        filtered.push(run);
+    }
+
+    filtered
 }
 
 pub(crate) fn apply_plaintext_paragraph_direction(items: &mut [InlineItem], direction: crate::style::types::Direction) {
