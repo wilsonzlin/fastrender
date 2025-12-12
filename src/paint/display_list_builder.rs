@@ -1180,9 +1180,25 @@ impl DisplayListBuilder {
                             );
                         }
                     } else if *is_marker {
-                        self.emit_list_marker_runs(runs, color, baseline_inline, baseline_block, &shadows, style_opt);
+                        self.emit_list_marker_runs(
+                            runs,
+                            color,
+                            baseline_inline,
+                            baseline_block,
+                            &shadows,
+                            style_opt,
+                            inline_vertical,
+                        );
                     } else {
-                        self.emit_shaped_runs(runs, color, baseline_inline, baseline_block, &shadows, style_opt);
+                        self.emit_shaped_runs(
+                            runs,
+                            color,
+                            baseline_inline,
+                            baseline_block,
+                            &shadows,
+                            style_opt,
+                            inline_vertical,
+                        );
                     }
                 } else {
                     // Fallback: naive glyphs when shaping fails or no style is present
@@ -1858,6 +1874,7 @@ impl DisplayListBuilder {
         start_x: f32,
         shadows: &[TextShadowItem],
         style: Option<&ComputedStyle>,
+        inline_vertical: bool,
     ) {
         let mut pen_x = start_x;
         for run in runs {
@@ -1868,7 +1885,7 @@ impl DisplayListBuilder {
             };
             let glyphs = self.glyphs_from_run(run, origin_x, baseline_y);
             let font_id = self.font_id_from_run(run);
-            let emphasis = style.and_then(|s| self.build_emphasis(run, s, origin_x, baseline_y));
+            let emphasis = style.and_then(|s| self.build_emphasis(run, s, origin_x, baseline_y, inline_vertical));
 
             self.list.push(DisplayItem::Text(TextItem {
                 origin: Point::new(origin_x, baseline_y),
@@ -1906,7 +1923,7 @@ impl DisplayListBuilder {
             };
             let glyphs = self.glyphs_from_run_vertical(run, block_baseline, run_origin_inline, inline_start);
             let font_id = self.font_id_from_run(run);
-            let emphasis = style.and_then(|s| self.build_emphasis(run, s, block_baseline, run_origin_inline));
+            let emphasis = style.and_then(|s| self.build_emphasis(run, s, block_baseline, run_origin_inline, true));
 
             self.list.push(DisplayItem::Text(TextItem {
                 origin: Point::new(block_baseline, inline_start),
@@ -1934,6 +1951,7 @@ impl DisplayListBuilder {
         start_x: f32,
         shadows: &[TextShadowItem],
         style: Option<&ComputedStyle>,
+        inline_vertical: bool,
     ) {
         let mut pen_x = start_x;
         for run in runs {
@@ -1944,7 +1962,7 @@ impl DisplayListBuilder {
             };
             let glyphs = self.glyphs_from_run(run, origin_x, baseline_y);
             let font_id = self.font_id_from_run(run);
-            let emphasis = style.and_then(|s| self.build_emphasis(run, s, origin_x, baseline_y));
+            let emphasis = style.and_then(|s| self.build_emphasis(run, s, origin_x, baseline_y, inline_vertical));
             self.list.push(DisplayItem::ListMarker(ListMarkerItem {
                 origin: Point::new(origin_x, baseline_y),
                 glyphs,
@@ -1981,7 +1999,7 @@ impl DisplayListBuilder {
             };
             let glyphs = self.glyphs_from_run_vertical(run, block_baseline, run_origin_inline, inline_start);
             let font_id = self.font_id_from_run(run);
-            let emphasis = style.and_then(|s| self.build_emphasis(run, s, block_baseline, run_origin_inline));
+            let emphasis = style.and_then(|s| self.build_emphasis(run, s, block_baseline, run_origin_inline, true));
             self.list.push(DisplayItem::ListMarker(ListMarkerItem {
                 origin: Point::new(block_baseline, inline_start),
                 glyphs,
@@ -2356,8 +2374,9 @@ impl DisplayListBuilder {
         &self,
         run: &ShapedRun,
         style: &ComputedStyle,
-        origin_x: f32,
-        baseline_y: f32,
+        inline_origin: f32,
+        block_baseline: f32,
+        inline_vertical: bool,
     ) -> Option<TextEmphasis> {
         if style.text_emphasis_style.is_none() {
             return None;
@@ -2376,22 +2395,22 @@ impl DisplayListBuilder {
             TextEmphasisPosition::Auto => TextEmphasisPosition::Over,
             other => other,
         };
-        let center_y = match resolved_position {
+        let block_center = match resolved_position {
             TextEmphasisPosition::Over | TextEmphasisPosition::OverLeft | TextEmphasisPosition::OverRight => {
-                baseline_y - ascent - gap - mark_size * 0.5
+                block_baseline - ascent - gap - mark_size * 0.5
             }
             TextEmphasisPosition::Under | TextEmphasisPosition::UnderLeft | TextEmphasisPosition::UnderRight => {
-                baseline_y + descent + gap + mark_size * 0.5
+                block_baseline + descent + gap + mark_size * 0.5
             }
-            TextEmphasisPosition::Auto => baseline_y - ascent - gap - mark_size * 0.5,
+            TextEmphasisPosition::Auto => block_baseline - ascent - gap - mark_size * 0.5,
         };
 
         let mut marks = Vec::new();
         let mut seen_clusters = HashSet::new();
-        let run_origin = if run.direction.is_rtl() {
-            origin_x + run.advance
+        let run_origin_inline = if run.direction.is_rtl() {
+            inline_origin + run.advance
         } else {
-            origin_x
+            inline_origin
         };
         for glyph in &run.glyphs {
             if !seen_clusters.insert(glyph.cluster) {
@@ -2405,13 +2424,18 @@ impl DisplayListBuilder {
                     }
                 }
             }
-            let center_x = match run.direction {
-                crate::text::pipeline::Direction::RightToLeft => run_origin - (glyph.x_offset + glyph.x_advance * 0.5),
-                _ => run_origin + glyph.x_offset + glyph.x_advance * 0.5,
+            let inline_center = match run.direction {
+                crate::text::pipeline::Direction::RightToLeft => {
+                    run_origin_inline - (glyph.x_offset + glyph.x_advance * 0.5)
+                }
+                _ => run_origin_inline + glyph.x_offset + glyph.x_advance * 0.5,
             };
-            marks.push(EmphasisMark {
-                center: Point::new(center_x, center_y),
-            });
+            let center = if inline_vertical {
+                Point::new(block_center, inline_center)
+            } else {
+                Point::new(inline_center, block_center)
+            };
+            marks.push(EmphasisMark { center });
         }
 
         let text = if let TextEmphasisStyle::String(ref s) = style.text_emphasis_style {
@@ -2475,6 +2499,7 @@ impl DisplayListBuilder {
             position: resolved_position,
             size: mark_size,
             marks,
+            inline_vertical,
             text,
         })
     }
@@ -2575,7 +2600,7 @@ impl DisplayListBuilder {
         let baseline = rect.y() + half_leading + metrics.baseline_offset;
 
         let shadows = Self::text_shadows_from_style(Some(style));
-        self.emit_shaped_runs(&runs, style.color, baseline, rect.x(), &shadows, Some(style));
+        self.emit_shaped_runs(&runs, style.color, baseline, rect.x(), &shadows, Some(style), false);
         true
     }
 

@@ -670,6 +670,7 @@ impl DisplayListRenderer {
         if let Some(emphasis) = &item.emphasis {
             let mut e = emphasis.clone();
             e.size = self.ds_len(e.size);
+            e.inline_vertical = emphasis.inline_vertical;
             e.marks = e
                 .marks
                 .iter()
@@ -2375,6 +2376,7 @@ impl DisplayListRenderer {
             return Ok(());
         }
 
+        let inline_vertical = emphasis.inline_vertical;
         if let TextEmphasisStyle::String(_) = emphasis.style {
             if let Some(text) = &emphasis.text {
                 let font = self
@@ -2495,20 +2497,36 @@ impl DisplayListRenderer {
                         emphasis.position,
                         TextEmphasisPosition::Over | TextEmphasisPosition::OverLeft | TextEmphasisPosition::OverRight
                     );
-                    let apex_y = if direction {
-                        mark.center.y - height * 0.5
-                    } else {
-                        mark.center.y + height * 0.5
-                    };
-                    let base_y = if direction {
-                        mark.center.y + height * 0.5
-                    } else {
-                        mark.center.y - height * 0.5
-                    };
                     let mut builder = tiny_skia::PathBuilder::new();
-                    builder.move_to(mark.center.x, apex_y);
-                    builder.line_to(mark.center.x - half, base_y);
-                    builder.line_to(mark.center.x + half, base_y);
+                    if inline_vertical {
+                        let apex_x = if direction {
+                            mark.center.x - height * 0.5
+                        } else {
+                            mark.center.x + height * 0.5
+                        };
+                        let base_x = if direction {
+                            mark.center.x + height * 0.5
+                        } else {
+                            mark.center.x - height * 0.5
+                        };
+                        builder.move_to(apex_x, mark.center.y);
+                        builder.line_to(base_x, mark.center.y - half);
+                        builder.line_to(base_x, mark.center.y + half);
+                    } else {
+                        let apex_y = if direction {
+                            mark.center.y - height * 0.5
+                        } else {
+                            mark.center.y + height * 0.5
+                        };
+                        let base_y = if direction {
+                            mark.center.y + height * 0.5
+                        } else {
+                            mark.center.y - height * 0.5
+                        };
+                        builder.move_to(mark.center.x, apex_y);
+                        builder.line_to(mark.center.x - half, base_y);
+                        builder.line_to(mark.center.x + half, base_y);
+                    }
                     builder.close();
                     if let Some(path) = builder.finish() {
                         match fill {
@@ -3937,6 +3955,7 @@ mod tests {
                 marks: vec![crate::paint::display_list::EmphasisMark {
                     center: Point::new(20.0, 12.0),
                 }],
+                inline_vertical: false,
                 text: None,
             }),
             decorations: Vec::new(),

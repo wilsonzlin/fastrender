@@ -498,6 +498,7 @@ pub struct TextEmphasis {
     pub position: TextEmphasisPosition,
     pub size: f32,
     pub marks: Vec<EmphasisMark>,
+    pub inline_vertical: bool,
     pub text: Option<EmphasisText>,
 }
 

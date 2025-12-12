@@ -914,7 +914,13 @@ impl Painter {
                     inline_len,
                     inline_vertical,
                 );
-                self.paint_text_emphasis(&style, shaped_runs.as_deref(), inline_start, block_baseline);
+                self.paint_text_emphasis(
+                    &style,
+                    shaped_runs.as_deref(),
+                    inline_start,
+                    block_baseline,
+                    inline_vertical,
+                );
             }
             DisplayCommand::Replaced {
                 rect,
@@ -3936,8 +3942,9 @@ impl Painter {
         &mut self,
         style: &ComputedStyle,
         runs: Option<&[ShapedRun]>,
-        origin_x: f32,
-        baseline_y: f32,
+        inline_origin: f32,
+        block_baseline: f32,
+        inline_vertical: bool,
     ) {
         let runs = match runs {
             Some(r) => r,
@@ -3947,8 +3954,8 @@ impl Painter {
             return;
         }
 
-        let origin_x = self.device_length(origin_x);
-        let baseline_y = self.device_length(baseline_y);
+        let inline_origin = self.device_length(inline_origin);
+        let block_baseline = self.device_length(block_baseline);
 
         let Some(metrics) = self.decoration_metrics(Some(runs), style) else {
             return;
@@ -3963,18 +3970,18 @@ impl Painter {
         let mark_size = (style.font_size * 0.5 * self.scale).max(1.0);
         let gap = mark_size * 0.3;
 
-        let center_y = match resolved_position {
+        let block_center = match resolved_position {
             crate::style::types::TextEmphasisPosition::Over
             | crate::style::types::TextEmphasisPosition::OverLeft
             | crate::style::types::TextEmphasisPosition::OverRight => {
-                baseline_y - metrics.ascent - gap - mark_size * 0.5
+                block_baseline - metrics.ascent - gap - mark_size * 0.5
             }
             crate::style::types::TextEmphasisPosition::Under
             | crate::style::types::TextEmphasisPosition::UnderLeft
             | crate::style::types::TextEmphasisPosition::UnderRight => {
-                baseline_y + metrics.descent + gap + mark_size * 0.5
+                block_baseline + metrics.descent + gap + mark_size * 0.5
             }
-            crate::style::types::TextEmphasisPosition::Auto => baseline_y - metrics.ascent - gap - mark_size * 0.5,
+            crate::style::types::TextEmphasisPosition::Auto => block_baseline - metrics.ascent - gap - mark_size * 0.5,
         };
 
         // Precompute mark painter for string emphasis.
@@ -4027,10 +4034,14 @@ impl Painter {
             }
         }
 
-        let mut pen_x = origin_x;
+        let mut pen_inline = inline_origin;
         for run in runs {
             let advance = run.advance * self.scale;
-            let run_origin = if run.direction.is_rtl() { pen_x + advance } else { pen_x };
+            let run_origin_inline = if run.direction.is_rtl() {
+                pen_inline + advance
+            } else {
+                pen_inline
+            };
 
             let mut seen_clusters = std::collections::HashSet::new();
             for glyph in &run.glyphs {
@@ -4045,23 +4056,29 @@ impl Painter {
                         }
                     }
                 }
-                let mark_center_x = match run.direction {
+                let inline_center = match run.direction {
                     crate::text::pipeline::Direction::RightToLeft => {
-                        run_origin - (glyph.x_offset + glyph.x_advance * 0.5) * self.scale
+                        run_origin_inline - (glyph.x_offset + glyph.x_advance * 0.5) * self.scale
                     }
-                    _ => run_origin + (glyph.x_offset + glyph.x_advance * 0.5) * self.scale,
+                    _ => run_origin_inline + (glyph.x_offset + glyph.x_advance * 0.5) * self.scale,
+                };
+                let (mark_center_x, mark_center_y) = if inline_vertical {
+                    (block_center, inline_center)
+                } else {
+                    (inline_center, block_center)
                 };
 
                 match style.text_emphasis_style {
                     crate::style::types::TextEmphasisStyle::Mark { fill, shape } => {
                         self.draw_emphasis_mark(
                             mark_center_x,
-                            center_y,
+                            mark_center_y,
                             mark_size,
                             fill,
                             shape,
                             emphasis_color,
                             resolved_position,
+                            inline_vertical,
                         );
                     }
                     crate::style::types::TextEmphasisStyle::String(_) => {
@@ -4071,7 +4088,7 @@ impl Painter {
                             paint.set_color(color_to_skia(emphasis_color));
 
                             let offset_x = mark_center_x - width * 0.5;
-                            let offset_y = center_y - height * 0.5;
+                            let offset_y = mark_center_y - height * 0.5;
                             for path in paths {
                                 let translated = path.clone().transform(Transform::from_translate(offset_x, offset_y));
                                 if let Some(p) = translated {
@@ -4090,7 +4107,7 @@ impl Painter {
                 }
             }
 
-            pen_x += advance;
+            pen_inline += advance;
         }
     }
 
@@ -4103,6 +4120,7 @@ impl Painter {
         shape: crate::style::types::TextEmphasisShape,
         color: Rgba,
         position: crate::style::types::TextEmphasisPosition,
+        inline_vertical: bool,
     ) {
         let mut paint = Paint::default();
         paint.anti_alias = true;
@@ -4169,20 +4187,36 @@ impl Painter {
                         | crate::style::types::TextEmphasisPosition::OverLeft
                         | crate::style::types::TextEmphasisPosition::OverRight
                 );
-                let apex_y = if direction {
-                    center_y - height * 0.5
-                } else {
-                    center_y + height * 0.5
-                };
-                let base_y = if direction {
-                    center_y + height * 0.5
-                } else {
-                    center_y - height * 0.5
-                };
                 let mut builder = PathBuilder::new();
-                builder.move_to(center_x, apex_y);
-                builder.line_to(center_x - half, base_y);
-                builder.line_to(center_x + half, base_y);
+                if inline_vertical {
+                    let apex_x = if direction {
+                        center_x - height * 0.5
+                    } else {
+                        center_x + height * 0.5
+                    };
+                    let base_x = if direction {
+                        center_x + height * 0.5
+                    } else {
+                        center_x - height * 0.5
+                    };
+                    builder.move_to(apex_x, center_y);
+                    builder.line_to(base_x, center_y - half);
+                    builder.line_to(base_x, center_y + half);
+                } else {
+                    let apex_y = if direction {
+                        center_y - height * 0.5
+                    } else {
+                        center_y + height * 0.5
+                    };
+                    let base_y = if direction {
+                        center_y + height * 0.5
+                    } else {
+                        center_y - height * 0.5
+                    };
+                    builder.move_to(center_x, apex_y);
+                    builder.line_to(center_x - half, base_y);
+                    builder.line_to(center_x + half, base_y);
+                }
                 builder.close();
                 if let Some(path) = builder.finish() {
                     match fill {
