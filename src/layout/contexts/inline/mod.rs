@@ -1684,18 +1684,21 @@ impl InlineFormattingContext {
             if matches!(base_align, TextAlign::Justify) && matches!(resolved_justify, TextJustify::None) {
                 base_align = map_text_align(TextAlign::Start, line_direction);
             }
-            let mut effective_align =
-                resolve_text_align_for_line(base_align, text_align_last, line_direction, is_last_line);
-            let justify_probe_items =
-                if matches!(effective_align, TextAlign::Justify) && !matches!(resolved_justify, TextJustify::None) {
-                    self.expand_items_for_justification(&line.items, resolved_justify)
-                } else {
-                    line.items.clone()
-                };
-            let has_justify = has_justify_opportunities(&justify_probe_items, resolved_justify);
-            if matches!(effective_align, TextAlign::Justify) && matches!(resolved_justify, TextJustify::None) {
-                effective_align = map_text_align(TextAlign::Start, line_direction);
-            } else if matches!(effective_align, TextAlign::Justify) && !has_justify {
+            let allow_justify = !is_last_line || !matches!(text_align_last, crate::style::types::TextAlignLast::Auto);
+            let has_justify = if !allow_justify || matches!(resolved_justify, TextJustify::None) {
+                false
+            } else {
+                has_justify_opportunities(&line.items, resolved_justify)
+            };
+            let mut effective_align = resolve_text_align_for_line(
+                base_align,
+                text_align_last,
+                line_direction,
+                is_last_line,
+                resolved_justify,
+                has_justify,
+            );
+            if matches!(effective_align, TextAlign::Justify) && !has_justify {
                 effective_align = map_text_align(TextAlign::Start, line_direction);
             }
             let line_fragment = self.create_line_fragment(
@@ -3950,13 +3953,15 @@ impl InlineFormattingContext {
                 if matches!(base_align, TextAlign::Justify) && matches!(resolved_justify, TextJustify::None) {
                     base_align = map_text_align(TextAlign::Start, first_line.resolved_direction);
                 }
+                let has_justify = has_justify_opportunities(&first_line.items, resolved_justify);
                 let mut effective_align = resolve_text_align_for_line(
                     base_align,
                     style.text_align_last,
                     first_line.resolved_direction,
                     *is_last_line,
+                    resolved_justify,
+                    has_justify,
                 );
-                let has_justify = has_justify_opportunities(&first_line.items, resolved_justify);
                 if matches!(effective_align, TextAlign::Justify)
                     && (matches!(resolved_justify, TextJustify::None) || !has_justify)
                 {
@@ -4315,6 +4320,8 @@ fn resolve_text_align_for_line(
     text_align_last: crate::style::types::TextAlignLast,
     direction: crate::style::types::Direction,
     is_last_line: bool,
+    text_justify: crate::style::types::TextJustify,
+    has_justify_opportunities: bool,
 ) -> TextAlign {
     if !is_last_line {
         return text_align;
@@ -4332,13 +4339,14 @@ fn resolve_text_align_for_line(
     };
 
     match text_align_last {
-        crate::style::types::TextAlignLast::Auto => {
-            if matches!(text_align, TextAlign::Justify) {
-                map_text_align(TextAlign::Start, direction)
-            } else {
-                text_align
+        crate::style::types::TextAlignLast::Auto => match text_align {
+            TextAlign::Justify if has_justify_opportunities && !matches!(text_justify, TextJustify::None) => {
+                TextAlign::Justify
             }
-        }
+            // Single-line or no-justify-opportunity => start align
+            TextAlign::Justify => TextAlign::Start,
+            other => map_text_align(other, direction),
+        },
         _ => mapped_start_end(text_align_last),
     }
 }
