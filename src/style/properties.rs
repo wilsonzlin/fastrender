@@ -2422,6 +2422,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     styles.font_synthesis = FontSynthesis::default();
                     styles.font_kerning = FontKerning::Auto;
                     styles.font_feature_settings.clear();
+                    styles.font_variation_settings.clear();
                     styles.font_style = font_style;
                     styles.font_weight = font_weight;
                     styles.font_variant = font_variant;
@@ -2721,6 +2722,20 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     let mut parser = Parser::new(&mut input);
                     if let Ok(features) = parser.parse_comma_separated(|p| parse_feature_setting(p)) {
                         styles.font_feature_settings = features;
+                    }
+                }
+            }
+        }
+        "font-variation-settings" => {
+            if let PropertyValue::Keyword(raw) = &resolved_value {
+                let trimmed = raw.trim();
+                if trimmed.eq_ignore_ascii_case("normal") {
+                    styles.font_variation_settings.clear();
+                } else {
+                    let mut input = ParserInput::new(trimmed);
+                    let mut parser = Parser::new(&mut input);
+                    if let Ok(vars) = parser.parse_comma_separated(|p| parse_variation_setting(p)) {
+                        styles.font_variation_settings = vars;
                     }
                 }
             }
@@ -8331,6 +8346,42 @@ mod tests {
     }
 
     #[test]
+    fn parses_font_variation_settings() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font-variation-settings".to_string(),
+            value: PropertyValue::Keyword("\"wght\" 600, \"wdth\" 80".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert_eq!(style.font_variation_settings.len(), 2);
+        assert_eq!(style.font_variation_settings[0].tag, *b"wght");
+        assert!((style.font_variation_settings[0].value - 600.0).abs() < 0.001);
+        assert_eq!(style.font_variation_settings[1].tag, *b"wdth");
+        assert!((style.font_variation_settings[1].value - 80.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn font_variation_settings_normal_clears_values() {
+        let mut style = ComputedStyle::default();
+        style.font_variation_settings = vec![FontVariationSetting {
+            tag: *b"wght",
+            value: 500.0,
+        }];
+
+        let decl = Declaration {
+            property: "font-variation-settings".to_string(),
+            value: PropertyValue::Keyword("normal".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(style.font_variation_settings.is_empty());
+    }
+
+    #[test]
     fn line_height_percentage_is_resolved_to_number() {
         let mut style = ComputedStyle::default();
         let decl = Declaration {
@@ -8965,6 +9016,28 @@ fn parse_feature_setting<'i, 't>(
     };
 
     Ok(FontFeatureSetting { tag: tag_bytes, value })
+}
+
+fn parse_variation_setting<'i, 't>(
+    parser: &mut Parser<'i, 't>,
+) -> Result<FontVariationSetting, cssparser::ParseError<'i, ()>> {
+    parser.skip_whitespace();
+    let location = parser.current_source_location();
+
+    let tag_bytes: [u8; 4] = match parser.next()? {
+        Token::QuotedString(s) | Token::Ident(s) if s.len() == 4 && s.as_bytes().iter().all(|b| b.is_ascii()) => {
+            s.as_bytes().try_into().map_err(|_| location.new_custom_error(()))?
+        }
+        _ => return Err(location.new_custom_error(())),
+    };
+
+    parser.skip_whitespace();
+    let value = parser.expect_number()?;
+
+    Ok(FontVariationSetting {
+        tag: tag_bytes,
+        value,
+    })
 }
 
 fn inline_axis_is_horizontal(wm: WritingMode) -> bool {

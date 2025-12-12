@@ -57,7 +57,7 @@ use crate::style::ComputedStyle;
 use crate::text::font_db::font_has_feature;
 use crate::text::font_db::{FontStretch, FontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
-use rustybuzz::{Direction as HbDirection, Face, Feature, Language as HbLanguage, UnicodeBuffer};
+use rustybuzz::{Direction as HbDirection, Face, Feature, Language as HbLanguage, UnicodeBuffer, Variation};
 use std::str::FromStr;
 use std::sync::Arc;
 use ttf_parser::Tag;
@@ -621,6 +621,8 @@ pub struct FontRun {
     pub language: String,
     /// OpenType features to apply for this run.
     pub features: Vec<Feature>,
+    /// Font variation settings to apply for this run.
+    pub variations: Vec<Variation>,
 
     /// Optional rotation hint for vertical writing modes.
     pub rotation: RunRotation,
@@ -839,6 +841,14 @@ pub fn compute_adjusted_font_size(style: &ComputedStyle, font: &LoadedFont, pref
 pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &FontContext) -> Result<Vec<FontRun>> {
     let mut font_runs = Vec::with_capacity(runs.len());
     let features = collect_opentype_features(style);
+    let variations: Vec<Variation> = style
+        .font_variation_settings
+        .iter()
+        .map(|v| Variation {
+            tag: Tag::from_bytes(&v.tag),
+            value: v.value,
+        })
+        .collect();
     let preferred_aspect = preferred_font_aspect(style, font_context);
 
     for run in runs {
@@ -862,6 +872,7 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
             font_size: used_font_size,
             language: style.language.clone(),
             features: features.clone(),
+            variations: variations.clone(),
             rotation: RunRotation::None,
             vertical: false,
         });
@@ -1115,10 +1126,13 @@ impl ShapedRun {
 /// Shapes a single font run into positioned glyphs.
 fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     // Create rustybuzz face from font data
-    let rb_face = Face::from_slice(&run.font.data, run.font.index).ok_or_else(|| TextError::ShapingFailed {
+    let mut rb_face = Face::from_slice(&run.font.data, run.font.index).ok_or_else(|| TextError::ShapingFailed {
         text: run.text.clone(),
         reason: "Failed to create HarfBuzz face".to_string(),
     })?;
+    if !run.variations.is_empty() {
+        rb_face.set_variations(&run.variations);
+    }
 
     // Create Unicode buffer
     let mut buffer = UnicodeBuffer::new();
@@ -1515,9 +1529,14 @@ impl ClusterMap {
 mod tests {
     use super::*;
     use crate::style::types::{
-        EastAsianVariant, EastAsianWidth, FontFeatureSetting, FontKerning, FontVariantLigatures, NumericFigure,
-        NumericFraction, NumericSpacing, TextOrientation, WritingMode,
+        EastAsianVariant, EastAsianWidth, FontFeatureSetting, FontKerning, FontVariationSetting, FontVariantLigatures,
+        NumericFigure, NumericFraction, NumericSpacing, TextOrientation, WritingMode,
     };
+    use crate::text::font_db::FontDatabase;
+    use std::fs;
+    use std::path::Path;
+    use std::sync::Arc;
+    use ttf_parser::name_id;
 
     #[test]
     fn test_direction_from_level() {
@@ -1849,6 +1868,54 @@ mod tests {
         let shaped = ShapingPipeline::new().shape("Abc", &style, &ctx).unwrap();
         assert_eq!(shaped.len(), 1, "synthetic small-caps should not split runs");
         assert!(shaped.iter().all(|r| (r.font_size - 18.0).abs() < 0.1));
+    }
+
+    #[test]
+    fn font_variation_settings_adjust_variable_font_axes() {
+        let font_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fonts/RobotoFlex-VF.ttf");
+        let data = fs::read(&font_path).expect("variable font fixture");
+        let face = ttf_parser::Face::parse(&data, 0).expect("parse fixture font");
+        let family = face
+            .names()
+            .into_iter()
+            .find_map(|name| {
+                if name.name_id == name_id::FAMILY {
+                    name.to_string()
+                } else {
+                    None
+                }
+            })
+            .expect("font family name");
+
+        let mut db = FontDatabase::empty();
+        db.load_font_data(data).expect("load font into database");
+        let ctx = FontContext::with_database(Arc::new(db));
+
+        let mut style = ComputedStyle::default();
+        style.font_family = vec![family];
+        style.font_size = 16.0;
+
+        let pipeline = ShapingPipeline::new();
+        let default_run = pipeline.shape("mmmm", &style, &ctx).expect("default run");
+
+        style.font_variation_settings = vec![FontVariationSetting {
+            tag: *b"wdth",
+            value: 75.0,
+        }];
+        let narrow_run = pipeline.shape("mmmm", &style, &ctx).expect("narrow run");
+
+        style.font_variation_settings = vec![FontVariationSetting {
+            tag: *b"wdth",
+            value: 130.0,
+        }];
+        let wide_run = pipeline.shape("mmmm", &style, &ctx).expect("wide run");
+
+        let default_advance: f32 = default_run.iter().map(|r| r.advance).sum();
+        let narrow_advance: f32 = narrow_run.iter().map(|r| r.advance).sum();
+        let wide_advance: f32 = wide_run.iter().map(|r| r.advance).sum();
+
+        assert!(narrow_advance < default_advance, "wdth axis should shrink glyph advances");
+        assert!(wide_advance > default_advance, "wdth axis should widen glyph advances");
     }
 
     #[test]

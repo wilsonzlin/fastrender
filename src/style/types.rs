@@ -841,6 +841,13 @@ pub struct FontFeatureSetting {
     pub value: u32,
 }
 
+/// Low-level font variation override (`font-variation-settings`)
+#[derive(Debug, Clone, PartialEq)]
+pub struct FontVariationSetting {
+    pub tag: [u8; 4],
+    pub value: f32,
+}
+
 /// East Asian variants (`font-variant-east-asian`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EastAsianVariant {
