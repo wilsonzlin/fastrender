@@ -6,6 +6,10 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Text shadow tests now promote channel comparisons to u16 to avoid u8 overflow when detecting red halos.
+- The display-list high-DPR text-shadow regression now checks offset scaling (2px → ~4px at 2x) instead of an impossible blur expectation, aligning with the painter coverage.
+- Filter lengths are now spec-valid: blur/drop-shadow parsing rejects percentage lengths, blur radii clamp non-negative, and viewport-relative units resolve against the viewport in painter and display-list paths (tests cover percentage rejection and vw resolution).
+- Filter lengths resolve font-relative units using actual font metrics: blur/drop-shadow lengths now honor em/ex/ch/rem via the shared font-aware resolver in both painter and display-list builder, with regressions for ex-based blur lengths.
 - ::marker now honors text-decoration and text-shadow declarations: the marker allowlist permits decoration/shadow longhands, marker resets no longer clear text shadows, CSS parsing understands text-shadow (comma-separated shadows, optional color defaulting to currentColor), and TextShadow now carries optional colors resolved against the element’s color. Tests cover marker styles keeping decorations/shadows and the cascade allowing shadows on ::marker.
 - `unicode-bidi: plaintext` now keeps per-paragraph first-strong direction without hiding text behind isolates: plaintext controls no longer inject FSI/PDI wrappers, paragraph base levels fall back to auto only when the paragraph (or root) is authored as plaintext, and mandatory-break splitting preserves glyph advances. Wrapper stripping now reanchors glyph clusters after removing prefixes so shaped runs stay within content bounds.
 - Inline painting now renders vertical writing modes directly: the painter and display-list builder drive glyph advances down the inline (vertical) axis using block-axis baselines, avoiding the old post-layout fragment rotation and keeping upright glyphs for vertical-rl/lr flows.

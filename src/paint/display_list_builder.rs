@@ -366,8 +366,8 @@ impl DisplayListBuilder {
         let (filters, backdrop_filters, radii) = root_style
             .map(|style| {
                 (
-                    Self::resolve_filters(&style.filter, style),
-                    Self::resolve_filters(&style.backdrop_filter, style),
+                    Self::resolve_filters(&style.filter, style, self.viewport, &self.font_ctx),
+                    Self::resolve_filters(&style.backdrop_filter, style, self.viewport, &self.font_ctx),
                     Self::resolve_border_radii(Some(style), context.bounds),
                 )
             })
@@ -806,13 +806,18 @@ impl DisplayListBuilder {
         Point::new(cx, cy)
     }
 
-    fn resolve_filters(filters: &[crate::style::types::FilterFunction], style: &ComputedStyle) -> Vec<ResolvedFilter> {
+    fn resolve_filters(
+        filters: &[crate::style::types::FilterFunction],
+        style: &ComputedStyle,
+        viewport: Option<(f32, f32)>,
+        font_ctx: &FontContext,
+    ) -> Vec<ResolvedFilter> {
+        let viewport = viewport.unwrap_or((0.0, 0.0));
         filters
             .iter()
             .filter_map(|f| match f {
-                crate::style::types::FilterFunction::Blur(len) => {
-                    Some(ResolvedFilter::Blur(Self::resolve_filter_length(len, style)))
-                }
+                crate::style::types::FilterFunction::Blur(len) => Self::resolve_filter_length(len, style, viewport, font_ctx)
+                    .map(|r| ResolvedFilter::Blur(r.max(0.0))),
                 crate::style::types::FilterFunction::Brightness(v) => Some(ResolvedFilter::Brightness(*v)),
                 crate::style::types::FilterFunction::Contrast(v) => Some(ResolvedFilter::Contrast(*v)),
                 crate::style::types::FilterFunction::Grayscale(v) => Some(ResolvedFilter::Grayscale(*v)),
@@ -826,11 +831,16 @@ impl DisplayListBuilder {
                         crate::style::types::FilterColor::CurrentColor => style.color,
                         crate::style::types::FilterColor::Color(c) => c,
                     };
+                    let offset_x = Self::resolve_filter_length(&shadow.offset_x, style, viewport, font_ctx)?;
+                    let offset_y = Self::resolve_filter_length(&shadow.offset_y, style, viewport, font_ctx)?;
+                    let blur_radius =
+                        Self::resolve_filter_length(&shadow.blur_radius, style, viewport, font_ctx).map(|r| r.max(0.0))?;
+                    let spread = Self::resolve_filter_length(&shadow.spread, style, viewport, font_ctx)?;
                     Some(ResolvedFilter::DropShadow {
-                        offset_x: Self::resolve_filter_length(&shadow.offset_x, style),
-                        offset_y: Self::resolve_filter_length(&shadow.offset_y, style),
-                        blur_radius: Self::resolve_filter_length(&shadow.blur_radius, style),
-                        spread: Self::resolve_filter_length(&shadow.spread, style),
+                        offset_x,
+                        offset_y,
+                        blur_radius,
+                        spread,
                         color,
                     })
                 }
@@ -838,12 +848,18 @@ impl DisplayListBuilder {
             .collect()
     }
 
-    fn resolve_filter_length(len: &Length, style: &ComputedStyle) -> f32 {
+    fn resolve_filter_length(
+        len: &Length,
+        style: &ComputedStyle,
+        viewport: (f32, f32),
+        font_ctx: &FontContext,
+    ) -> Option<f32> {
         match len.unit {
-            LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(style.font_size),
-            LengthUnit::Percent => len.resolve_against(style.font_size),
-            unit if unit.is_absolute() => len.to_px(),
-            _ => 0.0,
+            LengthUnit::Percent => None,
+            unit if unit.is_font_relative() => Some(resolve_font_relative_length(*len, style, font_ctx)),
+            unit if unit.is_viewport_relative() => Some(len.resolve_with_viewport(viewport.0, viewport.1)),
+            unit if unit.is_absolute() => Some(len.to_px()),
+            _ => None,
         }
     }
 
@@ -1303,11 +1319,11 @@ impl DisplayListBuilder {
                     .next()
                 {
                     let (dest_x, dest_y, dest_w, dest_h) = {
-                        let (fit, position, font_size) = if let Some(style) = fragment.style.as_deref() {
-                            (style.object_fit, style.object_position, style.font_size)
-                        } else {
-                            (ObjectFit::Fill, default_object_position(), 16.0)
-                        };
+                    let (fit, position, font_size) = if let Some(style) = fragment.style.as_deref() {
+                        (style.object_fit, style.object_position, style.font_size)
+                    } else {
+                        (ObjectFit::Fill, default_object_position(), 16.0)
+                    };
 
                         compute_object_fit(
                             fit,
@@ -3026,12 +3042,16 @@ mod tests {
         let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="blue"/></svg>"#;
         let fragment = create_image_fragment(0.0, 0.0, 10.0, 10.0, svg);
 
-        let list = DisplayListBuilder::new().build(&fragment);
+        let list = DisplayListBuilder::new().build_with_stacking_tree(&fragment);
 
-        assert_eq!(list.len(), 1, "image content should decode instead of placeholder");
-        let DisplayItem::Image(img) = &list.items()[0] else {
-            panic!("expected image display item");
-        };
+        let img = list
+            .items()
+            .iter()
+            .find_map(|item| match item {
+                DisplayItem::Image(img) => Some(img),
+                _ => None,
+            })
+            .expect("expected image display item");
         assert_eq!(img.image.width, 1);
         assert_eq!(img.image.height, 1);
     }
@@ -3592,6 +3612,24 @@ mod tests {
             panic!("Expected image item");
         };
         assert_eq!(img.filter_quality, ImageFilterQuality::Nearest);
+    }
+
+    #[test]
+    fn filters_resolve_font_relative_lengths_in_display_list() {
+        let mut style = ComputedStyle::default();
+        style.font_size = 20.0;
+        style.filter = vec![crate::style::types::FilterFunction::Blur(Length::new(1.0, LengthUnit::Ex))];
+
+        let filters =
+            DisplayListBuilder::resolve_filters(&style.filter, &style, Some((200.0, 100.0)), &FontContext::new());
+
+        match filters.first() {
+            Some(ResolvedFilter::Blur(radius)) => assert!(
+                (radius - 10.0).abs() < 2.0,
+                "expected ex to resolve near half the font size (got {radius})"
+            ),
+            other => panic!("expected blur filter, got {:?}", other),
+        }
     }
 
     #[test]

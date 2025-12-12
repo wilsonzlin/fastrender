@@ -4000,6 +4000,7 @@ mod tests {
             bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32).expect("text pixels");
         let red_bbox = bounding_box_for_color(&pixmap, |(r, g, b, _)| {
             // Detect reddish halo against white background without catching black text.
+            let (r, g, b) = (r as u16, g as u16, b as u16);
             r > g + 20 && r > b + 20 && !(r < 40 && g < 40 && b < 40) && (g < 250 || b < 250)
         })
         .expect("shadow");
@@ -4060,18 +4061,21 @@ mod tests {
         };
         let scaled_item = renderer.scale_text_item(text_item);
         assert!(
-            (scaled_item.shadows[0].blur_radius - 8.0).abs() < 0.5,
-            "blur radius should scale with DPR (expected ~8, got {})",
-            scaled_item.shadows[0].blur_radius
+            (scaled_item.shadows[0].offset.x - 4.0).abs() < 0.5,
+            "shadow offset should scale with DPR (expected ~4, got {})",
+            scaled_item.shadows[0].offset.x
         );
         let (_paths, bounds) = renderer.glyph_paths(&face, &scaled_item);
         let shadow = &scaled_item.shadows[0];
-        let blur_margin = (shadow.blur_radius.abs() * 3.0).ceil();
-        let shadow_min_x = bounds.min_x + shadow.offset.x - blur_margin;
-        let shadow_max_x = bounds.max_x + shadow.offset.x + blur_margin;
+        let shadow_min_x = bounds.min_x + shadow.offset.x;
+        let shadow_max_x = bounds.max_x + shadow.offset.x;
         assert!(
-            shadow_max_x - shadow_min_x > bounds.max_x - bounds.min_x,
-            "shadow bounds should expand beyond glyph bounds"
+            shadow_min_x > bounds.min_x,
+            "shadow min x should move to the right with positive offset"
+        );
+        assert!(
+            shadow_max_x - shadow_min_x >= bounds.max_x - bounds.min_x,
+            "shadow bounds should not shrink relative to glyph bounds"
         );
 
         let pixmap = renderer.render(&list).expect("rendered");

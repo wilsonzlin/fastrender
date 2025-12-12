@@ -6304,9 +6304,19 @@ fn parse_filter_function<'i, 't>(
     name: &str,
     input: &mut Parser<'i, 't>,
 ) -> Result<FilterFunction, cssparser::ParseError<'i, ()>> {
+    fn parse_filter_length<'i, 't>(
+        input: &mut Parser<'i, 't>,
+    ) -> Result<Length, cssparser::ParseError<'i, ()>> {
+        let len = parse_length_component(input)?;
+        if matches!(len.unit, LengthUnit::Percent) {
+            return Err(input.new_custom_error(()));
+        }
+        Ok(len)
+    }
+
     match name {
         "blur" => {
-            let len = parse_length_component(input)?;
+            let len = parse_filter_length(input)?;
             input.skip_whitespace();
             if !input.is_exhausted() {
                 return Err(input.new_custom_error(()));
@@ -6903,7 +6913,7 @@ fn parse_drop_shadow<'i, 't>(input: &mut Parser<'i, 't>) -> Result<FilterFunctio
             }
         }
 
-        if let Ok(len) = input.try_parse(parse_length_component) {
+        if let Ok(len) = input.try_parse(parse_filter_function_length) {
             lengths.push(len);
             continue;
         }
@@ -6927,6 +6937,14 @@ fn parse_drop_shadow<'i, 't>(input: &mut Parser<'i, 't>) -> Result<FilterFunctio
         spread,
         color: color.unwrap_or(FilterColor::CurrentColor),
     }))
+}
+
+fn parse_filter_function_length<'i, 't>(input: &mut Parser<'i, 't>) -> Result<Length, cssparser::ParseError<'i, ()>> {
+    let len = parse_length_component(input)?;
+    if matches!(len.unit, LengthUnit::Percent) {
+        return Err(input.new_custom_error(()));
+    }
+    Ok(len)
 }
 
 fn parse_mix_blend_mode(kw: &str) -> Option<MixBlendMode> {
@@ -10693,6 +10711,18 @@ mod tests {
             FilterFunction::Blur(len) => assert!((len.to_px() - 5.0).abs() < 0.01),
             _ => panic!("expected blur"),
         }
+    }
+
+    #[test]
+    fn filter_lengths_reject_percentages() {
+        assert!(
+            parse_filter_list(&PropertyValue::Keyword("blur(10%)".to_string())).is_none(),
+            "percentage blur should be invalid"
+        );
+        assert!(
+            parse_filter_list(&PropertyValue::Keyword("drop-shadow(1px 2px 10%)".to_string())).is_none(),
+            "percentage drop-shadow blur should be invalid"
+        );
     }
 
     #[test]

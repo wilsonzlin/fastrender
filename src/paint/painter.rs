@@ -712,14 +712,15 @@ impl Painter {
         let isolated = style_ref
             .map(|s| matches!(s.isolation, crate::style::types::Isolation::Isolate))
             .unwrap_or(false);
+        let viewport = (self.css_width, self.css_height);
         let filters = style_ref
             .as_deref()
-            .map(|s| resolve_filters(&s.filter, s, self.scale))
+            .map(|s| resolve_filters(&s.filter, s, viewport, &self.font_ctx))
             .unwrap_or_default();
         let has_filters = !filters.is_empty();
         let backdrop_filters = style_ref
             .as_deref()
-            .map(|s| resolve_filters(&s.backdrop_filter, s, self.scale))
+            .map(|s| resolve_filters(&s.backdrop_filter, s, viewport, &self.font_ctx))
             .unwrap_or_default();
         let has_backdrop = !backdrop_filters.is_empty();
         let clip = style_ref.and_then(|style| {
@@ -4754,11 +4755,17 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
         .collect()
 }
 
-fn resolve_filters(filters: &[FilterFunction], style: &ComputedStyle, _scale: f32) -> Vec<ResolvedFilter> {
+fn resolve_filters(
+    filters: &[FilterFunction],
+    style: &ComputedStyle,
+    viewport: (f32, f32),
+    font_ctx: &FontContext,
+) -> Vec<ResolvedFilter> {
     filters
         .iter()
         .filter_map(|f| match f {
-            FilterFunction::Blur(len) => Some(ResolvedFilter::Blur(resolve_filter_length(len, style))),
+            FilterFunction::Blur(len) => resolve_filter_length(len, style, viewport, font_ctx)
+                .map(|r| ResolvedFilter::Blur(r.max(0.0))),
             FilterFunction::Brightness(v) => Some(ResolvedFilter::Brightness(*v)),
             FilterFunction::Contrast(v) => Some(ResolvedFilter::Contrast(*v)),
             FilterFunction::Grayscale(v) => Some(ResolvedFilter::Grayscale(*v)),
@@ -4772,11 +4779,16 @@ fn resolve_filters(filters: &[FilterFunction], style: &ComputedStyle, _scale: f3
                     FilterColor::CurrentColor => style.color,
                     FilterColor::Color(c) => c,
                 };
+                let offset_x = resolve_filter_length(&shadow.offset_x, style, viewport, font_ctx)?;
+                let offset_y = resolve_filter_length(&shadow.offset_y, style, viewport, font_ctx)?;
+                let blur_radius =
+                    resolve_filter_length(&shadow.blur_radius, style, viewport, font_ctx).map(|r| r.max(0.0))?;
+                let spread = resolve_filter_length(&shadow.spread, style, viewport, font_ctx)?;
                 Some(ResolvedFilter::DropShadow {
-                    offset_x: resolve_filter_length(&shadow.offset_x, style),
-                    offset_y: resolve_filter_length(&shadow.offset_y, style),
-                    blur_radius: resolve_filter_length(&shadow.blur_radius, style),
-                    spread: resolve_filter_length(&shadow.spread, style),
+                    offset_x,
+                    offset_y,
+                    blur_radius,
+                    spread,
                     color,
                 })
             }
@@ -4784,12 +4796,18 @@ fn resolve_filters(filters: &[FilterFunction], style: &ComputedStyle, _scale: f3
         .collect()
 }
 
-fn resolve_filter_length(len: &Length, style: &ComputedStyle) -> f32 {
+fn resolve_filter_length(
+    len: &Length,
+    style: &ComputedStyle,
+    viewport: (f32, f32),
+    font_ctx: &FontContext,
+) -> Option<f32> {
     match len.unit {
-        LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(style.font_size),
-        LengthUnit::Percent => len.resolve_against(style.font_size),
-        unit if unit.is_absolute() => len.to_px(),
-        _ => 0.0,
+        LengthUnit::Percent => None,
+        unit if unit.is_font_relative() => Some(resolve_font_relative_length(*len, style, font_ctx)),
+        unit if unit.is_viewport_relative() => Some(len.resolve_with_viewport(viewport.0, viewport.1)),
+        unit if unit.is_absolute() => Some(len.to_px()),
+        _ => None,
     }
 }
 
@@ -6318,6 +6336,7 @@ mod tests {
         let black_bbox =
             bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32).expect("black text");
         let red_bbox = bounding_box_for_color(&pixmap, |(r, g, b, _)| {
+            let (r, g, b) = (r as u16, g as u16, b as u16);
             r > g + 20 && r > b + 20 && !(r < 40 && g < 40 && b < 40) && (g < 250 || b < 250)
         })
         .expect("shadow");
@@ -6461,6 +6480,40 @@ mod tests {
             "percent offset_x should resolve to ~10px (got {dx})"
         );
         assert!((19..=21).contains(&dy), "1em offset_y should resolve to ~20px (got {dy})");
+    }
+
+    #[test]
+    fn filter_lengths_resolve_viewport_units() {
+        let mut style = ComputedStyle::default();
+        style.filter = vec![FilterFunction::Blur(Length::new(10.0, LengthUnit::Vw))];
+        let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+        match filters.first() {
+            Some(ResolvedFilter::Blur(radius)) => assert!((radius - 20.0).abs() < 0.001),
+            other => panic!("expected blur filter, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn filter_lengths_ignore_percentages() {
+        let mut style = ComputedStyle::default();
+        style.filter = vec![FilterFunction::Blur(Length::percent(50.0))];
+        let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+        assert!(filters.is_empty(), "percentage blur should be discarded");
+    }
+
+    #[test]
+    fn filter_lengths_resolve_ex_units() {
+        let mut style = ComputedStyle::default();
+        style.font_size = 20.0;
+        style.filter = vec![FilterFunction::Blur(Length::new(1.0, LengthUnit::Ex))];
+        let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+        match filters.first() {
+            Some(ResolvedFilter::Blur(radius)) => assert!(
+                (radius - 10.0).abs() < 2.0,
+                "expected ex to resolve near half the font size (got {radius})"
+            ),
+            other => panic!("expected blur filter, got {:?}", other),
+        }
     }
 
     #[test]
