@@ -4171,6 +4171,64 @@ mod tests {
     }
 
     #[test]
+    fn text_shadow_resolves_percent_and_em_units() {
+        let font_ctx = FontContext::new();
+        let Some(font) = font_ctx.get_sans_serif() else {
+            return;
+        };
+        let Ok(face) = font.as_ttf_face() else {
+            return;
+        };
+        let Some(glyph_id) = face.glyph_index('H') else {
+            return;
+        };
+
+        let mut list = DisplayList::new();
+        list.push(DisplayItem::Text(TextItem {
+            origin: Point::new(0.0, 20.0),
+            glyphs: vec![GlyphInstance {
+                glyph_id: glyph_id.0 as u32,
+                offset: Point::new(0.0, 0.0),
+                advance: 14.0,
+            }],
+            color: Rgba::BLACK,
+            shadows: vec![TextShadowItem {
+                offset: Point::new(10.0, 20.0), // percent(50%) + em(1.0) resolved against font size 20px
+                blur_radius: 0.0,
+                color: Rgba::from_rgba8(255, 0, 0, 255),
+            }],
+            font_size: 20.0,
+            advance_width: 14.0,
+            font_id: Some(FontId {
+                family: font.family.clone(),
+                weight: font.weight.value(),
+                style: font.style,
+                stretch: font.stretch,
+            }),
+            synthetic_bold: 0.0,
+            synthetic_oblique: 0.0,
+            emphasis: None,
+            decorations: Vec::new(),
+        }));
+
+        let renderer = DisplayListRenderer::new(120, 100, Rgba::WHITE, font_ctx).expect("renderer");
+        let pixmap = renderer.render(&list).expect("rendered");
+
+        let black_bbox =
+            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32).expect("text pixels");
+        let red_bbox = bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80)
+            .expect("shadow");
+
+        let dx = red_bbox.0 as i32 - black_bbox.0 as i32;
+        let dy = red_bbox.1 as i32 - black_bbox.1 as i32;
+        assert!(
+            (9..=11).contains(&dx),
+            "percent offset_x should resolve to ~10px (got {dx})"
+        );
+        assert!((19..=21).contains(&dy), "1em offset_y should resolve to ~20px (got {dy})");
+    }
+
+    #[test]
     fn renders_text_emphasis_marks() {
         let mut list = DisplayList::new();
         list.push(DisplayItem::Text(TextItem {
