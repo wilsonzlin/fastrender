@@ -1337,6 +1337,20 @@ mod tests {
     }
 
     #[test]
+    fn text_align_all_does_not_reset_text_align_last() {
+        let dom = element_with_style("text-align-last: right; text-align-all: justify;");
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(
+            styled.styles.text_align,
+            crate::style::types::TextAlign::Justify
+        ));
+        assert!(matches!(
+            styled.styles.text_align_last,
+            crate::style::types::TextAlignLast::Right
+        ));
+    }
+
+    #[test]
     fn will_change_parses_hint_list() {
         let dom = element_with_style("will-change: transform, opacity");
         let styled = apply_styles(&dom, &StyleSheet::new());
@@ -1616,7 +1630,7 @@ mod tests {
         let styled = apply_styles(&dom, &StyleSheet::new());
         assert!(matches!(
             styled.styles.text_align,
-            crate::style::types::TextAlign::Justify
+            crate::style::types::TextAlign::JustifyAll
         ));
         assert!(matches!(
             styled.styles.text_align_last,
@@ -2172,6 +2186,44 @@ mod tests {
     }
 
     #[test]
+    fn marker_alignment_does_not_apply_or_inherit() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "ul".to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: vec![(
+                        "style".to_string(),
+                        "text-align: center; text-align-last: right; text-indent: 2em;".to_string(),
+                    )],
+                },
+                children: vec![],
+            }],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        let li = styled.children.first().expect("li");
+        let marker = li.marker_styles.as_ref().expect("marker styles");
+
+        assert!(
+            matches!(marker.text_align, crate::style::types::TextAlign::Start),
+            "::marker should not inherit text-align from the list item"
+        );
+        assert!(
+            matches!(marker.text_align_last, crate::style::types::TextAlignLast::Auto),
+            "::marker should keep default text-align-last"
+        );
+        assert_eq!(
+            marker.text_indent,
+            crate::style::types::TextIndent::default(),
+            "::marker should not inherit text-indent"
+        );
+    }
+
+    #[test]
     fn marker_allows_font_shorthand() {
         let dom = DomNode {
             node_type: DomNodeType::Element {
@@ -2300,6 +2352,41 @@ mod tests {
             marker.text_emphasis_position,
             crate::style::types::TextEmphasisPosition::UnderRight,
             "text-emphasis-position should apply to ::marker"
+        );
+    }
+
+    #[test]
+    fn marker_allows_cursor_property() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "ul".to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            }],
+        };
+
+        let stylesheet = parse_stylesheet(
+            r#"
+            li::marker {
+                cursor: move;
+            }
+        "#,
+        )
+        .unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        let li = styled.children.first().expect("li");
+        let marker = li.marker_styles.as_ref().expect("marker styles");
+
+        assert!(
+            matches!(marker.cursor, crate::style::types::CursorKeyword::Move),
+            "cursor should be honored on ::marker"
         );
     }
 
@@ -2927,6 +3014,15 @@ pub(crate) fn reset_marker_box_properties(styles: &mut ComputedStyle) {
     styles.border_spacing_vertical = defaults.border_spacing_vertical;
     styles.border_collapse = defaults.border_collapse;
     styles.table_layout = defaults.table_layout;
+    styles.caption_side = defaults.caption_side;
+    styles.empty_cells = defaults.empty_cells;
+
+    // Text alignment/indentation properties do not apply to ::marker (CSS Pseudo/Lists).
+    styles.text_align = defaults.text_align;
+    styles.text_align_last = defaults.text_align_last;
+    styles.text_justify = defaults.text_justify;
+    styles.text_indent = defaults.text_indent;
+    styles.text_overflow = defaults.text_overflow;
 }
 
 fn marker_allows_property(property: &str) -> bool {
@@ -2938,6 +3034,11 @@ fn marker_allows_property(property: &str) -> bool {
         p.as_str(),
         "content" | "direction" | "unicode-bidi" | "text-combine-upright"
     ) {
+        return true;
+    }
+
+    // Cursor is explicitly allowed for ::marker in the CSS Pseudo tests.
+    if p == "cursor" {
         return true;
     }
 

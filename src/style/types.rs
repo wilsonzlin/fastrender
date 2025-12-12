@@ -1324,6 +1324,8 @@ pub enum TextAlign {
     Right,
     Center,
     Justify,
+    /// Justify all lines, including the last (text-align: justify-all)
+    JustifyAll,
     MatchParent,
 }
 

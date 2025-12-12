@@ -1679,7 +1679,7 @@ impl InlineFormattingContext {
             };
             let mut base_align = map_text_align(text_align, line_direction);
             let resolved_justify = resolve_auto_text_justify(text_justify, &line.items);
-            if matches!(base_align, TextAlign::Justify) && matches!(resolved_justify, TextJustify::None) {
+            if is_justify_align(base_align) && matches!(resolved_justify, TextJustify::None) {
                 base_align = map_text_align(TextAlign::Start, line_direction);
             }
             let allow_justify = !is_last_line || !matches!(text_align_last, crate::style::types::TextAlignLast::Auto);
@@ -1696,7 +1696,7 @@ impl InlineFormattingContext {
                 resolved_justify,
                 has_justify,
             );
-            if matches!(effective_align, TextAlign::Justify) && !has_justify {
+            if is_justify_align(effective_align) && !has_justify {
                 effective_align = map_text_align(TextAlign::Start, line_direction);
             }
             let line_fragment = self.create_line_fragment(
@@ -1729,7 +1729,7 @@ impl InlineFormattingContext {
         indent_offset: f32,
         inline_vertical: bool,
     ) -> FragmentNode {
-        let should_justify = matches!(line_align, TextAlign::Justify) && !matches!(resolved_justify, TextJustify::None);
+        let should_justify = is_justify_align(line_align) && !matches!(resolved_justify, TextJustify::None);
         let items: Vec<PositionedItem> = if should_justify {
             self.expand_items_for_justification(&line.items, resolved_justify)
         } else {
@@ -1746,7 +1746,7 @@ impl InlineFormattingContext {
         let (lead, gap_extra) = match line_align {
             TextAlign::Right => (extra_space, 0.0),
             TextAlign::Center => (extra_space * 0.5, 0.0),
-            TextAlign::Justify if should_justify && items.len() > 1 => {
+            TextAlign::Justify | TextAlign::JustifyAll if should_justify && items.len() > 1 => {
                 let gap_count = Self::count_justifiable_gaps(&items, resolved_justify);
                 if gap_count > 0 {
                     (0.0, extra_space / gap_count as f32)
@@ -4156,7 +4156,7 @@ impl InlineFormattingContext {
                 };
                 let mut base_align = map_text_align(style.text_align, first_line.resolved_direction);
                 let resolved_justify = resolve_auto_text_justify(style.text_justify, &first_line.items);
-                if matches!(base_align, TextAlign::Justify) && matches!(resolved_justify, TextJustify::None) {
+                if is_justify_align(base_align) && matches!(resolved_justify, TextJustify::None) {
                     base_align = map_text_align(TextAlign::Start, first_line.resolved_direction);
                 }
                 let has_justify = has_justify_opportunities(&first_line.items, resolved_justify);
@@ -4168,7 +4168,7 @@ impl InlineFormattingContext {
                     resolved_justify,
                     has_justify,
                 );
-                if matches!(effective_align, TextAlign::Justify)
+                if is_justify_align(effective_align)
                     && (matches!(resolved_justify, TextJustify::None) || !has_justify)
                 {
                     effective_align = map_text_align(TextAlign::Start, first_line.resolved_direction);
@@ -4556,11 +4556,13 @@ fn resolve_text_align_for_line(
 
     match text_align_last {
         crate::style::types::TextAlignLast::Auto => match text_align {
-            TextAlign::Justify if has_justify_opportunities && !matches!(text_justify, TextJustify::None) => {
+            TextAlign::Justify | TextAlign::JustifyAll
+                if has_justify_opportunities && !matches!(text_justify, TextJustify::None) =>
+            {
                 TextAlign::Justify
             }
             // Single-line or no-justify-opportunity => start align
-            TextAlign::Justify => TextAlign::Start,
+            TextAlign::Justify | TextAlign::JustifyAll => TextAlign::Start,
             other => map_text_align(other, direction),
         },
         _ => mapped_start_end(text_align_last),
@@ -4604,6 +4606,10 @@ fn map_text_align(text_align: TextAlign, direction: crate::style::types::Directi
         }
         _ => text_align,
     }
+}
+
+fn is_justify_align(text_align: TextAlign) -> bool {
+    matches!(text_align, TextAlign::Justify | TextAlign::JustifyAll)
 }
 
 fn compute_paragraph_line_flags(lines: &[Line]) -> Vec<(bool, bool)> {

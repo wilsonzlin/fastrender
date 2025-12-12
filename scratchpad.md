@@ -6,6 +6,8 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- text-align parsing now preserves `justify-all` as a distinct computed value and sets `text-align-last` to justify per CSS Text; `text-align-all` no longer resets `text-align-last`, keeping the longhand split faithful to the spec. Inline layout treats `justify-all` as justification on all lines. Added cascade coverage.
+- ::marker now follows the CSS Lists/Pseudo supported property set more closely: cursor is honored, while text-align/text-align-last/text-indent are reset to defaults even when inherited. Added cascade tests to lock cursor support and ignore alignment on markers.
 - Filter functions follow the spec defaults/validation: blur/hue-rotate default to 0 when arguments are omitted, the rest default to 1, negative parameters are invalid, unit-interval filters clamp to [0,1] at resolution, and brightness/contrast/saturate keep values above 1. Added painter/display-list regressions for clamping and defaults.
 - Filter drop-shadow now follows the CSS grammar (offsets + optional blur + optional spread); four-length shadows parse and the spread is preserved.
 - Drop-shadow spread now supports negative lengths via morphological erosion: spread is applied for positive and negative values in painter/display-list paths, the spread kernel switches between dilation/min, and regressions cover negative-spread shadows shrinking when offset into visible space.

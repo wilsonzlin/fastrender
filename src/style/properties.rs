@@ -4397,7 +4397,7 @@ pub fn apply_declaration_with_base(
                     "right" => Some(TextAlign::Right),
                     "center" => Some(TextAlign::Center),
                     "justify" => Some(TextAlign::Justify),
-                    "justify-all" => Some(TextAlign::Justify),
+                    "justify-all" => Some(TextAlign::JustifyAll),
                     "match-parent" => Some(TextAlign::MatchParent),
                     _ => None,
                 };
@@ -4405,12 +4405,10 @@ pub fn apply_declaration_with_base(
                     styles.text_align = value;
                     styles.text_align_last = match value {
                         TextAlign::Justify => TextAlignLast::Auto,
+                        TextAlign::JustifyAll => TextAlignLast::Justify,
                         TextAlign::MatchParent => TextAlignLast::MatchParent,
                         _ => TextAlignLast::Auto,
                     };
-                    if matches!(value, TextAlign::Justify) && kw.as_str() == "justify-all" {
-                        styles.text_align_last = TextAlignLast::Justify;
-                    }
                 }
             }
         }
@@ -4423,23 +4421,12 @@ pub fn apply_declaration_with_base(
                     "right" => Some(TextAlign::Right),
                     "center" => Some(TextAlign::Center),
                     "justify" => Some(TextAlign::Justify),
-                    "justify-all" => Some(TextAlign::Justify),
+                    "justify-all" => Some(TextAlign::JustifyAll),
                     "match-parent" => Some(TextAlign::MatchParent),
                     _ => None,
                 };
                 if let Some(value) = parsed {
                     styles.text_align = value;
-                    match value {
-                        TextAlign::Justify => {
-                            styles.text_align_last = TextAlignLast::Justify;
-                        }
-                        TextAlign::MatchParent => {
-                            // text-align-last left unchanged per spec carve-out
-                        }
-                        _ => {
-                            styles.text_align_last = TextAlignLast::Auto;
-                        }
-                    }
                 }
             }
         }
