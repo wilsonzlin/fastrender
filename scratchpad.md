@@ -13,6 +13,7 @@
 - Text-emphasis position honors vertical flows: over/under map to block-end/block-start offsets in vertical writing so marks sit to the right/left of the line stack instead of above/below.
 - Emphasis strings center correctly in vertical text: string marks swap width/height and baseline offsets along the block axis so they align with vertical lines in both painter and display list.
 - Verified the centering change in both painter and display-list renderers (width/height swapped for vertical string emphasis); `cargo test --lib` passes.
+- Plaintext paragraph base levels still fall back to first-strong resolution only when the paragraph/root is authored with `unicode-bidi: plaintext`, deferring to the bidi algorithm’s paragraph handling instead of a manual pre-scan.
 - Text decorations now respect vertical writing: underline/overline/strike centers use the block-axis baseline while lines run along the inline axis (vertical strokes in vertical-rl/lr), wavy/dashed/dotted shapes rotate accordingly, and display-list items carry an orientation flag; skip-ink carving remains horizontal-only for now.
 - Underline skip-ink now works in vertical writing: exclusion carving runs along the inline (vertical) axis using the block-axis band, so ink is avoided for vertical underlines both in the painter and display list.
 - Sesame emphasis marks rotate for vertical text: sesame strokes now slant along the block axis in vertical flows in both painter and display-list renderer.

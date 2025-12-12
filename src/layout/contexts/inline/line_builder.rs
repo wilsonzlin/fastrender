@@ -1661,14 +1661,7 @@ impl<'a> LineBuilder<'a> {
             if self.root_unicode_bidi == UnicodeBidi::Plaintext
                 || Self::paragraph_all_plaintext(&self.lines[start..end])
             {
-                if let Some(dir) = Self::paragraph_direction_from_lines(&self.lines[start..end]) {
-                    paragraph_level = Some(match dir {
-                        Direction::Rtl => Level::rtl(),
-                        _ => Level::ltr(),
-                    });
-                } else {
-                    paragraph_level = None;
-                }
+                paragraph_level = None;
             }
             reorder_paragraph(
                 &mut self.lines[start..end],
@@ -1679,42 +1672,6 @@ impl<'a> LineBuilder<'a> {
                 &font_context,
             );
         }
-    }
-
-    fn collect_text_from_item(item: &InlineItem, out: &mut String) {
-        const OBJECT_REPLACEMENT: char = '\u{FFFC}';
-        match item {
-            InlineItem::Text(t) => out.push_str(&t.text),
-            InlineItem::Tab(_) => out.push('\t'),
-            InlineItem::InlineBox(b) => {
-                for child in &b.children {
-                    Self::collect_text_from_item(child, out);
-                }
-            }
-            InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {
-                out.push(OBJECT_REPLACEMENT);
-            }
-        }
-    }
-
-    fn paragraph_direction_from_lines(lines: &[Line]) -> Option<Direction> {
-        let mut logical = String::new();
-        for line in lines {
-            for positioned in &line.items {
-                Self::collect_text_from_item(&positioned.item, &mut logical);
-            }
-        }
-        if logical.is_empty() {
-            return None;
-        }
-        let bidi = unicode_bidi::BidiInfo::new(&logical, None);
-        bidi.paragraphs.first().map(|p| {
-            if p.level.is_rtl() {
-                Direction::Rtl
-            } else {
-                Direction::Ltr
-            }
-        })
     }
 
     fn paragraph_all_plaintext(lines: &[Line]) -> bool {
