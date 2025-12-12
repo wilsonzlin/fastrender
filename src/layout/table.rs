@@ -306,6 +306,118 @@ fn distribute_rowspan_targets(
     }
 }
 
+fn distribute_extra_row_height(
+    row_metrics: &mut [RowMetrics],
+    rows: &[RowInfo],
+    flex_indices: &[usize],
+    extra: f32,
+    percent_base: Option<f32>,
+) {
+    if flex_indices.is_empty() || extra <= 0.0 {
+        return;
+    }
+
+    let mut remaining = extra;
+    let mut iterations = 0;
+    while remaining > 0.01 && iterations < flex_indices.len().saturating_mul(2).max(1) {
+        let mut eligible = Vec::new();
+        for &idx in flex_indices {
+            if let Some(row) = row_metrics.get(idx) {
+                let (_, max_opt) = resolve_row_min_max(&rows[idx], percent_base);
+                let headroom = max_opt.map(|m| (m - row.height).max(0.0)).unwrap_or(f32::INFINITY);
+                if headroom <= 0.0 {
+                    continue;
+                }
+                let weight = if headroom.is_finite() {
+                    headroom
+                } else {
+                    row.height.max(1.0)
+                };
+                eligible.push((idx, headroom, weight));
+            }
+        }
+
+        if eligible.is_empty() {
+            break;
+        }
+
+        let total_weight: f32 = eligible.iter().map(|(_, _, w)| *w).sum();
+        if total_weight <= 0.0 {
+            break;
+        }
+
+        let mut consumed = 0.0;
+        for (idx, headroom, weight) in &eligible {
+            if let Some(row) = row_metrics.get_mut(*idx) {
+                let mut delta = remaining * (*weight / total_weight);
+                if headroom.is_finite() {
+                    delta = delta.min(*headroom);
+                }
+                row.height += delta;
+                consumed += delta;
+            }
+        }
+
+        if consumed <= 0.001 {
+            break;
+        }
+        remaining = (remaining - consumed).max(0.0);
+        iterations += 1;
+    }
+}
+
+fn distribute_remaining_height_with_caps(computed: &mut [f32], rows: &[RowInfo], remaining: f32, percent_base: Option<f32>) {
+    if remaining <= 0.0 || computed.is_empty() {
+        return;
+    }
+
+    let mut rem = remaining;
+    let mut iterations = 0;
+    while rem > 0.01 && iterations < computed.len().saturating_mul(2).max(1) {
+        let mut eligible = Vec::new();
+        for (idx, row) in rows.iter().enumerate() {
+            let (_, max_cap) = resolve_row_min_max(row, percent_base);
+            let headroom = max_cap.map(|m| (m - computed[idx]).max(0.0)).unwrap_or(f32::INFINITY);
+            if headroom <= 0.0 {
+                continue;
+            }
+            let weight = if headroom.is_finite() {
+                headroom
+            } else {
+                computed[idx].max(1.0)
+            };
+            eligible.push((idx, headroom, weight));
+        }
+
+        if eligible.is_empty() {
+            break;
+        }
+
+        let total_weight: f32 = eligible.iter().map(|(_, _, w)| *w).sum();
+        if total_weight <= 0.0 {
+            break;
+        }
+
+        let mut consumed = 0.0;
+        for (idx, headroom, weight) in &eligible {
+            let mut delta = rem * (*weight / total_weight);
+            if headroom.is_finite() {
+                delta = delta.min(*headroom);
+            }
+            if let Some(slot) = computed.get_mut(*idx) {
+                *slot += delta;
+                consumed += delta;
+            }
+        }
+
+        if consumed <= 0.001 {
+            break;
+        }
+        rem = (rem - consumed).max(0.0);
+        iterations += 1;
+    }
+}
+
 fn resolve_row_min_max(row: &RowInfo, percent_base: Option<f32>) -> (Option<f32>, Option<f32>) {
     let min = match row.author_min_height {
         Some(SpecifiedHeight::Fixed(h)) => Some(h),
@@ -2128,12 +2240,26 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
         if let Some(SpecifiedHeight::Fixed(h)) = row.specified_height {
             computed[idx] = computed[idx].max(h);
         }
+        let (min_cap, max_cap) = resolve_row_min_max(row, content_available);
+        if let Some(min_h) = min_cap {
+            computed[idx] = computed[idx].max(min_h);
+        }
+        if let Some(max_h) = max_cap {
+            computed[idx] = computed[idx].min(max_h);
+        }
     }
 
-    // Phase 4: calculate positions.
+    if let Some(base) = content_available {
+        let total: f32 = computed.iter().sum();
+        if total < base {
+            distribute_remaining_height_with_caps(&mut computed, &structure.rows, base - total, content_available);
+        }
+    }
+
+    // Phase 4: calculate positions using the computed heights.
     let mut y = spacing;
     for (idx, row) in structure.rows.iter_mut().enumerate() {
-        row.computed_height = computed[idx];
+        row.computed_height = computed.get(idx).copied().unwrap_or(0.0);
         row.y_position = y;
         y += row.computed_height + spacing;
     }
@@ -2943,7 +3069,7 @@ impl FormattingContext for TableFormattingContext {
             let target_rows = (target_height - spacing_total).max(0.0);
             if target_rows > rows_space && !row_metrics.is_empty() {
                 let extra = target_rows - rows_space;
-                let mut flex_indices: Vec<usize> = structure
+                let flex_indices: Vec<usize> = structure
                     .rows
                     .iter()
                     .enumerate()
@@ -2952,30 +3078,19 @@ impl FormattingContext for TableFormattingContext {
                         _ => Some(idx),
                     })
                     .collect();
-                if flex_indices.is_empty() {
-                    // No auto rows: distribute across all rows proportionally to their current height.
-                    flex_indices = (0..structure.row_count).collect();
-                }
-
-                let flex_sum: f32 = flex_indices
-                    .iter()
-                    .map(|i| row_metrics.get(*i).map(|r| r.height).unwrap_or(0.0))
-                    .sum();
-                if flex_sum > 0.0 {
-                    for idx in flex_indices {
-                        if let Some(row) = row_metrics.get_mut(idx) {
-                            let weight = row.height / flex_sum;
-                            row.height += extra * weight;
-                        }
-                    }
+                let targets = if flex_indices.is_empty() {
+                    (0..structure.row_count).collect::<Vec<_>>()
                 } else {
-                    let share = extra / flex_indices.len() as f32;
-                    for idx in flex_indices {
-                        if let Some(row) = row_metrics.get_mut(idx) {
-                            row.height += share;
-                        }
-                    }
-                }
+                    flex_indices
+                };
+
+                distribute_extra_row_height(
+                    &mut row_metrics,
+                    &structure.rows,
+                    &targets,
+                    extra,
+                    percent_height_base,
+                );
             }
         }
 
@@ -5907,6 +6022,29 @@ mod tests {
         // Extra 80 should distribute in 1:3 ratio from initial 10:30 heights → 20/60 split.
         assert!((structure.rows[0].computed_height - 30.0).abs() < 0.01);
         assert!((structure.rows[1].computed_height - 90.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn extra_table_height_respects_row_max_when_distributing() {
+        let mut structure = TableStructure::new();
+        structure.border_collapse = BorderCollapse::Separate;
+        structure.border_spacing = (0.0, 0.0);
+        structure.row_count = 2;
+        structure.rows = vec![RowInfo::new(0), RowInfo::new(1)];
+        structure.rows[0].min_height = 20.0;
+        structure.rows[1].min_height = 20.0;
+        structure.rows[0].author_max_height = Some(SpecifiedHeight::Fixed(60.0));
+
+        calculate_row_heights(&mut structure, Some(200.0));
+
+        assert!(
+            structure.rows[0].computed_height <= 61.0,
+            "row 0 should respect its max cap when filling extra space"
+        );
+        assert!(
+            structure.rows[1].computed_height >= 130.0,
+            "remaining extra space should flow to uncapped rows"
+        );
     }
 
     #[test]
