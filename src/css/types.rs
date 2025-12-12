@@ -68,6 +68,14 @@ impl precomputed_hash::PrecomputedHash for CssString {
 // Stylesheet structures
 // ============================================================================
 
+/// Flattened style rule with its cascade layer ordering.
+#[derive(Debug, Clone)]
+pub struct CollectedRule<'a> {
+    pub rule: &'a StyleRule,
+    /// Cascade layer order (lexicographic; unlayered rules use a sentinel of u32::MAX).
+    pub layer_order: Vec<u32>,
+}
+
 /// Stylesheet containing CSS rules
 #[derive(Debug, Clone)]
 pub struct StyleSheet {
@@ -91,9 +99,10 @@ impl StyleSheet {
     /// Collects all applicable style rules, evaluating @media queries
     ///
     /// This flattens nested @media rules and filters by the given media context.
-    pub fn collect_style_rules(&self, media_ctx: &MediaContext) -> Vec<&StyleRule> {
+    pub fn collect_style_rules(&self, media_ctx: &MediaContext) -> Vec<CollectedRule<'_>> {
         let mut result = Vec::new();
-        collect_rules_recursive(&self.rules, media_ctx, &mut result);
+        let mut registry = LayerRegistry::new();
+        collect_rules_recursive(&self.rules, media_ctx, &mut registry, &[], &mut result);
         result
     }
 
@@ -114,21 +123,56 @@ impl StyleSheet {
     }
 }
 
-/// Helper to recursively collect style rules from nested @media blocks
-fn collect_rules_recursive<'a>(rules: &'a [CssRule], media_ctx: &MediaContext, out: &mut Vec<&'a StyleRule>) {
+/// Helper to recursively collect style rules from nested @media/@layer blocks
+fn collect_rules_recursive<'a>(
+    rules: &'a [CssRule],
+    media_ctx: &MediaContext,
+    registry: &mut LayerRegistry,
+    current_layer: &[u32],
+    out: &mut Vec<CollectedRule<'a>>,
+) {
     for rule in rules {
         match rule {
             CssRule::Style(style_rule) => {
-                out.push(style_rule);
+                let layer_order = if current_layer.is_empty() {
+                    vec![u32::MAX]
+                } else {
+                    current_layer.to_vec()
+                };
+                out.push(CollectedRule { rule: style_rule, layer_order });
             }
             CssRule::Media(media_rule) => {
                 // Only include rules from @media blocks that match
                 if media_ctx.evaluate(&media_rule.query) {
-                    collect_rules_recursive(&media_rule.rules, media_ctx, out);
+                    collect_rules_recursive(&media_rule.rules, media_ctx, registry, current_layer, out);
                 }
             }
             CssRule::Import(_) => {
                 // Imports are resolved before collection; nothing to add here.
+            }
+            CssRule::Layer(layer_rule) => {
+                if layer_rule.rules.is_empty() {
+                    for name in &layer_rule.names {
+                        registry.ensure_path(current_layer, name);
+                    }
+                    if layer_rule.anonymous {
+                        registry.ensure_anonymous(current_layer);
+                    }
+                    continue;
+                }
+
+                if layer_rule.anonymous {
+                    let path = registry.ensure_anonymous(current_layer);
+                    collect_rules_recursive(&layer_rule.rules, media_ctx, registry, &path, out);
+                    continue;
+                }
+
+                if layer_rule.names.len() != 1 {
+                    // Invalid layer block; skip the rules.
+                    continue;
+                }
+                let path = registry.ensure_path(current_layer, &layer_rule.names[0]);
+                collect_rules_recursive(&layer_rule.rules, media_ctx, registry, &path, out);
             }
         }
     }
@@ -149,6 +193,8 @@ pub enum CssRule {
     Media(MediaRule),
     /// An @import rule (href + optional media list)
     Import(ImportRule),
+    /// A @layer rule establishing cascade layers
+    Layer(LayerRule),
 }
 
 /// A @media rule containing conditional rules
@@ -176,6 +222,17 @@ pub struct StyleRule {
     pub declarations: Vec<Declaration>,
 }
 
+/// A @layer rule (blockless or with nested rules).
+#[derive(Debug, Clone)]
+pub struct LayerRule {
+    /// Named layers declared in the prelude (empty for anonymous layers).
+    pub names: Vec<Vec<String>>,
+    /// Nested rules (empty for blockless declarations).
+    pub rules: Vec<CssRule>,
+    /// Whether this is an anonymous layer (no names).
+    pub anonymous: bool,
+}
+
 /// A CSS property declaration
 #[derive(Debug, Clone)]
 pub struct Declaration {
@@ -199,6 +256,22 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
     for rule in rules {
         match rule {
             CssRule::Style(_) | CssRule::Media(_) => out.push(rule.clone()),
+            CssRule::Layer(layer_rule) => {
+                let mut resolved_children = Vec::new();
+                resolve_rules(
+                    &layer_rule.rules,
+                    loader,
+                    base_url,
+                    media_ctx,
+                    seen,
+                    &mut resolved_children,
+                );
+                out.push(CssRule::Layer(LayerRule {
+                    names: layer_rule.names.clone(),
+                    rules: resolved_children,
+                    anonymous: layer_rule.anonymous,
+                }));
+            }
             CssRule::Import(import) => {
                 let media_matches = import.media.is_empty() || media_ctx.evaluate_list(&import.media);
                 if !media_matches {
@@ -233,6 +306,87 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
                 }
             }
         }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+struct LayerNode {
+    children: Vec<LayerChild>,
+}
+
+#[derive(Debug, Clone)]
+struct LayerChild {
+    name: String,
+    order: u32,
+    node: LayerNode,
+}
+
+#[derive(Debug, Default, Clone)]
+struct LayerRegistry {
+    root: LayerNode,
+    next_anonymous: u32,
+}
+
+impl LayerRegistry {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn ensure_path(&mut self, base: &[u32], name: &[String]) -> Vec<u32> {
+        let mut path = base.to_vec();
+        let mut node: &mut LayerNode = if let Some(existing) = self.get_node_mut(base) {
+            existing
+        } else {
+            &mut self.root
+        };
+        for component in name {
+            let (order, next) = node.ensure_child(component);
+            path.push(order);
+            node = next;
+        }
+        path
+    }
+
+    fn ensure_anonymous(&mut self, base: &[u32]) -> Vec<u32> {
+        let name = format!("__anon{}", self.next_anonymous);
+        self.next_anonymous += 1;
+        self.ensure_path(base, &[name])
+    }
+
+    fn get_node_mut(&mut self, path: &[u32]) -> Option<&mut LayerNode> {
+        fn descend<'a>(node: &'a mut LayerNode, path: &[u32]) -> Option<&'a mut LayerNode> {
+            if path.is_empty() {
+                return Some(node);
+            }
+            let (first, rest) = path.split_first()?;
+            let pos = node.children.iter().position(|c| c.order == *first)?;
+            let child = &mut node.children[pos].node;
+            if rest.is_empty() {
+                Some(child)
+            } else {
+                descend(child, rest)
+            }
+        }
+        descend(&mut self.root, path)
+    }
+}
+
+impl LayerNode {
+    fn ensure_child(&mut self, name: &str) -> (u32, &mut LayerNode) {
+        if let Some(pos) = self.children.iter().position(|c| c.name == name) {
+            let order = self.children[pos].order;
+            let node = &mut self.children[pos].node;
+            return (order, node);
+        }
+        let order = self.children.len() as u32;
+        self.children.push(LayerChild {
+            name: name.to_string(),
+            order,
+            node: LayerNode::default(),
+        });
+        let len = self.children.len();
+        let node = &mut self.children[len - 1].node;
+        (order, node)
     }
 }
 

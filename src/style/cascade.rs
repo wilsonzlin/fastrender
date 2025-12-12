@@ -21,6 +21,7 @@ use crate::style::properties::{
 use crate::style::{normalize_language_tag, ComputedStyle};
 use selectors::context::{QuirksMode, SelectorCaches};
 use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
+use std::collections::HashMap;
 
 /// User-agent stylesheet containing default browser styles
 const USER_AGENT_STYLESHEET: &str = include_str!("../user_agent.css");
@@ -43,11 +44,12 @@ impl StyleOrigin {
 }
 
 /// A style rule annotated with its origin and document order.
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 struct CascadeRule<'a> {
     origin: StyleOrigin,
     order: usize,
     rule: &'a StyleRule,
+    layer_order: Vec<u32>,
 }
 
 /// A matched rule with the specificity of the selector that applied.
@@ -56,6 +58,7 @@ struct MatchedRule {
     origin: StyleOrigin,
     specificity: u32,
     order: usize,
+    layer_order: Vec<u32>,
     declarations: Vec<Declaration>,
 }
 
@@ -66,6 +69,7 @@ struct MatchedDeclaration {
     specificity: u32,
     rule_order: usize,
     decl_order: usize,
+    layer_order: Vec<u32>,
     declaration: Declaration,
 }
 
@@ -147,7 +151,8 @@ pub fn apply_styles_with_media_target_and_imports(
         all_rules.push(CascadeRule {
             origin: StyleOrigin::UserAgent,
             order,
-            rule,
+            rule: rule.rule,
+            layer_order: rule.layer_order.clone(),
         });
     }
     let offset = all_rules.len();
@@ -155,7 +160,8 @@ pub fn apply_styles_with_media_target_and_imports(
         all_rules.push(CascadeRule {
             origin: StyleOrigin::Author,
             order: offset + idx,
-            rule,
+            rule: rule.rule,
+            layer_order: rule.layer_order.clone(),
         });
     }
 
@@ -771,6 +777,67 @@ mod tests {
         let child = styled.children.first().expect("child");
         assert_eq!(child.styles.color, ComputedStyle::default().color);
         assert_ne!(child.styles.color, styled.styles.color);
+    }
+
+    #[test]
+    fn layer_order_controls_cascade_priority() {
+        let dom = element_with_id_and_class("target", "", None);
+        let stylesheet = parse_stylesheet(
+            r#"
+            @layer base { #target { color: rgb(1, 2, 3); } }
+            @layer theme { #target { color: rgb(4, 5, 6); } }
+        "#,
+        )
+        .unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        assert_eq!(styled.styles.color, Rgba::rgb(4, 5, 6));
+    }
+
+    #[test]
+    fn blockless_layer_prelude_defines_order() {
+        let dom = element_with_id_and_class("target", "", None);
+        let stylesheet = parse_stylesheet(
+            r#"
+            @layer base, theme;
+            @layer base { #target { color: rgb(1, 2, 3); } }
+            @layer theme { #target { color: rgb(9, 8, 7); } }
+        "#,
+        )
+        .unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        assert_eq!(styled.styles.color, Rgba::rgb(9, 8, 7));
+    }
+
+    #[test]
+    fn unlayered_rules_override_layered() {
+        let dom = element_with_id_and_class("target", "", None);
+        let stylesheet = parse_stylesheet(
+            r#"
+            @layer base { #target { color: rgb(1, 1, 1); } }
+            #target { color: rgb(2, 3, 4); }
+        "#,
+        )
+        .unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        assert_eq!(styled.styles.color, Rgba::rgb(2, 3, 4));
+    }
+
+    #[test]
+    fn revert_layer_restores_previous_layer_value() {
+        let dom = element_with_id_and_class("target", "", None);
+        let stylesheet = parse_stylesheet(
+            r#"
+            @layer base { #target { color: rgb(10, 20, 30); } }
+            @layer theme { #target { color: rgb(200, 100, 50); color: revert-layer; } }
+        "#,
+        )
+        .unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        assert_eq!(styled.styles.color, Rgba::rgb(10, 20, 30));
     }
 
     #[test]
@@ -1897,7 +1964,8 @@ mod tests {
             .map(|(order, rule)| CascadeRule {
                 origin: StyleOrigin::Author,
                 order,
-                rule,
+                rule: rule.rule,
+                layer_order: rule.layer_order,
             })
             .collect();
         assert_eq!(rule_refs.len(), 1, "should collect the authored li::marker rule");
@@ -2212,6 +2280,7 @@ fn find_matching_rules(node: &DomNode, rules: &[CascadeRule<'_>], ancestors: &[&
                 origin: rule.origin,
                 specificity: max_specificity,
                 order: rule.order,
+                layer_order: rule.layer_order.clone(),
                 declarations: rule.rule.declarations.clone(),
             });
         }
@@ -2266,15 +2335,16 @@ fn find_pseudo_element_rules(
             }
         }
 
-        if matched {
-            matches.push(MatchedRule {
-                origin: rule.origin,
-                specificity: max_specificity,
-                order: rule.order,
-                declarations: rule.rule.declarations.clone(),
-            });
+            if matched {
+                matches.push(MatchedRule {
+                    origin: rule.origin,
+                    specificity: max_specificity,
+                    order: rule.order,
+                    layer_order: rule.layer_order.clone(),
+                    declarations: rule.rule.declarations.clone(),
+                });
+            }
         }
-    }
 
     matches.sort_by(|a, b| a.specificity.cmp(&b.specificity).then(a.order.cmp(&b.order)));
 
@@ -2303,6 +2373,7 @@ fn apply_cascaded_declarations<F>(
                 specificity: rule.specificity,
                 rule_order: rule.order,
                 decl_order,
+                layer_order: rule.layer_order.clone(),
                 declaration,
             });
         }
@@ -2316,32 +2387,48 @@ fn apply_cascaded_declarations<F>(
                 specificity: INLINE_SPECIFICITY,
                 rule_order: INLINE_RULE_ORDER,
                 decl_order,
+                layer_order: vec![u32::MAX],
                 declaration,
             });
         }
+    }
+
+    fn cmp_layer_order(a: &[u32], b: &[u32]) -> std::cmp::Ordering {
+        for (ai, bi) in a.iter().zip(b.iter()) {
+            if ai != bi {
+                return ai.cmp(bi);
+            }
+        }
+        a.len().cmp(&b.len())
     }
 
     flattened.sort_by(|a, b| {
         a.important
             .cmp(&b.important)
             .then(a.origin.rank().cmp(&b.origin.rank()))
+            .then_with(|| cmp_layer_order(&a.layer_order, &b.layer_order))
             .then(a.specificity.cmp(&b.specificity))
             .then(a.rule_order.cmp(&b.rule_order))
             .then(a.decl_order.cmp(&b.decl_order))
     });
 
     let defaults = ComputedStyle::default();
+    let mut layer_snapshots: HashMap<Vec<u32>, ComputedStyle> = HashMap::new();
     for entry in flattened {
         if filter(&entry.declaration) {
             let revert_base = match entry.origin {
                 StyleOrigin::UserAgent => &defaults,
                 StyleOrigin::Author | StyleOrigin::Inline => revert_base_styles,
             };
+            let layer_base = layer_snapshots
+                .entry(entry.layer_order.clone())
+                .or_insert_with(|| styles.clone());
             apply_declaration_with_base(
                 styles,
                 &entry.declaration,
                 parent_styles,
                 revert_base,
+                Some(&*layer_base),
                 parent_font_size,
                 root_font_size,
             );
@@ -2361,6 +2448,7 @@ fn dir_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule> 
                 origin: StyleOrigin::Author,
                 specificity: 0,
                 order,
+                layer_order: vec![u32::MAX],
                 declarations,
             })
         }
@@ -2378,6 +2466,7 @@ fn dir_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule> 
                 origin: StyleOrigin::Author,
                 specificity: 0,
                 order,
+                layer_order: vec![u32::MAX],
                 declarations,
             })
         }
@@ -2398,6 +2487,7 @@ fn list_type_presentational_hint(node: &DomNode, order: usize) -> Option<Matched
         origin: StyleOrigin::Author,
         specificity: 0,
         order,
+        layer_order: vec![u32::MAX],
         declarations,
     })
 }
@@ -2456,6 +2546,7 @@ fn alignment_presentational_hint(node: &DomNode, order: usize) -> Option<Matched
         origin: StyleOrigin::Author,
         specificity: 0,
         order,
+        layer_order: vec![u32::MAX],
         declarations: parse_declarations(&declarations),
     })
 }

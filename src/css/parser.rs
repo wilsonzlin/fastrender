@@ -4,7 +4,7 @@
 
 use super::properties::parse_property_value;
 use super::selectors::PseudoClassParser;
-use super::types::{CssRule, Declaration, ImportRule, MediaRule, StyleRule, StyleSheet};
+use super::types::{CssRule, Declaration, ImportRule, LayerRule, MediaRule, StyleRule, StyleSheet};
 use crate::dom::DomNode;
 use crate::error::Result;
 use crate::style::media::MediaQuery;
@@ -79,6 +79,7 @@ fn parse_rule<'i, 't>(
             match kw_str.as_str() {
                 "import" => parse_import_rule(p),
                 "media" => parse_media_rule(p),
+                "layer" => parse_layer_rule(p),
                 _ => {
                     skip_at_rule(p);
                     Ok(None)
@@ -198,6 +199,62 @@ fn parse_media_rule<'i, 't>(
     Ok(Some(CssRule::Media(MediaRule {
         query,
         rules: nested_rules,
+    })))
+}
+
+fn parse_layer_rule<'i, 't>(
+    parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+    let mut names: Vec<Vec<String>> = Vec::new();
+    let mut current: Vec<String> = Vec::new();
+    let mut saw_block = false;
+    let mut anonymous = false;
+
+    loop {
+        match parser.next_including_whitespace() {
+            Ok(Token::Ident(id)) => current.push(id.to_string()),
+            Ok(Token::Delim('.')) => {
+                // part of dotted layer name; keep collecting
+            }
+            Ok(Token::Comma) => {
+                if !current.is_empty() {
+                    names.push(current.clone());
+                    current.clear();
+                }
+            }
+            Ok(Token::CurlyBracketBlock) => {
+                saw_block = true;
+                break;
+            }
+            Ok(Token::Semicolon) => break,
+            Ok(Token::WhiteSpace(_)) => {}
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+
+    if !current.is_empty() {
+        names.push(current);
+    }
+
+    let rules = if saw_block {
+        parser.parse_nested_block(|nested| Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list(nested)))?
+    } else {
+        Vec::new()
+    };
+
+    if names.is_empty() && rules.is_empty() {
+        return Ok(None);
+    }
+
+    if names.is_empty() {
+        anonymous = true;
+    }
+
+    Ok(Some(CssRule::Layer(LayerRule {
+        names,
+        rules,
+        anonymous,
     })))
 }
 

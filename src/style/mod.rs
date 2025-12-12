@@ -33,13 +33,13 @@ use types::{
     AlignContent, AlignItems, AspectRatio, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer,
     BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxSizing, CaptionSide,
     Containment, CursorImage, CursorKeyword, Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap,
-    FontFeatureSetting, FontKerning, FontSizeAdjust, FontStretch, FontStyle, FontSynthesis, FontVariant,
-    FontLanguageOverride, FontOpticalSizing, FontVariantAlternates, FontVariantCaps, FontVariantEastAsian,
-    FontVariantEmoji, FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontVariationSetting, FontWeight,
-    GridTrack, HyphensMode, ImageRendering, Isolation, JustifyContent, LineBreak, LineHeight, ListStyleImage,
-    ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow,
-    OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextCombineUpright, TextDecoration,
-    TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextTransform,
+    FontFeatureSetting, FontKerning, FontLanguageOverride, FontOpticalSizing, FontSizeAdjust, FontStretch, FontStyle,
+    FontSynthesis, FontVariant, FontVariantAlternates, FontVariantCaps, FontVariantEastAsian, FontVariantEmoji,
+    FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontVariationSetting, FontWeight, GridTrack,
+    HyphensMode, ImageRendering, Isolation, JustifyContent, LineBreak, LineHeight, ListStyleImage, ListStylePosition,
+    ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowWrap,
+    TabSize, TableLayout, TextAlign, TextAlignLast, TextCombineUpright, TextDecoration, TextDecorationSkipInk,
+    TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextTransform,
     TextUnderlineOffset, TextUnderlinePosition, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WillChange,
     WordBreak, WritingMode,
 };
@@ -213,6 +213,14 @@ impl LogicalState {
         let order = self.next_order;
         self.next_order += 1;
         order
+    }
+
+    pub fn next_order_value(&self) -> i32 {
+        self.next_order
+    }
+
+    pub fn set_next_order(&mut self, value: i32) {
+        self.next_order = value;
     }
 
     pub fn reset(&mut self) {

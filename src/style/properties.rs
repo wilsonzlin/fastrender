@@ -869,19 +869,31 @@ fn set_axis_max_dimension(
     }
 }
 
-fn global_keyword(value: &PropertyValue) -> Option<&'static str> {
+#[derive(Copy, Clone)]
+enum GlobalKeyword {
+    Inherit,
+    Initial,
+    Unset,
+    Revert,
+    RevertLayer,
+}
+
+fn global_keyword(value: &PropertyValue) -> Option<GlobalKeyword> {
     if let PropertyValue::Keyword(kw) = value {
         if kw.eq_ignore_ascii_case("inherit") {
-            return Some("inherit");
+            return Some(GlobalKeyword::Inherit);
         }
         if kw.eq_ignore_ascii_case("initial") {
-            return Some("initial");
+            return Some(GlobalKeyword::Initial);
         }
         if kw.eq_ignore_ascii_case("unset") {
-            return Some("unset");
+            return Some(GlobalKeyword::Unset);
         }
-        if kw.eq_ignore_ascii_case("revert") || kw.eq_ignore_ascii_case("revert-layer") {
-            return Some("revert");
+        if kw.eq_ignore_ascii_case("revert-layer") {
+            return Some(GlobalKeyword::RevertLayer);
+        }
+        if kw.eq_ignore_ascii_case("revert") {
+            return Some(GlobalKeyword::Revert);
         }
     }
     None
@@ -931,7 +943,7 @@ fn set_all_logical_orders(logical: &mut crate::style::LogicalState, order: i32, 
     logical.max_width_order = order;
     logical.max_height_order = order;
 
-    logical.next_order = next_order;
+    logical.set_next_order(next_order);
 }
 
 fn is_inherited_property(name: &str) -> bool {
@@ -1002,24 +1014,25 @@ fn is_inherited_property(name: &str) -> bool {
 }
 
 fn global_keyword_source<'a>(
-    keyword: &str,
+    keyword: GlobalKeyword,
     property: &str,
     parent: &'a ComputedStyle,
     defaults: &'a ComputedStyle,
     revert_base: &'a ComputedStyle,
+    revert_layer_base: Option<&'a ComputedStyle>,
 ) -> Option<&'a ComputedStyle> {
     match keyword {
-        "inherit" => Some(parent),
-        "initial" => Some(defaults),
-        "unset" => {
+        GlobalKeyword::Inherit => Some(parent),
+        GlobalKeyword::Initial => Some(defaults),
+        GlobalKeyword::Unset => {
             if is_inherited_property(property) {
                 Some(parent)
             } else {
                 Some(defaults)
             }
         }
-        "revert" => Some(revert_base),
-        _ => None,
+        GlobalKeyword::Revert => Some(revert_base),
+        GlobalKeyword::RevertLayer => revert_layer_base.or(Some(revert_base)),
     }
 }
 
@@ -2168,11 +2181,14 @@ fn apply_global_keyword(
     parent: &ComputedStyle,
     defaults: &ComputedStyle,
     revert_base: &ComputedStyle,
+    revert_layer_base: Option<&ComputedStyle>,
     property: &str,
-    keyword: &str,
+    keyword: GlobalKeyword,
     order: i32,
 ) -> bool {
-    let Some(source) = global_keyword_source(keyword, property, parent, defaults, revert_base) else {
+    let Some(source) =
+        global_keyword_source(keyword, property, parent, defaults, revert_base, revert_layer_base)
+    else {
         return false;
     };
     apply_property_from_source(styles, source, property, order)
@@ -2191,6 +2207,7 @@ pub fn apply_declaration(
         decl,
         parent_styles,
         &defaults,
+        None,
         parent_font_size,
         root_font_size,
     );
@@ -2201,6 +2218,7 @@ pub fn apply_declaration_with_base(
     decl: &Declaration,
     parent_styles: &ComputedStyle,
     revert_base: &ComputedStyle,
+    revert_layer_base: Option<&ComputedStyle>,
     parent_font_size: f32,
     root_font_size: f32,
 ) {
@@ -2227,6 +2245,7 @@ pub fn apply_declaration_with_base(
             parent_styles,
             &defaults,
             revert_base,
+            revert_layer_base,
             decl.property.as_str(),
             global,
             order,
@@ -2249,12 +2268,14 @@ pub fn apply_declaration_with_base(
                 return;
             };
             let defaults = ComputedStyle::default();
-            let Some(source) = global_keyword_source(global, "all", parent_styles, &defaults, revert_base) else {
+            let Some(source) =
+                global_keyword_source(global, "all", parent_styles, &defaults, revert_base, revert_layer_base)
+            else {
                 return;
             };
             let prev_direction = styles.direction;
             let prev_unicode_bidi = styles.unicode_bidi;
-            let next_order = styles.logical.next_order;
+            let next_order = styles.logical.next_order_value();
 
             *styles = source.clone();
             styles.direction = prev_direction;
