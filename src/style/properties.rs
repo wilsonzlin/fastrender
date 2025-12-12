@@ -4464,10 +4464,10 @@ fn parse_number_or_percentage<'i, 't>(input: &mut Parser<'i, 't>) -> Result<f32,
 fn parse_angle_token(token: &Token) -> Option<f32> {
     match token {
         Token::Dimension { value, ref unit, .. } => match unit.as_ref() {
-            "deg" => Some(*value),
-            "grad" => Some(*value * 0.9),
-            "turn" => Some(*value * 360.0),
-            "rad" => Some(*value * (180.0 / std::f32::consts::PI)),
+            "deg" => validate_oblique_angle(*value),
+            "grad" => validate_oblique_angle(*value * 0.9),
+            "turn" => validate_oblique_angle(*value * 360.0),
+            "rad" => validate_oblique_angle(*value * (180.0 / std::f32::consts::PI)),
             _ => None,
         },
         Token::Number { value, .. } if *value == 0.0 => Some(0.0),
@@ -4488,11 +4488,8 @@ fn parse_font_style_keyword(raw: &str) -> Option<FontStyle> {
         if angle_part.is_empty() {
             return Some(FontStyle::Oblique(None));
         }
-        // Attempt to parse angle; fall back to plain oblique if invalid.
-        if let Some(angle) = parse_angle_from_str(angle_part) {
-            return Some(FontStyle::Oblique(Some(angle)));
-        }
-        return Some(FontStyle::Oblique(None));
+        // Attempt to parse angle; invalid/out-of-range makes the declaration invalid.
+        return parse_angle_from_str(angle_part).map(|angle| FontStyle::Oblique(Some(angle)));
     }
     None
 }
@@ -4500,7 +4497,16 @@ fn parse_font_style_keyword(raw: &str) -> Option<FontStyle> {
 fn parse_angle_from_str(s: &str) -> Option<f32> {
     let mut input = ParserInput::new(s.trim());
     let mut parser = Parser::new(&mut input);
-    parse_angle_degrees(&mut parser).ok()
+    parse_angle_degrees(&mut parser).ok().and_then(validate_oblique_angle)
+}
+
+fn validate_oblique_angle(angle: f32) -> Option<f32> {
+    // CSS Fonts: oblique angles must be between -90deg and 90deg.
+    if angle >= -90.0 && angle <= 90.0 {
+        Some(angle)
+    } else {
+        None
+    }
 }
 
 fn parse_font_stretch_keyword(kw: &str) -> Option<FontStretch> {
@@ -4633,11 +4639,13 @@ fn parse_font_shorthand(
                         "italic" => font_style = Some(FontStyle::Italic),
                         "oblique" => {
                             font_style = Some(FontStyle::Oblique(None));
-                            if let Ok(Some(angle)) = parser.try_parse(|p| {
+                            match parser.try_parse(|p| {
                                 let t = p.next()?;
                                 Ok::<_, cssparser::ParseError<()>>(parse_angle_token(&t))
                             }) {
-                                font_style = Some(FontStyle::Oblique(Some(angle)));
+                                Ok(Some(angle)) => font_style = Some(FontStyle::Oblique(Some(angle))),
+                                Ok(None) => return None, // invalid angle token consumed
+                                Err(_) => {}
                             }
                         }
                         "bold" => font_weight = Some(FontWeight::Bold),
@@ -8843,6 +8851,54 @@ mod tests {
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         // Negative calc is ignored; previous value (10.0 from percent) stays.
         assert!((style.font_size - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn font_style_oblique_angle_parses_and_ranges() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font-style".to_string(),
+            value: PropertyValue::Keyword("oblique 20deg".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_style, FontStyle::Oblique(Some(a)) if (a - 20.0).abs() < 0.01));
+
+        let invalid = Declaration {
+            property: "font-style".to_string(),
+            value: PropertyValue::Keyword("oblique 120deg".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &invalid, 16.0, 16.0);
+        // Out-of-range angle invalidates the declaration; previous value remains.
+        assert!(matches!(style.font_style, FontStyle::Oblique(Some(a)) if (a - 20.0).abs() < 0.01));
+    }
+
+    #[test]
+    fn font_shorthand_oblique_angle_parses_and_rejects_out_of_range() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font".to_string(),
+            value: PropertyValue::Keyword("oblique 15deg 16px serif".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_style, FontStyle::Oblique(Some(a)) if (a - 15.0).abs() < 0.01));
+        assert!((style.font_size - 16.0).abs() < 0.01);
+
+        let invalid = Declaration {
+            property: "font".to_string(),
+            value: PropertyValue::Keyword("oblique 100deg 20px serif".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &invalid, 16.0, 16.0);
+        // Invalid oblique angle makes the declaration invalid; style stays unchanged.
+        assert!(matches!(style.font_style, FontStyle::Oblique(Some(a)) if (a - 15.0).abs() < 0.01));
+        assert!((style.font_size - 16.0).abs() < 0.01);
     }
 
     #[test]
