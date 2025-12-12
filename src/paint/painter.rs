@@ -3870,6 +3870,7 @@ impl Painter {
                             center,
                             thickness,
                             block_baseline,
+                            inline_vertical,
                             deco.skip_ink,
                         );
                         for (seg_start, seg_end) in segments {
@@ -3911,6 +3912,7 @@ impl Painter {
         center: f32,
         thickness: f32,
         baseline_y: f32,
+        inline_vertical: bool,
         skip_ink: TextDecorationSkipInk,
     ) -> Vec<(f32, f32)> {
         if line_width <= 0.0 {
@@ -3918,17 +3920,31 @@ impl Painter {
         }
 
         let band_half = (thickness * 0.5).abs();
-        let band_top = center - band_half;
-        let band_bottom = center + band_half;
-        let mut exclusions = collect_underline_exclusions(
-            runs,
-            line_start,
-            baseline_y,
-            band_top,
-            band_bottom,
-            skip_ink == TextDecorationSkipInk::All,
-            self.scale,
-        );
+        let mut exclusions = if inline_vertical {
+            let band_left = center - band_half;
+            let band_right = center + band_half;
+            collect_underline_exclusions_vertical(
+                runs,
+                line_start,
+                baseline_y,
+                band_left,
+                band_right,
+                skip_ink == TextDecorationSkipInk::All,
+                self.scale,
+            )
+        } else {
+            let band_top = center - band_half;
+            let band_bottom = center + band_half;
+            collect_underline_exclusions(
+                runs,
+                line_start,
+                baseline_y,
+                band_top,
+                band_bottom,
+                skip_ink == TextDecorationSkipInk::All,
+                self.scale,
+            )
+        };
 
         let mut segments = subtract_intervals((line_start, line_start + line_width), &mut exclusions);
         if segments.is_empty() && skip_ink != TextDecorationSkipInk::All {
@@ -4332,6 +4348,61 @@ fn collect_underline_exclusions(
         }
 
         pen_x += advance;
+    }
+
+    intervals
+}
+
+fn collect_underline_exclusions_vertical(
+    runs: &[ShapedRun],
+    inline_start: f32,
+    block_baseline: f32,
+    band_left: f32,
+    band_right: f32,
+    skip_all: bool,
+    device_scale: f32,
+) -> Vec<(f32, f32)> {
+    let mut intervals = Vec::new();
+    let tolerance = 0.5 * device_scale;
+
+    let mut pen_inline = inline_start * device_scale;
+    for run in runs {
+        let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        let units_per_em = face.units_per_em() as f32;
+        if units_per_em == 0.0 {
+            continue;
+        }
+        let mut scale = run.font_size / units_per_em;
+        scale *= run.scale * device_scale;
+        let advance = run.advance * device_scale;
+        let run_origin = if run.direction.is_rtl() {
+            pen_inline + advance
+        } else {
+            pen_inline
+        };
+
+        for glyph in &run.glyphs {
+            let inline_pos = match run.direction {
+                crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset * device_scale,
+                _ => run_origin + glyph.x_offset * device_scale,
+            };
+            let block_pos = block_baseline - glyph.y_offset * device_scale;
+            if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
+                let inline_left = inline_pos + bbox.x_min as f32 * scale - tolerance;
+                let inline_right = inline_pos + bbox.x_max as f32 * scale + tolerance;
+                let block_top = block_pos - bbox.y_max as f32 * scale - tolerance;
+                let block_bottom = block_pos - bbox.y_min as f32 * scale + tolerance;
+
+                if skip_all || (block_bottom >= band_left && block_top <= band_right) {
+                    intervals.push((inline_left, inline_right));
+                }
+            }
+        }
+
+        pen_inline += advance;
     }
 
     intervals
@@ -6332,6 +6403,7 @@ mod tests {
             center,
             thickness,
             baseline,
+            false,
             crate::style::types::TextDecorationSkipInk::All,
         );
 
@@ -6342,6 +6414,7 @@ mod tests {
             center,
             thickness,
             baseline,
+            false,
             crate::style::types::TextDecorationSkipInk::Auto,
         );
 
@@ -6422,6 +6495,7 @@ mod tests {
             center,
             thickness,
             baseline,
+            false,
             crate::style::types::TextDecorationSkipInk::Auto,
         );
         assert!(

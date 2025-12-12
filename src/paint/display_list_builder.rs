@@ -2095,9 +2095,7 @@ impl DisplayListBuilder {
                 let thickness = used_thickness.unwrap_or(metrics.underline_thickness);
                 let center = block_baseline
                     - self.underline_position(&metrics, deco.underline_position, underline_offset, thickness);
-                let segments = if !inline_vertical
-                    && matches!(deco.skip_ink, TextDecorationSkipInk::Auto | TextDecorationSkipInk::All)
-                {
+                let segments = if matches!(deco.skip_ink, TextDecorationSkipInk::Auto | TextDecorationSkipInk::All) {
                     runs.map(|r| {
                         self.build_underline_segments(
                             r,
@@ -2106,6 +2104,7 @@ impl DisplayListBuilder {
                             center,
                             thickness,
                             block_baseline,
+                            inline_vertical,
                             deco.skip_ink,
                         )
                     })
@@ -2299,6 +2298,7 @@ impl DisplayListBuilder {
         center: f32,
         thickness: f32,
         baseline_y: f32,
+        inline_vertical: bool,
         skip_ink: TextDecorationSkipInk,
     ) -> Vec<(f32, f32)> {
         if line_width <= 0.0 {
@@ -2306,16 +2306,29 @@ impl DisplayListBuilder {
         }
 
         let band_half = (thickness * 0.5).abs();
-        let band_top = center - band_half;
-        let band_bottom = center + band_half;
-        let mut exclusions = collect_underline_exclusions(
-            runs,
-            line_start,
-            baseline_y,
-            band_top,
-            band_bottom,
-            skip_ink == TextDecorationSkipInk::All,
-        );
+        let mut exclusions = if inline_vertical {
+            let band_left = center - band_half;
+            let band_right = center + band_half;
+            collect_underline_exclusions_vertical(
+                runs,
+                line_start,
+                baseline_y,
+                band_left,
+                band_right,
+                skip_ink == TextDecorationSkipInk::All,
+            )
+        } else {
+            let band_top = center - band_half;
+            let band_bottom = center + band_half;
+            collect_underline_exclusions(
+                runs,
+                line_start,
+                baseline_y,
+                band_top,
+                band_bottom,
+                skip_ink == TextDecorationSkipInk::All,
+            )
+        };
 
         let mut segments = subtract_intervals((line_start, line_start + line_width), &mut exclusions);
         if segments.is_empty() && skip_ink != TextDecorationSkipInk::All {
@@ -2732,6 +2745,58 @@ fn collect_underline_exclusions(
         }
 
         pen_x += run.advance;
+    }
+
+    intervals
+}
+
+fn collect_underline_exclusions_vertical(
+    runs: &[ShapedRun],
+    inline_start: f32,
+    block_baseline: f32,
+    band_left: f32,
+    band_right: f32,
+    skip_all: bool,
+) -> Vec<(f32, f32)> {
+    let mut intervals = Vec::new();
+    let mut pen_inline = inline_start;
+
+    for run in runs {
+        let face = match ttf_parser::Face::parse(&run.font.data, run.font.index) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        let units_per_em = face.units_per_em() as f32;
+        if units_per_em == 0.0 {
+            continue;
+        }
+        let scale = run.font_size / units_per_em * run.scale;
+        let advance = run.advance;
+        let run_origin = if run.direction.is_rtl() {
+            pen_inline + advance
+        } else {
+            pen_inline
+        };
+
+        for glyph in &run.glyphs {
+            let inline_pos = match run.direction {
+                crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset,
+                _ => run_origin + glyph.x_offset,
+            };
+            let block_pos = block_baseline - glyph.y_offset;
+            if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
+                let inline_left = inline_pos + bbox.x_min as f32 * scale;
+                let inline_right = inline_pos + bbox.x_max as f32 * scale;
+                let block_top = block_pos - bbox.y_max as f32 * scale;
+                let block_bottom = block_pos - bbox.y_min as f32 * scale;
+
+                if skip_all || (block_bottom >= band_left && block_top <= band_right) {
+                    intervals.push((inline_left, inline_right));
+                }
+            }
+        }
+
+        pen_inline += advance;
     }
 
     intervals

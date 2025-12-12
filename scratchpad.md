@@ -11,6 +11,7 @@
 - Inline painting now renders vertical writing modes directly: the painter and display-list builder drive glyph advances down the inline (vertical) axis using block-axis baselines, avoiding the old post-layout fragment rotation and keeping upright glyphs for vertical-rl/lr flows.
 - Text emphasis now orients for vertical writing: marks are offset along the block axis for over/under in vertical flows, mark centers follow inline offsets, and triangle marks rotate to point toward block-start/end; display list carries an `inline_vertical` flag for emphasis and renders with the same orientation.
 - Text decorations now respect vertical writing: underline/overline/strike centers use the block-axis baseline while lines run along the inline axis (vertical strokes in vertical-rl/lr), wavy/dashed/dotted shapes rotate accordingly, and display-list items carry an orientation flag; skip-ink carving remains horizontal-only for now.
+- Underline skip-ink now works in vertical writing: exclusion carving runs along the inline (vertical) axis using the block-axis band, so ink is avoided for vertical underlines both in the painter and display list.
 - Inline layout now maps vertical writing into block/inline coordinates instead of rotating fragments: line fragments place block coordinates along x (line stacking) and inline along y, and item bounds swap inline/block dimensions so vertical text paints without fragment rotation.
 - Vertical-rl alignment honors block-start on the right: when a definite block size exists, inline formatting contexts shift the line stack to the block-start edge, keeping vertical-rl flows anchored to the right while inline axis stays vertical.
 - Line builder only breaks text when it overflows again (reverted the unconditional breakable path) so multiple inline items remain intact on fitting lines.
@@ -619,7 +620,7 @@
 - Justification lacks script-aware expansion (kashida/justification alternates, punctuation stretching) and `text-justify` is still approximated (auto treated as inter-word; no trim/edge handling).
 - `text-align-last` currently maps start/end via direction; nuanced interaction with `text-justify` and additional values still pending.
 - `text-indent` hanging/each-line semantics are approximate; indentation doesn’t yet handle hanging outdents per spec nuances.
-- Text decorations skip-ink remains horizontal-only; vertical writing needs skip-ink parity.
+- Text emphasis sesame/double-circle orientation remains simplistic in vertical flows; confirm against spec for rotated shapes.
 - Max-content sizing now honors mandatory breaks but still ignores anonymous inline box generation and percent-driven height constraints.
 - Table layout still partial: row/col spans not fully honored (rowspan baselines, percent/fixed widths still simplified vs CSS 2.1), colspan distribution still heuristic.
 - Non-image replaced content (iframe/video/etc.) remains unrendered; need full replaced-element handling beyond images/SVG.
