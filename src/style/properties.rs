@@ -6,7 +6,7 @@
 //! Reference: CSS Cascading and Inheritance Level 4
 //! <https://www.w3.org/TR/css-cascade-4/>
 
-use crate::css::properties::{parse_calc_function_length, parse_length};
+use crate::css::properties::{parse_calc_function_length, parse_length, MathFn};
 use crate::css::types::{Declaration, PropertyValue};
 use crate::style::color::Rgba;
 use crate::style::content::{parse_content, ContentValue};
@@ -6412,18 +6412,16 @@ fn parse_number_or_percentage<'i, 't>(input: &mut Parser<'i, 't>) -> Result<f32,
     }
 }
 
-fn parse_angle_token(token: &Token) -> Option<f32> {
-    match token {
-        Token::Dimension { value, ref unit, .. } => match unit.as_ref() {
-            "deg" => validate_oblique_angle(*value),
-            "grad" => validate_oblique_angle(*value * 0.9),
-            "turn" => validate_oblique_angle(*value * 360.0),
-            "rad" => validate_oblique_angle(*value * (180.0 / std::f32::consts::PI)),
-            _ => None,
-        },
-        Token::Number { value, .. } if *value == 0.0 => Some(0.0),
-        _ => None,
-    }
+#[derive(Clone, Copy, Debug)]
+struct AngleComponent {
+    value: f32,
+    is_angle: bool,
+}
+
+fn parse_angle_token<'i, 't>(input: &mut Parser<'i, 't>) -> Option<f32> {
+    parse_angle_degrees(input)
+        .ok()
+        .and_then(validate_oblique_angle)
 }
 
 fn parse_font_style_keyword(raw: &str) -> Option<FontStyle> {
@@ -6451,6 +6449,194 @@ fn parse_angle_from_str(s: &str) -> Option<f32> {
     parse_angle_degrees(&mut parser).ok().and_then(validate_oblique_angle)
 }
 
+fn angle_component_from_unit(unit: &str, value: f32) -> Option<AngleComponent> {
+    match unit {
+        "deg" => Some(AngleComponent { value, is_angle: true }),
+        "grad" => Some(AngleComponent {
+            value: value * 0.9,
+            is_angle: true,
+        }),
+        "turn" => Some(AngleComponent {
+            value: value * 360.0,
+            is_angle: true,
+        }),
+        "rad" => Some(AngleComponent {
+            value: value * (180.0 / std::f32::consts::PI),
+            is_angle: true,
+        }),
+        _ => None,
+    }
+}
+
+fn combine_angle_sum<'i>(
+    left: AngleComponent,
+    right: AngleComponent,
+    sign: f32,
+    location: cssparser::SourceLocation,
+) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
+    if left.is_angle && right.is_angle {
+        Ok(AngleComponent {
+            value: left.value + sign * right.value,
+            is_angle: true,
+        })
+    } else {
+        Err(location.new_custom_error(()))
+    }
+}
+
+fn combine_angle_product<'i>(
+    left: AngleComponent,
+    right: AngleComponent,
+    op: char,
+    location: cssparser::SourceLocation,
+) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
+    match (left.is_angle, right.is_angle, op) {
+        (true, false, '*') => Ok(AngleComponent {
+            value: left.value * right.value,
+            is_angle: true,
+        }),
+        (false, true, '*') => Ok(AngleComponent {
+            value: left.value * right.value,
+            is_angle: true,
+        }),
+        (true, false, '/') if right.value != 0.0 => Ok(AngleComponent {
+            value: left.value / right.value,
+            is_angle: true,
+        }),
+        (false, false, '*') => Ok(AngleComponent {
+            value: left.value * right.value,
+            is_angle: false,
+        }),
+        (false, false, '/') if right.value != 0.0 => Ok(AngleComponent {
+            value: left.value / right.value,
+            is_angle: false,
+        }),
+        _ => Err(location.new_custom_error(())),
+    }
+}
+
+fn parse_calc_angle_sum<'i, 't>(input: &mut Parser<'i, 't>) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
+    let mut left = parse_calc_angle_product(input)?;
+    loop {
+        let op = match input.try_parse(|p| match p.next()? {
+            Token::Delim('+') => Ok(1.0),
+            Token::Delim('-') => Ok(-1.0),
+            _ => Err(cssparser::ParseError {
+                kind: cssparser::ParseErrorKind::Custom(()),
+                location: p.current_source_location(),
+            }),
+        }) {
+            Ok(sign) => sign,
+            Err(_) => break,
+        };
+        let right = parse_calc_angle_product(input)?;
+        let location = input.current_source_location();
+        left = combine_angle_sum(left, right, op, location)?;
+    }
+    Ok(left)
+}
+
+fn parse_calc_angle_product<'i, 't>(
+    input: &mut Parser<'i, 't>,
+) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
+    let mut left = parse_calc_angle_factor(input)?;
+    loop {
+        let op = match input.try_parse(|p| match p.next()? {
+            Token::Delim('*') => Ok('*'),
+            Token::Delim('/') => Ok('/'),
+            _ => Err(cssparser::ParseError {
+                kind: cssparser::ParseErrorKind::Custom(()),
+                location: p.current_source_location(),
+            }),
+        }) {
+            Ok(op) => op,
+            Err(_) => break,
+        };
+        let right = parse_calc_angle_factor(input)?;
+        let location = input.current_source_location();
+        left = combine_angle_product(left, right, op, location)?;
+    }
+    Ok(left)
+}
+
+fn parse_calc_angle_factor<'i, 't>(
+    input: &mut Parser<'i, 't>,
+) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
+    let location = input.current_source_location();
+    match input.next()? {
+        Token::Number { value, .. } => Ok(AngleComponent {
+            value: *value,
+            is_angle: false,
+        }),
+        Token::Dimension { value, ref unit, .. } => {
+            angle_component_from_unit(&unit.to_ascii_lowercase(), *value).ok_or(location.new_custom_error(()))
+        }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
+            input.parse_nested_block(parse_calc_angle_sum)
+        }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("min") => {
+            input.parse_nested_block(|block| parse_min_max_angle(block, MathFn::Min))
+        }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("max") => {
+            input.parse_nested_block(|block| parse_min_max_angle(block, MathFn::Max))
+        }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("clamp") => input.parse_nested_block(parse_clamp_angle),
+        _ => Err(location.new_custom_error(())),
+    }
+}
+
+fn parse_min_max_angle<'i, 't>(
+    input: &mut Parser<'i, 't>,
+    func: MathFn,
+) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
+    let mut values = Vec::new();
+    loop {
+        input.skip_whitespace();
+        values.push(parse_calc_angle_sum(input)?);
+        input.skip_whitespace();
+        if input.try_parse(|p| p.expect_comma()).is_err() {
+            break;
+        }
+    }
+
+    if values.len() < 2 || values.iter().any(|v| !v.is_angle) {
+        return Err(input.new_custom_error(()));
+    }
+
+    let init = match func {
+        MathFn::Min => f32::INFINITY,
+        MathFn::Max => f32::NEG_INFINITY,
+    };
+    let value = values.into_iter().fold(init, |acc, v| match func {
+        MathFn::Min => acc.min(v.value),
+        MathFn::Max => acc.max(v.value),
+    });
+
+    Ok(AngleComponent { value, is_angle: true })
+}
+
+fn parse_clamp_angle<'i, 't>(input: &mut Parser<'i, 't>) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
+    input.skip_whitespace();
+    let min = parse_calc_angle_sum(input)?;
+    input.skip_whitespace();
+    input.expect_comma()?;
+    input.skip_whitespace();
+    let preferred = parse_calc_angle_sum(input)?;
+    input.skip_whitespace();
+    input.expect_comma()?;
+    input.skip_whitespace();
+    let max = parse_calc_angle_sum(input)?;
+
+    if !min.is_angle || !preferred.is_angle || !max.is_angle {
+        return Err(input.new_custom_error(()));
+    }
+
+    let clamped = preferred.value.clamp(min.value, max.value);
+    Ok(AngleComponent {
+        value: clamped,
+        is_angle: true,
+    })
+}
 fn validate_oblique_angle(angle: f32) -> Option<f32> {
     // CSS Fonts: oblique angles must be between -90deg and 90deg.
     if angle >= -90.0 && angle <= 90.0 {
@@ -6592,10 +6778,7 @@ fn parse_font_shorthand(
                         "italic" => font_style = Some(FontStyle::Italic),
                         "oblique" => {
                             font_style = Some(FontStyle::Oblique(None));
-                            match parser.try_parse(|p| {
-                                let t = p.next()?;
-                                Ok::<_, cssparser::ParseError<()>>(parse_angle_token(&t))
-                            }) {
+                            match parser.try_parse(|p| Ok::<_, cssparser::ParseError<()>>(parse_angle_token(p))) {
                                 Ok(Some(angle)) => font_style = Some(FontStyle::Oblique(Some(angle))),
                                 Ok(None) => return None, // invalid angle token consumed
                                 Err(_) => {}
@@ -6829,16 +7012,33 @@ fn length_from_token(token: &Token) -> Option<Length> {
 
 fn parse_angle_degrees<'i, 't>(input: &mut Parser<'i, 't>) -> Result<f32, cssparser::ParseError<'i, ()>> {
     let location = input.current_source_location();
-    match input.next()? {
-        Token::Dimension { value, ref unit, .. } => match unit.as_ref() {
-            "deg" => Ok(*value),
-            "grad" => Ok(*value * 0.9),
-            "turn" => Ok(*value * 360.0),
-            "rad" => Ok(*value * (180.0 / std::f32::consts::PI)),
-            _ => Err(location.new_custom_error(())),
+    let token = input.next()?;
+    let component = match token {
+        Token::Dimension { value, ref unit, .. } => {
+            angle_component_from_unit(&unit.to_ascii_lowercase(), *value).ok_or(location.new_custom_error(()))?
+        }
+        Token::Function(ref name) => {
+            let func = name.as_ref().to_ascii_lowercase();
+            match func.as_str() {
+                "calc" => input.parse_nested_block(parse_calc_angle_sum)?,
+                "min" => input.parse_nested_block(|block| parse_min_max_angle(block, MathFn::Min))?,
+                "max" => input.parse_nested_block(|block| parse_min_max_angle(block, MathFn::Max))?,
+                "clamp" => input.parse_nested_block(parse_clamp_angle)?,
+                _ => return Err(location.new_custom_error(())),
+            }
+        }
+        Token::Number { value, .. } => AngleComponent {
+            value: *value,
+            is_angle: false,
         },
-        Token::Number { value, .. } if *value == 0.0 => Ok(0.0),
-        _ => Err(location.new_custom_error(())),
+        _ => return Err(location.new_custom_error(())),
+    };
+    if component.is_angle {
+        Ok(component.value)
+    } else if component.value == 0.0 {
+        Ok(0.0)
+    } else {
+        Err(location.new_custom_error(()))
     }
 }
 
@@ -10744,6 +10944,16 @@ mod tests {
     }
 
     #[test]
+    fn hue_rotate_accepts_calc_angles() {
+        let filters =
+            parse_filter_list(&PropertyValue::Keyword("hue-rotate(calc(1turn / 2))".to_string())).expect("filters");
+        match &filters[0] {
+            FilterFunction::HueRotate(v) => assert!((*v - 180.0).abs() < 0.01),
+            other => panic!("expected hue-rotate filter, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn parses_drop_shadow_defaulting_to_current_color() {
         let filters =
             parse_filter_list(&PropertyValue::Keyword("drop-shadow(2px 3px 4px)".to_string())).expect("filters");
@@ -10856,6 +11066,24 @@ mod tests {
             _ => panic!("expected length line-height"),
         }
         assert_eq!(style.font_family, vec!["Fira Sans".to_string(), "serif".to_string()]);
+    }
+
+    #[test]
+    fn oblique_font_angle_accepts_calc() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font".to_string(),
+            value: PropertyValue::Keyword("oblique calc(60deg - 10deg) 16px serif".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        match style.font_style {
+            FontStyle::Oblique(Some(angle)) => assert!((angle - 50.0).abs() < 0.01),
+            other => panic!("expected oblique angle, got {:?}", other),
+        }
+        assert!((style.font_size - 16.0).abs() < 0.01);
     }
 
     #[test]

@@ -8,6 +8,7 @@
 ## Recent changes (this branch)
 - Filter functions follow the spec defaults/validation: blur/hue-rotate default to 0 when arguments are omitted, the rest default to 1, negative parameters are invalid, unit-interval filters clamp to [0,1] at resolution, and brightness/contrast/saturate keep values above 1. Added painter/display-list regressions for clamping and defaults.
 - Filter drop-shadow now follows the CSS grammar (no spread length); four-length shadows are rejected during parsing with a regression to lock the invalid case.
+- Angle math now honors calc/min/max/clamp for filters and font oblique angles: hue-rotate accepts calc() with mixed angle units, and oblique angles in the font shorthand validate range after calc evaluation (regressions added for both).
 - Text shadow tests now promote channel comparisons to u16 to avoid u8 overflow when detecting red halos.
 - The display-list high-DPR text-shadow regression now checks offset scaling (2px → ~4px at 2x) instead of an impossible blur expectation, aligning with the painter coverage.
 - Filter lengths are now spec-valid: blur/drop-shadow parsing rejects percentage lengths, blur radii clamp non-negative, and viewport-relative units resolve against the viewport in painter and display-list paths (tests cover percentage rejection and vw resolution).
