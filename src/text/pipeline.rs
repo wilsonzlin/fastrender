@@ -984,6 +984,7 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
                 continue;
             }
             let emoji_pref = emoji_preference_for_char(ch, style.font_variant_emoji);
+            let mut picker = FontPreferencePicker::new(emoji_pref);
             let font = resolve_font_for_char(
                 ch,
                 &families,
@@ -991,7 +992,7 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
                 font_style,
                 font_stretch,
                 font_context,
-                emoji_pref,
+                &mut picker,
             )
             .ok_or_else(|| TextError::ShapingFailed {
                 text: run.text.clone(),
@@ -1277,6 +1278,105 @@ enum EmojiPreference {
     Neutral,
 }
 
+#[derive(Default)]
+struct FontPreferencePicker {
+    prefer_emoji: bool,
+    avoid_emoji: bool,
+    first_emoji: Option<(LoadedFont, usize)>,
+    first_text: Option<(LoadedFont, usize)>,
+    first_emoji_any: Option<(LoadedFont, usize)>,
+    first_text_any: Option<(LoadedFont, usize)>,
+    order: usize,
+}
+
+impl FontPreferencePicker {
+    fn new(pref: EmojiPreference) -> Self {
+        Self {
+            prefer_emoji: matches!(pref, EmojiPreference::PreferEmoji),
+            avoid_emoji: matches!(pref, EmojiPreference::AvoidEmoji),
+            ..Self::default()
+        }
+    }
+
+    fn bump_order(&mut self) -> usize {
+        let idx = self.order;
+        self.order += 1;
+        idx
+    }
+
+    fn record_any(&mut self, font: &LoadedFont, is_emoji_font: bool, idx: usize) {
+        if is_emoji_font {
+            if self.first_emoji_any.is_none() {
+                self.first_emoji_any = Some((font.clone(), idx));
+            }
+        } else if self.first_text_any.is_none() {
+            self.first_text_any = Some((font.clone(), idx));
+        }
+    }
+
+    fn consider(&mut self, font: LoadedFont, is_emoji_font: bool, idx: usize) -> Option<LoadedFont> {
+        if is_emoji_font {
+            if self.first_emoji.is_none() {
+                self.first_emoji = Some((font.clone(), idx));
+            }
+            if self.prefer_emoji && !self.avoid_emoji {
+                return Some(font);
+            }
+            if !self.prefer_emoji && !self.avoid_emoji {
+                return Some(font);
+            }
+            // avoid_emoji => keep as fallback if nothing else has a glyph
+        } else {
+            if self.first_text.is_none() {
+                self.first_text = Some((font.clone(), idx));
+            }
+            if self.avoid_emoji {
+                return Some(font);
+            }
+            if !self.prefer_emoji {
+                return Some(font);
+            }
+            // prefer_emoji => keep searching for an emoji font with coverage
+        }
+
+        None
+    }
+
+    fn finish(&mut self) -> Option<LoadedFont> {
+        let first_emoji = self
+            .first_emoji
+            .take()
+            .or_else(|| self.first_emoji_any.take());
+        let first_text = self
+            .first_text
+            .take()
+            .or_else(|| self.first_text_any.take());
+
+        if self.prefer_emoji && !self.avoid_emoji {
+            first_emoji
+                .map(|(f, _)| f)
+                .or_else(|| first_text.map(|(f, _)| f))
+        } else if self.avoid_emoji {
+            first_text
+                .map(|(f, _)| f)
+                .or_else(|| first_emoji.map(|(f, _)| f))
+        } else {
+            match (first_text, first_emoji) {
+                (Some((text, ti)), Some((emoji, ei))) => {
+                    if ti <= ei {
+                        Some(text)
+                    } else {
+                        Some(emoji)
+                    }
+                }
+                (Some((text, _)), None) => Some(text),
+                (None, Some((emoji, _))) => Some(emoji),
+                (None, None) => None,
+            }
+        }
+    }
+}
+
 fn emoji_preference_for_char(ch: char, variant: FontVariantEmoji) -> EmojiPreference {
     match variant {
         FontVariantEmoji::Emoji => EmojiPreference::PreferEmoji,
@@ -1344,32 +1444,16 @@ fn resolve_font_for_char(
     style: FontStyle,
     stretch: DbFontStretch,
     font_context: &FontContext,
-    emoji_pref: EmojiPreference,
+    picker: &mut FontPreferencePicker,
 ) -> Option<LoadedFont> {
     use crate::text::font_fallback::FamilyEntry;
     use fontdb::Family;
     let db = font_context.database();
-    let avoid_emoji_fonts = matches!(emoji_pref, EmojiPreference::AvoidEmoji);
-    let prefer_emoji_fonts = matches!(emoji_pref, EmojiPreference::PreferEmoji);
-    let mut fallback_non_emoji: Option<LoadedFont> = None;
-    let mut fallback_emoji: Option<LoadedFont> = None;
     let is_emoji = crate::text::font_db::FontDatabase::is_emoji(ch);
     let weight_preferences = weight_preference_order(weight);
     let slope_preferences = slope_preference_order(style);
     let stretch_preferences = stretch_preference_order(stretch);
     for entry in families {
-        if avoid_emoji_fonts {
-            if let FamilyEntry::Generic(crate::text::font_db::GenericFamily::Emoji) = entry {
-                continue;
-            }
-        }
-
-        if prefer_emoji_fonts {
-            if let FamilyEntry::Generic(crate::text::font_db::GenericFamily::Emoji) = entry {
-                // keep priority order but still try query below
-            }
-        }
-
         for weight_choice in &weight_preferences {
             for slope in slope_preferences {
                 for stretch_choice in &stretch_preferences {
@@ -1391,18 +1475,12 @@ fn resolve_font_for_char(
                     if let Some(id) = db.inner().query(&query) {
                         if let Some(font) = db.load_font(id) {
                             let is_emoji_font = font_is_emoji_font(&font);
-                            if is_emoji_font {
-                                if fallback_emoji.is_none() {
-                                    fallback_emoji = Some(font.clone());
-                                }
-                            } else if fallback_non_emoji.is_none() {
-                                fallback_non_emoji = Some(font.clone());
-                            }
-                            if avoid_emoji_fonts && is_emoji_font {
-                                continue;
-                            }
+                            let idx = picker.bump_order();
+                            picker.record_any(&font, is_emoji_font, idx);
                             if db.has_glyph(id, ch) {
-                                return Some(font);
+                                if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+                                    return Some(font);
+                                }
                             }
                         }
                     }
@@ -1420,23 +1498,15 @@ fn resolve_font_for_char(
                                 weight: fontdb::Weight(*weight_choice),
                                 stretch: (*stretch_choice).into(),
                                 style: (*slope).into(),
-                            };
-                            if let Some(id) = db.inner().query(&query) {
-                                if let Some(font) = db.load_font(id) {
-                                    let is_emoji_font = font_is_emoji_font(&font);
-                                    if is_emoji_font {
-                                        if fallback_emoji.is_none() {
-                                            fallback_emoji = Some(font.clone());
-                                        }
-                                    } else if fallback_non_emoji.is_none() {
-                                        fallback_non_emoji = Some(font.clone());
-                                    }
-                                    if avoid_emoji_fonts && is_emoji_font {
-                                        continue;
-                                    }
-                                    if db.has_glyph(id, ch) {
-                                        return Some(font);
-                                    }
+                    };
+                    if let Some(id) = db.inner().query(&query) {
+                        if let Some(font) = db.load_font(id) {
+                            let is_emoji_font = font_is_emoji_font(&font);
+                            let idx = picker.bump_order();
+                            picker.record_any(&font, is_emoji_font, idx);
+                            if db.has_glyph(id, ch) {
+                                if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+                                    return Some(font);
                                 }
                             }
                         }
@@ -1444,17 +1514,19 @@ fn resolve_font_for_char(
                 }
             }
         }
+            }
+        }
     }
 
-    if is_emoji && !avoid_emoji_fonts {
+    if is_emoji && !picker.avoid_emoji {
         for id in db.find_emoji_fonts() {
-            if db.has_glyph(id, ch) {
-                if let Some(font) = db.load_font(id) {
-                    return Some(font);
-                }
-            } else if fallback_emoji.is_none() {
-                if let Some(font) = db.load_font(id) {
-                    fallback_emoji = Some(font);
+            if let Some(font) = db.load_font(id) {
+                let idx = picker.bump_order();
+                picker.record_any(&font, true, idx);
+                if db.has_glyph(id, ch) {
+                    if let Some(font) = picker.consider(font, true, idx) {
+                        return Some(font);
+                    }
                 }
             }
         }
@@ -1463,29 +1535,17 @@ fn resolve_font_for_char(
     for face in db.faces() {
         if let Some(font) = db.load_font(face.id) {
             let is_emoji_font = font_is_emoji_font(&font);
-            if is_emoji_font {
-                if fallback_emoji.is_none() {
-                    fallback_emoji = Some(font.clone());
-                }
-            } else if fallback_non_emoji.is_none() {
-                fallback_non_emoji = Some(font.clone());
-            }
-            if avoid_emoji_fonts && is_emoji_font {
-                continue;
-            }
+            let idx = picker.bump_order();
+            picker.record_any(&font, is_emoji_font, idx);
             if db.has_glyph(face.id, ch) {
-                return Some(font);
+                if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+                    return Some(font);
+                }
             }
         }
     }
 
-    if avoid_emoji_fonts {
-        fallback_non_emoji
-    } else if prefer_emoji_fonts {
-        fallback_emoji.or(fallback_non_emoji)
-    } else {
-        fallback_non_emoji.or(fallback_emoji)
-    }
+    picker.finish()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3159,6 +3219,73 @@ mod tests {
             emoji_preference_for_char('#', FontVariantEmoji::Unicode),
             EmojiPreference::AvoidEmoji
         );
+    }
+
+    fn dummy_font(name: &str) -> LoadedFont {
+        LoadedFont {
+            data: Arc::new(Vec::new()),
+            index: 0,
+            family: name.into(),
+            weight: FontWeight::NORMAL,
+            style: DbFontStyle::Normal,
+            stretch: DbFontStretch::Normal,
+        }
+    }
+
+    #[test]
+    fn emoji_preference_picker_prefers_emoji_when_available() {
+        let text_font = dummy_font("Example Text");
+        let emoji_font = dummy_font("Noto Color Emoji");
+        let mut picker = FontPreferencePicker::new(EmojiPreference::PreferEmoji);
+        let idx = picker.bump_order();
+        assert!(picker
+            .consider(
+                text_font.clone(),
+                font_is_emoji_font(&text_font),
+                idx
+            )
+            .is_none());
+        let idx = picker.bump_order();
+        let chosen = picker
+            .consider(
+                emoji_font.clone(),
+                font_is_emoji_font(&emoji_font),
+                idx
+            )
+            .expect("should pick emoji font");
+        assert_eq!(chosen.family, emoji_font.family);
+    }
+
+    #[test]
+    fn emoji_preference_picker_falls_back_to_text_when_no_emoji_font() {
+        let text_font = dummy_font("Example Text");
+        let mut picker = FontPreferencePicker::new(EmojiPreference::PreferEmoji);
+        let idx = picker.bump_order();
+        assert!(picker
+            .consider(
+                text_font.clone(),
+                font_is_emoji_font(&text_font),
+                idx
+            )
+            .is_none());
+        let chosen = picker.finish().expect("fallback text font");
+        assert_eq!(chosen.family, text_font.family);
+    }
+
+    #[test]
+    fn emoji_preference_picker_avoids_emoji_but_allows_fallback() {
+        let emoji_font = dummy_font("Twemoji");
+        let mut picker = FontPreferencePicker::new(EmojiPreference::AvoidEmoji);
+        let idx = picker.bump_order();
+        assert!(picker
+            .consider(
+                emoji_font.clone(),
+                font_is_emoji_font(&emoji_font),
+                idx
+            )
+            .is_none());
+        let chosen = picker.finish().expect("fallback emoji font");
+        assert_eq!(chosen.family, emoji_font.family);
     }
 }
 fn number_tag(prefix: &[u8; 2], n: u8) -> Option<[u8; 4]> {
