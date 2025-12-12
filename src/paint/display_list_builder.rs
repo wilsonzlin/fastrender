@@ -181,7 +181,8 @@ impl DisplayListBuilder {
     /// Builds a display list from a FragmentTree
     pub fn build_tree(mut self, tree: &FragmentTree) -> DisplayList {
         if self.viewport.is_none() {
-            self.viewport = Some((tree.root.bounds.width(), tree.root.bounds.height()));
+            let viewport = tree.viewport_size();
+            self.viewport = Some((viewport.width, viewport.height));
         }
         self.build_fragment(&tree.root, Point::ZERO);
         self.list
@@ -3151,8 +3152,9 @@ mod tests {
             style: Some(Arc::new(style)),
         };
 
+        let tree = FragmentTree::with_viewport(fragment, crate::geometry::Size::new(200.0, 200.0));
         let builder = DisplayListBuilder::with_image_cache(ImageCache::new());
-        let list = builder.build(&fragment);
+        let list = builder.build_tree(&tree);
 
         assert_eq!(list.len(), 1);
         let DisplayItem::Image(img) = &list.items()[0] else {

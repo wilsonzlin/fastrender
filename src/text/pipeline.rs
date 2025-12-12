@@ -57,6 +57,7 @@ use crate::style::ComputedStyle;
 use crate::text::font_db::font_has_feature;
 use crate::text::font_db::{FontStretch as DbFontStretch, FontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
+use crate::text::emoji;
 use rustybuzz::{Direction as HbDirection, Face, Feature, Language as HbLanguage, UnicodeBuffer, Variation};
 use std::collections::HashSet;
 use std::iter::FromIterator;
@@ -1028,22 +1029,57 @@ fn get_font_for_run(
         CssFontStyle::Oblique(_) => FontStyle::Oblique,
     };
     let font_stretch = DbFontStretch::from_percentage(style.font_stretch.to_percentage());
+    let emoji_dominant = is_emoji_dominant(&run.text);
+    let wants_emoji_fonts = emoji_dominant && matches!(style.font_variant_emoji, FontVariantEmoji::Emoji);
+    let avoid_emoji_fonts = emoji_dominant && matches!(style.font_variant_emoji, FontVariantEmoji::Text);
+
+    let mut family_list = style.font_family.clone();
+    if wants_emoji_fonts && !family_list.iter().any(|f| f.eq_ignore_ascii_case("emoji")) {
+        family_list.insert(0, "emoji".to_string());
+    }
+
+    let try_families = |families: &[String],
+                        require_emoji: bool,
+                        reject_emoji: bool|
+     -> Option<(LoadedFont, f32, f32)> {
+        for family in families {
+            if let Some(font) =
+                font_context.get_font_full(&[family.clone()], style.font_weight.to_u16(), font_style, font_stretch)
+            {
+                let is_emoji_font = font_is_emoji_font(&font);
+                if require_emoji && !is_emoji_font {
+                    continue;
+                }
+                if reject_emoji && is_emoji_font {
+                    continue;
+                }
+                let (bold, oblique) = compute_synthetic_styles(style, &font);
+                return Some((font, bold, oblique));
+            }
+        }
+        None
+    };
 
     // Try the font family list first
-    if let Some(font) =
-        font_context.get_font_full(&style.font_family, style.font_weight.to_u16(), font_style, font_stretch)
-    {
-        // Verify the font has glyphs for at least the first character
-        if let Some(ch) = run.text.chars().next() {
-            if let Ok(face) = font.as_ttf_face() {
-                if face.glyph_index(ch).is_some() {
+    if wants_emoji_fonts {
+        if let Some(found) = try_families(&family_list, true, false) {
+            return Ok(found);
+        }
+        if let Some(ch) = run.text.chars().find(|c| emoji::is_emoji(*c)) {
+            for id in font_context.database().find_emoji_fonts() {
+                if !font_context.database().has_glyph(id, ch) {
+                    continue;
+                }
+                if let Some(font) = font_context.database().load_font(id) {
                     let (bold, oblique) = compute_synthetic_styles(style, &font);
                     return Ok((font, bold, oblique));
                 }
             }
         }
-        let (bold, oblique) = compute_synthetic_styles(style, &font);
-        return Ok((font, bold, oblique));
+    }
+
+    if let Some(font) = try_families(&family_list, false, avoid_emoji_fonts) {
+        return Ok(font);
     }
 
     // Try generic fallbacks based on script
@@ -1054,27 +1090,33 @@ fn get_font_for_run(
         _ => vec!["sans-serif".to_string()],
     };
 
-    if let Some(font) =
-        font_context.get_font_full(&generic_families, style.font_weight.to_u16(), font_style, font_stretch)
-    {
-        let (bold, oblique) = compute_synthetic_styles(style, &font);
-        return Ok((font, bold, oblique));
+    if let Some(font) = try_families(&generic_families, false, avoid_emoji_fonts) {
+        return Ok(font);
     }
 
     // Last resort: try to get any sans-serif font
-    font_context
-        .get_sans_serif()
-        .map(|font| {
-            let (bold, oblique) = compute_synthetic_styles(style, &font);
-            (font, bold, oblique)
-        })
-        .ok_or_else(|| {
-            TextError::ShapingFailed {
-                text: run.text.clone(),
-                reason: "No suitable font found".to_string(),
+    if let Some(font) = font_context.get_sans_serif() {
+        if avoid_emoji_fonts && font_is_emoji_font(&font) {
+            for face in font_context.database().faces() {
+                if let Some(candidate) = font_context.database().load_font(face.id) {
+                    if font_is_emoji_font(&candidate) {
+                        continue;
+                    }
+                    let (bold, oblique) = compute_synthetic_styles(style, &candidate);
+                    return Ok((candidate, bold, oblique));
+                }
             }
-            .into()
-        })
+        } else {
+            let (bold, oblique) = compute_synthetic_styles(style, &font);
+            return Ok((font, bold, oblique));
+        }
+    }
+
+    Err(TextError::ShapingFailed {
+        text: run.text.clone(),
+        reason: "No suitable font found".to_string(),
+    }
+    .into())
 }
 
 fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f32) {
@@ -1098,6 +1140,26 @@ fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f
     }
 
     (synthetic_bold, synthetic_oblique)
+}
+
+fn is_emoji_dominant(text: &str) -> bool {
+    let mut saw_emoji = false;
+    for c in text.chars() {
+        if emoji::is_emoji(c) {
+            saw_emoji = true;
+            continue;
+        }
+        if c.is_whitespace() || matches!(c, '\u{200d}' | '\u{fe0f}' | '\u{fe0e}') {
+            continue;
+        }
+        return false;
+    }
+    saw_emoji
+}
+
+fn font_is_emoji_font(font: &LoadedFont) -> bool {
+    let name = font.family.to_lowercase();
+    name.contains("emoji") || name.contains("color") || name.contains("twemoji") || name.contains("symbola")
 }
 
 // ============================================================================
@@ -1586,6 +1648,7 @@ mod tests {
         FontVariantLigatures, NumericFigure, NumericFraction, NumericSpacing, TextOrientation, WritingMode,
     };
     use crate::text::font_db::FontDatabase;
+    use crate::text::font_db::{FontStretch as DbFontStretch, FontStyle as DbFontStyle, FontWeight};
     use std::fs;
     use std::path::Path;
     use std::sync::Arc;
@@ -2221,6 +2284,35 @@ mod tests {
         assert_eq!(seen.get(b"cv04"), Some(&1));
         assert_eq!(seen.get(b"swsh"), Some(&1));
         assert_eq!(seen.get(b"ornm"), Some(&2));
+    }
+
+    #[test]
+    fn emoji_dominant_detection_respects_non_emoji_content() {
+        assert!(is_emoji_dominant("😀 😀"));
+        assert!(is_emoji_dominant("😀\u{200d}\u{1f9d1}"));
+        assert!(!is_emoji_dominant("😀a"));
+    }
+
+    #[test]
+    fn emoji_font_classifier_matches_family_names() {
+        let emoji_font = LoadedFont {
+            data: Arc::new(Vec::new()),
+            index: 0,
+            family: "Noto Color Emoji".into(),
+            weight: FontWeight::NORMAL,
+            style: DbFontStyle::Normal,
+            stretch: DbFontStretch::Normal,
+        };
+        let text_font = LoadedFont {
+            data: Arc::new(Vec::new()),
+            index: 0,
+            family: "Roboto".into(),
+            weight: FontWeight::NORMAL,
+            style: DbFontStyle::Normal,
+            stretch: DbFontStretch::Normal,
+        };
+        assert!(font_is_emoji_font(&emoji_font));
+        assert!(!font_is_emoji_font(&text_font));
     }
 }
 fn number_tag(prefix: &[u8; 2], n: u8) -> Option<[u8; 4]> {

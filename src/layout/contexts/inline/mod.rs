@@ -3367,22 +3367,11 @@ impl InlineFormattingContext {
                                 local_float_ctx = Some(FloatContext::new(available_inline.max(0.0)));
                             }
 
-                            let current_ctx = float_ctx
+                            let mut candidate_ctx = float_ctx
                                 .as_deref()
                                 .or_else(|| local_float_ctx.as_ref())
                                 .cloned()
                                 .unwrap_or_else(|| FloatContext::new(available_inline.max(0.0)));
-
-                            let _ = flush_pending(
-                                &mut pending,
-                                &mut use_first_line_width,
-                                &mut line_offset,
-                                &mut lines,
-                                Some(&current_ctx),
-                                &mut flow_order,
-                            );
-
-                            let mut candidate_ctx = current_ctx;
 
                             let float_min_y = float_base_y + line_offset;
                             let (fragment, _, bottom_rel) = self.layout_inline_float_fragment(
