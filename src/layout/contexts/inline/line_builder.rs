@@ -1955,30 +1955,41 @@ fn reorder_paragraph(
                     .iter()
                     .map(|(idx, _, _)| paragraph_chars.get(*idx).copied().unwrap_or('\u{FFFD}'))
                     .collect();
-                let isolate_levels: Vec<Level> = if let Some(ctx) = paragraph_leaves
+                let (_isolate_levels, reorder): (Vec<Level>, Vec<usize>) = if let Some(ctx) = paragraph_leaves
                     .get(mapping.leaf_index)
                     .and_then(|p| p.bidi_context)
                 {
-                    unicode_bidi::BidiInfo::new(&isolate_text, Some(ctx.level))
-                        .levels
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(byte_idx, lvl)| {
-                            // levels indexed by byte; take the start of each char
-                            if isolate_text.is_char_boundary(byte_idx) {
-                                Some(*lvl)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect()
+                    if ctx.override_all {
+                        let levels = vec![ctx.level; grouped.len()];
+                        let reorder = if ctx.level.is_rtl() {
+                            (0..grouped.len()).rev().collect()
+                        } else {
+                            (0..grouped.len()).collect()
+                        };
+                        (levels, reorder)
+                    } else {
+                        let levels: Vec<Level> = unicode_bidi::BidiInfo::new(&isolate_text, Some(ctx.level))
+                            .levels
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(byte_idx, lvl)| {
+                                // levels indexed by byte; take the start of each char
+                                if isolate_text.is_char_boundary(byte_idx) {
+                                    Some(*lvl)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        let reorder = if levels.is_empty() {
+                            (0..grouped.len()).collect()
+                        } else {
+                            unicode_bidi::BidiInfo::reorder_visual(&levels)
+                        };
+                        (levels, reorder)
+                    }
                 } else {
-                    Vec::new()
-                };
-                let reorder = if isolate_levels.is_empty() {
-                    (0..grouped.len()).collect()
-                } else {
-                    unicode_bidi::BidiInfo::reorder_visual(&isolate_levels)
+                    ((0..grouped.len()).map(|_| paragraph_level).collect(), (0..grouped.len()).collect())
                 };
 
                 for visual_pos in reorder {
@@ -2732,6 +2743,55 @@ mod tests {
         assert_eq!(
             texts,
             vec!["L ".to_string(), "ג".to_string(), "אב".to_string(), " R".to_string()]
+        );
+    }
+
+    #[test]
+    fn bidi_isolate_override_reverses_child_order() {
+        let mut builder = make_builder(200.0);
+
+        builder.add_item(InlineItem::Text(make_text_item("A ", 10.0)));
+
+        let mut inline_box = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            0,
+            Direction::Rtl,
+            UnicodeBidi::IsolateOverride,
+        );
+        inline_box.add_child(InlineItem::Text(make_text_item("a", 10.0)));
+        inline_box.add_child(InlineItem::Text(make_text_item("b", 10.0)));
+        inline_box.add_child(InlineItem::Text(make_text_item("c", 10.0)));
+        builder.add_item(InlineItem::InlineBox(inline_box));
+
+        builder.add_item(InlineItem::Text(make_text_item(" C", 10.0)));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 1);
+        let texts: Vec<String> = lines[0]
+            .items
+            .iter()
+            .map(|p| match &p.item {
+                InlineItem::Text(t) => t.text.clone(),
+                InlineItem::InlineBox(b) => b
+                    .children
+                    .iter()
+                    .filter_map(|c| match c {
+                        InlineItem::Text(t) => Some(t.text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(""),
+                _ => String::new(),
+            })
+            .collect();
+
+        assert_eq!(
+            texts,
+            vec!["A ".to_string(), "c".to_string(), "b".to_string(), "a".to_string(), " C".to_string()]
         );
     }
 
