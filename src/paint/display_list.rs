@@ -532,8 +532,10 @@ pub struct TextDecorationItem {
     pub bounds: Rect,
     /// Line start position for decorations
     pub line_start: f32,
-    /// Total width available for the decoration
+    /// Total inline length available for the decoration
     pub line_width: f32,
+    /// Whether the inline axis is vertical (lines run vertically)
+    pub inline_vertical: bool,
     /// Decorations to paint
     pub decorations: Vec<DecorationPaint>,
 }

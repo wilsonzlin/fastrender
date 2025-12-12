@@ -1250,8 +1250,20 @@ impl DisplayListBuilder {
                 }
 
                 if let Some(style) = style_opt {
-                    let decoration_baseline = baseline_inline;
-                    self.emit_text_decorations(style, runs_ref, rect.x(), rect.width(), decoration_baseline);
+                    let (inline_start, inline_len) = if inline_vertical {
+                        (rect.y(), rect.height())
+                    } else {
+                        (rect.x(), rect.width())
+                    };
+                    let decoration_baseline = baseline_block;
+                    self.emit_text_decorations(
+                        style,
+                        runs_ref,
+                        inline_start,
+                        inline_len,
+                        decoration_baseline,
+                        inline_vertical,
+                    );
                 }
             }
 
@@ -1992,11 +2004,12 @@ impl DisplayListBuilder {
         &mut self,
         style: &ComputedStyle,
         runs: Option<&[ShapedRun]>,
-        line_start: f32,
-        line_width: f32,
-        baseline_y: f32,
+        inline_start: f32,
+        inline_len: f32,
+        block_baseline: f32,
+        inline_vertical: bool,
     ) {
-        if line_width <= 0.0 {
+        if inline_len <= 0.0 {
             return;
         }
 
@@ -2021,8 +2034,8 @@ impl DisplayListBuilder {
         };
 
         let mut paints = Vec::new();
-        let mut min_y = f32::INFINITY;
-        let mut max_y = f32::NEG_INFINITY;
+        let mut min_block = f32::INFINITY;
+        let mut max_block = f32::NEG_INFINITY;
 
         for deco in decorations {
             let decoration_color = deco.decoration.color.unwrap_or(style.color);
@@ -2062,17 +2075,19 @@ impl DisplayListBuilder {
 
             if deco.decoration.lines.contains(TextDecorationLine::UNDERLINE) {
                 let thickness = used_thickness.unwrap_or(metrics.underline_thickness);
-                let center = baseline_y
+                let center = block_baseline
                     - self.underline_position(&metrics, deco.underline_position, underline_offset, thickness);
-                let segments = if matches!(deco.skip_ink, TextDecorationSkipInk::Auto | TextDecorationSkipInk::All) {
+                let segments = if !inline_vertical
+                    && matches!(deco.skip_ink, TextDecorationSkipInk::Auto | TextDecorationSkipInk::All)
+                {
                     runs.map(|r| {
                         self.build_underline_segments(
                             r,
-                            line_start,
-                            line_width,
+                            inline_start,
+                            inline_len,
                             center,
                             thickness,
-                            baseline_y,
+                            block_baseline,
                             deco.skip_ink,
                         )
                     })
@@ -2085,32 +2100,32 @@ impl DisplayListBuilder {
                     segments,
                 });
                 let half_extent = Self::stroke_half_extent(deco.decoration.style, thickness);
-                min_y = min_y.min(center - half_extent);
-                max_y = max_y.max(center + half_extent);
+                min_block = min_block.min(center - half_extent);
+                max_block = max_block.max(center + half_extent);
             }
             if deco.decoration.lines.contains(TextDecorationLine::OVERLINE) {
                 let thickness = used_thickness.unwrap_or(metrics.underline_thickness);
-                let center = baseline_y - metrics.ascent;
+                let center = block_baseline - metrics.ascent;
                 paint.overline = Some(DecorationStroke {
                     center,
                     thickness,
                     segments: None,
                 });
                 let half_extent = Self::stroke_half_extent(deco.decoration.style, thickness);
-                min_y = min_y.min(center - half_extent);
-                max_y = max_y.max(center + half_extent);
+                min_block = min_block.min(center - half_extent);
+                max_block = max_block.max(center + half_extent);
             }
             if deco.decoration.lines.contains(TextDecorationLine::LINE_THROUGH) {
                 let thickness = used_thickness.unwrap_or(metrics.strike_thickness);
-                let center = baseline_y - metrics.strike_pos;
+                let center = block_baseline - metrics.strike_pos;
                 paint.line_through = Some(DecorationStroke {
                     center,
                     thickness,
                     segments: None,
                 });
                 let half_extent = Self::stroke_half_extent(deco.decoration.style, thickness);
-                min_y = min_y.min(center - half_extent);
-                max_y = max_y.max(center + half_extent);
+                min_block = min_block.min(center - half_extent);
+                max_block = max_block.max(center + half_extent);
             }
 
             if paint.underline.is_some() || paint.overline.is_some() || paint.line_through.is_some() {
@@ -2122,11 +2137,17 @@ impl DisplayListBuilder {
             return;
         }
 
-        let bounds = Rect::from_xywh(line_start, min_y, line_width, (max_y - min_y).max(0.0));
+        let block_span = (max_block - min_block).max(0.0);
+        let bounds = if inline_vertical {
+            Rect::from_xywh(min_block, inline_start, block_span, inline_len)
+        } else {
+            Rect::from_xywh(inline_start, min_block, inline_len, block_span)
+        };
         self.list.push(DisplayItem::TextDecoration(TextDecorationItem {
             bounds,
-            line_start,
-            line_width,
+            line_start: inline_start,
+            line_width: inline_len,
+            inline_vertical,
             decorations: paints,
         }));
     }

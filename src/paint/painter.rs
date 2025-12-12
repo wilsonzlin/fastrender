@@ -876,28 +876,45 @@ impl Painter {
                 let shaped_runs = runs
                     .clone()
                     .or_else(|| self.shaper.shape(&text, &style, &self.font_ctx).ok());
-                let baseline_block = rect.x() + baseline_offset;
-                let baseline_y = rect.y() + baseline_offset;
                 let inline_vertical = matches!(
                     style.writing_mode,
                     crate::style::types::WritingMode::VerticalRl | crate::style::types::WritingMode::VerticalLr
                 );
+                let (block_baseline, inline_start, inline_len) = if inline_vertical {
+                    (rect.x() + baseline_offset, rect.y(), rect.height())
+                } else {
+                    (rect.y() + baseline_offset, rect.x(), rect.width())
+                };
                 if let Some(ref shaped) = shaped_runs {
                     if inline_vertical {
-                        self.paint_shaped_runs_vertical(shaped, baseline_block, rect.y(), color, Some(&style));
+                        self.paint_shaped_runs_vertical(shaped, block_baseline, inline_start, color, Some(&style));
                     } else {
-                        self.paint_shaped_runs(shaped, rect.x(), baseline_y, color, Some(&style));
+                        self.paint_shaped_runs(shaped, inline_start, block_baseline, color, Some(&style));
                     }
                 } else {
                     if inline_vertical {
                         // Fallback: approximate vertical flow by painting horizontal text at the inline start.
-                        self.paint_text(&text, Some(&style), rect.x(), rect.y(), style.font_size, color);
+                        self.paint_text(&text, Some(&style), inline_start, rect.y(), style.font_size, color);
                     } else {
-                        self.paint_text(&text, Some(&style), rect.x(), baseline_y, style.font_size, color);
+                        self.paint_text(
+                            &text,
+                            Some(&style),
+                            inline_start,
+                            block_baseline,
+                            style.font_size,
+                            color,
+                        );
                     }
                 }
-                self.paint_text_decoration(&style, shaped_runs.as_deref(), rect.x(), baseline_y, rect.width());
-                self.paint_text_emphasis(&style, shaped_runs.as_deref(), rect.x(), baseline_y);
+                self.paint_text_decoration(
+                    &style,
+                    shaped_runs.as_deref(),
+                    inline_start,
+                    block_baseline,
+                    inline_len,
+                    inline_vertical,
+                );
+                self.paint_text_emphasis(&style, shaped_runs.as_deref(), inline_start, block_baseline);
             }
             DisplayCommand::Replaced {
                 rect,
@@ -3597,18 +3614,19 @@ impl Painter {
         &mut self,
         style: &ComputedStyle,
         runs: Option<&[ShapedRun]>,
-        x: f32,
-        baseline_y: f32,
-        width: f32,
+        inline_start: f32,
+        block_baseline: f32,
+        inline_len: f32,
+        inline_vertical: bool,
     ) {
         let has_any_decoration = !style.applied_text_decorations.is_empty() || !style.text_decoration.lines.is_empty();
-        if !has_any_decoration || width <= 0.0 {
+        if !has_any_decoration || inline_len <= 0.0 {
             return;
         }
 
-        let x = self.device_length(x);
-        let baseline_y = self.device_length(baseline_y);
-        let width = self.device_length(width);
+        let inline_start = self.device_length(inline_start);
+        let block_baseline = self.device_length(block_baseline);
+        let inline_len = self.device_length(inline_len);
 
         let Some(metrics) = self.decoration_metrics(runs, style) else {
             return;
@@ -3617,10 +3635,16 @@ impl Painter {
 
         let draw_solid_line =
             |pixmap: &mut Pixmap, paint: &Paint, start: f32, len: f32, center: f32, thickness: f32| {
-                if thickness <= 0.0 {
+                if thickness <= 0.0 || len <= 0.0 {
                     return;
                 }
-                if let Some(rect) = SkiaRect::from_xywh(start, center - thickness * 0.5, len, thickness) {
+
+                let rect = if inline_vertical {
+                    SkiaRect::from_xywh(center - thickness * 0.5, start, thickness, len)
+                } else {
+                    SkiaRect::from_xywh(start, center - thickness * 0.5, len, thickness)
+                };
+                if let Some(rect) = rect {
                     let path = PathBuilder::from_rect(rect);
                     pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
                 }
@@ -3635,8 +3659,13 @@ impl Painter {
                                  dash: Option<Vec<f32>>,
                                  round: bool| {
             let mut path = PathBuilder::new();
-            path.move_to(start, center);
-            path.line_to(start + len, center);
+            if inline_vertical {
+                path.move_to(center, start);
+                path.line_to(center, start + len);
+            } else {
+                path.move_to(start, center);
+                path.line_to(start + len, center);
+            }
             let Some(path) = path.finish() else { return };
 
             let mut stroke = Stroke::default();
@@ -3661,14 +3690,23 @@ impl Painter {
             let amplitude = (thickness * 0.75).max(thickness * 0.5);
 
             let mut path = PathBuilder::new();
-            path.move_to(start, center);
+            if inline_vertical {
+                path.move_to(center, start);
+            } else {
+                path.move_to(start, center);
+            }
             let mut cursor = start;
             let mut up = true;
             while cursor < start + len {
                 let end = (cursor + wavelength).min(start + len);
                 let mid = cursor + (end - cursor) * 0.5;
-                let control_y = if up { center - amplitude } else { center + amplitude };
-                path.quad_to(mid, control_y, end, center);
+                if inline_vertical {
+                    let control_x = if up { center - amplitude } else { center + amplitude };
+                    path.quad_to(control_x, mid, center, end);
+                } else {
+                    let control_y = if up { center - amplitude } else { center + amplitude };
+                    path.quad_to(mid, control_y, end, center);
+                }
                 cursor = end;
                 up = !up;
             }
@@ -3718,19 +3756,35 @@ impl Painter {
 
             let painter_style = deco.decoration.style;
             let render_line = |pixmap: &mut Pixmap, center: f32, thickness: f32| match painter_style {
-                TextDecorationStyle::Solid => draw_solid_line(pixmap, &paint, x, width, center, thickness),
+                TextDecorationStyle::Solid => {
+                    draw_solid_line(pixmap, &paint, inline_start, inline_len, center, thickness)
+                }
                 TextDecorationStyle::Double => {
                     let line_thickness = (thickness * 0.7).max(0.5);
                     let gap = line_thickness.max(thickness * 0.6);
-                    draw_solid_line(pixmap, &paint, x, width, center - (gap * 0.5), line_thickness);
-                    draw_solid_line(pixmap, &paint, x, width, center + (gap * 0.5), line_thickness);
+                    draw_solid_line(
+                        pixmap,
+                        &paint,
+                        inline_start,
+                        inline_len,
+                        center - (gap * 0.5),
+                        line_thickness,
+                    );
+                    draw_solid_line(
+                        pixmap,
+                        &paint,
+                        inline_start,
+                        inline_len,
+                        center + (gap * 0.5),
+                        line_thickness,
+                    );
                 }
                 TextDecorationStyle::Dotted => {
                     draw_stroked_line(
                         pixmap,
                         &paint,
-                        x,
-                        width,
+                        inline_start,
+                        inline_len,
                         center,
                         thickness,
                         Some(vec![thickness, thickness]),
@@ -3741,15 +3795,17 @@ impl Painter {
                     draw_stroked_line(
                         pixmap,
                         &paint,
-                        x,
-                        width,
+                        inline_start,
+                        inline_len,
                         center,
                         thickness,
                         Some(vec![3.0 * thickness, thickness]),
                         false,
                     );
                 }
-                TextDecorationStyle::Wavy => draw_wavy_line(pixmap, &paint, x, width, center, thickness),
+                TextDecorationStyle::Wavy => {
+                    draw_wavy_line(pixmap, &paint, inline_start, inline_len, center, thickness)
+                }
             };
 
             let render_line_segment =
@@ -3793,14 +3849,23 @@ impl Painter {
                 let thickness = used_thickness.unwrap_or(metrics.underline_thickness);
                 let adjusted_pos =
                     self.underline_position(&metrics, deco.underline_position, underline_offset, thickness);
-                let center = baseline_y - adjusted_pos;
-                if matches!(
+                let center = block_baseline - adjusted_pos;
+                if inline_vertical {
+                    render_line(&mut self.pixmap, center, thickness);
+                } else if matches!(
                     deco.skip_ink,
                     crate::style::types::TextDecorationSkipInk::Auto | crate::style::types::TextDecorationSkipInk::All
                 ) {
                     if let Some(runs) = runs {
-                        let segments =
-                            self.build_underline_segments(runs, x, width, center, thickness, baseline_y, deco.skip_ink);
+                        let segments = self.build_underline_segments(
+                            runs,
+                            inline_start,
+                            inline_len,
+                            center,
+                            thickness,
+                            block_baseline,
+                            deco.skip_ink,
+                        );
                         for (seg_start, seg_end) in segments {
                             let seg_width = seg_end - seg_start;
                             if seg_width <= 0.0 {
@@ -3818,14 +3883,14 @@ impl Painter {
             if deco.decoration.lines.contains(TextDecorationLine::OVERLINE) {
                 render_line(
                     &mut self.pixmap,
-                    baseline_y - metrics.ascent,
+                    block_baseline - metrics.ascent,
                     used_thickness.unwrap_or(metrics.underline_thickness),
                 );
             }
             if deco.decoration.lines.contains(TextDecorationLine::LINE_THROUGH) {
                 render_line(
                     &mut self.pixmap,
-                    baseline_y - metrics.strike_pos,
+                    block_baseline - metrics.strike_pos,
                     used_thickness.unwrap_or(metrics.strike_thickness),
                 );
             }

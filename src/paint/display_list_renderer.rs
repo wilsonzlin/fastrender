@@ -734,6 +734,7 @@ impl DisplayListRenderer {
         scaled.bounds = self.ds_rect(item.bounds);
         scaled.line_start = self.ds_len(item.line_start);
         scaled.line_width = self.ds_len(item.line_width);
+        scaled.inline_vertical = item.inline_vertical;
         scaled.decorations = item
             .decorations
             .iter()
@@ -2023,6 +2024,9 @@ impl DisplayListRenderer {
             return Ok(());
         }
 
+        let inline_vertical = item.inline_vertical;
+        let inline_start = item.line_start;
+        let inline_len = item.line_width;
         let clip = self.canvas.clip_mask().cloned();
         let transform = self.canvas.transform();
         let blend_mode = self.canvas.blend_mode();
@@ -2033,7 +2037,12 @@ impl DisplayListRenderer {
                 if thickness <= 0.0 || len <= 0.0 {
                     return;
                 }
-                if let Some(rect) = tiny_skia::Rect::from_xywh(start, center - thickness * 0.5, len, thickness) {
+                let rect = if inline_vertical {
+                    tiny_skia::Rect::from_xywh(center - thickness * 0.5, start, thickness, len)
+                } else {
+                    tiny_skia::Rect::from_xywh(start, center - thickness * 0.5, len, thickness)
+                };
+                if let Some(rect) = rect {
                     let path = PathBuilder::from_rect(rect);
                     pixmap.fill_path(&path, paint, tiny_skia::FillRule::Winding, transform, clip.as_ref());
                 }
@@ -2048,8 +2057,13 @@ impl DisplayListRenderer {
                                  dash: Option<Vec<f32>>,
                                  round: bool| {
             let mut path = PathBuilder::new();
-            path.move_to(start, center);
-            path.line_to(start + len, center);
+            if inline_vertical {
+                path.move_to(center, start);
+                path.line_to(center, start + len);
+            } else {
+                path.move_to(start, center);
+                path.line_to(start + len, center);
+            }
             let Some(path) = path.finish() else { return };
 
             let mut stroke = Stroke::default();
@@ -2075,14 +2089,23 @@ impl DisplayListRenderer {
                 let amplitude = (thickness * 0.75).max(thickness * 0.5);
 
                 let mut path = PathBuilder::new();
-                path.move_to(start, center);
+                if inline_vertical {
+                    path.move_to(center, start);
+                } else {
+                    path.move_to(start, center);
+                }
                 let mut cursor = start;
                 let mut up = true;
                 while cursor < start + len {
                     let end = (cursor + wavelength).min(start + len);
                     let mid = cursor + (end - cursor) * 0.5;
-                    let control_y = if up { center - amplitude } else { center + amplitude };
-                    path.quad_to(mid, control_y, end, center);
+                    if inline_vertical {
+                        let control_x = if up { center - amplitude } else { center + amplitude };
+                        path.quad_to(control_x, mid, center, end);
+                    } else {
+                        let control_y = if up { center - amplitude } else { center + amplitude };
+                        path.quad_to(mid, control_y, end, center);
+                    }
                     cursor = end;
                     up = !up;
                 }
@@ -2165,8 +2188,8 @@ impl DisplayListRenderer {
                         pixmap,
                         &paint,
                         deco.style,
-                        item.line_start,
-                        item.line_width,
+                        inline_start,
+                        inline_len,
                         underline.center,
                         underline.thickness,
                     );
@@ -2177,8 +2200,8 @@ impl DisplayListRenderer {
                     pixmap,
                     &paint,
                     deco.style,
-                    item.line_start,
-                    item.line_width,
+                    inline_start,
+                    inline_len,
                     overline.center,
                     overline.thickness,
                 );
@@ -2188,8 +2211,8 @@ impl DisplayListRenderer {
                     pixmap,
                     &paint,
                     deco.style,
-                    item.line_start,
-                    item.line_width,
+                    inline_start,
+                    inline_len,
                     strike.center,
                     strike.thickness,
                 );
@@ -3619,6 +3642,7 @@ mod tests {
             bounds: Rect::from_xywh(0.0, 0.0, 20.0, 10.0),
             line_start: 2.0,
             line_width: 16.0,
+            inline_vertical: false,
             decorations: vec![DecorationPaint {
                 style: TextDecorationStyle::Solid,
                 color: Rgba::from_rgba8(255, 0, 0, 255),
@@ -3646,6 +3670,7 @@ mod tests {
             bounds: Rect::from_xywh(0.0, 0.0, 20.0, 10.0),
             line_start: 0.0,
             line_width: 20.0,
+            inline_vertical: false,
             decorations: vec![DecorationPaint {
                 style: TextDecorationStyle::Solid,
                 color: Rgba::from_rgba8(0, 0, 255, 255),
