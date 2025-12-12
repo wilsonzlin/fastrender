@@ -38,6 +38,7 @@ use crate::style::types::{Direction, ListStylePosition, OverflowWrap, UnicodeBid
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::text::line_break::{BreakOpportunity, BreakType};
+use crate::layout::contexts::inline::bidi_controls;
 use crate::text::pipeline::{ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
@@ -1915,10 +1916,28 @@ fn reorder_paragraph(
                     let overlap_start = run.start.max(para_leaf.logical_range.start) - para_leaf.logical_range.start;
                     let overlap_end = run.end.min(para_leaf.logical_range.end) - para_leaf.logical_range.start;
 
+                    let base_dir = base_level
+                        .map(|l| if l.is_rtl() { Direction::Rtl } else { Direction::Ltr })
+                        .unwrap_or(root_direction);
+                    let bidi_context = {
+                        let mut stack: Vec<(UnicodeBidi, Direction)> =
+                            vec![(root_unicode_bidi, root_direction)];
+                        stack.extend(para_leaf.leaf.box_stack.iter().map(|c| (c.unicode_bidi, c.direction)));
+                        stack.push((para_leaf.leaf.item.unicode_bidi(), para_leaf.leaf.item.direction()));
+                        crate::layout::contexts::inline::explicit_bidi_context(base_dir, &stack)
+                    };
+
                     match &para_leaf.leaf.item {
                         InlineItem::Text(text_item) => {
-                            let sliced = slice_text_item(text_item, overlap_start..overlap_end, shaper, font_context)
-                                .unwrap_or_else(|| text_item.clone());
+                            let sliced = slice_text_item(
+                                text_item,
+                                overlap_start..overlap_end,
+                                shaper,
+                                font_context,
+                                base_dir,
+                                bidi_context,
+                            )
+                            .unwrap_or_else(|| text_item.clone());
 
                             Some(BidiLeaf {
                                 item: InlineItem::Text(sliced),
@@ -2005,6 +2024,8 @@ fn slice_text_item(
     range: std::ops::Range<usize>,
     pipeline: &ShapingPipeline,
     font_context: &FontContext,
+    base_direction: Direction,
+    bidi_context: Option<crate::text::pipeline::ExplicitBidiContext>,
 ) -> Option<TextItem> {
     if range.start >= range.end || range.end > item.text.len() {
         return None;
@@ -2071,12 +2092,13 @@ fn slice_text_item(
     }
 
     let slice_text = &item.text[range.clone()];
-    let mut runs = pipeline
-        .shape_with_direction(
+        let mut runs = pipeline
+        .shape_with_context(
             slice_text,
             &item.style,
             font_context,
-            pipeline_dir_from_style(item.base_direction),
+            pipeline_dir_from_style(base_direction),
+            bidi_context,
         )
         .ok()?;
     TextItem::apply_spacing_to_runs(
@@ -2118,10 +2140,6 @@ fn slice_text_item(
     }
 
     Some(new_item)
-}
-
-fn bidi_controls(unicode_bidi: UnicodeBidi, direction: Direction) -> (Vec<char>, Vec<char>) {
-    crate::layout::contexts::inline::bidi_controls(unicode_bidi, direction)
 }
 
 #[derive(Clone)]

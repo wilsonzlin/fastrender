@@ -4749,7 +4749,7 @@ pub(crate) fn bidi_controls(unicode_bidi: UnicodeBidi, direction: Direction) -> 
     }
 }
 
-fn push_embedding_level(level: unicode_bidi::Level, dir: Direction) -> unicode_bidi::Level {
+pub(crate) fn push_embedding_level(level: unicode_bidi::Level, dir: Direction) -> unicode_bidi::Level {
     let mut next = level.number().saturating_add(1);
     if dir == Direction::Rtl && next % 2 == 0 {
         next = next.saturating_add(1);
@@ -4763,7 +4763,7 @@ fn push_embedding_level(level: unicode_bidi::Level, dir: Direction) -> unicode_b
     unicode_bidi::Level::new(next).unwrap_or(level)
 }
 
-fn explicit_bidi_context(
+pub(crate) fn explicit_bidi_context(
     base_direction: Direction,
     stack: &[(UnicodeBidi, Direction)],
 ) -> Option<crate::text::pipeline::ExplicitBidiContext> {
