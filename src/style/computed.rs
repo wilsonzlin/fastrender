@@ -115,6 +115,11 @@ pub struct PositionedStyle {
     /// Initial: 0
     /// Note: Auto margins are handled during layout
     pub margin: EdgeOffsets,
+    /// Whether each margin side was authored as `auto`
+    pub margin_left_auto: bool,
+    pub margin_right_auto: bool,
+    pub margin_top_auto: bool,
+    pub margin_bottom_auto: bool,
 
     /// Padding on all sides
     ///
@@ -493,6 +498,10 @@ impl Default for PositionedStyle {
             min_height: Length::px(0.0),
             max_height: Length::px(f32::INFINITY),
             margin: EdgeOffsets::ZERO,
+            margin_left_auto: false,
+            margin_right_auto: false,
+            margin_top_auto: false,
+            margin_bottom_auto: false,
             padding: EdgeOffsets::ZERO,
             border_width: EdgeOffsets::all(3.0), // medium = 3px
             border_color: BorderColors::all(Color::Rgba(Rgba::BLACK)),

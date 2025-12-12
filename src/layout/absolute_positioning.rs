@@ -296,28 +296,30 @@ impl AbsoluteLayout {
             .resolve_against(cb_width)
             .map(|w| content_size_from_box_sizing(w, total_horizontal_spacing, style.box_sizing));
 
-        // Default margin values
-        let margin_left = style.margin.left;
-        let margin_right = style.margin.right;
+        // Default margin values (auto resolved after constraint solving)
+        let margin_left_auto = style.margin_left_auto;
+        let margin_right_auto = style.margin_right_auto;
+        let mut margin_left = if margin_left_auto { 0.0 } else { style.margin.left };
+        let mut margin_right = if margin_right_auto { 0.0 } else { style.margin.right };
 
-        match (left, specified_width, right) {
+        let (mut x, width) = match (left, specified_width, right) {
             // Case 1: All three specified (overconstrained) - ignore right for LTR
             (Some(l), Some(w), Some(_r)) => {
                 // For LTR, ignore right value
                 let x = l + margin_left + border_left + padding_left;
-                Ok((x, w, margin_left, margin_right))
+                (x, w)
             }
 
             // Case 2: left and width specified, right is auto
             (Some(l), Some(w), None) => {
                 let x = l + margin_left + border_left + padding_left;
-                Ok((x, w, margin_left, margin_right))
+                (x, w)
             }
 
             // Case 3: right and width specified, left is auto
             (None, Some(w), Some(r)) => {
                 let x = cb_width - r - margin_right - border_right - padding_right - w;
-                Ok((x, w, margin_left, margin_right))
+                (x, w)
             }
 
             // Case 4: left and right specified, width is auto (stretch)
@@ -326,34 +328,53 @@ impl AbsoluteLayout {
                 let available = cb_width - l - r - margin_left - margin_right - total_horizontal_spacing;
                 let width = available.max(0.0);
                 let x = l + margin_left + border_left + padding_left;
-                Ok((x, width, margin_left, margin_right))
+                (x, width)
             }
 
             // Case 5: Only left specified
             (Some(l), None, None) => {
                 let x = l + margin_left + border_left + padding_left;
-                Ok((x, intrinsic_width, margin_left, margin_right))
+                (x, intrinsic_width)
             }
 
             // Case 6: Only right specified
             (None, None, Some(r)) => {
                 let x = cb_width - r - margin_right - border_right - padding_right - intrinsic_width;
-                Ok((x, intrinsic_width, margin_left, margin_right))
+                (x, intrinsic_width)
             }
 
             // Case 7: Only width specified - use static position for left
             (None, Some(w), None) => {
                 // Use static position
                 let x = static_x + margin_left + border_left + padding_left;
-                Ok((x, w, margin_left, margin_right))
+                (x, w)
             }
 
             // Case 8: None specified - use static position and intrinsic width
             (None, None, None) => {
                 let x = static_x + margin_left + border_left + padding_left;
-                Ok((x, intrinsic_width, margin_left, margin_right))
+                (x, intrinsic_width)
             }
+        };
+
+        // Apply auto margin resolution after initial positioning (CSS 2.1 §10.3.7).
+        let left_edge = x - (margin_left + border_left + padding_left);
+        let remaining_without_margins =
+            cb_width - (left_edge + border_left + padding_left + width + padding_right + border_right);
+
+        if margin_left_auto && margin_right_auto {
+            let remaining = remaining_without_margins.max(0.0);
+            margin_left = remaining / 2.0;
+            margin_right = remaining - margin_left;
+            x = left_edge + margin_left + border_left + padding_left;
+        } else if margin_left_auto {
+            margin_left = remaining_without_margins - margin_right;
+            x = left_edge + margin_left + border_left + padding_left;
+        } else if margin_right_auto {
+            margin_right = remaining_without_margins - margin_left;
         }
+
+        Ok((x, width, margin_left, margin_right))
     }
 
     /// Computes vertical position, height, and margins
@@ -377,31 +398,33 @@ impl AbsoluteLayout {
         let border_bottom = style.border_width.bottom;
         let total_vertical_spacing = padding_top + padding_bottom + border_top + border_bottom;
 
-        let margin_top = style.margin.top;
-        let margin_bottom = style.margin.bottom;
+        let margin_top_auto = style.margin_top_auto;
+        let margin_bottom_auto = style.margin_bottom_auto;
+        let mut margin_top = if margin_top_auto { 0.0 } else { style.margin.top };
+        let mut margin_bottom = if margin_bottom_auto { 0.0 } else { style.margin.bottom };
 
         let specified_height = style
             .height
             .resolve_against(cb_height)
             .map(|h| content_size_from_box_sizing(h, total_vertical_spacing, style.box_sizing));
 
-        match (top, specified_height, bottom) {
+        let (mut y, height) = match (top, specified_height, bottom) {
             // All three specified (overconstrained) - ignore bottom
             (Some(t), Some(h), Some(_b)) => {
                 let y = t + margin_top + border_top + padding_top;
-                Ok((y, h, margin_top, margin_bottom))
+                (y, h)
             }
 
             // top and height specified
             (Some(t), Some(h), None) => {
                 let y = t + margin_top + border_top + padding_top;
-                Ok((y, h, margin_top, margin_bottom))
+                (y, h)
             }
 
             // bottom and height specified
             (None, Some(h), Some(b)) => {
                 let y = cb_height - b - margin_bottom - border_bottom - padding_bottom - h;
-                Ok((y, h, margin_top, margin_bottom))
+                (y, h)
             }
 
             // top and bottom specified, height is auto (stretch)
@@ -409,33 +432,51 @@ impl AbsoluteLayout {
                 let available = cb_height - t - b - margin_top - margin_bottom - total_vertical_spacing;
                 let height = available.max(0.0);
                 let y = t + margin_top + border_top + padding_top;
-                Ok((y, height, margin_top, margin_bottom))
+                (y, height)
             }
 
             // Only top specified
             (Some(t), None, None) => {
                 let y = t + margin_top + border_top + padding_top;
-                Ok((y, intrinsic_height, margin_top, margin_bottom))
+                (y, intrinsic_height)
             }
 
             // Only bottom specified
             (None, None, Some(b)) => {
                 let y = cb_height - b - margin_bottom - border_bottom - padding_bottom - intrinsic_height;
-                Ok((y, intrinsic_height, margin_top, margin_bottom))
+                (y, intrinsic_height)
             }
 
             // Only height specified - use static position
             (None, Some(h), None) => {
                 let y = static_y + margin_top + border_top + padding_top;
-                Ok((y, h, margin_top, margin_bottom))
+                (y, h)
             }
 
             // None specified - use static position and intrinsic height
             (None, None, None) => {
                 let y = static_y + margin_top + border_top + padding_top;
-                Ok((y, intrinsic_height, margin_top, margin_bottom))
+                (y, intrinsic_height)
             }
+        };
+
+        let top_edge = y - (margin_top + border_top + padding_top);
+        let remaining_without_margins =
+            cb_height - (top_edge + border_top + padding_top + height + padding_bottom + border_bottom);
+
+        if margin_top_auto && margin_bottom_auto {
+            let remaining = remaining_without_margins.max(0.0);
+            margin_top = remaining / 2.0;
+            margin_bottom = remaining - margin_top;
+            y = top_edge + margin_top + border_top + padding_top;
+        } else if margin_top_auto {
+            margin_top = remaining_without_margins - margin_bottom;
+            y = top_edge + margin_top + border_top + padding_top;
+        } else if margin_bottom_auto {
+            margin_bottom = remaining_without_margins - margin_top;
         }
+
+        Ok((y, height, margin_top, margin_bottom))
     }
 
     /// Computes centering for absolutely positioned elements with auto margins
@@ -849,6 +890,53 @@ mod tests {
     }
 
     #[test]
+    fn test_layout_absolute_auto_margins_center_horizontally() {
+        let layout = AbsoluteLayout::new();
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.left = LengthOrAuto::px(50.0);
+        style.right = LengthOrAuto::px(50.0);
+        style.width = LengthOrAuto::px(100.0);
+        style.margin_left_auto = true;
+        style.margin_right_auto = true;
+
+        let input = AbsoluteLayoutInput::new(style, Size::new(0.0, 20.0), Point::ZERO);
+        let cb = create_containing_block(400.0, 200.0);
+
+        let result = layout.layout_absolute(&input, &cb).unwrap();
+        assert!(
+            (result.position.x - 175.0).abs() < 0.001,
+            "expected centered position at x=175, got {}",
+            result.position.x
+        );
+        assert!((result.margins.left - 125.0).abs() < 0.001);
+        assert!((result.margins.right - 125.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_layout_absolute_single_auto_margin_consumes_remaining_space() {
+        let layout = AbsoluteLayout::new();
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.left = LengthOrAuto::px(30.0);
+        style.right = LengthOrAuto::px(40.0);
+        style.width = LengthOrAuto::px(100.0);
+        style.margin.left = 20.0;
+        style.margin_right_auto = true;
+
+        let input = AbsoluteLayoutInput::new(style, Size::new(0.0, 20.0), Point::ZERO);
+        let cb = create_containing_block(400.0, 200.0);
+
+        let result = layout.layout_absolute(&input, &cb).unwrap();
+        assert!(
+            (result.position.x - 50.0).abs() < 0.001,
+            "expected left edge at 50 (30 + 20 margin), got {}",
+            result.position.x
+        );
+        assert!((result.margins.right - 250.0).abs() < 0.001);
+    }
+
+    #[test]
     fn test_layout_absolute_only_left() {
         let layout = AbsoluteLayout::new();
 
@@ -1115,6 +1203,11 @@ pub fn resolve_positioned_style(
     resolved.border_width.right = resolve_len(&style.border_right_width, cb_width);
     resolved.border_width.top = resolve_len(&style.border_top_width, cb_width);
     resolved.border_width.bottom = resolve_len(&style.border_bottom_width, cb_width);
+
+    resolved.margin_left_auto = style.margin_left.is_none();
+    resolved.margin_right_auto = style.margin_right.is_none();
+    resolved.margin_top_auto = style.margin_top.is_none();
+    resolved.margin_bottom_auto = style.margin_bottom.is_none();
 
     resolved.margin.left = style
         .margin_left
