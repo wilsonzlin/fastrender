@@ -3620,7 +3620,9 @@ impl FormattingContext for TableFormattingContext {
             }
         }
 
-        let content_width: f32 = if structure.border_collapse == BorderCollapse::Collapse {
+        let content_width: f32 = if col_widths.is_empty() {
+            available_content
+        } else if structure.border_collapse == BorderCollapse::Collapse {
             col_widths.iter().sum::<f32>() + vertical_line_max.iter().copied().sum::<f32>()
         } else {
             col_widths.iter().sum::<f32>() + spacing
@@ -6648,6 +6650,31 @@ mod tests {
             .expect("intrinsic width");
 
         assert!(min >= 119.0, "table intrinsic width should be at least the caption min width");
+    }
+
+    #[test]
+    fn caption_only_table_expands_to_caption_width() {
+        let mut caption_style = ComputedStyle::default();
+        caption_style.display = Display::TableCaption;
+        caption_style.width = Some(Length::px(180.0));
+        let caption = BoxNode::new_block(
+            Arc::new(caption_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(make_style(Display::Inline), "caption".to_string())],
+        );
+
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![caption]);
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(&table, &LayoutConstraints::definite_width(50.0))
+            .expect("table layout");
+
+        assert!(fragment.bounds.width() >= 179.0, "caption-only table should size to the caption");
     }
 
     #[test]
