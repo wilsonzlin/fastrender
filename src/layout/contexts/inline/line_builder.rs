@@ -1911,8 +1911,46 @@ fn reorder_paragraph(
             continue;
         }
 
-        let levels_slice = &paragraph_levels[line_range.clone()];
-        let index_map = unicode_bidi::BidiInfo::reorder_visual(levels_slice);
+        // Build atoms so isolate groups participate as single units in visual reordering.
+        #[derive(Clone, Copy)]
+        struct Atom {
+            start: usize,
+            end: usize,
+            level: Level,
+            group: Option<usize>,
+        }
+
+        let mut atoms = Vec::new();
+        let mut idx = line_range.start;
+        while idx < line_range.end {
+            let mapping = &byte_map[idx];
+            if let Some(group) = mapping.isolate_group {
+                let group_level = paragraph_levels[idx];
+                let start = idx;
+                let mut end = idx + 1;
+                while end < line_range.end && byte_map[end].isolate_group == Some(group) {
+                    end += 1;
+                }
+                atoms.push(Atom {
+                    start,
+                    end,
+                    level: group_level,
+                    group: Some(group),
+                });
+                idx = end;
+            } else {
+                atoms.push(Atom {
+                    start: idx,
+                    end: idx + 1,
+                    level: paragraph_levels[idx],
+                    group: None,
+                });
+                idx += 1;
+            }
+        }
+
+        let atom_levels: Vec<Level> = atoms.iter().map(|a| a.level).collect();
+        let atom_order = unicode_bidi::BidiInfo::reorder_visual(&atom_levels);
 
         let mut segments: Vec<VisualSegment> = Vec::new();
         let push_segment = |mapping: &ByteMapping, level: Level, segments: &mut Vec<VisualSegment>| {
@@ -1932,75 +1970,70 @@ fn reorder_paragraph(
             });
         };
 
-        let mut map_iter = index_map.into_iter().peekable();
-        while let Some(visual) = map_iter.next() {
-            let global_idx = line_range.start + visual;
-            let mapping = &byte_map[global_idx];
-            let level = paragraph_levels[global_idx];
-
-            if let Some(group) = mapping.isolate_group {
-                let mut grouped: Vec<(usize, Level, &ByteMapping)> = vec![(global_idx, level, mapping)];
-                while let Some(&next) = map_iter.peek() {
-                    let next_global = line_range.start + next;
-                    if byte_map[next_global].isolate_group == Some(group) {
-                        map_iter.next();
-                        grouped.push((next_global, paragraph_levels[next_global], &byte_map[next_global]));
-                    } else {
-                        break;
-                    }
-                }
-
-                grouped.sort_by_key(|(idx, _, _)| *idx);
-                let isolate_text: String = grouped
-                    .iter()
-                    .map(|(idx, _, _)| paragraph_chars.get(*idx).copied().unwrap_or('\u{FFFD}'))
-                    .collect();
-                let (_isolate_levels, reorder): (Vec<Level>, Vec<usize>) = if let Some(ctx) = paragraph_leaves
-                    .get(mapping.leaf_index)
-                    .and_then(|p| p.bidi_context)
-                {
-                    if ctx.override_all {
-                        let levels = vec![ctx.level; grouped.len()];
-                        let reorder = if ctx.level.is_rtl() {
-                            (0..grouped.len()).rev().collect()
+        for atom_idx in atom_order {
+            if let Some(atom) = atoms.get(atom_idx) {
+                if atom.group.is_some() {
+                    let slice = &byte_map[atom.start..atom.end];
+                    let isolate_text: String = slice
+                        .iter()
+                        .map(|m| paragraph_chars.get(m.start).copied().unwrap_or('\u{FFFD}'))
+                        .collect();
+                    let (levels, reorder): (Vec<Level>, Vec<usize>) = if let Some(ctx) = paragraph_leaves
+                        .get(slice.first().map(|m| m.leaf_index).unwrap_or(0))
+                        .and_then(|p| p.bidi_context)
+                    {
+                        if ctx.override_all {
+                            let levels = vec![ctx.level; slice.len()];
+                            let reorder = if ctx.level.is_rtl() {
+                                (0..slice.len()).rev().collect()
+                            } else {
+                                (0..slice.len()).collect()
+                            };
+                            (levels, reorder)
                         } else {
-                            (0..grouped.len()).collect()
-                        };
-                        (levels, reorder)
+                            let levels: Vec<Level> = unicode_bidi::BidiInfo::new(&isolate_text, Some(ctx.level))
+                                .levels
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(byte_idx, lvl)| {
+                                    // levels indexed by byte; take the start of each char
+                                    if isolate_text.is_char_boundary(byte_idx) {
+                                        Some(*lvl)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            let reorder = if levels.is_empty() {
+                                (0..slice.len()).collect()
+                            } else {
+                                unicode_bidi::BidiInfo::reorder_visual(&levels)
+                            };
+                            (levels, reorder)
+                        }
                     } else {
-                        let levels: Vec<Level> = unicode_bidi::BidiInfo::new(&isolate_text, Some(ctx.level))
-                            .levels
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(byte_idx, lvl)| {
-                                // levels indexed by byte; take the start of each char
-                                if isolate_text.is_char_boundary(byte_idx) {
-                                    Some(*lvl)
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
-                        let reorder = if levels.is_empty() {
-                            (0..grouped.len()).collect()
-                        } else {
-                            unicode_bidi::BidiInfo::reorder_visual(&levels)
-                        };
-                        (levels, reorder)
+                        (
+                            (0..slice.len()).map(|_| paragraph_level).collect(),
+                            (0..slice.len()).collect(),
+                        )
+                    };
+
+                    for visual_pos in reorder {
+                        if let Some(map_ref) = slice.get(visual_pos) {
+                            let lvl = levels
+                                .get(visual_pos)
+                                .copied()
+                                .unwrap_or_else(|| paragraph_levels[atom.start]);
+                            push_segment(map_ref, lvl, &mut segments);
+                        }
                     }
                 } else {
-                    ((0..grouped.len()).map(|_| paragraph_level).collect(), (0..grouped.len()).collect())
-                };
-
-                for visual_pos in reorder {
-                    if let Some((_, lvl, map_ref)) = grouped.get(visual_pos) {
-                        push_segment(*map_ref, *lvl, &mut segments);
+                    if let Some(mapping) = byte_map.get(atom.start) {
+                        let level = paragraph_levels[atom.start];
+                        push_segment(mapping, level, &mut segments);
                     }
                 }
-                continue;
             }
-
-            push_segment(mapping, level, &mut segments);
         }
 
         let mut visual_fragments: Vec<BidiLeaf> = Vec::new();
@@ -2039,8 +2072,26 @@ fn reorder_paragraph(
             }
         }
 
+        fn coalesce_inline_boxes(items: Vec<PositionedItem>) -> Vec<PositionedItem> {
+            let mut out: Vec<PositionedItem> = Vec::new();
+            for item in items {
+                if let Some(last) = out.last_mut() {
+                    if let (InlineItem::InlineBox(prev), InlineItem::InlineBox(mut curr)) =
+                        (&mut last.item, item.item.clone())
+                    {
+                        if prev.box_index == curr.box_index {
+                            prev.children.append(&mut curr.children);
+                            prev.end_edge = curr.end_edge;
+                            continue;
+                        }
+                    }
+                }
+                out.push(item);
+            }
+            out
+        }
+
         let mut reordered: Vec<PositionedItem> = Vec::new();
-        let mut x = 0.0;
         for (vis_pos, frag) in visual_fragments.into_iter().enumerate() {
             let mut item = frag.item;
 
@@ -2066,11 +2117,17 @@ fn reorder_paragraph(
 
             let positioned = PositionedItem {
                 item,
-                x,
+                x: 0.0,
                 baseline_offset: frag.baseline_offset,
             };
-            x += positioned.item.width();
             reordered.push(positioned);
+        }
+
+        let mut reordered = coalesce_inline_boxes(reordered);
+        let mut x = 0.0;
+        for positioned in &mut reordered {
+            positioned.x = x;
+            x += positioned.item.width();
         }
 
         let width: f32 = reordered.iter().map(|p| p.item.width()).sum();
@@ -2694,7 +2751,7 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(texts, vec!["ABC ".to_string(), "אבג".to_string(), " DEF".to_string()]);
+        assert_eq!(texts, vec!["ABC ".to_string(), "גאב".to_string(), " DEF".to_string()]);
     }
 
     #[test]
@@ -2740,10 +2797,7 @@ mod tests {
 
         // Children stay adjacent and isolate prevents surrounding runs from interleaving; RTL order places the later
         // child earlier in visual order.
-        assert_eq!(
-            texts,
-            vec!["L ".to_string(), "ג".to_string(), "אב".to_string(), " R".to_string()]
-        );
+        assert_eq!(texts, vec!["L ".to_string(), "גבא".to_string(), " R".to_string()]);
     }
 
     #[test]
@@ -2789,10 +2843,7 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(
-            texts,
-            vec!["A ".to_string(), "c".to_string(), "b".to_string(), "a".to_string(), " C".to_string()]
-        );
+        assert_eq!(texts, vec!["A ".to_string(), "cba".to_string(), " C".to_string()]);
     }
 
     #[test]
@@ -2999,10 +3050,7 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(
-            texts,
-            vec!["L ".to_string(), "א".to_string(), "מ".to_string(), " R".to_string()]
-        );
+        assert_eq!(texts, vec!["L ".to_string(), "אמ".to_string(), " R".to_string()]);
     }
 
     #[test]
@@ -3092,6 +3140,79 @@ mod tests {
             })
             .collect();
         assert_eq!(para2, vec!["אבג".to_string(), " ".to_string(), "abc".to_string()]);
+    }
+
+    #[test]
+    fn bidi_nested_isolate_override_reorders_only_inner_scope() {
+        // Outer isolate keeps its children grouped; the inner isolate-override reverses its content.
+        let mut builder = make_builder(200.0);
+
+        builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
+
+        let mut inner = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            1,
+            Direction::Rtl,
+            UnicodeBidi::IsolateOverride,
+        );
+        inner.add_child(InlineItem::Text(make_text_item("x", 10.0)));
+        inner.add_child(InlineItem::Text(make_text_item("y", 10.0)));
+
+        let mut outer = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            0,
+            Direction::Rtl,
+            UnicodeBidi::Isolate,
+        );
+        outer.add_child(InlineItem::Text(make_text_item("a", 10.0)));
+        outer.add_child(InlineItem::InlineBox(inner));
+        outer.add_child(InlineItem::Text(make_text_item("b", 10.0)));
+
+        builder.add_item(InlineItem::InlineBox(outer));
+        builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 1);
+
+        let texts: Vec<String> = lines[0]
+            .items
+            .iter()
+            .map(|p| match &p.item {
+                InlineItem::Text(t) => t.text.clone(),
+                InlineItem::InlineBox(b) => b
+                    .children
+                    .iter()
+                    .filter_map(|c| match c {
+                        InlineItem::Text(t) => Some(t.text.clone()),
+                        InlineItem::InlineBox(inner) => Some(
+                            inner
+                                .children
+                                .iter()
+                                .filter_map(|c| match c {
+                                    InlineItem::Text(t) => Some(t.text.clone()),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>()
+                                .join(""),
+                        ),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(""),
+                _ => String::new(),
+            })
+            .collect();
+
+        // Outer isolate stays a single unit; inner override reverses its content (yx).
+        assert_eq!(texts, vec!["L ".to_string(), "byxa".to_string(), " R".to_string()]);
     }
 
     fn nested_inline_box_with_depth(
@@ -3219,7 +3340,7 @@ mod tests {
     #[test]
     fn bidi_isolate_resolves_neutrals_across_children() {
         // Single isolate should resolve neutrals using surrounding strong types inside the isolate.
-        let expected = "A אבX Z".to_string();
+        let expected = "A Xאב Z".to_string();
 
         let mut builder = make_builder(200.0);
         builder.add_item(InlineItem::Text(make_text_item("A ", 20.0)));
