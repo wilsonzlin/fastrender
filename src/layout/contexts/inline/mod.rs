@@ -3819,10 +3819,7 @@ impl InlineFormattingContext {
         float_base_y: f32,
     ) -> Result<FragmentNode, LayoutError> {
         let style = &box_node.style;
-        let inline_vertical = matches!(
-            style.writing_mode,
-            crate::style::types::WritingMode::VerticalRl | crate::style::types::WritingMode::VerticalLr
-        );
+        let inline_vertical = is_vertical_writing_mode(style.writing_mode);
         let available_inline = if inline_vertical {
             constraints.height().unwrap_or(f32::MAX)
         } else {
@@ -4557,7 +4554,10 @@ fn resolve_text_align_for_line(
 }
 
 fn is_vertical_writing_mode(mode: WritingMode) -> bool {
-    matches!(mode, WritingMode::VerticalRl | WritingMode::VerticalLr)
+    matches!(
+        mode,
+        WritingMode::VerticalRl | WritingMode::VerticalLr | WritingMode::SidewaysRl | WritingMode::SidewaysLr
+    )
 }
 
 fn can_combine_for_mode(ch: char, mode: TextCombineUpright) -> bool {
@@ -5238,6 +5238,38 @@ mod tests {
     }
 
     #[test]
+    fn marker_outside_positions_inline_start_in_sideways_rl() {
+        let ifc = InlineFormattingContext::new();
+        let mut root_style = ComputedStyle::default();
+        root_style.writing_mode = WritingMode::SidewaysRl;
+        let root_style = Arc::new(root_style);
+
+        let mut marker_style = (*root_style).clone();
+        marker_style.list_style_position = ListStylePosition::Outside;
+        let marker_style = Arc::new(marker_style);
+
+        let text_style = Arc::new((*root_style).clone());
+
+        let marker = BoxNode::new_marker(marker_style, MarkerContent::Text("•".to_string()));
+        let text = BoxNode::new_text(text_style, "content".to_string());
+        let root = BoxNode::new_block(root_style, FormattingContextType::Block, vec![marker, text]);
+        let constraints = LayoutConstraints::definite(200.0, 200.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let line = fragment.children.first().expect("line fragment");
+        let (marker_y, text_y) = marker_and_text_positions_vertical(line);
+
+        let marker_y = marker_y.expect("marker y");
+        let text_y = text_y.expect("text y");
+        assert!(
+            marker_y < text_y,
+            "marker should sit at inline-start (top) in sideways-rl; marker_y={}, text_y={}",
+            marker_y,
+            text_y
+        );
+    }
+
+    #[test]
     fn marker_outside_positions_inline_start_in_vertical_lr() {
         let ifc = InlineFormattingContext::new();
         let mut root_style = ComputedStyle::default();
@@ -5297,6 +5329,39 @@ mod tests {
         assert!(
             marker_y > text_y,
             "rtl inline-start should map to inline-end (bottom) in vertical-rl; marker_y={}, text_y={}",
+            marker_y,
+            text_y
+        );
+    }
+
+    #[test]
+    fn marker_outside_positions_inline_start_in_sideways_rl_rtl_direction() {
+        let ifc = InlineFormattingContext::new();
+        let mut root_style = ComputedStyle::default();
+        root_style.writing_mode = WritingMode::SidewaysRl;
+        root_style.direction = crate::style::types::Direction::Rtl;
+        let root_style = Arc::new(root_style);
+
+        let mut marker_style = (*root_style).clone();
+        marker_style.list_style_position = ListStylePosition::Outside;
+        let marker_style = Arc::new(marker_style);
+
+        let text_style = Arc::new((*root_style).clone());
+
+        let marker = BoxNode::new_marker(marker_style, MarkerContent::Text("•".to_string()));
+        let text = BoxNode::new_text(text_style, "content".to_string());
+        let root = BoxNode::new_block(root_style, FormattingContextType::Block, vec![marker, text]);
+        let constraints = LayoutConstraints::definite(200.0, 200.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let line = fragment.children.first().expect("line fragment");
+        let (marker_y, text_y) = marker_and_text_positions_vertical(line);
+
+        let marker_y = marker_y.expect("marker y");
+        let text_y = text_y.expect("text y");
+        assert!(
+            marker_y > text_y,
+            "rtl inline-start should map to inline-end (bottom) in sideways-rl; marker_y={}, text_y={}",
             marker_y,
             text_y
         );

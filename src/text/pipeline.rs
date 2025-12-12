@@ -1083,7 +1083,10 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
 fn is_vertical_writing_mode(mode: crate::style::types::WritingMode) -> bool {
     matches!(
         mode,
-        crate::style::types::WritingMode::VerticalRl | crate::style::types::WritingMode::VerticalLr
+        crate::style::types::WritingMode::VerticalRl
+            | crate::style::types::WritingMode::VerticalLr
+            | crate::style::types::WritingMode::SidewaysRl
+            | crate::style::types::WritingMode::SidewaysLr
     )
 }
 
