@@ -447,9 +447,11 @@ impl TableStructureFixer {
             .iter()
             .filter(|c| Self::is_table_cell(c))
             .map(|_cell| {
-                // TODO: Get colspan from cell style when table layout properties are added
-                // For now, assume colspan=1
-                1
+                _cell
+                    .debug_info
+                    .as_ref()
+                    .map(|info| info.colspan.max(1))
+                    .unwrap_or(1)
             })
             .sum()
     }
@@ -535,6 +537,7 @@ impl TableStructureFixer {
 mod tests {
     use super::*;
     use crate::tree::box_tree::BlockBox;
+    use crate::tree::debug::DebugInfo;
 
     // Helper to create a default style
     fn default_style() -> Arc<ComputedStyle> {
@@ -877,6 +880,16 @@ mod tests {
 
         let count = TableStructureFixer::count_columns(&row);
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_column_count_accounts_for_colspan() {
+        let mut spanning = cell_box(vec![]);
+        spanning.debug_info = Some(DebugInfo::new(None, None, vec![]).with_spans(3, 1));
+        let row = row_box(vec![spanning, cell_box(vec![])]);
+
+        let count = TableStructureFixer::count_columns(&row);
+        assert_eq!(count, 4);
     }
 
     // ==================== Validation Tests ====================
