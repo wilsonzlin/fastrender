@@ -331,6 +331,29 @@ fn saturation_blend_mode_uses_source_saturation() {
 }
 
 #[test]
+fn plus_lighter_blend_adds_colors() {
+    use fastrender::paint::display_list::{BlendMode, BlendModeItem};
+
+    let renderer = DisplayListRenderer::new(2, 2, Rgba::WHITE, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+        color: Rgba::from_rgba8(100, 100, 100, 255),
+    }));
+    list.push(DisplayItem::PushBlendMode(BlendModeItem {
+        mode: BlendMode::PlusLighter,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+        color: Rgba::from_rgba8(200, 0, 0, 255),
+    }));
+    list.push(DisplayItem::PopBlendMode);
+
+    let pixmap = renderer.render(&list).unwrap();
+    assert_eq!(pixel(&pixmap, 0, 0), (255, 100, 100, 255));
+}
+
+#[test]
 fn renderer_respects_device_scale() {
     let mut list = DisplayList::new();
     list.push(DisplayItem::FillRect(FillRectItem {
