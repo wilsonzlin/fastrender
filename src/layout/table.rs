@@ -3134,9 +3134,15 @@ impl FormattingContext for TableFormattingContext {
                     fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent).ok();
                 let preferred_inline =
                     fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent).ok();
+                let preferred_min_block =
+                    fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent).ok();
+                let preferred_block =
+                    fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent).ok();
                 let mut input = AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, cb.rect.origin);
                 input.preferred_min_inline_size = preferred_min_inline;
                 input.preferred_inline_size = preferred_inline;
+                input.preferred_min_block_size = preferred_min_block;
+                input.preferred_block_size = preferred_block;
                 let result = abs.layout_absolute(&input, &cb)?;
                 child_fragment.bounds = Rect::new(result.position, result.size);
                 fragment.children.push(child_fragment);

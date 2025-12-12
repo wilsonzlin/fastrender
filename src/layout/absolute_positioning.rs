@@ -120,6 +120,10 @@ pub struct AbsoluteLayoutInput {
     pub preferred_min_inline_size: Option<f32>,
     /// Preferred inline size (max-content), in CSS pixels (content box).
     pub preferred_inline_size: Option<f32>,
+    /// Preferred minimum block size (min-content), in CSS pixels (content box).
+    pub preferred_min_block_size: Option<f32>,
+    /// Preferred block size (max-content), in CSS pixels (content box).
+    pub preferred_block_size: Option<f32>,
     /// The intrinsic size (used when width/height are auto)
     pub intrinsic_size: Size,
     /// The static position (where element would be in normal flow)
@@ -133,6 +137,8 @@ impl AbsoluteLayoutInput {
             style,
             preferred_min_inline_size: None,
             preferred_inline_size: None,
+            preferred_min_block_size: None,
+            preferred_block_size: None,
             intrinsic_size,
             static_position,
         }
@@ -226,6 +232,8 @@ impl AbsoluteLayout {
             style,
             cb_height,
             viewport,
+            input.preferred_min_block_size,
+            input.preferred_block_size,
             input.intrinsic_size.height,
             input.static_position.y,
         )?;
@@ -427,6 +435,8 @@ impl AbsoluteLayout {
         style: &PositionedStyle,
         cb_height: f32,
         viewport: Size,
+        preferred_min_block_size: Option<f32>,
+        preferred_block_size: Option<f32>,
         intrinsic_height: f32,
         static_y: f32,
     ) -> Result<(f32, f32, f32, f32), LayoutError> {
@@ -454,6 +464,14 @@ impl AbsoluteLayout {
         let max_height =
             content_size_from_box_sizing(style.max_height.to_px(), total_vertical_spacing, style.box_sizing);
 
+        // Compute shrink-to-fit candidates for auto height.
+        let preferred_min = preferred_min_block_size.unwrap_or(intrinsic_height);
+        let preferred = preferred_block_size.unwrap_or(preferred_min);
+        let shrink = |available: f32| -> f32 {
+            let available = available.max(0.0);
+            preferred.min(available.max(preferred_min))
+        };
+
         let (mut y, mut height) = match (top, specified_height, bottom) {
             // All three specified (overconstrained) - ignore bottom
             (Some(t), Some(h), Some(_b)) => {
@@ -475,21 +493,26 @@ impl AbsoluteLayout {
 
             // top and bottom specified, height is auto (shrink-to-fit)
             (Some(t), None, Some(b)) => {
-                let height = (cb_height - t - b - margin_top - margin_bottom - total_vertical_spacing).max(0.0);
+                let available = cb_height - t - b - margin_top - margin_bottom - total_vertical_spacing;
+                let height = shrink(available);
                 let y = t + margin_top + border_top + padding_top;
                 (y, height)
             }
 
-            // Only top specified
+            // Only top specified - shrink-to-fit
             (Some(t), None, None) => {
+                let available = cb_height - t - margin_top - margin_bottom - total_vertical_spacing;
+                let height = shrink(available);
                 let y = t + margin_top + border_top + padding_top;
-                (y, intrinsic_height)
+                (y, height)
             }
 
-            // Only bottom specified
+            // Only bottom specified - shrink-to-fit
             (None, None, Some(b)) => {
-                let y = cb_height - b - margin_bottom - border_bottom - padding_bottom - intrinsic_height;
-                (y, intrinsic_height)
+                let available = cb_height - b - margin_top - margin_bottom - total_vertical_spacing;
+                let height = shrink(available);
+                let y = cb_height - b - margin_bottom - border_bottom - padding_bottom - height;
+                (y, height)
             }
 
             // Only height specified - use static position
@@ -498,10 +521,12 @@ impl AbsoluteLayout {
                 (y, h)
             }
 
-            // None specified - use static position and intrinsic height
+            // None specified - shrink against containing height
             (None, None, None) => {
+                let available = cb_height - margin_top - margin_bottom - total_vertical_spacing;
+                let height = shrink(available);
                 let y = static_y + margin_top + border_top + padding_top;
-                (y, intrinsic_height)
+                (y, height)
             }
         };
 
@@ -743,9 +768,11 @@ mod tests {
         style.position = Position::Absolute;
         style.top = LengthOrAuto::px(25.0);
         style.bottom = LengthOrAuto::px(25.0);
-        // height auto - should fill the remaining space between top/bottom
+        // height auto - should fill the remaining space between top/bottom (preferred block sizes unused without auto)
 
-        let input = AbsoluteLayoutInput::new(style, Size::new(100.0, 100.0), Point::ZERO);
+        let mut input = AbsoluteLayoutInput::new(style, Size::new(100.0, 100.0), Point::ZERO);
+        input.preferred_min_block_size = Some(80.0);
+        input.preferred_block_size = Some(300.0);
         let cb = create_containing_block(400.0, 300.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -1041,7 +1068,9 @@ mod tests {
         style.top = LengthOrAuto::px(10.0);
         style.bottom = LengthOrAuto::px(20.0);
         style.height = LengthOrAuto::Auto;
-        let input = AbsoluteLayoutInput::new(style, Size::new(80.0, 120.0), Point::ZERO);
+        let mut input = AbsoluteLayoutInput::new(style, Size::new(80.0, 120.0), Point::ZERO);
+        input.preferred_min_block_size = Some(50.0);
+        input.preferred_block_size = Some(200.0);
         let cb = create_containing_block(300.0, 200.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();

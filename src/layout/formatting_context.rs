@@ -187,6 +187,15 @@ pub trait FormattingContext: Send + Sync {
     /// This method may be called multiple times during layout (e.g., for table
     /// column sizing). Implementations should consider caching if expensive.
     fn compute_intrinsic_inline_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError>;
+
+    /// Computes intrinsic size for a box in the block axis
+    ///
+    /// Used for shrink-to-fit resolution of absolutely positioned height when
+    /// both vertical insets are specified, mirroring the inline shrink path.
+    fn compute_intrinsic_block_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
+        // Default to inline size for contexts that have symmetric handling.
+        self.compute_intrinsic_inline_size(box_node, mode)
+    }
 }
 
 /// Layout errors
