@@ -233,10 +233,16 @@ impl FontContext {
         stretch: FontStretch,
     ) -> Option<LoadedFont> {
         let font_weight = FontWeight::new(weight);
+        let stretches = crate::text::pipeline::stretch_preference_order(stretch.into());
         for slope in crate::text::pipeline::slope_preference_order(style) {
-            if let Some(id) = self.db.resolve_family_list_full(families, font_weight, *slope, stretch) {
-                if let Some(font) = self.db.load_font(id) {
-                    return Some(font);
+            for stretch_choice in &stretches {
+                if let Some(id) = self
+                    .db
+                    .resolve_family_list_full(families, font_weight, *slope, *stretch_choice)
+                {
+                    if let Some(font) = self.db.load_font(id) {
+                        return Some(font);
+                    }
                 }
             }
         }
