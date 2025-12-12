@@ -1641,7 +1641,8 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
             .iter()
             .map(|c| c.width)
             .fold(0.0f32, |acc, w| if w > acc { w } else { acc });
-        non_none.retain(|c| (c.width - max_width).abs() < 0.01);
+        let width_epsilon = 1e-6f32;
+        non_none.retain(|c| (c.width - max_width).abs() <= width_epsilon);
 
         let best_style = non_none.iter().map(|c| style_rank(c.style)).max().unwrap_or(0);
         non_none.retain(|c| style_rank(c.style) == best_style);
@@ -5076,6 +5077,46 @@ mod tests {
         assert_eq!(horizontal_border.style, BorderStyle::Solid);
         assert!((horizontal_border.width - 4.0).abs() < f32::EPSILON);
         assert_eq!(horizontal_border.color, Rgba::from_rgba8(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn collapsed_borders_prefer_wider_even_if_style_lower() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_collapse = BorderCollapse::Collapse;
+
+        let mut left_cell_style = ComputedStyle::default();
+        left_cell_style.display = Display::TableCell;
+        left_cell_style.border_right_style = BorderStyle::Double; // higher style rank but slightly thinner
+        left_cell_style.border_right_width = Length::px(3.0);
+        left_cell_style.border_right_color = Rgba::from_rgba8(255, 0, 0, 255);
+
+        let mut right_cell_style = ComputedStyle::default();
+        right_cell_style.display = Display::TableCell;
+        right_cell_style.border_left_style = BorderStyle::Solid; // lower style rank but wider
+        right_cell_style.border_left_width = Length::px(3.005);
+        right_cell_style.border_left_color = Rgba::from_rgba8(0, 0, 255, 255);
+
+        let left = BoxNode::new_block(Arc::new(left_cell_style), FormattingContextType::Block, vec![]);
+        let right = BoxNode::new_block(Arc::new(right_cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(
+            Arc::new(ComputedStyle {
+                display: Display::TableRow,
+                ..ComputedStyle::default()
+            }),
+            FormattingContextType::Block,
+            vec![left, right],
+        );
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        let borders = compute_collapsed_borders(&table, &structure);
+
+        let middle_border = &borders.vertical[1][0];
+        // The wider solid border should win despite the lower style precedence.
+        assert_eq!(middle_border.style, BorderStyle::Solid);
+        assert!((middle_border.width - 3.005).abs() < 0.0001);
+        assert_eq!(middle_border.color, Rgba::from_rgba8(0, 0, 255, 255));
     }
 
     #[test]
