@@ -622,7 +622,6 @@
 - Justification lacks script-aware expansion (kashida/justification alternates, punctuation stretching) and `text-justify` is still approximated (auto treated as inter-word; no trim/edge handling).
 - `text-align-last` currently maps start/end via direction; nuanced interaction with `text-justify` and additional values still pending.
 - `text-indent` hanging/each-line semantics are approximate; indentation doesn’t yet handle hanging outdents per spec nuances.
-- Text emphasis sesame/double-circle orientation remains simplistic in vertical flows; confirm against spec for rotated shapes.
 - Max-content sizing now honors mandatory breaks but still ignores anonymous inline box generation and percent-driven height constraints.
 - Table layout still partial: row/col spans not fully honored (rowspan baselines, percent/fixed widths still simplified vs CSS 2.1), colspan distribution still heuristic.
 - Non-image replaced content (iframe/video/etc.) remains unrendered; need full replaced-element handling beyond images/SVG.
