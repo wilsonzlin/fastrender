@@ -1290,10 +1290,12 @@ impl Painter {
                 };
 
                 let orientation = style.image_orientation.resolve(image.orientation, true);
-                let (img_w, img_h) = image.oriented_dimensions(orientation);
-                let img_w = img_w as f32;
-                let img_h = img_h as f32;
-                if img_w <= 0.0 || img_h <= 0.0 {
+                let (img_w_raw, img_h_raw) = image.oriented_dimensions(orientation);
+                let Some((img_w, img_h)) = image.css_dimensions(orientation, &style.image_resolution, self.scale, None)
+                else {
+                    return;
+                };
+                if img_w <= 0.0 || img_h <= 0.0 || img_w_raw == 0 || img_h_raw == 0 {
                     return;
                 }
 
@@ -2342,6 +2344,7 @@ impl Painter {
             }
         };
 
+        let image_resolution = style.map(|s| s.image_resolution).unwrap_or_default();
         let orientation = style
             .map(|s| s.image_orientation.resolve(image.orientation, false))
             .unwrap_or_else(|| ImageOrientation::default().resolve(image.orientation, false));
@@ -2349,8 +2352,10 @@ impl Painter {
         if img_w_raw == 0 || img_h_raw == 0 {
             return false;
         }
-        let img_w = img_w_raw as f32;
-        let img_h = img_h_raw as f32;
+        let Some((img_w_css, img_h_css)) = image.css_dimensions(orientation, &image_resolution, self.scale, None)
+        else {
+            return false;
+        };
 
         let pixmap = match Self::dynamic_image_to_pixmap(&image, orientation) {
             Some(pixmap) => pixmap,
@@ -2364,8 +2369,8 @@ impl Painter {
             pos,
             width,
             height,
-            img_w,
-            img_h,
+            img_w_css,
+            img_h_css,
             style.map(|s| s.font_size).unwrap_or(16.0),
             Some((self.css_width, self.css_height)),
         ) {
@@ -2378,8 +2383,8 @@ impl Painter {
         let dest_w = self.device_length(dest_w);
         let dest_h = self.device_length(dest_h);
 
-        let scale_x = dest_w / img_w;
-        let scale_y = dest_h / img_h;
+        let scale_x = dest_w / img_w_raw as f32;
+        let scale_y = dest_h / img_h_raw as f32;
         if !scale_x.is_finite() || !scale_y.is_finite() {
             return false;
         }
@@ -2424,6 +2429,7 @@ impl Painter {
             }
         };
 
+        let image_resolution = style.map(|s| s.image_resolution).unwrap_or_default();
         let orientation = style
             .map(|s| s.image_orientation.resolve(image.orientation, false))
             .unwrap_or_else(|| ImageOrientation::default().resolve(image.orientation, false));
@@ -2431,8 +2437,10 @@ impl Painter {
         if img_w_raw == 0 || img_h_raw == 0 {
             return false;
         }
-        let img_w = img_w_raw as f32;
-        let img_h = img_h_raw as f32;
+        let Some((img_w_css, img_h_css)) = image.css_dimensions(orientation, &image_resolution, self.scale, None)
+        else {
+            return false;
+        };
 
         let pixmap = match Self::dynamic_image_to_pixmap(&image, orientation) {
             Some(pixmap) => pixmap,
@@ -2446,8 +2454,8 @@ impl Painter {
             pos,
             width,
             height,
-            img_w,
-            img_h,
+            img_w_css,
+            img_h_css,
             style.map(|s| s.font_size).unwrap_or(16.0),
             Some((self.css_width, self.css_height)),
         ) {
@@ -2460,8 +2468,8 @@ impl Painter {
         let dest_w = self.device_length(dest_w);
         let dest_h = self.device_length(dest_h);
 
-        let scale_x = dest_w / img_w;
-        let scale_y = dest_h / img_h;
+        let scale_x = dest_w / img_w_raw as f32;
+        let scale_y = dest_h / img_h_raw as f32;
         if !scale_x.is_finite() || !scale_y.is_finite() {
             return false;
         }

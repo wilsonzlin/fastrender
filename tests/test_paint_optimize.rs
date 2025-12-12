@@ -54,7 +54,7 @@ fn make_image(x: f32, y: f32, w: f32, h: f32) -> DisplayItem {
     let pixels = vec![255u8; 4]; // 1x1 pixel
     DisplayItem::Image(ImageItem {
         dest_rect: Rect::from_xywh(x, y, w, h),
-        image: Arc::new(ImageData::new(1, 1, pixels)),
+        image: Arc::new(ImageData::new_pixels(1, 1, pixels)),
         filter_quality: ImageFilterQuality::Linear,
         src_rect: None,
     })

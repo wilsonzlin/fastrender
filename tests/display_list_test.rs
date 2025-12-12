@@ -517,7 +517,7 @@ fn test_image_item() {
     let mut list = DisplayList::new();
 
     let pixels = vec![255u8; 32 * 32 * 4]; // 32x32 RGBA image
-    let image_data = Arc::new(ImageData::new(32, 32, pixels));
+    let image_data = Arc::new(ImageData::new_pixels(32, 32, pixels));
 
     list.push(DisplayItem::Image(ImageItem {
         dest_rect: Rect::from_xywh(10.0, 10.0, 64.0, 64.0),
@@ -539,7 +539,7 @@ fn test_image_item() {
 #[test]
 fn test_image_with_src_rect() {
     let pixels = vec![0u8; 100 * 100 * 4];
-    let image_data = Arc::new(ImageData::new(100, 100, pixels));
+    let image_data = Arc::new(ImageData::new_pixels(100, 100, pixels));
 
     let item = ImageItem {
         dest_rect: Rect::from_xywh(0.0, 0.0, 50.0, 50.0),

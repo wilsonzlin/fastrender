@@ -796,9 +796,14 @@ impl DisplayListRenderer {
             crate::paint::display_list::GradientSpread::Reflect => SpreadMode::Reflect,
         };
         let transform = Transform::from_translate(center.x, center.y).pre_scale(radii.x, radii.y);
-        let Some(shader) =
-            RadialGradient::new(SkiaPoint::from_xy(0.0, 0.0), SkiaPoint::from_xy(0.0, 0.0), 1.0, stops, spread, transform)
-        else {
+        let Some(shader) = RadialGradient::new(
+            SkiaPoint::from_xy(0.0, 0.0),
+            SkiaPoint::from_xy(0.0, 0.0),
+            1.0,
+            stops,
+            spread,
+            transform,
+        ) else {
             return;
         };
 
@@ -831,7 +836,15 @@ impl DisplayListRenderer {
         let stops: Vec<(f32, crate::style::color::Rgba)> = item
             .stops
             .iter()
-            .map(|s| (s.position, crate::style::color::Rgba { a: s.color.a * opacity, ..s.color }))
+            .map(|s| {
+                (
+                    s.position,
+                    crate::style::color::Rgba {
+                        a: s.color.a * opacity,
+                        ..s.color
+                    },
+                )
+            })
             .collect();
         if stops.is_empty() {
             return;
@@ -881,7 +894,9 @@ impl DisplayListRenderer {
         let frac_y = rect.y() - dest_y as f32;
         let transform = Transform::from_translate(frac_x, frac_y).post_concat(self.canvas.transform());
         let clip = self.canvas.clip_mask().cloned();
-        self.canvas.pixmap_mut().draw_pixmap(dest_x, dest_y, pix.as_ref(), &paint, transform, clip.as_ref());
+        self.canvas
+            .pixmap_mut()
+            .draw_pixmap(dest_x, dest_y, pix.as_ref(), &paint, transform, clip.as_ref());
     }
 
     fn render_border(&mut self, item: &BorderItem) {
@@ -2082,7 +2097,11 @@ fn sample_conic_stops(
     if stops.len() == 1 {
         return stops[0].1;
     }
-    let total = if repeating { period } else { stops.last().map(|s| s.0).unwrap_or(1.0) };
+    let total = if repeating {
+        period
+    } else {
+        stops.last().map(|s| s.0).unwrap_or(1.0)
+    };
     let mut pos = t;
     if repeating && total > 0.0 {
         pos = pos.rem_euclid(total);
@@ -2103,9 +2122,15 @@ fn sample_conic_stops(
             let span = (p1 - p0).max(1e-6);
             let frac = ((pos - p0) / span).clamp(0.0, 1.0);
             return crate::style::color::Rgba {
-                r: ((1.0 - frac) * c0.r as f32 + frac * c1.r as f32).round().clamp(0.0, 255.0) as u8,
-                g: ((1.0 - frac) * c0.g as f32 + frac * c1.g as f32).round().clamp(0.0, 255.0) as u8,
-                b: ((1.0 - frac) * c0.b as f32 + frac * c1.b as f32).round().clamp(0.0, 255.0) as u8,
+                r: ((1.0 - frac) * c0.r as f32 + frac * c1.r as f32)
+                    .round()
+                    .clamp(0.0, 255.0) as u8,
+                g: ((1.0 - frac) * c0.g as f32 + frac * c1.g as f32)
+                    .round()
+                    .clamp(0.0, 255.0) as u8,
+                b: ((1.0 - frac) * c0.b as f32 + frac * c1.b as f32)
+                    .round()
+                    .clamp(0.0, 255.0) as u8,
                 a: (1.0 - frac) * c0.a + frac * c1.a,
             };
         }
@@ -2194,7 +2219,7 @@ mod tests {
             255, 0, 0, 255, // red
             0, 0, 255, 255, // blue
         ];
-        let image = Arc::new(ImageData::new(2, 1, pixels));
+        let image = Arc::new(ImageData::new_pixels(2, 1, pixels));
 
         let render_with_quality = |quality: ImageFilterQuality| {
             let mut list = DisplayList::new();
@@ -2231,7 +2256,7 @@ mod tests {
             0, 0, 255, 255, // blue
             255, 255, 0, 255, // yellow
         ];
-        let image = Arc::new(ImageData::new(2, 2, pixels));
+        let image = Arc::new(ImageData::new_pixels(2, 2, pixels));
 
         let mut list = DisplayList::new();
         list.push(DisplayItem::Image(ImageItem {

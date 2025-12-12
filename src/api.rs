@@ -787,14 +787,14 @@ impl FastRender {
                 if let Some(chosen_src) = chosen_src {
                     if let Ok(image) = self.image_cache.load(&chosen_src) {
                         let orientation = style.image_orientation.resolve(image.orientation, false);
-                        let (w, h) = image.oriented_dimensions(orientation);
-                        if w > 0 && h > 0 {
-                            let size = Size::new(w as f32, h as f32);
+                        if let Some((w, h)) =
+                            image.css_dimensions(orientation, &style.image_resolution, self.device_pixel_ratio, None)
+                        {
                             if needs_intrinsic {
-                                replaced_box.intrinsic_size = Some(size);
+                                replaced_box.intrinsic_size = Some(Size::new(w, h));
                             }
-                            if needs_ratio {
-                                replaced_box.aspect_ratio = Some(size.width / size.height);
+                            if needs_ratio && h > 0.0 {
+                                replaced_box.aspect_ratio = Some(w / h);
                             }
                             have_resource_dimensions = true;
                         }
@@ -832,14 +832,17 @@ impl FastRender {
                         };
                         if let Ok(image) = image {
                             let orientation = style.image_orientation.resolve(image.orientation, false);
-                            let (w, h) = image.oriented_dimensions(orientation);
-                            if w > 0 && h > 0 {
-                                let size = Size::new(w as f32, h as f32);
+                            if let Some((w, h)) = image.css_dimensions(
+                                orientation,
+                                &style.image_resolution,
+                                self.device_pixel_ratio,
+                                None,
+                            ) {
                                 if needs_intrinsic {
-                                    replaced_box.intrinsic_size = Some(size);
+                                    replaced_box.intrinsic_size = Some(Size::new(w, h));
                                 }
-                                if needs_ratio {
-                                    replaced_box.aspect_ratio = Some(size.width / size.height);
+                                if needs_ratio && h > 0.0 {
+                                    replaced_box.aspect_ratio = Some(w / h);
                                 }
                                 break;
                             }
@@ -866,14 +869,14 @@ impl FastRender {
 
                     if let Ok(image) = image {
                         let orientation = style.image_orientation.resolve(image.orientation, false);
-                        let (w, h) = image.oriented_dimensions(orientation);
-                        if w > 0 && h > 0 {
-                            let size = Size::new(w as f32, h as f32);
+                        if let Some((w, h)) =
+                            image.css_dimensions(orientation, &style.image_resolution, self.device_pixel_ratio, None)
+                        {
                             if needs_intrinsic {
-                                replaced_box.intrinsic_size = Some(size);
+                                replaced_box.intrinsic_size = Some(Size::new(w, h));
                             }
-                            if needs_ratio {
-                                replaced_box.aspect_ratio = Some(size.width / size.height);
+                            if needs_ratio && h > 0.0 {
+                                replaced_box.aspect_ratio = Some(w / h);
                             }
                         }
                     }
@@ -890,14 +893,14 @@ impl FastRender {
                     };
                     if let Ok(image) = image {
                         let orientation = style.image_orientation.resolve(image.orientation, false);
-                        let (w, h) = image.oriented_dimensions(orientation);
-                        if w > 0 && h > 0 {
-                            let size = Size::new(w as f32, h as f32);
+                        if let Some((w, h)) =
+                            image.css_dimensions(orientation, &style.image_resolution, self.device_pixel_ratio, None)
+                        {
                             if needs_intrinsic {
-                                replaced_box.intrinsic_size = Some(size);
+                                replaced_box.intrinsic_size = Some(Size::new(w, h));
                             }
-                            if needs_ratio {
-                                replaced_box.aspect_ratio = Some(size.width / size.height);
+                            if needs_ratio && h > 0.0 {
+                                replaced_box.aspect_ratio = Some(w / h);
                             }
                         }
                     }
@@ -1188,10 +1191,14 @@ fn extract_fragment(url: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::layout::contexts::inline::line_builder::TextItem;
+    use crate::style::types::ImageResolution;
     use crate::text::pipeline::ShapingPipeline;
     use crate::tree::fragment_tree::{FragmentContent, FragmentTree};
     use crate::ComputedStyle;
-    use image::load_from_memory;
+    use base64::Engine;
+    use image::codecs::png::PngEncoder;
+    use image::ImageEncoder;
+    use image::{load_from_memory, ColorType, RgbaImage};
     use std::sync::Arc;
 
     fn text_color_for(tree: &FragmentTree, needle: &str) -> Option<Rgba> {
@@ -1549,6 +1556,55 @@ mod tests {
             Some(20.0 / 12.0),
             "inline svg should populate aspect ratio"
         );
+    }
+
+    #[test]
+    fn image_resolution_scales_intrinsic_size() {
+        let renderer = FastRender::new().expect("init renderer");
+
+        let mut pixels = RgbaImage::new(4, 2);
+        for p in pixels.pixels_mut() {
+            *p = image::Rgba([255, 0, 0, 255]);
+        }
+        let mut buf = Vec::new();
+        PngEncoder::new(&mut buf)
+            .write_image(pixels.as_raw(), 4, 2, ColorType::Rgba8.into())
+            .expect("encode png");
+        let data_url = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&buf)
+        );
+
+        let mut style = ComputedStyle::default();
+        style.image_resolution = ImageResolution {
+            from_image: false,
+            specified: Some(2.0),
+            snap: false,
+        };
+
+        let mut node = BoxNode::new_replaced(
+            Arc::new(style),
+            ReplacedType::Image {
+                src: data_url,
+                alt: None,
+                sizes: None,
+                srcset: Vec::new(),
+            },
+            None,
+            None,
+        );
+
+        renderer.resolve_replaced_intrinsic_sizes(&mut node, Size::new(800.0, 600.0));
+
+        let replaced = match node.box_type {
+            BoxType::Replaced(ref r) => r,
+            _ => panic!("not replaced"),
+        };
+
+        let intrinsic = replaced.intrinsic_size.expect("intrinsic size");
+        assert!((intrinsic.width - 2.0).abs() < 1e-6);
+        assert!((intrinsic.height - 1.0).abs() < 1e-6);
+        assert_eq!(replaced.aspect_ratio, Some(2.0));
     }
 
     #[test]

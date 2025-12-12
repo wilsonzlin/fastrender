@@ -1214,8 +1214,8 @@ impl DisplayListBuilder {
                             position,
                             rect.width(),
                             rect.height(),
-                            image.width as f32,
-                            image.height as f32,
+                            image.css_width,
+                            image.css_height,
                             font_size,
                             self.viewport,
                         )
@@ -1493,8 +1493,8 @@ impl DisplayListBuilder {
             }
             BackgroundImage::Url(src) => {
                 if let Some(image) = self.decode_image(src, Some(style), true) {
-                    let img_w = image.width as f32;
-                    let img_h = image.height as f32;
+                    let img_w = image.css_width;
+                    let img_h = image.css_height;
                     if img_w > 0.0 && img_h > 0.0 {
                         let (mut tile_w, mut tile_h) = Self::compute_background_size(
                             layer,
@@ -2371,15 +2371,20 @@ impl DisplayListBuilder {
             Err(_) if src.trim_start().starts_with('<') => cache.render_svg(src).ok()?,
             Err(_) => return None,
         };
+        let image_resolution = style.map(|s| s.image_resolution).unwrap_or_default();
         let orientation = style
             .map(|s| s.image_orientation.resolve(image.orientation, decorative))
             .unwrap_or_else(|| ImageOrientation::default().resolve(image.orientation, decorative));
+        let Some((css_w, css_h)) = image.css_dimensions(orientation, &image_resolution, self.device_pixel_ratio, None)
+        else {
+            return None;
+        };
         let rgba = image.to_oriented_rgba(orientation);
         let (w, h) = rgba.dimensions();
         if w == 0 || h == 0 {
             return None;
         }
-        Some(ImageData::new(w, h, rgba.into_raw()))
+        Some(ImageData::new(w, h, css_w, css_h, rgba.into_raw()))
     }
 
     fn image_filter_quality(style: Option<&ComputedStyle>) -> ImageFilterQuality {

@@ -580,6 +580,12 @@ pub struct ImageData {
     /// Image height in pixels
     pub height: u32,
 
+    /// Natural image width in CSS px after applying image-resolution/orientation
+    pub css_width: f32,
+
+    /// Natural image height in CSS px after applying image-resolution/orientation
+    pub css_height: f32,
+
     /// Pixel data in RGBA8 format (4 bytes per pixel)
     pub pixels: Arc<Vec<u8>>,
 }
@@ -591,19 +597,33 @@ impl ImageData {
     ///
     /// * `width` - Image width in pixels
     /// * `height` - Image height in pixels
+    /// * `css_width` - Natural width in CSS px
+    /// * `css_height` - Natural height in CSS px
     /// * `pixels` - Pixel data in RGBA8 format
-    pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Self {
+    pub fn new(width: u32, height: u32, css_width: f32, css_height: f32, pixels: Vec<u8>) -> Self {
         debug_assert_eq!(pixels.len(), (width * height * 4) as usize, "Pixel data size mismatch");
         Self {
             width,
             height,
+            css_width,
+            css_height,
             pixels: Arc::new(pixels),
         }
+    }
+
+    /// Creates image data assuming 1dppx (CSS size equals pixel size).
+    pub fn new_pixels(width: u32, height: u32, pixels: Vec<u8>) -> Self {
+        Self::new(width, height, width as f32, height as f32, pixels)
     }
 
     /// Get the size of the image as a Size
     pub fn size(&self) -> Size {
         Size::new(self.width as f32, self.height as f32)
+    }
+
+    /// Natural CSS size of the image
+    pub fn css_size(&self) -> Size {
+        Size::new(self.css_width, self.css_height)
     }
 }
 
@@ -1628,11 +1648,12 @@ mod tests {
     #[test]
     fn test_image_data() {
         let pixels = vec![255u8; 100 * 100 * 4];
-        let image = ImageData::new(100, 100, pixels);
+        let image = ImageData::new(100, 100, 100.0, 100.0, pixels);
 
         assert_eq!(image.width, 100);
         assert_eq!(image.height, 100);
         assert_eq!(image.size(), Size::new(100.0, 100.0));
+        assert_eq!(image.css_size(), Size::new(100.0, 100.0));
     }
 
     // ========================================================================

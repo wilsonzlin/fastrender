@@ -219,6 +219,64 @@ pub enum ImageRendering {
     Pixelated,
 }
 
+/// Preferred resolution for raster images
+///
+/// CSS: `image-resolution`
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImageResolution {
+    /// Whether to prefer the image's own resolution (metadata) when present.
+    pub from_image: bool,
+    /// Explicit resolution in image pixels per CSS px (dppx). None when the author
+    /// omitted a resolution value.
+    pub specified: Option<f32>,
+    /// Whether to snap the resolution so image pixels map to an integer number of
+    /// device pixels.
+    pub snap: bool,
+}
+
+impl Default for ImageResolution {
+    fn default() -> Self {
+        Self {
+            from_image: false,
+            specified: Some(1.0),
+            snap: false,
+        }
+    }
+}
+
+impl ImageResolution {
+    /// Computes the used image resolution in dppx given optional resource metadata and device DPR.
+    ///
+    /// `resource_resolution` is the resolution supplied by the image itself (e.g. EXIF).
+    pub fn used_resolution(self, resource_resolution: Option<f32>, device_pixel_ratio: f32) -> f32 {
+        let base = if self.from_image {
+            resource_resolution.or(self.specified).unwrap_or(1.0)
+        } else {
+            self.specified.unwrap_or(1.0)
+        };
+
+        let mut resolved = if base.is_finite() && base > 0.0 { base } else { 1.0 };
+        if self.snap {
+            resolved = snap_resolution(resolved, device_pixel_ratio);
+        }
+        resolved
+    }
+}
+
+fn snap_resolution(resolution: f32, device_pixel_ratio: f32) -> f32 {
+    if !resolution.is_finite() || resolution <= 0.0 {
+        return 1.0;
+    }
+    if !device_pixel_ratio.is_finite() || device_pixel_ratio <= 0.0 {
+        return resolution;
+    }
+
+    // device pixels per image pixel = device_dppx / resolution.
+    let device_per_image = device_pixel_ratio / resolution;
+    let snapped_pixels = device_per_image.round().max(1.0);
+    device_pixel_ratio / snapped_pixels
+}
+
 /// Orientation applied to decoded images
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OrientationTransform {

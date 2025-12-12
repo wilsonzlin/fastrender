@@ -205,23 +205,27 @@ impl ReplacedType {
     /// remaining srcset URLs. Duplicate URLs are removed while preserving order.
     pub fn image_sources_with_fallback(&self, ctx: ImageSelectionContext<'_>) -> Vec<String> {
         match self {
-            ReplacedType::Image { src, srcset, sizes: _, .. } => {
+            ReplacedType::Image {
+                src, srcset, sizes: _, ..
+            } => {
                 let primary = self.image_source_for_context(ctx);
                 let mut seen = std::collections::HashSet::new();
                 let mut ordered = Vec::new();
-                let push_unique =
-                    |url: &str, out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
-                        if seen.insert(url.to_string()) {
-                            out.push(url.to_string());
-                        }
-                    };
+                let push_unique = |url: &str, out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
+                    if seen.insert(url.to_string()) {
+                        out.push(url.to_string());
+                    }
+                };
 
                 push_unique(primary, &mut ordered, &mut seen);
                 push_unique(src, &mut ordered, &mut seen);
                 for cand in srcset {
                     let url = &cand.url;
                     // Skip candidates whose descriptors depend on sizes when sizes cannot be evaluated.
-                    if matches!(cand.descriptor, SrcsetDescriptor::Width(_)) && ctx.slot_width.is_none() && ctx.viewport.is_none() {
+                    if matches!(cand.descriptor, SrcsetDescriptor::Width(_))
+                        && ctx.slot_width.is_none()
+                        && ctx.viewport.is_none()
+                    {
                         continue;
                     }
                     push_unique(url, &mut ordered, &mut seen);
@@ -254,9 +258,7 @@ impl ReplacedType {
                     return src;
                 }
 
-                let slot_width = ctx
-                    .slot_width
-                    .filter(|w| *w > 0.0 && w.is_finite());
+                let slot_width = ctx.slot_width.filter(|w| *w > 0.0 && w.is_finite());
 
                 let has_width_descriptors = srcset
                     .iter()
@@ -1237,7 +1239,10 @@ mod tests {
             font_size: Some(16.0),
         });
 
-        assert_eq!(chosen, "400w", "zero-width slot should use viewport width for width descriptors");
+        assert_eq!(
+            chosen, "400w",
+            "zero-width slot should use viewport width for width descriptors"
+        );
     }
 
     #[test]

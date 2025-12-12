@@ -1,5 +1,5 @@
 use crate::error::{Error, ImageError, RenderError, Result};
-use crate::style::types::OrientationTransform;
+use crate::style::types::{ImageResolution, OrientationTransform};
 use exif;
 use image::{imageops, DynamicImage, GenericImageView, RgbaImage};
 use std::collections::HashMap;
@@ -11,6 +11,10 @@ use url::Url;
 pub struct CachedImage {
     pub image: Arc<DynamicImage>,
     pub orientation: Option<OrientationTransform>,
+    /// Resolution in image pixels per CSS px (dppx) when provided by metadata.
+    pub resolution: Option<f32>,
+    /// Whether this image originated from a vector source (SVG).
+    pub is_vector: bool,
 }
 
 impl CachedImage {
@@ -29,6 +33,29 @@ impl CachedImage {
     pub fn oriented_dimensions(&self, transform: OrientationTransform) -> (u32, u32) {
         let (w, h) = self.dimensions();
         transform.oriented_dimensions(w, h)
+    }
+
+    /// Computes CSS pixel dimensions after applying orientation and the provided image-resolution.
+    pub fn css_dimensions(
+        &self,
+        transform: OrientationTransform,
+        resolution: &ImageResolution,
+        device_pixel_ratio: f32,
+        override_resolution: Option<f32>,
+    ) -> Option<(f32, f32)> {
+        let (w, h) = self.oriented_dimensions(transform);
+        if w == 0 || h == 0 {
+            return None;
+        }
+        if self.is_vector {
+            return Some((w as f32, h as f32));
+        }
+        let resource_resolution = override_resolution.or(self.resolution);
+        let used = resolution.used_resolution(resource_resolution, device_pixel_ratio);
+        if used <= 0.0 || !used.is_finite() {
+            return None;
+        }
+        Some((w as f32 / used, h as f32 / used))
     }
 
     pub fn to_oriented_rgba(&self, transform: OrientationTransform) -> RgbaImage {
@@ -120,28 +147,31 @@ impl ImageCache {
         }
 
         // Load image using resolved URL
-        let (img, orientation) = if resolved_url.starts_with("http://") || resolved_url.starts_with("https://") {
-            // Fetch from network
-            let (bytes, content_type) = self.load_from_url(&resolved_url)?;
-            self.decode_image_bytes(&bytes, content_type.as_deref(), None, &resolved_url)?
-        } else if resolved_url.starts_with("file://") {
-            // Load from file system
-            let path = resolved_url.strip_prefix("file://").unwrap();
-            let (bytes, ext_hint) = self.load_from_file(path)?;
-            self.decode_image_bytes(&bytes, None, ext_hint.as_deref(), path)?
-        } else if resolved_url.starts_with("data:") {
-            // Data URL
-            self.load_from_data_url(&resolved_url)?
-        } else {
-            // Assume it's a file path
-            let (bytes, ext_hint) = self.load_from_file(&resolved_url)?;
-            self.decode_image_bytes(&bytes, None, ext_hint.as_deref(), &resolved_url)?
-        };
+        let (img, orientation, resolution, is_vector) =
+            if resolved_url.starts_with("http://") || resolved_url.starts_with("https://") {
+                // Fetch from network
+                let (bytes, content_type) = self.load_from_url(&resolved_url)?;
+                self.decode_image_bytes(&bytes, content_type.as_deref(), None, &resolved_url)?
+            } else if resolved_url.starts_with("file://") {
+                // Load from file system
+                let path = resolved_url.strip_prefix("file://").unwrap();
+                let (bytes, ext_hint) = self.load_from_file(path)?;
+                self.decode_image_bytes(&bytes, None, ext_hint.as_deref(), path)?
+            } else if resolved_url.starts_with("data:") {
+                // Data URL
+                self.load_from_data_url(&resolved_url)?
+            } else {
+                // Assume it's a file path
+                let (bytes, ext_hint) = self.load_from_file(&resolved_url)?;
+                self.decode_image_bytes(&bytes, None, ext_hint.as_deref(), &resolved_url)?
+            };
 
         // Cache it (using resolved URL as key)
         let img_arc = Arc::new(CachedImage {
             image: Arc::new(img),
             orientation,
+            resolution,
+            is_vector,
         });
         {
             let mut cache = self.cache.lock().unwrap();
@@ -157,6 +187,8 @@ impl ImageCache {
         Ok(Arc::new(CachedImage {
             image: Arc::new(img),
             orientation: None,
+            resolution: None,
+            is_vector: true,
         }))
     }
 
@@ -205,7 +237,10 @@ impl ImageCache {
             })
     }
 
-    fn load_from_data_url(&self, data_url: &str) -> Result<(DynamicImage, Option<OrientationTransform>)> {
+    fn load_from_data_url(
+        &self,
+        data_url: &str,
+    ) -> Result<(DynamicImage, Option<OrientationTransform>, Option<f32>, bool)> {
         // Parse data URL: data:image/png;base64,iVBORw0KG... or data:image/svg+xml,%3Csvg...
         if !data_url.starts_with("data:") {
             return Err(Error::Image(ImageError::InvalidDataUrl {
@@ -232,9 +267,9 @@ impl ImageCache {
                 })
             })?;
 
-            let orientation = Self::exif_orientation(&bytes);
+            let (orientation, resolution) = Self::exif_metadata(&bytes);
             image::load_from_memory(&bytes)
-                .map(|img| (img, orientation))
+                .map(|img| (img, orientation, resolution, false))
                 .map_err(|e| {
                     Error::Image(ImageError::DecodeFailed {
                         url: "data URL".to_string(),
@@ -250,7 +285,7 @@ impl ImageCache {
             })?;
 
             // Use resvg to render SVG to bitmap
-            self.render_svg_to_image(&decoded).map(|img| (img, None))
+            self.render_svg_to_image(&decoded).map(|img| (img, None, None, true))
         } else {
             Err(Error::Image(ImageError::InvalidDataUrl {
                 reason: "Unsupported data URL format (not base64 or SVG)".to_string(),
@@ -264,7 +299,7 @@ impl ImageCache {
         mime_hint: Option<&str>,
         extension_hint: Option<&str>,
         url: &str,
-    ) -> Result<(DynamicImage, Option<OrientationTransform>)> {
+    ) -> Result<(DynamicImage, Option<OrientationTransform>, Option<f32>, bool)> {
         let mime_is_svg = mime_hint.map(|m| m.contains("image/svg")).unwrap_or(false);
         let ext_is_svg = extension_hint.map(|e| e.eq_ignore_ascii_case("svg")).unwrap_or(false);
 
@@ -282,12 +317,12 @@ impl ImageCache {
                     reason: format!("SVG not valid UTF-8: {}", e),
                 })
             })?;
-            return self.render_svg_to_image(content).map(|img| (img, None));
+            return self.render_svg_to_image(content).map(|img| (img, None, None, true));
         }
 
-        let orientation = Self::exif_orientation(bytes);
+        let (orientation, resolution) = Self::exif_metadata(bytes);
         image::load_from_memory(bytes)
-            .map(|img| (img, orientation))
+            .map(|img| (img, orientation, resolution, false))
             .map_err(|e| {
                 Error::Image(ImageError::DecodeFailed {
                     url: url.to_string(),
@@ -331,14 +366,68 @@ impl ImageCache {
         }
     }
 
-    fn exif_orientation(bytes: &[u8]) -> Option<OrientationTransform> {
+    fn exif_metadata(bytes: &[u8]) -> (Option<OrientationTransform>, Option<f32>) {
         let mut cursor = std::io::Cursor::new(bytes);
         let Ok(exif) = exif::Reader::new().read_from_container(&mut cursor) else {
-            return None;
+            return (None, None);
         };
-        let field = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?;
-        let value = field.value.get_uint(0)? as u16;
-        Self::orientation_from_exif(value)
+
+        let orientation = exif
+            .get_field(exif::Tag::Orientation, exif::In::PRIMARY)
+            .and_then(|f| f.value.get_uint(0))
+            .and_then(|v| Self::orientation_from_exif(v as u16));
+
+        let resolution_unit = exif
+            .get_field(exif::Tag::ResolutionUnit, exif::In::PRIMARY)
+            .and_then(|f| f.value.get_uint(0))
+            .unwrap_or(0);
+
+        let rational_to_f32 = |r: exif::Rational| -> Option<f32> {
+            if r.denom == 0 {
+                None
+            } else {
+                Some(r.num as f32 / r.denom as f32)
+            }
+        };
+
+        let x_res = exif
+            .get_field(exif::Tag::XResolution, exif::In::PRIMARY)
+            .and_then(|f| {
+                if let exif::Value::Rational(ref vals) = f.value {
+                    vals.get(0).cloned()
+                } else {
+                    None
+                }
+            })
+            .and_then(rational_to_f32);
+        let y_res = exif
+            .get_field(exif::Tag::YResolution, exif::In::PRIMARY)
+            .and_then(|f| {
+                if let exif::Value::Rational(ref vals) = f.value {
+                    vals.get(0).cloned()
+                } else {
+                    None
+                }
+            })
+            .and_then(rational_to_f32);
+        let avg_res = match (x_res, y_res) {
+            (Some(x), Some(y)) if x.is_finite() && y.is_finite() && x > 0.0 && y > 0.0 => Some((x + y) / 2.0),
+            (Some(v), None) | (None, Some(v)) if v.is_finite() && v > 0.0 => Some(v),
+            _ => None,
+        };
+
+        let resolution = avg_res.and_then(|res| match resolution_unit {
+            2 => Some(res / 96.0),          // inch -> dppx
+            3 => Some((res * 2.54) / 96.0), // cm -> dppx
+            _ => None,
+        });
+
+        (orientation, resolution)
+    }
+
+    #[allow(dead_code)]
+    fn exif_orientation(bytes: &[u8]) -> Option<OrientationTransform> {
+        Self::exif_metadata(bytes).0
     }
 
     /// Renders raw SVG content to a raster image.

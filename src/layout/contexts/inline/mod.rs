@@ -1063,8 +1063,7 @@ impl InlineFormattingContext {
         let (shape_text, prefix_len) = if prefix_controls.is_empty() && suffix_controls.is_empty() {
             (Cow::Borrowed(hyphen_free.as_str()), 0usize)
         } else {
-            let mut buf =
-                String::with_capacity(prefix_controls.len() + hyphen_free.len() + suffix_controls.len());
+            let mut buf = String::with_capacity(prefix_controls.len() + hyphen_free.len() + suffix_controls.len());
             buf.push_str(&prefix_controls);
             buf.push_str(&hyphen_free);
             buf.push_str(&suffix_controls);
@@ -1073,8 +1072,7 @@ impl InlineFormattingContext {
 
         let mut shaped_runs = self.shape_with_fallback(&shape_text, style, base_direction)?;
         if matches!(shape_text, Cow::Owned(_)) {
-            shaped_runs =
-                strip_bidi_wrapper_runs(shaped_runs, prefix_len, hyphen_free.len(), &hyphen_free);
+            shaped_runs = strip_bidi_wrapper_runs(shaped_runs, prefix_len, hyphen_free.len(), &hyphen_free);
         }
         TextItem::apply_spacing_to_runs(&mut shaped_runs, &hyphen_free, style.letter_spacing, style.word_spacing);
 
@@ -3396,7 +3394,7 @@ impl InlineFormattingContext {
                              lines_out: &mut Vec<Line>,
                              ctx_ref: Option<&FloatContext>,
                              order: &mut Vec<FlowChunk>|
-             -> Option<(f32, f32, f32)> {
+         -> Option<(f32, f32, f32)> {
             if pending.is_empty() {
                 return None;
             }
@@ -4158,15 +4156,27 @@ pub(crate) fn bidi_controls(unicode_bidi: UnicodeBidi, direction: Direction) -> 
     match unicode_bidi {
         UnicodeBidi::Normal => (Vec::new(), Vec::new()),
         UnicodeBidi::Embed => {
-            let open = vec![if direction == Direction::Rtl { '\u{202b}' } else { '\u{202a}' }];
+            let open = vec![if direction == Direction::Rtl {
+                '\u{202b}'
+            } else {
+                '\u{202a}'
+            }];
             (open, vec!['\u{202c}'])
         }
         UnicodeBidi::BidiOverride => {
-            let open = vec![if direction == Direction::Rtl { '\u{202e}' } else { '\u{202d}' }];
+            let open = vec![if direction == Direction::Rtl {
+                '\u{202e}'
+            } else {
+                '\u{202d}'
+            }];
             (open, vec!['\u{202c}'])
         }
         UnicodeBidi::Isolate => {
-            let open = vec![if direction == Direction::Rtl { '\u{2067}' } else { '\u{2066}' }];
+            let open = vec![if direction == Direction::Rtl {
+                '\u{2067}'
+            } else {
+                '\u{2066}'
+            }];
             (open, vec!['\u{2069}'])
         }
         UnicodeBidi::IsolateOverride => {

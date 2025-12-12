@@ -1694,9 +1694,7 @@ fn reorder_paragraph(
     // Seed root unicode-bidi context if needed.
     if !matches!(root_unicode_bidi, UnicodeBidi::Normal) {
         let (opens, closes) = crate::layout::contexts::inline::bidi_controls(root_unicode_bidi, root_direction);
-        if let Some((depth_added, closer_vec)) =
-            push_controls(&opens, &closes, &mut current_depth, &mut logical_text)
-        {
+        if let Some((depth_added, closer_vec)) = push_controls(&opens, &closes, &mut current_depth, &mut logical_text) {
             active_stack.push(ActiveCtx {
                 id: usize::MAX,
                 closers: closer_vec,

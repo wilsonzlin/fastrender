@@ -2123,6 +2123,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
             styles.background_repeats = source.background_repeats.clone();
             styles.rebuild_background_layers();
         }
+        "image-resolution" => styles.image_resolution = source.image_resolution,
         "background-position" => {
             styles.background_positions = source.background_positions.clone();
             styles.rebuild_background_layers();
@@ -5123,6 +5124,11 @@ pub fn apply_declaration_with_base(
                 styles.image_orientation = orientation;
             }
         }
+        "image-resolution" => {
+            if let Some(res) = parse_image_resolution(&resolved_value) {
+                styles.image_resolution = res;
+            }
+        }
         "image-rendering" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 if let Some(rendering) = parse_image_rendering(kw) {
@@ -5461,6 +5467,79 @@ fn parse_image_orientation(value: &PropertyValue) -> Option<ImageOrientation> {
                 }
             }
             parse_image_orientation_tokens(&tokens)
+        }
+        _ => None,
+    }
+}
+
+fn parse_resolution_token(token: &str) -> Option<f32> {
+    let lower = token.trim().to_ascii_lowercase();
+    if let Some(rest) = lower.strip_suffix("dppx") {
+        return rest.parse::<f32>().ok().filter(|v| *v > 0.0);
+    }
+    if let Some(rest) = lower.strip_suffix("dpi") {
+        return rest.parse::<f32>().ok().filter(|v| *v > 0.0).map(|dpi| dpi / 96.0);
+    }
+    if let Some(rest) = lower.strip_suffix("dpcm") {
+        return rest
+            .parse::<f32>()
+            .ok()
+            .filter(|v| *v > 0.0)
+            .map(|dpcm| (dpcm * 2.54) / 96.0);
+    }
+    if let Some(rest) = lower.strip_suffix('x') {
+        return rest.parse::<f32>().ok().filter(|v| *v > 0.0);
+    }
+    None
+}
+
+fn parse_image_resolution_tokens(tokens: &[&str]) -> Option<ImageResolution> {
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let mut from_image = false;
+    let mut snap = false;
+    let mut resolution: Option<f32> = None;
+
+    for token in tokens {
+        let lower = token.to_ascii_lowercase();
+        match lower.as_str() {
+            "from-image" if !from_image => from_image = true,
+            "from-image" => return None,
+            "snap" if !snap => snap = true,
+            "snap" => return None,
+            _ => {
+                if resolution.is_some() {
+                    return None;
+                }
+                resolution = parse_resolution_token(&lower);
+                if resolution.is_none() {
+                    return None;
+                }
+            }
+        }
+    }
+
+    Some(ImageResolution {
+        from_image,
+        specified: resolution,
+        snap,
+    })
+}
+
+fn parse_image_resolution(value: &PropertyValue) -> Option<ImageResolution> {
+    match value {
+        PropertyValue::Keyword(kw) => parse_image_resolution_tokens(&[kw.as_str()]),
+        PropertyValue::Multiple(values) => {
+            let mut tokens = Vec::new();
+            for v in values {
+                match v {
+                    PropertyValue::Keyword(kw) => tokens.push(kw.as_str()),
+                    _ => return None,
+                }
+            }
+            parse_image_resolution_tokens(&tokens)
         }
         _ => None,
     }
@@ -7672,8 +7751,8 @@ mod tests {
     use super::*;
     use crate::style::types::{
         AlignContent, AlignItems, AspectRatio, BackgroundRepeatKeyword, BoxSizing, CaseTransform, FontStretch,
-        FontVariant, GridAutoFlow, GridTrack, ImageOrientation, ImageRendering, JustifyContent, ListStylePosition,
-        ListStyleType, MixBlendMode, OutlineColor, OutlineStyle, PositionComponent, PositionKeyword,
+        FontVariant, GridAutoFlow, GridTrack, ImageOrientation, ImageRendering, ImageResolution, JustifyContent,
+        ListStylePosition, ListStyleType, MixBlendMode, OutlineColor, OutlineStyle, PositionComponent, PositionKeyword,
         TextCombineUpright, TextDecorationLine, TextDecorationStyle, TextDecorationThickness, TextEmphasisFill,
         TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle, TextOrientation, TextTransform, WritingMode,
     };
@@ -7723,6 +7802,94 @@ mod tests {
             16.0,
         );
         assert_eq!(style.image_rendering, ImageRendering::CrispEdges);
+    }
+
+    #[test]
+    fn parses_image_resolution_values() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "image-resolution".to_string(),
+                value: PropertyValue::Keyword("2dppx".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(
+            style.image_resolution,
+            ImageResolution {
+                from_image: false,
+                specified: Some(2.0),
+                snap: false
+            }
+        );
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "image-resolution".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("from-image".to_string()),
+                    PropertyValue::Keyword("192dpi".to_string()),
+                    PropertyValue::Keyword("snap".to_string()),
+                ]),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(style.image_resolution.from_image);
+        assert!(style.image_resolution.snap);
+        assert!(
+            (style.image_resolution.specified.unwrap() - 2.0).abs() < 1e-6,
+            "192dpi should convert to 2dppx"
+        );
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "image-resolution".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("from-image".to_string()),
+                    PropertyValue::Keyword("2dppx".to_string()),
+                    PropertyValue::Keyword("3dppx".to_string()),
+                ]),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(
+            (style.image_resolution.specified.unwrap() - 2.0).abs() < 1e-6,
+            "invalid duplicates should leave the value unchanged"
+        );
+    }
+
+    #[test]
+    fn image_resolution_snap_rounds_to_integer_device_mapping() {
+        let res = ImageResolution {
+            from_image: false,
+            specified: Some(1.5),
+            snap: true,
+        };
+        // device 2 / 1.5 = 1.333 -> round to 1 device px per image px => used resolution becomes 2dppx
+        assert!((res.used_resolution(None, 2.0) - 2.0).abs() < 1e-6);
+
+        let res = ImageResolution {
+            from_image: false,
+            specified: Some(1.6),
+            snap: true,
+        };
+        // device 3 / 1.6 = 1.875 -> round to 2 => used resolution 1.5dppx
+        assert!((res.used_resolution(None, 3.0) - 1.5).abs() < 1e-6);
     }
 
     #[test]
