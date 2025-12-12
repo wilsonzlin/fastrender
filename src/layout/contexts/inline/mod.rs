@@ -1911,11 +1911,16 @@ impl InlineFormattingContext {
                 let paint_offset = text_item.paint_offset;
                 let width = text_item.advance + paint_offset.abs();
                 let bounds = Rect::from_xywh(x + paint_offset, y, width, text_item.metrics.height);
-                FragmentNode::new_text_shaped(
+                FragmentNode::new_with_style(
                     bounds,
-                    text_item.text.clone(),
-                    text_item.metrics.baseline_offset,
-                    text_item.runs.clone(),
+                    FragmentContent::Text {
+                        text: text_item.text.clone(),
+                        box_id: None,
+                        baseline_offset: text_item.metrics.baseline_offset,
+                        shaped: Some(text_item.runs.clone()),
+                        is_marker: text_item.is_marker,
+                    },
+                    vec![],
                     text_item.style.clone(),
                 )
             }

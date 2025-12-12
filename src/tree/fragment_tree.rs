@@ -90,6 +90,9 @@ pub enum FragmentContent {
         /// glyph positions and fonts chosen during layout instead of reshaping
         /// with potentially different fallback results.
         shaped: Option<Vec<ShapedRun>>,
+
+        /// True when this fragment represents a list marker (::marker)
+        is_marker: bool,
     },
 
     /// Line box containing inline and text fragments
@@ -316,6 +319,7 @@ impl FragmentNode {
                 box_id: None,
                 baseline_offset,
                 shaped: None,
+                is_marker: false,
             },
             vec![],
         )
@@ -330,6 +334,7 @@ impl FragmentNode {
                 box_id: None,
                 baseline_offset,
                 shaped: None,
+                is_marker: false,
             },
             vec![],
             style,
@@ -351,6 +356,7 @@ impl FragmentNode {
                 box_id: None,
                 baseline_offset,
                 shaped: Some(shaped),
+                is_marker: false,
             },
             vec![],
             style,
@@ -898,6 +904,7 @@ mod tests {
             box_id: None,
             baseline_offset: 0.0,
             shaped: None,
+            is_marker: false,
         };
         assert!(text.is_text());
         assert_eq!(text.text(), Some("test"));

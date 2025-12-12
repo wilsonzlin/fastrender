@@ -11,8 +11,8 @@ use crate::paint::canvas::Canvas;
 use crate::paint::display_list::{
     BlendMode, BorderImageItem, BorderImageSourceItem, BorderItem, BorderRadii, BorderSide, BoxShadowItem, ClipItem,
     ConicGradientItem, DecorationPaint, DecorationStroke, DisplayItem, DisplayList, EmphasisMark, FillRectItem, FontId,
-    GlyphInstance, ImageData, ImageItem, LinearGradientItem, OpacityItem, OutlineItem, RadialGradientItem,
-    ResolvedFilter, StrokeRectItem, TextEmphasis, TextItem, TextShadowItem, TransformItem,
+    GlyphInstance, ImageData, ImageItem, LinearGradientItem, ListMarkerItem, OpacityItem, OutlineItem,
+    RadialGradientItem, ResolvedFilter, StrokeRectItem, TextEmphasis, TextItem, TextShadowItem, TransformItem,
 };
 use crate::paint::rasterize::{fill_rounded_rect, render_box_shadow, BoxShadow};
 use crate::paint::text_shadow::PathBounds;
@@ -693,6 +693,36 @@ impl DisplayListRenderer {
             scaled.emphasis = Some(e);
         }
         scaled
+    }
+
+    fn scale_list_marker_item(&self, item: &ListMarkerItem) -> ListMarkerItem {
+        let text_equiv = TextItem {
+            origin: item.origin,
+            glyphs: item.glyphs.clone(),
+            color: item.color,
+            shadows: item.shadows.clone(),
+            font_size: item.font_size,
+            advance_width: item.advance_width,
+            font_id: item.font_id.clone(),
+            synthetic_bold: item.synthetic_bold,
+            synthetic_oblique: item.synthetic_oblique,
+            emphasis: item.emphasis.clone(),
+            decorations: Vec::new(),
+        };
+        let scaled = self.scale_text_item(&text_equiv);
+        ListMarkerItem {
+            origin: scaled.origin,
+            glyphs: scaled.glyphs,
+            color: scaled.color,
+            shadows: scaled.shadows,
+            font_size: scaled.font_size,
+            advance_width: scaled.advance_width,
+            font_id: scaled.font_id,
+            synthetic_bold: scaled.synthetic_bold,
+            synthetic_oblique: scaled.synthetic_oblique,
+            emphasis: scaled.emphasis,
+            background: item.background,
+        }
     }
 
     fn scale_decoration_item(
@@ -1793,6 +1823,10 @@ impl DisplayListRenderer {
             }
             DisplayItem::Image(item) => self.render_image(item)?,
             DisplayItem::BoxShadow(item) => self.render_box_shadow(item),
+            DisplayItem::ListMarker(item) => {
+                let scaled = self.scale_list_marker_item(item);
+                self.render_list_marker(&scaled)?
+            }
             DisplayItem::PushStackingContext(item) => {
                 let scaled_filters = self.ds_filters(&item.filters);
                 let scaled_backdrop = self.ds_filters(&item.backdrop_filters);
@@ -1955,6 +1989,28 @@ impl DisplayListRenderer {
             self.render_emphasis(emphasis)?;
         }
         Ok(())
+    }
+
+    fn render_list_marker(&mut self, item: &ListMarkerItem) -> Result<()> {
+        if let Some(bg) = item.background {
+            let bounds = crate::paint::display_list::list_marker_bounds(item);
+            self.canvas.draw_rect(bounds, bg);
+        }
+
+        let text = TextItem {
+            origin: item.origin,
+            glyphs: item.glyphs.clone(),
+            color: item.color,
+            shadows: item.shadows.clone(),
+            font_size: item.font_size,
+            advance_width: item.advance_width,
+            font_id: item.font_id.clone(),
+            synthetic_bold: item.synthetic_bold,
+            synthetic_oblique: item.synthetic_oblique,
+            emphasis: item.emphasis.clone(),
+            decorations: Vec::new(),
+        };
+        self.render_text(&text)
     }
 
     fn render_text_decoration(&mut self, item: &crate::paint::display_list::TextDecorationItem) -> Result<()> {

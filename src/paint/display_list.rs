@@ -81,6 +81,9 @@ pub enum DisplayItem {
     /// Draw a box shadow
     BoxShadow(BoxShadowItem),
 
+    /// Draw a list marker (text-based marker)
+    ListMarker(ListMarkerItem),
+
     /// Draw a linear gradient
     LinearGradient(LinearGradientItem),
 
@@ -148,6 +151,7 @@ impl DisplayItem {
             DisplayItem::RadialGradient(item) => Some(item.rect),
             DisplayItem::ConicGradient(item) => Some(item.rect),
             DisplayItem::Border(item) => Some(item.rect),
+            DisplayItem::ListMarker(item) => Some(list_marker_bounds(item)),
             DisplayItem::PushClip(item) => Some(item.rect),
             DisplayItem::TextDecoration(item) => Some(item.bounds),
             // Stack operations don't have bounds
@@ -571,6 +575,63 @@ pub fn text_bounds(item: &TextItem) -> Rect {
         (max_x - min_x).max(0.0),
         ascent + descent,
     )
+}
+
+/// Conservative bounds for a list marker item.
+pub fn list_marker_bounds(item: &ListMarkerItem) -> Rect {
+    let mut min_x = item.origin.x;
+    let mut max_x = item.origin.x + item.advance_width;
+    for glyph in &item.glyphs {
+        let gx = item.origin.x + glyph.offset.x;
+        min_x = min_x.min(gx);
+        max_x = max_x.max(gx + glyph.advance);
+    }
+
+    let ascent = item.font_size;
+    let descent = item.font_size * 0.25;
+    Rect::from_xywh(
+        min_x,
+        item.origin.y - ascent,
+        (max_x - min_x).max(0.0),
+        ascent + descent,
+    )
+}
+
+/// List marker paint item
+#[derive(Debug, Clone)]
+pub struct ListMarkerItem {
+    /// Origin in CSS px (baseline-aligned)
+    pub origin: Point,
+
+    /// Shaped glyphs for the marker text
+    pub glyphs: Vec<GlyphInstance>,
+
+    /// Text color
+    pub color: Rgba,
+
+    /// Text shadows applied to the marker
+    pub shadows: Vec<TextShadowItem>,
+
+    /// Font size in CSS px
+    pub font_size: f32,
+
+    /// Total advance width for the marker run
+    pub advance_width: f32,
+
+    /// Resolved font id for glyph lookup
+    pub font_id: Option<FontId>,
+
+    /// Synthetic bold stroke width in CSS px (0 = none)
+    pub synthetic_bold: f32,
+
+    /// Synthetic oblique shear factor (tan(angle); 0 = none)
+    pub synthetic_oblique: f32,
+
+    /// Optional text emphasis marks to render over the marker
+    pub emphasis: Option<TextEmphasis>,
+
+    /// Optional background behind the marker (CSS px)
+    pub background: Option<Rgba>,
 }
 
 // ============================================================================

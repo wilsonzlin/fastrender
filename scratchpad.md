@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Display list renders list markers explicitly: text fragments carry an `is_marker` flag into the fragment tree, the display list builder emits `ListMarker` items (including font/shadow/emphasis data), bounds participate in culling, and the renderer draws markers through the shared text path so markers paint consistently.
 - Row group heights act as minimums: `height`/`min-height` on row groups distribute extra height to member rows with cap-aware weighting (respecting row max-heights), percent heights resolve against a definite table height; added regressions for fixed and percent row-group minimums.
 - Spanning cell minimum distribution now prefers available headroom: min-width growth weights by each column’s remaining max - min before falling back to current widths, so wide-headroom columns absorb more of a spanning cell and totals stay within the requested max (regression `distribute_spanning_prefers_existing_headroom`).
 - Spanning cell maximum distribution now prefers available headroom before pushing past existing maxima: extra max-width is first absorbed by columns with spare max - min, then falls back to width weighting to reach the requested span max (regression `distribute_spanning_max_uses_headroom_before_busting_caps`).

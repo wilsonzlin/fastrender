@@ -356,6 +356,7 @@ fn fragment_opacity_wraps_display_items() {
             baseline_offset: 8.0,
             shaped: None,
             box_id: None,
+            is_marker: false,
         },
         children: vec![],
         style: Some(Arc::new(style)),

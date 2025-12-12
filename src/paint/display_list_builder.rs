@@ -36,8 +36,8 @@ use crate::paint::display_list::{
     BlendMode, BlendModeItem, BorderImageItem, BorderImageSourceItem, BorderItem, BorderSide, BoxShadowItem, ClipItem,
     ConicGradientItem, DecorationPaint, DecorationStroke, DisplayItem, DisplayList, EmphasisMark, EmphasisText,
     FillRectItem, FontId, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem,
-    LinearGradientItem, OpacityItem, OutlineItem, RadialGradientItem, ResolvedFilter, StackingContextItem,
-    StrokeRectItem, TextDecorationItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
+    LinearGradientItem, ListMarkerItem, OpacityItem, OutlineItem, RadialGradientItem, ResolvedFilter,
+    StackingContextItem, StrokeRectItem, TextDecorationItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
@@ -1118,6 +1118,7 @@ impl DisplayListBuilder {
                 text,
                 baseline_offset,
                 shaped,
+                is_marker,
                 ..
             } => {
                 if text.is_empty() {
@@ -1149,7 +1150,11 @@ impl DisplayListBuilder {
                 };
 
                 if let Some(runs) = runs_ref {
-                    self.emit_shaped_runs(runs, color, baseline, start_x, &shadows, style_opt);
+                    if *is_marker {
+                        self.emit_list_marker_runs(runs, color, baseline, start_x, &shadows, style_opt);
+                    } else {
+                        self.emit_shaped_runs(runs, color, baseline, start_x, &shadows, style_opt);
+                    }
                 } else {
                     // Fallback: naive glyphs when shaping fails or no style is present
                     let font_size = style_opt.map(|s| s.font_size).unwrap_or(16.0);
@@ -1165,19 +1170,35 @@ impl DisplayListBuilder {
                         .collect();
                     let advance_width = text.len() as f32 * char_width;
 
-                    self.list.push(DisplayItem::Text(TextItem {
-                        origin: Point::new(start_x, baseline),
-                        glyphs,
-                        color,
-                        shadows: shadows.clone(),
-                        font_size,
-                        advance_width,
-                        font_id: None,
-                        synthetic_bold: 0.0,
-                        synthetic_oblique: 0.0,
-                        emphasis: None,
-                        decorations: Vec::new(),
-                    }));
+                    if *is_marker {
+                        self.list.push(DisplayItem::ListMarker(ListMarkerItem {
+                            origin: Point::new(start_x, baseline),
+                            glyphs,
+                            color,
+                            shadows: shadows.clone(),
+                            font_size,
+                            advance_width,
+                            font_id: None,
+                            synthetic_bold: 0.0,
+                            synthetic_oblique: 0.0,
+                            emphasis: None,
+                            background: None,
+                        }));
+                    } else {
+                        self.list.push(DisplayItem::Text(TextItem {
+                            origin: Point::new(start_x, baseline),
+                            glyphs,
+                            color,
+                            shadows: shadows.clone(),
+                            font_size,
+                            advance_width,
+                            font_id: None,
+                            synthetic_bold: 0.0,
+                            synthetic_oblique: 0.0,
+                            emphasis: None,
+                            decorations: Vec::new(),
+                        }));
+                    }
                 }
 
                 if let Some(style) = style_opt {
@@ -1798,6 +1819,43 @@ impl DisplayListBuilder {
                 synthetic_oblique: run.synthetic_oblique,
                 emphasis,
                 decorations: Vec::new(),
+            }));
+
+            pen_x += run.advance;
+        }
+    }
+
+    fn emit_list_marker_runs(
+        &mut self,
+        runs: &[ShapedRun],
+        color: Rgba,
+        baseline_y: f32,
+        start_x: f32,
+        shadows: &[TextShadowItem],
+        style: Option<&ComputedStyle>,
+    ) {
+        let mut pen_x = start_x;
+        for run in runs {
+            let origin_x = if run.direction.is_rtl() {
+                pen_x + run.advance
+            } else {
+                pen_x
+            };
+            let glyphs = self.glyphs_from_run(run, origin_x, baseline_y);
+            let font_id = self.font_id_from_run(run);
+            let emphasis = style.and_then(|s| self.build_emphasis(run, s, origin_x, baseline_y));
+            self.list.push(DisplayItem::ListMarker(ListMarkerItem {
+                origin: Point::new(origin_x, baseline_y),
+                glyphs,
+                font_size: run.font_size,
+                color,
+                shadows: shadows.to_vec(),
+                advance_width: run.advance,
+                font_id: Some(font_id),
+                synthetic_bold: run.synthetic_bold,
+                synthetic_oblique: run.synthetic_oblique,
+                emphasis,
+                background: None,
             }));
 
             pen_x += run.advance;
