@@ -896,6 +896,32 @@ mod tests {
     }
 
     #[test]
+    fn layout_absolute_auto_height_respects_min_height_with_bottom_inset() {
+        let layout = AbsoluteLayout::new();
+
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.bottom = LengthOrAuto::px(15.0);
+        style.height = LengthOrAuto::Auto;
+        style.min_height = Length::px(90.0);
+
+        let mut input = AbsoluteLayoutInput::new(style, Size::new(0.0, 0.0), Point::ZERO);
+        input.preferred_min_block_size = Some(10.0);
+        input.preferred_block_size = Some(40.0); // would shrink to 40 without min-height clamp
+        let cb = create_containing_block(200.0, 150.0);
+
+        let result = layout.layout_absolute(&input, &cb).unwrap();
+        assert!(
+            (result.size.height - 90.0).abs() < 0.001,
+            "min-height should clamp auto height when shrink-to-fit yields smaller"
+        );
+        assert!(
+            (result.position.y - (150.0 - 15.0 - 90.0)).abs() < 0.001,
+            "bottom inset should position the clamped box"
+        );
+    }
+
+    #[test]
     fn layout_absolute_auto_height_respects_max_height_in_shrink_case() {
         let layout = AbsoluteLayout::new();
 
@@ -945,6 +971,32 @@ mod tests {
         assert!(
             (result.position.x - (200.0 - 10.0 - 60.0)).abs() < 0.001,
             "right inset should still be satisfied after clamping"
+        );
+    }
+
+    #[test]
+    fn layout_absolute_auto_width_respects_min_width_with_only_right_inset() {
+        let layout = AbsoluteLayout::new();
+
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.right = LengthOrAuto::px(8.0);
+        style.width = LengthOrAuto::Auto;
+        style.min_width = Length::px(70.0);
+
+        let mut input = AbsoluteLayoutInput::new(style, Size::new(0.0, 0.0), Point::ZERO);
+        input.preferred_min_inline_size = Some(20.0);
+        input.preferred_inline_size = Some(30.0); // would shrink to 30 without min-width
+        let cb = create_containing_block(120.0, 200.0);
+
+        let result = layout.layout_absolute(&input, &cb).unwrap();
+        assert!(
+            (result.size.width - 70.0).abs() < 0.001,
+            "min-width should clamp auto width when shrink-to-fit is smaller"
+        );
+        assert!(
+            (result.position.x - (120.0 - 8.0 - 70.0)).abs() < 0.001,
+            "right inset should remain satisfied after min-width expansion"
         );
     }
 
