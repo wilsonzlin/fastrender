@@ -57,7 +57,6 @@ use crate::style::ComputedStyle;
 use crate::text::font_db::font_has_feature;
 use crate::text::font_db::{FontStretch as DbFontStretch, FontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
-use crate::text::emoji;
 use rustybuzz::{Direction as HbDirection, Face, Feature, Language as HbLanguage, UnicodeBuffer, Variation};
 use std::collections::HashSet;
 use std::iter::FromIterator;
@@ -842,7 +841,6 @@ pub fn compute_adjusted_font_size(style: &ComputedStyle, font: &LoadedFont, pref
 /// Uses the font context to find appropriate fonts for each script,
 /// falling back through the font family list as needed.
 pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &FontContext) -> Result<Vec<FontRun>> {
-    let mut font_runs = Vec::with_capacity(runs.len());
     let features = collect_opentype_features(style);
     let authored_variations: Vec<Variation> = style
         .font_variation_settings
@@ -853,83 +851,90 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
         })
         .collect();
     let preferred_aspect = preferred_font_aspect(style, font_context);
+    let font_style = match style.font_style {
+        CssFontStyle::Normal => FontStyle::Normal,
+        CssFontStyle::Italic => FontStyle::Italic,
+        CssFontStyle::Oblique(_) => FontStyle::Oblique,
+    };
+    let font_stretch = DbFontStretch::from_percentage(style.font_stretch.to_percentage());
+    let families = build_family_entries(style);
+    let avoid_emoji_fonts = matches!(style.font_variant_emoji, FontVariantEmoji::Text);
 
+    let mut font_runs = Vec::new();
     for run in runs {
-        // Try to get a font from the family list
-        let (font, mut synthetic_bold, synthetic_oblique) = get_font_for_run(run, style, font_context)?;
-        let used_font_size = compute_adjusted_font_size(style, &font, preferred_aspect);
-        if style.font_size > 0.0 {
-            synthetic_bold *= used_font_size / style.font_size;
-        }
+        let mut current: Option<(Arc<LoadedFont>, f32, f32, f32, usize)> = None; // (font, bold, oblique, size, start)
+        let mut iter = run.text.char_indices().peekable();
 
-        // Collect available variation axes on the chosen font.
-        let mut auto_variations = Vec::new();
-        if let Ok(face) = font.as_ttf_face() {
-            let axes: Vec<_> = face.variation_axes().into_iter().collect();
-            if !axes.is_empty() {
-                let mut set_tags: HashSet<Tag> = HashSet::from_iter(authored_variations.iter().map(|v| v.tag));
-                let wght_tag = Tag::from_bytes(b"wght");
-                let wdth_tag = Tag::from_bytes(b"wdth");
-                let opsz_tag = Tag::from_bytes(b"opsz");
-                let ital_tag = Tag::from_bytes(b"ital");
+        while let Some((byte_idx, ch)) = iter.next() {
+            let next_idx = iter.peek().map(|(i, _)| *i).unwrap_or_else(|| run.text.len());
+            let font = resolve_font_for_char(
+                ch,
+                &families,
+                style.font_weight.to_u16(),
+                font_style,
+                font_stretch,
+                font_context,
+                avoid_emoji_fonts,
+            )
+            .ok_or_else(|| TextError::ShapingFailed {
+                text: run.text.clone(),
+                reason: format!("No suitable font found for character U+{:04X}", ch as u32),
+            })?;
+            let used_font_size = compute_adjusted_font_size(style, &font, preferred_aspect);
+            let (mut synthetic_bold, synthetic_oblique) = compute_synthetic_styles(style, &font);
+            if style.font_size > 0.0 {
+                synthetic_bold *= used_font_size / style.font_size;
+            }
+            let font_arc = Arc::new(font);
 
-                for axis in axes {
-                    if axis.tag == wght_tag && !set_tags.contains(&wght_tag) {
-                        auto_variations.push(Variation {
-                            tag: wght_tag,
-                            value: style.font_weight.to_u16() as f32,
-                        });
-                        set_tags.insert(wght_tag);
-                    } else if axis.tag == wdth_tag && !set_tags.contains(&wdth_tag) {
-                        auto_variations.push(Variation {
-                            tag: wdth_tag,
-                            value: style.font_stretch.to_percentage(),
-                        });
-                        set_tags.insert(wdth_tag);
-                    } else if axis.tag == opsz_tag
-                        && !set_tags.contains(&opsz_tag)
-                        && matches!(style.font_optical_sizing, crate::style::types::FontOpticalSizing::Auto)
-                    {
-                        auto_variations.push(Variation {
-                            tag: opsz_tag,
-                            value: used_font_size,
-                        });
-                        set_tags.insert(opsz_tag);
-                    } else if axis.tag == ital_tag && !set_tags.contains(&ital_tag) {
-                        let ital = matches!(style.font_style, CssFontStyle::Italic | CssFontStyle::Oblique(_));
-                        auto_variations.push(Variation {
-                            tag: ital_tag,
-                            value: if ital { 1.0 } else { 0.0 },
-                        });
-                        set_tags.insert(ital_tag);
-                    }
+            let same_as_current = current.as_ref().map_or(false, |(f, b, o, size, _)| {
+                Arc::ptr_eq(&f.data, &font_arc.data)
+                    && f.index == font_arc.index
+                    && f.weight == font_arc.weight
+                    && f.style == font_arc.style
+                    && f.stretch == font_arc.stretch
+                    && (*b - synthetic_bold).abs() < f32::EPSILON
+                    && (*o - synthetic_oblique).abs() < f32::EPSILON
+                    && (*size - used_font_size).abs() < f32::EPSILON
+            });
+
+            if !same_as_current {
+                if let Some((font, bold, oblique, size, start)) = current.take() {
+                    push_font_run(
+                        &mut font_runs,
+                        run,
+                        start,
+                        byte_idx,
+                        font,
+                        bold,
+                        oblique,
+                        size,
+                        &features,
+                        &authored_variations,
+                        style,
+                    );
+                }
+                current = Some((font_arc, synthetic_bold, synthetic_oblique, used_font_size, byte_idx));
+            }
+
+            if iter.peek().is_none() {
+                if let Some((font, bold, oblique, size, start)) = current.take() {
+                    push_font_run(
+                        &mut font_runs,
+                        run,
+                        start,
+                        next_idx,
+                        font,
+                        bold,
+                        oblique,
+                        size,
+                        &features,
+                        &authored_variations,
+                        style,
+                    );
                 }
             }
         }
-        let mut variations = authored_variations.clone();
-        variations.extend(auto_variations);
-        let language = match &style.font_language_override {
-            FontLanguageOverride::Normal => style.language.clone(),
-            FontLanguageOverride::Override(tag) => tag.clone(),
-        };
-
-        font_runs.push(FontRun {
-            text: run.text.clone(),
-            start: run.start,
-            end: run.end,
-            font: Arc::new(font),
-            synthetic_bold,
-            synthetic_oblique,
-            script: run.script,
-            direction: run.direction,
-            level: run.level,
-            font_size: used_font_size,
-            language,
-            features: features.clone(),
-            variations,
-            rotation: RunRotation::None,
-            vertical: false,
-        });
     }
 
     Ok(font_runs)
@@ -1016,109 +1021,6 @@ fn push_oriented_segment(run: &FontRun, start: usize, end: usize, rotation: RunR
     out.push(segment);
 }
 
-/// Gets a font for a specific run.
-fn get_font_for_run(
-    run: &ItemizedRun,
-    style: &ComputedStyle,
-    font_context: &FontContext,
-) -> Result<(LoadedFont, f32, f32)> {
-    // Convert CSS font style to our font style
-    let font_style = match style.font_style {
-        CssFontStyle::Normal => FontStyle::Normal,
-        CssFontStyle::Italic => FontStyle::Italic,
-        CssFontStyle::Oblique(_) => FontStyle::Oblique,
-    };
-    let font_stretch = DbFontStretch::from_percentage(style.font_stretch.to_percentage());
-    let emoji_dominant = is_emoji_dominant(&run.text);
-    let wants_emoji_fonts = emoji_dominant && matches!(style.font_variant_emoji, FontVariantEmoji::Emoji);
-    let avoid_emoji_fonts = emoji_dominant && matches!(style.font_variant_emoji, FontVariantEmoji::Text);
-
-    let mut family_list = style.font_family.clone();
-    if wants_emoji_fonts && !family_list.iter().any(|f| f.eq_ignore_ascii_case("emoji")) {
-        family_list.insert(0, "emoji".to_string());
-    }
-
-    let try_families = |families: &[String],
-                        require_emoji: bool,
-                        reject_emoji: bool|
-     -> Option<(LoadedFont, f32, f32)> {
-        for family in families {
-            if let Some(font) =
-                font_context.get_font_full(&[family.clone()], style.font_weight.to_u16(), font_style, font_stretch)
-            {
-                let is_emoji_font = font_is_emoji_font(&font);
-                if require_emoji && !is_emoji_font {
-                    continue;
-                }
-                if reject_emoji && is_emoji_font {
-                    continue;
-                }
-                let (bold, oblique) = compute_synthetic_styles(style, &font);
-                return Some((font, bold, oblique));
-            }
-        }
-        None
-    };
-
-    // Try the font family list first
-    if wants_emoji_fonts {
-        if let Some(found) = try_families(&family_list, true, false) {
-            return Ok(found);
-        }
-        if let Some(ch) = run.text.chars().find(|c| emoji::is_emoji(*c)) {
-            for id in font_context.database().find_emoji_fonts() {
-                if !font_context.database().has_glyph(id, ch) {
-                    continue;
-                }
-                if let Some(font) = font_context.database().load_font(id) {
-                    let (bold, oblique) = compute_synthetic_styles(style, &font);
-                    return Ok((font, bold, oblique));
-                }
-            }
-        }
-    }
-
-    if let Some(font) = try_families(&family_list, false, avoid_emoji_fonts) {
-        return Ok(font);
-    }
-
-    // Try generic fallbacks based on script
-    let generic_families = match run.script {
-        Script::Arabic | Script::Hebrew => vec!["sans-serif".to_string()],
-        Script::Han | Script::Hiragana | Script::Katakana => vec!["sans-serif".to_string()],
-        Script::Devanagari | Script::Bengali | Script::Tamil | Script::Thai => vec!["sans-serif".to_string()],
-        _ => vec!["sans-serif".to_string()],
-    };
-
-    if let Some(font) = try_families(&generic_families, false, avoid_emoji_fonts) {
-        return Ok(font);
-    }
-
-    // Last resort: try to get any sans-serif font
-    if let Some(font) = font_context.get_sans_serif() {
-        if avoid_emoji_fonts && font_is_emoji_font(&font) {
-            for face in font_context.database().faces() {
-                if let Some(candidate) = font_context.database().load_font(face.id) {
-                    if font_is_emoji_font(&candidate) {
-                        continue;
-                    }
-                    let (bold, oblique) = compute_synthetic_styles(style, &candidate);
-                    return Ok((candidate, bold, oblique));
-                }
-            }
-        } else {
-            let (bold, oblique) = compute_synthetic_styles(style, &font);
-            return Ok((font, bold, oblique));
-        }
-    }
-
-    Err(TextError::ShapingFailed {
-        text: run.text.clone(),
-        reason: "No suitable font found".to_string(),
-    }
-    .into())
-}
-
 fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f32) {
     let mut synthetic_bold = 0.0;
     let mut synthetic_oblique = 0.0;
@@ -1142,10 +1044,11 @@ fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f
     (synthetic_bold, synthetic_oblique)
 }
 
+#[cfg(test)]
 fn is_emoji_dominant(text: &str) -> bool {
     let mut saw_emoji = false;
     for c in text.chars() {
-        if emoji::is_emoji(c) {
+        if crate::text::emoji::is_emoji(c) {
             saw_emoji = true;
             continue;
         }
@@ -1160,6 +1063,248 @@ fn is_emoji_dominant(text: &str) -> bool {
 fn font_is_emoji_font(font: &LoadedFont) -> bool {
     let name = font.family.to_lowercase();
     name.contains("emoji") || name.contains("color") || name.contains("twemoji") || name.contains("symbola")
+}
+
+fn build_family_entries(style: &ComputedStyle) -> Vec<crate::text::font_fallback::FamilyEntry> {
+    use crate::text::font_fallback::FamilyEntry;
+    let mut entries = Vec::new();
+    for family in &style.font_family {
+        if let Some(generic) = crate::text::font_db::GenericFamily::parse(family) {
+            entries.push(FamilyEntry::Generic(generic));
+        } else {
+            entries.push(FamilyEntry::Named(family.clone()));
+        }
+    }
+
+    if matches!(style.font_variant_emoji, FontVariantEmoji::Emoji)
+        && !entries
+            .iter()
+            .any(|e| matches!(e, crate::text::font_fallback::FamilyEntry::Generic(crate::text::font_db::GenericFamily::Emoji)))
+    {
+        entries.insert(
+            0,
+            crate::text::font_fallback::FamilyEntry::Generic(crate::text::font_db::GenericFamily::Emoji),
+        );
+    }
+
+    if !entries.iter().any(|e| {
+        matches!(
+            e,
+            crate::text::font_fallback::FamilyEntry::Generic(crate::text::font_db::GenericFamily::SansSerif)
+        )
+    }) {
+        entries.push(crate::text::font_fallback::FamilyEntry::Generic(
+            crate::text::font_db::GenericFamily::SansSerif,
+        ));
+    }
+
+    entries
+}
+
+fn resolve_font_for_char(
+    ch: char,
+    families: &[crate::text::font_fallback::FamilyEntry],
+    weight: u16,
+    style: FontStyle,
+    stretch: DbFontStretch,
+    font_context: &FontContext,
+    avoid_emoji_fonts: bool,
+) -> Option<LoadedFont> {
+    use crate::text::font_fallback::FamilyEntry;
+    use fontdb::Family;
+    let db = font_context.database();
+    let mut fallback_non_emoji: Option<LoadedFont> = None;
+    let mut fallback_emoji: Option<LoadedFont> = None;
+
+    let is_emoji = crate::text::font_db::FontDatabase::is_emoji(ch);
+    for entry in families {
+        if avoid_emoji_fonts {
+            if let FamilyEntry::Generic(crate::text::font_db::GenericFamily::Emoji) = entry {
+                continue;
+            }
+        }
+
+        let query = match entry {
+            FamilyEntry::Named(name) => fontdb::Query {
+                families: &[Family::Name(name)],
+                weight: fontdb::Weight(weight),
+                stretch: stretch.into(),
+                style: style.into(),
+            },
+            FamilyEntry::Generic(generic) => fontdb::Query {
+                families: &[generic.to_fontdb()],
+                weight: fontdb::Weight(weight),
+                stretch: stretch.into(),
+                style: style.into(),
+            },
+        };
+
+        if let Some(id) = db.inner().query(&query) {
+            if let Some(font) = db.load_font(id) {
+                let is_emoji_font = font_is_emoji_font(&font);
+                if is_emoji_font {
+                    if fallback_emoji.is_none() {
+                        fallback_emoji = Some(font.clone());
+                    }
+                } else if fallback_non_emoji.is_none() {
+                    fallback_non_emoji = Some(font.clone());
+                }
+                if avoid_emoji_fonts && is_emoji_font {
+                    continue;
+                }
+                if db.has_glyph(id, ch) {
+                    return Some(font);
+                }
+            }
+        }
+
+        if let FamilyEntry::Generic(generic) = entry {
+            for name in generic.fallback_families() {
+                let query = fontdb::Query {
+                    families: &[Family::Name(name)],
+                    weight: fontdb::Weight(weight),
+                    stretch: stretch.into(),
+                    style: style.into(),
+                };
+                if let Some(id) = db.inner().query(&query) {
+                    if let Some(font) = db.load_font(id) {
+                        let is_emoji_font = font_is_emoji_font(&font);
+                        if is_emoji_font {
+                            if fallback_emoji.is_none() {
+                                fallback_emoji = Some(font.clone());
+                            }
+                        } else if fallback_non_emoji.is_none() {
+                            fallback_non_emoji = Some(font.clone());
+                        }
+                        if avoid_emoji_fonts && is_emoji_font {
+                            continue;
+                        }
+                        if db.has_glyph(id, ch) {
+                            return Some(font);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if is_emoji && !avoid_emoji_fonts {
+        for id in db.find_emoji_fonts() {
+            if db.has_glyph(id, ch) {
+                if let Some(font) = db.load_font(id) {
+                    return Some(font);
+                }
+            } else if fallback_emoji.is_none() {
+                if let Some(font) = db.load_font(id) {
+                    fallback_emoji = Some(font);
+                }
+            }
+        }
+    }
+
+    for face in db.faces() {
+        if let Some(font) = db.load_font(face.id) {
+            let is_emoji_font = font_is_emoji_font(&font);
+            if is_emoji_font {
+                if fallback_emoji.is_none() {
+                    fallback_emoji = Some(font.clone());
+                }
+            } else if fallback_non_emoji.is_none() {
+                fallback_non_emoji = Some(font.clone());
+            }
+            if avoid_emoji_fonts && is_emoji_font {
+                continue;
+            }
+            if db.has_glyph(face.id, ch) {
+                return Some(font);
+            }
+        }
+    }
+
+    fallback_non_emoji.or(fallback_emoji)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_font_run(
+    out: &mut Vec<FontRun>,
+    run: &ItemizedRun,
+    start: usize,
+    end: usize,
+    font: Arc<LoadedFont>,
+    synthetic_bold: f32,
+    synthetic_oblique: f32,
+    font_size: f32,
+    features: &[Feature],
+    authored_variations: &[Variation],
+    style: &ComputedStyle,
+) {
+    let mut variations = authored_variations.to_vec();
+    if let Ok(face) = font.as_ttf_face() {
+        let axes: Vec<_> = face.variation_axes().into_iter().collect();
+        if !axes.is_empty() {
+            let mut set_tags: HashSet<Tag> = HashSet::from_iter(variations.iter().map(|v| v.tag));
+            let wght_tag = Tag::from_bytes(b"wght");
+            let wdth_tag = Tag::from_bytes(b"wdth");
+            let opsz_tag = Tag::from_bytes(b"opsz");
+            let ital_tag = Tag::from_bytes(b"ital");
+
+            for axis in axes {
+                if axis.tag == wght_tag && !set_tags.contains(&wght_tag) {
+                    variations.push(Variation {
+                        tag: wght_tag,
+                        value: style.font_weight.to_u16() as f32,
+                    });
+                    set_tags.insert(wght_tag);
+                } else if axis.tag == wdth_tag && !set_tags.contains(&wdth_tag) {
+                    variations.push(Variation {
+                        tag: wdth_tag,
+                        value: style.font_stretch.to_percentage(),
+                    });
+                    set_tags.insert(wdth_tag);
+                } else if axis.tag == opsz_tag
+                    && !set_tags.contains(&opsz_tag)
+                    && matches!(style.font_optical_sizing, crate::style::types::FontOpticalSizing::Auto)
+                {
+                    variations.push(Variation {
+                        tag: opsz_tag,
+                        value: font_size,
+                    });
+                    set_tags.insert(opsz_tag);
+                } else if axis.tag == ital_tag && !set_tags.contains(&ital_tag) {
+                    let ital = matches!(style.font_style, CssFontStyle::Italic | CssFontStyle::Oblique(_));
+                    variations.push(Variation {
+                        tag: ital_tag,
+                        value: if ital { 1.0 } else { 0.0 },
+                    });
+                    set_tags.insert(ital_tag);
+                }
+            }
+        }
+    }
+
+    let language = match &style.font_language_override {
+        FontLanguageOverride::Normal => style.language.clone(),
+        FontLanguageOverride::Override(tag) => tag.clone(),
+    };
+
+    let segment = &run.text[start..end];
+    out.push(FontRun {
+        text: segment.to_string(),
+        start: run.start + start,
+        end: run.start + end,
+        font,
+        synthetic_bold,
+        synthetic_oblique,
+        script: run.script,
+        direction: run.direction,
+        level: run.level,
+        font_size,
+        language,
+        features: features.to_vec(),
+        variations,
+        rotation: RunRotation::None,
+        vertical: false,
+    });
 }
 
 // ============================================================================
