@@ -4259,8 +4259,14 @@ impl Painter {
                 let angle = 20.0_f32.to_radians();
                 let dx = (angle.cos() * len * 0.5, angle.sin() * len * 0.5);
                 let mut builder = PathBuilder::new();
-                builder.move_to(center_x - dx.0, center_y - dx.1);
-                builder.line_to(center_x + dx.0, center_y + dx.1);
+                if inline_vertical {
+                    // Rotate sesame strokes to slant along the block axis for vertical writing.
+                    builder.move_to(center_x - dx.1, center_y - dx.0);
+                    builder.line_to(center_x + dx.1, center_y + dx.0);
+                } else {
+                    builder.move_to(center_x - dx.0, center_y - dx.1);
+                    builder.line_to(center_x + dx.0, center_y + dx.1);
+                }
                 if let Some(path) = builder.finish() {
                     let mut stroke = Stroke::default();
                     stroke.width = (size * 0.2).max(0.6);

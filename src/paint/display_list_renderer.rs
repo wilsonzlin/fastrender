@@ -2557,8 +2557,13 @@ impl DisplayListRenderer {
                     let angle = 20.0_f32.to_radians();
                     let dx = (angle.cos() * len * 0.5, angle.sin() * len * 0.5);
                     let mut builder = tiny_skia::PathBuilder::new();
-                    builder.move_to(mark.center.x - dx.0, mark.center.y - dx.1);
-                    builder.line_to(mark.center.x + dx.0, mark.center.y + dx.1);
+                    if inline_vertical {
+                        builder.move_to(mark.center.x - dx.1, mark.center.y - dx.0);
+                        builder.line_to(mark.center.x + dx.1, mark.center.y + dx.0);
+                    } else {
+                        builder.move_to(mark.center.x - dx.0, mark.center.y - dx.1);
+                        builder.line_to(mark.center.x + dx.0, mark.center.y + dx.1);
+                    }
                     if let Some(path) = builder.finish() {
                         let mut stroke = tiny_skia::Stroke::default();
                         stroke.width = (emphasis.size * 0.2).max(0.6);
