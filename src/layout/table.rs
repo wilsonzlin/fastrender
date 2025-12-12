@@ -1621,7 +1621,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         }
     }
 
-    fn resolve_candidates(candidates: &[BorderCandidate], _direction: Direction) -> BorderCandidate {
+    fn resolve_candidates(candidates: &[BorderCandidate], direction: Direction) -> BorderCandidate {
         if candidates.is_empty() {
             return BorderCandidate::none();
         }
@@ -1630,31 +1630,42 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
             return *hidden;
         }
 
-        let has_non_none = candidates.iter().any(|c| c.style != BorderStyle::None);
-        if !has_non_none {
+        let mut non_none: Vec<&BorderCandidate> = candidates.iter().filter(|c| c.style != BorderStyle::None).collect();
+        if non_none.is_empty() {
             return BorderCandidate::none();
         }
 
-        // CSS 2.1 border conflict resolution: style priority first, then width, then origin, then source order.
-        let best_style = candidates.iter().map(|c| style_rank(c.style)).max().unwrap_or(0);
-        let mut contenders: Vec<&BorderCandidate> = candidates
-            .iter()
-            .filter(|c| style_rank(c.style) == best_style)
-            .collect();
-
-        let max_width = contenders
+        // CSS 2.2 border conflict resolution (17.6.2.1): width wins first, then style,
+        // then element type, then physical position (left/top in LTR, right/top in RTL).
+        let max_width = non_none
             .iter()
             .map(|c| c.width)
             .fold(0.0f32, |acc, w| if w > acc { w } else { acc });
-        contenders.retain(|c| (c.width - max_width).abs() < 0.01);
+        non_none.retain(|c| (c.width - max_width).abs() < 0.01);
 
-        let best_origin = contenders.iter().map(|c| origin_priority(c.origin)).max().unwrap_or(0);
-        contenders.retain(|c| origin_priority(c.origin) == best_origin);
+        let best_style = non_none.iter().map(|c| style_rank(c.style)).max().unwrap_or(0);
+        non_none.retain(|c| style_rank(c.style) == best_style);
+
+        let best_origin = non_none.iter().map(|c| origin_priority(c.origin)).max().unwrap_or(0);
+        non_none.retain(|c| origin_priority(c.origin) == best_origin);
+
+        fn is_more_top_left(first: &BorderCandidate, second: &BorderCandidate, direction: Direction) -> bool {
+            if first.row != second.row {
+                return first.row < second.row;
+            }
+            match direction {
+                Direction::Ltr => first.col < second.col,
+                Direction::Rtl => first.col > second.col,
+            }
+        }
 
         let default_candidate = BorderCandidate::none();
-        let mut winner = *contenders.first().copied().unwrap_or(&default_candidate);
-        for cand in contenders.into_iter().skip(1) {
-            if cand.source_order >= winner.source_order {
+        let mut winner = *non_none.first().copied().unwrap_or(&default_candidate);
+        for cand in non_none.into_iter().skip(1) {
+            if is_more_top_left(cand, &winner, direction) {
+                winner = *cand;
+            } else if cand.row == winner.row && cand.col == winner.col && cand.source_order > winner.source_order {
+                // Preserve deterministic ordering when positions tie exactly.
                 winner = *cand;
             }
         }
@@ -4259,7 +4270,15 @@ impl FormattingContext for TableFormattingContext {
         }
         let width = base.max(caption_min);
 
-        Ok(width.max(0.0))
+        // Apply authored min/max width to intrinsic size per CSS preferred width clamping.
+        let font_size = box_node.style.font_size;
+        let min_w =
+            resolve_opt_length_against(box_node.style.min_width.as_ref(), font_size, None /* no containing width */);
+        let max_w =
+            resolve_opt_length_against(box_node.style.max_width.as_ref(), font_size, None /* no containing width */);
+        let clamped = clamp_to_min_max(width, min_w, max_w);
+
+        Ok(clamped.max(0.0))
     }
 }
 
@@ -4555,7 +4574,7 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_border_style_beats_width() {
+    fn collapsed_border_width_beats_style() {
         let mut table_style = ComputedStyle::default();
         table_style.display = Display::Table;
         table_style.border_collapse = BorderCollapse::Collapse;
@@ -4581,8 +4600,8 @@ mod tests {
         let borders = compute_collapsed_borders(&table, &structure);
 
         assert_eq!(borders.vertical.len(), 3);
-        assert!((borders.vertical[1][0].width - 2.0).abs() < f32::EPSILON);
-        assert_eq!(borders.vertical[1][0].style, BorderStyle::Double);
+        assert!((borders.vertical[1][0].width - 8.0).abs() < f32::EPSILON);
+        assert_eq!(borders.vertical[1][0].style, BorderStyle::Solid);
     }
 
     #[test]
@@ -4618,7 +4637,7 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_borders_tie_uses_later_cell() {
+    fn collapsed_borders_tie_prefers_left_cell_in_ltr() {
         let mut table_style = ComputedStyle::default();
         table_style.display = Display::Table;
         table_style.border_collapse = BorderCollapse::Collapse;
@@ -4646,11 +4665,11 @@ mod tests {
         let borders = compute_collapsed_borders(&table, &structure);
 
         let middle_border = &borders.vertical[1][0];
-        assert_eq!(middle_border.color, Rgba::from_rgba8(0, 255, 0, 255));
+        assert_eq!(middle_border.color, Rgba::from_rgba8(255, 0, 0, 255));
     }
 
     #[test]
-    fn collapsed_borders_tie_uses_source_order_even_in_rtl() {
+    fn collapsed_borders_tie_prefers_right_cell_in_rtl() {
         let mut table_style = ComputedStyle::default();
         table_style.display = Display::Table;
         table_style.border_collapse = BorderCollapse::Collapse;
@@ -5056,7 +5075,7 @@ mod tests {
         let horizontal_border = &borders.horizontal[1][0];
         assert_eq!(horizontal_border.style, BorderStyle::Solid);
         assert!((horizontal_border.width - 4.0).abs() < f32::EPSILON);
-        assert_eq!(horizontal_border.color, Rgba::from_rgba8(0, 0, 255, 255));
+        assert_eq!(horizontal_border.color, Rgba::from_rgba8(255, 0, 0, 255));
     }
 
     #[test]
@@ -6675,6 +6694,37 @@ mod tests {
             .expect("table layout");
 
         assert!(fragment.bounds.width() >= 179.0, "caption-only table should size to the caption");
+    }
+
+    #[test]
+    fn intrinsic_width_honors_min_and_max() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+        table_style.min_width = Some(Length::px(120.0));
+        table_style.max_width = Some(Length::px(160.0));
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.width = Some(Length::px(300.0));
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let tfc = TableFormattingContext::new();
+        let min = tfc
+            .compute_intrinsic_inline_size(&table, IntrinsicSizingMode::MinContent)
+            .expect("intrinsic");
+        let max = tfc
+            .compute_intrinsic_inline_size(&table, IntrinsicSizingMode::MaxContent)
+            .expect("intrinsic");
+
+        assert!(min >= 119.0, "min-content should clamp to min-width");
+        assert!(max <= 160.5, "max-content should clamp to max-width");
     }
 
     #[test]
