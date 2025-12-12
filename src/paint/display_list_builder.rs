@@ -2408,14 +2408,27 @@ impl DisplayListBuilder {
             TextEmphasisPosition::Auto => TextEmphasisPosition::Over,
             other => other,
         };
-        let block_center = match resolved_position {
-            TextEmphasisPosition::Over | TextEmphasisPosition::OverLeft | TextEmphasisPosition::OverRight => {
-                block_baseline - ascent - gap - mark_size * 0.5
+        let block_center = if inline_vertical {
+            let offset = gap + mark_size * 0.5;
+            match resolved_position {
+                TextEmphasisPosition::Over | TextEmphasisPosition::OverLeft | TextEmphasisPosition::OverRight => {
+                    block_baseline + offset
+                }
+                TextEmphasisPosition::Under | TextEmphasisPosition::UnderLeft | TextEmphasisPosition::UnderRight => {
+                    block_baseline - offset
+                }
+                TextEmphasisPosition::Auto => block_baseline + offset,
             }
-            TextEmphasisPosition::Under | TextEmphasisPosition::UnderLeft | TextEmphasisPosition::UnderRight => {
-                block_baseline + descent + gap + mark_size * 0.5
+        } else {
+            match resolved_position {
+                TextEmphasisPosition::Over | TextEmphasisPosition::OverLeft | TextEmphasisPosition::OverRight => {
+                    block_baseline - ascent - gap - mark_size * 0.5
+                }
+                TextEmphasisPosition::Under | TextEmphasisPosition::UnderLeft | TextEmphasisPosition::UnderRight => {
+                    block_baseline + descent + gap + mark_size * 0.5
+                }
+                TextEmphasisPosition::Auto => block_baseline - ascent - gap - mark_size * 0.5,
             }
-            TextEmphasisPosition::Auto => block_baseline - ascent - gap - mark_size * 0.5,
         };
 
         let mut marks = Vec::new();

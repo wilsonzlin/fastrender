@@ -3986,18 +3986,33 @@ impl Painter {
         let mark_size = (style.font_size * 0.5 * self.scale).max(1.0);
         let gap = mark_size * 0.3;
 
-        let block_center = match resolved_position {
-            crate::style::types::TextEmphasisPosition::Over
-            | crate::style::types::TextEmphasisPosition::OverLeft
-            | crate::style::types::TextEmphasisPosition::OverRight => {
-                block_baseline - metrics.ascent - gap - mark_size * 0.5
+        let block_center = if inline_vertical {
+            let offset = gap + mark_size * 0.5;
+            match resolved_position {
+                crate::style::types::TextEmphasisPosition::Over
+                | crate::style::types::TextEmphasisPosition::OverLeft
+                | crate::style::types::TextEmphasisPosition::OverRight => block_baseline + offset,
+                crate::style::types::TextEmphasisPosition::Under
+                | crate::style::types::TextEmphasisPosition::UnderLeft
+                | crate::style::types::TextEmphasisPosition::UnderRight => block_baseline - offset,
+                crate::style::types::TextEmphasisPosition::Auto => block_baseline + offset,
             }
-            crate::style::types::TextEmphasisPosition::Under
-            | crate::style::types::TextEmphasisPosition::UnderLeft
-            | crate::style::types::TextEmphasisPosition::UnderRight => {
-                block_baseline + metrics.descent + gap + mark_size * 0.5
+        } else {
+            match resolved_position {
+                crate::style::types::TextEmphasisPosition::Over
+                | crate::style::types::TextEmphasisPosition::OverLeft
+                | crate::style::types::TextEmphasisPosition::OverRight => {
+                    block_baseline - metrics.ascent - gap - mark_size * 0.5
+                }
+                crate::style::types::TextEmphasisPosition::Under
+                | crate::style::types::TextEmphasisPosition::UnderLeft
+                | crate::style::types::TextEmphasisPosition::UnderRight => {
+                    block_baseline + metrics.descent + gap + mark_size * 0.5
+                }
+                crate::style::types::TextEmphasisPosition::Auto => {
+                    block_baseline - metrics.ascent - gap - mark_size * 0.5
+                }
             }
-            crate::style::types::TextEmphasisPosition::Auto => block_baseline - metrics.ascent - gap - mark_size * 0.5,
         };
 
         // Precompute mark painter for string emphasis.
