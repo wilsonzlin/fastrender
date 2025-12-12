@@ -807,6 +807,53 @@ mod tests {
     }
 
     #[test]
+    fn layout_absolute_auto_height_uses_preferred_block_sizes_without_insets() {
+        let layout = AbsoluteLayout::new();
+
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.height = LengthOrAuto::Auto;
+
+        let mut input = AbsoluteLayoutInput::new(style, Size::new(10.0, 10.0), Point::ZERO);
+        input.preferred_min_block_size = Some(40.0);
+        input.preferred_block_size = Some(90.0);
+        // available = 200 (no insets)
+        let cb = create_containing_block(200.0, 200.0);
+
+        let result = layout.layout_absolute(&input, &cb).unwrap();
+        assert!(
+            (result.size.height - 90.0).abs() < 0.001,
+            "auto height with no insets should shrink-to-fit preferred block size"
+        );
+    }
+
+    #[test]
+    fn layout_absolute_single_inset_shrinks_height_to_available() {
+        let layout = AbsoluteLayout::new();
+
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.top = LengthOrAuto::px(20.0);
+        style.height = LengthOrAuto::Auto;
+
+        let mut input = AbsoluteLayoutInput::new(style, Size::new(10.0, 10.0), Point::ZERO);
+        input.preferred_min_block_size = Some(80.0);
+        input.preferred_block_size = Some(200.0);
+        // available = 200 - 20 = 180
+        let cb = create_containing_block(200.0, 200.0);
+
+        let result = layout.layout_absolute(&input, &cb).unwrap();
+        assert!(
+            (result.size.height - 180.0).abs() < 0.001,
+            "auto height with single inset should shrink to available while respecting min-content"
+        );
+        assert!(
+            (result.position.y - 20.0).abs() < 0.001,
+            "top inset should remain at 20"
+        );
+    }
+
+    #[test]
     fn test_layout_absolute_intrinsic_size() {
         let layout = AbsoluteLayout::new();
 
