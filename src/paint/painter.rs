@@ -41,7 +41,8 @@ use crate::style::display::Display;
 use crate::style::position::Position;
 use crate::style::types::{
     BackgroundAttachment, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeatKeyword,
-    BackgroundSize, BackgroundSizeComponent, BackgroundSizeKeyword, BorderStyle as CssBorderStyle, ImageOrientation,
+    BackgroundSize, BackgroundSizeComponent, BackgroundSizeKeyword, BorderImage, BorderImageOutsetValue,
+    BorderImageRepeat, BorderImageSource, BorderImageWidthValue, BorderStyle as CssBorderStyle, ImageOrientation,
     ImageRendering, ObjectFit, OrientationTransform, TextDecorationLine, TextDecorationSkipInk, TextDecorationStyle,
     TextDecorationThickness,
 };
@@ -1676,10 +1677,21 @@ impl Painter {
     /// Paints the borders of a fragment
     fn paint_borders(&mut self, x: f32, y: f32, width: f32, height: f32, style: &ComputedStyle) {
         // Only paint if there are borders
-        let top = style.border_top_width.to_px() * self.scale;
-        let right = style.border_right_width.to_px() * self.scale;
-        let bottom = style.border_bottom_width.to_px() * self.scale;
-        let left = style.border_left_width.to_px() * self.scale;
+        let top_css = style.border_top_width.to_px();
+        let right_css = style.border_right_width.to_px();
+        let bottom_css = style.border_bottom_width.to_px();
+        let left_css = style.border_left_width.to_px();
+
+        if matches!(style.border_image.source, BorderImageSource::Image(_)) {
+            if self.paint_border_image(x, y, width, height, style, top_css, right_css, bottom_css, left_css) {
+                return;
+            }
+        }
+
+        let top = top_css * self.scale;
+        let right = right_css * self.scale;
+        let bottom = bottom_css * self.scale;
+        let left = left_css * self.scale;
 
         let x = self.device_length(x);
         let y = self.device_length(y);
@@ -1744,6 +1756,338 @@ impl Painter {
                 style.border_left_style,
                 &style.border_left_color,
             );
+        }
+    }
+
+    fn paint_border_image(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        style: &ComputedStyle,
+        top: f32,
+        right: f32,
+        bottom: f32,
+        left: f32,
+    ) -> bool {
+        let BorderImage {
+            source,
+            slice,
+            width: img_widths,
+            outset,
+            repeat,
+        } = &style.border_image;
+
+        let bg = match source {
+            BorderImageSource::Image(img) => img,
+            BorderImageSource::None => return false,
+        };
+
+        let image = match bg {
+            BackgroundImage::Url(src) => match self.image_cache.load(src) {
+                Ok(img) => img,
+                Err(_) => return false,
+            },
+            BackgroundImage::LinearGradient { .. }
+            | BackgroundImage::RepeatingLinearGradient { .. }
+            | BackgroundImage::RadialGradient { .. }
+            | BackgroundImage::RepeatingRadialGradient { .. }
+            | BackgroundImage::ConicGradient { .. }
+            | BackgroundImage::RepeatingConicGradient { .. } => {
+                // Gradients as border images are not yet supported.
+                return false;
+            }
+            BackgroundImage::None => return false,
+        };
+
+        let orientation = style.image_orientation.resolve(image.orientation, true);
+        let Some(pixmap) = Self::dynamic_image_to_pixmap(&image, orientation) else {
+            return false;
+        };
+        let img_w = pixmap.width();
+        let img_h = pixmap.height();
+        if img_w == 0 || img_h == 0 {
+            return false;
+        }
+
+        let slice_top = resolve_slice_value(slice.top, img_h);
+        let slice_right = resolve_slice_value(slice.right, img_w);
+        let slice_bottom = resolve_slice_value(slice.bottom, img_h);
+        let slice_left = resolve_slice_value(slice.left, img_w);
+
+        let border_widths = BorderWidths {
+            top,
+            right,
+            bottom,
+            left,
+        };
+
+        let target_widths = resolve_border_image_widths(img_widths, border_widths, width, height);
+        let outsets = resolve_border_image_outset(outset, target_widths);
+
+        let outer_rect = Rect::from_xywh(
+            x - outsets.left,
+            y - outsets.top,
+            width + outsets.left + outsets.right,
+            height + outsets.top + outsets.bottom,
+        );
+        let inner_rect = Rect::from_xywh(
+            outer_rect.x() + target_widths.left,
+            outer_rect.y() + target_widths.top,
+            outer_rect.width() - target_widths.left - target_widths.right,
+            outer_rect.height() - target_widths.top - target_widths.bottom,
+        );
+        if inner_rect.width() <= 0.0 || inner_rect.height() <= 0.0 {
+            return true;
+        }
+
+        let sx0 = 0.0;
+        let sx1 = slice_left.min(img_w as f32);
+        let sx2 = (img_w as f32 - slice_right).max(sx1);
+        let sx3 = img_w as f32;
+
+        let sy0 = 0.0;
+        let sy1 = slice_top.min(img_h as f32);
+        let sy2 = (img_h as f32 - slice_bottom).max(sy1);
+        let sy3 = img_h as f32;
+
+        let (repeat_x, repeat_y) = *repeat;
+
+        // Corners
+        self.paint_border_patch(
+            &pixmap,
+            Rect::from_xywh(sx0, sy0, sx1 - sx0, sy1 - sy0),
+            Rect::from_xywh(outer_rect.x(), outer_rect.y(), target_widths.left, target_widths.top),
+            BorderImageRepeat::Stretch,
+            BorderImageRepeat::Stretch,
+        );
+        self.paint_border_patch(
+            &pixmap,
+            Rect::from_xywh(sx2, sy0, sx3 - sx2, sy1 - sy0),
+            Rect::from_xywh(
+                outer_rect.x() + outer_rect.width() - target_widths.right,
+                outer_rect.y(),
+                target_widths.right,
+                target_widths.top,
+            ),
+            BorderImageRepeat::Stretch,
+            BorderImageRepeat::Stretch,
+        );
+        self.paint_border_patch(
+            &pixmap,
+            Rect::from_xywh(sx0, sy2, sx1 - sx0, sy3 - sy2),
+            Rect::from_xywh(
+                outer_rect.x(),
+                outer_rect.y() + outer_rect.height() - target_widths.bottom,
+                target_widths.left,
+                target_widths.bottom,
+            ),
+            BorderImageRepeat::Stretch,
+            BorderImageRepeat::Stretch,
+        );
+        self.paint_border_patch(
+            &pixmap,
+            Rect::from_xywh(sx2, sy2, sx3 - sx2, sy3 - sy2),
+            Rect::from_xywh(
+                outer_rect.x() + outer_rect.width() - target_widths.right,
+                outer_rect.y() + outer_rect.height() - target_widths.bottom,
+                target_widths.right,
+                target_widths.bottom,
+            ),
+            BorderImageRepeat::Stretch,
+            BorderImageRepeat::Stretch,
+        );
+
+        // Edges
+        self.paint_border_patch(
+            &pixmap,
+            Rect::from_xywh(sx1, sy0, sx2 - sx1, sy1 - sy0),
+            Rect::from_xywh(inner_rect.x(), outer_rect.y(), inner_rect.width(), target_widths.top),
+            repeat_x,
+            BorderImageRepeat::Stretch,
+        );
+        self.paint_border_patch(
+            &pixmap,
+            Rect::from_xywh(sx1, sy2, sx2 - sx1, sy3 - sy2),
+            Rect::from_xywh(
+                inner_rect.x(),
+                outer_rect.y() + outer_rect.height() - target_widths.bottom,
+                inner_rect.width(),
+                target_widths.bottom,
+            ),
+            repeat_x,
+            BorderImageRepeat::Stretch,
+        );
+        self.paint_border_patch(
+            &pixmap,
+            Rect::from_xywh(sx0, sy1, sx1 - sx0, sy2 - sy1),
+            Rect::from_xywh(outer_rect.x(), inner_rect.y(), target_widths.left, inner_rect.height()),
+            BorderImageRepeat::Stretch,
+            repeat_y,
+        );
+        self.paint_border_patch(
+            &pixmap,
+            Rect::from_xywh(sx2, sy1, sx3 - sx2, sy2 - sy1),
+            Rect::from_xywh(
+                outer_rect.x() + outer_rect.width() - target_widths.right,
+                inner_rect.y(),
+                target_widths.right,
+                inner_rect.height(),
+            ),
+            BorderImageRepeat::Stretch,
+            repeat_y,
+        );
+
+        if slice.fill {
+            self.paint_border_patch(
+                &pixmap,
+                Rect::from_xywh(sx1, sy1, sx2 - sx1, sy2 - sy1),
+                inner_rect,
+                repeat_x,
+                repeat_y,
+            );
+        }
+
+        true
+    }
+
+    fn paint_border_patch(
+        &mut self,
+        source: &Pixmap,
+        src_rect: Rect,
+        dest_rect: Rect,
+        repeat_x: BorderImageRepeat,
+        repeat_y: BorderImageRepeat,
+    ) {
+        if src_rect.width() <= 0.0 || src_rect.height() <= 0.0 || dest_rect.width() <= 0.0 || dest_rect.height() <= 0.0
+        {
+            return;
+        }
+
+        let sx0 = src_rect.x().max(0.0).floor() as u32;
+        let sy0 = src_rect.y().max(0.0).floor() as u32;
+        let sx1 = (src_rect.x() + src_rect.width())
+            .ceil()
+            .min(source.width() as f32)
+            .max(0.0) as u32;
+        let sy1 = (src_rect.y() + src_rect.height())
+            .ceil()
+            .min(source.height() as f32)
+            .max(0.0) as u32;
+        if sx1 <= sx0 || sy1 <= sy0 {
+            return;
+        }
+        let width = sx1 - sx0;
+        let height = sy1 - sy0;
+
+        let data = source.data();
+        let mut patch = Vec::with_capacity((width * height * 4) as usize);
+        for row in sy0..sy1 {
+            let start = ((row * source.width() + sx0) * 4) as usize;
+            let end = start + (width * 4) as usize;
+            patch.extend_from_slice(&data[start..end]);
+        }
+        let Some(patch_pixmap) = Pixmap::from_vec(patch, IntSize::from_wh(width, height).unwrap()) else {
+            return;
+        };
+
+        let mut tile_w = dest_rect.width();
+        let mut tile_h = dest_rect.height();
+
+        let mut scale_x = tile_w / width as f32;
+        let mut scale_y = tile_h / height as f32;
+
+        if repeat_x != BorderImageRepeat::Stretch {
+            scale_x = scale_y;
+            tile_w = width as f32 * scale_x;
+        }
+        if repeat_y != BorderImageRepeat::Stretch {
+            scale_y = scale_x;
+            tile_h = height as f32 * scale_y;
+        }
+
+        if repeat_x == BorderImageRepeat::Round && tile_w > 0.0 {
+            let count = (dest_rect.width() / tile_w).round().max(1.0);
+            tile_w = dest_rect.width() / count;
+            scale_x = tile_w / width as f32;
+        }
+        if repeat_y == BorderImageRepeat::Round && tile_h > 0.0 {
+            let count = (dest_rect.height() / tile_h).round().max(1.0);
+            tile_h = dest_rect.height() / count;
+            scale_y = tile_h / height as f32;
+        }
+
+        let positions_x = if repeat_x == BorderImageRepeat::Stretch {
+            vec![dest_rect.x()]
+        } else {
+            let mut pos = Vec::new();
+            let mut cursor = dest_rect.x();
+            let end = dest_rect.x() + dest_rect.width();
+            if tile_w <= 0.0 {
+                return;
+            }
+            while cursor < end - 1e-3 {
+                pos.push(cursor);
+                cursor += tile_w;
+            }
+            pos
+        };
+
+        let positions_y = if repeat_y == BorderImageRepeat::Stretch {
+            vec![dest_rect.y()]
+        } else {
+            let mut pos = Vec::new();
+            let mut cursor = dest_rect.y();
+            let end = dest_rect.y() + dest_rect.height();
+            if tile_h <= 0.0 {
+                return;
+            }
+            while cursor < end - 1e-3 {
+                pos.push(cursor);
+                cursor += tile_h;
+            }
+            pos
+        };
+
+        let clip = dest_rect;
+        for ty in positions_y.iter().copied() {
+            for tx in positions_x.iter().copied() {
+                let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
+                let Some(intersection) = tile_rect.intersection(clip) else {
+                    continue;
+                };
+                if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
+                    continue;
+                }
+                let device_clip = self.device_rect(intersection);
+                let Some(src_rect) = SkiaRect::from_xywh(
+                    device_clip.x(),
+                    device_clip.y(),
+                    device_clip.width(),
+                    device_clip.height(),
+                ) else {
+                    continue;
+                };
+                let mut paint = Paint::default();
+                paint.shader = Pattern::new(
+                    patch_pixmap.as_ref(),
+                    SpreadMode::Pad,
+                    FilterQuality::Bilinear,
+                    1.0,
+                    Transform::from_row(
+                        scale_x * self.scale,
+                        0.0,
+                        0.0,
+                        scale_y * self.scale,
+                        self.device_length(tx),
+                        self.device_length(ty),
+                    ),
+                );
+                paint.anti_alias = false;
+
+                self.pixmap.fill_rect(src_rect, &paint, Transform::identity(), None);
+            }
         }
     }
 
@@ -4961,6 +5305,60 @@ pub fn scale_pixmap_for_dpr(pixmap: Pixmap, dpr: f32) -> Result<Pixmap> {
     Ok(target)
 }
 
+#[derive(Copy, Clone)]
+struct BorderWidths {
+    top: f32,
+    right: f32,
+    bottom: f32,
+    left: f32,
+}
+
+fn resolve_slice_value(value: crate::style::types::BorderImageSliceValue, axis_len: u32) -> f32 {
+    match value {
+        crate::style::types::BorderImageSliceValue::Number(n) => n.max(0.0),
+        crate::style::types::BorderImageSliceValue::Percentage(p) => (p / 100.0) * axis_len as f32,
+    }
+}
+
+fn resolve_border_image_widths(
+    widths: &crate::style::types::BorderImageWidth,
+    border: BorderWidths,
+    box_width: f32,
+    box_height: f32,
+) -> BorderWidths {
+    fn resolve_single(value: BorderImageWidthValue, border: f32, axis: f32) -> f32 {
+        match value {
+            BorderImageWidthValue::Auto => border,
+            BorderImageWidthValue::Number(n) => (n * border).max(0.0),
+            BorderImageWidthValue::Length(len) => resolve_length_for_paint(&len, 16.0, axis).max(0.0),
+            BorderImageWidthValue::Percentage(p) => ((p / 100.0) * axis).max(0.0),
+        }
+    }
+
+    BorderWidths {
+        top: resolve_single(widths.top, border.top, box_height),
+        right: resolve_single(widths.right, border.right, box_width),
+        bottom: resolve_single(widths.bottom, border.bottom, box_height),
+        left: resolve_single(widths.left, border.left, box_width),
+    }
+}
+
+fn resolve_border_image_outset(outset: &crate::style::types::BorderImageOutset, border: BorderWidths) -> BorderWidths {
+    fn resolve_single(value: BorderImageOutsetValue, border: f32) -> f32 {
+        match value {
+            BorderImageOutsetValue::Number(n) => (n * border).max(0.0),
+            BorderImageOutsetValue::Length(len) => resolve_length_for_paint(&len, 16.0, border.max(1.0)).max(0.0),
+        }
+    }
+
+    BorderWidths {
+        top: resolve_single(outset.top, border.top),
+        right: resolve_single(outset.right, border.right),
+        bottom: resolve_single(outset.bottom, border.bottom),
+        left: resolve_single(outset.left, border.left),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4969,14 +5367,17 @@ mod tests {
     use crate::image_loader::ImageCache;
     use crate::paint::display_list::BorderRadii;
     use crate::style::types::{
-        BackgroundAttachment, BackgroundBox, BackgroundRepeat, Isolation, MixBlendMode, OutlineColor, OutlineStyle,
-        Overflow,
+        BackgroundAttachment, BackgroundBox, BackgroundRepeat, BorderImage, BorderImageSlice, BorderImageSliceValue,
+        BorderImageSource, Isolation, MixBlendMode, OutlineColor, OutlineStyle, Overflow,
     };
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
     use crate::text::font_loader::FontContext;
     use crate::tree::box_tree::{SrcsetCandidate, SrcsetDescriptor};
     use crate::Position;
+    use base64::Engine;
+    use image::ImageEncoder;
+    use image::RgbaImage;
     use std::sync::Arc;
 
     fn make_empty_tree() -> FragmentTree {
@@ -6611,6 +7012,74 @@ mod tests {
             right.1 > right.0 && right.1 > right.2,
             "expected green-dominant pixel on the right without orientation, got {:?}",
             right
+        );
+    }
+
+    #[test]
+    fn paints_border_image_nine_slice() {
+        let mut img = RgbaImage::new(3, 3);
+        img.put_pixel(0, 0, image::Rgba([255, 0, 0, 255])); // TL
+        img.put_pixel(2, 0, image::Rgba([0, 0, 255, 255])); // TR
+        img.put_pixel(0, 2, image::Rgba([0, 255, 0, 255])); // BL
+        img.put_pixel(2, 2, image::Rgba([255, 255, 0, 255])); // BR
+        let edge = image::Rgba([0, 255, 255, 255]);
+        img.put_pixel(1, 0, edge); // top edge
+        img.put_pixel(1, 2, edge); // bottom edge
+        img.put_pixel(0, 1, edge); // left edge
+        img.put_pixel(2, 1, edge); // right edge
+        img.put_pixel(1, 1, image::Rgba([255, 255, 255, 255])); // center
+
+        let mut buf = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut buf)
+            .write_image(img.as_raw(), 3, 3, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        let data_url = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&buf)
+        );
+
+        let mut style = ComputedStyle::default();
+        style.border_top_width = Length::px(4.0);
+        style.border_right_width = Length::px(4.0);
+        style.border_bottom_width = Length::px(4.0);
+        style.border_left_width = Length::px(4.0);
+        style.border_image = BorderImage {
+            source: BorderImageSource::Image(BackgroundImage::Url(data_url)),
+            slice: BorderImageSlice {
+                top: BorderImageSliceValue::Number(1.0),
+                right: BorderImageSliceValue::Number(1.0),
+                bottom: BorderImageSliceValue::Number(1.0),
+                left: BorderImageSliceValue::Number(1.0),
+                fill: false,
+            },
+            ..BorderImage::default()
+        };
+
+        let mut painter = Painter::new(16, 16, Rgba::WHITE).expect("painter");
+        painter.paint_borders(0.0, 0.0, 16.0, 16.0, &style);
+
+        let tl = painter.pixmap.pixel(0, 0).unwrap();
+        let tr = painter.pixmap.pixel(15, 0).unwrap();
+        let bl = painter.pixmap.pixel(0, 15).unwrap();
+        let br = painter.pixmap.pixel(15, 15).unwrap();
+        assert_eq!((tl.red(), tl.green(), tl.blue()), (255, 0, 0));
+        assert_eq!((tr.red(), tr.green(), tr.blue()), (0, 0, 255));
+        assert_eq!((bl.red(), bl.green(), bl.blue()), (0, 255, 0));
+        assert_eq!((br.red(), br.green(), br.blue()), (255, 255, 0));
+        // Edge samples
+        let edge_sample = painter.pixmap.pixel(8, 1).unwrap();
+        assert_eq!(
+            (edge_sample.red(), edge_sample.green(), edge_sample.blue()),
+            (0, 255, 255)
+        );
+        let edge_sample_left = painter.pixmap.pixel(1, 8).unwrap();
+        assert_eq!(
+            (
+                edge_sample_left.red(),
+                edge_sample_left.green(),
+                edge_sample_left.blue()
+            ),
+            (0, 255, 255)
         );
     }
 }

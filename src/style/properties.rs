@@ -2192,6 +2192,14 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
             styles.background_attachments = source.background_attachments.clone();
             styles.rebuild_background_layers();
         }
+        "border-image-source" => styles.border_image.source = source.border_image.source.clone(),
+        "border-image-slice" => styles.border_image.slice = source.border_image.slice.clone(),
+        "border-image-width" => styles.border_image.width = source.border_image.width.clone(),
+        "border-image-outset" => styles.border_image.outset = source.border_image.outset.clone(),
+        "border-image-repeat" => styles.border_image.repeat = source.border_image.repeat,
+        "border-image" => {
+            styles.border_image = source.border_image.clone();
+        }
         "background-origin" => {
             styles.background_origins = source.background_origins.clone();
             styles.rebuild_background_layers();
@@ -5129,6 +5137,36 @@ pub fn apply_declaration_with_base(
                 styles.image_resolution = res;
             }
         }
+        "border-image-source" => {
+            if let Some(src) = parse_border_image_source(&resolved_value) {
+                styles.border_image.source = src;
+            }
+        }
+        "border-image-slice" => {
+            if let Some(slice) = parse_border_image_slice(&resolved_value) {
+                styles.border_image.slice = slice;
+            }
+        }
+        "border-image-width" => {
+            if let Some(width) = parse_border_image_width(&resolved_value) {
+                styles.border_image.width = width;
+            }
+        }
+        "border-image-outset" => {
+            if let Some(outset) = parse_border_image_outset(&resolved_value) {
+                styles.border_image.outset = outset;
+            }
+        }
+        "border-image-repeat" => {
+            if let Some(rep) = parse_border_image_repeat(&resolved_value) {
+                styles.border_image.repeat = rep;
+            }
+        }
+        "border-image" => {
+            if let Some(img) = parse_border_image_shorthand(&resolved_value) {
+                styles.border_image = img;
+            }
+        }
         "image-rendering" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 if let Some(rendering) = parse_image_rendering(kw) {
@@ -5543,6 +5581,246 @@ fn parse_image_resolution(value: &PropertyValue) -> Option<ImageResolution> {
         }
         _ => None,
     }
+}
+
+fn parse_border_image_source(value: &PropertyValue) -> Option<BorderImageSource> {
+    if let PropertyValue::Keyword(kw) = value {
+        if kw.eq_ignore_ascii_case("none") {
+            return Some(BorderImageSource::None);
+        }
+    }
+    parse_background_image_value(value).map(BorderImageSource::Image)
+}
+
+fn parse_border_image_slice(value: &PropertyValue) -> Option<BorderImageSlice> {
+    let tokens: Vec<PropertyValue> = match value {
+        PropertyValue::Multiple(v) => v.clone(),
+        other => vec![other.clone()],
+    };
+    parse_border_image_slice_values(&tokens)
+}
+
+fn parse_border_image_slice_values(values: &[PropertyValue]) -> Option<BorderImageSlice> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut fill = false;
+    let mut numeric: Vec<BorderImageSliceValue> = Vec::new();
+    for v in values {
+        match v {
+            PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("fill") => fill = true,
+            PropertyValue::Number(n) if *n >= 0.0 => numeric.push(BorderImageSliceValue::Number(*n)),
+            PropertyValue::Percentage(p) if *p >= 0.0 => numeric.push(BorderImageSliceValue::Percentage(*p)),
+            _ => return None,
+        }
+    }
+    if numeric.is_empty() {
+        return None;
+    }
+    let expand = |vals: &[BorderImageSliceValue]| -> [BorderImageSliceValue; 4] {
+        match vals.len() {
+            1 => [vals[0], vals[0], vals[0], vals[0]],
+            2 => [vals[0], vals[1], vals[0], vals[1]],
+            3 => [vals[0], vals[1], vals[2], vals[1]],
+            _ => [vals[0], vals[1], vals[2], vals[3]],
+        }
+    };
+    let expanded = expand(&numeric);
+    Some(BorderImageSlice {
+        top: expanded[0],
+        right: expanded[1],
+        bottom: expanded[2],
+        left: expanded[3],
+        fill,
+    })
+}
+
+fn parse_border_image_width(value: &PropertyValue) -> Option<BorderImageWidth> {
+    let tokens: Vec<PropertyValue> = match value {
+        PropertyValue::Multiple(v) => v.clone(),
+        other => vec![other.clone()],
+    };
+    parse_border_image_width_list(&tokens)
+}
+
+fn parse_border_image_width_list(values: &[PropertyValue]) -> Option<BorderImageWidth> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut widths: Vec<BorderImageWidthValue> = Vec::new();
+    for v in values {
+        if let PropertyValue::Keyword(kw) = v {
+            if kw.eq_ignore_ascii_case("auto") {
+                widths.push(BorderImageWidthValue::Auto);
+                continue;
+            }
+        }
+        match v {
+            PropertyValue::Number(n) if *n >= 0.0 => widths.push(BorderImageWidthValue::Number(*n)),
+            PropertyValue::Length(len) if len.value >= 0.0 => {
+                if len.unit == LengthUnit::Percent {
+                    widths.push(BorderImageWidthValue::Percentage(len.value));
+                } else {
+                    widths.push(BorderImageWidthValue::Length(*len));
+                }
+            }
+            PropertyValue::Percentage(p) if *p >= 0.0 => widths.push(BorderImageWidthValue::Percentage(*p)),
+            _ => return None,
+        }
+    }
+    let expand = |vals: &[BorderImageWidthValue]| -> [BorderImageWidthValue; 4] {
+        match vals.len() {
+            1 => [vals[0], vals[0], vals[0], vals[0]],
+            2 => [vals[0], vals[1], vals[0], vals[1]],
+            3 => [vals[0], vals[1], vals[2], vals[1]],
+            _ => [vals[0], vals[1], vals[2], vals[3]],
+        }
+    };
+    let expanded = expand(&widths);
+    Some(BorderImageWidth {
+        top: expanded[0],
+        right: expanded[1],
+        bottom: expanded[2],
+        left: expanded[3],
+    })
+}
+
+fn parse_border_image_outset(value: &PropertyValue) -> Option<BorderImageOutset> {
+    let tokens: Vec<PropertyValue> = match value {
+        PropertyValue::Multiple(v) => v.clone(),
+        other => vec![other.clone()],
+    };
+    parse_border_image_outset_list(&tokens)
+}
+
+fn parse_border_image_outset_list(values: &[PropertyValue]) -> Option<BorderImageOutset> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut outsets: Vec<BorderImageOutsetValue> = Vec::new();
+    for v in values {
+        match v {
+            PropertyValue::Number(n) if *n >= 0.0 => outsets.push(BorderImageOutsetValue::Number(*n)),
+            PropertyValue::Length(len) if len.value >= 0.0 => outsets.push(BorderImageOutsetValue::Length(*len)),
+            _ => return None,
+        }
+    }
+    let expand = |vals: &[BorderImageOutsetValue]| -> [BorderImageOutsetValue; 4] {
+        match vals.len() {
+            1 => [vals[0], vals[0], vals[0], vals[0]],
+            2 => [vals[0], vals[1], vals[0], vals[1]],
+            3 => [vals[0], vals[1], vals[2], vals[1]],
+            _ => [vals[0], vals[1], vals[2], vals[3]],
+        }
+    };
+    let expanded = expand(&outsets);
+    Some(BorderImageOutset {
+        top: expanded[0],
+        right: expanded[1],
+        bottom: expanded[2],
+        left: expanded[3],
+    })
+}
+
+fn parse_border_image_repeat(value: &PropertyValue) -> Option<(BorderImageRepeat, BorderImageRepeat)> {
+    let tokens: Vec<String> = match value {
+        PropertyValue::Multiple(v) => v
+            .iter()
+            .filter_map(|p| match p {
+                PropertyValue::Keyword(k) => Some(k.clone()),
+                _ => None,
+            })
+            .collect(),
+        PropertyValue::Keyword(kw) => kw.split_whitespace().map(|s| s.to_string()).collect(),
+        _ => Vec::new(),
+    };
+    if tokens.is_empty() {
+        return None;
+    }
+    let parse = |kw: &str| -> Option<BorderImageRepeat> {
+        match kw {
+            "stretch" => Some(BorderImageRepeat::Stretch),
+            "repeat" => Some(BorderImageRepeat::Repeat),
+            "round" => Some(BorderImageRepeat::Round),
+            "space" => Some(BorderImageRepeat::Space),
+            _ => None,
+        }
+    };
+    if tokens.len() == 1 {
+        parse(&tokens[0]).map(|r| (r, r))
+    } else {
+        match (parse(&tokens[0]), parse(&tokens[1])) {
+            (Some(a), Some(b)) => Some((a, b)),
+            _ => None,
+        }
+    }
+}
+
+fn parse_border_image_shorthand(value: &PropertyValue) -> Option<BorderImage> {
+    let mut img = BorderImage::default();
+    let tokens: Vec<PropertyValue> = match value {
+        PropertyValue::Multiple(v) => v.clone(),
+        other => vec![other.clone()],
+    };
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let mut segments: Vec<Vec<PropertyValue>> = Vec::new();
+    let mut current = Vec::new();
+    for t in tokens {
+        if matches!(&t, PropertyValue::Keyword(k) if k == "/") {
+            segments.push(current);
+            current = Vec::new();
+        } else {
+            current.push(t);
+        }
+    }
+    segments.push(current);
+
+    // First segment: source, slice, repeat
+    if let Some(first) = segments.get(0) {
+        let mut items = first.clone();
+        // Extract repeat keywords from the end (1 or 2 tokens)
+        let mut rep_tokens: Vec<PropertyValue> = Vec::new();
+        while let Some(PropertyValue::Keyword(k)) = items.last() {
+            if ["stretch", "repeat", "round", "space"].contains(&k.as_str()) {
+                rep_tokens.push(items.pop().unwrap());
+            } else {
+                break;
+            }
+            if rep_tokens.len() == 2 {
+                break;
+            }
+        }
+        rep_tokens.reverse();
+        if !rep_tokens.is_empty() {
+            if let Some(rep) = parse_border_image_repeat(&PropertyValue::Multiple(rep_tokens)) {
+                img.repeat = rep;
+            }
+        }
+
+        if let Some(src) = items.first().and_then(|t| parse_border_image_source(t)) {
+            img.source = src;
+            items.remove(0);
+        }
+        if let Some(slice) = parse_border_image_slice_values(&items) {
+            img.slice = slice;
+        }
+    }
+
+    if let Some(seg) = segments.get(1) {
+        if let Some(width) = parse_border_image_width_list(seg) {
+            img.width = width;
+        }
+    }
+    if let Some(seg) = segments.get(2) {
+        if let Some(outset) = parse_border_image_outset_list(seg) {
+            img.outset = outset;
+        }
+    }
+
+    Some(img)
 }
 
 fn parse_aspect_ratio(value: &PropertyValue) -> Option<AspectRatio> {

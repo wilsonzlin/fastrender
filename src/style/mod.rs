@@ -31,17 +31,17 @@ use position::Position;
 use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, AspectRatio, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer,
-    BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxSizing, CaptionSide,
-    Containment, CursorImage, CursorKeyword, Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap,
-    FontFeatureSetting, FontKerning, FontLanguageOverride, FontOpticalSizing, FontSizeAdjust, FontStretch, FontStyle,
-    FontSynthesis, FontVariant, FontVariantAlternates, FontVariantCaps, FontVariantEastAsian, FontVariantEmoji,
-    FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontVariationSetting, FontWeight, GridTrack,
-    HyphensMode, ImageOrientation, ImageRendering, ImageResolution, Isolation, JustifyContent, LineBreak, LineHeight,
-    ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor,
-    OutlineStyle, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast, TextCombineUpright,
-    TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify,
-    TextOrientation, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TransformOrigin, UnicodeBidi,
-    VerticalAlign, WhiteSpace, WillChange, WordBreak, WritingMode,
+    BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderImage, BorderStyle, BoxSizing,
+    CaptionSide, Containment, CursorImage, CursorKeyword, Direction, EmptyCells, FilterFunction, FlexBasis,
+    FlexDirection, FlexWrap, FontFeatureSetting, FontKerning, FontLanguageOverride, FontOpticalSizing, FontSizeAdjust,
+    FontStretch, FontStyle, FontSynthesis, FontVariant, FontVariantAlternates, FontVariantCaps, FontVariantEastAsian,
+    FontVariantEmoji, FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontVariationSetting, FontWeight,
+    GridTrack, HyphensMode, ImageOrientation, ImageRendering, ImageResolution, Isolation, JustifyContent, LineBreak,
+    LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
+    OutlineColor, OutlineStyle, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast,
+    TextCombineUpright, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent,
+    TextJustify, TextOrientation, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TransformOrigin,
+    UnicodeBidi, VerticalAlign, WhiteSpace, WillChange, WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -414,6 +414,7 @@ pub struct ComputedStyle {
     pub image_resolution: ImageResolution,
     pub image_orientation: ImageOrientation,
     pub image_rendering: ImageRendering,
+    pub border_image: BorderImage,
     pub aspect_ratio: AspectRatio,
     /// CSS filter effects applied to this element
     pub filter: Vec<FilterFunction>,
@@ -619,6 +620,7 @@ impl Default for ComputedStyle {
             image_resolution: ImageResolution::default(),
             image_orientation: ImageOrientation::FromImage,
             image_rendering: ImageRendering::Auto,
+            border_image: BorderImage::default(),
             aspect_ratio: AspectRatio::Auto,
             filter: Vec::new(),
             backdrop_filter: Vec::new(),

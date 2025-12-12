@@ -110,6 +110,129 @@ pub enum BorderStyle {
     Outset,
 }
 
+/// Border image repeat modes per axis
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BorderImageRepeat {
+    Stretch,
+    Repeat,
+    Round,
+    Space,
+}
+
+/// Border image source
+#[derive(Debug, Clone, PartialEq)]
+pub enum BorderImageSource {
+    None,
+    Image(BackgroundImage),
+}
+
+/// Border image slice value (number or percentage)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BorderImageSliceValue {
+    Number(f32),
+    Percentage(f32),
+}
+
+/// Border image slice data
+#[derive(Debug, Clone, PartialEq)]
+pub struct BorderImageSlice {
+    pub top: BorderImageSliceValue,
+    pub right: BorderImageSliceValue,
+    pub bottom: BorderImageSliceValue,
+    pub left: BorderImageSliceValue,
+    pub fill: bool,
+}
+
+impl Default for BorderImageSlice {
+    fn default() -> Self {
+        Self {
+            top: BorderImageSliceValue::Number(100.0),
+            right: BorderImageSliceValue::Number(100.0),
+            bottom: BorderImageSliceValue::Number(100.0),
+            left: BorderImageSliceValue::Number(100.0),
+            fill: false,
+        }
+    }
+}
+
+/// Border image width value
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BorderImageWidthValue {
+    Auto,
+    Number(f32),
+    Length(Length),
+    Percentage(f32),
+}
+
+/// Border image widths per side
+#[derive(Debug, Clone, PartialEq)]
+pub struct BorderImageWidth {
+    pub top: BorderImageWidthValue,
+    pub right: BorderImageWidthValue,
+    pub bottom: BorderImageWidthValue,
+    pub left: BorderImageWidthValue,
+}
+
+impl Default for BorderImageWidth {
+    fn default() -> Self {
+        Self {
+            top: BorderImageWidthValue::Auto,
+            right: BorderImageWidthValue::Auto,
+            bottom: BorderImageWidthValue::Auto,
+            left: BorderImageWidthValue::Auto,
+        }
+    }
+}
+
+/// Border image outset value
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BorderImageOutsetValue {
+    Number(f32),
+    Length(Length),
+}
+
+/// Border image outsets per side
+#[derive(Debug, Clone, PartialEq)]
+pub struct BorderImageOutset {
+    pub top: BorderImageOutsetValue,
+    pub right: BorderImageOutsetValue,
+    pub bottom: BorderImageOutsetValue,
+    pub left: BorderImageOutsetValue,
+}
+
+impl Default for BorderImageOutset {
+    fn default() -> Self {
+        Self {
+            top: BorderImageOutsetValue::Number(0.0),
+            right: BorderImageOutsetValue::Number(0.0),
+            bottom: BorderImageOutsetValue::Number(0.0),
+            left: BorderImageOutsetValue::Number(0.0),
+        }
+    }
+}
+
+/// Complete border image data
+#[derive(Debug, Clone, PartialEq)]
+pub struct BorderImage {
+    pub source: BorderImageSource,
+    pub slice: BorderImageSlice,
+    pub width: BorderImageWidth,
+    pub outset: BorderImageOutset,
+    pub repeat: (BorderImageRepeat, BorderImageRepeat),
+}
+
+impl Default for BorderImage {
+    fn default() -> Self {
+        Self {
+            source: BorderImageSource::None,
+            slice: BorderImageSlice::default(),
+            width: BorderImageWidth::default(),
+            outset: BorderImageOutset::default(),
+            repeat: (BorderImageRepeat::Stretch, BorderImageRepeat::Stretch),
+        }
+    }
+}
+
 /// Outline line style
 ///
 /// CSS: `outline-style`
