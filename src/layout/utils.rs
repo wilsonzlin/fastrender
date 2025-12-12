@@ -159,7 +159,7 @@ pub fn resolve_font_relative_length_for_positioned(
     let font_style = match style.font_style {
         crate::style::computed::FontStyle::Normal => CssFontStyle::Normal,
         crate::style::computed::FontStyle::Italic => CssFontStyle::Italic,
-        crate::style::computed::FontStyle::Oblique => CssFontStyle::Oblique(None),
+        crate::style::computed::FontStyle::Oblique(angle) => CssFontStyle::Oblique(angle),
     };
     resolve_font_relative_length_with_params(
         length,

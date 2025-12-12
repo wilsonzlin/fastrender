@@ -403,11 +403,12 @@ pub enum Visibility {
 }
 
 /// CSS font-style property values
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FontStyle {
     Normal,
     Italic,
-    Oblique,
+    /// Oblique may carry an optional angle in degrees (-90..90)
+    Oblique(Option<f32>),
 }
 
 /// CSS line-height property values
@@ -1006,10 +1007,12 @@ mod tests {
     fn test_font_style_enum() {
         let style1 = FontStyle::Normal;
         let style2 = FontStyle::Italic;
-        let style3 = FontStyle::Oblique;
+        let style3 = FontStyle::Oblique(None);
+        let style4 = FontStyle::Oblique(Some(12.0));
 
         assert_ne!(style1, style2);
         assert_ne!(style2, style3);
+        assert_ne!(style3, style4);
     }
 
     #[test]

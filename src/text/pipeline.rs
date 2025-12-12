@@ -54,10 +54,10 @@ use crate::style::types::{
     NumericFraction, NumericSpacing,
 };
 use crate::style::ComputedStyle;
+use crate::text::emoji;
 use crate::text::font_db::font_has_feature;
 use crate::text::font_db::{FontStretch as DbFontStretch, FontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
-use crate::text::emoji;
 use rustybuzz::{Direction as HbDirection, Face, Feature, Language as HbLanguage, UnicodeBuffer, Variation};
 use std::collections::HashSet;
 use std::iter::FromIterator;
@@ -66,6 +66,8 @@ use std::sync::Arc;
 use ttf_parser::Tag;
 use unicode_bidi::{BidiInfo, Level};
 use unicode_vo::{char_orientation, Orientation as VerticalOrientation};
+
+const DEFAULT_OBLIQUE_ANGLE_DEG: f32 = 14.0;
 
 // ============================================================================
 // Core Types
@@ -1042,6 +1044,14 @@ fn push_oriented_segment(run: &FontRun, start: usize, end: usize, rotation: RunR
     out.push(segment);
 }
 
+fn requested_slant_angle(style: &ComputedStyle) -> Option<f32> {
+    match style.font_style {
+        CssFontStyle::Normal => None,
+        CssFontStyle::Italic => Some(DEFAULT_OBLIQUE_ANGLE_DEG),
+        CssFontStyle::Oblique(angle) => Some(angle.unwrap_or(DEFAULT_OBLIQUE_ANGLE_DEG)),
+    }
+}
+
 fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f32) {
     let mut synthetic_bold = 0.0;
     let mut synthetic_oblique = 0.0;
@@ -1052,14 +1062,10 @@ fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f
         synthetic_bold = style.font_size * 0.04 * strength;
     }
 
-    let wants_slant = matches!(style.font_style, CssFontStyle::Italic | CssFontStyle::Oblique(_));
-    if style.font_synthesis.style && wants_slant && matches!(font.style, FontStyle::Normal) {
-        let angle = match style.font_style {
-            CssFontStyle::Oblique(Some(deg)) => deg,
-            CssFontStyle::Oblique(None) | CssFontStyle::Italic => 14.0,
-            CssFontStyle::Normal => 0.0,
-        };
-        synthetic_oblique = angle.to_radians().tan();
+    if style.font_synthesis.style && matches!(font.style, FontStyle::Normal) {
+        if let Some(angle) = requested_slant_angle(style) {
+            synthetic_oblique = angle.to_radians().tan();
+        }
     }
 
     (synthetic_bold, synthetic_oblique)
@@ -1141,9 +1147,12 @@ fn build_family_entries(style: &ComputedStyle) -> Vec<crate::text::font_fallback
     }
 
     if matches!(style.font_variant_emoji, FontVariantEmoji::Emoji)
-        && !entries
-            .iter()
-            .any(|e| matches!(e, crate::text::font_fallback::FamilyEntry::Generic(crate::text::font_db::GenericFamily::Emoji)))
+        && !entries.iter().any(|e| {
+            matches!(
+                e,
+                crate::text::font_fallback::FamilyEntry::Generic(crate::text::font_db::GenericFamily::Emoji)
+            )
+        })
     {
         entries.insert(
             0,
@@ -1325,6 +1334,7 @@ fn push_font_run(
             let wdth_tag = Tag::from_bytes(b"wdth");
             let opsz_tag = Tag::from_bytes(b"opsz");
             let ital_tag = Tag::from_bytes(b"ital");
+            let slnt_tag = Tag::from_bytes(b"slnt");
 
             for axis in axes {
                 if axis.tag == wght_tag && !set_tags.contains(&wght_tag) {
@@ -1348,6 +1358,15 @@ fn push_font_run(
                         value: font_size,
                     });
                     set_tags.insert(opsz_tag);
+                } else if axis.tag == slnt_tag && !set_tags.contains(&slnt_tag) {
+                    if let Some(angle) = requested_slant_angle(style) {
+                        let slnt_value = (-angle).clamp(axis.min_value, axis.max_value);
+                        variations.push(Variation {
+                            tag: slnt_tag,
+                            value: slnt_value,
+                        });
+                        set_tags.insert(slnt_tag);
+                    }
                 } else if axis.tag == ital_tag && !set_tags.contains(&ital_tag) {
                     let ital = matches!(style.font_style, CssFontStyle::Italic | CssFontStyle::Oblique(_));
                     variations.push(Variation {
@@ -1875,8 +1894,8 @@ impl ClusterMap {
 mod tests {
     use super::*;
     use crate::style::types::{
-        EastAsianVariant, EastAsianWidth, FontFeatureSetting, FontKerning, FontStretch, FontVariationSetting,
-        FontVariantLigatures, NumericFigure, NumericFraction, NumericSpacing, TextOrientation, WritingMode,
+        EastAsianVariant, EastAsianWidth, FontFeatureSetting, FontKerning, FontStretch, FontVariantLigatures,
+        FontVariationSetting, NumericFigure, NumericFraction, NumericSpacing, TextOrientation, WritingMode,
     };
     use crate::text::font_db::FontDatabase;
     use crate::text::font_db::{FontStretch as DbFontStretch, FontStyle as DbFontStyle, FontWeight};
@@ -2285,7 +2304,10 @@ mod tests {
         let narrow_advance: f32 = narrow_run.iter().map(|r| r.advance).sum();
         let wide_advance: f32 = wide_run.iter().map(|r| r.advance).sum();
 
-        assert!(narrow_advance < default_advance, "wdth axis should shrink glyph advances");
+        assert!(
+            narrow_advance < default_advance,
+            "wdth axis should shrink glyph advances"
+        );
         assert!(wide_advance > default_advance, "wdth axis should widen glyph advances");
     }
 
@@ -2363,8 +2385,14 @@ mod tests {
         let wide = pipeline.shape("mmmm", &style, &ctx).unwrap();
         let wide_adv: f32 = wide.iter().map(|r| r.advance).sum();
 
-        assert!(narrow_adv < base_adv, "narrow stretch should reduce advance with wdth axis");
-        assert!(wide_adv > base_adv, "wide stretch should increase advance with wdth axis");
+        assert!(
+            narrow_adv < base_adv,
+            "narrow stretch should reduce advance with wdth axis"
+        );
+        assert!(
+            wide_adv > base_adv,
+            "wide stretch should increase advance with wdth axis"
+        );
         assert!(
             (wide_adv - narrow_adv) > 1.0,
             "wdth axis should produce a noticeable difference"
@@ -2397,6 +2425,83 @@ mod tests {
             (forced_adv - baseline_adv).abs() < 0.25,
             "authored wdth should override font-stretch mapping"
         );
+    }
+
+    #[test]
+    fn oblique_angle_maps_to_slnt_axis_with_clamp() {
+        let (ctx, family) = load_variable_font();
+        let mut style = ComputedStyle::default();
+        style.font_family = vec![family.clone()];
+        style.font_size = 16.0;
+        style.font_style = CssFontStyle::Oblique(Some(20.0));
+
+        let runs = assign_fonts(
+            &[ItemizedRun {
+                text: "mmmm".to_string(),
+                start: 0,
+                end: 4,
+                script: Script::Latin,
+                direction: Direction::LeftToRight,
+                level: 0,
+            }],
+            &style,
+            &ctx,
+        )
+        .expect("assign fonts");
+        let slnt_tag = Tag::from_bytes(b"slnt");
+        let slnt_value = runs[0]
+            .variations
+            .iter()
+            .find(|v| v.tag == slnt_tag)
+            .map(|v| v.value)
+            .expect("slnt axis should be populated for oblique styles");
+
+        let font_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fonts/RobotoFlex-VF.ttf");
+        let data = fs::read(&font_path).expect("fixture font data");
+        let face = ttf_parser::Face::parse(&data, 0).expect("parse fixture font");
+        let axis = face
+            .variation_axes()
+            .into_iter()
+            .find(|a| a.tag == slnt_tag)
+            .expect("fixture font exposes slnt axis");
+        let expected = (-20.0_f32).clamp(axis.min_value, axis.max_value);
+        assert!((slnt_value - expected).abs() < 0.001);
+    }
+
+    #[test]
+    fn authored_slnt_variation_preserves_authored_value() {
+        let (ctx, family) = load_variable_font();
+        let mut style = ComputedStyle::default();
+        style.font_family = vec![family];
+        style.font_size = 16.0;
+        style.font_style = CssFontStyle::Oblique(Some(10.0));
+        style.font_variation_settings = vec![FontVariationSetting {
+            tag: *b"slnt",
+            value: -5.0,
+        }];
+
+        let runs = assign_fonts(
+            &[ItemizedRun {
+                text: "mmmm".to_string(),
+                start: 0,
+                end: 4,
+                script: Script::Latin,
+                direction: Direction::LeftToRight,
+                level: 0,
+            }],
+            &style,
+            &ctx,
+        )
+        .expect("assign fonts");
+        let slnt_tag = Tag::from_bytes(b"slnt");
+        let slnt_value = runs[0]
+            .variations
+            .iter()
+            .find(|v| v.tag == slnt_tag)
+            .map(|v| v.value)
+            .expect("authored slnt should survive auto mapping");
+
+        assert!((slnt_value + 5.0).abs() < 0.001);
     }
 
     #[test]

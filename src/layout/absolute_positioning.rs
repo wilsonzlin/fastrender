@@ -1087,7 +1087,7 @@ pub fn resolve_positioned_style(
     resolved.font_style = match style.font_style {
         crate::style::types::FontStyle::Normal => crate::style::computed::FontStyle::Normal,
         crate::style::types::FontStyle::Italic => crate::style::computed::FontStyle::Italic,
-        crate::style::types::FontStyle::Oblique(_) => crate::style::computed::FontStyle::Oblique,
+        crate::style::types::FontStyle::Oblique(angle) => crate::style::computed::FontStyle::Oblique(angle),
     };
     resolved.font_stretch = style.font_stretch;
     resolved.font_size_adjust = style.font_size_adjust;
