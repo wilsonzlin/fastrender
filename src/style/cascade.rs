@@ -774,6 +774,73 @@ mod tests {
     }
 
     #[test]
+    fn all_initial_resets_properties_but_preserves_direction() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![(
+                    "style".to_string(),
+                    "direction: rtl; unicode-bidi: bidi-override; color: red; background-color: blue; all: initial;"
+                        .to_string(),
+                )],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        let defaults = ComputedStyle::default();
+        assert_eq!(styled.styles.color, defaults.color);
+        assert_eq!(styled.styles.background_color, defaults.background_color);
+        assert!(matches!(styled.styles.direction, crate::style::types::Direction::Rtl));
+        assert!(matches!(
+            styled.styles.unicode_bidi,
+            crate::style::types::UnicodeBidi::BidiOverride
+        ));
+    }
+
+    #[test]
+    fn all_inherit_copies_non_inherited_properties() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), "display: inline;".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "span".to_string(),
+                    attributes: vec![("id".to_string(), "target".to_string()), ("style".to_string(), "all: inherit;".to_string())],
+                },
+                children: vec![],
+            }],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        let child = styled.children.first().expect("child");
+        assert!(matches!(child.styles.display, Display::Inline));
+    }
+
+    #[test]
+    fn all_revert_ignores_author_inheritance() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), "color: rgb(10, 20, 30);".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "span".to_string(),
+                    attributes: vec![("style".to_string(), "color: green; all: revert;".to_string())],
+                },
+                children: vec![],
+            }],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        let child = styled.children.first().expect("child");
+        assert_eq!(child.styles.color, ComputedStyle::default().color);
+    }
+
+    #[test]
     fn font_variation_settings_inherit() {
         let dom = DomNode {
             node_type: DomNodeType::Element {

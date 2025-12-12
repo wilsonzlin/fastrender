@@ -887,6 +887,53 @@ fn global_keyword(value: &PropertyValue) -> Option<&'static str> {
     None
 }
 
+fn set_all_logical_orders(logical: &mut crate::style::LogicalState, order: i32, next_order: i32) {
+    logical.pending.clear();
+    logical.margin_orders.top = order;
+    logical.margin_orders.right = order;
+    logical.margin_orders.bottom = order;
+    logical.margin_orders.left = order;
+
+    logical.padding_orders.top = order;
+    logical.padding_orders.right = order;
+    logical.padding_orders.bottom = order;
+    logical.padding_orders.left = order;
+
+    logical.border_width_orders.top = order;
+    logical.border_width_orders.right = order;
+    logical.border_width_orders.bottom = order;
+    logical.border_width_orders.left = order;
+
+    logical.border_style_orders.top = order;
+    logical.border_style_orders.right = order;
+    logical.border_style_orders.bottom = order;
+    logical.border_style_orders.left = order;
+
+    logical.border_color_orders.top = order;
+    logical.border_color_orders.right = order;
+    logical.border_color_orders.bottom = order;
+    logical.border_color_orders.left = order;
+
+    logical.inset_orders.top = order;
+    logical.inset_orders.right = order;
+    logical.inset_orders.bottom = order;
+    logical.inset_orders.left = order;
+
+    logical.corner_orders.top_left = order;
+    logical.corner_orders.top_right = order;
+    logical.corner_orders.bottom_right = order;
+    logical.corner_orders.bottom_left = order;
+
+    logical.width_order = order;
+    logical.height_order = order;
+    logical.min_width_order = order;
+    logical.min_height_order = order;
+    logical.max_width_order = order;
+    logical.max_height_order = order;
+
+    logical.next_order = next_order;
+}
+
 fn is_inherited_property(name: &str) -> bool {
     matches!(
         name,
@@ -2197,6 +2244,25 @@ pub fn apply_declaration_with_base(
     };
 
     match decl.property.as_str() {
+        "all" => {
+            let Some(global) = global_keyword(&resolved_value) else {
+                return;
+            };
+            let defaults = ComputedStyle::default();
+            let Some(source) = global_keyword_source(global, "all", parent_styles, &defaults, revert_base) else {
+                return;
+            };
+            let prev_direction = styles.direction;
+            let prev_unicode_bidi = styles.unicode_bidi;
+            let next_order = styles.logical.next_order;
+
+            *styles = source.clone();
+            styles.direction = prev_direction;
+            styles.unicode_bidi = prev_unicode_bidi;
+            styles.logical.reset();
+            set_all_logical_orders(&mut styles.logical, order, next_order);
+            return;
+        }
         // Display
         "display" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
