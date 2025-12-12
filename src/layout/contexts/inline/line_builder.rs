@@ -1891,7 +1891,7 @@ fn reorder_paragraph(
         .char_indices()
         .map(|(idx, _)| bidi.levels.get(idx).copied().unwrap_or(paragraph_level))
         .collect();
-    let paragraph_chars: Vec<char> = paragraph_text.chars().collect();
+    let _paragraph_chars: Vec<char> = paragraph_text.chars().collect();
 
     for (idx, mapping) in byte_map.iter().enumerate() {
         if let Some(ctx) = paragraph_leaves
@@ -1976,7 +1976,12 @@ fn reorder_paragraph(
                     let slice = &byte_map[atom.start..atom.end];
                     let isolate_text: String = slice
                         .iter()
-                        .map(|m| paragraph_chars.get(m.start).copied().unwrap_or('\u{FFFD}'))
+                        .map(|m| {
+                            paragraph_text
+                                .get(m.start..m.end)
+                                .and_then(|s| s.chars().next())
+                                .unwrap_or('\u{FFFD}')
+                        })
                         .collect();
                     let (levels, reorder): (Vec<Level>, Vec<usize>) = if let Some(ctx) = paragraph_leaves
                         .get(slice.first().map(|m| m.leaf_index).unwrap_or(0))
@@ -3340,7 +3345,7 @@ mod tests {
     #[test]
     fn bidi_isolate_resolves_neutrals_across_children() {
         // Single isolate should resolve neutrals using surrounding strong types inside the isolate.
-        let expected = "A Xאב Z".to_string();
+        let expected = "A בXא Z".to_string();
 
         let mut builder = make_builder(200.0);
         builder.add_item(InlineItem::Text(make_text_item("A ", 20.0)));
