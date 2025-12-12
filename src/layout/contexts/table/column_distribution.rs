@@ -941,9 +941,22 @@ pub fn distribute_spanning_percentage(columns: &mut [ColumnConstraints], start_c
         return;
     }
 
-    let share = (target_pct - existing_pct) / auto_indices.len() as f32;
-    for idx in auto_indices {
-        span[idx].set_percentage(share);
+    let remaining = target_pct - existing_pct;
+    let weights: Vec<f32> = auto_indices
+        .iter()
+        .map(|&i| span[i].min_width.max(1.0))
+        .collect();
+    let total_weight: f32 = weights.iter().sum();
+    if total_weight > 0.0 {
+        for (idx, weight) in auto_indices.iter().zip(weights.iter()) {
+            let share = remaining * (*weight / total_weight);
+            span[*idx].set_percentage(share);
+        }
+    } else {
+        let share = remaining / auto_indices.len() as f32;
+        for idx in auto_indices {
+            span[idx].set_percentage(share);
+        }
     }
 }
 
@@ -1547,6 +1560,17 @@ mod tests {
         let total_min: f32 = columns.iter().map(|c| c.min_width).sum();
         assert!((total_min - 120.0).abs() < 0.5);
         assert!(columns[1].min_width > columns[0].min_width + 15.0);
+    }
+
+    #[test]
+    fn distribute_spanning_percentage_weights_by_widths() {
+        let mut columns = vec![ColumnConstraints::new(20.0, 200.0), ColumnConstraints::new(80.0, 200.0)];
+        distribute_spanning_percentage(&mut columns, 0, 2, 60.0);
+        // Heavier column should receive a larger percentage share.
+        let pct0 = columns[0].percentage.unwrap();
+        let pct1 = columns[1].percentage.unwrap();
+        assert!(pct1 > pct0);
+        assert!((pct0 + pct1 - 60.0).abs() < 0.5);
     }
 
     #[test]
