@@ -1181,105 +1181,104 @@ impl Painter {
         };
 
         match bg {
-            BackgroundImage::LinearGradient { angle, stops } => {
-                let resolved = normalize_color_stops(stops, style.color);
-                self.paint_linear_gradient(
-                    origin_rect_css,
-                    clip_rect_css,
-                    clip_mask.as_ref(),
-                    *angle,
-                    &resolved,
-                    SpreadMode::Pad,
-                    layer.blend_mode,
-                );
-            }
-            BackgroundImage::RadialGradient {
-                shape,
-                size,
-                position,
-                stops,
-            } => {
-                let resolved = normalize_color_stops(stops, style.color);
-                self.paint_radial_gradient(
-                    origin_rect_css,
-                    clip_rect_css,
-                    clip_mask.as_ref(),
-                    position,
-                    size,
-                    *shape,
+            BackgroundImage::LinearGradient { .. }
+            | BackgroundImage::RepeatingLinearGradient { .. }
+            | BackgroundImage::RadialGradient { .. }
+            | BackgroundImage::RepeatingRadialGradient { .. }
+            | BackgroundImage::ConicGradient { .. }
+            | BackgroundImage::RepeatingConicGradient { .. } => {
+                let (mut tile_w, mut tile_h) = compute_background_size(
+                    layer,
                     style.font_size,
-                    &resolved,
-                    SpreadMode::Pad,
-                    layer.blend_mode,
+                    origin_rect_css.width(),
+                    origin_rect_css.height(),
+                    0.0,
+                    0.0,
                 );
-            }
-            BackgroundImage::RepeatingLinearGradient { angle, stops } => {
-                let resolved = normalize_color_stops(stops, style.color);
-                self.paint_linear_gradient(
-                    origin_rect_css,
-                    clip_rect_css,
-                    clip_mask.as_ref(),
-                    *angle,
-                    &resolved,
-                    SpreadMode::Repeat,
-                    layer.blend_mode,
-                );
-            }
-            BackgroundImage::RepeatingRadialGradient {
-                shape,
-                size,
-                position,
-                stops,
-            } => {
-                let resolved = normalize_color_stops(stops, style.color);
-                self.paint_radial_gradient(
-                    origin_rect_css,
-                    clip_rect_css,
-                    clip_mask.as_ref(),
-                    position,
-                    size,
-                    *shape,
+                if tile_w <= 0.0 || tile_h <= 0.0 {
+                    return;
+                }
+
+                let mut rounded_x = false;
+                let mut rounded_y = false;
+                if layer.repeat.x == BackgroundRepeatKeyword::Round {
+                    tile_w = round_tile_length(origin_rect_css.width(), tile_w);
+                    rounded_x = true;
+                }
+                if layer.repeat.y == BackgroundRepeatKeyword::Round {
+                    tile_h = round_tile_length(origin_rect_css.height(), tile_h);
+                    rounded_y = true;
+                }
+                if rounded_x ^ rounded_y
+                    && matches!(
+                        layer.size,
+                        BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
+                    )
+                {
+                    let aspect = 1.0;
+                    if rounded_x {
+                        tile_h = tile_w / aspect;
+                    } else {
+                        tile_w = tile_h * aspect;
+                    }
+                }
+
+                let (offset_x, offset_y) = resolve_background_offset(
+                    layer.position,
+                    origin_rect_css.width(),
+                    origin_rect_css.height(),
+                    tile_w,
+                    tile_h,
                     style.font_size,
-                    &resolved,
-                    SpreadMode::Repeat,
-                    layer.blend_mode,
                 );
-            }
-            BackgroundImage::ConicGradient {
-                from_angle,
-                position,
-                stops,
-            } => {
-                let resolved = normalize_color_stops_unclamped(stops, style.color);
-                self.paint_conic_gradient(
-                    origin_rect_css,
-                    clip_rect_css,
-                    clip_mask.as_ref(),
-                    position,
-                    *from_angle,
-                    &resolved,
-                    false,
-                    style.font_size,
-                    layer.blend_mode,
+
+                let positions_x = tile_positions(
+                    layer.repeat.x,
+                    origin_rect_css.x(),
+                    origin_rect_css.width(),
+                    tile_w,
+                    offset_x,
+                    clip_rect_css.min_x(),
+                    clip_rect_css.max_x(),
                 );
-            }
-            BackgroundImage::RepeatingConicGradient {
-                from_angle,
-                position,
-                stops,
-            } => {
-                let resolved = normalize_color_stops_unclamped(stops, style.color);
-                self.paint_conic_gradient(
-                    origin_rect_css,
-                    clip_rect_css,
-                    clip_mask.as_ref(),
-                    position,
-                    *from_angle,
-                    &resolved,
-                    true,
-                    style.font_size,
-                    layer.blend_mode,
+                let positions_y = tile_positions(
+                    layer.repeat.y,
+                    origin_rect_css.y(),
+                    origin_rect_css.height(),
+                    tile_h,
+                    offset_y,
+                    clip_rect_css.min_y(),
+                    clip_rect_css.max_y(),
                 );
+
+                let pixmap_w = tile_w.ceil().max(1.0) as u32;
+                let pixmap_h = tile_h.ceil().max(1.0) as u32;
+                let Some(pixmap) = self.render_generated_image(bg, style, pixmap_w, pixmap_h) else {
+                    return;
+                };
+
+                let max_x = clip_rect_css.max_x();
+                let max_y = clip_rect_css.max_y();
+                let quality = Self::filter_quality_for_image(Some(style));
+
+                for ty in positions_y.iter().copied() {
+                    for tx in positions_x.iter().copied() {
+                        if tx >= max_x || ty >= max_y {
+                            continue;
+                        }
+                        self.paint_background_tile(
+                            &pixmap,
+                            tx,
+                            ty,
+                            tile_w,
+                            tile_h,
+                            clip_rect_css,
+                            clip_mask.as_ref(),
+                            layer.blend_mode,
+                            quality,
+                        );
+                    }
+                }
             }
             BackgroundImage::None => {
                 return;
@@ -1395,6 +1394,7 @@ impl Painter {
         }
     }
 
+    #[allow(dead_code)]
     fn paint_linear_gradient(
         &mut self,
         gradient_rect: Rect,
@@ -1470,6 +1470,7 @@ impl Painter {
         }
     }
 
+    #[allow(dead_code)]
     fn paint_conic_gradient(
         &mut self,
         gradient_rect: Rect,
@@ -1534,6 +1535,7 @@ impl Painter {
             .draw_pixmap(0, 0, pix.as_ref(), &paint, transform, clip_mask.cloned().as_ref());
     }
 
+    #[allow(dead_code)]
     fn paint_radial_gradient(
         &mut self,
         gradient_rect: Rect,
@@ -1835,7 +1837,7 @@ impl Painter {
             | BackgroundImage::RepeatingConicGradient { .. } => {
                 let img_w = outer_rect.width().max(1.0).round() as u32;
                 let img_h = outer_rect.height().max(1.0).round() as u32;
-                let Some(pixmap) = self.render_generated_border_image(bg, style, img_w, img_h) else {
+                let Some(pixmap) = self.render_generated_image(bg, style, img_w, img_h) else {
                     return false;
                 };
                 (pixmap, img_w, img_h)
@@ -3138,7 +3140,7 @@ impl Painter {
         Pixmap::from_vec(data, size)
     }
 
-    fn render_generated_border_image(
+    fn render_generated_image(
         &self,
         bg: &BackgroundImage,
         style: &ComputedStyle,
@@ -5655,9 +5657,9 @@ mod tests {
     use crate::image_loader::ImageCache;
     use crate::paint::display_list::BorderRadii;
     use crate::style::types::{
-        BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundRepeat, BorderImage, BorderImageRepeat,
-        BorderImageSlice, BorderImageSliceValue, BorderImageSource, Isolation, MixBlendMode, OutlineColor,
-        OutlineStyle, Overflow,
+        BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundRepeat, BackgroundSize, BackgroundSizeComponent,
+        BorderImage, BorderImageRepeat, BorderImageSlice, BorderImageSliceValue, BorderImageSource, Isolation,
+        MixBlendMode, OutlineColor, OutlineStyle, Overflow,
     };
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
@@ -7485,6 +7487,56 @@ mod tests {
             (center.red(), center.green(), center.blue()),
             (255, 255, 255),
             "center should remain unfilled without border-image fill"
+        );
+    }
+
+    #[test]
+    fn gradient_background_respects_size_and_repeat() {
+        let mut style = ComputedStyle::default();
+        style.background_layers = vec![BackgroundLayer {
+            image: Some(BackgroundImage::LinearGradient {
+                angle: 90.0,
+                stops: vec![
+                    ColorStop {
+                        position: Some(0.0),
+                        color: crate::style::color::Color::Rgba(Rgba::new(255, 0, 0, 1.0)),
+                    },
+                    ColorStop {
+                        position: Some(1.0),
+                        color: crate::style::color::Color::Rgba(Rgba::new(0, 0, 255, 1.0)),
+                    },
+                ],
+            }),
+            size: BackgroundSize::Explicit(
+                BackgroundSizeComponent::Length(Length::px(4.0)),
+                BackgroundSizeComponent::Length(Length::px(2.0)),
+            ),
+            ..BackgroundLayer::default()
+        }];
+        style.background_color = Rgba::WHITE;
+
+        let mut painter = Painter::new(12, 6, Rgba::WHITE).expect("painter");
+        painter.fill_background();
+        painter.paint_background(0.0, 0.0, 12.0, 6.0, &style);
+
+        let top_left = painter.pixmap.pixel(0, 0).unwrap();
+        let top_right_tile = painter.pixmap.pixel(3, 0).unwrap();
+        let next_tile = painter.pixmap.pixel(5, 0).unwrap();
+
+        assert!(
+            top_left.red() > top_left.blue(),
+            "first tile should start red, got {:?}",
+            top_left
+        );
+        assert!(
+            top_right_tile.blue() > top_right_tile.red(),
+            "end of first tile should be blue-ish, got {:?}",
+            top_right_tile
+        );
+        assert!(
+            next_tile.red() > next_tile.blue(),
+            "second tile should repeat starting red, got {:?}",
+            next_tile
         );
     }
 }
