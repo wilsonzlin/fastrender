@@ -234,6 +234,7 @@ impl InlineFormattingContext {
         positioned_children: &mut Vec<BoxNode>,
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let mut pending_space: Option<PendingSpace> = None;
+        let mut bidi_stack = vec![(box_node.style.unicode_bidi, box_node.style.direction)];
         self.collect_inline_items_internal(
             box_node,
             available_width,
@@ -241,6 +242,7 @@ impl InlineFormattingContext {
             &mut pending_space,
             base_direction,
             positioned_children,
+            &mut bidi_stack,
         )
     }
 
@@ -251,6 +253,7 @@ impl InlineFormattingContext {
         available_height: Option<f32>,
         base_direction: crate::style::types::Direction,
         positioned_children: &mut Vec<BoxNode>,
+        bidi_stack: &mut Vec<(UnicodeBidi, Direction)>,
     ) -> Result<Vec<InlineFlowSegment>, LayoutError> {
         let mut pending_space: Option<PendingSpace> = None;
         let mut segments = Vec::new();
@@ -291,6 +294,7 @@ impl InlineFormattingContext {
                         normalized.clone(),
                         false,
                         base_direction,
+                        bidi_stack,
                     )?;
                     current_items.append(&mut produced);
                     if normalized.trailing_collapsible {
@@ -311,6 +315,7 @@ impl InlineFormattingContext {
                             normalized.clone(),
                             true,
                             base_direction,
+                            bidi_stack,
                         )?;
                         current_items.append(&mut produced);
                         if normalized.trailing_collapsible {
@@ -427,6 +432,7 @@ impl InlineFormattingContext {
                     let end_edge = padding_right + border_right;
                     let content_offset_y = padding_top + border_top;
 
+                    bidi_stack.push((child.style.unicode_bidi, child.style.direction));
                     let child_items = self.collect_inline_items_internal(
                         child,
                         available_width,
@@ -434,7 +440,9 @@ impl InlineFormattingContext {
                         &mut pending_space,
                         base_direction,
                         positioned_children,
+                        bidi_stack,
                     )?;
+                    bidi_stack.pop();
                     let fallback_metrics = self.compute_strut_metrics(&child.style);
                     let metrics = compute_inline_box_metrics(
                         &child_items,
@@ -494,6 +502,7 @@ impl InlineFormattingContext {
         pending_space: &mut Option<PendingSpace>,
         base_direction: crate::style::types::Direction,
         positioned_children: &mut Vec<BoxNode>,
+        bidi_stack: &mut Vec<(UnicodeBidi, Direction)>,
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let mut items = Vec::new();
 
@@ -521,6 +530,7 @@ impl InlineFormattingContext {
                         normalized.clone(),
                         false,
                         base_direction,
+                        bidi_stack,
                     )?;
                     items.append(&mut produced);
                     if normalized.trailing_collapsible {
@@ -541,6 +551,7 @@ impl InlineFormattingContext {
                             normalized.clone(),
                             true,
                             base_direction,
+                            bidi_stack,
                         )?;
                         items.append(&mut produced);
                         if normalized.trailing_collapsible {
@@ -659,6 +670,7 @@ impl InlineFormattingContext {
                     let content_offset_y = padding_top + border_top;
 
                     // Recursively collect children first
+                    bidi_stack.push((child.style.unicode_bidi, child.style.direction));
                     let child_items = self.collect_inline_items_internal(
                         child,
                         available_width,
@@ -666,7 +678,9 @@ impl InlineFormattingContext {
                         pending_space,
                         base_direction,
                         positioned_children,
+                        bidi_stack,
                     )?;
+                    bidi_stack.pop();
                     let fallback_metrics = self.compute_strut_metrics(&child.style);
                     let metrics = compute_inline_box_metrics(
                         &child_items,
@@ -883,7 +897,8 @@ impl InlineFormattingContext {
         text: &str,
         is_marker: bool,
     ) -> Result<Vec<InlineItem>, LayoutError> {
-        self.create_inline_items_for_text_with_base(box_node, text, is_marker, box_node.style.direction)
+        let stack = [(box_node.style.unicode_bidi, box_node.style.direction)];
+        self.create_inline_items_for_text_with_base(box_node, text, is_marker, box_node.style.direction, &stack)
     }
 
     fn create_inline_items_for_text_with_base(
@@ -892,11 +907,12 @@ impl InlineFormattingContext {
         text: &str,
         is_marker: bool,
         base_direction: crate::style::types::Direction,
+        bidi_stack: &[(UnicodeBidi, Direction)],
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let style = &box_node.style;
         let transformed = apply_text_transform(text, style.text_transform, style.white_space);
         let normalized = normalize_text_for_white_space(&transformed, style.white_space);
-        self.create_inline_items_from_normalized_with_base(box_node, normalized, is_marker, base_direction)
+        self.create_inline_items_from_normalized_with_base(box_node, normalized, is_marker, base_direction, bidi_stack)
     }
 
     #[allow(dead_code)]
@@ -906,7 +922,14 @@ impl InlineFormattingContext {
         normalized: NormalizedText,
         is_marker: bool,
     ) -> Result<Vec<InlineItem>, LayoutError> {
-        self.create_inline_items_from_normalized_with_base(box_node, normalized, is_marker, box_node.style.direction)
+        let stack = [(box_node.style.unicode_bidi, box_node.style.direction)];
+        self.create_inline_items_from_normalized_with_base(
+            box_node,
+            normalized,
+            is_marker,
+            box_node.style.direction,
+            &stack,
+        )
     }
 
     fn create_inline_items_from_normalized_with_base(
@@ -915,6 +938,7 @@ impl InlineFormattingContext {
         normalized: NormalizedText,
         is_marker: bool,
         base_direction: crate::style::types::Direction,
+        bidi_stack: &[(UnicodeBidi, Direction)],
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let NormalizedText {
             text: normalized_text,
@@ -934,6 +958,7 @@ impl InlineFormattingContext {
                 allow_soft_wrap,
                 is_marker,
                 base_direction,
+                bidi_stack,
             );
         }
 
@@ -953,6 +978,7 @@ impl InlineFormattingContext {
                     allow_soft_wrap,
                     is_marker,
                     base_direction,
+                    bidi_stack,
                 )?;
                 items.append(&mut produced);
             }
@@ -970,6 +996,7 @@ impl InlineFormattingContext {
                 allow_soft_wrap,
                 is_marker,
                 base_direction,
+                bidi_stack,
             )?;
             items.append(&mut produced);
         }
@@ -999,6 +1026,7 @@ impl InlineFormattingContext {
             normalized.allow_soft_wrap,
             false,
             base_direction,
+            &[(box_node.style.unicode_bidi, box_node.style.direction)],
         )
     }
 
@@ -1010,7 +1038,17 @@ impl InlineFormattingContext {
         allow_soft_wrap: bool,
         is_marker: bool,
         base_direction: crate::style::types::Direction,
+        bidi_stack: &[(UnicodeBidi, Direction)],
     ) -> Result<TextItem, LayoutError> {
+        let mut contextual_stack = Vec::with_capacity(bidi_stack.len() + 1);
+        contextual_stack.extend_from_slice(bidi_stack);
+        let current_context = (style.unicode_bidi, style.direction);
+        if contextual_stack.last().copied() != Some(current_context) {
+            contextual_stack.push(current_context);
+        }
+        let bidi_stack = contextual_stack;
+        let _ = &bidi_stack;
+
         let metrics = self.resolve_scaled_metrics(style);
         let line_height = compute_line_height_with_metrics(style, metrics.as_ref());
         let (hyphen_free, hyphen_breaks) = if is_marker {
@@ -1098,6 +1136,7 @@ impl InlineFormattingContext {
         allow_soft_wrap: bool,
         is_marker: bool,
         base_direction: crate::style::types::Direction,
+        bidi_stack: &[(UnicodeBidi, Direction)],
     ) -> Result<Vec<InlineItem>, LayoutError> {
         if !is_vertical_writing_mode(style.writing_mode)
             || matches!(style.text_combine_upright, TextCombineUpright::None)
@@ -1109,6 +1148,7 @@ impl InlineFormattingContext {
                 allow_soft_wrap,
                 is_marker,
                 base_direction,
+                bidi_stack,
             )?;
             return Ok(vec![InlineItem::Text(item)]);
         }
@@ -1155,6 +1195,7 @@ impl InlineFormattingContext {
                     false,
                     is_marker,
                     base_direction,
+                    bidi_stack,
                 )?;
                 self.compress_text_combine(&mut item, style.font_size);
                 if !item.text.is_empty() {
@@ -1180,6 +1221,7 @@ impl InlineFormattingContext {
                     allow_soft_wrap,
                     is_marker,
                     base_direction,
+                    bidi_stack,
                 )?;
                 if !item.text.is_empty() {
                     items.push(InlineItem::Text(item));
@@ -1221,8 +1263,15 @@ impl InlineFormattingContext {
         style: &Arc<ComputedStyle>,
         allow_soft_wrap: bool,
     ) -> Result<InlineItem, LayoutError> {
-        let item =
-            self.create_text_item_from_normalized(style, " ", Vec::new(), allow_soft_wrap, false, style.direction)?;
+        let item = self.create_text_item_from_normalized(
+            style,
+            " ",
+            Vec::new(),
+            allow_soft_wrap,
+            false,
+            style.direction,
+            &[(style.unicode_bidi, style.direction)],
+        )?;
         Ok(InlineItem::Text(item))
     }
 
@@ -3277,12 +3326,14 @@ impl InlineFormattingContext {
 
         // Collect inline items and block segments
         let mut positioned_children = Vec::new();
+        let mut bidi_stack = vec![(box_node.style.unicode_bidi, box_node.style.direction)];
         let segments = self.collect_inline_flow_segments_with_base(
             box_node,
             available_inline,
             available_height,
             base_direction,
             &mut positioned_children,
+            &mut bidi_stack,
         )?;
 
         let indent_value = resolve_length_with_percentage_inline(
@@ -4394,15 +4445,18 @@ mod tests {
         style.writing_mode = WritingMode::VerticalRl;
         style.text_combine_upright = TextCombineUpright::Digits(2);
         style.font_size = 16.0;
+        let bidi_stack = vec![(style.unicode_bidi, style.direction)];
+        let style = Arc::new(style);
         let normalized = normalize_text_for_white_space("123", style.white_space);
         let items = ifc
             .create_text_items_with_combine(
-                &Arc::new(style),
+                &style,
                 &normalized.text,
                 normalized.forced_breaks.clone(),
                 normalized.allow_soft_wrap,
                 false,
                 crate::style::types::Direction::Ltr,
+                &bidi_stack,
             )
             .expect("text combine items");
         assert!(!items.is_empty());

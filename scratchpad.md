@@ -21,6 +21,7 @@
 - `unicode-bidi: plaintext` now seeds the line builder’s base level from the paragraph’s first-strong direction (derived from the pending inline items) instead of defaulting to LTR, so paragraph base direction is honored during layout when plaintext is used.
 - Plaintext paragraphs now propagate their resolved base direction into the inline items they layout: text/tab/inline-box children have their shaping base direction updated so shaping and bidi controls use the first-strong paragraph base rather than the authored `direction`. Added a regression to confirm item directions are rewritten when plaintext is active.
 - Root unicode-bidi contexts now participate in bidi reordering: line builder carries the container’s unicode-bidi/direction and seeds the paragraph reorder with the appropriate embedding/isolate controls so outer isolates/overrides aren’t dropped for inline content.
+- Inline item collection now threads a unicode-bidi/direction stack through inline text/item construction, including inline-box recursion; text item creation deduplicates the current context and receives the stack for future bidi-aware shaping. Tests still pass with the new plumbing.
 - Conic gradients parse/paint (including `from` angles and `at` positions) in both painter and display list; stop positions stay unclamped for correct repeating periods and the display-list renderer now samples relative to the target rect instead of the canvas origin.
 - Inline layout now preserves block-level children instead of dropping them: mixed inline/block content is segmented into inline runs and block fragments laid out in flow order (with float-aware flushing), and inline segments restart first-line indentation around block intrusions.
 - Block fragments inside inline layout now honor margins: vertical flow advances by margin-top/height/margin-bottom and horizontal extents include margins when computing max width; tests cover margin-induced spacing.
@@ -544,7 +545,7 @@
 - Positioned layout now respects `aspect-ratio`: absolutely positioned elements derive missing dimensions from the authored ratio when one dimension is auto, falling back to intrinsic sizes when both are auto. Tests cover width-from-height, height-from-width, and intrinsic fallback (`src/layout/contexts/positioned.rs`, `tests/layout/test_positioned.rs`).
 
 ## Current issues / gaps
-- Bidi: still relies on injected controls instead of a dedicated embedding/isolate stack; nested isolates/overrides need validation against UAX#9 beyond the FSI/PDI wrapping.
+- Bidi: still relies on injected controls instead of a dedicated embedding/isolate stack; nested isolates/overrides need validation against UAX#9 beyond the FSI/PDI wrapping, and the new bidi context stack isn’t yet consumed during shaping.
 - Justification lacks script-aware expansion (kashida/justification alternates, punctuation stretching) and `text-justify` is still approximated (auto treated as inter-word; no trim/edge handling).
 - `text-align-last` currently maps start/end via direction; nuanced interaction with `text-justify` and additional values still pending.
 - `text-indent` hanging/each-line semantics are approximate; indentation doesn’t yet handle hanging outdents per spec nuances.
