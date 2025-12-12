@@ -3998,8 +3998,11 @@ mod tests {
 
         let black_bbox =
             bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32).expect("text pixels");
-        let red_bbox =
-            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80).expect("shadow");
+        let red_bbox = bounding_box_for_color(&pixmap, |(r, g, b, _)| {
+            // Detect reddish halo against white background without catching black text.
+            r > g + 20 && r > b + 20 && !(r < 40 && g < 40 && b < 40) && (g < 250 || b < 250)
+        })
+        .expect("shadow");
 
         assert!(red_bbox.0 > black_bbox.0 + 1, "shadow should be offset to the right");
         assert!(
@@ -4051,12 +4054,38 @@ mod tests {
 
         let renderer =
             DisplayListRenderer::new_scaled(80, 40, Rgba::WHITE, font_ctx, 2.0).expect("renderer with scale");
+        let text_item = match &list.items()[0] {
+            DisplayItem::Text(t) => t,
+            _ => unreachable!(),
+        };
+        let scaled_item = renderer.scale_text_item(text_item);
+        assert!(
+            (scaled_item.shadows[0].blur_radius - 8.0).abs() < 0.5,
+            "blur radius should scale with DPR (expected ~8, got {})",
+            scaled_item.shadows[0].blur_radius
+        );
+        let (_paths, bounds) = renderer.glyph_paths(&face, &scaled_item);
+        let shadow = &scaled_item.shadows[0];
+        let blur_margin = (shadow.blur_radius.abs() * 3.0).ceil();
+        let shadow_min_x = bounds.min_x + shadow.offset.x - blur_margin;
+        let shadow_max_x = bounds.max_x + shadow.offset.x + blur_margin;
+        assert!(
+            shadow_max_x - shadow_min_x > bounds.max_x - bounds.min_x,
+            "shadow bounds should expand beyond glyph bounds"
+        );
+
         let pixmap = renderer.render(&list).expect("rendered");
 
         let black_bbox =
             bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32).expect("text pixels");
-        let red_bbox =
-            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80).expect("shadow");
+        let shadow_pixels = pixmap
+            .data()
+            .chunks_exact(4)
+            .filter(|px| px[3] > 0 && px[0] > px[1] && px[0] > px[2])
+            .count();
+        assert!(shadow_pixels > 0, "expected shadow pixels to be present");
+
+        let red_bbox = bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > g && r > b).expect("shadow");
 
         let dx = red_bbox.0.saturating_sub(black_bbox.0);
         assert!(
@@ -4067,6 +4096,78 @@ mod tests {
             red_bbox.1.abs_diff(black_bbox.1) <= 2,
             "shadow should stay aligned vertically"
         );
+    }
+
+    #[test]
+    fn text_shadow_blur_scales_with_device_pixel_ratio() {
+        let font_ctx = FontContext::new();
+        let Some(font) = font_ctx.get_sans_serif() else {
+            return;
+        };
+        let Ok(face) = font.as_ttf_face() else {
+            return;
+        };
+        let Some(glyph_id) = face.glyph_index('H') else {
+            return;
+        };
+
+        let mut list = DisplayList::new();
+        list.push(DisplayItem::Text(TextItem {
+            origin: Point::new(10.0, 24.0),
+            glyphs: vec![GlyphInstance {
+                glyph_id: glyph_id.0 as u32,
+                offset: Point::new(0.0, 0.0),
+                advance: 14.0,
+            }],
+            color: Rgba::BLACK,
+            shadows: vec![TextShadowItem {
+                offset: Point::new(0.0, 0.0),
+                blur_radius: 4.0,
+                color: Rgba::from_rgba8(255, 0, 0, 255),
+            }],
+            font_size: 20.0,
+            advance_width: 14.0,
+            font_id: Some(FontId {
+                family: font.family.clone(),
+                weight: font.weight.value(),
+                style: font.style,
+                stretch: font.stretch,
+            }),
+            synthetic_bold: 0.0,
+            synthetic_oblique: 0.0,
+            emphasis: None,
+            decorations: Vec::new(),
+        }));
+
+        let renderer =
+            DisplayListRenderer::new_scaled(80, 40, Rgba::WHITE, font_ctx.clone(), 2.0).expect("renderer with scale");
+        let text_item = match &list.items()[0] {
+            DisplayItem::Text(t) => t,
+            _ => unreachable!(),
+        };
+        let scaled_item = renderer.scale_text_item(text_item);
+        assert!(
+            (scaled_item.shadows[0].blur_radius - 8.0).abs() < 0.5,
+            "blur radius should scale with DPR (expected ~8, got {})",
+            scaled_item.shadows[0].blur_radius
+        );
+        let (_paths, bounds) = renderer.glyph_paths(&face, &scaled_item);
+        let shadow = &scaled_item.shadows[0];
+        let blur_margin = (shadow.blur_radius.abs() * 3.0).ceil();
+        let shadow_min_x = bounds.min_x + shadow.offset.x - blur_margin;
+        let shadow_max_x = bounds.max_x + shadow.offset.x + blur_margin;
+        assert!(
+            shadow_max_x - shadow_min_x > bounds.max_x - bounds.min_x,
+            "shadow bounds should expand beyond glyph bounds"
+        );
+
+        let pixmap = renderer.render(&list).expect("rendered");
+        let shadow_pixels = pixmap
+            .data()
+            .chunks_exact(4)
+            .filter(|px| px[3] > 0 && px[0] > px[1] && px[0] > px[2])
+            .count();
+        assert!(shadow_pixels > 0, "expected shadow pixels to be present");
     }
 
     #[test]

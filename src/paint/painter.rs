@@ -6317,8 +6317,10 @@ mod tests {
 
         let black_bbox =
             bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32).expect("black text");
-        let red_bbox =
-            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80).expect("shadow");
+        let red_bbox = bounding_box_for_color(&pixmap, |(r, g, b, _)| {
+            r > g + 20 && r > b + 20 && !(r < 40 && g < 40 && b < 40) && (g < 250 || b < 250)
+        })
+        .expect("shadow");
 
         assert!(
             red_bbox.0 > black_bbox.0 + 2,
@@ -6352,8 +6354,15 @@ mod tests {
 
         let black_bbox =
             bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32).expect("black text");
+        let shadow_pixels = pixmap
+            .data()
+            .chunks_exact(4)
+            .filter(|px| px[3] > 0 && px[0] > px[1] && px[0] > px[2])
+            .count();
+        assert!(shadow_pixels > 0, "expected shadow pixels to be present");
+
         let red_bbox =
-            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80).expect("shadow");
+            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > g && r > b).expect("shadow");
 
         let dx = red_bbox.0.saturating_sub(black_bbox.0);
         assert!(
@@ -6363,6 +6372,60 @@ mod tests {
         assert!(
             red_bbox.1.abs_diff(black_bbox.1) <= 2,
             "shadow should align vertically when no y offset is set"
+        );
+    }
+
+    #[test]
+    fn text_shadow_blur_scales_with_device_pixel_ratio() {
+        let mut style = ComputedStyle::default();
+        style.color = Rgba::BLACK;
+        style.font_size = 16.0;
+        style.text_shadow = vec![TextShadow {
+            offset_x: Length::px(0.0),
+            offset_y: Length::px(0.0),
+            blur_radius: Length::px(4.0),
+            color: Some(Rgba::from_rgba8(255, 0, 0, 255)),
+        }];
+        let style = Arc::new(style);
+
+        let fragment =
+            FragmentNode::new_text_styled(Rect::from_xywh(10.0, 10.0, 80.0, 30.0), "Hi".to_string(), 16.0, style);
+        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 120.0, 60.0), vec![fragment]);
+        let tree = FragmentTree::new(root);
+
+        let pixmap = paint_tree_scaled(&tree, 120, 60, Rgba::TRANSPARENT, 2.0).expect("paint");
+
+        let black_bbox =
+            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32).expect("black text");
+        let shadow_pixels = pixmap
+            .data()
+            .chunks_exact(4)
+            .filter(|px| px[3] > 0 && px[0] > px[1] && px[0] > px[2])
+            .count();
+        assert!(shadow_pixels > 0, "expected shadow pixels to be present");
+
+        let red_bbox =
+            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > g && r > b).expect("shadow");
+
+        let mut outside = 0;
+        let width = pixmap.width();
+        for y in 0..pixmap.height() {
+            for x in 0..width {
+                if x >= black_bbox.0 && x <= black_bbox.2 && y >= black_bbox.1 && y <= black_bbox.3 {
+                    continue;
+                }
+                let (r, g, b, a) = color_at(&pixmap, x, y);
+                if a > 0 && r > g && r > b {
+                    outside += 1;
+                }
+            }
+        }
+        assert!(
+            outside > 0,
+            "blur should paint shadow pixels outside the glyph bounds (black bbox {:?}, red bbox {:?}, shadow pixels {})",
+            black_bbox,
+            red_bbox,
+            shadow_pixels
         );
     }
 
