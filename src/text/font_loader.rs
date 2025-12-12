@@ -227,10 +227,14 @@ impl FontContext {
         stretch: FontStretch,
     ) -> Option<LoadedFont> {
         let font_weight = FontWeight::new(weight);
-        let id = self
-            .db
-            .resolve_family_list_full(families, font_weight, style, stretch)?;
-        self.db.load_font(id)
+        for slope in crate::text::pipeline::slope_preference_order(style) {
+            if let Some(id) = self.db.resolve_family_list_full(families, font_weight, *slope, stretch) {
+                if let Some(font) = self.db.load_font(id) {
+                    return Some(font);
+                }
+            }
+        }
+        None
     }
 
     /// Gets a font by simple family name query
@@ -583,8 +587,8 @@ mod tests {
 
         let families = vec!["sans-serif".to_string()];
         let font = ctx.get_font_full(&families, 400, FontStyle::Normal, FontStretch::Normal);
-        if font.is_some() {
-            assert!(!font.unwrap().data.is_empty());
+        if let Some(font) = font {
+            assert!(!font.data.is_empty());
         }
     }
 

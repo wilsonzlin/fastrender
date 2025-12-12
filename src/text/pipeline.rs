@@ -1094,7 +1094,7 @@ fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f
     (synthetic_bold, synthetic_oblique)
 }
 
-fn slope_preference_order(style: FontStyle) -> &'static [FontStyle] {
+pub(crate) fn slope_preference_order(style: FontStyle) -> &'static [FontStyle] {
     match style {
         FontStyle::Normal => &[FontStyle::Normal],
         FontStyle::Italic => &[FontStyle::Italic, FontStyle::Oblique, FontStyle::Normal],
