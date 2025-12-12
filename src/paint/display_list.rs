@@ -1185,6 +1185,8 @@ pub enum BlendMode {
     Color,
     /// Luminosity
     Luminosity,
+    /// Plus-lighter
+    PlusLighter,
 }
 
 /// Stacking context

@@ -453,6 +453,7 @@ impl DisplayListBuilder {
             MixBlendMode::Saturation => BlendMode::Saturation,
             MixBlendMode::Color => BlendMode::Color,
             MixBlendMode::Luminosity => BlendMode::Luminosity,
+            MixBlendMode::PlusLighter => BlendMode::PlusLighter,
         }
     }
 
@@ -3637,6 +3638,14 @@ mod tests {
             ),
             other => panic!("expected blur filter, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn plus_lighter_mix_blend_mode_converts() {
+        assert!(matches!(
+            DisplayListBuilder::convert_blend_mode(MixBlendMode::PlusLighter),
+            BlendMode::PlusLighter
+        ));
     }
 
     #[test]

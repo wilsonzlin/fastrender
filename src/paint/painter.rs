@@ -5345,6 +5345,7 @@ fn map_blend_mode(mode: MixBlendMode) -> SkiaBlendMode {
         MixBlendMode::Saturation => SkiaBlendMode::Saturation,
         MixBlendMode::Color => SkiaBlendMode::Color,
         MixBlendMode::Luminosity => SkiaBlendMode::Luminosity,
+        MixBlendMode::PlusLighter => SkiaBlendMode::Plus,
     }
 }
 
@@ -7748,6 +7749,28 @@ mod tests {
         );
         let expected_hsl = rgb_to_hsl(expected.0, expected.1, expected.2);
         assert_hsl_components((r, g, b), expected_hsl, 0.02, 0.05, 0.05, "hue mix-blend-mode");
+    }
+
+    #[test]
+    fn mix_blend_mode_plus_lighter_adds_colors() {
+        let mut root_style = ComputedStyle::default();
+        root_style.background_color = Rgba::from_rgba8(100, 100, 100, 255);
+
+        let mut child_style = ComputedStyle::default();
+        child_style.background_color = Rgba::from_rgba8(200, 0, 0, 255);
+        child_style.mix_blend_mode = MixBlendMode::PlusLighter;
+
+        let child = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 2.0, 2.0), vec![], Arc::new(child_style));
+        let mut root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 2.0, 2.0), vec![child]);
+        root.style = Some(Arc::new(root_style));
+
+        let pixmap = paint_tree(&FragmentTree::new(root), 2, 2, Rgba::WHITE).expect("paint");
+        let (r, g, b, _) = color_at(&pixmap, 0, 0);
+        assert_eq!(
+            (r, g, b),
+            (255, 100, 100),
+            "plus-lighter should add source and destination colors"
+        );
     }
 
     #[test]

@@ -530,6 +530,7 @@ pub enum MixBlendMode {
     Saturation,
     Color,
     Luminosity,
+    PlusLighter,
 }
 
 /// Isolation for stacking contexts

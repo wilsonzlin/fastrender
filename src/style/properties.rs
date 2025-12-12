@@ -6419,9 +6419,7 @@ struct AngleComponent {
 }
 
 fn parse_angle_token<'i, 't>(input: &mut Parser<'i, 't>) -> Option<f32> {
-    parse_angle_degrees(input)
-        .ok()
-        .and_then(validate_oblique_angle)
+    parse_angle_degrees(input).ok().and_then(validate_oblique_angle)
 }
 
 fn parse_font_style_keyword(raw: &str) -> Option<FontStyle> {
@@ -7183,6 +7181,7 @@ fn parse_mix_blend_mode(kw: &str) -> Option<MixBlendMode> {
         "saturation" => Some(MixBlendMode::Saturation),
         "color" => Some(MixBlendMode::Color),
         "luminosity" => Some(MixBlendMode::Luminosity),
+        "plus-lighter" => Some(MixBlendMode::PlusLighter),
         _ => None,
     }
 }
@@ -10974,6 +10973,19 @@ mod tests {
             parse_filter_list(&PropertyValue::Keyword("drop-shadow(1px 2px 3px 4px)".to_string())).is_none(),
             "drop-shadow should not accept spread values"
         );
+    }
+
+    #[test]
+    fn parses_plus_lighter_mix_blend_mode() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "mix-blend-mode".to_string(),
+            value: PropertyValue::Keyword("plus-lighter".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert!(matches!(style.mix_blend_mode, MixBlendMode::PlusLighter));
     }
 
     #[test]

@@ -52,6 +52,7 @@ fn map_blend_mode(mode: BlendMode) -> tiny_skia::BlendMode {
         BlendMode::Saturation => tiny_skia::BlendMode::Saturation,
         BlendMode::Color => tiny_skia::BlendMode::Color,
         BlendMode::Luminosity => tiny_skia::BlendMode::Luminosity,
+        BlendMode::PlusLighter => tiny_skia::BlendMode::Plus,
     }
 }
 

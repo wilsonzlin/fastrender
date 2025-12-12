@@ -1096,6 +1096,7 @@ impl BlendModeExt for BlendMode {
             BlendMode::Saturation => SkiaBlendMode::Saturation,
             BlendMode::Color => SkiaBlendMode::Color,
             BlendMode::Luminosity => SkiaBlendMode::Luminosity,
+            BlendMode::PlusLighter => SkiaBlendMode::Plus,
         }
     }
 }
