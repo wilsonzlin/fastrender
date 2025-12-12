@@ -2590,6 +2590,7 @@ impl DisplayListBuilder {
 
         let label = match replaced_type {
             ReplacedType::Video { .. } => Some("video"),
+            ReplacedType::Audio { .. } => Some("audio"),
             ReplacedType::Iframe { .. } => Some("iframe"),
             ReplacedType::Canvas => Some("canvas"),
             ReplacedType::Embed { .. } => Some("embed"),
@@ -3755,6 +3756,19 @@ mod tests {
         let list = builder.build(&fragment);
 
         assert_eq!(list.len(), 3, "fill, stroke, and label text expected");
+        assert!(matches!(list.items()[0], DisplayItem::FillRect(_)));
+        assert!(matches!(list.items()[1], DisplayItem::StrokeRect(_)));
+        assert!(matches!(list.items()[2], DisplayItem::Text(_)));
+    }
+
+    #[test]
+    fn audio_replaced_uses_labeled_placeholder() {
+        let fragment =
+            FragmentNode::new_replaced(Rect::from_xywh(0.0, 0.0, 30.0, 12.0), ReplacedType::Audio { src: String::new() });
+        let builder = DisplayListBuilder::new();
+        let list = builder.build(&fragment);
+
+        assert_eq!(list.len(), 3, "audio placeholder should include label text");
         assert!(matches!(list.items()[0], DisplayItem::FillRect(_)));
         assert!(matches!(list.items()[1], DisplayItem::StrokeRect(_)));
         assert!(matches!(list.items()[2], DisplayItem::Text(_)));

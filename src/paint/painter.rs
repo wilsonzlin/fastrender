@@ -2902,11 +2902,13 @@ impl Painter {
                 }
             }
             ReplacedType::Video { .. } => {
+                let media_ctx = crate::style::media::MediaContext::screen(self.css_width, self.css_height)
+                    .with_device_pixel_ratio(self.scale);
                 let sources = replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
                     scale: self.scale,
                     slot_width: Some(content_rect.width()),
                     viewport: Some(Size::new(self.css_width, self.css_height)),
-                    media_context: None,
+                    media_context: Some(&media_ctx),
                     font_size: style.map(|s| s.font_size),
                 });
                 for candidate in sources {
@@ -7143,6 +7145,30 @@ mod tests {
             color_at(&pixmap, 5, 5),
             (0, 255, 0, 255),
             "poster content should paint instead of placeholder"
+        );
+    }
+
+    #[test]
+    fn paints_audio_placeholder() {
+        let style = Arc::new(ComputedStyle::default());
+        let fragment = FragmentNode::new_with_style(
+            Rect::from_xywh(0.0, 0.0, 12.0, 8.0),
+            FragmentContent::Replaced {
+                replaced_type: ReplacedType::Audio { src: String::new() },
+                box_id: None,
+            },
+            vec![],
+            style,
+        );
+        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 14.0, 10.0), vec![fragment]);
+        let tree = FragmentTree::new(root);
+
+        let pixmap = paint_tree(&tree, 14, 10, Rgba::WHITE).expect("paint audio placeholder");
+        let center = color_at(&pixmap, 6, 4);
+        assert_eq!(
+            center,
+            (200, 200, 200, 255),
+            "audio should render placeholder fill when no media is available"
         );
     }
 

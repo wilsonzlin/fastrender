@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Video posters now honor media context when selecting poster sources, and audio replacements get labeled placeholders in both painter and display list builder. Added tests for audio placeholders and builder labels.
 - text-align parsing now preserves `justify-all` as a distinct computed value and sets `text-align-last` to justify per CSS Text; `text-align-all` no longer resets `text-align-last`, keeping the longhand split faithful to the spec. Inline layout treats `justify-all` as justification on all lines. Added cascade coverage.
 - ::marker now follows the CSS Lists/Pseudo supported property set more closely: cursor is honored, while text-align/text-align-last/text-indent are reset to defaults even when inherited. Added cascade tests to lock cursor support and ignore alignment on markers.
 - Filter functions follow the spec defaults/validation: blur/hue-rotate default to 0 when arguments are omitted, the rest default to 1, negative parameters are invalid, unit-interval filters clamp to [0,1] at resolution, and brightness/contrast/saturate keep values above 1. Added painter/display-list regressions for clamping and defaults.
