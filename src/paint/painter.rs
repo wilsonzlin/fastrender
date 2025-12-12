@@ -1704,14 +1704,28 @@ impl Painter {
             return;
         }
 
+        // Center strokes on the border edges so paint remains within the border box.
+        let top_center = y + top * 0.5;
+        let bottom_center = y + height - bottom * 0.5;
+        let left_center = x + left * 0.5;
+        let right_center = x + width - right * 0.5;
+        let top_start = left_center;
+        let top_end = right_center;
+        let bottom_start = left_center;
+        let bottom_end = right_center;
+        let left_start = top_center;
+        let left_end = bottom_center;
+        let right_start = top_center;
+        let right_end = bottom_center;
+
         // Top border
         if top > 0.0 {
             self.paint_border_edge(
                 BorderEdge::Top,
-                x,
-                y + top * 0.5,
-                x + width,
-                y + top * 0.5,
+                top_start,
+                top_center,
+                top_end,
+                top_center,
                 top,
                 style.border_top_style,
                 &style.border_top_color,
@@ -1722,10 +1736,10 @@ impl Painter {
         if right > 0.0 {
             self.paint_border_edge(
                 BorderEdge::Right,
-                x + width - right * 0.5,
-                y,
-                x + width - right * 0.5,
-                y + height,
+                right_center,
+                right_start,
+                right_center,
+                right_end,
                 right,
                 style.border_right_style,
                 &style.border_right_color,
@@ -1736,10 +1750,10 @@ impl Painter {
         if bottom > 0.0 {
             self.paint_border_edge(
                 BorderEdge::Bottom,
-                x,
-                y + height - bottom * 0.5,
-                x + width,
-                y + height - bottom * 0.5,
+                bottom_start,
+                bottom_center,
+                bottom_end,
+                bottom_center,
                 bottom,
                 style.border_bottom_style,
                 &style.border_bottom_color,
@@ -1750,10 +1764,10 @@ impl Painter {
         if left > 0.0 {
             self.paint_border_edge(
                 BorderEdge::Left,
-                x + left * 0.5,
-                y,
-                x + left * 0.5,
-                y + height,
+                left_center,
+                left_start,
+                left_center,
+                left_end,
                 left,
                 style.border_left_style,
                 &style.border_left_color,
