@@ -632,6 +632,63 @@ pub fn itemize_text(text: &str, bidi: &BidiAnalysis) -> Vec<ItemizedRun> {
     runs
 }
 
+fn split_itemized_runs_by_paragraph(runs: Vec<ItemizedRun>, paragraphs: &[ParagraphBoundary]) -> Vec<ItemizedRun> {
+    if runs.is_empty() || paragraphs.is_empty() {
+        return runs;
+    }
+
+    let mut out = Vec::with_capacity(runs.len());
+    let mut para_iter = paragraphs.iter().peekable();
+
+    for mut run in runs {
+        while let Some(para) = para_iter.peek().copied() {
+            // Advance paragraph iterator if run starts after the current paragraph.
+            if run.start >= para.end_byte {
+                para_iter.next();
+                continue;
+            }
+
+            let para_end = para.end_byte;
+            if run.end <= para_end {
+                out.push(run);
+                break;
+            }
+
+            // Split the run at the paragraph boundary.
+            let split_point = para_end;
+            let split_offset = split_point - run.start;
+            let (left, right) = split_run_at(&run, split_offset);
+            out.push(left);
+            run = right;
+            para_iter.next();
+        }
+    }
+
+    out
+}
+
+fn split_run_at(run: &ItemizedRun, split_offset: usize) -> (ItemizedRun, ItemizedRun) {
+    let left_text = run.text[..split_offset].to_string();
+    let right_text = run.text[split_offset..].to_string();
+    let left = ItemizedRun {
+        start: run.start,
+        end: run.start + split_offset,
+        text: left_text,
+        script: run.script,
+        direction: run.direction,
+        level: run.level,
+    };
+    let right = ItemizedRun {
+        start: run.start + split_offset,
+        end: run.end,
+        text: right_text,
+        script: run.script,
+        direction: run.direction,
+        level: run.level,
+    };
+    (left, right)
+}
+
 // ============================================================================
 // Font Matching
 // ============================================================================
@@ -1791,6 +1848,7 @@ impl ShapingPipeline {
 
         // Step 2: Script itemization
         let itemized_runs = itemize_text(text, &bidi);
+        let itemized_runs = split_itemized_runs_by_paragraph(itemized_runs, bidi.paragraphs());
 
         // Step 3: Font matching
         let font_runs = assign_fonts(&itemized_runs, style, font_context)?;
@@ -2395,6 +2453,25 @@ mod tests {
         let mut runs: Vec<ShapedRun> = Vec::new();
         reorder_runs(&mut runs, &[]);
         assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn itemization_splits_runs_at_paragraph_boundaries() {
+        let mut style = ComputedStyle::default();
+        style.direction = CssDirection::Ltr;
+        let text = "abc\nאבג";
+
+        let bidi = BidiAnalysis::analyze(text, &style);
+        let runs = itemize_text(text, &bidi);
+        let runs = split_itemized_runs_by_paragraph(runs, bidi.paragraphs());
+
+        assert_eq!(runs.len(), 2, "should yield one run per paragraph in this case");
+        let paras = bidi.paragraphs();
+        assert_eq!(paras.len(), 2);
+        assert_eq!(runs[0].start, paras[0].start_byte);
+        assert_eq!(runs[0].end, paras[0].end_byte);
+        assert_eq!(runs[1].start, paras[1].start_byte);
+        assert_eq!(runs[1].end, paras[1].end_byte);
     }
 
     #[test]
