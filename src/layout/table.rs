@@ -209,6 +209,103 @@ pub enum SpecifiedHeight {
     Auto,
 }
 
+fn distribute_rowspan_targets(
+    targets: &[usize],
+    row_heights: &mut [f32],
+    rows: &[RowInfo],
+    remaining: f32,
+    percent_base: Option<f32>,
+    row_floor: &dyn Fn(usize, f32) -> f32,
+) {
+    if targets.is_empty() || remaining <= 0.0 {
+        return;
+    }
+
+    let mut weights = Vec::with_capacity(targets.len());
+    let mut caps = Vec::with_capacity(targets.len());
+    for &idx in targets {
+        let current = *row_heights.get(idx).unwrap_or(&0.0);
+        let base = row_floor(idx, current);
+        let (_, max_opt) = resolve_row_min_max(&rows[idx], percent_base);
+        let headroom = max_opt.map(|m| (m - base).max(0.0));
+        let weight = match headroom {
+            Some(h) if h > 0.0 => h,
+            Some(_) => 0.0,
+            None => base.max(1.0), // Uncapped rows fall back to current/base height weighting.
+        };
+        weights.push(weight);
+        caps.push(max_opt);
+    }
+
+    let mut total_weight: f32 = weights.iter().sum();
+    if total_weight <= 0.0 {
+        total_weight = targets.len() as f32;
+        for w in &mut weights {
+            *w = 1.0;
+        }
+    }
+
+    let mut shares = vec![0.0; targets.len()];
+    let mut allocated = 0.0;
+    for (((share, weight), cap), _) in shares
+        .iter_mut()
+        .zip(weights.iter())
+        .zip(caps.iter())
+        .zip(targets.iter())
+    {
+        let mut portion = if total_weight > 0.0 {
+            remaining * (*weight / total_weight)
+        } else {
+            0.0
+        };
+        if let Some(c) = cap {
+            portion = portion.min(*c);
+        }
+        *share = portion;
+        allocated += portion;
+    }
+
+    let leftover = (remaining - allocated).max(0.0);
+    if leftover > 0.01 {
+        let mut flexible = Vec::new();
+        for (idx, cap) in caps.iter().enumerate() {
+            let cap_left = cap.map(|c| (c - shares[idx]).max(0.0)).unwrap_or(f32::INFINITY);
+            if cap_left > 0.0 {
+                flexible.push((idx, cap_left));
+            }
+        }
+
+        if !flexible.is_empty() {
+            let finite_sum: f32 = flexible
+                .iter()
+                .filter_map(|(_, cap_left)| if *cap_left == f32::INFINITY { None } else { Some(*cap_left) })
+                .sum();
+            let unbounded: Vec<_> = flexible.iter().filter(|(_, cap_left)| *cap_left == f32::INFINITY).collect();
+
+            if finite_sum > 0.0 {
+                for (idx, cap_left) in flexible {
+                    if cap_left == f32::INFINITY {
+                        continue;
+                    }
+                    let extra = leftover * (cap_left / finite_sum);
+                    shares[idx] += extra.min(cap_left);
+                }
+            } else if !unbounded.is_empty() {
+                let per = leftover / unbounded.len() as f32;
+                for (idx_ref, _) in unbounded {
+                    shares[*idx_ref] += per;
+                }
+            }
+        }
+    }
+
+    for (target_idx, share) in targets.iter().zip(shares.iter()) {
+        if let Some(slot) = row_heights.get_mut(*target_idx) {
+            *slot = slot.max(*share);
+        }
+    }
+}
+
 fn resolve_row_min_max(row: &RowInfo, percent_base: Option<f32>) -> (Option<f32>, Option<f32>) {
     let min = match row.author_min_height {
         Some(SpecifiedHeight::Fixed(h)) => Some(h),
@@ -1937,23 +2034,23 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
                 (span_start..span_end).collect()
             };
             if !targets.is_empty() {
+                let percent_base = content_available;
+                let mut mins: Vec<f32> = structure.rows.iter().map(|r| r.min_height).collect();
+                let row_floor_fn = |idx: usize, current: f32| -> f32 {
+                    let mut floor = row_floor(&structure.rows[idx]);
+                    floor = floor.max(current);
+                    floor
+                };
                 let non_target_sum: f32 = (span_start..span_end)
                     .filter(|idx| !targets.contains(idx))
-                    .map(|idx| row_floor(&structure.rows[idx]))
+                    .map(|idx| row_floor_fn(idx, *mins.get(idx).unwrap_or(&0.0)))
                     .sum();
                 let remaining = (span_height - non_target_sum).max(0.0);
-                let base_sum: f32 = targets.iter().map(|r| row_floor(&structure.rows[*r])).sum();
-                let total_weight = if base_sum > 0.0 { base_sum } else { targets.len() as f32 };
-
-                for &r in &targets {
-                    let base = row_floor(&structure.rows[r]);
-                    let weight = if base_sum > 0.0 {
-                        base / total_weight
-                    } else {
-                        1.0 / targets.len() as f32
-                    };
-                    let share = remaining * weight;
-                    structure.rows[r].min_height = structure.rows[r].min_height.max(share);
+                distribute_rowspan_targets(&targets, &mut mins, &structure.rows, remaining, percent_base, &row_floor_fn);
+                for (idx, val) in mins.into_iter().enumerate() {
+                    if let Some(row) = structure.rows.get_mut(idx) {
+                        row.min_height = row.min_height.max(val);
+                    }
                 }
             }
         }
@@ -2686,32 +2783,21 @@ impl FormattingContext for TableFormattingContext {
                     (span_start..span_end).collect()
                 };
                 if !targets.is_empty() {
-                    let non_target_sum: f32 = (span_start..span_end)
-                        .filter(|idx| !targets.contains(idx))
-                        .map(|idx| row_floor(idx, *row_heights.get(idx).unwrap_or(&0.0)))
-                        .sum();
-                    let remaining = (span_height - non_target_sum).max(0.0);
-                    let use_proportional = !has_auto;
-                    let base_sum: f32 = targets
-                        .iter()
-                        .map(|idx| row_floor(*idx, *row_heights.get(*idx).unwrap_or(&0.0)))
-                        .sum();
-                    let total_weight = if use_proportional && base_sum > 0.0 {
-                        base_sum
-                    } else {
-                        targets.len() as f32
-                    };
-
-                    for &idx in &targets {
-                        let base = row_floor(idx, *row_heights.get(idx).unwrap_or(&0.0));
-                        let weight = if use_proportional && base_sum > 0.0 {
-                            base / total_weight
-                        } else {
-                            1.0 / targets.len() as f32
-                        };
+                    let percent_base = percent_height_base;
+                    let mut working = row_heights.clone();
+                    let row_floor_fn = |idx: usize, _current: f32| -> f32 { row_floor(idx, 0.0) };
+                    let remaining = span_height;
+                    distribute_rowspan_targets(
+                        &targets,
+                        &mut working,
+                        &structure.rows,
+                        remaining,
+                        percent_base,
+                        &row_floor_fn,
+                    );
+                    for (idx, val) in working.into_iter().enumerate() {
                         if let Some(row) = row_heights.get_mut(idx) {
-                            let share = remaining * weight;
-                            *row = row.max(share);
+                            *row = row.max(val);
                         }
                     }
                 }
@@ -5821,6 +5907,37 @@ mod tests {
         // Extra 80 should distribute in 1:3 ratio from initial 10:30 heights → 20/60 split.
         assert!((structure.rows[0].computed_height - 30.0).abs() < 0.01);
         assert!((structure.rows[1].computed_height - 90.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn calculate_row_heights_respects_headroom_for_rowspans() {
+        let mut structure = TableStructure::new();
+        structure.row_count = 2;
+        structure.rows = vec![RowInfo::new(0), RowInfo::new(1)];
+        structure.rows[0].min_height = 20.0;
+        structure.rows[1].min_height = 20.0;
+        structure.rows[0].author_max_height = Some(SpecifiedHeight::Fixed(60.0));
+        structure.cells = vec![CellInfo {
+            index: 0,
+            source_row: 0,
+            source_col: 0,
+            row: 0,
+            col: 0,
+            rowspan: 2,
+            colspan: 1,
+            box_index: 0,
+            min_width: 0.0,
+            max_width: 0.0,
+            min_height: 200.0,
+            bounds: Rect::ZERO,
+        }];
+        structure.border_spacing = (0.0, 0.0);
+
+        calculate_row_heights(&mut structure, None);
+
+        // Row 0 caps at its max; the remaining height flows into row 1.
+        assert!((structure.rows[0].computed_height - 60.0).abs() < 0.5);
+        assert!(structure.rows[1].computed_height > 120.0);
     }
 
     #[test]
