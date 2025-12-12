@@ -6459,6 +6459,35 @@ mod tests {
     }
 
     #[test]
+    fn underline_thickness_scales_with_device_pixel_ratio() {
+        let mut style = ComputedStyle::default();
+        style.color = Rgba::BLACK;
+        style.font_size = 20.0;
+        style.text_decoration.lines = crate::style::types::TextDecorationLine::UNDERLINE;
+        style.text_decoration.color = Some(Rgba::from_rgba8(255, 0, 0, 255));
+        style.text_decoration.thickness = crate::style::types::TextDecorationThickness::Length(Length::px(4.0));
+        style.text_decoration_skip_ink = crate::style::types::TextDecorationSkipInk::None;
+        let style = Arc::new(style);
+
+        let fragment = FragmentNode::new_text_styled(
+            Rect::from_xywh(10.0, 10.0, 80.0, 30.0),
+            "Hi".to_string(),
+            22.0,
+            style,
+        );
+        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 120.0, 60.0), vec![fragment]);
+        let pixmap = paint_tree_scaled(&FragmentTree::new(root), 120, 60, Rgba::WHITE, 2.0).expect("paint");
+
+        let red_bbox =
+            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80).expect("underline");
+        let height = red_bbox.3 - red_bbox.1 + 1;
+        assert!(
+            (7..=9).contains(&height),
+            "expected underline thickness around 8 device px (4 CSS px at 2x), got {height}"
+        );
+    }
+
+    #[test]
     fn skip_ink_all_forces_exclusions_even_without_overlap() {
         let mut style = ComputedStyle::default();
         style.color = Rgba::BLACK;
