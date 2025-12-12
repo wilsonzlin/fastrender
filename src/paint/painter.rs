@@ -2237,22 +2237,24 @@ impl Painter {
             ReplacedType::Image { alt, .. } => {
                 let media_ctx = crate::style::media::MediaContext::screen(self.css_width, self.css_height)
                     .with_device_pixel_ratio(self.scale);
-                let chosen_src = replaced_type.image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
+                let sources = replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
                     scale: self.scale,
                     slot_width: Some(content_rect.width()),
                     viewport: Some(Size::new(self.css_width, self.css_height)),
                     media_context: Some(&media_ctx),
                     font_size: style.map(|s| s.font_size),
                 });
-                if self.paint_image_from_src(
-                    chosen_src,
-                    style,
-                    content_rect.x(),
-                    content_rect.y(),
-                    content_rect.width(),
-                    content_rect.height(),
-                ) {
-                    return;
+                for candidate in sources {
+                    if self.paint_image_from_src(
+                        &candidate,
+                        style,
+                        content_rect.x(),
+                        content_rect.y(),
+                        content_rect.width(),
+                        content_rect.height(),
+                    ) {
+                        return;
+                    }
                 }
                 if let (Some(style), Some(alt_text)) = (style, alt.as_deref()) {
                     if self.paint_alt_text(alt_text, style, content_rect) {
@@ -2260,7 +2262,10 @@ impl Painter {
                     }
                 }
             }
-            ReplacedType::Svg { content } => {
+            ReplacedType::Svg { content }
+            | ReplacedType::Embed { src: content }
+            | ReplacedType::Object { data: content }
+            | ReplacedType::Iframe { src: content } => {
                 if self.paint_svg(
                     content,
                     style,
@@ -2271,10 +2276,8 @@ impl Painter {
                 ) {
                     return;
                 }
-            }
-            ReplacedType::Embed { src } => {
                 if self.paint_image_from_src(
-                    src,
+                    content,
                     style,
                     content_rect.x(),
                     content_rect.y(),
@@ -2284,34 +2287,17 @@ impl Painter {
                     return;
                 }
             }
-            ReplacedType::Object { data } => {
-                if self.paint_image_from_src(
-                    data,
-                    style,
-                    content_rect.x(),
-                    content_rect.y(),
-                    content_rect.width(),
-                    content_rect.height(),
-                ) {
-                    return;
-                }
-            }
-            ReplacedType::Iframe { src } => {
-                if self.paint_image_from_src(
-                    src,
-                    style,
-                    content_rect.x(),
-                    content_rect.y(),
-                    content_rect.width(),
-                    content_rect.height(),
-                ) {
-                    return;
-                }
-            }
-            ReplacedType::Video { src, poster } => {
-                if let Some(poster_src) = poster.as_deref() {
+            ReplacedType::Video { .. } => {
+                let sources = replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
+                    scale: self.scale,
+                    slot_width: Some(content_rect.width()),
+                    viewport: Some(Size::new(self.css_width, self.css_height)),
+                    media_context: None,
+                    font_size: style.map(|s| s.font_size),
+                });
+                for candidate in sources {
                     if self.paint_image_from_src(
-                        poster_src,
+                        &candidate,
                         style,
                         content_rect.x(),
                         content_rect.y(),
@@ -2320,16 +2306,6 @@ impl Painter {
                     ) {
                         return;
                     }
-                }
-                if self.paint_image_from_src(
-                    src,
-                    style,
-                    content_rect.x(),
-                    content_rect.y(),
-                    content_rect.width(),
-                    content_rect.height(),
-                ) {
-                    return;
                 }
             }
             _ => {}

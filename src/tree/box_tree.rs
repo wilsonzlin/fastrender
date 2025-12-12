@@ -198,6 +198,52 @@ pub struct ImageSelectionContext<'a> {
 }
 
 impl ReplacedType {
+    /// Returns a priority-ordered list of candidate image sources for painting.
+    ///
+    /// The first entry is the best-fit srcset candidate (or the base src when
+    /// no srcset applies), followed by the base `src` (if different) and any
+    /// remaining srcset URLs. Duplicate URLs are removed while preserving order.
+    pub fn image_sources_with_fallback(&self, ctx: ImageSelectionContext<'_>) -> Vec<String> {
+        match self {
+            ReplacedType::Image { src, srcset, sizes: _, .. } => {
+                let primary = self.image_source_for_context(ctx);
+                let mut seen = std::collections::HashSet::new();
+                let mut ordered = Vec::new();
+                let mut push_unique =
+                    |url: &str, out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
+                        if seen.insert(url.to_string()) {
+                            out.push(url.to_string());
+                        }
+                    };
+
+                push_unique(primary, &mut ordered, &mut seen);
+                push_unique(src, &mut ordered, &mut seen);
+                for cand in srcset {
+                    let url = &cand.url;
+                    // Skip candidates whose descriptors depend on sizes when sizes cannot be evaluated.
+                    if matches!(cand.descriptor, SrcsetDescriptor::Width(_)) && ctx.slot_width.is_none() && ctx.viewport.is_none() {
+                        continue;
+                    }
+                    push_unique(url, &mut ordered, &mut seen);
+                }
+                ordered
+            }
+            ReplacedType::Video { src, poster } => {
+                let mut urls = Vec::new();
+                if let Some(p) = poster {
+                    urls.push(p.clone());
+                }
+                urls.push(src.clone());
+                urls
+            }
+            ReplacedType::Svg { content }
+            | ReplacedType::Embed { src: content }
+            | ReplacedType::Object { data: content }
+            | ReplacedType::Iframe { src: content } => vec![content.clone()],
+            _ => Vec::new(),
+        }
+    }
+
     /// Selects the best image source for the given device scale and slot width.
     ///
     /// Returns the authored `src` when no better candidate exists.
@@ -1192,5 +1238,40 @@ mod tests {
         });
 
         assert_eq!(chosen, "400w", "zero-width slot should use viewport width for width descriptors");
+    }
+
+    #[test]
+    fn image_sources_with_fallback_prioritizes_selected_then_src() {
+        let img = ReplacedType::Image {
+            src: "base".to_string(),
+            alt: None,
+            srcset: vec![
+                SrcsetCandidate {
+                    url: "2x".to_string(),
+                    descriptor: SrcsetDescriptor::Density(2.0),
+                },
+                SrcsetCandidate {
+                    url: "1x".to_string(),
+                    descriptor: SrcsetDescriptor::Density(1.0),
+                },
+            ],
+            sizes: None,
+        };
+
+        let media_ctx = MediaContext::screen(800.0, 600.0).with_device_pixel_ratio(2.0);
+        let sources = img.image_sources_with_fallback(ImageSelectionContext {
+            scale: 2.0,
+            slot_width: Some(400.0),
+            viewport: Some(Size::new(800.0, 600.0)),
+            media_context: Some(&media_ctx),
+            font_size: Some(16.0),
+        });
+
+        assert_eq!(sources[0], "2x", "selected srcset candidate should lead");
+        assert!(
+            sources.contains(&"base".to_string()),
+            "base src should remain available as fallback"
+        );
+        assert_eq!(sources.len(), 3, "srcset entries and base src should be unique");
     }
 }

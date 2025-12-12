@@ -1182,36 +1182,16 @@ impl DisplayListBuilder {
             }
 
             FragmentContent::Replaced { replaced_type, .. } => {
-                let sources: Vec<&str> = match replaced_type {
-                    ReplacedType::Image { .. } => {
-                        let media_ctx = self.viewport.map(|(w, h)| {
-                            crate::style::media::MediaContext::screen(w, h)
-                                .with_device_pixel_ratio(self.device_pixel_ratio)
-                        });
-                        vec![
-                            replaced_type.image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
-                                scale: self.device_pixel_ratio,
-                                slot_width: Some(rect.width()),
-                                viewport: self.viewport.map(|(w, h)| crate::geometry::Size::new(w, h)),
-                                media_context: media_ctx.as_ref(),
-                                font_size: fragment.style.as_deref().map(|s| s.font_size),
-                            }),
-                        ]
-                    }
-                    ReplacedType::Video { src, poster } => {
-                        let mut list = Vec::new();
-                        if let Some(p) = poster.as_deref() {
-                            list.push(p);
-                        }
-                        list.push(src.as_str());
-                        list
-                    }
-                    ReplacedType::Svg { content } => vec![content.as_str()],
-                    ReplacedType::Embed { src } => vec![src.as_str()],
-                    ReplacedType::Object { data } => vec![data.as_str()],
-                    ReplacedType::Iframe { src } => vec![src.as_str()],
-                    _ => Vec::new(),
-                };
+                let media_ctx = self.viewport.map(|(w, h)| {
+                    crate::style::media::MediaContext::screen(w, h).with_device_pixel_ratio(self.device_pixel_ratio)
+                });
+                let sources = replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
+                    scale: self.device_pixel_ratio,
+                    slot_width: Some(rect.width()),
+                    viewport: self.viewport.map(|(w, h)| crate::geometry::Size::new(w, h)),
+                    media_context: media_ctx.as_ref(),
+                    font_size: fragment.style.as_deref().map(|s| s.font_size),
+                });
 
                 if let Some(image) = sources.iter().filter_map(|s| self.decode_image(s)).next() {
                     let (dest_x, dest_y, dest_w, dest_h) = {
