@@ -192,10 +192,14 @@ impl FontContext {
             FontStyle::Normal
         };
 
-        for slope in crate::text::pipeline::slope_preference_order(requested_style) {
-            if let Some(id) = self.db.resolve_family_list(families, font_weight, *slope) {
-                if let Some(font) = self.db.load_font(id) {
-                    return Some(font);
+        let weights = crate::text::pipeline::weight_preference_order(weight);
+        for weight_choice in &weights {
+            let font_weight = FontWeight::new(*weight_choice);
+            for slope in crate::text::pipeline::slope_preference_order(requested_style) {
+                if let Some(id) = self.db.resolve_family_list(families, font_weight, *slope) {
+                    if let Some(font) = self.db.load_font(id) {
+                        return Some(font);
+                    }
                 }
             }
         }
@@ -232,16 +236,19 @@ impl FontContext {
         style: FontStyle,
         stretch: FontStretch,
     ) -> Option<LoadedFont> {
-        let font_weight = FontWeight::new(weight);
         let stretches = crate::text::pipeline::stretch_preference_order(stretch.into());
-        for slope in crate::text::pipeline::slope_preference_order(style) {
-            for stretch_choice in &stretches {
-                if let Some(id) = self
-                    .db
-                    .resolve_family_list_full(families, font_weight, *slope, *stretch_choice)
-                {
-                    if let Some(font) = self.db.load_font(id) {
-                        return Some(font);
+        let weights = crate::text::pipeline::weight_preference_order(weight);
+        for weight_choice in &weights {
+            let font_weight = FontWeight::new(*weight_choice);
+            for slope in crate::text::pipeline::slope_preference_order(style) {
+                for stretch_choice in &stretches {
+                    if let Some(id) = self
+                        .db
+                        .resolve_family_list_full(families, font_weight, *slope, *stretch_choice)
+                    {
+                        if let Some(font) = self.db.load_font(id) {
+                            return Some(font);
+                        }
                     }
                 }
             }
@@ -612,8 +619,8 @@ mod tests {
         let ctx = FontContext::with_database(Arc::new(db));
 
         let families = vec!["Roboto".to_string()];
-        // Request italic even though only a normal face exists; should still return a font.
-        let font = ctx.get_font(&families, 400, true, false);
+        // Request italic + heavier weight even though only a normal face exists; should still return a font.
+        let font = ctx.get_font(&families, 700, true, false);
         assert!(font.is_some());
     }
 

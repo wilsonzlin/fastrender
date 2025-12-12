@@ -1102,6 +1102,19 @@ pub(crate) fn slope_preference_order(style: FontStyle) -> &'static [FontStyle] {
     }
 }
 
+pub(crate) fn weight_preference_order(weight: u16) -> Vec<u16> {
+    let desired = weight.clamp(100, 900);
+    let mut candidates: Vec<u16> = (1..=9).map(|i| i * 100).collect();
+    candidates.sort_by(|a, b| {
+        let da = (*a as i32 - desired as i32).abs();
+        let db = (*b as i32 - desired as i32).abs();
+        da.cmp(&db)
+            .then_with(|| if desired >= 400 { b.cmp(a) } else { a.cmp(b) })
+            .then_with(|| a.cmp(b))
+    });
+    candidates
+}
+
 pub(crate) fn stretch_preference_order(stretch: DbFontStretch) -> Vec<DbFontStretch> {
     let target = stretch.to_percentage();
     let mut variants = [
@@ -1246,9 +1259,9 @@ fn resolve_font_for_char(
     let prefer_emoji_fonts = matches!(emoji_pref, EmojiPreference::PreferEmoji);
     let mut fallback_non_emoji: Option<LoadedFont> = None;
     let mut fallback_emoji: Option<LoadedFont> = None;
-    let slope_preferences = slope_preference_order(style);
-
     let is_emoji = crate::text::font_db::FontDatabase::is_emoji(ch);
+    let weight_preferences = weight_preference_order(weight);
+    let slope_preferences = slope_preference_order(style);
     let stretch_preferences = stretch_preference_order(stretch);
     for entry in families {
         if avoid_emoji_fonts {
@@ -1263,38 +1276,40 @@ fn resolve_font_for_char(
             }
         }
 
-        for slope in slope_preferences {
-            for stretch_choice in &stretch_preferences {
-                let query = match entry {
-                    FamilyEntry::Named(name) => fontdb::Query {
-                        families: &[Family::Name(name)],
-                        weight: fontdb::Weight(weight),
-                        stretch: (*stretch_choice).into(),
-                        style: (*slope).into(),
-                    },
-                    FamilyEntry::Generic(generic) => fontdb::Query {
-                        families: &[generic.to_fontdb()],
-                        weight: fontdb::Weight(weight),
-                        stretch: (*stretch_choice).into(),
-                        style: (*slope).into(),
-                    },
-                };
+        for weight_choice in &weight_preferences {
+            for slope in slope_preferences {
+                for stretch_choice in &stretch_preferences {
+                    let query = match entry {
+                        FamilyEntry::Named(name) => fontdb::Query {
+                            families: &[Family::Name(name)],
+                            weight: fontdb::Weight(*weight_choice),
+                            stretch: (*stretch_choice).into(),
+                            style: (*slope).into(),
+                        },
+                        FamilyEntry::Generic(generic) => fontdb::Query {
+                            families: &[generic.to_fontdb()],
+                            weight: fontdb::Weight(*weight_choice),
+                            stretch: (*stretch_choice).into(),
+                            style: (*slope).into(),
+                        },
+                    };
 
-                if let Some(id) = db.inner().query(&query) {
-                    if let Some(font) = db.load_font(id) {
-                        let is_emoji_font = font_is_emoji_font(&font);
-                        if is_emoji_font {
-                            if fallback_emoji.is_none() {
-                                fallback_emoji = Some(font.clone());
+                    if let Some(id) = db.inner().query(&query) {
+                        if let Some(font) = db.load_font(id) {
+                            let is_emoji_font = font_is_emoji_font(&font);
+                            if is_emoji_font {
+                                if fallback_emoji.is_none() {
+                                    fallback_emoji = Some(font.clone());
+                                }
+                            } else if fallback_non_emoji.is_none() {
+                                fallback_non_emoji = Some(font.clone());
                             }
-                        } else if fallback_non_emoji.is_none() {
-                            fallback_non_emoji = Some(font.clone());
-                        }
-                        if avoid_emoji_fonts && is_emoji_font {
-                            continue;
-                        }
-                        if db.has_glyph(id, ch) {
-                            return Some(font);
+                            if avoid_emoji_fonts && is_emoji_font {
+                                continue;
+                            }
+                            if db.has_glyph(id, ch) {
+                                return Some(font);
+                            }
                         }
                     }
                 }
@@ -1303,29 +1318,31 @@ fn resolve_font_for_char(
 
         if let FamilyEntry::Generic(generic) = entry {
             for name in generic.fallback_families() {
-                for slope in slope_preferences {
-                    for stretch_choice in &stretch_preferences {
-                        let query = fontdb::Query {
-                            families: &[Family::Name(name)],
-                            weight: fontdb::Weight(weight),
-                            stretch: (*stretch_choice).into(),
-                            style: (*slope).into(),
-                        };
-                        if let Some(id) = db.inner().query(&query) {
-                            if let Some(font) = db.load_font(id) {
-                                let is_emoji_font = font_is_emoji_font(&font);
-                                if is_emoji_font {
-                                    if fallback_emoji.is_none() {
-                                        fallback_emoji = Some(font.clone());
+                for weight_choice in &weight_preferences {
+                    for slope in slope_preferences {
+                        for stretch_choice in &stretch_preferences {
+                            let query = fontdb::Query {
+                                families: &[Family::Name(name)],
+                                weight: fontdb::Weight(*weight_choice),
+                                stretch: (*stretch_choice).into(),
+                                style: (*slope).into(),
+                            };
+                            if let Some(id) = db.inner().query(&query) {
+                                if let Some(font) = db.load_font(id) {
+                                    let is_emoji_font = font_is_emoji_font(&font);
+                                    if is_emoji_font {
+                                        if fallback_emoji.is_none() {
+                                            fallback_emoji = Some(font.clone());
+                                        }
+                                    } else if fallback_non_emoji.is_none() {
+                                        fallback_non_emoji = Some(font.clone());
                                     }
-                                } else if fallback_non_emoji.is_none() {
-                                    fallback_non_emoji = Some(font.clone());
-                                }
-                                if avoid_emoji_fonts && is_emoji_font {
-                                    continue;
-                                }
-                                if db.has_glyph(id, ch) {
-                                    return Some(font);
+                                    if avoid_emoji_fonts && is_emoji_font {
+                                        continue;
+                                    }
+                                    if db.has_glyph(id, ch) {
+                                        return Some(font);
+                                    }
                                 }
                             }
                         }
@@ -2721,6 +2738,14 @@ mod tests {
             slope_preference_order(DbStyle::Oblique),
             &[DbStyle::Oblique, DbStyle::Italic, DbStyle::Normal]
         );
+    }
+
+    #[test]
+    fn weight_preferences_prefer_closest_with_bias() {
+        let order_350 = weight_preference_order(350);
+        assert!(order_350.iter().position(|w| *w == 300) < order_350.iter().position(|w| *w == 400));
+        let order_600 = weight_preference_order(600);
+        assert!(order_600.iter().position(|w| *w == 700) < order_600.iter().position(|w| *w == 500));
     }
 
     #[test]
