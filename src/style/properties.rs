@@ -2446,19 +2446,23 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     }
                 }
                 PropertyValue::Length(len) => {
-                    // Resolve font-size against parent or root depending on unit
-                    if len.unit.is_absolute() {
-                        styles.font_size = len.to_px();
-                    } else if len.unit == LengthUnit::Em {
-                        styles.font_size = len.value * parent_font_size;
-                    } else if len.unit == LengthUnit::Rem {
-                        styles.font_size = len.value * root_font_size;
-                    } else if len.unit == LengthUnit::Percent {
-                        styles.font_size = (len.value / 100.0) * parent_font_size;
+                    if len.value >= 0.0 {
+                        // Resolve font-size against parent or root depending on unit
+                        if len.unit.is_absolute() {
+                            styles.font_size = len.to_px();
+                        } else if len.unit == LengthUnit::Em {
+                            styles.font_size = len.value * parent_font_size;
+                        } else if len.unit == LengthUnit::Rem {
+                            styles.font_size = len.value * root_font_size;
+                        } else if len.unit == LengthUnit::Percent {
+                            styles.font_size = (len.value / 100.0) * parent_font_size;
+                        }
                     }
                 }
                 PropertyValue::Percentage(p) => {
-                    styles.font_size = (p / 100.0) * parent_font_size;
+                    if *p >= 0.0 {
+                        styles.font_size = (p / 100.0) * parent_font_size;
+                    }
                 }
                 _ => {}
             }
@@ -4570,7 +4574,11 @@ fn parse_font_shorthand(
     let mut families: Vec<String> = Vec::new();
     let mut current_family: Vec<String> = Vec::new();
 
-    while let Ok(token) = parser.next() {
+    loop {
+        let token = match parser.next() {
+            Ok(t) => t,
+            Err(_) => break,
+        };
         match phase {
             Phase::PreSize => {
                 if matches!(token, Token::Delim('/')) {
@@ -4578,10 +4586,34 @@ fn parse_font_shorthand(
                 }
 
                 if font_size.is_none() {
-                    if let Some(sz) = parse_font_size_token(&token, parent_font_size, root_font_size) {
-                        font_size = Some(sz);
-                        phase = Phase::AfterSize;
-                        continue;
+                    if font_size.is_none() {
+                        if let Token::Function(ref name) = token {
+                            if name.eq_ignore_ascii_case("calc")
+                                || name.eq_ignore_ascii_case("min")
+                                || name.eq_ignore_ascii_case("max")
+                                || name.eq_ignore_ascii_case("clamp")
+                            {
+                                let parsed = parse_calc_function_length(&mut parser);
+                                match parsed {
+                                    Ok(len) if len.value >= 0.0 => {
+                                        if let Some(sz) = resolve_font_size_length(len, parent_font_size, root_font_size) {
+                                            font_size = Some(sz);
+                                            phase = Phase::AfterSize;
+                                            continue;
+                                        } else {
+                                            return None;
+                                        }
+                                    }
+                                    _ => return None,
+                                }
+                            }
+                        }
+
+                        if let Some(sz) = parse_font_size_token(&token, parent_font_size, root_font_size) {
+                            font_size = Some(sz);
+                            phase = Phase::AfterSize;
+                            continue;
+                        }
                     }
                 }
 
@@ -4773,6 +4805,9 @@ fn parse_font_size_keyword(keyword: &str, parent_font_size: f32) -> Option<f32> 
 }
 
 fn resolve_font_size_length(len: Length, parent_font_size: f32, root_font_size: f32) -> Option<f32> {
+    if len.value < 0.0 {
+        return None;
+    }
     if len.unit.is_absolute() {
         return Some(len.to_px());
     }
@@ -8445,6 +8480,41 @@ mod tests {
     }
 
     #[test]
+    fn parses_font_shorthand_with_calc_font_size() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font".to_string(),
+            value: PropertyValue::Keyword("bold calc(10px + 5px)/normal serif".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_weight, FontWeight::Bold));
+        assert!((style.font_size - 15.0).abs() < 0.01);
+        assert!(matches!(style.line_height, LineHeight::Normal));
+        assert_eq!(style.font_family, vec!["serif".to_string()]);
+    }
+
+    #[test]
+    fn font_shorthand_with_negative_calc_font_size_is_ignored() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font".to_string(),
+            value: PropertyValue::Keyword("bold calc(-10px + 2px)/normal serif".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        // Invalid size leaves defaults
+        assert!(matches!(style.font_weight, FontWeight::Normal));
+        assert!((style.font_size - 16.0).abs() < 0.01);
+        assert!(matches!(style.line_height, LineHeight::Normal));
+        assert_eq!(style.font_family, vec!["serif".to_string()]);
+    }
+
+    #[test]
     fn font_shorthand_with_negative_line_height_is_ignored() {
         let mut style = ComputedStyle::default();
         let decl = Declaration {
@@ -8745,6 +8815,34 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, 10.0, 16.0);
         assert!((style.font_size - 20.0).abs() < 0.01);
+
+        let decl = Declaration {
+            property: "font-size".to_string(),
+            value: PropertyValue::Length(parse_length("calc(10px + 5px)").unwrap()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!((style.font_size - 15.0).abs() < 0.01);
+
+        let decl = Declaration {
+            property: "font-size".to_string(),
+            value: PropertyValue::Length(parse_length("calc(50% + 0%)").unwrap()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 20.0, 16.0);
+        assert!((style.font_size - 10.0).abs() < 0.01);
+
+        let decl = Declaration {
+            property: "font-size".to_string(),
+            value: PropertyValue::Length(parse_length("calc(-10px + 2px)").unwrap()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        // Negative calc is ignored; previous value (10.0 from percent) stays.
+        assert!((style.font_size - 10.0).abs() < 0.01);
     }
 
     #[test]
