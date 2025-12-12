@@ -885,7 +885,10 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
                             value: style.font_stretch.to_percentage(),
                         });
                         set_tags.insert(wdth_tag);
-                    } else if axis.tag == opsz_tag && !set_tags.contains(&opsz_tag) {
+                    } else if axis.tag == opsz_tag
+                        && !set_tags.contains(&opsz_tag)
+                        && matches!(style.font_optical_sizing, crate::style::types::FontOpticalSizing::Auto)
+                    {
                         auto_variations.push(Variation {
                             tag: opsz_tag,
                             value: used_font_size,
@@ -1966,6 +1969,45 @@ mod tests {
 
         assert!(narrow_advance < default_advance, "wdth axis should shrink glyph advances");
         assert!(wide_advance > default_advance, "wdth axis should widen glyph advances");
+    }
+
+    #[test]
+    fn font_optical_sizing_none_skips_opsz_axis() {
+        let (ctx, family) = load_variable_font();
+        let mut style = ComputedStyle::default();
+        style.font_family = vec![family];
+        style.font_size = 20.0;
+        let runs_auto = assign_fonts(
+            &[ItemizedRun {
+                text: "mmmm".to_string(),
+                start: 0,
+                end: 4,
+                script: Script::Latin,
+                direction: Direction::LeftToRight,
+                level: 0,
+            }],
+            &style,
+            &ctx,
+        )
+        .expect("assign fonts auto");
+        let opsz_tag = Tag::from_bytes(b"opsz");
+        assert!(runs_auto[0].variations.iter().any(|v| v.tag == opsz_tag));
+
+        style.font_optical_sizing = crate::style::types::FontOpticalSizing::None;
+        let runs_none = assign_fonts(
+            &[ItemizedRun {
+                text: "mmmm".to_string(),
+                start: 0,
+                end: 4,
+                script: Script::Latin,
+                direction: Direction::LeftToRight,
+                level: 0,
+            }],
+            &style,
+            &ctx,
+        )
+        .expect("assign fonts none");
+        assert!(runs_none[0].variations.iter().all(|v| v.tag != opsz_tag));
     }
 
     #[test]

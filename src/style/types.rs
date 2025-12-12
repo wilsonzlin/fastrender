@@ -848,6 +848,13 @@ pub struct FontVariationSetting {
     pub value: f32,
 }
 
+/// Optical sizing control (`font-optical-sizing`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontOpticalSizing {
+    Auto,
+    None,
+}
+
 /// East Asian variants (`font-variant-east-asian`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EastAsianVariant {

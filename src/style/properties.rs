@@ -2423,6 +2423,7 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     styles.font_kerning = FontKerning::Auto;
                     styles.font_feature_settings.clear();
                     styles.font_variation_settings.clear();
+                    styles.font_optical_sizing = FontOpticalSizing::Auto;
                     styles.font_style = font_style;
                     styles.font_weight = font_weight;
                     styles.font_variant = font_variant;
@@ -2724,6 +2725,15 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                         styles.font_feature_settings = features;
                     }
                 }
+            }
+        }
+        "font-optical-sizing" => {
+            if let PropertyValue::Keyword(raw) = &resolved_value {
+                styles.font_optical_sizing = match raw.to_ascii_lowercase().as_str() {
+                    "auto" => FontOpticalSizing::Auto,
+                    "none" => FontOpticalSizing::None,
+                    _ => styles.font_optical_sizing,
+                };
             }
         }
         "font-variation-settings" => {
@@ -8343,6 +8353,7 @@ mod tests {
         // Defaults stay intact because the shorthand is invalid.
         assert!(matches!(style.font_style, FontStyle::Normal));
         assert!((style.font_size - 16.0).abs() < 0.01);
+        assert!(matches!(style.font_optical_sizing, FontOpticalSizing::Auto));
     }
 
     #[test]
@@ -8379,6 +8390,28 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert!(style.font_variation_settings.is_empty());
+    }
+
+    #[test]
+    fn parses_font_optical_sizing() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font-optical-sizing".to_string(),
+            value: PropertyValue::Keyword("none".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.font_optical_sizing, FontOpticalSizing::None));
+
+        let decl2 = Declaration {
+            property: "font-optical-sizing".to_string(),
+            value: PropertyValue::Keyword("auto".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl2, 16.0, 16.0);
+        assert!(matches!(style.font_optical_sizing, FontOpticalSizing::Auto));
     }
 
     #[test]
