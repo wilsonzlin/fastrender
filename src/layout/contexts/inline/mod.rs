@@ -4250,16 +4250,10 @@ fn strip_bidi_wrapper_runs(
             continue;
         }
 
-        let mut cumulative = 0.0;
-        for glyph in &mut glyphs {
-            glyph.x_offset = cumulative;
-            cumulative += glyph.x_advance;
-        }
-
         run.start = run.start.saturating_sub(prefix_len);
         run.end = run.end.min(content_end).saturating_sub(prefix_len);
         run.text = content_text.to_string();
-        run.advance = cumulative;
+        run.advance = glyphs.iter().map(|g| g.x_advance).sum();
         run.glyphs = glyphs;
         filtered.push(run);
     }
