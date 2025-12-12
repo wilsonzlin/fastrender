@@ -4609,9 +4609,13 @@ fn marker_inline_end_margin(style: &ComputedStyle) -> Option<Length> {
                 style.margin_right
             }
         }
-        VerticalRl | VerticalLr => style.margin_bottom,
-        SidewaysRl => style.margin_left,
-        SidewaysLr => style.margin_right,
+        VerticalRl | VerticalLr | SidewaysRl | SidewaysLr => {
+            if matches!(style.direction, crate::style::types::Direction::Rtl) {
+                style.margin_top
+            } else {
+                style.margin_bottom
+            }
+        }
     }
 }
 
@@ -4641,9 +4645,13 @@ fn marker_inline_start_sign(writing_mode: crate::style::types::WritingMode, dire
                 -1.0
             }
         }
-        VerticalRl | VerticalLr => -1.0,
-        SidewaysRl => 1.0,
-        SidewaysLr => -1.0,
+        VerticalRl | VerticalLr | SidewaysRl | SidewaysLr => {
+            if matches!(direction, crate::style::types::Direction::Rtl) {
+                1.0
+            } else {
+                -1.0
+            }
+        }
     }
 }
 
@@ -5256,6 +5264,39 @@ mod tests {
         assert!(
             marker_y < text_y,
             "marker should sit at inline-start (top) in vertical-lr; marker_y={}, text_y={}",
+            marker_y,
+            text_y
+        );
+    }
+
+    #[test]
+    fn marker_outside_positions_inline_start_in_vertical_rl_rtl_direction() {
+        let ifc = InlineFormattingContext::new();
+        let mut root_style = ComputedStyle::default();
+        root_style.writing_mode = WritingMode::VerticalRl;
+        root_style.direction = crate::style::types::Direction::Rtl;
+        let root_style = Arc::new(root_style);
+
+        let mut marker_style = (*root_style).clone();
+        marker_style.list_style_position = ListStylePosition::Outside;
+        let marker_style = Arc::new(marker_style);
+
+        let text_style = Arc::new((*root_style).clone());
+
+        let marker = BoxNode::new_marker(marker_style, MarkerContent::Text("•".to_string()));
+        let text = BoxNode::new_text(text_style, "content".to_string());
+        let root = BoxNode::new_block(root_style, FormattingContextType::Block, vec![marker, text]);
+        let constraints = LayoutConstraints::definite(200.0, 200.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let line = fragment.children.first().expect("line fragment");
+        let (marker_y, text_y) = marker_and_text_positions_vertical(line);
+
+        let marker_y = marker_y.expect("marker y");
+        let text_y = text_y.expect("text y");
+        assert!(
+            marker_y > text_y,
+            "rtl inline-start should map to inline-end (bottom) in vertical-rl; marker_y={}, text_y={}",
             marker_y,
             text_y
         );
