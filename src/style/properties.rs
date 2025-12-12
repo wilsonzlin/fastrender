@@ -6938,8 +6938,12 @@ fn parse_drop_shadow<'i, 't>(input: &mut Parser<'i, 't>) -> Result<FilterFunctio
         return Err(input.new_custom_error(()));
     }
 
+    if lengths.len() > 3 {
+        return Err(input.new_custom_error(()));
+    }
+
     let blur = lengths.get(2).copied().unwrap_or_else(|| Length::px(0.0));
-    let spread = lengths.get(3).copied().unwrap_or_else(|| Length::px(0.0));
+    let spread = Length::px(0.0);
     if blur.value < 0.0 {
         return Err(input.new_custom_error(()));
     }
@@ -10752,6 +10756,14 @@ mod tests {
             }
             _ => panic!("expected drop-shadow"),
         }
+    }
+
+    #[test]
+    fn drop_shadow_rejects_spread_length() {
+        assert!(
+            parse_filter_list(&PropertyValue::Keyword("drop-shadow(1px 2px 3px 4px)".to_string())).is_none(),
+            "drop-shadow should not accept spread values"
+        );
     }
 
     #[test]
