@@ -2850,13 +2850,23 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                 styles.line_height = LineHeight::Normal;
             }
             PropertyValue::Number(n) => {
-                styles.line_height = LineHeight::Number(*n);
+                if *n >= 0.0 {
+                    styles.line_height = LineHeight::Number(*n);
+                }
             }
             PropertyValue::Length(len) => {
-                styles.line_height = LineHeight::Length(*len);
+                if len.unit == LengthUnit::Percent {
+                    if len.value >= 0.0 {
+                        styles.line_height = LineHeight::Percentage(len.value);
+                    }
+                } else if len.value >= 0.0 {
+                    styles.line_height = LineHeight::Length(*len);
+                }
             }
             PropertyValue::Percentage(pct) => {
-                styles.line_height = LineHeight::Percentage(*pct);
+                if *pct >= 0.0 {
+                    styles.line_height = LineHeight::Percentage(*pct);
+                }
             }
             _ => {}
         },
@@ -4706,9 +4716,18 @@ fn parse_font_size_token(token: &Token, parent_font_size: f32, root_font_size: f
 fn parse_line_height_token(token: &Token) -> Option<LineHeight> {
     match token {
         Token::Ident(ref ident) if ident.as_ref().eq_ignore_ascii_case("normal") => Some(LineHeight::Normal),
-        Token::Number { value, .. } => Some(LineHeight::Number(*value)),
-        Token::Percentage { unit_value, .. } => Some(LineHeight::Percentage(*unit_value * 100.0)),
-        _ => length_from_token(token).map(LineHeight::Length),
+        Token::Number { value, .. } if *value >= 0.0 => Some(LineHeight::Number(*value)),
+        Token::Percentage { unit_value, .. } if *unit_value >= 0.0 => Some(LineHeight::Percentage(*unit_value * 100.0)),
+        _ => length_from_token(token).and_then(|len| {
+            if len.value < 0.0 {
+                return None;
+            }
+            if len.unit == LengthUnit::Percent {
+                Some(LineHeight::Percentage(len.value))
+            } else {
+                Some(LineHeight::Length(len))
+            }
+        }),
     }
 }
 
@@ -8387,6 +8406,24 @@ mod tests {
     }
 
     #[test]
+    fn font_shorthand_with_negative_line_height_is_ignored() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font".to_string(),
+            value: PropertyValue::Keyword("bold 20px/-1px serif".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, 20.0, 16.0);
+        // Invalid shorthand should leave defaults intact.
+        assert!(matches!(style.font_weight, FontWeight::Normal));
+        assert!((style.font_size - 16.0).abs() < 0.01);
+        assert!(matches!(style.line_height, LineHeight::Normal));
+        assert_eq!(style.font_family, vec!["serif".to_string()]);
+    }
+
+    #[test]
     fn font_shorthand_without_family_is_ignored() {
         let mut style = ComputedStyle::default();
         let decl = Declaration {
@@ -8544,6 +8581,53 @@ mod tests {
 
         apply_declaration(&mut style, &decl, 16.0, 16.0);
         assert!(matches!(style.line_height, LineHeight::Percentage(p) if (p - 150.0).abs() < 0.001));
+    }
+
+    #[test]
+    fn line_height_percentage_length_is_normalized_to_percentage_variant() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "line-height".to_string(),
+            value: PropertyValue::Length(Length::percent(125.0)),
+            raw_value: String::new(),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(style.line_height, LineHeight::Percentage(p) if (p - 125.0).abs() < 0.001));
+    }
+
+    #[test]
+    fn line_height_negative_values_are_ignored() {
+        let mut style = ComputedStyle::default();
+        style.line_height = LineHeight::Number(1.2);
+
+        let negative_number = Declaration {
+            property: "line-height".to_string(),
+            value: PropertyValue::Number(-1.0),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &negative_number, 16.0, 16.0);
+        assert!(matches!(style.line_height, LineHeight::Number(n) if (n - 1.2).abs() < 0.001));
+
+        let negative_percent = Declaration {
+            property: "line-height".to_string(),
+            value: PropertyValue::Percentage(-50.0),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &negative_percent, 16.0, 16.0);
+        assert!(matches!(style.line_height, LineHeight::Number(n) if (n - 1.2).abs() < 0.001));
+
+        let negative_length = Declaration {
+            property: "line-height".to_string(),
+            value: PropertyValue::Length(Length::px(-10.0)),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &negative_length, 16.0, 16.0);
+        assert!(matches!(style.line_height, LineHeight::Number(n) if (n - 1.2).abs() < 0.001));
     }
 
     #[test]
