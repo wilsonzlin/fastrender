@@ -3850,11 +3850,12 @@ impl FormattingContext for TableFormattingContext {
             fragments.push(laid.fragment.translate(Point::new(x, y)));
         }
 
-        let total_width = if structure.border_collapse == BorderCollapse::Collapse {
+        let mut total_width = if structure.border_collapse == BorderCollapse::Collapse {
             content_width + padding_h
         } else {
             content_width + padding_h + border_h
         };
+        total_width = clamp_to_min_max(total_width, min_width, max_width);
         let total_height = if let Some(specified) = table_height {
             specified
         } else {
@@ -4372,6 +4373,59 @@ mod tests {
         let fragment = tfc.layout(&table, &constraints).expect("table layout");
 
         assert!((fragment.bounds.width() - 200.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn auto_table_width_honors_min_width() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.min_width = Some(Length::px(300.0));
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        let cell_a = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![]);
+        let cell_b = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell_a, cell_b]);
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let tfc = TableFormattingContext::new();
+        let constraints = LayoutConstraints::definite_width(10.0);
+        let fragment = tfc.layout(&table, &constraints).expect("table layout");
+
+        assert!((fragment.bounds.width() - 300.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn auto_table_width_honors_max_width() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.max_width = Some(Length::px(100.0));
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut wide_cell_style = ComputedStyle::default();
+        wide_cell_style.display = Display::TableCell;
+        wide_cell_style.width = Some(Length::px(120.0));
+        let cell_a = BoxNode::new_block(Arc::new(wide_cell_style.clone()), FormattingContextType::Block, vec![]);
+        let cell_b = BoxNode::new_block(Arc::new(wide_cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell_a, cell_b]);
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let tfc = TableFormattingContext::new();
+        let constraints = LayoutConstraints::definite_width(400.0);
+        let fragment = tfc.layout(&table, &constraints).expect("table layout");
+
+        assert!(fragment.bounds.width() <= 100.1);
     }
 
     #[test]
