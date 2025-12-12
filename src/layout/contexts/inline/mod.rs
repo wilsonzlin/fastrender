@@ -99,6 +99,19 @@ pub struct InlineFormattingContext {
     nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock,
 }
 
+#[derive(Debug, Clone)]
+enum InlineFlowSegment {
+    InlineItems(Vec<InlineItem>),
+    Block(BoxNode),
+}
+
+#[derive(Debug, Clone)]
+enum FlowChunk {
+    Inline { start: usize, end: usize },
+    Float { index: usize },
+    Block { index: usize },
+}
+
 impl InlineFormattingContext {
     /// Creates a new InlineFormattingContext
     pub fn new() -> Self {
@@ -229,6 +242,244 @@ impl InlineFormattingContext {
             base_direction,
             positioned_children,
         )
+    }
+
+    fn collect_inline_flow_segments_with_base(
+        &self,
+        box_node: &BoxNode,
+        available_width: f32,
+        available_height: Option<f32>,
+        base_direction: crate::style::types::Direction,
+        positioned_children: &mut Vec<BoxNode>,
+    ) -> Result<Vec<InlineFlowSegment>, LayoutError> {
+        let mut pending_space: Option<PendingSpace> = None;
+        let mut segments = Vec::new();
+        let mut current_items: Vec<InlineItem> = Vec::new();
+
+        for child in &box_node.children {
+            if let Some(space) = pending_space.take() {
+                let space_item = self.create_collapsed_space_item(&space.style, space.allow_soft_wrap)?;
+                current_items.push(space_item);
+            }
+
+            if matches!(
+                child.style.position,
+                crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
+            ) {
+                positioned_children.push(child.clone());
+                continue;
+            }
+
+            let is_inline_level = child.style.display.is_inline_level();
+            let float = child.style.float.is_floating();
+            let formatting_context = child.formatting_context();
+
+            let flush_current = |segments: &mut Vec<InlineFlowSegment>, current: &mut Vec<InlineItem>| {
+                if !current.is_empty() {
+                    segments.push(InlineFlowSegment::InlineItems(std::mem::take(current)));
+                }
+            };
+
+            match &child.box_type {
+                BoxType::Text(text_box) => {
+                    let normalized = normalize_text_for_white_space(
+                        &apply_text_transform(&text_box.text, child.style.text_transform, child.style.white_space),
+                        child.style.white_space,
+                    );
+                    let mut produced = self.create_inline_items_from_normalized_with_base(
+                        child,
+                        normalized.clone(),
+                        false,
+                        base_direction,
+                    )?;
+                    current_items.append(&mut produced);
+                    if normalized.trailing_collapsible {
+                        pending_space = Some(PendingSpace::new(child.style.clone(), normalized.allow_soft_wrap));
+                    }
+                }
+                BoxType::Marker(marker_box) => match &marker_box.content {
+                    MarkerContent::Text(text) => {
+                        let normalized = NormalizedText {
+                            text: text.clone(),
+                            forced_breaks: Vec::new(),
+                            allow_soft_wrap: false,
+                            leading_collapsible: false,
+                            trailing_collapsible: false,
+                        };
+                        let mut produced = self.create_inline_items_from_normalized_with_base(
+                            child,
+                            normalized.clone(),
+                            true,
+                            base_direction,
+                        )?;
+                        current_items.append(&mut produced);
+                        if normalized.trailing_collapsible {
+                            pending_space = Some(PendingSpace::new(child.style.clone(), normalized.allow_soft_wrap));
+                        }
+                    }
+                    MarkerContent::Image(replaced_box) => {
+                        let mut item =
+                            self.create_replaced_item(child, replaced_box, available_width, available_height)?;
+                        let raw_gap = child
+                            .style
+                            .margin_right
+                            .as_ref()
+                            .map(|m| {
+                                resolve_length_for_width(*m, 0.0, &child.style, &self.font_context, self.viewport_size)
+                            })
+                            .unwrap_or(0.0);
+                        let gap = if raw_gap.abs() > f32::EPSILON {
+                            raw_gap
+                        } else {
+                            child.style.font_size * 0.5
+                        };
+                        item = item.as_marker(gap, child.style.list_style_position, child.style.direction);
+                        current_items.push(InlineItem::Replaced(item));
+                    }
+                },
+                BoxType::Inline(_) => {
+                    if float {
+                        let metrics = self.compute_strut_metrics(&child.style);
+                        let va = self.convert_vertical_align(
+                            child.style.vertical_align,
+                            child.style.font_size,
+                            metrics.line_height,
+                        );
+                        let floating = crate::layout::contexts::inline::line_builder::FloatingItem {
+                            box_node: child.clone(),
+                            metrics,
+                            vertical_align: va,
+                            direction: child.style.direction,
+                            unicode_bidi: child.style.unicode_bidi,
+                        };
+                        current_items.push(InlineItem::Floating(floating));
+                        continue;
+                    }
+                    if formatting_context.is_some() {
+                        let item = self.layout_inline_block(child, available_width, available_height)?;
+                        current_items.push(InlineItem::InlineBlock(item));
+                        continue;
+                    }
+
+                    let percentage_base = if available_width.is_finite() { available_width } else { 0.0 };
+                    let padding_left = resolve_length_for_width(
+                        child.style.padding_left,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let padding_right = resolve_length_for_width(
+                        child.style.padding_right,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let padding_top = resolve_length_for_width(
+                        child.style.padding_top,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let padding_bottom = resolve_length_for_width(
+                        child.style.padding_bottom,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let border_left = resolve_length_for_width(
+                        child.style.border_left_width,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let border_right = resolve_length_for_width(
+                        child.style.border_right_width,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let border_top = resolve_length_for_width(
+                        child.style.border_top_width,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let border_bottom = resolve_length_for_width(
+                        child.style.border_bottom_width,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+
+                    let start_edge = padding_left + border_left;
+                    let end_edge = padding_right + border_right;
+                    let content_offset_y = padding_top + border_top;
+
+                    let child_items = self.collect_inline_items_internal(
+                        child,
+                        available_width,
+                        available_height,
+                        &mut pending_space,
+                        base_direction,
+                        positioned_children,
+                    )?;
+                    let fallback_metrics = self.compute_strut_metrics(&child.style);
+                    let metrics = compute_inline_box_metrics(
+                        &child_items,
+                        content_offset_y,
+                        padding_bottom + border_bottom,
+                        fallback_metrics,
+                    );
+
+                    let mut inline_box = InlineBoxItem::new(
+                        start_edge,
+                        end_edge,
+                        content_offset_y,
+                        metrics,
+                        child.style.clone(),
+                        0,
+                        child.style.direction,
+                        child.style.unicode_bidi,
+                    );
+                    inline_box.vertical_align = self.convert_vertical_align(
+                        child.style.vertical_align,
+                        child.style.font_size,
+                        metrics.line_height,
+                    );
+                    for item in child_items {
+                        inline_box.add_child(item);
+                    }
+
+                    current_items.push(InlineItem::InlineBox(inline_box));
+                }
+                BoxType::Replaced(replaced_box) => {
+                    let item = self.create_replaced_item(child, replaced_box, available_width, available_height)?;
+                    current_items.push(InlineItem::Replaced(item));
+                }
+                _ => {
+                    if is_inline_level || float {
+                        continue;
+                    }
+                    flush_current(&mut segments, &mut current_items);
+                    pending_space = None;
+                    segments.push(InlineFlowSegment::Block(child.clone()));
+                }
+            }
+        }
+
+        if !current_items.is_empty() {
+            segments.push(InlineFlowSegment::InlineItems(current_items));
+        }
+
+        Ok(segments)
     }
 
     fn collect_inline_items_internal(
@@ -3012,9 +3263,9 @@ impl InlineFormattingContext {
         // Resolve paragraph base direction before shaping so bidi analysis uses the correct base.
         let base_direction = resolve_base_direction_for_box(box_node);
 
-        // Collect inline items
+        // Collect inline items and block segments
         let mut positioned_children = Vec::new();
-        let items = self.collect_inline_items_with_base(
+        let segments = self.collect_inline_flow_segments_with_base(
             box_node,
             available_inline,
             available_height,
@@ -3060,21 +3311,25 @@ impl InlineFormattingContext {
         // Build lines, interleaving float placement
         let mut lines = Vec::new();
         let mut float_fragments: Vec<FragmentNode> = Vec::new();
+        let mut block_fragments: Vec<FragmentNode> = Vec::new();
         let mut line_offset: f32 = 0.0;
         let mut max_float_bottom: f32 = 0.0;
         let mut pending: Vec<InlineItem> = Vec::new();
         let mut use_first_line_width = true;
         let mut local_float_ctx: Option<FloatContext> = None;
+        let mut flow_order: Vec<FlowChunk> = Vec::new();
 
         let flush_pending = |pending: &mut Vec<InlineItem>,
                              use_first_line_width: &mut bool,
                              line_offset: &mut f32,
                              lines_out: &mut Vec<Line>,
-                             ctx_ref: Option<&FloatContext>|
+                             ctx_ref: Option<&FloatContext>,
+                             order: &mut Vec<FlowChunk>|
          -> Option<(f32, f32, f32)> {
             if pending.is_empty() {
                 return None;
             }
+            let start_idx = lines_out.len();
             let seg_lines = self.layout_segment_lines(
                 pending,
                 *use_first_line_width,
@@ -3094,53 +3349,98 @@ impl InlineFormattingContext {
                 line.y_offset += *line_offset;
                 lines_out.push(line);
             }
+            let end_idx = lines_out.len();
+            order.push(FlowChunk::Inline { start: start_idx, end: end_idx });
             *line_offset += seg_height;
             *use_first_line_width = false;
             pending.clear();
             Some((seg_height, last_top, last_height))
         };
 
-        for item in items {
-            if let InlineItem::Floating(floating) = item {
-                if float_ctx.is_none() && local_float_ctx.is_none() {
-                    local_float_ctx = Some(FloatContext::new(available_inline.max(0.0)));
+        for segment in segments {
+            match segment {
+                InlineFlowSegment::InlineItems(seg_items) => {
+                    for item in seg_items {
+                        if let InlineItem::Floating(floating) = item {
+                            if float_ctx.is_none() && local_float_ctx.is_none() {
+                                local_float_ctx = Some(FloatContext::new(available_inline.max(0.0)));
+                            }
+
+                            let current_ctx = float_ctx
+                                .as_deref()
+                                .or_else(|| local_float_ctx.as_ref())
+                                .cloned()
+                                .unwrap_or_else(|| FloatContext::new(available_inline.max(0.0)));
+
+                            let _ = flush_pending(
+                                &mut pending,
+                                &mut use_first_line_width,
+                                &mut line_offset,
+                                &mut lines,
+                                Some(&current_ctx),
+                                &mut flow_order,
+                            );
+
+                            let mut candidate_ctx = current_ctx;
+
+                            let float_min_y = float_base_y + line_offset;
+                            let (fragment, _, bottom_rel) = self.layout_inline_float_fragment(
+                                &floating,
+                                available_inline,
+                                float_base_y,
+                                float_min_y,
+                                &mut candidate_ctx,
+                            )?;
+                            max_float_bottom = max_float_bottom.max(bottom_rel);
+                            flow_order.push(FlowChunk::Float {
+                                index: float_fragments.len(),
+                            });
+                            float_fragments.push(fragment);
+
+                            if let Some(ctx) = float_ctx.as_deref_mut() {
+                                *ctx = candidate_ctx;
+                            } else {
+                                local_float_ctx = Some(candidate_ctx);
+                            }
+                        } else {
+                            pending.push(item);
+                        }
+                    }
                 }
+                InlineFlowSegment::Block(block_node) => {
+                    if float_ctx.is_none() && local_float_ctx.is_none() {
+                        local_float_ctx = Some(FloatContext::new(available_inline.max(0.0)));
+                    }
 
-                let mut candidate_ctx = float_ctx
-                    .as_deref()
-                    .or_else(|| local_float_ctx.as_ref())
-                    .cloned()
-                    .unwrap_or_else(|| FloatContext::new(available_inline.max(0.0)));
+                    let _ = flush_pending(
+                        &mut pending,
+                        &mut use_first_line_width,
+                        &mut line_offset,
+                        &mut lines,
+                        float_ctx.as_deref().or_else(|| local_float_ctx.as_ref()),
+                        &mut flow_order,
+                    );
 
-                // Place the float at the current line offset and reflow accumulated content around it.
-                let float_min_y = float_base_y + line_offset;
-                let (fragment, _, bottom_rel) = self.layout_inline_float_fragment(
-                    &floating,
-                    available_inline,
-                    float_base_y,
-                    float_min_y,
-                    &mut candidate_ctx,
-                )?;
-                max_float_bottom = max_float_bottom.max(bottom_rel);
-                float_fragments.push(fragment);
-
-                // Lay out any buffered inline items with the updated float context.
-                let _ = flush_pending(
-                    &mut pending,
-                    &mut use_first_line_width,
-                    &mut line_offset,
-                    &mut lines,
-                    Some(&candidate_ctx),
-                );
-
-                // Replace the working float context with the candidate that includes the new float.
-                if let Some(ctx) = float_ctx.as_deref_mut() {
-                    *ctx = candidate_ctx;
-                } else {
-                    local_float_ctx = Some(candidate_ctx);
+                    let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
+                        self.font_context.clone(),
+                        self.viewport_size,
+                        self.nearest_positioned_cb,
+                    );
+                    let fc_type = block_node.formatting_context().unwrap_or(FormattingContextType::Block);
+                    let fc = factory.create(fc_type);
+                    let child_constraints = LayoutConstraints::new(
+                        AvailableSpace::Definite(available_inline),
+                        constraints.available_height,
+                    );
+                    let fragment = fc.layout(&block_node, &child_constraints)?;
+                    let translated = fragment.translate(Point::new(0.0, line_offset));
+                    line_offset = translated.bounds.max_y();
+                    flow_order.push(FlowChunk::Block {
+                        index: block_fragments.len(),
+                    });
+                    block_fragments.push(translated);
+                    use_first_line_width = true;
                 }
-            } else {
-                pending.push(item);
             }
         }
 
@@ -3152,11 +3452,16 @@ impl InlineFormattingContext {
             &mut line_offset,
             &mut lines,
             final_ctx,
+            &mut flow_order,
         );
 
         // Calculate total height
-        let total_height: f32 = lines.iter().map(|l| l.y_offset + l.height).fold(0.0, f32::max);
-        let total_height = total_height.max(max_float_bottom);
+        let total_height_lines: f32 = lines.iter().map(|l| l.y_offset + l.height).fold(0.0, f32::max);
+        let blocks_bottom = block_fragments
+            .iter()
+            .map(|f| f.bounds.max_y())
+            .fold(0.0, f32::max);
+        let total_height = total_height_lines.max(max_float_bottom).max(blocks_bottom);
         let line_max_width = lines
             .iter()
             .map(|l| (l.left_offset + l.box_width).max(l.left_offset + l.width + indent_value.abs()))
@@ -3165,10 +3470,14 @@ impl InlineFormattingContext {
             .iter()
             .map(|f| f.bounds.x() + f.bounds.width())
             .fold(0.0, f32::max);
+        let block_max_width = block_fragments
+            .iter()
+            .map(|f| f.bounds.x() + f.bounds.width())
+            .fold(0.0, f32::max);
         let max_width: f32 = if available_inline.is_finite() {
             available_inline
         } else {
-            line_max_width.max(float_max_width)
+            line_max_width.max(float_max_width).max(block_max_width)
         };
 
         // Create fragments
@@ -3229,7 +3538,7 @@ impl InlineFormattingContext {
             };
         let lines_empty = lines.is_empty();
 
-        let children = self.create_fragments(
+        let line_fragments = self.create_fragments(
             lines,
             0.0,
             style.text_align,
@@ -3240,10 +3549,33 @@ impl InlineFormattingContext {
             &paragraph_info,
         );
 
+        let mut merged_children = Vec::new();
+        if flow_order.is_empty() {
+            merged_children.extend(float_fragments.clone());
+            merged_children.extend(line_fragments.clone());
+            merged_children.extend(block_fragments.clone());
+        } else {
+            for chunk in flow_order {
+                match chunk {
+                    FlowChunk::Inline { start, end } => {
+                        merged_children.extend(line_fragments[start..end].iter().cloned());
+                    }
+                    FlowChunk::Float { index } => {
+                        if let Some(f) = float_fragments.get(index) {
+                            merged_children.push(f.clone());
+                        }
+                    }
+                    FlowChunk::Block { index } => {
+                        if let Some(b) = block_fragments.get(index) {
+                            merged_children.push(b.clone());
+                        }
+                    }
+                }
+            }
+        }
+
         // Create containing fragment
         let mut bounds = Rect::from_xywh(0.0, 0.0, max_width.min(available_inline), total_height);
-        let mut merged_children = float_fragments;
-        merged_children.extend(children);
 
         // For vertical writing modes, rotate the inline content so the inline axis is vertical and
         // lines advance along the block axis (horizontal).
@@ -4291,6 +4623,42 @@ mod tests {
 
         // Should produce valid output
         assert!(fragment.bounds.width() >= 0.0);
+    }
+
+    #[test]
+    fn inline_layout_keeps_block_children_in_flow_order() {
+        let ifc = InlineFormattingContext::new();
+        let before = BoxNode::new_text(default_style(), "before".to_string());
+        let mut block_style = (*default_style()).clone();
+        block_style.display = crate::style::display::Display::Block;
+        let block_child = BoxNode::new_block(Arc::new(block_style), FormattingContextType::Block, vec![make_text_box("block")]);
+        let after = BoxNode::new_text(default_style(), "after".to_string());
+        let root = BoxNode::new_inline(default_style(), vec![before, block_child, after]);
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let mut kinds = Vec::new();
+        for child in &fragment.children {
+            kinds.push((
+                child.content.is_line(),
+                child.content.is_block(),
+                child.bounds.y(),
+                child.bounds.max_y(),
+            ));
+        }
+
+        assert!(
+            kinds.iter().any(|k| k.1),
+            "block child should create a block fragment in inline layout"
+        );
+        assert!(
+            kinds.windows(2).all(|w| w[0].3 <= w[1].2),
+            "fragments should stack in document order without overlap: {kinds:?}"
+        );
+        assert!(
+            kinds.iter().filter(|k| k.0).count() >= 2,
+            "lines before and after block should remain"
+        );
     }
 
     #[test]
