@@ -383,6 +383,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.font_feature_settings = parent.font_feature_settings.clone();
     styles.font_optical_sizing = parent.font_optical_sizing;
     styles.font_variation_settings = parent.font_variation_settings.clone();
+    styles.font_language_override = parent.font_language_override.clone();
     styles.font_stretch = parent.font_stretch;
     styles.font_kerning = parent.font_kerning;
     styles.line_height = parent.line_height.clone();
@@ -620,6 +621,30 @@ mod tests {
         assert_eq!(child.styles.font_variation_settings.len(), 1);
         assert_eq!(child.styles.font_variation_settings[0].tag, *b"wght");
         assert!((child.styles.font_variation_settings[0].value - 600.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn font_language_override_inherits() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("style".to_string(), r#"font-language-override: "SRB";"#.to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "span".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            }],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        let child = styled.children.first().expect("child");
+        assert!(matches!(
+            child.styles.font_language_override,
+            crate::style::types::FontLanguageOverride::Override(ref tag) if tag == "SRB"
+        ));
     }
 
     #[test]

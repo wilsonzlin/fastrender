@@ -49,7 +49,7 @@
 
 use crate::error::{Result, TextError};
 use crate::style::types::{
-    Direction as CssDirection, EastAsianVariant, EastAsianWidth, FontKerning, FontSizeAdjust,
+    Direction as CssDirection, EastAsianVariant, EastAsianWidth, FontKerning, FontLanguageOverride, FontSizeAdjust,
     FontStyle as CssFontStyle, FontVariant, FontVariantCaps, FontVariantPosition, NumericFigure, NumericFraction,
     NumericSpacing,
 };
@@ -907,6 +907,10 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
         }
         let mut variations = authored_variations.clone();
         variations.extend(auto_variations);
+        let language = match &style.font_language_override {
+            FontLanguageOverride::Normal => style.language.clone(),
+            FontLanguageOverride::Override(tag) => tag.clone(),
+        };
 
         font_runs.push(FontRun {
             text: run.text.clone(),
@@ -919,7 +923,7 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
             direction: run.direction,
             level: run.level,
             font_size: used_font_size,
-            language: style.language.clone(),
+            language,
             features: features.clone(),
             variations,
             rotation: RunRotation::None,
@@ -2008,6 +2012,21 @@ mod tests {
         )
         .expect("assign fonts none");
         assert!(runs_none[0].variations.iter().all(|v| v.tag != opsz_tag));
+    }
+
+    #[test]
+    fn font_language_override_sets_language_tag() {
+        let ctx = FontContext::new();
+        let mut style = ComputedStyle::default();
+        style.font_family = vec!["serif".to_string()];
+        style.font_language_override = crate::style::types::FontLanguageOverride::Override("SRB".to_string());
+
+        let runs = ShapingPipeline::new()
+            .shape("text", &style, &ctx)
+            .expect("shape with override");
+        assert!(runs
+            .iter()
+            .all(|r| r.language.as_ref().map(|l| l.as_str()) == Some("srb")));
     }
 
     #[test]

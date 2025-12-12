@@ -848,6 +848,15 @@ pub struct FontVariationSetting {
     pub value: f32,
 }
 
+/// Overrides the OpenType language system when shaping text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FontLanguageOverride {
+    /// Use the element/Document language (default)
+    Normal,
+    /// Override with an explicit OpenType language system tag (1–4 ASCII letters)
+    Override(String),
+}
+
 /// Optical sizing control (`font-optical-sizing`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontOpticalSizing {

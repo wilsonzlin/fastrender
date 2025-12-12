@@ -2421,9 +2421,8 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     styles.font_size_adjust = FontSizeAdjust::None;
                     styles.font_synthesis = FontSynthesis::default();
                     styles.font_kerning = FontKerning::Auto;
-                    styles.font_feature_settings.clear();
-                    styles.font_variation_settings.clear();
                     styles.font_optical_sizing = FontOpticalSizing::Auto;
+                    // font-feature-settings, font-variation-settings, and font-language-override are not reset by the font shorthand.
                     styles.font_style = font_style;
                     styles.font_weight = font_weight;
                     styles.font_variant = font_variant;
@@ -2734,6 +2733,20 @@ pub fn apply_declaration(styles: &mut ComputedStyle, decl: &Declaration, parent_
                     "none" => FontOpticalSizing::None,
                     _ => styles.font_optical_sizing,
                 };
+            }
+        }
+        "font-language-override" => {
+            match &resolved_value {
+                PropertyValue::Keyword(raw) if raw.eq_ignore_ascii_case("normal") => {
+                    styles.font_language_override = FontLanguageOverride::Normal;
+                }
+                PropertyValue::Keyword(raw) | PropertyValue::String(raw) => {
+                    let tag = raw.trim_matches('"').trim();
+                    if (1..=4).contains(&tag.len()) && tag.is_ascii() {
+                        styles.font_language_override = FontLanguageOverride::Override(tag.to_string());
+                    }
+                }
+                _ => {}
             }
         }
         "font-variation-settings" => {
@@ -8354,6 +8367,7 @@ mod tests {
         assert!(matches!(style.font_style, FontStyle::Normal));
         assert!((style.font_size - 16.0).abs() < 0.01);
         assert!(matches!(style.font_optical_sizing, FontOpticalSizing::Auto));
+        assert!(matches!(style.font_language_override, crate::style::types::FontLanguageOverride::Normal));
     }
 
     #[test]
@@ -8412,6 +8426,76 @@ mod tests {
         };
         apply_declaration(&mut style, &decl2, 16.0, 16.0);
         assert!(matches!(style.font_optical_sizing, FontOpticalSizing::Auto));
+    }
+
+    #[test]
+    fn parses_font_language_override() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font-language-override".to_string(),
+            value: PropertyValue::Keyword("\"SRB\"".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, 16.0, 16.0);
+        assert!(matches!(
+            style.font_language_override,
+            crate::style::types::FontLanguageOverride::Override(ref tag) if tag == "SRB"
+        ));
+
+        let decl2 = Declaration {
+            property: "font-language-override".to_string(),
+            value: PropertyValue::Keyword("normal".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl2, 16.0, 16.0);
+        assert!(matches!(
+            style.font_language_override,
+            crate::style::types::FontLanguageOverride::Normal
+        ));
+    }
+
+    #[test]
+    fn font_shorthand_does_not_reset_low_level_font_controls() {
+        let mut style = ComputedStyle::default();
+        let decls = vec![
+            Declaration {
+                property: "font-feature-settings".to_string(),
+                value: PropertyValue::Keyword("\"kern\" off".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            Declaration {
+                property: "font-variation-settings".to_string(),
+                value: PropertyValue::Keyword("\"wght\" 700".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            Declaration {
+                property: "font-language-override".to_string(),
+                value: PropertyValue::Keyword("\"SRB\"".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            Declaration {
+                property: "font".to_string(),
+                value: PropertyValue::Keyword("italic 16px/20px serif".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+        ];
+
+        for decl in decls {
+            apply_declaration(&mut style, &decl, 16.0, 16.0);
+        }
+
+        assert_eq!(style.font_feature_settings.len(), 1);
+        assert_eq!(style.font_variation_settings.len(), 1);
+        assert!(matches!(
+            style.font_language_override,
+            crate::style::types::FontLanguageOverride::Override(_)
+        ));
     }
 
     #[test]
