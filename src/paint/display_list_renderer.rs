@@ -9,24 +9,28 @@ use crate::geometry::{Point, Rect};
 use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::canvas::Canvas;
 use crate::paint::display_list::{
-    BlendMode, BorderItem, BorderRadii, BorderSide, BoxShadowItem, ClipItem, ConicGradientItem, DecorationPaint,
-    DecorationStroke, DisplayItem, DisplayList, EmphasisMark, FillRectItem, FontId, GlyphInstance, ImageItem,
-    LinearGradientItem, OpacityItem, RadialGradientItem, ResolvedFilter, StrokeRectItem, TextEmphasis, TextItem,
-    TextShadowItem, TransformItem,
+    BlendMode, BorderImageItem, BorderImageSourceItem, BorderItem, BorderRadii, BorderSide, BoxShadowItem, ClipItem,
+    ConicGradientItem, DecorationPaint, DecorationStroke, DisplayItem, DisplayList, EmphasisMark, FillRectItem, FontId,
+    GlyphInstance, ImageData, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem, ResolvedFilter,
+    StrokeRectItem, TextEmphasis, TextItem, TextShadowItem, TransformItem,
 };
 use crate::paint::rasterize::{fill_rounded_rect, render_box_shadow, BoxShadow};
 use crate::paint::text_shadow::PathBounds;
 use crate::style::color::Rgba;
 use crate::style::types::{
-    BorderStyle as CssBorderStyle, TextDecorationStyle, TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape,
-    TextEmphasisStyle,
+    BackgroundImage, BackgroundPosition, BorderImageOutsetValue, BorderImageRepeat, BorderImageSliceValue,
+    BorderImageWidth, BorderImageWidthValue, BorderStyle as CssBorderStyle, TextDecorationStyle, TextEmphasisFill,
+    TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
 };
+use crate::style::values::{Length, LengthUnit};
+use crate::css::types::{ColorStop, RadialGradientShape, RadialGradientSize};
 use crate::text::font_db::{FontStretch, FontStyle as DbFontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
 use crate::text::shaper::GlyphPosition;
 use tiny_skia::{
     BlendMode as SkiaBlendMode, GradientStop as SkiaGradientStop, LinearGradient, Mask, PathBuilder, Pixmap,
     PixmapPaint, Point as SkiaPoint, PremultipliedColorU8, RadialGradient, SpreadMode, Stroke, StrokeDash, Transform,
+    Pattern, IntSize,
 };
 
 fn map_blend_mode(mode: BlendMode) -> tiny_skia::BlendMode {
@@ -934,6 +938,25 @@ impl DisplayListRenderer {
             pushed_clip = true;
         }
 
+        if let Some(border_image) = item.image.as_ref() {
+            if self.render_border_image(
+                border_image,
+                rect,
+                top.width,
+                right.width,
+                bottom.width,
+                left.width,
+                opacity,
+                clip.as_ref(),
+                transform,
+            ) {
+                if pushed_clip {
+                    self.canvas.restore();
+                }
+                return;
+            }
+        }
+
         let top_center = rect.y() + top.width * 0.5;
         let bottom_center = rect.y() + rect.height() - bottom.width * 0.5;
         let left_center = rect.x() + left.width * 0.5;
@@ -983,6 +1006,205 @@ impl DisplayListRenderer {
         if pushed_clip {
             self.canvas.restore();
         }
+    }
+
+    fn render_border_image(
+        &mut self,
+        border_image: &BorderImageItem,
+        rect: Rect,
+        top: f32,
+        right: f32,
+        bottom: f32,
+        left: f32,
+        opacity: f32,
+        clip: Option<&Mask>,
+        transform: Transform,
+    ) -> bool {
+        let border_widths = BorderImageWidths { top, right, bottom, left };
+        let target_widths = resolve_border_image_widths(&border_image.width, border_widths, rect.width(), rect.height());
+        let outsets = resolve_border_image_outset(&border_image.outset, target_widths);
+
+        let outer_rect = Rect::from_xywh(
+            rect.x() - outsets.left,
+            rect.y() - outsets.top,
+            rect.width() + outsets.left + outsets.right,
+            rect.height() + outsets.top + outsets.bottom,
+        );
+        let inner_rect = Rect::from_xywh(
+            outer_rect.x() + target_widths.left,
+            outer_rect.y() + target_widths.top,
+            outer_rect.width() - target_widths.left - target_widths.right,
+            outer_rect.height() - target_widths.top - target_widths.bottom,
+        );
+        if inner_rect.width() <= 0.0 || inner_rect.height() <= 0.0 {
+            return true;
+        }
+
+        let (pixmap, img_w, img_h) = match &border_image.source {
+            BorderImageSourceItem::Raster(image) => {
+                let Some(pixmap) = image_data_to_pixmap(image) else {
+                    return false;
+                };
+                let (w, h) = (pixmap.width(), pixmap.height());
+                if w == 0 || h == 0 {
+                    return false;
+                }
+                (pixmap, w, h)
+            }
+            BorderImageSourceItem::Generated(bg) => {
+                let img_w = outer_rect.width().max(1.0).round() as u32;
+                let img_h = outer_rect.height().max(1.0).round() as u32;
+                let Some(pixmap) = render_generated_border_image(bg, border_image.current_color, img_w, img_h) else {
+                    return false;
+                };
+                let (w, h) = (pixmap.width(), pixmap.height());
+                if w == 0 || h == 0 {
+                    return false;
+                }
+                (pixmap, w, h)
+            }
+        };
+
+        let slice_top = resolve_slice_value(border_image.slice.top, img_h);
+        let slice_right = resolve_slice_value(border_image.slice.right, img_w);
+        let slice_bottom = resolve_slice_value(border_image.slice.bottom, img_h);
+        let slice_left = resolve_slice_value(border_image.slice.left, img_w);
+
+        let sx0 = 0.0;
+        let sx1 = slice_left.min(img_w as f32);
+        let sx2 = (img_w as f32 - slice_right).max(sx1);
+        let sx3 = img_w as f32;
+
+        let sy0 = 0.0;
+        let sy1 = slice_top.min(img_h as f32);
+        let sy2 = (img_h as f32 - slice_bottom).max(sy1);
+        let sy3 = img_h as f32;
+
+        let (repeat_x, repeat_y) = border_image.repeat;
+
+        // Corners
+        self.paint_border_patch(
+            &pixmap,
+            Rect::from_xywh(sx0, sy0, sx1 - sx0, sy1 - sy0),
+            Rect::from_xywh(outer_rect.x(), outer_rect.y(), target_widths.left, target_widths.top),
+            BorderImageRepeat::Stretch,
+            BorderImageRepeat::Stretch,
+            opacity,
+            clip,
+            transform,
+        );
+        self.paint_border_patch(
+            &pixmap,
+            Rect::from_xywh(sx2, sy0, sx3 - sx2, sy1 - sy0),
+            Rect::from_xywh(
+                outer_rect.x() + outer_rect.width() - target_widths.right,
+                outer_rect.y(),
+                target_widths.right,
+                target_widths.top,
+            ),
+            BorderImageRepeat::Stretch,
+            BorderImageRepeat::Stretch,
+            opacity,
+            clip,
+            transform,
+        );
+        self.paint_border_patch(
+            &pixmap,
+            Rect::from_xywh(sx0, sy2, sx1 - sx0, sy3 - sy2),
+            Rect::from_xywh(
+                outer_rect.x(),
+                outer_rect.y() + outer_rect.height() - target_widths.bottom,
+                target_widths.left,
+                target_widths.bottom,
+            ),
+            BorderImageRepeat::Stretch,
+            BorderImageRepeat::Stretch,
+            opacity,
+            clip,
+            transform,
+        );
+        self.paint_border_patch(
+            &pixmap,
+            Rect::from_xywh(sx2, sy2, sx3 - sx2, sy3 - sy2),
+            Rect::from_xywh(
+                outer_rect.x() + outer_rect.width() - target_widths.right,
+                outer_rect.y() + outer_rect.height() - target_widths.bottom,
+                target_widths.right,
+                target_widths.bottom,
+            ),
+            BorderImageRepeat::Stretch,
+            BorderImageRepeat::Stretch,
+            opacity,
+            clip,
+            transform,
+        );
+
+        // Edges
+        self.paint_border_patch(
+            &pixmap,
+            Rect::from_xywh(sx1, sy0, sx2 - sx1, sy1 - sy0),
+            Rect::from_xywh(inner_rect.x(), outer_rect.y(), inner_rect.width(), target_widths.top),
+            repeat_x,
+            BorderImageRepeat::Stretch,
+            opacity,
+            clip,
+            transform,
+        );
+        self.paint_border_patch(
+            &pixmap,
+            Rect::from_xywh(sx1, sy2, sx2 - sx1, sy3 - sy2),
+            Rect::from_xywh(
+                inner_rect.x(),
+                outer_rect.y() + outer_rect.height() - target_widths.bottom,
+                inner_rect.width(),
+                target_widths.bottom,
+            ),
+            repeat_x,
+            BorderImageRepeat::Stretch,
+            opacity,
+            clip,
+            transform,
+        );
+        self.paint_border_patch(
+            &pixmap,
+            Rect::from_xywh(sx0, sy1, sx1 - sx0, sy2 - sy1),
+            Rect::from_xywh(outer_rect.x(), inner_rect.y(), target_widths.left, inner_rect.height()),
+            BorderImageRepeat::Stretch,
+            repeat_y,
+            opacity,
+            clip,
+            transform,
+        );
+        self.paint_border_patch(
+            &pixmap,
+            Rect::from_xywh(sx2, sy1, sx3 - sx2, sy2 - sy1),
+            Rect::from_xywh(
+                outer_rect.x() + outer_rect.width() - target_widths.right,
+                inner_rect.y(),
+                target_widths.right,
+                inner_rect.height(),
+            ),
+            BorderImageRepeat::Stretch,
+            repeat_y,
+            opacity,
+            clip,
+            transform,
+        );
+
+        if border_image.slice.fill {
+            self.paint_border_patch(
+                &pixmap,
+                Rect::from_xywh(sx1, sy1, sx2 - sx1, sy2 - sy1),
+                inner_rect,
+                repeat_x,
+                repeat_y,
+                opacity,
+                clip,
+                transform,
+            );
+        }
+
+        true
     }
 
     fn render_border_edge(
@@ -1090,6 +1312,210 @@ impl DisplayListRenderer {
             }
             _ => {
                 pixmap.stroke_path(&base_path, &paint, &stroke, transform, clip);
+            }
+        }
+    }
+
+    fn paint_border_patch(
+        &mut self,
+        source: &Pixmap,
+        src_rect: Rect,
+        dest_rect: Rect,
+        repeat_x: BorderImageRepeat,
+        repeat_y: BorderImageRepeat,
+        opacity: f32,
+        clip: Option<&Mask>,
+        transform: Transform,
+    ) {
+        if src_rect.width() <= 0.0 || src_rect.height() <= 0.0 || dest_rect.width() <= 0.0 || dest_rect.height() <= 0.0
+        {
+            return;
+        }
+
+        let sx0 = src_rect.x().max(0.0).floor() as u32;
+        let sy0 = src_rect.y().max(0.0).floor() as u32;
+        let sx1 = (src_rect.x() + src_rect.width())
+            .ceil()
+            .min(source.width() as f32)
+            .max(0.0) as u32;
+        let sy1 = (src_rect.y() + src_rect.height())
+            .ceil()
+            .min(source.height() as f32)
+            .max(0.0) as u32;
+        if sx1 <= sx0 || sy1 <= sy0 {
+            return;
+        }
+        let width = sx1 - sx0;
+        let height = sy1 - sy0;
+
+        let data = source.data();
+        let mut patch = Vec::with_capacity((width * height * 4) as usize);
+        for row in sy0..sy1 {
+            let start = ((row * source.width() + sx0) * 4) as usize;
+            let end = start + (width * 4) as usize;
+            patch.extend_from_slice(&data[start..end]);
+        }
+        let Some(patch_pixmap) = Pixmap::from_vec(patch, IntSize::from_wh(width, height).unwrap()) else {
+            return;
+        };
+
+        let mut tile_w = dest_rect.width();
+        let mut tile_h = dest_rect.height();
+
+        let mut scale_x = tile_w / width as f32;
+        let mut scale_y = tile_h / height as f32;
+
+        if repeat_x != BorderImageRepeat::Stretch {
+            scale_x = scale_y;
+            tile_w = width as f32 * scale_x;
+        }
+        if repeat_y != BorderImageRepeat::Stretch {
+            scale_y = scale_x;
+            tile_h = height as f32 * scale_y;
+        }
+
+        if repeat_x == BorderImageRepeat::Round && tile_w > 0.0 {
+            let count = (dest_rect.width() / tile_w).round().max(1.0);
+            tile_w = dest_rect.width() / count;
+            scale_x = tile_w / width as f32;
+        }
+        if repeat_y == BorderImageRepeat::Round && tile_h > 0.0 {
+            let count = (dest_rect.height() / tile_h).round().max(1.0);
+            tile_h = dest_rect.height() / count;
+            scale_y = tile_h / height as f32;
+        }
+
+        let positions_x = match repeat_x {
+            BorderImageRepeat::Stretch => vec![dest_rect.x()],
+            BorderImageRepeat::Round => {
+                let mut pos = Vec::new();
+                let mut cursor = dest_rect.x();
+                let end = dest_rect.x() + dest_rect.width();
+                if tile_w <= 0.0 {
+                    return;
+                }
+                while cursor < end - 1e-3 {
+                    pos.push(cursor);
+                    cursor += tile_w;
+                }
+                pos
+            }
+            BorderImageRepeat::Space => {
+                if tile_w <= 0.0 {
+                    return;
+                }
+                let count = (dest_rect.width() / tile_w).floor();
+                if count < 1.0 {
+                    vec![dest_rect.x() + (dest_rect.width() - tile_w) * 0.5]
+                } else if count < 2.0 {
+                    vec![dest_rect.x() + (dest_rect.width() - tile_w) * 0.5]
+                } else {
+                    let spacing = (dest_rect.width() - tile_w * count) / (count - 1.0);
+                    let mut pos = Vec::with_capacity(count as usize);
+                    let mut cursor = dest_rect.x();
+                    for _ in 0..(count as usize) {
+                        pos.push(cursor);
+                        cursor += tile_w + spacing;
+                    }
+                    pos
+                }
+            }
+            BorderImageRepeat::Repeat => {
+                let mut pos = Vec::new();
+                let mut cursor = dest_rect.x();
+                let end = dest_rect.x() + dest_rect.width();
+                if tile_w <= 0.0 {
+                    return;
+                }
+                while cursor < end - 1e-3 {
+                    pos.push(cursor);
+                    cursor += tile_w;
+                }
+                pos
+            }
+        };
+
+        let positions_y = match repeat_y {
+            BorderImageRepeat::Stretch => vec![dest_rect.y()],
+            BorderImageRepeat::Round => {
+                let mut pos = Vec::new();
+                let mut cursor = dest_rect.y();
+                let end = dest_rect.y() + dest_rect.height();
+                if tile_h <= 0.0 {
+                    return;
+                }
+                while cursor < end - 1e-3 {
+                    pos.push(cursor);
+                    cursor += tile_h;
+                }
+                pos
+            }
+            BorderImageRepeat::Space => {
+                if tile_h <= 0.0 {
+                    return;
+                }
+                let count = (dest_rect.height() / tile_h).floor();
+                if count < 1.0 {
+                    vec![dest_rect.y() + (dest_rect.height() - tile_h) * 0.5]
+                } else if count < 2.0 {
+                    vec![dest_rect.y() + (dest_rect.height() - tile_h) * 0.5]
+                } else {
+                    let spacing = (dest_rect.height() - tile_h * count) / (count - 1.0);
+                    let mut pos = Vec::with_capacity(count as usize);
+                    let mut cursor = dest_rect.y();
+                    for _ in 0..(count as usize) {
+                        pos.push(cursor);
+                        cursor += tile_h + spacing;
+                    }
+                    pos
+                }
+            }
+            BorderImageRepeat::Repeat => {
+                let mut pos = Vec::new();
+                let mut cursor = dest_rect.y();
+                let end = dest_rect.y() + dest_rect.height();
+                if tile_h <= 0.0 {
+                    return;
+                }
+                while cursor < end - 1e-3 {
+                    pos.push(cursor);
+                    cursor += tile_h;
+                }
+                pos
+            }
+        };
+
+        let clip_rect = dest_rect;
+        for ty in positions_y.iter().copied() {
+            for tx in positions_x.iter().copied() {
+                let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
+                let Some(intersection) = tile_rect.intersection(clip_rect) else {
+                    continue;
+                };
+                if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
+                    continue;
+                }
+                let Some(src_rect) = tiny_skia::Rect::from_xywh(
+                    intersection.x(),
+                    intersection.y(),
+                    intersection.width(),
+                    intersection.height(),
+                ) else {
+                    continue;
+                };
+                let mut paint = tiny_skia::Paint::default();
+                paint.shader = Pattern::new(
+                    patch_pixmap.as_ref(),
+                    SpreadMode::Pad,
+                    tiny_skia::FilterQuality::Bilinear,
+                    opacity,
+                    Transform::from_row(scale_x, 0.0, 0.0, scale_y, tx, ty),
+                );
+                paint.anti_alias = false;
+                paint.blend_mode = self.canvas.blend_mode();
+                self.canvas
+                    .pixmap_mut()
+                    .fill_rect(src_rect, &paint, transform, clip);
             }
         }
     }
@@ -2148,19 +2574,575 @@ fn sample_conic_stops(
     stops.last().unwrap().1
 }
 
+#[derive(Copy, Clone)]
+struct BorderImageWidths {
+    top: f32,
+    right: f32,
+    bottom: f32,
+    left: f32,
+}
+
+fn resolve_slice_value(value: BorderImageSliceValue, axis_len: u32) -> f32 {
+    match value {
+        BorderImageSliceValue::Number(n) => n.max(0.0),
+        BorderImageSliceValue::Percentage(p) => (p / 100.0) * axis_len as f32,
+    }
+}
+
+fn resolve_length_for_border_image(len: &Length, percentage_base: f32) -> f32 {
+    match len.unit {
+        LengthUnit::Percent => len.resolve_against(percentage_base),
+        LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(16.0),
+        _ if len.unit.is_absolute() => len.to_px(),
+        _ => len.value,
+    }
+}
+
+fn resolve_border_image_widths(
+    widths: &BorderImageWidth,
+    border: BorderImageWidths,
+    box_width: f32,
+    box_height: f32,
+) -> BorderImageWidths {
+    fn resolve_single(value: BorderImageWidthValue, border: f32, axis: f32) -> f32 {
+        match value {
+            BorderImageWidthValue::Auto => border,
+            BorderImageWidthValue::Number(n) => (n * border).max(0.0),
+            BorderImageWidthValue::Length(len) => resolve_length_for_border_image(&len, axis).max(0.0),
+            BorderImageWidthValue::Percentage(p) => ((p / 100.0) * axis).max(0.0),
+        }
+    }
+
+    BorderImageWidths {
+        top: resolve_single(widths.top, border.top, box_height),
+        right: resolve_single(widths.right, border.right, box_width),
+        bottom: resolve_single(widths.bottom, border.bottom, box_height),
+        left: resolve_single(widths.left, border.left, box_width),
+    }
+}
+
+fn resolve_border_image_outset(outset: &crate::style::types::BorderImageOutset, border: BorderImageWidths) -> BorderImageWidths {
+    fn resolve_single(value: BorderImageOutsetValue, border: f32) -> f32 {
+        match value {
+            BorderImageOutsetValue::Number(n) => (n * border).max(0.0),
+            BorderImageOutsetValue::Length(len) => resolve_length_for_border_image(&len, border.max(1.0)).max(0.0),
+        }
+    }
+
+    BorderImageWidths {
+        top: resolve_single(outset.top, border.top),
+        right: resolve_single(outset.right, border.right),
+        bottom: resolve_single(outset.bottom, border.bottom),
+        left: resolve_single(outset.left, border.left),
+    }
+}
+
+fn image_data_to_pixmap(data: &ImageData) -> Option<Pixmap> {
+    let mut premul = Vec::with_capacity((data.width * data.height * 4) as usize);
+    for chunk in data.pixels.chunks_exact(4) {
+        let a = chunk[3] as f32 / 255.0;
+        premul.push((chunk[0] as f32 * a).round() as u8);
+        premul.push((chunk[1] as f32 * a).round() as u8);
+        premul.push((chunk[2] as f32 * a).round() as u8);
+        premul.push(chunk[3]);
+    }
+    Pixmap::from_vec(premul, IntSize::from_wh(data.width, data.height).unwrap())
+}
+
+fn normalize_color_stops(stops: &[ColorStop], current_color: Rgba) -> Vec<(f32, Rgba)> {
+    if stops.is_empty() {
+        return Vec::new();
+    }
+
+    let mut positions: Vec<Option<f32>> = stops.iter().map(|s| s.position).collect();
+    if positions.iter().all(|p| p.is_none()) {
+        if stops.len() == 1 {
+            return vec![(0.0, stops[0].color.to_rgba(current_color))];
+        }
+        let denom = (stops.len() - 1) as f32;
+        return stops
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (i as f32 / denom, s.color.to_rgba(current_color)))
+            .collect();
+    }
+
+    if positions.first().and_then(|p| *p).is_none() {
+        positions[0] = Some(0.0);
+    }
+    if positions.last().and_then(|p| *p).is_none() {
+        if let Some(last) = positions.last_mut() {
+            *last = Some(1.0);
+        }
+    }
+
+    let mut last_known: Option<(usize, f32)> = None;
+    for i in 0..positions.len() {
+        if let Some(pos) = positions[i] {
+            if let Some((start_idx, start_pos)) = last_known {
+                let gap = i.saturating_sub(start_idx + 1);
+                if gap > 0 {
+                    let step = (pos - start_pos) / (gap as f32 + 1.0);
+                    for j in 1..=gap {
+                        positions[start_idx + j] = Some((start_pos + step * j as f32).max(start_pos));
+                    }
+                }
+            } else if i > 0 {
+                let gap = i;
+                let step = pos / gap as f32;
+                for j in 0..i {
+                    positions[j] = Some(step * j as f32);
+                }
+            }
+            last_known = Some((i, pos));
+        }
+    }
+
+    let mut output = Vec::with_capacity(stops.len());
+    let mut prev = 0.0;
+    for (idx, pos_opt) in positions.into_iter().enumerate() {
+        let pos = pos_opt.unwrap_or(prev);
+        let clamped = pos.max(prev).clamp(0.0, 1.0);
+        prev = clamped;
+        output.push((clamped, stops[idx].color.to_rgba(current_color)));
+    }
+
+    output
+}
+
+fn normalize_color_stops_unclamped(stops: &[ColorStop], current_color: Rgba) -> Vec<(f32, Rgba)> {
+    if stops.is_empty() {
+        return Vec::new();
+    }
+    let mut positions: Vec<Option<f32>> = stops.iter().map(|s| s.position).collect();
+    if positions.iter().all(|p| p.is_none()) {
+        if stops.len() == 1 {
+            return vec![(0.0, stops[0].color.to_rgba(current_color))];
+        }
+        let denom = (stops.len() - 1) as f32;
+        return stops
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (i as f32 / denom, s.color.to_rgba(current_color)))
+            .collect();
+    }
+    if positions.first().and_then(|p| *p).is_none() {
+        positions[0] = Some(0.0);
+    }
+    if positions.last().and_then(|p| *p).is_none() {
+        if let Some(last) = positions.last_mut() {
+            *last = Some(1.0);
+        }
+    }
+    let mut last_known: Option<(usize, f32)> = None;
+    for i in 0..positions.len() {
+        if let Some(pos) = positions[i] {
+            if let Some((start_idx, start_pos)) = last_known {
+                let gap = i.saturating_sub(start_idx + 1);
+                if gap > 0 {
+                    let step = (pos - start_pos) / (gap as f32 + 1.0);
+                    for j in 1..=gap {
+                        positions[start_idx + j] = Some(start_pos + step * j as f32);
+                    }
+                }
+            } else if i > 0 {
+                let gap = i;
+                let step = pos / gap as f32;
+                for j in 0..i {
+                    positions[j] = Some(step * j as f32);
+                }
+            }
+            last_known = Some((i, pos));
+        }
+    }
+
+    let mut output = Vec::with_capacity(stops.len());
+    let mut prev = 0.0;
+    for (idx, pos_opt) in positions.into_iter().enumerate() {
+        let pos = pos_opt.unwrap_or(prev);
+        let unclamped = pos.max(prev);
+        prev = unclamped;
+        output.push((unclamped, stops[idx].color.to_rgba(current_color)));
+    }
+
+    output
+}
+
+fn gradient_stops(stops: &[(f32, Rgba)]) -> Vec<tiny_skia::GradientStop> {
+    stops
+        .iter()
+        .map(|(p, c)| tiny_skia::GradientStop::new(
+            *p,
+            tiny_skia::Color::from_rgba8(c.r, c.g, c.b, (c.a * 255.0).round().clamp(0.0, 255.0) as u8),
+        ))
+        .collect()
+}
+
+fn radial_geometry(
+    rect: Rect,
+    position: &BackgroundPosition,
+    size: &RadialGradientSize,
+    shape: RadialGradientShape,
+    _font_size: f32,
+) -> (f32, f32, f32, f32) {
+    let (align_x, off_x, align_y, off_y) = match position {
+        BackgroundPosition::Position { x, y } => {
+            let ox = resolve_length_for_border_image(&x.offset, rect.width());
+            let oy = resolve_length_for_border_image(&y.offset, rect.height());
+            (x.alignment, ox, y.alignment, oy)
+        }
+    };
+    let cx = rect.x() + align_x * rect.width() + off_x;
+    let cy = rect.y() + align_y * rect.height() + off_y;
+
+    let dx_left = (cx - rect.x()).max(0.0);
+    let dx_right = (rect.x() + rect.width() - cx).max(0.0);
+    let dy_top = (cy - rect.y()).max(0.0);
+    let dy_bottom = (rect.y() + rect.height() - cy).max(0.0);
+
+    let (mut radius_x, mut radius_y) = match size {
+        RadialGradientSize::ClosestSide => (dx_left.min(dx_right), dy_top.min(dy_bottom)),
+        RadialGradientSize::FarthestSide => (dx_left.max(dx_right), dy_top.max(dy_bottom)),
+        RadialGradientSize::ClosestCorner => {
+            let corners = [
+                (dx_left, dy_top),
+                (dx_left, dy_bottom),
+                (dx_right, dy_top),
+                (dx_right, dy_bottom),
+            ];
+            let mut best = std::f32::INFINITY;
+            let mut best_pair = (0.0, 0.0);
+            for (dx, dy) in corners {
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist < best {
+                    best = dist;
+                    best_pair = (dx, dy);
+                }
+            }
+            (
+                best_pair.0 * std::f32::consts::SQRT_2,
+                best_pair.1 * std::f32::consts::SQRT_2,
+            )
+        }
+        RadialGradientSize::FarthestCorner => {
+            let corners = [
+                (dx_left, dy_top),
+                (dx_left, dy_bottom),
+                (dx_right, dy_top),
+                (dx_right, dy_bottom),
+            ];
+            let mut best = -std::f32::INFINITY;
+            let mut best_pair = (0.0, 0.0);
+            for (dx, dy) in corners {
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist > best {
+                    best = dist;
+                    best_pair = (dx, dy);
+                }
+            }
+            (
+                best_pair.0 * std::f32::consts::SQRT_2,
+                best_pair.1 * std::f32::consts::SQRT_2,
+            )
+        }
+        RadialGradientSize::Explicit { x, y } => {
+            let rx = resolve_length_for_border_image(x, rect.width()).max(0.0);
+            let ry = y
+                .as_ref()
+                .map(|yy| resolve_length_for_border_image(yy, rect.height()).max(0.0))
+                .unwrap_or(rx);
+            (rx, ry)
+        }
+    };
+
+    if matches!(shape, RadialGradientShape::Circle) {
+        let r = if matches!(size, RadialGradientSize::ClosestCorner | RadialGradientSize::FarthestCorner) {
+            let r_corner = ((radius_x * radius_x + radius_y * radius_y) / 2.0).sqrt();
+            r_corner
+        } else {
+            radius_x.max(radius_y)
+        };
+        radius_x = r;
+        radius_y = r;
+    }
+
+    (cx, cy, radius_x.max(0.0), radius_y.max(0.0))
+}
+
+fn resolve_gradient_center(rect: Rect, position: &BackgroundPosition) -> Point {
+    let (align_x, off_x, align_y, off_y) = match position {
+        BackgroundPosition::Position { x, y } => {
+            let ox = resolve_length_for_border_image(&x.offset, rect.width());
+            let oy = resolve_length_for_border_image(&y.offset, rect.height());
+            (x.alignment, ox, y.alignment, oy)
+        }
+    };
+    let cx = rect.x() + align_x * rect.width() + off_x;
+    let cy = rect.y() + align_y * rect.height() + off_y;
+    Point::new(cx, cy)
+}
+
+fn sample_stops(stops: &[(f32, Rgba)], t: f32, repeating: bool, period: f32) -> Rgba {
+    if stops.is_empty() {
+        return Rgba::TRANSPARENT;
+    }
+    if stops.len() == 1 {
+        return stops[0].1;
+    }
+    let total = if repeating {
+        period
+    } else {
+        stops.last().map(|(p, _)| *p).unwrap_or(1.0)
+    };
+    let mut pos = t;
+    if repeating && total > 0.0 {
+        pos = pos.rem_euclid(total);
+    }
+    if pos <= stops[0].0 {
+        return stops[0].1;
+    }
+    if pos >= stops.last().unwrap().0 && !repeating {
+        return stops.last().unwrap().1;
+    }
+    for window in stops.windows(2) {
+        let (p0, c0) = window[0];
+        let (p1, c1) = window[1];
+        if pos >= p0 && pos <= p1 {
+            let t = if (p1 - p0).abs() < f32::EPSILON {
+                0.0
+            } else {
+                ((pos - p0) / (p1 - p0)).clamp(0.0, 1.0)
+            };
+            return Rgba {
+                r: (c0.r as f32 + (c1.r as f32 - c0.r as f32) * t).round() as u8,
+                g: (c0.g as f32 + (c1.g as f32 - c0.g as f32) * t).round() as u8,
+                b: (c0.b as f32 + (c1.b as f32 - c0.b as f32) * t).round() as u8,
+                a: c0.a + (c1.a - c0.a) * t,
+            };
+        }
+    }
+    Rgba::TRANSPARENT
+}
+
+fn render_generated_border_image(bg: &BackgroundImage, current_color: Rgba, width: u32, height: u32) -> Option<Pixmap> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let rect = Rect::from_xywh(0.0, 0.0, width as f32, height as f32);
+    match bg {
+        BackgroundImage::LinearGradient { angle, stops } => {
+            let resolved = normalize_color_stops(stops, current_color);
+            if resolved.is_empty() {
+                return None;
+            }
+            let skia_stops = gradient_stops(&resolved);
+            let rad = angle.to_radians();
+            let dx = rad.sin();
+            let dy = -rad.cos();
+            let len = 0.5 * (rect.width() * dx.abs() + rect.height() * dy.abs());
+            let cx = rect.x() + rect.width() / 2.0;
+            let cy = rect.y() + rect.height() / 2.0;
+
+            let start = tiny_skia::Point::from_xy(cx - dx * len, cy - dy * len);
+            let end = tiny_skia::Point::from_xy(cx + dx * len, cy + dy * len);
+            let shader = LinearGradient::new(start, end, skia_stops, SpreadMode::Pad, Transform::identity())?;
+
+            let mut pixmap = Pixmap::new(width, height)?;
+            let Some(skia_rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
+                return None;
+            };
+            let path = PathBuilder::from_rect(skia_rect);
+
+            let mut paint = tiny_skia::Paint::default();
+            paint.shader = shader;
+            paint.anti_alias = true;
+            pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+            Some(pixmap)
+        }
+        BackgroundImage::RepeatingLinearGradient { angle, stops } => {
+            let resolved = normalize_color_stops(stops, current_color);
+            if resolved.is_empty() {
+                return None;
+            }
+            let skia_stops = gradient_stops(&resolved);
+            let rad = angle.to_radians();
+            let dx = rad.sin();
+            let dy = -rad.cos();
+            let len = 0.5 * (rect.width() * dx.abs() + rect.height() * dy.abs());
+            let cx = rect.x() + rect.width() / 2.0;
+            let cy = rect.y() + rect.height() / 2.0;
+
+            let start = tiny_skia::Point::from_xy(cx - dx * len, cy - dy * len);
+            let end = tiny_skia::Point::from_xy(cx + dx * len, cy + dy * len);
+            let shader = LinearGradient::new(start, end, skia_stops, SpreadMode::Repeat, Transform::identity())?;
+
+            let mut pixmap = Pixmap::new(width, height)?;
+            let Some(skia_rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
+                return None;
+            };
+            let path = PathBuilder::from_rect(skia_rect);
+
+            let mut paint = tiny_skia::Paint::default();
+            paint.shader = shader;
+            paint.anti_alias = true;
+            pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+            Some(pixmap)
+        }
+        BackgroundImage::RadialGradient {
+            shape,
+            size,
+            position,
+            stops,
+        } => {
+            let resolved = normalize_color_stops(stops, current_color);
+            if resolved.is_empty() {
+                return None;
+            }
+            let skia_stops = gradient_stops(&resolved);
+            let (cx, cy, radius_x, radius_y) = radial_geometry(rect, position, size, *shape, 16.0);
+            let transform = Transform::from_translate(cx, cy).pre_scale(radius_x, radius_y);
+            let shader = RadialGradient::new(
+                tiny_skia::Point::from_xy(0.0, 0.0),
+                tiny_skia::Point::from_xy(0.0, 0.0),
+                1.0,
+                skia_stops,
+                SpreadMode::Pad,
+                transform,
+            )?;
+
+            let mut pixmap = Pixmap::new(width, height)?;
+            let Some(skia_rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
+                return None;
+            };
+            let path = PathBuilder::from_rect(skia_rect);
+            let mut paint = tiny_skia::Paint::default();
+            paint.shader = shader;
+            paint.anti_alias = true;
+            pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+            Some(pixmap)
+        }
+        BackgroundImage::RepeatingRadialGradient {
+            shape,
+            size,
+            position,
+            stops,
+        } => {
+            let resolved = normalize_color_stops(stops, current_color);
+            if resolved.is_empty() {
+                return None;
+            }
+            let skia_stops = gradient_stops(&resolved);
+            let (cx, cy, radius_x, radius_y) = radial_geometry(rect, position, size, *shape, 16.0);
+            let transform = Transform::from_translate(cx, cy).pre_scale(radius_x, radius_y);
+            let shader = RadialGradient::new(
+                tiny_skia::Point::from_xy(0.0, 0.0),
+                tiny_skia::Point::from_xy(0.0, 0.0),
+                1.0,
+                skia_stops,
+                SpreadMode::Repeat,
+                transform,
+            )?;
+
+            let mut pixmap = Pixmap::new(width, height)?;
+            let Some(skia_rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
+                return None;
+            };
+            let path = PathBuilder::from_rect(skia_rect);
+            let mut paint = tiny_skia::Paint::default();
+            paint.shader = shader;
+            paint.anti_alias = true;
+            pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+            Some(pixmap)
+        }
+        BackgroundImage::ConicGradient {
+            from_angle,
+            position,
+            stops,
+        } => {
+            let resolved = normalize_color_stops_unclamped(stops, current_color);
+            if resolved.is_empty() {
+                return None;
+            }
+            let mut pixmap = Pixmap::new(width, height)?;
+            let center = resolve_gradient_center(rect, position);
+            let start_angle = from_angle.to_radians();
+            let period = 1.0;
+            let data = pixmap.pixels_mut();
+            let transparent = PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
+            for y in 0..height {
+                for x in 0..width {
+                    let dx = x as f32 + 0.5 - center.x;
+                    let dy = y as f32 + 0.5 - center.y;
+                    let angle = dx.atan2(-dy) + start_angle;
+                    let mut t = (angle / (2.0 * std::f32::consts::PI)).rem_euclid(1.0);
+                    t *= period;
+                    let color = sample_stops(&resolved, t, false, period);
+                    let idx = (y * width + x) as usize;
+                    data[idx] = PremultipliedColorU8::from_rgba(
+                        color.r,
+                        color.g,
+                        color.b,
+                        (color.a * 255.0).round().clamp(0.0, 255.0) as u8,
+                    )
+                    .unwrap_or(transparent);
+                }
+            }
+            Some(pixmap)
+        }
+        BackgroundImage::RepeatingConicGradient {
+            from_angle,
+            position,
+            stops,
+        } => {
+            let resolved = normalize_color_stops_unclamped(stops, current_color);
+            if resolved.is_empty() {
+                return None;
+            }
+            let mut pixmap = Pixmap::new(width, height)?;
+            let center = resolve_gradient_center(rect, position);
+            let start_angle = from_angle.to_radians();
+            let period = resolved.last().map(|(p, _)| *p).unwrap_or(1.0).max(1e-6);
+            let data = pixmap.pixels_mut();
+            let transparent = PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
+            for y in 0..height {
+                for x in 0..width {
+                    let dx = x as f32 + 0.5 - center.x;
+                    let dy = y as f32 + 0.5 - center.y;
+                    let angle = dx.atan2(-dy) + start_angle;
+                    let mut t = (angle / (2.0 * std::f32::consts::PI)).rem_euclid(1.0);
+                    t *= period;
+                    let color = sample_stops(&resolved, t, true, period);
+                    let idx = (y * width + x) as usize;
+                    data[idx] = PremultipliedColorU8::from_rgba(
+                        color.r,
+                        color.g,
+                        color.b,
+                        (color.a * 255.0).round().clamp(0.0, 255.0) as u8,
+                    )
+                    .unwrap_or(transparent);
+                }
+            }
+            Some(pixmap)
+        }
+        BackgroundImage::None | BackgroundImage::Url(_) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::geometry::{Point, Rect};
     use crate::paint::display_list::{
-        BorderItem, BorderRadii, BorderSide, BoxShadowItem, DecorationPaint, DecorationStroke, DisplayItem, DisplayList,
-        FillRectItem, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem,
-        LinearGradientItem, OpacityItem, RadialGradientItem, TextDecorationItem, TextEmphasis, TextItem, TextShadowItem,
-        Transform2D,
+        BorderImageItem, BorderImageSourceItem, BorderItem, BorderRadii, BorderSide, BoxShadowItem, DecorationPaint,
+        DecorationStroke, DisplayItem, DisplayList, FillRectItem, GlyphInstance, GradientSpread, GradientStop,
+        ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem,
+        TextDecorationItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
     };
     use crate::style::color::Rgba;
     use crate::style::types::{
-        BorderStyle as CssBorderStyle, TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
+        BorderImageSlice, BorderImageSliceValue, BorderImageWidth, BorderImageWidthValue, BorderStyle as CssBorderStyle,
+        TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
     };
     use std::sync::Arc;
 
@@ -2212,6 +3194,7 @@ mod tests {
             right: side.clone(),
             bottom: side.clone(),
             left: side,
+            image: None,
             radii: BorderRadii::ZERO,
         }));
 
@@ -2222,6 +3205,64 @@ mod tests {
         assert_eq!(pixel(&pixmap, 2, 0), (255, 255, 255, 255));
         // Border still paints along the edges of the box.
         assert_eq!(pixel(&pixmap, 3, 2), (0, 0, 0, 255));
+    }
+
+    #[test]
+    fn border_image_paints_raster_slices() {
+        let renderer = DisplayListRenderer::new(8, 8, Rgba::WHITE, FontContext::new()).unwrap();
+        let mut list = DisplayList::new();
+
+        let pixels = vec![
+            255, 0, 0, 255, // red
+            0, 255, 0, 255, // green
+            0, 0, 255, 255, // blue
+            0, 0, 0, 255, // black
+        ];
+        let image = ImageData::new_pixels(2, 2, pixels);
+        let border_image = BorderImageItem {
+            source: BorderImageSourceItem::Raster(image),
+            slice: BorderImageSlice {
+                top: BorderImageSliceValue::Number(1.0),
+                right: BorderImageSliceValue::Number(1.0),
+                bottom: BorderImageSliceValue::Number(1.0),
+                left: BorderImageSliceValue::Number(1.0),
+                fill: false,
+            },
+            width: BorderImageWidth {
+                top: BorderImageWidthValue::Number(1.0),
+                right: BorderImageWidthValue::Number(1.0),
+                bottom: BorderImageWidthValue::Number(1.0),
+                left: BorderImageWidthValue::Number(1.0),
+            },
+            outset: crate::style::types::BorderImageOutset::default(),
+            repeat: (crate::style::types::BorderImageRepeat::Stretch, crate::style::types::BorderImageRepeat::Stretch),
+            current_color: Rgba::BLACK,
+        };
+
+        let side = BorderSide {
+            width: 2.0,
+            style: CssBorderStyle::Solid,
+            color: Rgba::BLACK,
+        };
+        list.push(DisplayItem::Border(BorderItem {
+            rect: Rect::from_xywh(1.0, 1.0, 6.0, 6.0),
+            top: side.clone(),
+            right: side.clone(),
+            bottom: side.clone(),
+            left: side,
+            image: Some(border_image),
+            radii: BorderRadii::ZERO,
+        }));
+
+        let pixmap = renderer.render(&list).unwrap();
+        // Top-left border area should come from the red slice.
+        assert_eq!(pixel(&pixmap, 1, 1), (255, 0, 0, 255));
+        // Top-right border area should come from the green slice.
+        assert_eq!(pixel(&pixmap, 6, 1), (0, 255, 0, 255));
+        // Bottom-left border area should come from the blue slice.
+        assert_eq!(pixel(&pixmap, 1, 6), (0, 0, 255, 255));
+        // Center remains white because fill is false.
+        assert_eq!(pixel(&pixmap, 4, 4), (255, 255, 255, 255));
     }
 
     #[test]
@@ -2239,6 +3280,7 @@ mod tests {
                 right: side.clone(),
                 bottom: side.clone(),
                 left: side,
+                image: None,
                 radii: BorderRadii::ZERO,
             }));
             list

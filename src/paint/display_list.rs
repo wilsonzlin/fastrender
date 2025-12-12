@@ -39,6 +39,7 @@
 use crate::geometry::{Point, Rect, Size};
 use crate::style::color::Rgba;
 use crate::style::types::{
+    BackgroundImage, BorderImageOutset, BorderImageRepeat, BorderImageSlice, BorderImageWidth,
     BorderStyle as CssBorderStyle, ResolvedTextDecoration, TextEmphasisPosition, TextEmphasisStyle,
 };
 use crate::text::font_db::{FontStretch, FontStyle};
@@ -753,6 +754,9 @@ pub struct BorderItem {
     /// Left border side
     pub left: BorderSide,
 
+    /// Optional border-image to draw instead of styled strokes.
+    pub image: Option<BorderImageItem>,
+
     /// Border corner radii (currently informational)
     pub radii: BorderRadii,
 }
@@ -768,6 +772,38 @@ pub struct BorderSide {
 
     /// Border color
     pub color: Rgba,
+}
+
+/// Resolved border-image data for rendering.
+#[derive(Debug, Clone)]
+pub struct BorderImageItem {
+    /// The source image: either pre-decoded pixels or a generated background.
+    pub source: BorderImageSourceItem,
+
+    /// Slice geometry.
+    pub slice: BorderImageSlice,
+
+    /// Target border widths.
+    pub width: BorderImageWidth,
+
+    /// Border image outset.
+    pub outset: BorderImageOutset,
+
+    /// Repeat modes for x/y.
+    pub repeat: (BorderImageRepeat, BorderImageRepeat),
+
+    /// Current color for resolving `currentColor` stops.
+    pub current_color: Rgba,
+}
+
+/// Border-image source variants.
+#[derive(Debug, Clone)]
+pub enum BorderImageSourceItem {
+    /// Pre-decoded raster pixels.
+    Raster(ImageData),
+
+    /// Generated image such as a gradient.
+    Generated(BackgroundImage),
 }
 
 // ============================================================================

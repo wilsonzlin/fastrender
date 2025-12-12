@@ -33,11 +33,11 @@ use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::paint::display_list::{
-    BlendMode, BlendModeItem, BorderItem, BorderSide, BoxShadowItem, ClipItem, ConicGradientItem, DecorationPaint,
-    DecorationStroke, DisplayItem, DisplayList, EmphasisMark, EmphasisText, FillRectItem, FontId, GlyphInstance,
-    GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, OpacityItem,
-    RadialGradientItem, ResolvedFilter, StackingContextItem, StrokeRectItem, TextDecorationItem, TextEmphasis,
-    TextItem, TextShadowItem, Transform2D,
+    BlendMode, BlendModeItem, BorderImageItem, BorderImageSourceItem, BorderItem, BorderSide, BoxShadowItem, ClipItem,
+    ConicGradientItem, DecorationPaint, DecorationStroke, DisplayItem, DisplayList, EmphasisMark, EmphasisText,
+    FillRectItem, FontId, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem,
+    LinearGradientItem, OpacityItem, RadialGradientItem, ResolvedFilter, StackingContextItem, StrokeRectItem,
+    TextDecorationItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::stacking::StackingContext;
@@ -45,9 +45,10 @@ use crate::paint::text_shadow::resolve_text_shadows;
 use crate::style::color::Rgba;
 use crate::style::types::{
     BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeatKeyword,
-    BackgroundSize, BackgroundSizeComponent, BackgroundSizeKeyword, ImageOrientation, ImageRendering, Isolation,
-    MixBlendMode, ObjectFit, ResolvedTextDecoration, TextDecorationLine, TextDecorationSkipInk, TextDecorationStyle,
-    TextDecorationThickness, TextEmphasisPosition, TextEmphasisStyle, TextUnderlineOffset, TextUnderlinePosition,
+    BackgroundSize, BackgroundSizeComponent, BackgroundSizeKeyword, BorderImageSource, ImageOrientation,
+    ImageRendering, Isolation, MixBlendMode, ObjectFit, ResolvedTextDecoration, TextDecorationLine,
+    TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness, TextEmphasisPosition, TextEmphasisStyle,
+    TextUnderlineOffset, TextUnderlinePosition,
 };
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
@@ -1682,6 +1683,32 @@ impl DisplayListBuilder {
             return;
         }
 
+        let border_image = match &style.border_image.source {
+            BorderImageSource::Image(bg) => {
+                let source = match bg {
+                    BackgroundImage::Url(src) => self.decode_image(src, Some(style), true).map(BorderImageSourceItem::Raster),
+                    BackgroundImage::LinearGradient { .. }
+                    | BackgroundImage::RepeatingLinearGradient { .. }
+                    | BackgroundImage::RadialGradient { .. }
+                    | BackgroundImage::RepeatingRadialGradient { .. }
+                    | BackgroundImage::ConicGradient { .. }
+                    | BackgroundImage::RepeatingConicGradient { .. } => {
+                        Some(BorderImageSourceItem::Generated(bg.clone()))
+                    }
+                    BackgroundImage::None => None,
+                };
+                source.map(|source| BorderImageItem {
+                    source,
+                    slice: style.border_image.slice.clone(),
+                    width: style.border_image.width.clone(),
+                    outset: style.border_image.outset.clone(),
+                    repeat: style.border_image.repeat,
+                    current_color: style.color,
+                })
+            }
+            BorderImageSource::None => None,
+        };
+
         let radii = Self::border_radii(rect, style).clamped(rect.width(), rect.height());
         self.list.push(DisplayItem::Border(BorderItem {
             rect,
@@ -1689,6 +1716,7 @@ impl DisplayListBuilder {
             right: sides.1,
             bottom: sides.2,
             left: sides.3,
+            image: border_image,
             radii,
         }));
     }
