@@ -2424,7 +2424,9 @@ impl FormattingContext for TableFormattingContext {
             .and_then(|len| resolve_length_against(len, font_size, containing_height));
         let min_height = resolve_opt_length_against(box_node.style.min_height.as_ref(), font_size, containing_height);
         let max_height = resolve_opt_length_against(box_node.style.max_height.as_ref(), font_size, containing_height);
-        let table_height = specified_height.map(|h| clamp_to_min_max(h, min_height, max_height));
+        let table_height = specified_height
+            .or(containing_height)
+            .map(|h| clamp_to_min_max(h, min_height, max_height));
 
         // Helper to position out-of-flow children against a containing block.
         let place_out_of_flow = |fragment: &mut FragmentNode, cb: ContainingBlock| -> Result<(), LayoutError> {
@@ -5806,6 +5808,22 @@ mod tests {
         // Extra 80 should distribute in 1:3 ratio from initial 10:30 heights → 20/60 split.
         assert!((structure.rows[0].computed_height - 30.0).abs() < 0.01);
         assert!((structure.rows[1].computed_height - 90.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn percent_rows_use_available_height_when_table_auto() {
+        let mut structure = TableStructure::new();
+        structure.border_collapse = BorderCollapse::Separate;
+        structure.border_spacing = (0.0, 0.0);
+        structure.row_count = 2;
+        structure.rows = vec![RowInfo::new(0), RowInfo::new(1)];
+        structure.rows[0].specified_height = Some(SpecifiedHeight::Percent(50.0));
+        structure.rows[1].specified_height = Some(SpecifiedHeight::Auto);
+
+        calculate_row_heights(&mut structure, Some(200.0));
+
+        assert!((structure.rows[0].computed_height - 100.0).abs() < 0.5);
+        assert!((structure.rows[1].computed_height - 100.0).abs() < 0.5);
     }
 
     #[test]
