@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Row group heights act as minimums: `height`/`min-height` on row groups distribute extra height to member rows with cap-aware weighting (respecting row max-heights), percent heights resolve against a definite table height; added regressions for fixed and percent row-group minimums.
 - Spanning cell minimum distribution now prefers available headroom: min-width growth weights by each column’s remaining max - min before falling back to current widths, so wide-headroom columns absorb more of a spanning cell and totals stay within the requested max (regression `distribute_spanning_prefers_existing_headroom`).
 - Spanning cell maximum distribution now prefers available headroom before pushing past existing maxima: extra max-width is first absorbed by columns with spare max - min, then falls back to width weighting to reach the requested span max (regression `distribute_spanning_max_uses_headroom_before_busting_caps`).
 - Column percentages now honor a definite table width (specified or containing block): percent column hints feed into auto layout distribution instead of being ignored when width is auto but the containing width is known; spans and explicit column counts are respected during distribution and intrinsic sizing.
@@ -583,6 +584,7 @@
 - `text-indent` hanging/each-line semantics are approximate; indentation doesn’t yet handle hanging outdents per spec nuances.
 - Max-content sizing now honors mandatory breaks but still ignores anonymous inline box generation and percent-driven height constraints.
 - Table layout still partial: row/col spans not fully honored (rowspan baselines, percent/fixed widths still simplified vs CSS 2.1), colspan distribution still heuristic.
+- Row-group caps/minimums are enforced before table-height fill; table-level extra-height distribution still ignores row-group caps when expanding to a definite table height.
 - Non-image replaced content (iframe/video/etc.) remains unrendered; need full replaced-element handling beyond images/SVG.
 - Painting still lacks 3D transforms/transform-origin z and fuller filter/blend/isolation interplay, and the richer display list module remains partially integrated.
 - Root line strut still provides minimum line-height rather than full descendant baseline synthesis.
