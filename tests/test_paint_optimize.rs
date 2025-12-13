@@ -4,7 +4,7 @@
 //! in various scenarios including edge cases.
 
 use fastrender::geometry::{Point, Rect};
-use fastrender::paint::display_list::ResolvedFilter;
+use fastrender::paint::display_list::{ClipShape, ResolvedFilter};
 use fastrender::Rgba;
 use fastrender::{
     BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, DisplayListOptimizer,
@@ -681,8 +681,10 @@ fn test_rounded_rect_items() {
 fn test_clip_inside_viewport() {
     let mut list = DisplayList::new();
     list.push(DisplayItem::PushClip(ClipItem {
-        rect: Rect::from_xywh(10.0, 10.0, 80.0, 80.0),
-        radii: None,
+        shape: ClipShape::Rect {
+            rect: Rect::from_xywh(10.0, 10.0, 80.0, 80.0),
+            radii: None,
+        },
     }));
     list.push(make_fill_rect(20.0, 20.0, 60.0, 60.0, Rgba::RED));
     list.push(DisplayItem::PopClip);
@@ -697,8 +699,10 @@ fn test_clip_inside_viewport() {
 fn test_clip_outside_viewport_culls_children() {
     let mut list = DisplayList::new();
     list.push(DisplayItem::PushClip(ClipItem {
-        rect: Rect::from_xywh(500.0, 500.0, 80.0, 80.0),
-        radii: None,
+        shape: ClipShape::Rect {
+            rect: Rect::from_xywh(500.0, 500.0, 80.0, 80.0),
+            radii: None,
+        },
     }));
     list.push(make_fill_rect(510.0, 510.0, 60.0, 60.0, Rgba::RED));
     list.push(DisplayItem::PopClip);
@@ -715,8 +719,10 @@ fn test_clip_outside_viewport_culls_children() {
 fn transform_keeps_clipped_content_from_being_culled() {
     let mut list = DisplayList::new();
     list.push(DisplayItem::PushClip(ClipItem {
-        rect: Rect::from_xywh(500.0, 500.0, 50.0, 50.0),
-        radii: None,
+        shape: ClipShape::Rect {
+            rect: Rect::from_xywh(500.0, 500.0, 50.0, 50.0),
+            radii: None,
+        },
     }));
     // Transform could reposition content relative to the viewport, so the optimizer should not drop it.
     list.push(DisplayItem::PushTransform(TransformItem {

@@ -97,16 +97,16 @@ fn test_absolute_left_and_right_stretch_width() {
     style.position = Position::Absolute;
     style.left = LengthOrAuto::px(50.0);
     style.right = LengthOrAuto::px(50.0);
-    // width is auto - should stretch
+    // width is auto - shrink-to-fit the intrinsic width between insets
 
     let input = create_input(style, Size::new(100.0, 100.0));
     let cb = create_cb(400.0, 300.0);
 
     let result = layout.layout_absolute(&input, &cb).unwrap();
 
-    // Width = 400 - 50 - 50 = 300
+    // Width = shrink-to-fit 100px within the 300px slot
     assert_eq!(result.position.x, 50.0);
-    assert_eq!(result.size.width, 300.0);
+    assert_eq!(result.size.width, 100.0);
 }
 
 #[test]
@@ -450,8 +450,8 @@ fn test_negative_computed_width_clamped() {
 
     let result = layout.layout_absolute(&input, &cb).unwrap();
 
-    // Width should be clamped to 0
-    assert_eq!(result.size.width, 0.0);
+    // Width should shrink to the intrinsic 50px rather than clamping to 0
+    assert_eq!(result.size.width, 50.0);
 }
 
 #[test]

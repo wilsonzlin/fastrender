@@ -11,6 +11,7 @@ use fastrender::style::types::{
 use fastrender::style::values::Length;
 use fastrender::tree::box_tree::ReplacedType;
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode};
+use fastrender::paint::display_list::ClipShape;
 use fastrender::{
     BlendMode, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FillRoundedRectItem,
     GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem,
@@ -678,8 +679,10 @@ fn test_push_pop_clip() {
     let mut list = DisplayList::new();
 
     list.push(DisplayItem::PushClip(ClipItem {
-        rect: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-        radii: None,
+        shape: ClipShape::Rect {
+            rect: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+            radii: None,
+        },
     }));
 
     list.push(DisplayItem::FillRect(FillRectItem {
@@ -698,11 +701,16 @@ fn test_push_pop_clip() {
 #[test]
 fn test_rounded_clip() {
     let item = ClipItem {
-        rect: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-        radii: Some(BorderRadii::uniform(10.0)),
+        shape: ClipShape::Rect {
+            rect: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+            radii: Some(BorderRadii::uniform(10.0)),
+        },
     };
 
-    assert!(item.radii.is_some());
+    match &item.shape {
+        ClipShape::Rect { radii, .. } => assert!(radii.is_some()),
+        _ => panic!("expected rect clip"),
+    }
 }
 
 #[test]
@@ -1183,7 +1191,9 @@ fn paint_containment_clips_stacking_context() {
     assert!(stacking_idx > clip_start && stacking_idx < clip_end);
 
     match &items[clip_start] {
-        DisplayItem::PushClip(ClipItem { rect, radii }) => {
+        DisplayItem::PushClip(ClipItem {
+            shape: ClipShape::Rect { rect, radii },
+        }) => {
             assert_eq!(*rect, Rect::from_xywh(12.0, 22.0, 46.0, 26.0));
             assert_eq!(*radii, Some(BorderRadii::uniform(3.0)));
         }

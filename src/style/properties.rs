@@ -2280,6 +2280,397 @@ fn apply_global_keyword(
     apply_property_from_source(styles, source, property, order)
 }
 
+fn parse_font_variant_caps_tokens(tokens: &[&str], base_variant: FontVariant) -> Option<(FontVariantCaps, FontVariant)> {
+    if tokens.is_empty() {
+        return None;
+    }
+    if tokens.len() != 1 {
+        return None;
+    }
+
+    let mut variant = base_variant;
+    let caps = match tokens[0] {
+        "normal" => FontVariantCaps::Normal,
+        "small-caps" => {
+            variant = FontVariant::SmallCaps;
+            FontVariantCaps::SmallCaps
+        }
+        "all-small-caps" => FontVariantCaps::AllSmallCaps,
+        "petite-caps" => FontVariantCaps::PetiteCaps,
+        "all-petite-caps" => FontVariantCaps::AllPetiteCaps,
+        "unicase" => FontVariantCaps::Unicase,
+        "titling-caps" => FontVariantCaps::TitlingCaps,
+        _ => return None,
+    };
+
+    Some((caps, variant))
+}
+
+fn parse_font_variant_ligatures_tokens(tokens: &[&str]) -> Option<FontVariantLigatures> {
+    if tokens.is_empty() {
+        return None;
+    }
+
+    if tokens.len() == 1 {
+        return match tokens[0] {
+            "normal" => Some(FontVariantLigatures::default()),
+            "none" => Some(FontVariantLigatures {
+                common: false,
+                discretionary: false,
+                historical: false,
+                contextual: false,
+            }),
+            _ => None,
+        };
+    }
+
+    let mut lig = FontVariantLigatures::default();
+    let mut seen_common = false;
+    let mut seen_disc = false;
+    let mut seen_hist = false;
+    let mut seen_ctx = false;
+
+    for tok in tokens {
+        match *tok {
+            "common-ligatures" => {
+                if seen_common {
+                    return None;
+                }
+                lig.common = true;
+                seen_common = true;
+            }
+            "no-common-ligatures" => {
+                if seen_common {
+                    return None;
+                }
+                lig.common = false;
+                seen_common = true;
+            }
+            "discretionary-ligatures" => {
+                if seen_disc {
+                    return None;
+                }
+                lig.discretionary = true;
+                seen_disc = true;
+            }
+            "no-discretionary-ligatures" => {
+                if seen_disc {
+                    return None;
+                }
+                lig.discretionary = false;
+                seen_disc = true;
+            }
+            "historical-ligatures" => {
+                if seen_hist {
+                    return None;
+                }
+                lig.historical = true;
+                seen_hist = true;
+            }
+            "no-historical-ligatures" => {
+                if seen_hist {
+                    return None;
+                }
+                lig.historical = false;
+                seen_hist = true;
+            }
+            "contextual" => {
+                if seen_ctx {
+                    return None;
+                }
+                lig.contextual = true;
+                seen_ctx = true;
+            }
+            "no-contextual" => {
+                if seen_ctx {
+                    return None;
+                }
+                lig.contextual = false;
+                seen_ctx = true;
+            }
+            _ => return None,
+        }
+    }
+
+    Some(lig)
+}
+
+fn parse_font_variant_numeric_tokens(tokens: &[&str]) -> Option<FontVariantNumeric> {
+    if tokens.is_empty() {
+        return None;
+    }
+    if tokens.len() == 1 && tokens[0] == "normal" {
+        return Some(FontVariantNumeric::default());
+    }
+
+    let mut numeric = FontVariantNumeric::default();
+    let mut seen_figure = false;
+    let mut seen_spacing = false;
+    let mut seen_fraction = false;
+
+    for tok in tokens {
+        match *tok {
+            "lining-nums" => {
+                if seen_figure {
+                    return None;
+                }
+                numeric.figure = NumericFigure::Lining;
+                seen_figure = true;
+            }
+            "oldstyle-nums" => {
+                if seen_figure {
+                    return None;
+                }
+                numeric.figure = NumericFigure::Oldstyle;
+                seen_figure = true;
+            }
+            "proportional-nums" => {
+                if seen_spacing {
+                    return None;
+                }
+                numeric.spacing = NumericSpacing::Proportional;
+                seen_spacing = true;
+            }
+            "tabular-nums" => {
+                if seen_spacing {
+                    return None;
+                }
+                numeric.spacing = NumericSpacing::Tabular;
+                seen_spacing = true;
+            }
+            "diagonal-fractions" => {
+                if seen_fraction {
+                    return None;
+                }
+                numeric.fraction = NumericFraction::Diagonal;
+                seen_fraction = true;
+            }
+            "stacked-fractions" => {
+                if seen_fraction {
+                    return None;
+                }
+                numeric.fraction = NumericFraction::Stacked;
+                seen_fraction = true;
+            }
+            "ordinal" => numeric.ordinal = true,
+            "slashed-zero" => numeric.slashed_zero = true,
+            _ => return None,
+        }
+    }
+
+    Some(numeric)
+}
+
+fn parse_font_variant_east_asian_tokens(tokens: &[&str]) -> Option<FontVariantEastAsian> {
+    if tokens.is_empty() {
+        return None;
+    }
+    if tokens.len() == 1 && tokens[0] == "normal" {
+        return Some(FontVariantEastAsian::default());
+    }
+
+    let mut east = FontVariantEastAsian::default();
+    let mut seen_variant = false;
+    let mut seen_width = false;
+
+    for tok in tokens {
+        match *tok {
+            "jis78" => {
+                if seen_variant {
+                    return None;
+                }
+                east.variant = Some(EastAsianVariant::Jis78);
+                seen_variant = true;
+            }
+            "jis83" => {
+                if seen_variant {
+                    return None;
+                }
+                east.variant = Some(EastAsianVariant::Jis83);
+                seen_variant = true;
+            }
+            "jis90" => {
+                if seen_variant {
+                    return None;
+                }
+                east.variant = Some(EastAsianVariant::Jis90);
+                seen_variant = true;
+            }
+            "jis04" => {
+                if seen_variant {
+                    return None;
+                }
+                east.variant = Some(EastAsianVariant::Jis04);
+                seen_variant = true;
+            }
+            "simplified" => {
+                if seen_variant {
+                    return None;
+                }
+                east.variant = Some(EastAsianVariant::Simplified);
+                seen_variant = true;
+            }
+            "traditional" => {
+                if seen_variant {
+                    return None;
+                }
+                east.variant = Some(EastAsianVariant::Traditional);
+                seen_variant = true;
+            }
+            "full-width" => {
+                if seen_width {
+                    return None;
+                }
+                east.width = Some(EastAsianWidth::FullWidth);
+                seen_width = true;
+            }
+            "proportional-width" => {
+                if seen_width {
+                    return None;
+                }
+                east.width = Some(EastAsianWidth::ProportionalWidth);
+                seen_width = true;
+            }
+            "ruby" => east.ruby = true,
+            _ => return None,
+        }
+    }
+
+    Some(east)
+}
+
+fn parse_font_variant_alternates_tokens(tokens: &[&str]) -> Option<FontVariantAlternates> {
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let mut alt = FontVariantAlternates::default();
+    let mut seen_stylistic = false;
+    let mut seen_swash = false;
+    let mut seen_ornaments = false;
+    let mut seen_annotation = false;
+
+    let parse_num = |s: &str| s.trim().parse::<u8>().ok().filter(|n| *n > 0 && *n <= 99);
+
+    for token in tokens {
+        if *token == "historical-forms" {
+            alt.historical_forms = true;
+            continue;
+        }
+
+        if let Some(inner) = token.strip_prefix("stylistic(").and_then(|s| s.strip_suffix(')')) {
+            if seen_stylistic {
+                return None;
+            }
+            if let Some(n) = parse_num(inner) {
+                alt.stylistic = Some(n);
+                seen_stylistic = true;
+                continue;
+            }
+            return None;
+        }
+
+        if let Some(inner) = token
+            .strip_prefix("styleset(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            for part in inner
+                .split(|c: char| c == ',' || c.is_whitespace())
+                .filter(|s| !s.is_empty())
+            {
+                if let Some(n) = parse_num(part) {
+                    alt.stylesets.push(n);
+                } else {
+                    return None;
+                }
+            }
+            continue;
+        }
+
+        if let Some(inner) = token
+            .strip_prefix("character-variant(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            for part in inner
+                .split(|c: char| c == ',' || c.is_whitespace())
+                .filter(|s| !s.is_empty())
+            {
+                if let Some(n) = parse_num(part) {
+                    alt.character_variants.push(n);
+                } else {
+                    return None;
+                }
+            }
+            continue;
+        }
+
+        if let Some(inner) = token.strip_prefix("swash(").and_then(|s| s.strip_suffix(')')) {
+            if seen_swash {
+                return None;
+            }
+            if let Some(n) = parse_num(inner) {
+                alt.swash = Some(n);
+                seen_swash = true;
+                continue;
+            }
+            return None;
+        }
+
+        if let Some(inner) = token
+            .strip_prefix("ornaments(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            if seen_ornaments {
+                return None;
+            }
+            if let Some(n) = parse_num(inner) {
+                alt.ornaments = Some(n);
+                seen_ornaments = true;
+                continue;
+            }
+            return None;
+        }
+
+        if let Some(inner) = token
+            .strip_prefix("annotation(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            if seen_annotation {
+                return None;
+            }
+            if !inner.trim().is_empty() {
+                alt.annotation = Some(inner.trim().to_string());
+                seen_annotation = true;
+                continue;
+            }
+            return None;
+        }
+
+        return None;
+    }
+
+    Some(alt)
+}
+
+fn parse_font_variant_position_tokens(
+    tokens: &[&str],
+    base_position: FontVariantPosition,
+) -> Option<FontVariantPosition> {
+    if tokens.is_empty() {
+        return Some(base_position);
+    }
+    if tokens.len() != 1 {
+        return None;
+    }
+
+    match tokens[0] {
+        "normal" => Some(FontVariantPosition::Normal),
+        "sub" => Some(FontVariantPosition::Sub),
+        "super" => Some(FontVariantPosition::Super),
+        _ => None,
+    }
+}
+
 pub fn apply_declaration(
     styles: &mut ComputedStyle,
     decl: &Declaration,
@@ -3978,507 +4369,206 @@ pub fn apply_declaration_with_base(
         }
         "font-variant" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                // Accept both the legacy shorthand and caps values.
-                let tokens: Vec<&str> = kw.split_whitespace().collect();
-                if tokens.len() == 1 && tokens[0] == "normal" {
+                let trimmed = kw.trim();
+                // CSS Fonts shorthand for font-variant subproperties.
+                if trimmed == "normal" {
                     styles.font_variant = FontVariant::Normal;
                     styles.font_variant_caps = FontVariantCaps::Normal;
                     styles.font_variant_alternates = FontVariantAlternates::default();
+                    styles.font_variant_ligatures = FontVariantLigatures::default();
+                    styles.font_variant_numeric = FontVariantNumeric::default();
+                    styles.font_variant_east_asian = FontVariantEastAsian::default();
+                    styles.font_variant_position = FontVariantPosition::Normal;
                 } else {
-                    let prev_caps = styles.font_variant_caps;
-                    let prev_variant = styles.font_variant;
-                    let mut seen_caps = false;
-                    let mut invalid_caps = false;
+                    let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+                    if tokens.is_empty() {
+                        return;
+                    }
+
+                    let mut caps_tokens: Vec<&str> = Vec::new();
+                    let mut ligature_tokens: Vec<&str> = Vec::new();
+                    let mut numeric_tokens: Vec<&str> = Vec::new();
+                    let mut east_asian_tokens: Vec<&str> = Vec::new();
+                    let mut alternate_tokens: Vec<&str> = Vec::new();
+                    let mut position_tokens: Vec<&str> = Vec::new();
+                    let mut invalid = false;
+
                     for tok in tokens {
                         match tok {
-                            "small-caps" => {
-                                if seen_caps {
-                                    invalid_caps = true;
-                                    break;
-                                }
-                                styles.font_variant = FontVariant::SmallCaps;
-                                styles.font_variant_caps = FontVariantCaps::SmallCaps;
-                                seen_caps = true;
+                            "small-caps"
+                            | "all-small-caps"
+                            | "petite-caps"
+                            | "all-petite-caps"
+                            | "unicase"
+                            | "titling-caps" => caps_tokens.push(tok),
+                            // The shorthand grammar omits "normal"/"none" for ligatures; those are invalid here.
+                            "common-ligatures"
+                            | "no-common-ligatures"
+                            | "discretionary-ligatures"
+                            | "no-discretionary-ligatures"
+                            | "historical-ligatures"
+                            | "no-historical-ligatures"
+                            | "contextual"
+                            | "no-contextual" => ligature_tokens.push(tok),
+                            "lining-nums"
+                            | "oldstyle-nums"
+                            | "proportional-nums"
+                            | "tabular-nums"
+                            | "diagonal-fractions"
+                            | "stacked-fractions"
+                            | "ordinal"
+                            | "slashed-zero" => numeric_tokens.push(tok),
+                            "jis78"
+                            | "jis83"
+                            | "jis90"
+                            | "jis04"
+                            | "simplified"
+                            | "traditional"
+                            | "full-width"
+                            | "proportional-width"
+                            | "ruby" => east_asian_tokens.push(tok),
+                            tok if tok.starts_with("stylistic(")
+                                || tok.starts_with("styleset(")
+                                || tok.starts_with("character-variant(")
+                                || tok.starts_with("swash(")
+                                || tok.starts_with("ornaments(")
+                                || tok.starts_with("annotation(")
+                                || tok == "historical-forms" =>
+                            {
+                                alternate_tokens.push(tok)
                             }
-                            "all-small-caps" => {
-                                if seen_caps {
-                                    invalid_caps = true;
-                                    break;
-                                }
-                                styles.font_variant_caps = FontVariantCaps::AllSmallCaps;
-                                seen_caps = true;
-                            }
-                            "petite-caps" => {
-                                if seen_caps {
-                                    invalid_caps = true;
-                                    break;
-                                }
-                                styles.font_variant_caps = FontVariantCaps::PetiteCaps;
-                                seen_caps = true;
-                            }
-                            "all-petite-caps" => {
-                                if seen_caps {
-                                    invalid_caps = true;
-                                    break;
-                                }
-                                styles.font_variant_caps = FontVariantCaps::AllPetiteCaps;
-                                seen_caps = true;
-                            }
-                            "unicase" => {
-                                if seen_caps {
-                                    invalid_caps = true;
-                                    break;
-                                }
-                                styles.font_variant_caps = FontVariantCaps::Unicase;
-                                seen_caps = true;
-                            }
-                            "titling-caps" => {
-                                if seen_caps {
-                                    invalid_caps = true;
-                                    break;
-                                }
-                                styles.font_variant_caps = FontVariantCaps::TitlingCaps;
-                                seen_caps = true;
-                            }
+                            "sub" | "super" => position_tokens.push(tok),
                             _ => {
-                                invalid_caps = true;
+                                invalid = true;
                                 break;
                             }
                         }
                     }
 
-                    if invalid_caps {
-                        // Restore previous caps value if the caps portion was invalid.
-                        // Other font-variant sub-features are not modeled here, so we only guard caps.
-                        styles.font_variant_caps = prev_caps;
-                        if matches!(prev_variant, FontVariant::SmallCaps) {
-                            styles.font_variant = prev_variant;
+                    if invalid {
+                        return;
+                    }
+
+                    let mut variant = FontVariant::Normal;
+                    let mut caps = FontVariantCaps::Normal;
+                    if !caps_tokens.is_empty() {
+                        if let Some((parsed_caps, parsed_variant)) =
+                            parse_font_variant_caps_tokens(&caps_tokens, FontVariant::Normal)
+                        {
+                            caps = parsed_caps;
+                            variant = parsed_variant;
+                        } else {
+                            return;
                         }
                     }
+
+                    let mut ligatures = FontVariantLigatures::default();
+                    if !ligature_tokens.is_empty() {
+                        if let Some(parsed) = parse_font_variant_ligatures_tokens(&ligature_tokens) {
+                            ligatures = parsed;
+                        } else {
+                            return;
+                        }
+                    }
+
+                    let mut numeric = FontVariantNumeric::default();
+                    if !numeric_tokens.is_empty() {
+                        if let Some(parsed) = parse_font_variant_numeric_tokens(&numeric_tokens) {
+                            numeric = parsed;
+                        } else {
+                            return;
+                        }
+                    }
+
+                    let mut east_asian = FontVariantEastAsian::default();
+                    if !east_asian_tokens.is_empty() {
+                        if let Some(parsed) = parse_font_variant_east_asian_tokens(&east_asian_tokens) {
+                            east_asian = parsed;
+                        } else {
+                            return;
+                        }
+                    }
+
+                    let mut alternates = FontVariantAlternates::default();
+                    if !alternate_tokens.is_empty() {
+                        if let Some(parsed) = parse_font_variant_alternates_tokens(&alternate_tokens) {
+                            alternates = parsed;
+                        } else {
+                            return;
+                        }
+                    }
+
+                    let mut position = FontVariantPosition::Normal;
+                    if !position_tokens.is_empty() {
+                        if let Some(parsed) =
+                            parse_font_variant_position_tokens(&position_tokens, FontVariantPosition::Normal)
+                        {
+                            position = parsed;
+                        } else {
+                            return;
+                        }
+                    }
+
+                    styles.font_variant = variant;
+                    styles.font_variant_caps = caps;
+                    styles.font_variant_alternates = alternates;
+                    styles.font_variant_ligatures = ligatures;
+                    styles.font_variant_numeric = numeric;
+                    styles.font_variant_east_asian = east_asian;
+                    styles.font_variant_position = position;
                 }
             }
         }
         "font-variant-caps" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 let tokens: Vec<&str> = kw.split_whitespace().collect();
-                if tokens.len() == 1 {
-                    styles.font_variant_caps = match tokens[0] {
-                        "normal" => FontVariantCaps::Normal,
-                        "small-caps" => {
-                            styles.font_variant = FontVariant::SmallCaps;
-                            FontVariantCaps::SmallCaps
-                        }
-                        "all-small-caps" => FontVariantCaps::AllSmallCaps,
-                        "petite-caps" => FontVariantCaps::PetiteCaps,
-                        "all-petite-caps" => FontVariantCaps::AllPetiteCaps,
-                        "unicase" => FontVariantCaps::Unicase,
-                        "titling-caps" => FontVariantCaps::TitlingCaps,
-                        _ => styles.font_variant_caps,
-                    };
+                if let Some((caps, variant)) = parse_font_variant_caps_tokens(&tokens, styles.font_variant) {
+                    styles.font_variant_caps = caps;
+                    styles.font_variant = variant;
                 }
             }
         }
         "font-variant-alternates" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                let trimmed = kw.trim();
-                if trimmed == "normal" {
+                let tokens: Vec<&str> = kw.split_whitespace().collect();
+                if tokens.len() == 1 && tokens[0] == "normal" {
                     styles.font_variant_alternates = FontVariantAlternates::default();
-                } else {
-                    let mut alt = FontVariantAlternates::default();
-                    let mut seen_stylistic = false;
-                    let mut seen_swash = false;
-                    let mut seen_ornaments = false;
-                    let mut seen_annotation = false;
-                    let mut invalid = false;
-
-                    let parse_num = |s: &str| s.trim().parse::<u8>().ok().filter(|n| *n > 0 && *n <= 99);
-
-                    for token in trimmed.split_whitespace() {
-                        if token == "historical-forms" {
-                            alt.historical_forms = true;
-                            continue;
-                        }
-
-                        if let Some(inner) = token.strip_prefix("stylistic(").and_then(|s| s.strip_suffix(')')) {
-                            if seen_stylistic {
-                                invalid = true;
-                                break;
-                            }
-                            if let Some(n) = parse_num(inner) {
-                                alt.stylistic = Some(n);
-                                seen_stylistic = true;
-                                continue;
-                            }
-                            invalid = true;
-                            break;
-                        }
-
-                        if let Some(inner) = token.strip_prefix("styleset(").and_then(|s| s.strip_suffix(')')) {
-                            for part in inner
-                                .split(|c: char| c == ',' || c.is_whitespace())
-                                .filter(|s| !s.is_empty())
-                            {
-                                if let Some(n) = parse_num(part) {
-                                    alt.stylesets.push(n);
-                                } else {
-                                    invalid = true;
-                                    break;
-                                }
-                            }
-                            if invalid {
-                                break;
-                            }
-                            continue;
-                        }
-
-                        if let Some(inner) = token
-                            .strip_prefix("character-variant(")
-                            .and_then(|s| s.strip_suffix(')'))
-                        {
-                            for part in inner
-                                .split(|c: char| c == ',' || c.is_whitespace())
-                                .filter(|s| !s.is_empty())
-                            {
-                                if let Some(n) = parse_num(part) {
-                                    alt.character_variants.push(n);
-                                } else {
-                                    invalid = true;
-                                    break;
-                                }
-                            }
-                            if invalid {
-                                break;
-                            }
-                            continue;
-                        }
-
-                        if let Some(inner) = token.strip_prefix("swash(").and_then(|s| s.strip_suffix(')')) {
-                            if seen_swash {
-                                invalid = true;
-                                break;
-                            }
-                            if let Some(n) = parse_num(inner) {
-                                alt.swash = Some(n);
-                                seen_swash = true;
-                                continue;
-                            }
-                            invalid = true;
-                            break;
-                        }
-
-                        if let Some(inner) = token.strip_prefix("ornaments(").and_then(|s| s.strip_suffix(')')) {
-                            if seen_ornaments {
-                                invalid = true;
-                                break;
-                            }
-                            if let Some(n) = parse_num(inner) {
-                                alt.ornaments = Some(n);
-                                seen_ornaments = true;
-                                continue;
-                            }
-                            invalid = true;
-                            break;
-                        }
-
-                        if let Some(inner) = token.strip_prefix("annotation(").and_then(|s| s.strip_suffix(')')) {
-                            if seen_annotation {
-                                invalid = true;
-                                break;
-                            }
-                            if !inner.trim().is_empty() {
-                                alt.annotation = Some(inner.trim().to_string());
-                                seen_annotation = true;
-                                continue;
-                            }
-                            invalid = true;
-                            break;
-                        }
-
-                        invalid = true;
-                        break;
-                    }
-
-                    if !invalid {
-                        styles.font_variant_alternates = alt;
-                    }
+                } else if let Some(alt) = parse_font_variant_alternates_tokens(&tokens) {
+                    styles.font_variant_alternates = alt;
                 }
             }
         }
         "font-variant-position" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.font_variant_position = match kw.as_str() {
-                    "normal" => FontVariantPosition::Normal,
-                    "sub" => FontVariantPosition::Sub,
-                    "super" => FontVariantPosition::Super,
-                    _ => styles.font_variant_position,
-                };
+                let tokens: Vec<&str> = kw.split_whitespace().collect();
+                if let Some(position) =
+                    parse_font_variant_position_tokens(&tokens, styles.font_variant_position)
+                {
+                    styles.font_variant_position = position;
+                }
             }
         }
         "font-variant-east-asian" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 let tokens: Vec<&str> = kw.split_whitespace().collect();
-                if tokens.len() == 1 && tokens[0] == "normal" {
-                    styles.font_variant_east_asian = FontVariantEastAsian::default();
-                } else if !tokens.is_empty() {
-                    let mut east = FontVariantEastAsian::default();
-                    let mut seen_variant = false;
-                    let mut seen_width = false;
-                    let mut invalid = false;
-                    for tok in tokens {
-                        match tok {
-                            "jis78" => {
-                                if seen_variant {
-                                    invalid = true;
-                                    break;
-                                }
-                                east.variant = Some(EastAsianVariant::Jis78);
-                                seen_variant = true;
-                            }
-                            "jis83" => {
-                                if seen_variant {
-                                    invalid = true;
-                                    break;
-                                }
-                                east.variant = Some(EastAsianVariant::Jis83);
-                                seen_variant = true;
-                            }
-                            "jis90" => {
-                                if seen_variant {
-                                    invalid = true;
-                                    break;
-                                }
-                                east.variant = Some(EastAsianVariant::Jis90);
-                                seen_variant = true;
-                            }
-                            "jis04" => {
-                                if seen_variant {
-                                    invalid = true;
-                                    break;
-                                }
-                                east.variant = Some(EastAsianVariant::Jis04);
-                                seen_variant = true;
-                            }
-                            "simplified" => {
-                                if seen_variant {
-                                    invalid = true;
-                                    break;
-                                }
-                                east.variant = Some(EastAsianVariant::Simplified);
-                                seen_variant = true;
-                            }
-                            "traditional" => {
-                                if seen_variant {
-                                    invalid = true;
-                                    break;
-                                }
-                                east.variant = Some(EastAsianVariant::Traditional);
-                                seen_variant = true;
-                            }
-                            "full-width" => {
-                                if seen_width {
-                                    invalid = true;
-                                    break;
-                                }
-                                east.width = Some(EastAsianWidth::FullWidth);
-                                seen_width = true;
-                            }
-                            "proportional-width" => {
-                                if seen_width {
-                                    invalid = true;
-                                    break;
-                                }
-                                east.width = Some(EastAsianWidth::ProportionalWidth);
-                                seen_width = true;
-                            }
-                            "ruby" => east.ruby = true,
-                            _ => {
-                                invalid = true;
-                                break;
-                            }
-                        }
-                    }
-                    if !invalid {
-                        styles.font_variant_east_asian = east;
-                    }
+                if let Some(east) = parse_font_variant_east_asian_tokens(&tokens) {
+                    styles.font_variant_east_asian = east;
                 }
             }
         }
         "font-variant-numeric" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 let tokens: Vec<&str> = kw.split_whitespace().collect();
-                if tokens.len() == 1 && tokens[0] == "normal" {
-                    styles.font_variant_numeric = FontVariantNumeric::default();
-                } else if !tokens.is_empty() {
-                    let mut numeric = FontVariantNumeric::default();
-                    let mut seen_figure = false;
-                    let mut seen_spacing = false;
-                    let mut seen_fraction = false;
-                    let mut invalid = false;
-                    for tok in tokens {
-                        match tok {
-                            "lining-nums" => {
-                                if seen_figure {
-                                    invalid = true;
-                                    break;
-                                }
-                                numeric.figure = NumericFigure::Lining;
-                                seen_figure = true;
-                            }
-                            "oldstyle-nums" => {
-                                if seen_figure {
-                                    invalid = true;
-                                    break;
-                                }
-                                numeric.figure = NumericFigure::Oldstyle;
-                                seen_figure = true;
-                            }
-                            "proportional-nums" => {
-                                if seen_spacing {
-                                    invalid = true;
-                                    break;
-                                }
-                                numeric.spacing = NumericSpacing::Proportional;
-                                seen_spacing = true;
-                            }
-                            "tabular-nums" => {
-                                if seen_spacing {
-                                    invalid = true;
-                                    break;
-                                }
-                                numeric.spacing = NumericSpacing::Tabular;
-                                seen_spacing = true;
-                            }
-                            "diagonal-fractions" => {
-                                if seen_fraction {
-                                    invalid = true;
-                                    break;
-                                }
-                                numeric.fraction = NumericFraction::Diagonal;
-                                seen_fraction = true;
-                            }
-                            "stacked-fractions" => {
-                                if seen_fraction {
-                                    invalid = true;
-                                    break;
-                                }
-                                numeric.fraction = NumericFraction::Stacked;
-                                seen_fraction = true;
-                            }
-                            "ordinal" => numeric.ordinal = true,
-                            "slashed-zero" => numeric.slashed_zero = true,
-                            _ => {
-                                invalid = true;
-                                break;
-                            }
-                        }
-                    }
-                    if !invalid {
-                        styles.font_variant_numeric = numeric;
-                    }
+                if let Some(numeric) = parse_font_variant_numeric_tokens(&tokens) {
+                    styles.font_variant_numeric = numeric;
                 }
             }
         }
         "font-variant-ligatures" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 let tokens: Vec<&str> = kw.split_whitespace().collect();
-                if tokens.len() == 1 {
-                    match tokens[0] {
-                        "normal" => styles.font_variant_ligatures = FontVariantLigatures::default(),
-                        "none" => {
-                            styles.font_variant_ligatures = FontVariantLigatures {
-                                common: false,
-                                discretionary: false,
-                                historical: false,
-                                contextual: false,
-                            }
-                        }
-                        _ => {}
-                    }
-                } else if !tokens.is_empty() {
-                    // Start from the initial value and apply toggles, rejecting conflicts/unknowns.
-                    let mut lig = FontVariantLigatures::default();
-                    let mut seen_common = false;
-                    let mut seen_disc = false;
-                    let mut seen_hist = false;
-                    let mut seen_ctx = false;
-                    let mut invalid = false;
-
-                    for tok in tokens {
-                        match tok {
-                            "common-ligatures" => {
-                                if seen_common {
-                                    invalid = true;
-                                    break;
-                                }
-                                lig.common = true;
-                                seen_common = true;
-                            }
-                            "no-common-ligatures" => {
-                                if seen_common {
-                                    invalid = true;
-                                    break;
-                                }
-                                lig.common = false;
-                                seen_common = true;
-                            }
-                            "discretionary-ligatures" => {
-                                if seen_disc {
-                                    invalid = true;
-                                    break;
-                                }
-                                lig.discretionary = true;
-                                seen_disc = true;
-                            }
-                            "no-discretionary-ligatures" => {
-                                if seen_disc {
-                                    invalid = true;
-                                    break;
-                                }
-                                lig.discretionary = false;
-                                seen_disc = true;
-                            }
-                            "historical-ligatures" => {
-                                if seen_hist {
-                                    invalid = true;
-                                    break;
-                                }
-                                lig.historical = true;
-                                seen_hist = true;
-                            }
-                            "no-historical-ligatures" => {
-                                if seen_hist {
-                                    invalid = true;
-                                    break;
-                                }
-                                lig.historical = false;
-                                seen_hist = true;
-                            }
-                            "contextual" => {
-                                if seen_ctx {
-                                    invalid = true;
-                                    break;
-                                }
-                                lig.contextual = true;
-                                seen_ctx = true;
-                            }
-                            "no-contextual" => {
-                                if seen_ctx {
-                                    invalid = true;
-                                    break;
-                                }
-                                lig.contextual = false;
-                                seen_ctx = true;
-                            }
-                            _ => {
-                                invalid = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if !invalid {
-                        styles.font_variant_ligatures = lig;
-                    }
+                if let Some(ligatures) = parse_font_variant_ligatures_tokens(&tokens) {
+                    styles.font_variant_ligatures = ligatures;
                 }
             }
         }
@@ -12518,6 +12608,155 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_variant, FontVariant::SmallCaps));
+    }
+
+    #[test]
+    fn font_variant_invalid_token_preserves_previous() {
+        let mut style = ComputedStyle::default();
+        style.font_variant_caps = FontVariantCaps::AllSmallCaps;
+        let decl = Declaration {
+            property: "font-variant".to_string(),
+            value: PropertyValue::Keyword("small-caps bogus".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert!(matches!(style.font_variant_caps, FontVariantCaps::AllSmallCaps));
+    }
+
+    #[test]
+    fn font_variant_conflicting_caps_invalidates_declaration() {
+        let mut style = ComputedStyle::default();
+        style.font_variant_caps = FontVariantCaps::AllSmallCaps;
+        let decl = Declaration {
+            property: "font-variant".to_string(),
+            value: PropertyValue::Keyword("small-caps all-petite-caps".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert!(matches!(style.font_variant_caps, FontVariantCaps::AllSmallCaps));
+    }
+
+    #[test]
+    fn font_variant_normal_resets_all_subproperties() {
+        let mut style = ComputedStyle::default();
+        style.font_variant = FontVariant::SmallCaps;
+        style.font_variant_caps = FontVariantCaps::AllSmallCaps;
+        style.font_variant_alternates.historical_forms = true;
+        style.font_variant_ligatures.common = false;
+        style.font_variant_numeric.figure = NumericFigure::Oldstyle;
+        style.font_variant_numeric.slashed_zero = true;
+        style.font_variant_east_asian.variant = Some(EastAsianVariant::Traditional);
+        style.font_variant_position = FontVariantPosition::Super;
+
+        let decl = Declaration {
+            property: "font-variant".to_string(),
+            value: PropertyValue::Keyword("normal".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+
+        assert!(matches!(style.font_variant, FontVariant::Normal));
+        assert!(matches!(style.font_variant_caps, FontVariantCaps::Normal));
+        assert_eq!(style.font_variant_alternates, FontVariantAlternates::default());
+        assert_eq!(style.font_variant_ligatures, FontVariantLigatures::default());
+        assert_eq!(style.font_variant_numeric, FontVariantNumeric::default());
+        assert_eq!(style.font_variant_east_asian, FontVariantEastAsian::default());
+        assert!(matches!(style.font_variant_position, FontVariantPosition::Normal));
+    }
+
+    #[test]
+    fn font_variant_shorthand_sets_components() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font-variant".to_string(),
+            value: PropertyValue::Keyword(
+                "small-caps oldstyle-nums tabular-nums stacked-fractions ordinal slashed-zero \
+                 jis90 proportional-width ruby no-common-ligatures discretionary-ligatures \
+                 historical-forms styleset(1,2) swash(3) annotation(note) sub"
+                    .to_string(),
+            ),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+
+        assert!(matches!(style.font_variant, FontVariant::SmallCaps));
+        assert!(matches!(style.font_variant_caps, FontVariantCaps::SmallCaps));
+        assert!(matches!(style.font_variant_numeric.figure, NumericFigure::Oldstyle));
+        assert!(matches!(style.font_variant_numeric.spacing, NumericSpacing::Tabular));
+        assert!(matches!(style.font_variant_numeric.fraction, NumericFraction::Stacked));
+        assert!(style.font_variant_numeric.ordinal);
+        assert!(style.font_variant_numeric.slashed_zero);
+        assert!(matches!(
+            style.font_variant_east_asian.variant,
+            Some(EastAsianVariant::Jis90)
+        ));
+        assert!(matches!(
+            style.font_variant_east_asian.width,
+            Some(EastAsianWidth::ProportionalWidth)
+        ));
+        assert!(style.font_variant_east_asian.ruby);
+        assert!(!style.font_variant_ligatures.common);
+        assert!(style.font_variant_ligatures.discretionary);
+        assert!(style.font_variant_ligatures.contextual);
+        assert!(style.font_variant_alternates.historical_forms);
+        assert_eq!(style.font_variant_alternates.stylesets, vec![1, 2]);
+        assert_eq!(style.font_variant_alternates.swash, Some(3));
+        assert_eq!(style.font_variant_alternates.annotation.as_deref(), Some("note"));
+        assert!(matches!(style.font_variant_position, FontVariantPosition::Sub));
+    }
+
+    #[test]
+    fn font_variant_shorthand_resets_omitted_components_to_initial() {
+        let mut style = ComputedStyle::default();
+        style.font_variant_ligatures.common = false;
+        style.font_variant_numeric.fraction = NumericFraction::Stacked;
+        style.font_variant_east_asian.variant = Some(EastAsianVariant::Jis04);
+        style.font_variant_alternates.historical_forms = true;
+        style.font_variant_position = FontVariantPosition::Super;
+
+        let decl = Declaration {
+            property: "font-variant".to_string(),
+            value: PropertyValue::Keyword("small-caps oldstyle-nums".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+
+        assert!(matches!(style.font_variant, FontVariant::SmallCaps));
+        assert!(matches!(style.font_variant_caps, FontVariantCaps::SmallCaps));
+        assert!(matches!(style.font_variant_numeric.figure, NumericFigure::Oldstyle));
+        assert!(matches!(style.font_variant_numeric.spacing, NumericSpacing::Normal));
+        assert!(matches!(style.font_variant_numeric.fraction, NumericFraction::Normal));
+        assert_eq!(style.font_variant_ligatures, FontVariantLigatures::default());
+        assert_eq!(style.font_variant_alternates, FontVariantAlternates::default());
+        assert_eq!(style.font_variant_east_asian, FontVariantEastAsian::default());
+        assert!(matches!(style.font_variant_position, FontVariantPosition::Normal));
+    }
+
+    #[test]
+    fn font_variant_shorthand_conflict_invalidates_entire_declaration() {
+        let mut style = ComputedStyle::default();
+        style.font_variant = FontVariant::SmallCaps;
+        style.font_variant_caps = FontVariantCaps::AllSmallCaps;
+        style.font_variant_numeric.spacing = NumericSpacing::Proportional;
+        style.font_variant_position = FontVariantPosition::Super;
+
+        let decl = Declaration {
+            property: "font-variant".to_string(),
+            value: PropertyValue::Keyword("small-caps tabular-nums proportional-nums".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+
+        assert!(matches!(style.font_variant, FontVariant::SmallCaps));
+        assert!(matches!(style.font_variant_caps, FontVariantCaps::AllSmallCaps));
+        assert!(matches!(style.font_variant_numeric.spacing, NumericSpacing::Proportional));
+        assert!(matches!(style.font_variant_position, FontVariantPosition::Super));
     }
 
     #[test]
