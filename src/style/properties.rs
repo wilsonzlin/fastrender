@@ -2058,7 +2058,12 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         }
         "text-align-last" => styles.text_align_last = source.text_align_last,
         "text-justify" => styles.text_justify = source.text_justify,
-        "text-orientation" => styles.text_orientation = source.text_orientation,
+        "text-orientation" => {
+            styles.text_orientation = match source.text_orientation {
+                crate::style::types::TextOrientation::SidewaysRight => crate::style::types::TextOrientation::Sideways,
+                other => other,
+            }
+        }
         "text-combine-upright" => styles.text_combine_upright = source.text_combine_upright,
         "text-indent" => styles.text_indent = source.text_indent.clone(),
         "text-overflow" => styles.text_overflow = source.text_overflow.clone(),
@@ -4463,7 +4468,7 @@ pub fn apply_declaration_with_base(
                     "mixed" => TextOrientation::Mixed,
                     "upright" => TextOrientation::Upright,
                     "sideways" => TextOrientation::Sideways,
-                    "sideways-right" => TextOrientation::SidewaysRight,
+                    "sideways-right" => TextOrientation::Sideways,
                     _ => styles.text_orientation,
                 };
             }
@@ -8747,7 +8752,7 @@ mod tests {
             16.0,
             16.0,
         );
-        assert_eq!(styles.text_orientation, TextOrientation::SidewaysRight);
+        assert_eq!(styles.text_orientation, TextOrientation::Sideways);
     }
 
     #[test]

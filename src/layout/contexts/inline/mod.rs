@@ -1179,6 +1179,11 @@ impl InlineFormattingContext {
             let (byte_offset, ch) = chars[idx];
             let combinable = can_combine_for_mode(ch, style.text_combine_upright) && !forced_set.contains(&byte_offset);
             if combinable {
+                let combine_style = {
+                    let mut s = (**style).clone();
+                    s.text_orientation = crate::style::types::TextOrientation::Upright;
+                    Arc::new(s)
+                };
                 let mut end = idx + 1;
                 let mut count = 1usize;
                 while end < chars.len() {
@@ -1198,7 +1203,7 @@ impl InlineFormattingContext {
                 let end_byte = chars.get(end).map(|p| p.0).unwrap_or_else(|| text.len());
                 let sub_breaks = slice_breaks(&forced_breaks, byte_offset, end_byte);
                 let mut item = self.create_text_item_from_normalized(
-                    style,
+                    &combine_style,
                     &text[byte_offset..end_byte],
                     sub_breaks,
                     false,
@@ -5145,6 +5150,38 @@ mod tests {
                 .break_opportunities
                 .iter()
                 .all(|b| matches!(b.break_type, BreakType::Mandatory)));
+        } else {
+            panic!("expected text item");
+        }
+    }
+
+    #[test]
+    fn text_combine_forces_upright_orientation() {
+        let ifc = InlineFormattingContext::new();
+        let mut style = ComputedStyle::default();
+        style.writing_mode = WritingMode::VerticalRl;
+        style.text_orientation = crate::style::types::TextOrientation::Mixed;
+        style.text_combine_upright = TextCombineUpright::Digits(2);
+        let bidi_stack = vec![(style.unicode_bidi, style.direction)];
+        let style = Arc::new(style);
+        let normalized = normalize_text_for_white_space("12", style.white_space);
+        let items = ifc
+            .create_text_items_with_combine(
+                &style,
+                &normalized.text,
+                normalized.forced_breaks.clone(),
+                normalized.allow_soft_wrap,
+                false,
+                crate::style::types::Direction::Ltr,
+                &bidi_stack,
+            )
+            .expect("text combine items");
+        assert!(!items.is_empty());
+        if let InlineItem::Text(text) = &items[0] {
+            assert!(
+                text.runs.iter().all(|r| r.rotation == crate::text::pipeline::RunRotation::None),
+                "combined text should stay upright even when default orientation would rotate digits"
+            );
         } else {
             panic!("expected text item");
         }
