@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- text-combine-upright boundary detection now tracks edge adjacency: collapsed/explicit whitespace blocks cross-inline combinations, empty inline wrappers are skipped, and boundary flags only set when combinable characters touch both sides. Added regression to ensure whitespace-separated spans still combine independently.
 - Video posters now honor media context when selecting poster sources, and audio replacements get labeled placeholders in both painter and display list builder. Added tests for audio placeholders and builder labels.
 - List marker positioning is writing-mode aware: outside markers offset to inline-start in vertical flows (vertical-rl/lr) and gaps resolve against inline-end margins instead of always margin-right. Added vertical marker layout tests.
 - Vertical marker inline-start offsets now match for vertical-rl and vertical-lr, and inline-end gaps pull from logical margins in sideways flows; updated the vertical-lr marker test.

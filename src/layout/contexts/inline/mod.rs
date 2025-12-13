@@ -271,7 +271,7 @@ impl InlineFormattingContext {
                 if is_vertical_typographic_mode(c.style.writing_mode)
                     && !matches!(c.style.text_combine_upright, TextCombineUpright::None)
                 {
-                    if first_character_combinable(c, c.style.text_combine_upright).unwrap_or(false) {
+                    if leading_edge_combinability(c, c.style.text_combine_upright) == CombineEdgeState::Combinable {
                         return Some(i);
                     }
                 }
@@ -588,7 +588,7 @@ impl InlineFormattingContext {
                 if is_vertical_typographic_mode(c.style.writing_mode)
                     && !matches!(c.style.text_combine_upright, TextCombineUpright::None)
                 {
-                    if first_character_combinable(c, c.style.text_combine_upright).unwrap_or(false) {
+                    if leading_edge_combinability(c, c.style.text_combine_upright) == CombineEdgeState::Combinable {
                         return Some(i);
                     }
                 }
@@ -1378,7 +1378,8 @@ impl InlineFormattingContext {
                         bidi_stack,
                     )?;
                     self.compress_text_combine(&mut item, style.font_size);
-                    item.break_opportunities = vec![crate::text::line_break::BreakOpportunity::mandatory(item.text.len())];
+                    item.break_opportunities =
+                        vec![crate::text::line_break::BreakOpportunity::mandatory(item.text.len())];
                     item.forced_break_offsets.clear();
                     if !item.text.is_empty() {
                         items.push(InlineItem::Text(item));
@@ -1478,16 +1479,13 @@ impl InlineFormattingContext {
         base_direction: crate::style::types::Direction,
         bidi_context: Option<ExplicitBidiContext>,
     ) -> Result<Vec<ShapedRun>, LayoutError> {
-        match self
-            .pipeline
-            .shape_with_context(
-                text,
-                style,
-                &self.font_context,
-                pipeline_direction(base_direction),
-                bidi_context,
-            )
-        {
+        match self.pipeline.shape_with_context(
+            text,
+            style,
+            &self.font_context,
+            pipeline_direction(base_direction),
+            bidi_context,
+        ) {
             Ok(runs) => Ok(runs),
             Err(err) => {
                 if let Some(fallback_font) = self.font_context.get_sans_serif() {
@@ -4318,73 +4316,72 @@ impl InlineFormattingContext {
 
         // Create fragments
         let paragraph_info = compute_paragraph_line_flags(&lines);
-        let static_position =
-            if let (Some(first_line), Some((is_last_line, _))) = (lines.first(), paragraph_info.first()) {
-                let indent_raw = if indent_applies_first { indent_value } else { 0.0 };
-                let indent_offset = if matches!(first_line.resolved_direction, crate::style::types::Direction::Rtl) {
-                    -indent_raw
-                } else {
-                    indent_raw
-                };
-                let mut base_align = map_text_align(style.text_align, first_line.resolved_direction);
-                let resolved_justify = resolve_auto_text_justify(style.text_justify, &first_line.items);
-                if is_justify_align(base_align) && matches!(resolved_justify, TextJustify::None) {
-                    base_align = map_text_align(TextAlign::Start, first_line.resolved_direction);
-                }
-                let has_justify = has_justify_opportunities(&first_line.items, resolved_justify);
-                let mut effective_align = resolve_text_align_for_line(
-                    base_align,
-                    style.text_align_last,
-                    first_line.resolved_direction,
-                    *is_last_line,
-                    resolved_justify,
-                    has_justify,
-                );
-                if is_justify_align(effective_align)
-                    && (matches!(resolved_justify, TextJustify::None) || !has_justify)
-                {
-                    effective_align = map_text_align(TextAlign::Start, first_line.resolved_direction);
-                }
-                let usable_width = if first_line.available_width > 0.0 {
-                    first_line.available_width
-                } else {
-                    first_line.width
-                };
-                let total_width: f32 = first_line.items.iter().map(|p| p.item.width()).sum();
-                let extra_space = (usable_width - total_width).max(0.0);
-                let lead = match effective_align {
-                    TextAlign::Right => extra_space,
-                    TextAlign::Center => extra_space * 0.5,
-                    _ => 0.0,
-                };
-                let cursor = if matches!(first_line.resolved_direction, crate::style::types::Direction::Rtl) {
-                    first_line.left_offset + indent_offset + lead + total_width
-                } else {
-                    first_line.left_offset + indent_offset + lead
-                };
-                let start_x = if matches!(first_line.resolved_direction, crate::style::types::Direction::Rtl) {
-                    cursor - total_width
-                } else {
-                    cursor
-                };
-                // Anchor static position to the hypothetical inline box origin: start of the line and
-                // the strut baseline offset applied to the line's baseline.
-                let start_y = first_line.y_offset + first_line.baseline - strut_metrics.baseline_offset;
-                let mut pos = if inline_vertical {
-                    Point::new(start_y, start_x)
-                } else {
-                    Point::new(start_x, start_y)
-                };
-                if inline_vertical
-                    && matches!(style.writing_mode, crate::style::types::WritingMode::VerticalRl)
-                    && block_shift.abs() > f32::EPSILON
-                {
-                    pos = Point::new(pos.x + block_shift, pos.y);
-                }
-                pos
+        let static_position = if let (Some(first_line), Some((is_last_line, _))) =
+            (lines.first(), paragraph_info.first())
+        {
+            let indent_raw = if indent_applies_first { indent_value } else { 0.0 };
+            let indent_offset = if matches!(first_line.resolved_direction, crate::style::types::Direction::Rtl) {
+                -indent_raw
             } else {
-                Point::ZERO
+                indent_raw
             };
+            let mut base_align = map_text_align(style.text_align, first_line.resolved_direction);
+            let resolved_justify = resolve_auto_text_justify(style.text_justify, &first_line.items);
+            if is_justify_align(base_align) && matches!(resolved_justify, TextJustify::None) {
+                base_align = map_text_align(TextAlign::Start, first_line.resolved_direction);
+            }
+            let has_justify = has_justify_opportunities(&first_line.items, resolved_justify);
+            let mut effective_align = resolve_text_align_for_line(
+                base_align,
+                style.text_align_last,
+                first_line.resolved_direction,
+                *is_last_line,
+                resolved_justify,
+                has_justify,
+            );
+            if is_justify_align(effective_align) && (matches!(resolved_justify, TextJustify::None) || !has_justify) {
+                effective_align = map_text_align(TextAlign::Start, first_line.resolved_direction);
+            }
+            let usable_width = if first_line.available_width > 0.0 {
+                first_line.available_width
+            } else {
+                first_line.width
+            };
+            let total_width: f32 = first_line.items.iter().map(|p| p.item.width()).sum();
+            let extra_space = (usable_width - total_width).max(0.0);
+            let lead = match effective_align {
+                TextAlign::Right => extra_space,
+                TextAlign::Center => extra_space * 0.5,
+                _ => 0.0,
+            };
+            let cursor = if matches!(first_line.resolved_direction, crate::style::types::Direction::Rtl) {
+                first_line.left_offset + indent_offset + lead + total_width
+            } else {
+                first_line.left_offset + indent_offset + lead
+            };
+            let start_x = if matches!(first_line.resolved_direction, crate::style::types::Direction::Rtl) {
+                cursor - total_width
+            } else {
+                cursor
+            };
+            // Anchor static position to the hypothetical inline box origin: start of the line and
+            // the strut baseline offset applied to the line's baseline.
+            let start_y = first_line.y_offset + first_line.baseline - strut_metrics.baseline_offset;
+            let mut pos = if inline_vertical {
+                Point::new(start_y, start_x)
+            } else {
+                Point::new(start_x, start_y)
+            };
+            if inline_vertical
+                && matches!(style.writing_mode, crate::style::types::WritingMode::VerticalRl)
+                && block_shift.abs() > f32::EPSILON
+            {
+                pos = Point::new(pos.x + block_shift, pos.y);
+            }
+            pos
+        } else {
+            Point::ZERO
+        };
         let lines_empty = lines.is_empty();
 
         let line_fragments = self.create_fragments(
@@ -4531,14 +4528,18 @@ impl InlineFormattingContext {
                 let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
                 let positioned_style =
                     resolve_positioned_style(&child.style, &cb, self.viewport_size, &self.font_context);
-                let preferred_min_inline =
-                    fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent).ok();
-                let preferred_inline =
-                    fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent).ok();
-                let preferred_min_block =
-                    fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent).ok();
-                let preferred_block =
-                    fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent).ok();
+                let preferred_min_inline = fc
+                    .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
+                    .ok();
+                let preferred_inline = fc
+                    .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
+                    .ok();
+                let preferred_min_block = fc
+                    .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
+                    .ok();
+                let preferred_block = fc
+                    .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
+                    .ok();
                 let mut input = AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, static_position);
                 input.preferred_min_inline_size = preferred_min_inline;
                 input.preferred_inline_size = preferred_inline;
@@ -4758,6 +4759,22 @@ struct CombineBoundary {
     next: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CombineEdgeState {
+    /// No non-whitespace content at this edge (empty inline wrapper)
+    Empty,
+    /// A combinable character reaches this edge with no separating content
+    Combinable,
+    /// Content (whitespace or non-combinable text) touches the edge and breaks adjacency
+    Blocked,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CombineEdge {
+    Leading,
+    Trailing,
+}
+
 fn participates_in_combine_sequence(node: &BoxNode) -> bool {
     node.style.display.is_inline_level()
         && !node.style.float.is_floating()
@@ -4767,129 +4784,141 @@ fn participates_in_combine_sequence(node: &BoxNode) -> bool {
         )
 }
 
-fn first_character_combinable(node: &BoxNode, mode: TextCombineUpright) -> Option<bool> {
+fn edge_combinability(node: &BoxNode, mode: TextCombineUpright, edge: CombineEdge) -> CombineEdgeState {
     if !participates_in_combine_sequence(node) {
-        return Some(false);
+        return CombineEdgeState::Blocked;
     }
     match &node.box_type {
         BoxType::Text(text_box) => {
             let transformed = apply_text_transform(&text_box.text, node.style.text_transform, node.style.white_space);
             let normalized = normalize_text_for_white_space(&transformed, node.style.white_space);
-            for ch in normalized.text.chars() {
+            let mut saw_whitespace = match edge {
+                CombineEdge::Leading => normalized.leading_collapsible,
+                CombineEdge::Trailing => normalized.trailing_collapsible,
+            };
+            let mut iter: Box<dyn Iterator<Item = char>> = match edge {
+                CombineEdge::Leading => Box::new(normalized.text.chars()),
+                CombineEdge::Trailing => Box::new(normalized.text.chars().rev()),
+            };
+            while let Some(ch) = iter.next() {
                 if ch.is_whitespace() {
+                    saw_whitespace = true;
                     continue;
                 }
                 let combinable = is_vertical_typographic_mode(node.style.writing_mode)
                     && node.style.text_combine_upright == mode
                     && can_combine_for_mode(ch, mode);
-                return Some(combinable);
+                if combinable && !saw_whitespace {
+                    return CombineEdgeState::Combinable;
+                }
+                return CombineEdgeState::Blocked;
             }
-            None
+            if saw_whitespace {
+                CombineEdgeState::Blocked
+            } else {
+                CombineEdgeState::Empty
+            }
         }
         BoxType::Marker(marker_box) => {
             if let MarkerContent::Text(text) = &marker_box.content {
-                for ch in text.chars() {
+                let normalized = normalize_text_for_white_space(text, node.style.white_space);
+                let mut saw_whitespace = match edge {
+                    CombineEdge::Leading => normalized.leading_collapsible,
+                    CombineEdge::Trailing => normalized.trailing_collapsible,
+                };
+                let mut iter: Box<dyn Iterator<Item = char>> = match edge {
+                    CombineEdge::Leading => Box::new(normalized.text.chars()),
+                    CombineEdge::Trailing => Box::new(normalized.text.chars().rev()),
+                };
+                while let Some(ch) = iter.next() {
                     if ch.is_whitespace() {
+                        saw_whitespace = true;
                         continue;
                     }
                     let combinable = is_vertical_typographic_mode(node.style.writing_mode)
                         && node.style.text_combine_upright == mode
                         && can_combine_for_mode(ch, mode);
-                    return Some(combinable);
+                    if combinable && !saw_whitespace {
+                        return CombineEdgeState::Combinable;
+                    }
+                    return CombineEdgeState::Blocked;
                 }
+                if saw_whitespace {
+                    CombineEdgeState::Blocked
+                } else {
+                    CombineEdgeState::Empty
+                }
+            } else {
+                CombineEdgeState::Blocked
             }
-            None
         }
         BoxType::Inline(_) => {
-            for child in &node.children {
-                if let Some(result) = first_character_combinable(child, mode) {
-                    return Some(result);
+            let children_iter: Box<dyn Iterator<Item = &BoxNode>> = match edge {
+                CombineEdge::Leading => Box::new(node.children.iter()),
+                CombineEdge::Trailing => Box::new(node.children.iter().rev()),
+            };
+            for child in children_iter {
+                if !participates_in_combine_sequence(child) {
+                    return CombineEdgeState::Blocked;
+                }
+                match edge_combinability(child, mode, edge) {
+                    CombineEdgeState::Empty => continue,
+                    other => return other,
                 }
             }
-            None
+            CombineEdgeState::Empty
         }
-        _ => None,
+        _ => CombineEdgeState::Blocked,
     }
 }
 
-fn last_character_combinable(node: &BoxNode, mode: TextCombineUpright) -> Option<bool> {
-    if !participates_in_combine_sequence(node) {
-        return Some(false);
-    }
-    match &node.box_type {
-        BoxType::Text(text_box) => {
-            let transformed = apply_text_transform(&text_box.text, node.style.text_transform, node.style.white_space);
-            let normalized = normalize_text_for_white_space(&transformed, node.style.white_space);
-            for ch in normalized.text.chars().rev() {
-                if ch.is_whitespace() {
-                    continue;
-                }
-                let combinable = is_vertical_typographic_mode(node.style.writing_mode)
-                    && node.style.text_combine_upright == mode
-                    && can_combine_for_mode(ch, mode);
-                return Some(combinable);
-            }
-            None
-        }
-        BoxType::Marker(marker_box) => {
-            if let MarkerContent::Text(text) = &marker_box.content {
-                for ch in text.chars().rev() {
-                    if ch.is_whitespace() {
-                        continue;
-                    }
-                    let combinable = is_vertical_typographic_mode(node.style.writing_mode)
-                        && node.style.text_combine_upright == mode
-                        && can_combine_for_mode(ch, mode);
-                    return Some(combinable);
-                }
-            }
-            None
-        }
-        BoxType::Inline(_) => {
-            for child in node.children.iter().rev() {
-                if let Some(result) = last_character_combinable(child, mode) {
-                    return Some(result);
-                }
-            }
-            None
-        }
-        _ => None,
-    }
+fn leading_edge_combinability(node: &BoxNode, mode: TextCombineUpright) -> CombineEdgeState {
+    edge_combinability(node, mode, CombineEdge::Leading)
+}
+
+fn trailing_edge_combinability(node: &BoxNode, mode: TextCombineUpright) -> CombineEdgeState {
+    edge_combinability(node, mode, CombineEdge::Trailing)
 }
 
 fn compute_combine_boundary(children: &[BoxNode], idx: usize, mode: TextCombineUpright) -> CombineBoundary {
     let mut boundary = CombineBoundary::default();
+    let leading_state = leading_edge_combinability(&children[idx], mode);
+    let trailing_state = trailing_edge_combinability(&children[idx], mode);
 
-    let mut i = idx;
-    while i > 0 {
-        i -= 1;
-        if !participates_in_combine_sequence(&children[i]) {
-            break;
-        }
-        match last_character_combinable(&children[i], mode) {
-            Some(true) => {
-                boundary.prev = true;
+    if matches!(leading_state, CombineEdgeState::Combinable) {
+        let mut i = idx;
+        while i > 0 {
+            i -= 1;
+            if !participates_in_combine_sequence(&children[i]) {
                 break;
             }
-            Some(false) => break,
-            None => continue,
+            match trailing_edge_combinability(&children[i], mode) {
+                CombineEdgeState::Combinable => {
+                    boundary.prev = true;
+                    break;
+                }
+                CombineEdgeState::Blocked => break,
+                CombineEdgeState::Empty => continue,
+            }
         }
     }
 
-    let mut j = idx + 1;
-    while j < children.len() {
-        if !participates_in_combine_sequence(&children[j]) {
-            break;
-        }
-        match first_character_combinable(&children[j], mode) {
-            Some(true) => {
-                boundary.next = true;
+    if matches!(trailing_state, CombineEdgeState::Combinable) {
+        let mut j = idx + 1;
+        while j < children.len() {
+            if !participates_in_combine_sequence(&children[j]) {
                 break;
             }
-            Some(false) => break,
-            None => {
-                j += 1;
-                continue;
+            match leading_edge_combinability(&children[j], mode) {
+                CombineEdgeState::Combinable => {
+                    boundary.next = true;
+                    break;
+                }
+                CombineEdgeState::Blocked => break,
+                CombineEdgeState::Empty => {
+                    j += 1;
+                    continue;
+                }
             }
         }
     }
@@ -4956,11 +4985,7 @@ fn marker_inline_end_margin(style: &ComputedStyle) -> Option<Length> {
     }
 }
 
-fn marker_inline_gap(
-    style: &ComputedStyle,
-    font_context: &FontContext,
-    viewport_size: Size,
-) -> f32 {
+fn marker_inline_gap(style: &ComputedStyle, font_context: &FontContext, viewport_size: Size) -> f32 {
     let resolved = marker_inline_end_margin(style)
         .and_then(|m| Some(resolve_length_for_width(m, 0.0, style, font_context, viewport_size)))
         .unwrap_or(0.0);
@@ -4972,7 +4997,10 @@ fn marker_inline_gap(
     }
 }
 
-fn marker_inline_start_sign(writing_mode: crate::style::types::WritingMode, direction: crate::style::types::Direction) -> f32 {
+fn marker_inline_start_sign(
+    writing_mode: crate::style::types::WritingMode,
+    direction: crate::style::types::Direction,
+) -> f32 {
     use crate::style::types::WritingMode::*;
     match writing_mode {
         HorizontalTb => {
@@ -5610,7 +5638,9 @@ mod tests {
         assert!(!items.is_empty());
         if let InlineItem::Text(text) = &items[0] {
             assert!(
-                text.runs.iter().all(|r| r.rotation == crate::text::pipeline::RunRotation::None),
+                text.runs
+                    .iter()
+                    .all(|r| r.rotation == crate::text::pipeline::RunRotation::None),
                 "combined text should stay upright even when default orientation would rotate digits"
             );
         } else {
@@ -5749,6 +5779,83 @@ mod tests {
         assert!(
             widths.iter().all(|w| *w > style.font_size),
             "neither fragment should be compressed when the combinable run crosses inline boundaries"
+        );
+    }
+
+    #[test]
+    fn text_combine_whitespace_at_boundaries_allows_internal_combination() {
+        let ifc = InlineFormattingContext::new();
+        let mut style = ComputedStyle::default();
+        style.writing_mode = WritingMode::VerticalRl;
+        style.text_combine_upright = TextCombineUpright::Digits(2);
+        style.font_size = 16.0;
+        let style = Arc::new(style);
+
+        let span1 = BoxNode::new_inline(style.clone(), vec![BoxNode::new_text(style.clone(), "12 ".into())]);
+        let span2 = BoxNode::new_inline(style.clone(), vec![BoxNode::new_text(style.clone(), "34".into())]);
+        let root = make_inline_container(vec![span1, span2]);
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let boundary_first = compute_combine_boundary(&root.children, 0, TextCombineUpright::Digits(2));
+        let boundary_second = compute_combine_boundary(&root.children, 1, TextCombineUpright::Digits(2));
+        assert!(
+            !boundary_first.next && !boundary_second.prev,
+            "whitespace should break combinable runs across inline boundaries"
+        );
+
+        let bidi_stack = vec![(style.unicode_bidi, style.direction)];
+        let normalized = normalize_text_for_white_space("12 ", style.white_space);
+        let combined = ifc
+            .create_text_items_with_combine(
+                &style,
+                &normalized.text,
+                normalized.forced_breaks.clone(),
+                normalized.allow_soft_wrap,
+                false,
+                Direction::Ltr,
+                &bidi_stack,
+                CombineBoundary::default(),
+            )
+            .expect("text items");
+        if let InlineItem::Text(text) = &combined[0] {
+            assert!(
+                text.advance_for_layout <= style.font_size + 0.01,
+                "individual runs should still combine when separated by whitespace"
+            );
+        }
+
+        let mut positioned = Vec::new();
+        let items = ifc
+            .collect_inline_items_with_base(
+                &root,
+                constraints.available_width.or_else(f32::INFINITY),
+                constraints.available_height.to_option(),
+                Direction::Ltr,
+                &mut positioned,
+            )
+            .expect("collect inline items");
+
+        fn collect_texts(items: &[InlineItem], out: &mut Vec<(String, f32)>) {
+            for item in items {
+                match item {
+                    InlineItem::Text(t) => out.push((t.text.clone(), t.advance_for_layout)),
+                    InlineItem::InlineBox(b) => collect_texts(&b.children, out),
+                    _ => {}
+                }
+            }
+        }
+
+        let mut texts = Vec::new();
+        collect_texts(&items, &mut texts);
+        let digit_runs: Vec<_> = texts
+            .iter()
+            .filter(|(t, _)| t.chars().all(|c| c.is_ascii_digit()))
+            .collect();
+        assert_eq!(digit_runs.len(), 2, "expected two digit runs");
+        assert!(
+            digit_runs.iter().all(|(_, a)| *a <= style.font_size + 0.01),
+            "whitespace at inline boundaries should not suppress combination of internal runs (advances {:?})",
+            texts
         );
     }
 
