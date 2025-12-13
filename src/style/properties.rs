@@ -4085,28 +4085,52 @@ pub fn apply_declaration_with_base(
                     styles.font_variant_alternates = FontVariantAlternates::default();
                 } else {
                     let mut alt = FontVariantAlternates::default();
+                    let mut seen_stylistic = false;
+                    let mut seen_swash = false;
+                    let mut seen_ornaments = false;
+                    let mut seen_annotation = false;
+                    let mut invalid = false;
+
+                    let parse_num = |s: &str| s.trim().parse::<u8>().ok().filter(|n| *n > 0 && *n <= 99);
+
                     for token in trimmed.split_whitespace() {
                         if token == "historical-forms" {
                             alt.historical_forms = true;
                             continue;
                         }
+
                         if let Some(inner) = token.strip_prefix("stylistic(").and_then(|s| s.strip_suffix(')')) {
-                            if let Ok(n) = inner.trim().parse::<u8>() {
-                                alt.stylistic = Some(n);
+                            if seen_stylistic {
+                                invalid = true;
+                                break;
                             }
-                            continue;
+                            if let Some(n) = parse_num(inner) {
+                                alt.stylistic = Some(n);
+                                seen_stylistic = true;
+                                continue;
+                            }
+                            invalid = true;
+                            break;
                         }
+
                         if let Some(inner) = token.strip_prefix("styleset(").and_then(|s| s.strip_suffix(')')) {
                             for part in inner
                                 .split(|c: char| c == ',' || c.is_whitespace())
                                 .filter(|s| !s.is_empty())
                             {
-                                if let Ok(n) = part.parse::<u8>() {
+                                if let Some(n) = parse_num(part) {
                                     alt.stylesets.push(n);
+                                } else {
+                                    invalid = true;
+                                    break;
                                 }
+                            }
+                            if invalid {
+                                break;
                             }
                             continue;
                         }
+
                         if let Some(inner) = token
                             .strip_prefix("character-variant(")
                             .and_then(|s| s.strip_suffix(')'))
@@ -4115,32 +4139,68 @@ pub fn apply_declaration_with_base(
                                 .split(|c: char| c == ',' || c.is_whitespace())
                                 .filter(|s| !s.is_empty())
                             {
-                                if let Ok(n) = part.parse::<u8>() {
+                                if let Some(n) = parse_num(part) {
                                     alt.character_variants.push(n);
+                                } else {
+                                    invalid = true;
+                                    break;
                                 }
                             }
+                            if invalid {
+                                break;
+                            }
                             continue;
                         }
+
                         if let Some(inner) = token.strip_prefix("swash(").and_then(|s| s.strip_suffix(')')) {
-                            if let Ok(n) = inner.trim().parse::<u8>() {
+                            if seen_swash {
+                                invalid = true;
+                                break;
+                            }
+                            if let Some(n) = parse_num(inner) {
                                 alt.swash = Some(n);
+                                seen_swash = true;
+                                continue;
                             }
-                            continue;
+                            invalid = true;
+                            break;
                         }
+
                         if let Some(inner) = token.strip_prefix("ornaments(").and_then(|s| s.strip_suffix(')')) {
-                            if let Ok(n) = inner.trim().parse::<u8>() {
-                                alt.ornaments = Some(n);
+                            if seen_ornaments {
+                                invalid = true;
+                                break;
                             }
-                            continue;
+                            if let Some(n) = parse_num(inner) {
+                                alt.ornaments = Some(n);
+                                seen_ornaments = true;
+                                continue;
+                            }
+                            invalid = true;
+                            break;
                         }
+
                         if let Some(inner) = token.strip_prefix("annotation(").and_then(|s| s.strip_suffix(')')) {
+                            if seen_annotation {
+                                invalid = true;
+                                break;
+                            }
                             if !inner.trim().is_empty() {
                                 alt.annotation = Some(inner.trim().to_string());
+                                seen_annotation = true;
+                                continue;
                             }
-                            continue;
+                            invalid = true;
+                            break;
                         }
+
+                        invalid = true;
+                        break;
                     }
-                    styles.font_variant_alternates = alt;
+
+                    if !invalid {
+                        styles.font_variant_alternates = alt;
+                    }
                 }
             }
         }
@@ -12767,6 +12827,34 @@ mod tests {
         assert!(matches!(style.font_variant_numeric.fraction, NumericFraction::Normal));
         assert!(!style.font_variant_numeric.ordinal);
         assert!(!style.font_variant_numeric.slashed_zero);
+    }
+
+    #[test]
+    fn font_variant_alternates_invalid_token_is_ignored() {
+        let mut style = ComputedStyle::default();
+        style.font_variant_alternates.historical_forms = true;
+        let decl = Declaration {
+            property: "font-variant-alternates".to_string(),
+            value: PropertyValue::Keyword("bogus".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert!(style.font_variant_alternates.historical_forms);
+    }
+
+    #[test]
+    fn font_variant_alternates_conflict_invalidates_declaration() {
+        let mut style = ComputedStyle::default();
+        style.font_variant_alternates.stylistic = Some(1);
+        let decl = Declaration {
+            property: "font-variant-alternates".to_string(),
+            value: PropertyValue::Keyword("stylistic(1) stylistic(2)".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert_eq!(style.font_variant_alternates.stylistic, Some(1));
     }
 
     #[test]
