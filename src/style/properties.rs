@@ -12624,16 +12624,18 @@ fn parse_background_shorthand(tokens: &[PropertyValue], current_color: Rgba) -> 
 
         // Color
         if shorthand.color.is_none() {
-            if let PropertyValue::Color(c) = token {
-                shorthand.color = Some(*c);
+            let parsed_color = match token {
+                PropertyValue::Color(c) => Some(*c),
+                PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentcolor") => Some(current_color),
+                PropertyValue::Keyword(kw) => crate::style::color::Color::parse(kw)
+                    .ok()
+                    .map(|c| c.to_rgba(current_color)),
+                _ => None,
+            };
+            if let Some(color) = parsed_color {
+                shorthand.color = Some(color);
                 idx += 1;
                 continue;
-            } else if let PropertyValue::Keyword(kw) = token {
-                if kw.eq_ignore_ascii_case("currentcolor") {
-                    shorthand.color = Some(current_color);
-                    idx += 1;
-                    continue;
-                }
             }
         }
 

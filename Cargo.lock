@@ -403,6 +403,7 @@ dependencies = [
  "image",
  "kamadak-exif",
  "markup5ever_rcdom",
+ "percent-encoding",
  "precomputed-hash",
  "resvg",
  "rustybuzz 0.20.1",

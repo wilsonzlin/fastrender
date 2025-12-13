@@ -108,6 +108,11 @@ impl ImageCache {
         self.base_url = None;
     }
 
+    /// Returns the configured base URL for resolving relative paths.
+    pub fn base_url(&self) -> Option<String> {
+        self.base_url.clone()
+    }
+
     /// Resolve a potentially relative URL to an absolute URL
     fn resolve_url(&self, url: &str) -> String {
         if url.is_empty() {

@@ -6,6 +6,10 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Iframe `srcdoc` is fully rendered: nested HTML is parsed, styled (with @import fetcher that supports data/file/http URLs), laid out with intrinsic replaced sizing, and painted into the iframe rect instead of a placeholder. `ImageCache` now exposes `base_url` for relative resolution.
+- Canvas backgrounds respect author colors even when the root box has zero height: root backgrounds expand to the viewport only when the root fragment starts at (0,0), and otherwise stay bounded so unit tests don’t get filled. Background fallback to first child applies only when the root has a style but no paintable background (HTML/body propagation).
+- `background` shorthand now recognizes color keywords (e.g., `background: red`) via `Color::parse`, fixing missing backgrounds for shorthand-only rules.
+- Added `percent-encoding` dependency for data URL decoding in the embedded import loader.
 - Bidi reorder treats leaf-scoped isolates separately from ancestor isolates: leaf isolates still merge adjacent mappings (so text-combine isolates stay intact), while ancestor isolates keep per-character ordering and ignore outer overrides when resolving internal content. Updated isolate tests now follow the UAX #9 visual ordering for isolate contents.
 - Text-combine runs across inline boundaries stay separate: isolate coalescing only merges within leaf-scoped isolates, preventing vertical digit compression from bridging sibling spans.
 - Video posters are the only imaging source: video `src` no longer attempts image decode; intrinsic sizing and painting use the poster alone, keeping media resources from being mis-fetched as images while still rendering posters.

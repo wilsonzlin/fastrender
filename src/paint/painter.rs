@@ -40,6 +40,7 @@ use crate::paint::text_shadow::{resolve_text_shadows, PathBounds, ResolvedTextSh
 use crate::style::color::Color;
 use crate::style::color::Rgba;
 use crate::style::display::Display;
+use crate::style::media::MediaContext;
 use crate::style::position::Position;
 use crate::style::types::{
     BackgroundAttachment, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeatKeyword,
@@ -54,14 +55,20 @@ use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStretch, FontStyle, ScaledMetrics};
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::{ShapedRun, ShapingPipeline};
-use crate::tree::box_tree::ReplacedType;
+use crate::tree::box_tree::{ReplacedBox, ReplacedType};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
+use crate::{css, dom, layout, style, tree};
+use base64::Engine;
+use encoding_rs::Encoding;
+use percent_encoding::percent_decode;
 use std::borrow::Cow;
+use std::io::Read;
 use std::sync::Arc;
 use tiny_skia::{
     BlendMode as SkiaBlendMode, FilterQuality, IntSize, LinearGradient, Mask, MaskType, Paint, PathBuilder, Pattern,
     Pixmap, PixmapPaint, PremultipliedColorU8, RadialGradient, Rect as SkiaRect, SpreadMode, Stroke, Transform,
 };
+use url::Url;
 
 /// Main painter that rasterizes a FragmentTree to pixels
 pub struct Painter {
@@ -308,10 +315,193 @@ impl Painter {
             .map(|m| m.scale(style.font_size))
     }
 
+    fn resolve_scaled_metrics_static(style: &ComputedStyle, font_ctx: &FontContext) -> Option<ScaledMetrics> {
+        let italic = matches!(style.font_style, crate::style::types::FontStyle::Italic);
+        let oblique = matches!(style.font_style, crate::style::types::FontStyle::Oblique(_));
+        let stretch = FontStretch::from_percentage(style.font_stretch.to_percentage());
+
+        font_ctx
+            .get_font_full(
+                &style.font_family,
+                style.font_weight.to_u16(),
+                if italic {
+                    FontStyle::Italic
+                } else if oblique {
+                    FontStyle::Oblique
+                } else {
+                    FontStyle::Normal
+                },
+                stretch,
+            )
+            .or_else(|| font_ctx.get_sans_serif())
+            .and_then(|font| font.metrics().ok())
+            .map(|m| m.scale(style.font_size))
+    }
+
     fn filter_quality_for_image(style: Option<&ComputedStyle>) -> FilterQuality {
         match style.map(|s| s.image_rendering) {
             Some(ImageRendering::CrispEdges) | Some(ImageRendering::Pixelated) => FilterQuality::Nearest,
             _ => FilterQuality::Bilinear,
+        }
+    }
+
+    fn resolve_replaced_intrinsic_sizes(&self, node: &mut tree::box_tree::BoxNode, viewport: Size) {
+        use tree::box_tree::{BoxType, MarkerContent};
+        if let BoxType::Marker(marker_box) = &mut node.box_type {
+            if let MarkerContent::Image(replaced) = &mut marker_box.content {
+                self.resolve_intrinsic_for_replaced(replaced, node.style.as_ref(), None, viewport);
+            }
+        }
+
+        if let BoxType::Replaced(replaced_box) = &mut node.box_type {
+            let alt = match &replaced_box.replaced_type {
+                ReplacedType::Image { alt, .. } => alt.clone(),
+                _ => None,
+            };
+            self.resolve_intrinsic_for_replaced(replaced_box, node.style.as_ref(), alt.as_deref(), viewport);
+        }
+
+        for child in &mut node.children {
+            self.resolve_replaced_intrinsic_sizes(child, viewport);
+        }
+    }
+
+    fn resolve_intrinsic_for_replaced(
+        &self,
+        replaced_box: &mut ReplacedBox,
+        style: &ComputedStyle,
+        alt: Option<&str>,
+        viewport: Size,
+    ) {
+        let replaced_type_snapshot = replaced_box.replaced_type.clone();
+        match replaced_type_snapshot {
+            ReplacedType::Image {
+                src, alt: stored_alt, ..
+            } => {
+                let needs_intrinsic = replaced_box.intrinsic_size.is_none();
+                let needs_ratio = replaced_box.aspect_ratio.is_none();
+                let mut have_resource_dimensions = false;
+
+                let chosen_src = if (needs_intrinsic || needs_ratio) && !src.is_empty() {
+                    let media_ctx = crate::style::media::MediaContext::screen(viewport.width, viewport.height)
+                        .with_device_pixel_ratio(self.scale);
+                    Some(
+                        replaced_box
+                            .replaced_type
+                            .image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
+                                scale: self.scale,
+                                slot_width: None,
+                                viewport: Some(viewport),
+                                media_context: Some(&media_ctx),
+                                font_size: Some(style.font_size),
+                            })
+                            .to_string(),
+                    )
+                } else {
+                    None
+                };
+
+                if let Some(url) = chosen_src {
+                    if let Ok(img) = self.image_cache.load(&url) {
+                        let orientation = style.image_orientation.resolve(img.orientation, false);
+                        if let Some((w, h)) = img.css_dimensions(orientation, &style.image_resolution, self.scale, None)
+                        {
+                            if needs_intrinsic {
+                                replaced_box.intrinsic_size = Some(Size::new(w, h));
+                            }
+                            if needs_ratio && h > 0.0 {
+                                replaced_box.aspect_ratio = Some(w / h);
+                            }
+                            have_resource_dimensions = true;
+                        }
+                    }
+                }
+
+                if have_resource_dimensions {
+                    return;
+                }
+
+                let inherited_alt = alt.or_else(|| stored_alt.as_deref()).unwrap_or("");
+                if let Some(text_size) = self.measure_alt_text(inherited_alt, style) {
+                    if needs_intrinsic && replaced_box.intrinsic_size.is_none() {
+                        replaced_box.intrinsic_size = Some(text_size);
+                    }
+                    if needs_ratio && replaced_box.aspect_ratio.is_none() && text_size.height > 0.0 {
+                        replaced_box.aspect_ratio = Some(text_size.width / text_size.height);
+                    }
+                }
+            }
+            ReplacedType::Svg { content }
+            | ReplacedType::Embed { src: content }
+            | ReplacedType::Object { data: content } => {
+                let needs_intrinsic = replaced_box.intrinsic_size.is_none();
+                let needs_ratio = replaced_box.aspect_ratio.is_none();
+                if !needs_intrinsic && !needs_ratio {
+                    return;
+                }
+                let image = if content.trim_start().starts_with('<') {
+                    self.image_cache.render_svg(&content)
+                } else {
+                    self.image_cache.load(&content)
+                };
+                if let Ok(image) = image {
+                    let orientation = style.image_orientation.resolve(image.orientation, false);
+                    if let Some((w, h)) = image.css_dimensions(orientation, &style.image_resolution, self.scale, None) {
+                        if needs_intrinsic {
+                            replaced_box.intrinsic_size = Some(Size::new(w, h));
+                        }
+                        if needs_ratio && h > 0.0 {
+                            replaced_box.aspect_ratio = Some(w / h);
+                        }
+                    }
+                }
+            }
+            ReplacedType::Video { src: _src, poster } => {
+                let needs_intrinsic = replaced_box.intrinsic_size.is_none();
+                let needs_ratio = replaced_box.aspect_ratio.is_none();
+                if !needs_intrinsic && !needs_ratio {
+                    return;
+                }
+                if let Some(poster) = poster {
+                    if let Ok(img) = self.image_cache.load(&poster) {
+                        let orientation = style.image_orientation.resolve(img.orientation, false);
+                        if let Some((w, h)) = img.css_dimensions(orientation, &style.image_resolution, self.scale, None)
+                        {
+                            if needs_intrinsic {
+                                replaced_box.intrinsic_size = Some(Size::new(w, h));
+                            }
+                            if needs_ratio && h > 0.0 {
+                                replaced_box.aspect_ratio = Some(w / h);
+                            }
+                            return;
+                        }
+                    }
+                }
+
+                if needs_intrinsic {
+                    replaced_box.intrinsic_size = Some(Size::new(300.0, 150.0));
+                }
+                if needs_ratio {
+                    replaced_box.aspect_ratio = Some(2.0);
+                }
+            }
+            ReplacedType::Canvas => {
+                if replaced_box.intrinsic_size.is_none() {
+                    replaced_box.intrinsic_size = Some(Size::new(300.0, 150.0));
+                }
+                if replaced_box.aspect_ratio.is_none() {
+                    replaced_box.aspect_ratio = Some(2.0);
+                }
+            }
+            ReplacedType::Audio { .. } => {
+                if replaced_box.intrinsic_size.is_none() {
+                    replaced_box.intrinsic_size = Some(Size::new(300.0, 32.0));
+                }
+                if replaced_box.aspect_ratio.is_none() {
+                    replaced_box.aspect_ratio = Some(300.0 / 32.0);
+                }
+            }
+            ReplacedType::Iframe { .. } => {}
         }
     }
 
@@ -444,6 +634,7 @@ impl Painter {
         is_root_context: bool,
         items: &mut Vec<DisplayCommand>,
     ) {
+        let is_root_fragment = parent_style.is_none() && is_root_context;
         if let Some(style) = fragment.style.as_deref() {
             if !matches!(style.visibility, crate::style::computed::Visibility::Visible) {
                 return;
@@ -466,7 +657,7 @@ impl Painter {
         let mut local_commands = Vec::new();
 
         if !establishes_context {
-            self.enqueue_background_and_borders(fragment, abs_bounds, &mut local_commands);
+            self.enqueue_background_and_borders(fragment, abs_bounds, is_root_fragment, &mut local_commands);
             self.enqueue_content(fragment, abs_bounds, &mut local_commands);
 
             let next_offset = Point::new(abs_bounds.x(), abs_bounds.y());
@@ -587,7 +778,7 @@ impl Painter {
         }
 
         // Stacking context: paint own background/border first
-        self.enqueue_background_and_borders(fragment, abs_bounds, &mut local_commands);
+        self.enqueue_background_and_borders(fragment, abs_bounds, is_root_fragment, &mut local_commands);
 
         // Partition children into stacking-context buckets and normal content
         let mut negative_contexts = Vec::new();
@@ -786,15 +977,24 @@ impl Painter {
         &self,
         fragment: &FragmentNode,
         abs_bounds: Rect,
+        is_root_fragment: bool,
         items: &mut Vec<DisplayCommand>,
     ) {
-        let Some(style) = fragment.style.clone() else { return };
+        let style = if is_root_fragment {
+            Self::root_background_style(fragment)
+        } else {
+            fragment.style.clone()
+        };
+        let Some(style) = style else { return };
 
-        let has_background =
-            style.background_color.alpha_u8() > 0 || style.background_layers.iter().any(|l| l.image.is_some());
+        let has_background = Self::has_paintable_background(&style);
         if has_background {
             items.push(DisplayCommand::Background {
-                rect: abs_bounds,
+                rect: if is_root_fragment && abs_bounds.x() == 0.0 && abs_bounds.y() == 0.0 {
+                    Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height)
+                } else {
+                    abs_bounds
+                },
                 style: style.clone(),
             });
         }
@@ -828,6 +1028,34 @@ impl Painter {
                 style,
             });
         }
+    }
+
+    fn has_paintable_background(style: &ComputedStyle) -> bool {
+        style.background_color.alpha_u8() > 0 || style.background_layers.iter().any(|l| l.image.is_some())
+    }
+
+    fn root_background_style(fragment: &FragmentNode) -> Option<Arc<ComputedStyle>> {
+        let own_style = fragment.style.clone();
+        if let Some(style) = own_style.as_ref() {
+            if Self::has_paintable_background(style) {
+                return own_style;
+            }
+            if let Some(html) = fragment.children.get(0) {
+                if let Some(style) = html.style.clone() {
+                    if Self::has_paintable_background(&style) {
+                        return Some(style);
+                    }
+                }
+                if let Some(body) = html.children.first() {
+                    if let Some(style) = body.style.clone() {
+                        if Self::has_paintable_background(&style) {
+                            return Some(style);
+                        }
+                    }
+                }
+            }
+        }
+        own_style
     }
 
     /// Enqueue paint commands for the fragment's own content (text/replaced).
@@ -2891,10 +3119,53 @@ impl Painter {
                     }
                 }
             }
+            ReplacedType::Iframe {
+                srcdoc: Some(html),
+                src,
+            } => {
+                if let Some(pixmap) = self.render_iframe_srcdoc(html, content_rect, style) {
+                    let device_x = self.device_length(content_rect.x());
+                    let device_y = self.device_length(content_rect.y());
+                    let paint = PixmapPaint::default();
+                    self.pixmap.draw_pixmap(
+                        device_x as i32,
+                        device_y as i32,
+                        pixmap.as_ref(),
+                        &paint,
+                        Transform::identity(),
+                        None,
+                    );
+                    return;
+                }
+
+                if self.paint_svg(
+                    src,
+                    style,
+                    content_rect.x(),
+                    content_rect.y(),
+                    content_rect.width(),
+                    content_rect.height(),
+                ) {
+                    return;
+                }
+                if self.paint_image_from_src(
+                    src,
+                    style,
+                    content_rect.x(),
+                    content_rect.y(),
+                    content_rect.width(),
+                    content_rect.height(),
+                ) {
+                    return;
+                }
+            }
             ReplacedType::Svg { content }
             | ReplacedType::Embed { src: content }
             | ReplacedType::Object { data: content }
-            | ReplacedType::Iframe { src: content, .. } => {
+            | ReplacedType::Iframe {
+                src: content,
+                srcdoc: None,
+            } => {
                 if self.paint_svg(
                     content,
                     style,
@@ -2943,6 +3214,54 @@ impl Painter {
         }
 
         self.paint_replaced_placeholder(replaced_type, style, content_rect);
+    }
+
+    fn render_iframe_srcdoc(
+        &mut self,
+        html: &str,
+        content_rect: Rect,
+        style: Option<&ComputedStyle>,
+    ) -> Option<Pixmap> {
+        if content_rect.width() <= 0.0 || content_rect.height() <= 0.0 {
+            return None;
+        }
+        let dom = dom::parse_html(html).ok()?;
+        let stylesheet = css::parser::extract_css(&dom).ok()?;
+        let media_ctx =
+            MediaContext::screen(content_rect.width(), content_rect.height()).with_device_pixel_ratio(self.scale);
+        let import_loader = EmbeddedImportFetcher {
+            base_url: self.image_cache.base_url(),
+        };
+        let target_fragment = self
+            .image_cache
+            .base_url()
+            .as_ref()
+            .and_then(|url| url.split('#').nth(1))
+            .map(String::from);
+        let styled_tree = style::cascade::apply_styles_with_media_target_and_imports(
+            &dom,
+            &stylesheet,
+            &media_ctx,
+            target_fragment.as_deref(),
+            Some(&import_loader),
+            self.image_cache.base_url().as_deref(),
+        );
+        let mut box_tree = tree::box_generation::generate_box_tree(&styled_tree);
+        let viewport = Size::new(content_rect.width(), content_rect.height());
+        self.resolve_replaced_intrinsic_sizes(&mut box_tree.root, viewport);
+        let config = layout::engine::LayoutConfig::for_viewport(viewport);
+        let layout_engine = layout::engine::LayoutEngine::with_font_context(config, self.font_ctx.clone());
+        let fragment_tree = layout_engine.layout_tree(&box_tree).ok()?;
+        paint_tree_with_resources_scaled(
+            &fragment_tree,
+            content_rect.width().ceil() as u32,
+            content_rect.height().ceil() as u32,
+            style.map(|s| s.background_color).unwrap_or(Rgba::WHITE),
+            self.font_ctx.clone(),
+            self.image_cache.clone(),
+            self.scale,
+        )
+        .ok()
     }
 
     fn paint_image_from_src(
@@ -3263,6 +3582,19 @@ impl Painter {
 
         self.paint_shaped_runs(&runs, rect.x(), baseline_y, style.color, Some(style));
         true
+    }
+
+    fn measure_alt_text(&self, alt: &str, style: &ComputedStyle) -> Option<Size> {
+        let text = alt.trim();
+        if text.is_empty() {
+            return None;
+        }
+        let mut runs = self.shaper.shape(text, style, &self.font_ctx).ok()?;
+        TextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
+        let metrics_scaled = Self::resolve_scaled_metrics_static(style, &self.font_ctx);
+        let line_height = compute_line_height_with_metrics(style, metrics_scaled.as_ref());
+        let width: f32 = runs.iter().map(|r| r.advance).sum();
+        Some(Size::new(width, line_height))
     }
 
     fn decoration_metrics<'a>(
@@ -4576,6 +4908,111 @@ fn approx_same_rect(a: Rect, b: Rect) -> bool {
         && (a.min_y() - b.min_y()).abs() <= eps
         && (a.width() - b.width()).abs() <= eps
         && (a.height() - b.height()).abs() <= eps
+}
+
+fn decode_data_url_to_string(data_url: &str) -> Result<String> {
+    let mut parts = data_url.splitn(2, ',');
+    let header = parts.next().ok_or_else(|| RenderError::InvalidParameters {
+        message: "Invalid data URL".to_string(),
+    })?;
+    let data = parts.next().ok_or_else(|| RenderError::InvalidParameters {
+        message: "Invalid data URL".to_string(),
+    })?;
+
+    let is_base64 = header.to_ascii_lowercase().ends_with(";base64");
+    let decoded = if is_base64 {
+        base64::engine::general_purpose::STANDARD
+            .decode(data.as_bytes())
+            .map_err(|_| RenderError::InvalidParameters {
+                message: "Invalid base64 in data URL".to_string(),
+            })?
+    } else {
+        percent_decode(data.as_bytes()).collect()
+    };
+
+    if let Some((enc, bom_len)) = Encoding::for_bom(&decoded) {
+        return Ok(enc.decode_without_bom_handling(&decoded[bom_len..]).0.into_owned());
+    }
+
+    Ok(String::from_utf8_lossy(&decoded).into_owned())
+}
+
+struct EmbeddedImportFetcher {
+    base_url: Option<String>,
+}
+
+impl EmbeddedImportFetcher {
+    fn resolve_url(&self, href: &str) -> Option<Url> {
+        if href.starts_with("data:") {
+            return None;
+        }
+
+        if let Ok(abs) = Url::parse(href) {
+            return Some(abs);
+        }
+
+        let base = self.base_url.as_ref()?;
+        let mut base_candidate = base.clone();
+        if base_candidate.starts_with("file://") {
+            let path = &base_candidate["file://".len()..];
+            if std::path::Path::new(path).is_dir() && !base_candidate.ends_with('/') {
+                base_candidate.push('/');
+            }
+        }
+
+        Url::parse(&base_candidate)
+            .or_else(|_| Url::from_file_path(&base_candidate).map_err(|_| url::ParseError::RelativeUrlWithoutBase))
+            .ok()
+            .and_then(|base_url| base_url.join(href).ok())
+    }
+}
+
+impl css::types::CssImportLoader for EmbeddedImportFetcher {
+    fn load(&self, url: &str) -> Result<String> {
+        if url.starts_with("data:") {
+            return decode_data_url_to_string(url);
+        }
+
+        let resolved =
+            self.resolve_url(url)
+                .or_else(|| Url::parse(url).ok())
+                .ok_or_else(|| RenderError::InvalidParameters {
+                    message: format!("Cannot resolve @import URL '{}'", url),
+                })?;
+
+        match resolved.scheme() {
+            "file" => {
+                let path = resolved.to_file_path().map_err(|_| RenderError::InvalidParameters {
+                    message: format!("Invalid file URL for @import: {}", resolved),
+                })?;
+                let bytes = std::fs::read(&path)?;
+                Ok(css::encoding::decode_css_bytes(&bytes, None))
+            }
+            "http" | "https" => {
+                let agent = ureq::Agent::config_builder()
+                    .timeout_global(Some(std::time::Duration::from_secs(30)))
+                    .build();
+                let agent: ureq::Agent = agent.into();
+                let response = agent
+                    .get(resolved.as_str())
+                    .call()
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                let content_type = response
+                    .headers()
+                    .get("content-type")
+                    .and_then(|h| h.to_str().ok())
+                    .map(|s| s.to_string());
+                let mut body = Vec::new();
+                let mut reader = response.into_body().into_reader();
+                reader.read_to_end(&mut body)?;
+                Ok(css::encoding::decode_css_bytes(&body, content_type.as_deref()))
+            }
+            _ => Err(RenderError::InvalidParameters {
+                message: format!("Unsupported URL scheme for @import: {}", resolved),
+            }
+            .into()),
+        }
+    }
 }
 
 fn clip_rect_axes(mut bounds: Rect, clip: Rect, clip_x: bool, clip_y: bool) -> Rect {
@@ -8622,5 +9059,33 @@ mod tests {
         assert_eq!(snap_upscale(5.0, 2.0), Some((4.0, 0.5)));
         assert_eq!(snap_upscale(2.0, 2.0), None);
         assert_eq!(snap_upscale(1.0, 3.0), None);
+    }
+
+    #[test]
+    fn iframe_srcdoc_renders_inline_content() {
+        let html = r#"
+        <style>html, body { margin: 0; padding: 0; background: red; }</style>
+        "#;
+        let painter = Painter::new(20, 20, Rgba::WHITE).expect("painter");
+        let fragment = FragmentNode {
+            bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+            content: FragmentContent::Replaced {
+                box_id: None,
+                replaced_type: ReplacedType::Iframe {
+                    src: String::new(),
+                    srcdoc: Some(html.to_string()),
+                },
+            },
+            children: vec![],
+            style: Some(Arc::new(ComputedStyle::default())),
+        };
+        let tree = FragmentTree::new(fragment);
+        let pixmap = painter.paint(&tree).expect("paint");
+
+        let center = pixmap.pixel(5, 5).unwrap();
+        assert!(
+            center.red() > 200 && center.green() < 50 && center.blue() < 50,
+            "iframe srcdoc should paint red"
+        );
     }
 }
