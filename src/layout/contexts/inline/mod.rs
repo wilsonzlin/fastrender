@@ -5629,6 +5629,39 @@ mod tests {
     }
 
     #[test]
+    fn text_combine_does_not_cross_inline_boundaries_with_same_mode() {
+        let ifc = InlineFormattingContext::new();
+        let mut style = ComputedStyle::default();
+        style.writing_mode = WritingMode::VerticalRl;
+        style.text_combine_upright = TextCombineUpright::Digits(2);
+        let style = Arc::new(style);
+
+        let span1 = BoxNode::new_inline(style.clone(), vec![BoxNode::new_text(style.clone(), "12".into())]);
+        let span2 = BoxNode::new_inline(style.clone(), vec![BoxNode::new_text(style.clone(), "34".into())]);
+        let root = make_inline_container(vec![span1, span2]);
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        fn collect_text_widths(node: &FragmentNode, out: &mut Vec<f32>) {
+            if let FragmentContent::Text { .. } = node.content {
+                out.push(node.bounds.width());
+            }
+            for child in &node.children {
+                collect_text_widths(child, out);
+            }
+        }
+
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        let mut widths = Vec::new();
+        collect_text_widths(fragment.children.first().expect("line"), &mut widths);
+
+        assert_eq!(widths.len(), 2, "two separate text fragments expected");
+        assert!(
+            widths.iter().all(|w| *w > style.font_size),
+            "neither fragment should be compressed when the combinable run crosses inline boundaries"
+        );
+    }
+
+    #[test]
     fn bidi_wrappers_are_stripped_from_shaped_runs() {
         let ifc = InlineFormattingContext::new();
         let mut style = ComputedStyle::default();
