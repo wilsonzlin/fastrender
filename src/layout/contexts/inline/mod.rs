@@ -261,7 +261,7 @@ impl InlineFormattingContext {
         let mut segments = Vec::new();
         let mut current_items: Vec<InlineItem> = Vec::new();
 
-        for child in &box_node.children {
+        for (idx, child) in box_node.children.iter().enumerate() {
             if let Some(space) = pending_space.take() {
                 let space_item = self.create_collapsed_space_item(&space.style, space.allow_soft_wrap)?;
                 current_items.push(space_item);
@@ -287,6 +287,13 @@ impl InlineFormattingContext {
 
             match &child.box_type {
                 BoxType::Text(text_box) => {
+                    let boundary = if is_vertical_typographic_mode(child.style.writing_mode)
+                        && !matches!(child.style.text_combine_upright, TextCombineUpright::None)
+                    {
+                        compute_combine_boundary(&box_node.children, idx, child.style.text_combine_upright)
+                    } else {
+                        CombineBoundary::default()
+                    };
                     let normalized = normalize_text_for_white_space(
                         &apply_text_transform(&text_box.text, child.style.text_transform, child.style.white_space),
                         child.style.white_space,
@@ -297,6 +304,7 @@ impl InlineFormattingContext {
                         false,
                         base_direction,
                         bidi_stack,
+                        boundary,
                     )?;
                     current_items.append(&mut produced);
                     if normalized.trailing_collapsible {
@@ -305,6 +313,13 @@ impl InlineFormattingContext {
                 }
                 BoxType::Marker(marker_box) => match &marker_box.content {
                     MarkerContent::Text(text) => {
+                        let boundary = if is_vertical_typographic_mode(child.style.writing_mode)
+                            && !matches!(child.style.text_combine_upright, TextCombineUpright::None)
+                        {
+                            compute_combine_boundary(&box_node.children, idx, child.style.text_combine_upright)
+                        } else {
+                            CombineBoundary::default()
+                        };
                         let normalized = NormalizedText {
                             text: text.clone(),
                             forced_breaks: Vec::new(),
@@ -318,6 +333,7 @@ impl InlineFormattingContext {
                             true,
                             base_direction,
                             bidi_stack,
+                            boundary,
                         )?;
                         current_items.append(&mut produced);
                         if normalized.trailing_collapsible {
@@ -514,7 +530,7 @@ impl InlineFormattingContext {
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let mut items = Vec::new();
 
-        for child in &box_node.children {
+        for (idx, child) in box_node.children.iter().enumerate() {
             if let Some(space) = pending_space.take() {
                 let space_item = self.create_collapsed_space_item(&space.style, space.allow_soft_wrap)?;
                 items.push(space_item);
@@ -528,6 +544,13 @@ impl InlineFormattingContext {
             }
             match &child.box_type {
                 BoxType::Text(text_box) => {
+                    let boundary = if is_vertical_typographic_mode(child.style.writing_mode)
+                        && !matches!(child.style.text_combine_upright, TextCombineUpright::None)
+                    {
+                        compute_combine_boundary(&box_node.children, idx, child.style.text_combine_upright)
+                    } else {
+                        CombineBoundary::default()
+                    };
                     let normalized = normalize_text_for_white_space(
                         &apply_text_transform(&text_box.text, child.style.text_transform, child.style.white_space),
                         child.style.white_space,
@@ -539,6 +562,7 @@ impl InlineFormattingContext {
                         false,
                         base_direction,
                         bidi_stack,
+                        boundary,
                     )?;
                     items.append(&mut produced);
                     if normalized.trailing_collapsible {
@@ -547,6 +571,13 @@ impl InlineFormattingContext {
                 }
                 BoxType::Marker(marker_box) => match &marker_box.content {
                     MarkerContent::Text(text) => {
+                        let boundary = if is_vertical_typographic_mode(child.style.writing_mode)
+                            && !matches!(child.style.text_combine_upright, TextCombineUpright::None)
+                        {
+                            compute_combine_boundary(&box_node.children, idx, child.style.text_combine_upright)
+                        } else {
+                            CombineBoundary::default()
+                        };
                         let normalized = NormalizedText {
                             text: text.clone(),
                             forced_breaks: Vec::new(),
@@ -560,6 +591,7 @@ impl InlineFormattingContext {
                             true,
                             base_direction,
                             bidi_stack,
+                            boundary,
                         )?;
                         items.append(&mut produced);
                         if normalized.trailing_collapsible {
@@ -906,7 +938,14 @@ impl InlineFormattingContext {
         is_marker: bool,
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let stack = [(box_node.style.unicode_bidi, box_node.style.direction)];
-        self.create_inline_items_for_text_with_base(box_node, text, is_marker, box_node.style.direction, &stack)
+        self.create_inline_items_for_text_with_base(
+            box_node,
+            text,
+            is_marker,
+            box_node.style.direction,
+            &stack,
+            CombineBoundary::default(),
+        )
     }
 
     fn create_inline_items_for_text_with_base(
@@ -916,11 +955,19 @@ impl InlineFormattingContext {
         is_marker: bool,
         base_direction: crate::style::types::Direction,
         bidi_stack: &[(UnicodeBidi, Direction)],
+        boundary: CombineBoundary,
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let style = &box_node.style;
         let transformed = apply_text_transform(text, style.text_transform, style.white_space);
         let normalized = normalize_text_for_white_space(&transformed, style.white_space);
-        self.create_inline_items_from_normalized_with_base(box_node, normalized, is_marker, base_direction, bidi_stack)
+        self.create_inline_items_from_normalized_with_base(
+            box_node,
+            normalized,
+            is_marker,
+            base_direction,
+            bidi_stack,
+            boundary,
+        )
     }
 
     #[allow(dead_code)]
@@ -937,6 +984,7 @@ impl InlineFormattingContext {
             is_marker,
             box_node.style.direction,
             &stack,
+            CombineBoundary::default(),
         )
     }
 
@@ -947,6 +995,7 @@ impl InlineFormattingContext {
         is_marker: bool,
         base_direction: crate::style::types::Direction,
         bidi_stack: &[(UnicodeBidi, Direction)],
+        boundary: CombineBoundary,
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let NormalizedText {
             text: normalized_text,
@@ -974,6 +1023,7 @@ impl InlineFormattingContext {
                 is_marker,
                 effective_base_direction,
                 bidi_stack,
+                boundary,
             );
         }
 
@@ -992,8 +1042,12 @@ impl InlineFormattingContext {
                     segment_breaks,
                     allow_soft_wrap,
                     is_marker,
-                    base_direction,
+                    effective_base_direction,
                     bidi_stack,
+                    CombineBoundary {
+                        prev: segment_start == 0 && boundary.prev,
+                        next: false,
+                    },
                 )?;
                 items.append(&mut produced);
             }
@@ -1010,8 +1064,12 @@ impl InlineFormattingContext {
                 segment_breaks,
                 allow_soft_wrap,
                 is_marker,
-                base_direction,
+                effective_base_direction,
                 bidi_stack,
+                CombineBoundary {
+                    prev: false,
+                    next: boundary.next,
+                },
             )?;
             items.append(&mut produced);
         }
@@ -1139,6 +1197,7 @@ impl InlineFormattingContext {
         is_marker: bool,
         base_direction: crate::style::types::Direction,
         bidi_stack: &[(UnicodeBidi, Direction)],
+        boundary: CombineBoundary,
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let mut effective_base = base_direction;
         if matches!(style.unicode_bidi, UnicodeBidi::Plaintext) {
@@ -1150,6 +1209,19 @@ impl InlineFormattingContext {
         if !is_vertical_typographic_mode(style.writing_mode)
             || matches!(style.text_combine_upright, TextCombineUpright::None)
         {
+            let item = self.create_text_item_from_normalized(
+                style,
+                text,
+                forced_breaks,
+                allow_soft_wrap,
+                is_marker,
+                effective_base,
+                bidi_stack,
+            )?;
+            return Ok(vec![InlineItem::Text(item)]);
+        }
+
+        if boundary.prev || boundary.next {
             let item = self.create_text_item_from_normalized(
                 style,
                 text,
@@ -4589,6 +4661,151 @@ fn is_vertical_typographic_mode(mode: WritingMode) -> bool {
     matches!(mode, WritingMode::VerticalRl | WritingMode::VerticalLr)
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct CombineBoundary {
+    prev: bool,
+    next: bool,
+}
+
+fn participates_in_combine_sequence(node: &BoxNode) -> bool {
+    node.style.display.is_inline_level()
+        && !node.style.float.is_floating()
+        && !matches!(
+            node.style.position,
+            crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
+        )
+}
+
+fn first_character_combinable(node: &BoxNode, mode: TextCombineUpright) -> Option<bool> {
+    if !participates_in_combine_sequence(node) {
+        return Some(false);
+    }
+    match &node.box_type {
+        BoxType::Text(text_box) => {
+            let transformed = apply_text_transform(&text_box.text, node.style.text_transform, node.style.white_space);
+            let normalized = normalize_text_for_white_space(&transformed, node.style.white_space);
+            for ch in normalized.text.chars() {
+                if ch.is_whitespace() {
+                    continue;
+                }
+                let combinable = is_vertical_typographic_mode(node.style.writing_mode)
+                    && node.style.text_combine_upright == mode
+                    && can_combine_for_mode(ch, mode);
+                return Some(combinable);
+            }
+            None
+        }
+        BoxType::Marker(marker_box) => {
+            if let MarkerContent::Text(text) = &marker_box.content {
+                for ch in text.chars() {
+                    if ch.is_whitespace() {
+                        continue;
+                    }
+                    let combinable = is_vertical_typographic_mode(node.style.writing_mode)
+                        && node.style.text_combine_upright == mode
+                        && can_combine_for_mode(ch, mode);
+                    return Some(combinable);
+                }
+            }
+            None
+        }
+        BoxType::Inline(_) => {
+            for child in &node.children {
+                if let Some(result) = first_character_combinable(child, mode) {
+                    return Some(result);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn last_character_combinable(node: &BoxNode, mode: TextCombineUpright) -> Option<bool> {
+    if !participates_in_combine_sequence(node) {
+        return Some(false);
+    }
+    match &node.box_type {
+        BoxType::Text(text_box) => {
+            let transformed = apply_text_transform(&text_box.text, node.style.text_transform, node.style.white_space);
+            let normalized = normalize_text_for_white_space(&transformed, node.style.white_space);
+            for ch in normalized.text.chars().rev() {
+                if ch.is_whitespace() {
+                    continue;
+                }
+                let combinable = is_vertical_typographic_mode(node.style.writing_mode)
+                    && node.style.text_combine_upright == mode
+                    && can_combine_for_mode(ch, mode);
+                return Some(combinable);
+            }
+            None
+        }
+        BoxType::Marker(marker_box) => {
+            if let MarkerContent::Text(text) = &marker_box.content {
+                for ch in text.chars().rev() {
+                    if ch.is_whitespace() {
+                        continue;
+                    }
+                    let combinable = is_vertical_typographic_mode(node.style.writing_mode)
+                        && node.style.text_combine_upright == mode
+                        && can_combine_for_mode(ch, mode);
+                    return Some(combinable);
+                }
+            }
+            None
+        }
+        BoxType::Inline(_) => {
+            for child in node.children.iter().rev() {
+                if let Some(result) = last_character_combinable(child, mode) {
+                    return Some(result);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn compute_combine_boundary(children: &[BoxNode], idx: usize, mode: TextCombineUpright) -> CombineBoundary {
+    let mut boundary = CombineBoundary::default();
+
+    let mut i = idx;
+    while i > 0 {
+        i -= 1;
+        if !participates_in_combine_sequence(&children[i]) {
+            break;
+        }
+        match last_character_combinable(&children[i], mode) {
+            Some(true) => {
+                boundary.prev = true;
+                break;
+            }
+            Some(false) => break,
+            None => continue,
+        }
+    }
+
+    let mut j = idx + 1;
+    while j < children.len() {
+        if !participates_in_combine_sequence(&children[j]) {
+            break;
+        }
+        match first_character_combinable(&children[j], mode) {
+            Some(true) => {
+                boundary.next = true;
+                break;
+            }
+            Some(false) => break,
+            None => {
+                j += 1;
+                continue;
+            }
+        }
+    }
+
+    boundary
+}
+
 fn can_combine_for_mode(ch: char, mode: TextCombineUpright) -> bool {
     match mode {
         TextCombineUpright::Digits(_) => ch.is_ascii_digit(),
@@ -5161,6 +5378,7 @@ mod tests {
                 false,
                 crate::style::types::Direction::Ltr,
                 &bidi_stack,
+                CombineBoundary::default(),
             )
             .expect("text combine items");
         assert!(!items.is_empty());
@@ -5194,6 +5412,7 @@ mod tests {
                 false,
                 crate::style::types::Direction::Ltr,
                 &bidi_stack,
+                CombineBoundary::default(),
             )
             .expect("text combine items");
         assert!(!items.is_empty());
@@ -5228,6 +5447,7 @@ mod tests {
                 false,
                 crate::style::types::Direction::Ltr,
                 &bidi_stack,
+                CombineBoundary::default(),
             )
             .expect("text items");
         assert_eq!(items.len(), 1);
@@ -5260,6 +5480,7 @@ mod tests {
                 false,
                 crate::style::types::Direction::Ltr,
                 &bidi_stack,
+                CombineBoundary::default(),
             )
             .expect("text items");
         assert!(!items.is_empty());
@@ -5292,6 +5513,7 @@ mod tests {
                 false,
                 crate::style::types::Direction::Ltr,
                 &bidi_stack,
+                CombineBoundary::default(),
             )
             .expect("text combine items");
         assert!(!items.is_empty());
@@ -5324,6 +5546,7 @@ mod tests {
                 false,
                 crate::style::types::Direction::Ltr,
                 &bidi_stack,
+                CombineBoundary::default(),
             )
             .expect("text items");
         assert_eq!(items.len(), 1);
@@ -5361,6 +5584,7 @@ mod tests {
                 false,
                 crate::style::types::Direction::Rtl,
                 &bidi_stack,
+                CombineBoundary::default(),
             )
             .expect("text items");
         if let InlineItem::Text(text) = &items[0] {
@@ -5390,6 +5614,7 @@ mod tests {
                 false,
                 crate::style::types::Direction::Ltr,
                 &bidi_stack,
+                CombineBoundary::default(),
             )
             .expect("text items");
         assert!(!items.is_empty());
