@@ -3985,28 +3985,74 @@ pub fn apply_declaration_with_base(
                     styles.font_variant_caps = FontVariantCaps::Normal;
                     styles.font_variant_alternates = FontVariantAlternates::default();
                 } else {
+                    let prev_caps = styles.font_variant_caps;
+                    let prev_variant = styles.font_variant;
+                    let mut seen_caps = false;
+                    let mut invalid_caps = false;
                     for tok in tokens {
                         match tok {
                             "small-caps" => {
+                                if seen_caps {
+                                    invalid_caps = true;
+                                    break;
+                                }
                                 styles.font_variant = FontVariant::SmallCaps;
                                 styles.font_variant_caps = FontVariantCaps::SmallCaps;
+                                seen_caps = true;
                             }
                             "all-small-caps" => {
+                                if seen_caps {
+                                    invalid_caps = true;
+                                    break;
+                                }
                                 styles.font_variant_caps = FontVariantCaps::AllSmallCaps;
+                                seen_caps = true;
                             }
                             "petite-caps" => {
+                                if seen_caps {
+                                    invalid_caps = true;
+                                    break;
+                                }
                                 styles.font_variant_caps = FontVariantCaps::PetiteCaps;
+                                seen_caps = true;
                             }
                             "all-petite-caps" => {
+                                if seen_caps {
+                                    invalid_caps = true;
+                                    break;
+                                }
                                 styles.font_variant_caps = FontVariantCaps::AllPetiteCaps;
+                                seen_caps = true;
                             }
                             "unicase" => {
+                                if seen_caps {
+                                    invalid_caps = true;
+                                    break;
+                                }
                                 styles.font_variant_caps = FontVariantCaps::Unicase;
+                                seen_caps = true;
                             }
                             "titling-caps" => {
+                                if seen_caps {
+                                    invalid_caps = true;
+                                    break;
+                                }
                                 styles.font_variant_caps = FontVariantCaps::TitlingCaps;
+                                seen_caps = true;
                             }
-                            _ => {}
+                            _ => {
+                                invalid_caps = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if invalid_caps {
+                        // Restore previous caps value if the caps portion was invalid.
+                        // Other font-variant sub-features are not modeled here, so we only guard caps.
+                        styles.font_variant_caps = prev_caps;
+                        if matches!(prev_variant, FontVariant::SmallCaps) {
+                            styles.font_variant = prev_variant;
                         }
                     }
                 }
@@ -4014,19 +4060,22 @@ pub fn apply_declaration_with_base(
         }
         "font-variant-caps" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.font_variant_caps = match kw.as_str() {
-                    "normal" => FontVariantCaps::Normal,
-                    "small-caps" => {
-                        styles.font_variant = FontVariant::SmallCaps;
-                        FontVariantCaps::SmallCaps
-                    }
-                    "all-small-caps" => FontVariantCaps::AllSmallCaps,
-                    "petite-caps" => FontVariantCaps::PetiteCaps,
-                    "all-petite-caps" => FontVariantCaps::AllPetiteCaps,
-                    "unicase" => FontVariantCaps::Unicase,
-                    "titling-caps" => FontVariantCaps::TitlingCaps,
-                    _ => styles.font_variant_caps,
-                };
+                let tokens: Vec<&str> = kw.split_whitespace().collect();
+                if tokens.len() == 1 {
+                    styles.font_variant_caps = match tokens[0] {
+                        "normal" => FontVariantCaps::Normal,
+                        "small-caps" => {
+                            styles.font_variant = FontVariant::SmallCaps;
+                            FontVariantCaps::SmallCaps
+                        }
+                        "all-small-caps" => FontVariantCaps::AllSmallCaps,
+                        "petite-caps" => FontVariantCaps::PetiteCaps,
+                        "all-petite-caps" => FontVariantCaps::AllPetiteCaps,
+                        "unicase" => FontVariantCaps::Unicase,
+                        "titling-caps" => FontVariantCaps::TitlingCaps,
+                        _ => styles.font_variant_caps,
+                    };
+                }
             }
         }
         "font-variant-alternates" => {
@@ -12430,7 +12479,10 @@ mod tests {
             important: false,
         };
         apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
-        assert!(matches!(style.font_variant_caps, FontVariantCaps::TitlingCaps));
+        assert!(
+            matches!(style.font_variant_caps, FontVariantCaps::AllSmallCaps),
+            "conflicting caps keywords should invalidate the declaration and keep the prior value"
+        );
     }
 
     #[test]
