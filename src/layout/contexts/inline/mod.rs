@@ -5134,14 +5134,36 @@ pub(crate) fn explicit_bidi_context(
     for (ub, dir) in stack {
         match ub {
             UnicodeBidi::Normal | UnicodeBidi::Plaintext => {}
-            UnicodeBidi::Embed | UnicodeBidi::Isolate | UnicodeBidi::BidiOverride | UnicodeBidi::IsolateOverride => {
+            UnicodeBidi::Embed => {
                 let next = push_embedding_level(level, *dir);
                 if next != level {
                     level = next;
+                    override_all = false;
                     changed = true;
                 }
-                if matches!(ub, UnicodeBidi::BidiOverride | UnicodeBidi::IsolateOverride) {
+            }
+            UnicodeBidi::Isolate => {
+                let next = push_embedding_level(level, *dir);
+                if next != level {
+                    level = next;
+                    override_all = false;
+                    changed = true;
+                }
+            }
+            UnicodeBidi::BidiOverride => {
+                let next = push_embedding_level(level, *dir);
+                if next != level {
+                    level = next;
                     override_all = true;
+                    changed = true;
+                }
+            }
+            UnicodeBidi::IsolateOverride => {
+                let next = push_embedding_level(level, *dir);
+                if next != level {
+                    level = next;
+                    override_all = true;
+                    changed = true;
                 }
             }
         }

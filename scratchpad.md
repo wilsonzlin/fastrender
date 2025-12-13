@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Bidi mapping now tracks both paragraph-global and leaf-local byte offsets so isolate text is sliced correctly during reordering; added a regression ensuring bidi-override ancestors don't leak into isolate contents (isolate text now reorders to match UAX#9 instead of collapsing due to mis-indexed slices).
 - text-combine-upright boundary detection now tracks edge adjacency: collapsed/explicit whitespace blocks cross-inline combinations, empty inline wrappers are skipped, and boundary flags only set when combinable characters touch both sides. Added regression to ensure whitespace-separated spans still combine independently.
 - text-indent handling matches CSS Text: hanging indents apply to every line after the first (including hard breaks), `each-line` only indents paragraph starts (not soft wraps), and line-level indent offsets are stored per line so forced breaks/RTL map correctly. Added a regression to ensure `each-line` skips soft-wrapped lines.
 - Intrinsic inline sizing now ignores text-indent (including hanging), matching CSS sizing rules; tests updated to assert min/max-content widths stay at content widths without indent inflation.

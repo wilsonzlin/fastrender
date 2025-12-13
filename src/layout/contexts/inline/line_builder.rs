@@ -1763,21 +1763,23 @@ fn reorder_paragraph(
         return;
     }
 
-    #[derive(Clone, Copy)]
-    struct ByteMapping {
-        leaf_index: usize,
-        start: usize,
-        end: usize,
-        isolate_group: Option<usize>,
-    }
+#[derive(Clone, Copy)]
+struct ByteMapping {
+    leaf_index: usize,
+    /// Byte offsets into the paragraph_text buffer
+    start: usize,
+    end: usize,
+    /// Byte offsets within the leaf's own text (for slicing)
+    local_start: usize,
+    local_end: usize,
+    isolate_group: Option<usize>,
+}
 
-    #[derive(Clone, Copy)]
-    struct VisualSegment {
-        leaf_index: usize,
-        start: usize,
-        end: usize,
-        level: Level,
-    }
+#[derive(Clone, Copy)]
+struct VisualSegment {
+    mapping: ByteMapping,
+    level: Level,
+}
 
     let mut box_counter = 0usize;
     let mut line_leaves: Vec<Vec<BidiLeaf>> = Vec::with_capacity(lines.len());
@@ -1827,11 +1829,11 @@ fn reorder_paragraph(
     let mut global_offset = 0usize;
     let mut paragraph_text = String::new();
 
-    for (_line_idx, leaves) in line_leaves.into_iter().enumerate() {
-        let line_start = global_offset;
-        for leaf in leaves {
-            let mut stack: Vec<(UnicodeBidi, Direction)> = vec![(root_unicode_bidi, root_direction)];
-            stack.extend(leaf.box_stack.iter().map(|c| (c.unicode_bidi, c.direction)));
+        for (_line_idx, leaves) in line_leaves.into_iter().enumerate() {
+            let line_start = global_offset;
+            for leaf in leaves {
+                let mut stack: Vec<(UnicodeBidi, Direction)> = vec![(root_unicode_bidi, root_direction)];
+                stack.extend(leaf.box_stack.iter().map(|c| (c.unicode_bidi, c.direction)));
             stack.push((leaf.item.unicode_bidi(), leaf.item.direction()));
             let bidi_context = crate::layout::contexts::inline::explicit_bidi_context(base_dir, &stack);
 
@@ -1861,36 +1863,47 @@ fn reorder_paragraph(
             match &leaf.item {
                 InlineItem::Text(t) => {
                     for (byte_idx, ch) in t.text.char_indices() {
-                        let end = byte_idx + ch.len_utf8();
+                        let start = paragraph_text.len();
+                        paragraph_text.push(ch);
+                        let end = paragraph_text.len();
                         byte_map.push(ByteMapping {
                             leaf_index,
-                            start: byte_idx,
+                            start,
                             end,
+                            local_start: byte_idx,
+                            local_end: byte_idx + ch.len_utf8(),
                             isolate_group,
                         });
-                        paragraph_text.push(ch);
                         global_offset += 1;
                     }
                 }
                 InlineItem::Tab(_) => {
+                    let start = paragraph_text.len();
+                    paragraph_text.push('\t');
+                    let end = paragraph_text.len();
                     byte_map.push(ByteMapping {
                         leaf_index,
-                        start: 0,
-                        end: 0,
+                        start,
+                        end,
+                        local_start: 0,
+                        local_end: 0,
                         isolate_group,
                     });
-                    paragraph_text.push('\t');
                     global_offset += 1;
                 }
                 InlineItem::InlineBox(_) => {}
                 _ => {
+                    let start = paragraph_text.len();
+                    paragraph_text.push('\u{FFFC}');
+                    let end = paragraph_text.len();
                     byte_map.push(ByteMapping {
                         leaf_index,
-                        start: 0,
-                        end: 0,
+                        start,
+                        end,
+                        local_start: 0,
+                        local_end: 0,
                         isolate_group,
                     });
-                    paragraph_text.push('\u{FFFC}');
                     global_offset += 1;
                 }
             }
@@ -1966,17 +1979,20 @@ fn reorder_paragraph(
         let mut segments: Vec<VisualSegment> = Vec::new();
         let push_segment = |mapping: &ByteMapping, level: Level, segments: &mut Vec<VisualSegment>| {
             if let Some(last) = segments.last_mut() {
-                if last.leaf_index == mapping.leaf_index && last.level == level {
-                    last.start = last.start.min(mapping.start);
-                    last.end = last.end.max(mapping.end);
+                if last.mapping.leaf_index == mapping.leaf_index
+                    && last.level == level
+                    && mapping.start >= last.mapping.end
+                {
+                    last.mapping.start = last.mapping.start.min(mapping.start);
+                    last.mapping.end = last.mapping.end.max(mapping.end);
+                    last.mapping.local_start = last.mapping.local_start.min(mapping.local_start);
+                    last.mapping.local_end = last.mapping.local_end.max(mapping.local_end);
                     return;
                 }
             }
 
             segments.push(VisualSegment {
-                leaf_index: mapping.leaf_index,
-                start: mapping.start,
-                end: mapping.end,
+                mapping: *mapping,
                 level,
             });
         };
@@ -2054,12 +2070,12 @@ fn reorder_paragraph(
 
         let mut visual_fragments: Vec<BidiLeaf> = Vec::new();
         for seg in segments {
-            if let Some(para_leaf) = paragraph_leaves.get(seg.leaf_index) {
+            if let Some(para_leaf) = paragraph_leaves.get(seg.mapping.leaf_index) {
                 let mut frag = para_leaf.leaf.clone();
                 if let InlineItem::Text(text_item) = &para_leaf.leaf.item {
                     if let Some(sliced) = slice_text_item(
                         text_item,
-                        seg.start..seg.end,
+                        seg.mapping.local_start..seg.mapping.local_end,
                         shaper,
                         font_context,
                         base_dir,
@@ -2350,6 +2366,7 @@ fn flatten_positioned_item(
 mod tests {
     use super::*;
     use crate::geometry::Rect;
+    use crate::layout::contexts::inline::explicit_bidi_context;
     use crate::style::ComputedStyle;
     use crate::text::font_loader::FontContext;
     use crate::text::line_break::find_break_opportunities;
@@ -2867,6 +2884,34 @@ mod tests {
     }
 
     #[test]
+    fn explicit_bidi_context_resets_override_on_isolate() {
+        let ctx = explicit_bidi_context(
+            Direction::Ltr,
+            &[
+                (UnicodeBidi::BidiOverride, Direction::Rtl),
+                (UnicodeBidi::Isolate, Direction::Ltr),
+            ],
+        )
+        .expect("should compute explicit context");
+        assert!(!ctx.override_all, "override should not leak past isolates");
+        assert!(
+            ctx.level.number() % 2 == 0,
+            "isolate should push an even level for LTR"
+        );
+    }
+
+    #[test]
+    fn explicit_bidi_context_sets_override_for_isolate_override() {
+        let ctx = explicit_bidi_context(
+            Direction::Ltr,
+            &[(UnicodeBidi::IsolateOverride, Direction::Ltr)],
+        )
+        .expect("should compute explicit context");
+        assert!(ctx.override_all, "isolate-override should force overriding status");
+        assert!(ctx.level.number() % 2 == 0);
+    }
+
+    #[test]
     fn excessive_embedding_depth_is_clamped() {
         // Build a deeply nested set of inline boxes that exceed unicode_bidi's max depth.
         let mut inner = InlineItem::Text(make_text_item("abc", 30.0));
@@ -3233,6 +3278,57 @@ mod tests {
 
         // Outer isolate stays a single unit; inner override reverses its content (yx).
         assert_eq!(texts, vec!["L ".to_string(), "byxa".to_string(), " R".to_string()]);
+    }
+
+    #[test]
+    fn bidi_override_does_not_apply_inside_isolate() {
+        let mut builder = make_builder(200.0);
+
+        let mut inner = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            1,
+            Direction::Ltr,
+            UnicodeBidi::Isolate,
+        );
+        inner.add_child(InlineItem::Text(make_text_item("אב", 20.0)));
+
+        let mut outer = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            0,
+            Direction::Rtl,
+            UnicodeBidi::BidiOverride,
+        );
+        outer.add_child(InlineItem::Text(make_text_item("a", 10.0)));
+        outer.add_child(InlineItem::InlineBox(inner));
+        outer.add_child(InlineItem::Text(make_text_item("b", 10.0)));
+
+        builder.add_item(InlineItem::InlineBox(outer));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 1);
+        let mut visual = String::new();
+        for positioned in &lines[0].items {
+            collect_text(&positioned.item, &mut visual);
+        }
+
+        let logical = "\u{202E}a\u{2066}אב\u{2069}b\u{202C}";
+        let info = BidiInfo::new(logical, Some(Level::ltr()));
+        let para = &info.paragraphs[0];
+        let expected: String = info
+            .reorder_line(para, para.range.clone())
+            .chars()
+            .filter(|c| !is_bidi_control(*c))
+            .collect();
+
+        assert_eq!(visual, expected);
     }
 
     fn nested_inline_box_with_depth(
