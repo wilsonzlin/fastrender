@@ -72,10 +72,10 @@ pub struct ColumnConstraints {
     /// Takes precedence over percentage and auto sizing.
     pub fixed_width: Option<f32>,
 
-    /// Percentage width relative to table width
+    /// Percentage width relative to table width (can exceed 100%)
     ///
     /// If set, this column's width is a percentage of the table's width.
-    /// The percentage is a value from 0.0 to 100.0.
+    /// Values may exceed 100% and are treated as over-constrained requests.
     pub percentage: Option<f32>,
 
     /// Whether this column can be resized during distribution
@@ -147,7 +147,7 @@ impl ColumnConstraints {
     ///
     /// # Arguments
     ///
-    /// * `percentage` - Percentage value (0.0 to 100.0)
+    /// * `percentage` - Percentage value (may exceed 100; negative clamped to 0)
     /// * `min_width` - Minimum content width (fallback)
     /// * `max_width` - Maximum content width
     ///
@@ -165,14 +165,14 @@ impl ColumnConstraints {
             min_width,
             max_width: max_width.max(min_width),
             fixed_width: None,
-            percentage: Some(percentage.clamp(0.0, 100.0)),
+            percentage: Some(percentage.max(0.0)),
             is_flexible: false,
         }
     }
 
     /// Marks this column as percentage-based using the current min/max widths.
     pub fn set_percentage(&mut self, percentage: f32) {
-        self.percentage = Some(percentage.clamp(0.0, 100.0));
+        self.percentage = Some(percentage.max(0.0));
         self.fixed_width = None;
         self.is_flexible = false;
     }
@@ -930,7 +930,7 @@ pub fn distribute_spanning_percentage(columns: &mut [ColumnConstraints], start_c
     if start_col >= end_col || end_col > columns.len() {
         return;
     }
-    let target_pct = pct.clamp(0.0, 100.0);
+    let target_pct = pct.max(0.0);
     if target_pct <= 0.0 {
         return;
     }
@@ -1086,7 +1086,7 @@ mod tests {
     #[test]
     fn test_column_constraints_percentage_clamping() {
         let col = ColumnConstraints::percentage(150.0, 0.0, 100.0);
-        assert_eq!(col.percentage, Some(100.0)); // Clamped to 100%
+        assert_eq!(col.percentage, Some(150.0)); // Values above 100% are allowed
 
         let col2 = ColumnConstraints::percentage(-10.0, 0.0, 100.0);
         assert_eq!(col2.percentage, Some(0.0)); // Clamped to 0%
