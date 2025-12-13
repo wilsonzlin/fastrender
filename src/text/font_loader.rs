@@ -27,6 +27,7 @@
 use crate::css::types::{FontFaceRule, FontFaceSource, FontFaceStyle};
 use crate::error::{Error, Result};
 use crate::text::font_db::{FontDatabase, FontStretch, FontStyle, FontWeight, LoadedFont, ScaledMetrics};
+use crate::text::pipeline::DEFAULT_OBLIQUE_ANGLE_DEG;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use percent_encoding::percent_decode_str;
@@ -210,12 +211,20 @@ impl FontContext {
         } else {
             FontStyle::Normal
         };
+        let requested_angle = if oblique { Some(DEFAULT_OBLIQUE_ANGLE_DEG) } else { None };
 
         let stretches = crate::text::pipeline::stretch_preference_order(FontStretch::Normal);
         let slopes = crate::text::pipeline::slope_preference_order(requested_style);
         let weights = crate::text::pipeline::weight_preference_order(weight);
         for family in families {
-            if let Some(font) = self.select_web_font(family, weight, requested_style, FontStretch::Normal, None) {
+            if let Some(font) = self.select_web_font(
+                family,
+                weight,
+                requested_style,
+                FontStretch::Normal,
+                requested_angle,
+                None,
+            ) {
                 return Some(font);
             }
             if self.is_web_family_declared(family) {
@@ -276,8 +285,13 @@ impl FontContext {
         let stretches = crate::text::pipeline::stretch_preference_order(stretch);
         let weights = crate::text::pipeline::weight_preference_order(weight);
         let slopes = crate::text::pipeline::slope_preference_order(style);
+        let requested_angle = if matches!(style, FontStyle::Oblique) {
+            Some(DEFAULT_OBLIQUE_ANGLE_DEG)
+        } else {
+            None
+        };
         for family in families {
-            if let Some(font) = self.select_web_font(family, weight, style, stretch, None) {
+            if let Some(font) = self.select_web_font(family, weight, style, stretch, requested_angle, None) {
                 return Some(font);
             }
             if self.is_web_family_declared(family) {
@@ -314,7 +328,12 @@ impl FontContext {
     /// let font = ctx.get_font_simple("Arial", 400, FontStyle::Normal);
     /// ```
     pub fn get_font_simple(&self, family: &str, weight: u16, style: FontStyle) -> Option<LoadedFont> {
-        if let Some(font) = self.select_web_font(family, weight, style, FontStretch::Normal, None) {
+        let angle = if matches!(style, FontStyle::Oblique) {
+            Some(DEFAULT_OBLIQUE_ANGLE_DEG)
+        } else {
+            None
+        };
+        if let Some(font) = self.select_web_font(family, weight, style, FontStretch::Normal, angle, None) {
             return Some(font);
         }
         if self.is_web_family_declared(family) {
@@ -465,9 +484,10 @@ impl FontContext {
         weight: u16,
         style: FontStyle,
         stretch: FontStretch,
+        oblique_angle: Option<f32>,
         ch: char,
     ) -> Option<LoadedFont> {
-        self.select_web_font(family, weight, style, stretch, Some(ch))
+        self.select_web_font(family, weight, style, stretch, oblique_angle, Some(ch))
     }
 
     fn select_web_font(
@@ -476,11 +496,12 @@ impl FontContext {
         weight: u16,
         style: FontStyle,
         stretch: FontStretch,
+        oblique_angle: Option<f32>,
         ch: Option<char>,
     ) -> Option<LoadedFont> {
         let guard = self.web_fonts.read().ok()?;
         let desired_stretch = stretch.to_percentage();
-        let mut best: Option<((u8, f32, u8, (u8, f32), usize), LoadedFont)> = None;
+        let mut best: Option<((u8, f32, u8, f32, (u8, f32), usize), LoadedFont)> = None;
 
         for face in guard.iter().filter(|f| f.family.eq_ignore_ascii_case(family)) {
             if let Some(ch) = ch {
@@ -493,13 +514,20 @@ impl FontContext {
                 Some(r) => r,
                 None => continue,
             };
-            let style_rank = style_rank(face, style);
+            let style_rank = style_rank(face, style, oblique_angle);
             let (weight_rank, matched_weight) = match weight_match(face, weight) {
                 Some(r) => r,
                 None => continue,
             };
 
-            let key = (stretch_rank.0, stretch_rank.1, style_rank.0, weight_rank, face.order);
+            let key = (
+                stretch_rank.0,
+                stretch_rank.1,
+                style_rank.0,
+                style_rank.1,
+                weight_rank,
+                face.order,
+            );
             let chosen_stretch = percent_to_stretch_variant(matched_stretch);
             let candidate = face.to_loaded_font(
                 &face.family,
@@ -843,23 +871,41 @@ fn weight_match(face: &WebFontFace, desired: u16) -> Option<((u8, f32), u16)> {
     None
 }
 
-fn style_rank(face: &WebFontFace, desired: FontStyle) -> (u8, f32) {
+fn style_rank(face: &WebFontFace, desired: FontStyle, angle: Option<f32>) -> (u8, f32) {
     match desired {
-        FontStyle::Normal => match face.style {
-            FontFaceStyle::Normal => (0, 0.0),
-            FontFaceStyle::Oblique { .. } => (1, 0.0),
-            FontFaceStyle::Italic => (2, 0.0),
-        },
-        FontStyle::Italic => match face.style {
-            FontFaceStyle::Italic => (0, 0.0),
-            FontFaceStyle::Oblique { .. } => (1, 0.0),
-            FontFaceStyle::Normal => (2, 0.0),
-        },
-        FontStyle::Oblique => match face.style {
-            FontFaceStyle::Oblique { .. } => (0, 0.0),
+        FontStyle::Normal => match &face.style {
+            FontFaceStyle::Oblique { range } => (0, oblique_distance(range, angle.unwrap_or(0.0))),
             FontFaceStyle::Italic => (1, 0.0),
             FontFaceStyle::Normal => (2, 0.0),
         },
+        FontStyle::Italic => match &face.style {
+            FontFaceStyle::Italic => (0, 0.0),
+            FontFaceStyle::Oblique { range } => {
+                (1, oblique_distance(range, angle.unwrap_or(DEFAULT_OBLIQUE_ANGLE_DEG)))
+            }
+            FontFaceStyle::Normal => (2, 0.0),
+        },
+        FontStyle::Oblique => match &face.style {
+            FontFaceStyle::Oblique { range } => {
+                (0, oblique_distance(range, angle.unwrap_or(DEFAULT_OBLIQUE_ANGLE_DEG)))
+            }
+            FontFaceStyle::Italic => (1, 0.0),
+            FontFaceStyle::Normal => (2, 0.0),
+        },
+    }
+}
+
+fn oblique_distance(range: &Option<(f32, f32)>, desired: f32) -> f32 {
+    if let Some((start, end)) = range {
+        if *start <= desired && desired <= *end {
+            0.0
+        } else if desired < *start {
+            *start - desired
+        } else {
+            desired - *end
+        }
+    } else {
+        0.0
     }
 }
 
@@ -1086,6 +1132,46 @@ mod tests {
         assert!(
             resolved.is_none(),
             "platform fonts must not satisfy a family declared via @font-face when no faces load"
+        );
+    }
+
+    #[test]
+    fn oblique_range_matching_picks_covering_face() {
+        let font_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/fonts/Roboto-Regular.ttf");
+        let font_url = url::Url::from_file_path(&font_path).expect("file url");
+        let family = "ObliqueRange".to_string();
+
+        let faces = vec![
+            FontFaceRule {
+                family: Some(family.clone()),
+                sources: vec![FontFaceSource::Url(font_url.to_string())],
+                style: FontFaceStyle::Oblique {
+                    range: Some((0.0, 10.0)),
+                },
+                weight: (400, 400),
+                ..Default::default()
+            },
+            FontFaceRule {
+                family: Some(family.clone()),
+                sources: vec![FontFaceSource::Url(font_url.to_string())],
+                style: FontFaceStyle::Oblique {
+                    range: Some((20.0, 30.0)),
+                },
+                weight: (900, 900),
+                ..Default::default()
+            },
+        ];
+
+        let ctx = FontContext::empty();
+        ctx.load_web_fonts(&faces, None).expect("load faces");
+
+        let chosen = ctx
+            .match_web_font_for_char(&family, 400, FontStyle::Oblique, FontStretch::Normal, Some(25.0), 'A')
+            .expect("choose face");
+        assert_eq!(
+            chosen.weight.value(),
+            900,
+            "face covering the requested oblique angle should win even with a heavier weight"
         );
     }
 

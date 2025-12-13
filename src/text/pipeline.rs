@@ -67,7 +67,7 @@ use ttf_parser::Tag;
 use unicode_bidi::{BidiInfo, Level};
 use unicode_vo::{char_orientation, Orientation as VerticalOrientation};
 
-const DEFAULT_OBLIQUE_ANGLE_DEG: f32 = 14.0;
+pub(crate) const DEFAULT_OBLIQUE_ANGLE_DEG: f32 = 14.0;
 
 // ============================================================================
 // Core Types
@@ -969,10 +969,10 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
         })
         .collect();
     let preferred_aspect = preferred_font_aspect(style, font_context);
-    let font_style = match style.font_style {
-        CssFontStyle::Normal => FontStyle::Normal,
-        CssFontStyle::Italic => FontStyle::Italic,
-        CssFontStyle::Oblique(_) => FontStyle::Oblique,
+    let (font_style, requested_oblique) = match style.font_style {
+        CssFontStyle::Normal => (FontStyle::Normal, None),
+        CssFontStyle::Italic => (FontStyle::Italic, None),
+        CssFontStyle::Oblique(angle) => (FontStyle::Oblique, Some(angle.unwrap_or(DEFAULT_OBLIQUE_ANGLE_DEG))),
     };
     let font_stretch = DbFontStretch::from_percentage(style.font_stretch.to_percentage());
     let families = build_family_entries(style);
@@ -1012,6 +1012,7 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
                 &families,
                 style.font_weight.to_u16(),
                 font_style,
+                requested_oblique,
                 font_stretch,
                 font_context,
                 &mut picker,
@@ -1541,6 +1542,7 @@ fn resolve_font_for_char(
     families: &[crate::text::font_fallback::FamilyEntry],
     weight: u16,
     style: FontStyle,
+    oblique_angle: Option<f32>,
     stretch: DbFontStretch,
     font_context: &FontContext,
     picker: &mut FontPreferencePicker,
@@ -1554,7 +1556,7 @@ fn resolve_font_for_char(
     let stretch_preferences = stretch_preference_order(stretch);
     for entry in families {
         if let FamilyEntry::Named(name) = entry {
-            if let Some(font) = font_context.match_web_font_for_char(name, weight, style, stretch, ch) {
+            if let Some(font) = font_context.match_web_font_for_char(name, weight, style, stretch, oblique_angle, ch) {
                 return Some(font);
             }
             if font_context.is_web_family_declared(name) {
@@ -2901,6 +2903,7 @@ mod tests {
             &families,
             400,
             DbFontStyle::Normal,
+            None,
             DbFontStretch::Normal,
             &ctx,
             &mut picker,
@@ -2914,6 +2917,7 @@ mod tests {
             &families,
             400,
             DbFontStyle::Normal,
+            None,
             DbFontStretch::Normal,
             &ctx,
             &mut picker,
