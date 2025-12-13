@@ -31,7 +31,8 @@ use crate::text::pipeline::DEFAULT_OBLIQUE_ANGLE_DEG;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use percent_encoding::percent_decode_str;
-use rustybuzz::{Direction, Face, UnicodeBuffer};
+use rustybuzz::ttf_parser::Tag;
+use rustybuzz::{Direction, Face, Feature, UnicodeBuffer};
 use std::fs;
 use std::sync::{Arc, RwLock};
 use ureq::Agent;
@@ -73,6 +74,7 @@ pub struct FontContext {
     db: Arc<FontDatabase>,
     web_fonts: Arc<RwLock<Vec<WebFontFace>>>,
     web_families: Arc<RwLock<std::collections::HashSet<String>>>,
+    feature_support: Arc<RwLock<std::collections::HashMap<(usize, u32, u32), bool>>>,
 }
 
 impl FontContext {
@@ -117,6 +119,7 @@ impl FontContext {
             db: Arc::new(db),
             web_fonts: Arc::new(RwLock::new(Vec::new())),
             web_families: Arc::new(RwLock::new(std::collections::HashSet::new())),
+            feature_support: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
 
@@ -135,6 +138,7 @@ impl FontContext {
             db,
             web_fonts: Arc::new(RwLock::new(Vec::new())),
             web_families: Arc::new(RwLock::new(std::collections::HashSet::new())),
+            feature_support: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
 
@@ -146,6 +150,7 @@ impl FontContext {
             db: Arc::new(FontDatabase::empty()),
             web_fonts: Arc::new(RwLock::new(Vec::new())),
             web_families: Arc::new(RwLock::new(std::collections::HashSet::new())),
+            feature_support: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
 
@@ -380,6 +385,9 @@ impl FontContext {
         if let Ok(mut families) = self.web_families.write() {
             families.clear();
         }
+        if let Ok(mut support) = self.feature_support.write() {
+            support.clear();
+        }
     }
 
     /// Loads web fonts defined by @font-face rules into the context.
@@ -563,6 +571,21 @@ impl FontContext {
             .read()
             .map(|faces| faces.iter().any(|f| case_fold(&f.family) == folded))
             .unwrap_or(false)
+    }
+
+    pub(crate) fn supports_feature(&self, font: &LoadedFont, tag: [u8; 4]) -> bool {
+        let key = (Arc::as_ptr(&font.data) as usize, font.index, u32::from_be_bytes(tag));
+        if let Ok(cache) = self.feature_support.read() {
+            if let Some(value) = cache.get(&key) {
+                return *value;
+            }
+        }
+
+        let supported = font_supports_feature(font, tag);
+        if let Ok(mut cache) = self.feature_support.write() {
+            cache.insert(key, supported);
+        }
+        supported
     }
 
     fn declare_web_family(&self, family: &str) {
@@ -934,6 +957,37 @@ fn case_fold(name: &str) -> String {
         }
     }
     out
+}
+
+fn font_supports_feature(font: &LoadedFont, tag: [u8; 4]) -> bool {
+    let face = match Face::from_slice(&font.data, font.index) {
+        Some(f) => f,
+        None => return false,
+    };
+
+    let mut base = UnicodeBuffer::new();
+    base.push_str("x");
+    let base_shape = rustybuzz::shape(&face, &[], base);
+    let mut feature_buf = UnicodeBuffer::new();
+    feature_buf.push_str("x");
+    let feature = Feature {
+        tag: Tag::from_bytes(&tag),
+        value: 1,
+        start: 0,
+        end: u32::MAX,
+    };
+    let feature_shape = rustybuzz::shape(&face, &[feature], feature_buf);
+
+    let base_info = base_shape.glyph_infos().first().cloned();
+    let feature_info = feature_shape.glyph_infos().first().cloned();
+    let base_pos = base_shape.glyph_positions().first().cloned();
+    let feature_pos = feature_shape.glyph_positions().first().cloned();
+
+    if let (Some(bi), Some(fi), Some(bp), Some(fp)) = (base_info, feature_info, base_pos, feature_pos) {
+        bi.glyph_id != fi.glyph_id || bp.x_advance != fp.x_advance || bp.y_offset != fp.y_offset
+    } else {
+        false
+    }
 }
 
 fn resolve_font_url(url: &str, base_url: Option<&str>) -> String {

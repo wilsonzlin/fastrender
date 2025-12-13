@@ -737,6 +737,8 @@ pub struct FontRun {
     pub level: u8,
     /// Font size in pixels.
     pub font_size: f32,
+    /// Additional baseline shift in pixels (positive raises text).
+    pub baseline_shift: f32,
     /// BCP47 language tag (lowercased).
     pub language: String,
     /// OpenType features to apply for this run.
@@ -979,7 +981,7 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
 
     let mut font_runs = Vec::new();
     for run in runs {
-        let mut current: Option<(Arc<LoadedFont>, f32, f32, f32, usize)> = None; // (font, bold, oblique, size, start)
+        let mut current: Option<(Arc<LoadedFont>, f32, f32, f32, f32, usize)> = None; // (font, bold, oblique, size, baseline_shift, start)
         let mut iter = run.text.char_indices().peekable();
 
         while let Some((byte_idx, ch)) = iter.next() {
@@ -987,7 +989,7 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
             let next_idx = next_peek.map(|(i, _)| i).unwrap_or_else(|| run.text.len());
             if (emoji::is_variation_selector(ch) || emoji::is_zwj(ch)) && current.is_some() {
                 if iter.peek().is_none() {
-                    if let Some((font, bold, oblique, size, start)) = current.take() {
+                    if let Some((font, bold, oblique, size, shift, start)) = current.take() {
                         push_font_run(
                             &mut font_runs,
                             run,
@@ -997,6 +999,7 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
                             bold,
                             oblique,
                             size,
+                            shift,
                             &features,
                             &authored_variations,
                             style,
@@ -1027,8 +1030,11 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
                 synthetic_bold *= used_font_size / style.font_size;
             }
             let font_arc = Arc::new(font);
+            let (position_scale, baseline_shift) =
+                synthetic_position_adjustment(style, &font_arc, used_font_size, font_context);
+            let run_font_size = used_font_size * position_scale;
 
-            let same_as_current = current.as_ref().map_or(false, |(f, b, o, size, _)| {
+            let same_as_current = current.as_ref().map_or(false, |(f, b, o, size, shift, _)| {
                 Arc::ptr_eq(&f.data, &font_arc.data)
                     && f.index == font_arc.index
                     && f.weight == font_arc.weight
@@ -1036,11 +1042,12 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
                     && f.stretch == font_arc.stretch
                     && (*b - synthetic_bold).abs() < f32::EPSILON
                     && (*o - synthetic_oblique).abs() < f32::EPSILON
-                    && (*size - used_font_size).abs() < f32::EPSILON
+                    && (*size - run_font_size).abs() < f32::EPSILON
+                    && (*shift - baseline_shift).abs() < f32::EPSILON
             });
 
             if !same_as_current {
-                if let Some((font, bold, oblique, size, start)) = current.take() {
+                if let Some((font, bold, oblique, size, shift, start)) = current.take() {
                     push_font_run(
                         &mut font_runs,
                         run,
@@ -1050,16 +1057,24 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
                         bold,
                         oblique,
                         size,
+                        shift,
                         &features,
                         &authored_variations,
                         style,
                     );
                 }
-                current = Some((font_arc, synthetic_bold, synthetic_oblique, used_font_size, byte_idx));
+                current = Some((
+                    font_arc,
+                    synthetic_bold,
+                    synthetic_oblique,
+                    run_font_size,
+                    baseline_shift,
+                    byte_idx,
+                ));
             }
 
             if iter.peek().is_none() {
-                if let Some((font, bold, oblique, size, start)) = current.take() {
+                if let Some((font, bold, oblique, size, shift, start)) = current.take() {
                     push_font_run(
                         &mut font_runs,
                         run,
@@ -1069,6 +1084,7 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
                         bold,
                         oblique,
                         size,
+                        shift,
                         &features,
                         &authored_variations,
                         style,
@@ -1226,6 +1242,39 @@ fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f
     }
 
     (synthetic_bold, synthetic_oblique)
+}
+
+fn synthetic_position_adjustment(
+    style: &ComputedStyle,
+    font: &LoadedFont,
+    base_font_size: f32,
+    font_context: &FontContext,
+) -> (f32, f32) {
+    if !style.font_synthesis.position {
+        return (1.0, 0.0);
+    }
+
+    const SYNTHETIC_SCALE: f32 = 0.8;
+    const SUPER_SHIFT: f32 = 0.34;
+    const SUB_SHIFT: f32 = -0.2;
+
+    match style.font_variant_position {
+        crate::style::types::FontVariantPosition::Normal => (1.0, 0.0),
+        crate::style::types::FontVariantPosition::Super => {
+            if font_context.supports_feature(font, *b"sups") {
+                (1.0, 0.0)
+            } else {
+                (SYNTHETIC_SCALE, base_font_size * SUPER_SHIFT)
+            }
+        }
+        crate::style::types::FontVariantPosition::Sub => {
+            if font_context.supports_feature(font, *b"subs") {
+                (1.0, 0.0)
+            } else {
+                (SYNTHETIC_SCALE, base_font_size * SUB_SHIFT)
+            }
+        }
+    }
 }
 
 pub(crate) fn slope_preference_order(style: FontStyle) -> &'static [FontStyle] {
@@ -1668,6 +1717,7 @@ fn push_font_run(
     synthetic_bold: f32,
     synthetic_oblique: f32,
     font_size: f32,
+    baseline_shift: f32,
     features: &[Feature],
     authored_variations: &[Variation],
     style: &ComputedStyle,
@@ -1759,6 +1809,7 @@ fn push_font_run(
         direction: run.direction,
         level: run.level,
         font_size,
+        baseline_shift,
         language,
         features: features.to_vec(),
         variations,
@@ -1809,6 +1860,8 @@ pub struct ShapedRun {
     pub font: Arc<LoadedFont>,
     /// Font size in pixels.
     pub font_size: f32,
+    /// Additional baseline shift in pixels (positive raises text).
+    pub baseline_shift: f32,
     /// Language set on the shaping buffer (if provided).
     pub language: Option<HbLanguage>,
     /// Synthetic bold stroke width in pixels (0 = none).
@@ -1898,7 +1951,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
         let x_advance = pos.x_advance as f32 * scale;
         if !is_bidi_control {
             let x_offset = x_position + (pos.x_offset as f32 * scale);
-            let y_offset = pos.y_offset as f32 * scale;
+            let y_offset = pos.y_offset as f32 * scale + run.baseline_shift;
             let y_advance = pos.y_advance as f32 * scale;
 
             glyphs.push(GlyphPosition {
@@ -1923,6 +1976,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
         advance: x_position,
         font: Arc::clone(&run.font),
         font_size: run.font_size,
+        baseline_shift: run.baseline_shift,
         language,
         synthetic_bold: run.synthetic_bold,
         synthetic_oblique: run.synthetic_oblique,
@@ -2723,6 +2777,7 @@ mod tests {
                     stretch: DbFontStretch::Normal,
                 }),
                 font_size: 16.0,
+                baseline_shift: 0.0,
                 language: None,
                 synthetic_bold: 0.0,
                 synthetic_oblique: 0.0,
@@ -2789,6 +2844,73 @@ mod tests {
         let shaped = ShapingPipeline::new().shape("Abc", &style, &ctx).unwrap();
         assert_eq!(shaped.len(), 1, "synthetic small-caps should not split runs");
         assert!(shaped.iter().all(|r| (r.font_size - 18.0).abs() < 0.1));
+    }
+
+    #[test]
+    fn synthetic_super_position_applies_without_feature() {
+        let pipeline = ShapingPipeline::new();
+        let mut style = ComputedStyle::default();
+        style.font_variant_position = FontVariantPosition::Super;
+        style.font_size = 20.0;
+
+        let ctx = FontContext::new();
+        if !ctx.has_fonts() {
+            return;
+        }
+
+        let runs = match pipeline.shape("x", &style, &ctx) {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        if runs.is_empty() {
+            return;
+        }
+        let run = &runs[0];
+        if ctx.supports_feature(&run.font, *b"sups") {
+            // Genuine superscript support means no synthesis needed.
+            return;
+        }
+
+        assert!(
+            run.font_size < style.font_size,
+            "synthetic superscript should shrink font size"
+        );
+        assert!(
+            run.glyphs.iter().any(|g| g.y_offset > 0.0),
+            "synthetic superscript should raise glyphs"
+        );
+    }
+
+    #[test]
+    fn font_synthesis_position_none_disables_synthetic_shift() {
+        let pipeline = ShapingPipeline::new();
+        let mut style = ComputedStyle::default();
+        style.font_variant_position = FontVariantPosition::Super;
+        style.font_synthesis.position = false;
+
+        let ctx = FontContext::new();
+        if !ctx.has_fonts() {
+            return;
+        }
+
+        let runs = match pipeline.shape("x", &style, &ctx) {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        if runs.is_empty() {
+            return;
+        }
+        let run = &runs[0];
+        if ctx.supports_feature(&run.font, *b"sups") {
+            // Real superscript glyphs remain allowed.
+            return;
+        }
+
+        assert!((run.font_size - style.font_size).abs() < 0.01);
+        assert!(
+            run.glyphs.iter().all(|g| g.y_offset.abs() < 0.01),
+            "synthesis disabled should keep glyphs on the baseline"
+        );
     }
 
     #[test]
