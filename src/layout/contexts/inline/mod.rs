@@ -4730,6 +4730,16 @@ fn collect_logical_text_for_direction(node: &BoxNode, out: &mut String) {
 }
 
 fn resolve_base_direction_for_box(box_node: &BoxNode) -> crate::style::types::Direction {
+    if matches!(
+        box_node.style.writing_mode,
+        crate::style::types::WritingMode::VerticalRl | crate::style::types::WritingMode::VerticalLr
+    ) && matches!(
+        box_node.style.text_orientation,
+        crate::style::types::TextOrientation::Upright
+    ) {
+        return crate::style::types::Direction::Ltr;
+    }
+
     if !matches!(box_node.style.unicode_bidi, crate::style::types::UnicodeBidi::Plaintext) {
         return box_node.style.direction;
     }
@@ -5396,6 +5406,25 @@ mod tests {
             (21.0..23.0).contains(&gap),
             "expected inline-end gap from margin-top in vertical RTL, got {}",
             gap
+        );
+    }
+
+    #[test]
+    fn upright_vertical_forces_ltr_base_direction() {
+        let mut style = ComputedStyle::default();
+        style.direction = crate::style::types::Direction::Rtl;
+        style.writing_mode = WritingMode::VerticalRl;
+        style.text_orientation = crate::style::types::TextOrientation::Upright;
+
+        let text_style = Arc::new(style);
+        let text = BoxNode::new_text(text_style.clone(), "אבג abc".to_string());
+        let root = BoxNode::new_inline(text_style, vec![text]);
+
+        let dir = resolve_base_direction_for_box(&root);
+        assert_eq!(
+            dir,
+            crate::style::types::Direction::Ltr,
+            "upright vertical text should use LTR base direction regardless of authored direction"
         );
     }
 
