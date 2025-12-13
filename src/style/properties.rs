@@ -2671,6 +2671,36 @@ fn parse_font_variant_position_tokens(
     }
 }
 
+fn split_font_variant_tokens(input: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut paren_depth = 0usize;
+
+    for ch in input.chars() {
+        if ch.is_whitespace() && paren_depth == 0 {
+            if !current.is_empty() {
+                tokens.push(current.clone());
+                current.clear();
+            }
+            continue;
+        }
+
+        if ch == '(' {
+            paren_depth = paren_depth.saturating_add(1);
+        } else if ch == ')' && paren_depth > 0 {
+            paren_depth -= 1;
+        }
+
+        current.push(ch);
+    }
+
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    tokens
+}
+
 pub fn apply_declaration(
     styles: &mut ComputedStyle,
     decl: &Declaration,
@@ -4380,10 +4410,11 @@ pub fn apply_declaration_with_base(
                     styles.font_variant_east_asian = FontVariantEastAsian::default();
                     styles.font_variant_position = FontVariantPosition::Normal;
                 } else {
-                    let tokens: Vec<&str> = trimmed.split_whitespace().collect();
-                    if tokens.is_empty() {
+                    let raw_tokens = split_font_variant_tokens(trimmed);
+                    if raw_tokens.is_empty() {
                         return;
                     }
+                    let tokens: Vec<&str> = raw_tokens.iter().map(String::as_str).collect();
 
                     let mut caps_tokens: Vec<&str> = Vec::new();
                     let mut ligature_tokens: Vec<&str> = Vec::new();
@@ -4521,7 +4552,8 @@ pub fn apply_declaration_with_base(
         }
         "font-variant-caps" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                let tokens: Vec<&str> = kw.split_whitespace().collect();
+                let raw_tokens = split_font_variant_tokens(kw);
+                let tokens: Vec<&str> = raw_tokens.iter().map(String::as_str).collect();
                 if let Some((caps, variant)) = parse_font_variant_caps_tokens(&tokens, styles.font_variant) {
                     styles.font_variant_caps = caps;
                     styles.font_variant = variant;
@@ -4530,7 +4562,8 @@ pub fn apply_declaration_with_base(
         }
         "font-variant-alternates" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                let tokens: Vec<&str> = kw.split_whitespace().collect();
+                let raw_tokens = split_font_variant_tokens(kw);
+                let tokens: Vec<&str> = raw_tokens.iter().map(String::as_str).collect();
                 if tokens.len() == 1 && tokens[0] == "normal" {
                     styles.font_variant_alternates = FontVariantAlternates::default();
                 } else if let Some(alt) = parse_font_variant_alternates_tokens(&tokens) {
@@ -4540,7 +4573,8 @@ pub fn apply_declaration_with_base(
         }
         "font-variant-position" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                let tokens: Vec<&str> = kw.split_whitespace().collect();
+                let raw_tokens = split_font_variant_tokens(kw);
+                let tokens: Vec<&str> = raw_tokens.iter().map(String::as_str).collect();
                 if let Some(position) =
                     parse_font_variant_position_tokens(&tokens, styles.font_variant_position)
                 {
@@ -12710,6 +12744,23 @@ mod tests {
     }
 
     #[test]
+    fn font_variant_shorthand_allows_whitespace_inside_function_tokens() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font-variant".to_string(),
+            value: PropertyValue::Keyword("small-caps styleset(1 2 3) swash(4)".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+
+        assert_eq!(style.font_variant_alternates.stylesets, vec![1, 2, 3]);
+        assert_eq!(style.font_variant_alternates.swash, Some(4));
+        assert!(matches!(style.font_variant_caps, FontVariantCaps::SmallCaps));
+    }
+
+    #[test]
     fn font_variant_shorthand_resets_omitted_components_to_initial() {
         let mut style = ComputedStyle::default();
         style.font_variant_ligatures.common = false;
@@ -13094,6 +13145,21 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert_eq!(style.font_variant_alternates.stylistic, Some(1));
+    }
+
+    #[test]
+    fn font_variant_alternates_allows_whitespace_inside_functions() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font-variant-alternates".to_string(),
+            value: PropertyValue::Keyword("styleset(1 2 3) character-variant(4 5) swash(6)".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert_eq!(style.font_variant_alternates.stylesets, vec![1, 2, 3]);
+        assert_eq!(style.font_variant_alternates.character_variants, vec![4, 5]);
+        assert_eq!(style.font_variant_alternates.swash, Some(6));
     }
 
     #[test]

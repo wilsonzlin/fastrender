@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- font-variant tokenization now preserves whitespace inside alternates functions (styleset/character-variant/swash/ornaments/annotation), so both the longhand and shorthand parse space-separated arguments; new regressions lock the whitespace-friendly parsing. The font-variant shorthand already resets omitted subproperties and validates conflicts.
 - `font-variant` shorthand now parses all subproperties (caps/ligatures/numeric/east-asian/alternates/position), resets unspecified pieces to their initial values, and rejects invalid/unknown tokens; shared helpers cover longhands and new regressions assert reset/invalid behavior.
 - Display list clip tests updated to the `ClipShape::Rect` API; absolute positioning integration expectations now match the shrink-to-fit behavior between opposing insets (aligning with the unit tests/spec).
 - Math generic fonts now prefer real OpenType math faces: FontDatabase caches MATH-table system faces and math generic walks them before falling back to generic sans. Web fonts with a MATH table are detected at load time, and `font-family: math` will pick those web faces first. Regression tests cover system math selection, web math selection, and fallback when no math font is available (new fixture `tests/fixtures/fonts/STIXTwoMath-Regular.otf`).
