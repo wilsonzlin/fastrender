@@ -55,7 +55,6 @@ use crate::style::types::{
 };
 use crate::style::ComputedStyle;
 use crate::text::emoji;
-use crate::text::font_db::font_has_feature;
 use crate::text::font_db::{FontStretch as DbFontStretch, FontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
 use rustybuzz::{Direction as HbDirection, Face, Feature, Language as HbLanguage, UnicodeBuffer, Variation};
