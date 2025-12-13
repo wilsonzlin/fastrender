@@ -1,4 +1,10 @@
+//! Image loading and caching
+//!
+//! This module provides image loading from various sources (HTTP, file, data URLs)
+//! with in-memory caching and support for various image formats including SVG.
+
 use crate::error::{Error, ImageError, RenderError, Result};
+use crate::resource::{FetchedResource, HttpFetcher, ResourceFetcher};
 use crate::style::types::{ImageResolution, OrientationTransform};
 use exif;
 use image::{imageops, DynamicImage, GenericImageView, RgbaImage};
@@ -6,6 +12,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use url::Url;
+
+// ============================================================================
+// CachedImage
+// ============================================================================
 
 /// Decoded image plus orientation metadata.
 pub struct CachedImage {
@@ -77,24 +87,71 @@ impl CachedImage {
     }
 }
 
+// ============================================================================
+// ImageCache
+// ============================================================================
+
 /// Cache for loaded images
+///
+/// `ImageCache` provides in-memory caching of decoded images, with support for
+/// loading from URLs, files, and data URLs. It uses a [`ResourceFetcher`] for
+/// the actual byte fetching, allowing custom fetching strategies (caching,
+/// mocking, etc.) to be injected.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use fastrender::image_loader::ImageCache;
+/// use fastrender::resource::HttpFetcher;
+/// use std::sync::Arc;
+///
+/// let fetcher = Arc::new(HttpFetcher::new());
+/// let cache = ImageCache::with_fetcher(fetcher);
+/// let image = cache.load("https://example.com/image.png")?;
+/// ```
 pub struct ImageCache {
+    /// In-memory cache of decoded images (keyed by resolved URL)
     cache: Arc<Mutex<HashMap<String, Arc<CachedImage>>>>,
+    /// Base URL for resolving relative image sources
     base_url: Option<String>,
+    /// Resource fetcher for loading bytes from URLs
+    fetcher: Arc<dyn ResourceFetcher>,
 }
 
 impl ImageCache {
+    /// Create a new ImageCache with the default HTTP fetcher
     pub fn new() -> Self {
         Self {
             cache: Arc::new(Mutex::new(HashMap::new())),
             base_url: None,
+            fetcher: Arc::new(HttpFetcher::new()),
         }
     }
 
+    /// Create a new ImageCache with a custom fetcher
+    pub fn with_fetcher(fetcher: Arc<dyn ResourceFetcher>) -> Self {
+        Self {
+            cache: Arc::new(Mutex::new(HashMap::new())),
+            base_url: None,
+            fetcher,
+        }
+    }
+
+    /// Create a new ImageCache with a base URL and the default HTTP fetcher
     pub fn with_base_url(base_url: String) -> Self {
         Self {
             cache: Arc::new(Mutex::new(HashMap::new())),
             base_url: Some(base_url),
+            fetcher: Arc::new(HttpFetcher::new()),
+        }
+    }
+
+    /// Create a new ImageCache with both a base URL and a custom fetcher
+    pub fn with_base_url_and_fetcher(base_url: String, fetcher: Arc<dyn ResourceFetcher>) -> Self {
+        Self {
+            cache: Arc::new(Mutex::new(HashMap::new())),
+            base_url: Some(base_url),
+            fetcher,
         }
     }
 
@@ -111,6 +168,16 @@ impl ImageCache {
     /// Returns the configured base URL for resolving relative paths.
     pub fn base_url(&self) -> Option<String> {
         self.base_url.clone()
+    }
+
+    /// Sets the resource fetcher
+    pub fn set_fetcher(&mut self, fetcher: Arc<dyn ResourceFetcher>) {
+        self.fetcher = fetcher;
+    }
+
+    /// Returns a reference to the current fetcher
+    pub fn fetcher(&self) -> &Arc<dyn ResourceFetcher> {
+        &self.fetcher
     }
 
     /// Resolve a potentially relative URL to an absolute URL
@@ -139,6 +206,10 @@ impl ImageCache {
     }
 
     /// Load an image from a URL or file path
+    ///
+    /// The URL is first resolved against the base URL if one is configured.
+    /// Results are cached in memory, so subsequent loads of the same URL
+    /// return the cached image.
     pub fn load(&self, url: &str) -> Result<Arc<CachedImage>> {
         // Resolve the URL first
         let resolved_url = self.resolve_url(url);
@@ -151,25 +222,12 @@ impl ImageCache {
             }
         }
 
-        // Load image using resolved URL
+        // Fetch the resource bytes
+        let resource = self.fetcher.fetch(&resolved_url)?;
+
+        // Decode the image
         let (img, orientation, resolution, is_vector) =
-            if resolved_url.starts_with("http://") || resolved_url.starts_with("https://") {
-                // Fetch from network
-                let (bytes, content_type) = self.load_from_url(&resolved_url)?;
-                self.decode_image_bytes(&bytes, content_type.as_deref(), None, &resolved_url)?
-            } else if resolved_url.starts_with("file://") {
-                // Load from file system
-                let path = resolved_url.strip_prefix("file://").unwrap();
-                let (bytes, ext_hint) = self.load_from_file(path)?;
-                self.decode_image_bytes(&bytes, None, ext_hint.as_deref(), path)?
-            } else if resolved_url.starts_with("data:") {
-                // Data URL
-                self.load_from_data_url(&resolved_url)?
-            } else {
-                // Assume it's a file path
-                let (bytes, ext_hint) = self.load_from_file(&resolved_url)?;
-                self.decode_image_bytes(&bytes, None, ext_hint.as_deref(), &resolved_url)?
-            };
+            self.decode_resource(&resource, &resolved_url)?;
 
         // Cache it (using resolved URL as key)
         let img_arc = Arc::new(CachedImage {
@@ -197,122 +255,21 @@ impl ImageCache {
         }))
     }
 
-    fn load_from_url(&self, url: &str) -> Result<(Vec<u8>, Option<String>)> {
-        // Configure agent with timeout
-        let config = ureq::Agent::config_builder()
-            .timeout_global(Some(std::time::Duration::from_secs(30)))
-            .build();
-        let agent: ureq::Agent = config.into();
-
-        let mut response = agent
-            .get(url)
-            .call()
-            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
-
-        // Read response body into bytes (limit to 50MB for images)
-        let bytes = response
-            .body_mut()
-            .with_config()
-            .limit(50 * 1024 * 1024)
-            .read_to_vec()
-            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
-
-        let content_type = response
-            .headers()
-            .get("content-type")
-            .and_then(|h| h.to_str().ok())
-            .map(|s| s.to_string());
-        Ok((bytes, content_type))
-    }
-
-    fn load_from_file(&self, path: &str) -> Result<(Vec<u8>, Option<String>)> {
-        std::fs::read(path)
-            .map(|bytes| {
-                let ext = std::path::Path::new(path)
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|s| s.to_string());
-                (bytes, ext.map(|e| format!("image/{}", e)))
-            })
-            .map_err(|e| {
-                Error::Image(ImageError::LoadFailed {
-                    url: path.to_string(),
-                    reason: e.to_string(),
-                })
-            })
-    }
-
-    fn load_from_data_url(
+    /// Decode a fetched resource into an image
+    fn decode_resource(
         &self,
-        data_url: &str,
-    ) -> Result<(DynamicImage, Option<OrientationTransform>, Option<f32>, bool)> {
-        // Parse data URL: data:image/png;base64,iVBORw0KG... or data:image/svg+xml,%3Csvg...
-        if !data_url.starts_with("data:") {
-            return Err(Error::Image(ImageError::InvalidDataUrl {
-                reason: "URL does not start with 'data:'".to_string(),
-            }));
-        }
-
-        let parts: Vec<&str> = data_url.splitn(2, ',').collect();
-        if parts.len() != 2 {
-            return Err(Error::Image(ImageError::InvalidDataUrl {
-                reason: "Missing comma separator".to_string(),
-            }));
-        }
-
-        let header = parts[0];
-        let data = parts[1];
-
-        // Check if base64 encoded
-        if header.contains("base64") {
-            use base64::Engine;
-            let bytes = base64::engine::general_purpose::STANDARD.decode(data).map_err(|e| {
-                Error::Image(ImageError::InvalidDataUrl {
-                    reason: format!("Failed to decode base64: {}", e),
-                })
-            })?;
-
-            let (orientation, resolution) = Self::exif_metadata(&bytes);
-            image::load_from_memory(&bytes)
-                .map(|img| (img, orientation, resolution, false))
-                .map_err(|e| {
-                    Error::Image(ImageError::DecodeFailed {
-                        url: "data URL".to_string(),
-                        reason: e.to_string(),
-                    })
-                })
-        } else if header.contains("image/svg+xml") {
-            // Handle URL-encoded SVG
-            let decoded = urlencoding::decode(data).map_err(|e| {
-                Error::Image(ImageError::InvalidDataUrl {
-                    reason: format!("Failed to URL decode SVG: {}", e),
-                })
-            })?;
-
-            // Use resvg to render SVG to bitmap
-            self.render_svg_to_image(&decoded).map(|img| (img, None, None, true))
-        } else {
-            Err(Error::Image(ImageError::InvalidDataUrl {
-                reason: "Unsupported data URL format (not base64 or SVG)".to_string(),
-            }))
-        }
-    }
-
-    fn decode_image_bytes(
-        &self,
-        bytes: &[u8],
-        mime_hint: Option<&str>,
-        extension_hint: Option<&str>,
+        resource: &FetchedResource,
         url: &str,
     ) -> Result<(DynamicImage, Option<OrientationTransform>, Option<f32>, bool)> {
-        let mime_is_svg = mime_hint.map(|m| m.contains("image/svg")).unwrap_or(false);
-        let ext_is_svg = extension_hint.map(|e| e.eq_ignore_ascii_case("svg")).unwrap_or(false);
+        let bytes = &resource.bytes;
+        let content_type = resource.content_type.as_deref();
 
+        // Check if this is SVG
+        let mime_is_svg = content_type.map(|m| m.contains("image/svg")).unwrap_or(false);
         let is_svg = mime_is_svg
-            || ext_is_svg
             || std::str::from_utf8(bytes)
                 .ok()
-                .map(|s| s.trim_start().starts_with("<svg"))
+                .map(|s| s.trim_start().starts_with("<svg") || s.trim_start().starts_with("<?xml"))
                 .unwrap_or(false);
 
         if is_svg {
@@ -325,6 +282,7 @@ impl ImageCache {
             return self.render_svg_to_image(content).map(|img| (img, None, None, true));
         }
 
+        // Regular image - extract EXIF metadata and decode
         let (orientation, resolution) = Self::exif_metadata(bytes);
         image::load_from_memory(bytes)
             .map(|img| (img, orientation, resolution, false))
@@ -443,7 +401,7 @@ impl ImageCache {
         let options = usvg::Options::default();
         let tree = usvg::Tree::from_str(svg_content, &options).map_err(|e| {
             Error::Image(ImageError::DecodeFailed {
-                url: "SVG data URL".to_string(),
+                url: "SVG content".to_string(),
                 reason: format!("Failed to parse SVG: {}", e),
             })
         })?;
@@ -451,6 +409,11 @@ impl ImageCache {
         let size = tree.size();
         let width = size.width() as u32;
         let height = size.height() as u32;
+
+        // Handle zero-size SVGs
+        if width == 0 || height == 0 {
+            return Err(Error::Render(RenderError::CanvasCreationFailed { width, height }));
+        }
 
         // Render SVG to pixmap
         let mut pixmap = tiny_skia::Pixmap::new(width, height)
@@ -462,7 +425,7 @@ impl ImageCache {
         let rgba_data = pixmap.take();
         let img = image::RgbaImage::from_raw(width, height, rgba_data).ok_or_else(|| {
             Error::Image(ImageError::DecodeFailed {
-                url: "SVG data URL".to_string(),
+                url: "SVG content".to_string(),
                 reason: "Failed to create image from SVG pixmap".to_string(),
             })
         })?;
@@ -470,6 +433,10 @@ impl ImageCache {
         Ok(image::DynamicImage::ImageRgba8(img))
     }
 }
+
+// ============================================================================
+// URL Resolution
+// ============================================================================
 
 fn resolve_against_base(base: &str, reference: &str) -> Option<String> {
     // Normalize file:// bases that point to directories so Url::join keeps the directory segment.
@@ -498,6 +465,10 @@ fn resolve_against_base(base: &str, reference: &str) -> Option<String> {
     base_url.join(reference).ok().map(|u| u.to_string())
 }
 
+// ============================================================================
+// Trait Implementations
+// ============================================================================
+
 impl Default for ImageCache {
     fn default() -> Self {
         Self::new()
@@ -509,9 +480,14 @@ impl Clone for ImageCache {
         Self {
             cache: Arc::clone(&self.cache),
             base_url: self.base_url.clone(),
+            fetcher: Arc::clone(&self.fetcher),
         }
     }
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -624,5 +600,49 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn with_fetcher_uses_custom_fetcher() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CountingFetcher {
+            count: AtomicUsize,
+        }
+
+        impl ResourceFetcher for CountingFetcher {
+            fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+                self.count.fetch_add(1, Ordering::SeqCst);
+                // Return a minimal valid PNG
+                let png_data = vec![
+                    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
+                    0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
+                    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1
+                    0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+                    0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41,
+                    0x54, 0x08, 0xD7, 0x63, 0xF8, 0xFF, 0xFF, 0x3F,
+                    0x00, 0x05, 0xFE, 0x02, 0xFE, 0xDC, 0xCC, 0x59,
+                    0xE7, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
+                    0x44, 0xAE, 0x42, 0x60, 0x82,
+                ];
+                Ok(FetchedResource::new(png_data, Some("image/png".to_string())))
+            }
+        }
+
+        let fetcher = Arc::new(CountingFetcher {
+            count: AtomicUsize::new(0),
+        });
+        let cache = ImageCache::with_fetcher(Arc::clone(&fetcher) as Arc<dyn ResourceFetcher>);
+
+        let _ = cache.load("test://image.png");
+        assert_eq!(fetcher.count.load(Ordering::SeqCst), 1);
+
+        // Second load should use cache
+        let _ = cache.load("test://image.png");
+        assert_eq!(fetcher.count.load(Ordering::SeqCst), 1);
+
+        // Different URL should fetch again
+        let _ = cache.load("test://other.png");
+        assert_eq!(fetcher.count.load(Ordering::SeqCst), 2);
     }
 }

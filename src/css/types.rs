@@ -12,6 +12,83 @@ use std::fmt;
 use super::selectors::FastRenderSelectorImpl;
 
 // ============================================================================
+// CSS Parse Errors
+// ============================================================================
+
+/// A CSS parse error with location information
+#[derive(Debug, Clone)]
+pub struct CssParseError {
+    /// Error message describing what went wrong
+    pub message: String,
+    /// Line number (1-indexed)
+    pub line: u32,
+    /// Column number (1-indexed)
+    pub column: u32,
+}
+
+impl CssParseError {
+    /// Create a new parse error
+    pub fn new(message: impl Into<String>, line: u32, column: u32) -> Self {
+        Self {
+            message: message.into(),
+            line,
+            column,
+        }
+    }
+}
+
+impl fmt::Display for CssParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "CSS error at {}:{}: {}", self.line, self.column, self.message)
+    }
+}
+
+impl std::error::Error for CssParseError {}
+
+/// Result of parsing a CSS stylesheet
+///
+/// Contains the parsed stylesheet along with any errors that were encountered.
+/// The parser attempts error recovery, so even if errors are present, the
+/// stylesheet may contain valid rules.
+#[derive(Debug, Clone)]
+pub struct CssParseResult {
+    /// The parsed stylesheet (may be partial if errors occurred)
+    pub stylesheet: StyleSheet,
+    /// Any errors encountered during parsing
+    pub errors: Vec<CssParseError>,
+}
+
+impl CssParseResult {
+    /// Create a successful result with no errors
+    pub fn ok(stylesheet: StyleSheet) -> Self {
+        Self {
+            stylesheet,
+            errors: Vec::new(),
+        }
+    }
+
+    /// Create a result with errors
+    pub fn with_errors(stylesheet: StyleSheet, errors: Vec<CssParseError>) -> Self {
+        Self { stylesheet, errors }
+    }
+
+    /// Returns true if parsing completed without errors
+    pub fn is_ok(&self) -> bool {
+        self.errors.is_empty()
+    }
+
+    /// Returns true if parsing encountered errors
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+
+    /// Returns the number of errors
+    pub fn error_count(&self) -> usize {
+        self.errors.len()
+    }
+}
+
+// ============================================================================
 // CssString wrapper for selectors crate compatibility
 // ============================================================================
 

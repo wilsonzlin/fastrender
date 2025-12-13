@@ -87,6 +87,9 @@ ureq = "3.1"
 
 # Base64 encoding for data URLs
 base64 = "0.22"
+rayon = "1.10.0"
+num_cpus = "1.17.0"
+chrono = "0.4.42"
 
 # ============================================================================
 # Development Dependencies

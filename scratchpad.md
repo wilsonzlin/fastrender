@@ -1,9 +1,36 @@
 # Scratchpad – rendering engine session notes
 
+## Current Status (Dec 2024)
+- **42 pages tested**: 33 pass, 9 crash, 0 error
+- **Main crashes**: `em`/`rem`/`vw` unit resolution without context (values.rs:498)
+- **Testing**: `cargo run --release --bin render_pages` → see `fetches/renders/_summary.log`
+
 ## Context
 - Project: Rust HTML/CSS renderer (`fastrender`); current harness: danger-full-access FS, network enabled, approval policy `never`.
 - Taffy is vendored in `vendor/taffy/` and must not be updated via Cargo.
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
+
+## Infrastructure Changes (Dec 2024)
+- **ResourceFetcher trait** (`src/resource.rs`): Abstraction for fetching external resources
+  - `HttpFetcher`: Default implementation for HTTP/file/data URLs
+  - Pluggable into `FastRender::builder().fetcher(...)`
+- **CachingFetcher** (`src/bin/caching_fetcher.rs`): Disk-caching wrapper for dev tooling
+- **ImageCache refactored**: Uses ResourceFetcher, no longer has disk caching built in
+- **CSS error collection**: `parse_stylesheet_with_errors()` returns `CssParseResult` with errors
+- **New folder structure**:
+  - `fetches/html/` - cached HTML pages
+  - `fetches/assets/` - cached images/CSS
+  - `fetches/renders/` - output PNGs + logs
+  - `fetches/renders/_summary.log` - overall results
+  - `fetches/renders/*.log` - per-page logs with timing/errors/crashes
+
+## Immediate Priorities
+1. Fix unit resolution crashes (em/rem/vw without context)
+   - Location: `src/style/values.rs:498`
+   - Triggered by: google.com, cnn.com, airbnb.com, cnet.com, imdb.com, etc.
+2. Fix `min > max` panic in f32 operations
+   - Location: `core/num/f32.rs:1405`
+   - Triggered by: cnn.com
 
 ## Recent changes (this branch)
 - font-variant tokenization now preserves whitespace inside alternates functions (styleset/character-variant/swash/ornaments/annotation), so both the longhand and shorthand parse space-separated arguments; new regressions lock the whitespace-friendly parsing. The font-variant shorthand already resets omitted subproperties and validates conflicts.

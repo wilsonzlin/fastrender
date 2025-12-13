@@ -66,6 +66,7 @@ use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem;
 use crate::layout::engine::{LayoutConfig, LayoutEngine};
 use crate::paint::painter::paint_tree_with_resources_scaled;
+use crate::resource::{HttpFetcher, ResourceFetcher};
 use crate::style::cascade::apply_styles_with_media_and_target;
 use crate::style::color::Rgba;
 use crate::style::media::MediaContext;
@@ -78,6 +79,7 @@ use crate::tree::box_tree::{BoxNode, BoxType, MarkerContent, ReplacedBox, Replac
 use crate::tree::fragment_tree::FragmentTree;
 use std::io;
 use std::path::Path;
+use std::sync::Arc;
 use url::Url;
 
 // Re-export Pixmap from tiny-skia for public use
@@ -137,6 +139,9 @@ pub struct FastRender {
 
     /// Image cache for external resources (images, SVG)
     image_cache: ImageCache,
+
+    /// Resource fetcher for loading external resources (shared with ImageCache)
+    fetcher: Arc<dyn ResourceFetcher>,
 
     /// Default background color for rendering
     background_color: Rgba,
@@ -228,9 +233,9 @@ impl FastRenderConfig {
 ///     .background_color(Rgba::WHITE)
 ///     .build()?;
 /// ```
-#[derive(Debug, Clone)]
 pub struct FastRenderBuilder {
     config: FastRenderConfig,
+    fetcher: Option<Arc<dyn ResourceFetcher>>,
 }
 
 impl FastRenderBuilder {
@@ -238,6 +243,7 @@ impl FastRenderBuilder {
     pub fn new() -> Self {
         Self {
             config: FastRenderConfig::default(),
+            fetcher: None,
         }
     }
 
@@ -278,9 +284,17 @@ impl FastRenderBuilder {
         self
     }
 
+    /// Sets a custom resource fetcher for loading external resources (images, CSS)
+    ///
+    /// This allows injection of custom fetching behavior, such as caching or mocking.
+    pub fn fetcher(mut self, fetcher: Arc<dyn ResourceFetcher>) -> Self {
+        self.fetcher = Some(fetcher);
+        self
+    }
+
     /// Builds the FastRender instance
     pub fn build(self) -> Result<FastRender> {
-        FastRender::with_config(self.config)
+        FastRender::with_config_and_fetcher(self.config, self.fetcher)
     }
 }
 
@@ -420,19 +434,34 @@ impl FastRender {
     /// let mut renderer = FastRender::with_config(config)?;
     /// ```
     pub fn with_config(config: FastRenderConfig) -> Result<Self> {
+        Self::with_config_and_fetcher(config, None)
+    }
+
+    /// Creates a new FastRender instance with custom configuration and fetcher
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Configuration options for the renderer
+    /// * `fetcher` - Optional custom resource fetcher (uses HttpFetcher if None)
+    pub fn with_config_and_fetcher(
+        config: FastRenderConfig,
+        fetcher: Option<Arc<dyn ResourceFetcher>>,
+    ) -> Result<Self> {
+        let fetcher = fetcher.unwrap_or_else(|| Arc::new(HttpFetcher::new()));
         let font_context = FontContext::new();
         let layout_config =
             LayoutConfig::for_viewport(Size::new(config.default_width as f32, config.default_height as f32));
         let layout_engine = LayoutEngine::with_font_context(layout_config, font_context.clone());
         let image_cache = match &config.base_url {
-            Some(url) => ImageCache::with_base_url(url.clone()),
-            None => ImageCache::new(),
+            Some(url) => ImageCache::with_base_url_and_fetcher(url.clone(), Arc::clone(&fetcher)),
+            None => ImageCache::with_fetcher(Arc::clone(&fetcher)),
         };
 
         Ok(Self {
             font_context,
             layout_engine,
             image_cache,
+            fetcher,
             background_color: config.background_color,
             default_width: config.default_width,
             default_height: config.default_height,
@@ -612,9 +641,7 @@ impl FastRender {
         let target_fragment = self.current_target_fragment();
         let media_ctx =
             MediaContext::screen(width as f32, height as f32).with_device_pixel_ratio(self.device_pixel_ratio);
-        let import_loader = CssImportFetcher {
-            base_url: self.base_url.clone(),
-        };
+        let import_loader = CssImportFetcher::new(self.base_url.clone(), Arc::clone(&self.fetcher));
         let resolved_stylesheet = stylesheet.resolve_imports(&import_loader, self.base_url.as_deref(), &media_ctx);
         self.font_context.clear_web_fonts();
         let font_faces = resolved_stylesheet.collect_font_face_rules(&media_ctx);
@@ -996,19 +1023,24 @@ impl FastRender {
     }
 }
 
-#[derive(Clone, Debug)]
+/// CSS import loader that uses a ResourceFetcher for byte fetching
 struct CssImportFetcher {
     base_url: Option<String>,
+    fetcher: Arc<dyn ResourceFetcher>,
 }
 
 impl CssImportFetcher {
-    fn resolve_url(&self, href: &str) -> Option<Url> {
+    fn new(base_url: Option<String>, fetcher: Arc<dyn ResourceFetcher>) -> Self {
+        Self { base_url, fetcher }
+    }
+
+    fn resolve_url(&self, href: &str) -> Option<String> {
         if href.starts_with("data:") {
-            return None;
+            return Some(href.to_string());
         }
 
         if let Ok(abs) = Url::parse(href) {
-            return Some(abs);
+            return Some(abs.to_string());
         }
 
         let base = self.base_url.as_ref()?;
@@ -1024,149 +1056,26 @@ impl CssImportFetcher {
             .or_else(|_| Url::from_file_path(&base_candidate).map_err(|_| url::ParseError::RelativeUrlWithoutBase))
             .ok()
             .and_then(|base_url| base_url.join(href).ok())
+            .map(|u| u.to_string())
     }
 }
 
 impl CssImportLoader for CssImportFetcher {
     fn load(&self, url: &str) -> Result<String> {
-        if url.starts_with("data:") {
-            return decode_data_url_to_string(url);
-        }
-
-        let resolved = self.resolve_url(url).or_else(|| Url::parse(url).ok()).ok_or_else(|| {
+        // Resolve the URL first
+        let resolved = self.resolve_url(url).ok_or_else(|| {
             Error::Io(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("Cannot resolve @import URL '{}'", url),
             ))
         })?;
 
-        match resolved.scheme() {
-            "file" => {
-                let path = resolved.to_file_path().map_err(|_| {
-                    Error::Io(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!("Invalid file URL for @import: {}", resolved),
-                    ))
-                })?;
-                let bytes = std::fs::read(&path).map_err(Error::Io)?;
-                Ok(decode_css_bytes(&bytes, None))
-            }
-            _ => {
-                let config = ureq::Agent::config_builder()
-                    .timeout_global(Some(std::time::Duration::from_secs(30)))
-                    .build();
-                let agent: ureq::Agent = config.into();
+        // Use the fetcher to get the bytes
+        let resource = self.fetcher.fetch(&resolved)?;
 
-                let mut response = agent
-                    .get(resolved.as_str())
-                    .call()
-                    .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
-
-                let content_type = response
-                    .headers()
-                    .get("content-type")
-                    .and_then(|h| h.to_str().ok())
-                    .map(|s| s.to_string());
-
-                let bytes = response
-                    .body_mut()
-                    .read_to_vec()
-                    .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
-
-                Ok(decode_css_bytes(&bytes, content_type.as_deref()))
-            }
-        }
+        // Decode CSS bytes with charset handling
+        Ok(decode_css_bytes(&resource.bytes, resource.content_type.as_deref()))
     }
-}
-
-fn decode_data_url_to_string(data_url: &str) -> Result<String> {
-    if !data_url.starts_with("data:") {
-        return Err(Error::Io(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Not a data: URL",
-        )));
-    }
-
-    let mut parts = data_url.splitn(2, ',');
-    let header = parts
-        .next()
-        .ok_or_else(|| Error::Io(io::Error::new(io::ErrorKind::InvalidInput, "Malformed data URL")))?;
-    let payload = parts
-        .next()
-        .ok_or_else(|| Error::Io(io::Error::new(io::ErrorKind::InvalidInput, "Missing data in data URL")))?;
-
-    let header = header.trim_start_matches("data:");
-    let mut is_base64 = false;
-    let mut charset: Option<String> = None;
-    let mut mime: Option<String> = None;
-    for (idx, segment) in header.split(';').enumerate() {
-        let seg = segment.trim();
-        if seg.is_empty() {
-            continue;
-        }
-        if seg.eq_ignore_ascii_case("base64") {
-            is_base64 = true;
-        } else if seg.to_ascii_lowercase().starts_with("charset=") {
-            charset = seg.split_once('=').map(|(_, v)| v.trim().to_string());
-        } else if idx == 0 && seg.contains('/') {
-            mime = Some(seg.to_string());
-        }
-    }
-
-    let bytes = if is_base64 {
-        use base64::Engine;
-        base64::engine::general_purpose::STANDARD.decode(payload).map_err(|e| {
-            Error::Io(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Invalid base64 data URL: {}", e),
-            ))
-        })?
-    } else {
-        percent_decode_bytes(payload)?
-    };
-
-    let content_type = match (mime, charset) {
-        (Some(m), Some(cs)) => Some(format!("{};charset={}", m, cs)),
-        (Some(m), None) => Some(m),
-        (None, Some(cs)) => Some(format!("text/plain;charset={}", cs)),
-        (None, None) => None,
-    };
-
-    Ok(decode_css_bytes(&bytes, content_type.as_deref()))
-}
-
-fn percent_decode_bytes(input: &str) -> Result<Vec<u8>> {
-    let mut out = Vec::with_capacity(input.len());
-    let bytes = input.as_bytes();
-    let mut i = 0usize;
-    while i < bytes.len() {
-        if bytes[i] == b'%' {
-            if i + 2 >= bytes.len() {
-                return Err(Error::Io(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Incomplete percent-escape in data URL",
-                )));
-            }
-            let hi = (bytes[i + 1] as char).to_digit(16);
-            let lo = (bytes[i + 2] as char).to_digit(16);
-            match (hi, lo) {
-                (Some(hi), Some(lo)) => {
-                    out.push(((hi << 4) | lo) as u8);
-                    i += 3;
-                }
-                _ => {
-                    return Err(Error::Io(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "Invalid percent-escape in data URL",
-                    )))
-                }
-            }
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    Ok(out)
 }
 
 fn extract_fragment(url: &str) -> Option<String> {

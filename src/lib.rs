@@ -181,6 +181,7 @@ pub mod debug;
 pub mod dom;
 pub mod image_loader;
 pub mod image_output;
+pub mod resource;
 
 // ============================================================================
 // Public API
@@ -254,10 +255,14 @@ pub use text::hyphenation::{
 pub use text::shaper::{Script, TextDirection, TextShaper};
 
 // CSS
-pub use css::types::{PropertyValue, Transform};
+pub use css::parser::parse_stylesheet_with_errors;
+pub use css::types::{CssParseError, CssParseResult, PropertyValue, Transform};
 
 // Image output
 pub use image_output::OutputFormat;
+
+// Resource fetching
+pub use resource::{FetchedResource, HttpFetcher, ResourceFetcher};
 
 // Debug tools
 pub use debug::tree_printer::{ColorMode, DiffMode, DotExporter, EnhancedTreePrinter, PrintConfig, TreeDiff};

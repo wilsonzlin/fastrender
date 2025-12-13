@@ -1,12 +1,16 @@
 //! CSS parsing
 //!
 //! Parses CSS stylesheets and declarations.
+//!
+//! The parser supports error recovery - when it encounters invalid CSS,
+//! it attempts to skip to the next valid rule and continue parsing.
+//! Errors are collected and returned alongside the parsed stylesheet.
 
 use super::properties::parse_property_value;
 use super::selectors::PseudoClassParser;
 use super::types::{
-    CssRule, Declaration, FontFaceRule, FontFaceSource, FontFaceStyle, ImportRule, LayerRule, MediaRule, StyleRule,
-    StyleSheet,
+    CssParseError, CssParseResult, CssRule, Declaration, FontFaceRule, FontFaceSource,
+    FontFaceStyle, ImportRule, LayerRule, MediaRule, StyleRule, StyleSheet,
 };
 use crate::dom::DomNode;
 use crate::error::Result;
@@ -20,19 +24,57 @@ use selectors::parser::{SelectorList, SelectorParseErrorKind};
 
 /// Parse a CSS stylesheet
 ///
-/// This parser now properly handles @media rules, building a tree of
-/// CssRule that can be evaluated against a MediaContext during cascade.
+/// This parser handles @media rules, building a tree of CssRule that can be
+/// evaluated against a MediaContext during cascade.
+///
+/// Errors are silently ignored for backward compatibility. Use
+/// [`parse_stylesheet_with_errors`] to capture parse errors.
 pub fn parse_stylesheet(css: &str) -> Result<StyleSheet> {
-    let mut input = ParserInput::new(css);
-    let mut parser = Parser::new(&mut input);
-
-    let rules = parse_rule_list(&mut parser);
-
-    Ok(StyleSheet { rules })
+    let result = parse_stylesheet_collecting_errors(css);
+    Ok(result.stylesheet)
 }
 
-/// Parse a list of CSS rules (top-level or inside @media block)
-fn parse_rule_list<'i, 't>(parser: &mut Parser<'i, 't>) -> Vec<CssRule> {
+/// Parse a CSS stylesheet and collect any parse errors
+///
+/// This parser attempts error recovery, so even if errors are present,
+/// the returned stylesheet may contain valid rules.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use fastrender::css::parser::parse_stylesheet_with_errors;
+///
+/// let css = "p { color: red; } .invalid {{ } span { color: blue; }";
+/// let result = parse_stylesheet_with_errors(css);
+///
+/// println!("Found {} errors", result.error_count());
+/// for error in &result.errors {
+///     eprintln!("{}", error);
+/// }
+///
+/// // The stylesheet still contains the valid rules
+/// assert!(result.stylesheet.rules.len() > 0);
+/// ```
+pub fn parse_stylesheet_with_errors(css: &str) -> CssParseResult {
+    parse_stylesheet_collecting_errors(css)
+}
+
+/// Internal function that does the actual parsing with error collection
+fn parse_stylesheet_collecting_errors(css: &str) -> CssParseResult {
+    let mut input = ParserInput::new(css);
+    let mut parser = Parser::new(&mut input);
+    let mut errors = Vec::new();
+
+    let rules = parse_rule_list_collecting(&mut parser, &mut errors);
+
+    CssParseResult::with_errors(StyleSheet { rules }, errors)
+}
+
+/// Parse a list of CSS rules, collecting errors
+fn parse_rule_list_collecting<'i, 't>(
+    parser: &mut Parser<'i, 't>,
+    errors: &mut Vec<CssParseError>,
+) -> Vec<CssRule> {
     let mut rules = Vec::new();
 
     while !parser.is_exhausted() {
@@ -47,7 +89,11 @@ fn parse_rule_list<'i, 't>(parser: &mut Parser<'i, 't>) -> Vec<CssRule> {
             }
             Ok(None) => {} // Comment or skipped at-rule
             Err(e) => {
-                eprintln!("CSS parse error: {:?}", e);
+                // Collect the error
+                let location = e.location;
+                let message = format!("{:?}", e.kind);
+                errors.push(CssParseError::new(message, location.line, location.column));
+
                 // Try to recover by skipping to next rule
                 recover_from_error(parser);
             }
@@ -55,6 +101,16 @@ fn parse_rule_list<'i, 't>(parser: &mut Parser<'i, 't>) -> Vec<CssRule> {
     }
 
     rules
+}
+
+/// Parse a list of CSS rules (internal use - discards errors)
+///
+/// Used for parsing nested rule lists inside @media and @layer blocks
+fn parse_rule_list<'i, 't>(parser: &mut Parser<'i, 't>) -> Vec<CssRule> {
+    let mut errors = Vec::new();
+    parse_rule_list_collecting(parser, &mut errors)
+    // Errors from nested rules are discarded here
+    // In the future, we could pass down the error collector
 }
 
 /// Recover from a parse error by skipping to the next rule
