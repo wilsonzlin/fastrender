@@ -1206,7 +1206,8 @@ fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f
     let mut synthetic_bold = 0.0;
     let mut synthetic_oblique = 0.0;
 
-    if style.font_synthesis.weight && style.font_weight.to_u16() > font.weight.value() {
+    if style.font_synthesis.weight && style.font_weight.to_u16() > font.weight.value() && !font_has_axis(font, *b"wght")
+    {
         let delta = (style.font_weight.to_u16() as f32 - font.weight.value() as f32).max(0.0);
         let strength = (delta / 400.0).clamp(0.0, 1.0);
         synthetic_bold = style.font_size * 0.04 * strength;
@@ -1242,6 +1243,14 @@ fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f
     }
 
     (synthetic_bold, synthetic_oblique)
+}
+
+fn font_has_axis(font: &LoadedFont, tag: [u8; 4]) -> bool {
+    if let Ok(face) = font.as_ttf_face() {
+        let target = Tag::from_bytes(&tag);
+        return face.variation_axes().into_iter().any(|axis| axis.tag == target);
+    }
+    false
 }
 
 fn synthetic_position_adjustment(
@@ -2373,10 +2382,12 @@ mod tests {
     use crate::css::types::{FontFaceRule, FontFaceSource};
     use crate::style::types::{
         EastAsianVariant, EastAsianWidth, FontFeatureSetting, FontKerning, FontStretch, FontVariantLigatures,
-        FontVariationSetting, NumericFigure, NumericFraction, NumericSpacing, TextOrientation, WritingMode,
+        FontVariationSetting, FontWeight, NumericFigure, NumericFraction, NumericSpacing, TextOrientation, WritingMode,
     };
     use crate::text::font_db::FontDatabase;
-    use crate::text::font_db::{FontStretch as DbFontStretch, FontStyle as DbFontStyle, FontWeight, GenericFamily};
+    use crate::text::font_db::{
+        FontStretch as DbFontStretch, FontStyle as DbFontStyle, FontWeight as DbFontWeight, GenericFamily,
+    };
     use crate::text::font_fallback::FamilyEntry;
     use std::fs;
     use std::path::Path;
@@ -2772,7 +2783,7 @@ mod tests {
                     family: "Test".to_string(),
                     data: Arc::new(Vec::new()),
                     index: 0,
-                    weight: FontWeight::NORMAL,
+                    weight: DbFontWeight::NORMAL,
                     style: DbFontStyle::Normal,
                     stretch: DbFontStretch::Normal,
                 }),
@@ -2983,6 +2994,25 @@ mod tests {
         )
         .expect("assign fonts none");
         assert!(runs_none[0].variations.iter().all(|v| v.tag != opsz_tag));
+    }
+
+    #[test]
+    fn wght_axis_prevents_synthetic_bold() {
+        let (ctx, family) = load_variable_font();
+        let mut style = ComputedStyle::default();
+        style.font_family = vec![family];
+        style.font_weight = FontWeight::Number(900);
+
+        let runs = ShapingPipeline::new()
+            .shape("m", &style, &ctx)
+            .expect("shape variable font");
+        if runs.is_empty() {
+            return;
+        }
+        assert!(
+            runs.iter().all(|r| r.synthetic_bold.abs() < f32::EPSILON),
+            "wght axis should satisfy requested weight without synthetic bolding"
+        );
     }
 
     #[test]
@@ -3553,7 +3583,7 @@ mod tests {
             data: Arc::new(Vec::new()),
             index: 0,
             family: "Noto Color Emoji".into(),
-            weight: FontWeight::NORMAL,
+            weight: DbFontWeight::NORMAL,
             style: DbFontStyle::Normal,
             stretch: DbFontStretch::Normal,
         };
@@ -3561,7 +3591,7 @@ mod tests {
             data: Arc::new(Vec::new()),
             index: 0,
             family: "Roboto".into(),
-            weight: FontWeight::NORMAL,
+            weight: DbFontWeight::NORMAL,
             style: DbFontStyle::Normal,
             stretch: DbFontStretch::Normal,
         };
@@ -3636,7 +3666,7 @@ mod tests {
             data: Arc::new(Vec::new()),
             index: 0,
             family: name.into(),
-            weight: FontWeight::NORMAL,
+            weight: DbFontWeight::NORMAL,
             style: DbFontStyle::Normal,
             stretch: DbFontStretch::Normal,
         }
