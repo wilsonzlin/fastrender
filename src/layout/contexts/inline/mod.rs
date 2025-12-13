@@ -245,6 +245,7 @@ impl InlineFormattingContext {
             base_direction,
             positioned_children,
             &mut bidi_stack,
+            CombineBoundary::default(),
         )
     }
 
@@ -256,10 +257,29 @@ impl InlineFormattingContext {
         base_direction: crate::style::types::Direction,
         positioned_children: &mut Vec<BoxNode>,
         bidi_stack: &mut Vec<(UnicodeBidi, Direction)>,
+        boundary: CombineBoundary,
     ) -> Result<Vec<InlineFlowSegment>, LayoutError> {
         let mut pending_space: Option<PendingSpace> = None;
         let mut segments = Vec::new();
         let mut current_items: Vec<InlineItem> = Vec::new();
+
+        let combinable_indices: Vec<usize> = box_node
+            .children
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| {
+                if is_vertical_typographic_mode(c.style.writing_mode)
+                    && !matches!(c.style.text_combine_upright, TextCombineUpright::None)
+                {
+                    if first_character_combinable(c, c.style.text_combine_upright).unwrap_or(false) {
+                        return Some(i);
+                    }
+                }
+                None
+            })
+            .collect();
+        let first_combinable = combinable_indices.first().copied();
+        let last_combinable = combinable_indices.last().copied();
 
         for (idx, child) in box_node.children.iter().enumerate() {
             if let Some(space) = pending_space.take() {
@@ -287,12 +307,22 @@ impl InlineFormattingContext {
 
             match &child.box_type {
                 BoxType::Text(text_box) => {
+                    let mut inherited_boundary = CombineBoundary::default();
+                    if Some(idx) == first_combinable {
+                        inherited_boundary.prev = boundary.prev;
+                    }
+                    if Some(idx) == last_combinable {
+                        inherited_boundary.next = boundary.next;
+                    }
                     let boundary = if is_vertical_typographic_mode(child.style.writing_mode)
                         && !matches!(child.style.text_combine_upright, TextCombineUpright::None)
                     {
-                        compute_combine_boundary(&box_node.children, idx, child.style.text_combine_upright)
+                        let mut b = compute_combine_boundary(&box_node.children, idx, child.style.text_combine_upright);
+                        b.prev |= inherited_boundary.prev;
+                        b.next |= inherited_boundary.next;
+                        b
                     } else {
-                        CombineBoundary::default()
+                        inherited_boundary
                     };
                     let normalized = normalize_text_for_white_space(
                         &apply_text_transform(&text_box.text, child.style.text_transform, child.style.white_space),
@@ -313,12 +343,23 @@ impl InlineFormattingContext {
                 }
                 BoxType::Marker(marker_box) => match &marker_box.content {
                     MarkerContent::Text(text) => {
+                        let mut inherited_boundary = CombineBoundary::default();
+                        if Some(idx) == first_combinable {
+                            inherited_boundary.prev = boundary.prev;
+                        }
+                        if Some(idx) == last_combinable {
+                            inherited_boundary.next = boundary.next;
+                        }
                         let boundary = if is_vertical_typographic_mode(child.style.writing_mode)
                             && !matches!(child.style.text_combine_upright, TextCombineUpright::None)
                         {
-                            compute_combine_boundary(&box_node.children, idx, child.style.text_combine_upright)
+                            let mut b =
+                                compute_combine_boundary(&box_node.children, idx, child.style.text_combine_upright);
+                            b.prev |= inherited_boundary.prev;
+                            b.next |= inherited_boundary.next;
+                            b
                         } else {
-                            CombineBoundary::default()
+                            inherited_boundary
                         };
                         let normalized = NormalizedText {
                             text: text.clone(),
@@ -451,6 +492,13 @@ impl InlineFormattingContext {
                     let content_offset_y = padding_top + border_top;
 
                     bidi_stack.push((child.style.unicode_bidi, child.style.direction));
+                    let mut child_boundary = CombineBoundary::default();
+                    if Some(idx) == first_combinable {
+                        child_boundary.prev = boundary.prev;
+                    }
+                    if Some(idx) == last_combinable {
+                        child_boundary.next = boundary.next;
+                    }
                     let child_items = self.collect_inline_items_internal(
                         child,
                         available_width,
@@ -459,6 +507,7 @@ impl InlineFormattingContext {
                         base_direction,
                         positioned_children,
                         bidi_stack,
+                        child_boundary,
                     )?;
                     bidi_stack.pop();
                     let fallback_metrics = self.compute_strut_metrics(&child.style);
@@ -527,8 +576,27 @@ impl InlineFormattingContext {
         base_direction: crate::style::types::Direction,
         positioned_children: &mut Vec<BoxNode>,
         bidi_stack: &mut Vec<(UnicodeBidi, Direction)>,
+        boundary: CombineBoundary,
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let mut items = Vec::new();
+
+        let combinable_indices: Vec<usize> = box_node
+            .children
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| {
+                if is_vertical_typographic_mode(c.style.writing_mode)
+                    && !matches!(c.style.text_combine_upright, TextCombineUpright::None)
+                {
+                    if first_character_combinable(c, c.style.text_combine_upright).unwrap_or(false) {
+                        return Some(i);
+                    }
+                }
+                None
+            })
+            .collect();
+        let first_combinable = combinable_indices.first().copied();
+        let last_combinable = combinable_indices.last().copied();
 
         for (idx, child) in box_node.children.iter().enumerate() {
             if let Some(space) = pending_space.take() {
@@ -544,12 +612,22 @@ impl InlineFormattingContext {
             }
             match &child.box_type {
                 BoxType::Text(text_box) => {
+                    let mut inherited_boundary = CombineBoundary::default();
+                    if Some(idx) == first_combinable {
+                        inherited_boundary.prev = boundary.prev;
+                    }
+                    if Some(idx) == last_combinable {
+                        inherited_boundary.next = boundary.next;
+                    }
                     let boundary = if is_vertical_typographic_mode(child.style.writing_mode)
                         && !matches!(child.style.text_combine_upright, TextCombineUpright::None)
                     {
-                        compute_combine_boundary(&box_node.children, idx, child.style.text_combine_upright)
+                        let mut b = compute_combine_boundary(&box_node.children, idx, child.style.text_combine_upright);
+                        b.prev |= inherited_boundary.prev;
+                        b.next |= inherited_boundary.next;
+                        b
                     } else {
-                        CombineBoundary::default()
+                        inherited_boundary
                     };
                     let normalized = normalize_text_for_white_space(
                         &apply_text_transform(&text_box.text, child.style.text_transform, child.style.white_space),
@@ -571,12 +649,23 @@ impl InlineFormattingContext {
                 }
                 BoxType::Marker(marker_box) => match &marker_box.content {
                     MarkerContent::Text(text) => {
+                        let mut inherited_boundary = CombineBoundary::default();
+                        if Some(idx) == first_combinable {
+                            inherited_boundary.prev = boundary.prev;
+                        }
+                        if Some(idx) == last_combinable {
+                            inherited_boundary.next = boundary.next;
+                        }
                         let boundary = if is_vertical_typographic_mode(child.style.writing_mode)
                             && !matches!(child.style.text_combine_upright, TextCombineUpright::None)
                         {
-                            compute_combine_boundary(&box_node.children, idx, child.style.text_combine_upright)
+                            let mut b =
+                                compute_combine_boundary(&box_node.children, idx, child.style.text_combine_upright);
+                            b.prev |= inherited_boundary.prev;
+                            b.next |= inherited_boundary.next;
+                            b
                         } else {
-                            CombineBoundary::default()
+                            inherited_boundary
                         };
                         let normalized = NormalizedText {
                             text: text.clone(),
@@ -719,6 +808,7 @@ impl InlineFormattingContext {
                         base_direction,
                         positioned_children,
                         bidi_stack,
+                        CombineBoundary::default(),
                     )?;
                     bidi_stack.pop();
                     let fallback_metrics = self.compute_strut_metrics(&child.style);
@@ -3949,6 +4039,7 @@ impl InlineFormattingContext {
             base_direction,
             &mut positioned_children,
             &mut bidi_stack,
+            CombineBoundary::default(),
         )?;
 
         let indent_value = resolve_length_with_percentage_inline(
