@@ -1657,19 +1657,25 @@ impl InlineFormattingContext {
         items: Vec<InlineItem>,
         first_line_width: f32,
         subsequent_line_width: f32,
+        start_is_para_start: bool,
+        indent: f32,
+        indent_hanging: bool,
+        indent_each_line: bool,
         strut_metrics: &BaselineMetrics,
         base_level: Option<unicode_bidi::Level>,
         root_direction: Direction,
         root_unicode_bidi: UnicodeBidi,
         float_ctx: Option<&'a FloatContext>,
         float_base_y: f32,
-        first_line_indent_cut: f32,
-        subsequent_line_indent_cut: f32,
     ) -> Vec<Line> {
         let float_integration = float_ctx.map(InlineFloatIntegration::new);
         let mut builder: LineBuilder<'a> = LineBuilder::new(
             first_line_width,
             subsequent_line_width,
+            start_is_para_start,
+            indent,
+            indent_hanging,
+            indent_each_line,
             *strut_metrics,
             self.pipeline.clone(),
             self.font_context.clone(),
@@ -1678,8 +1684,6 @@ impl InlineFormattingContext {
             root_direction,
             float_integration,
             float_base_y,
-            first_line_indent_cut,
-            subsequent_line_indent_cut,
         );
 
         for item in items {
@@ -1816,8 +1820,6 @@ impl InlineFormattingContext {
         text_align: TextAlign,
         text_align_last: crate::style::types::TextAlignLast,
         text_justify: TextJustify,
-        first_line_indent: f32,
-        subsequent_line_indent: f32,
         paragraph_info: &[(bool, bool)],
         inline_vertical: bool,
     ) -> Vec<FragmentNode> {
@@ -1839,15 +1841,10 @@ impl InlineFormattingContext {
             } else {
                 line_width
             };
-            let indent_raw = if idx == 0 {
-                first_line_indent
-            } else {
-                subsequent_line_indent
-            };
             let indent_offset = if matches!(line_direction, crate::style::types::Direction::Rtl) {
-                -indent_raw
+                -line.indent
             } else {
-                indent_raw
+                line.indent
             };
             let mut base_align = map_text_align(text_align, line_direction);
             let resolved_justify = resolve_auto_text_justify(text_justify, &line.items);
@@ -2389,8 +2386,8 @@ impl InlineFormattingContext {
         )
         .unwrap_or(0.0);
         let indent_positive = indent_value.max(0.0);
-        let indent_applies_first = style.text_indent.each_line || !style.text_indent.hanging;
-        let indent_applies_subsequent = style.text_indent.each_line || style.text_indent.hanging;
+        let indent_applies_first = !style.text_indent.hanging || style.text_indent.each_line;
+        let indent_applies_subsequent = style.text_indent.hanging || style.text_indent.each_line;
 
         let mut width = match mode {
             IntrinsicSizingMode::MinContent => self.min_content_width(&items),
@@ -3462,37 +3459,35 @@ impl InlineFormattingContext {
         use_first_line_width: bool,
         first_line_width: f32,
         subsequent_line_width: f32,
+        indent: f32,
+        indent_hanging: bool,
+        indent_each_line: bool,
         strut_metrics: &BaselineMetrics,
         base_level: Option<unicode_bidi::Level>,
         root_direction: Direction,
         root_unicode_bidi: UnicodeBidi,
         float_ctx: Option<&FloatContext>,
         float_base_y: f32,
-        first_line_indent_cut: f32,
-        subsequent_line_indent_cut: f32,
     ) -> Vec<Line> {
         let first_width = if use_first_line_width {
             first_line_width
         } else {
             subsequent_line_width
         };
-        let first_cut = if use_first_line_width {
-            first_line_indent_cut
-        } else {
-            subsequent_line_indent_cut
-        };
         self.build_lines(
             items.to_vec(),
             first_width,
             subsequent_line_width,
+            use_first_line_width,
+            indent,
+            indent_hanging,
+            indent_each_line,
             strut_metrics,
             base_level,
             root_direction,
             root_unicode_bidi,
             float_ctx,
             float_base_y,
-            first_cut,
-            subsequent_line_indent_cut,
         )
     }
 
@@ -3965,6 +3960,7 @@ impl InlineFormattingContext {
         let mut line = Line {
             items: positioned,
             resolved_direction: template.resolved_direction,
+            indent: template.indent,
             available_width: template.available_width,
             box_width: template.box_width,
             left_offset: template.left_offset,
@@ -4052,20 +4048,10 @@ impl InlineFormattingContext {
             self.viewport_size,
         )
         .unwrap_or(0.0);
-        let indent_applies_first = style.text_indent.each_line || !style.text_indent.hanging;
-        let indent_applies_subsequent = style.text_indent.each_line || style.text_indent.hanging;
-        let first_line_width = if indent_applies_first {
-            (available_inline - indent_value).max(0.0)
-        } else {
-            available_inline
-        };
-        let subsequent_line_width = if indent_applies_subsequent {
-            (available_inline - indent_value).max(0.0)
-        } else {
-            available_inline
-        };
-        let first_line_indent_cut = if indent_applies_first { indent_value } else { 0.0 };
-        let subsequent_line_indent_cut = if indent_applies_subsequent { indent_value } else { 0.0 };
+        let indent_hanging = style.text_indent.hanging;
+        let indent_each_line = style.text_indent.each_line;
+        let first_line_width = available_inline;
+        let subsequent_line_width = available_inline;
 
         // Build lines, interleaving float placement
         let mut lines = Vec::new();
@@ -4103,14 +4089,15 @@ impl InlineFormattingContext {
                 *use_first_line_width,
                 first_line_width,
                 subsequent_line_width,
+                indent_value,
+                indent_hanging,
+                indent_each_line,
                 &strut_metrics,
                 paragraph_base_level,
                 paragraph_direction,
                 style.unicode_bidi,
                 ctx_ref,
                 float_base_y + *line_offset,
-                first_line_indent_cut,
-                subsequent_line_indent_cut,
             );
             let seg_height = seg_lines.iter().map(|l| l.y_offset + l.height).fold(0.0, f32::max);
             let last_top = seg_lines.last().map(|l| l.y_offset).unwrap_or(0.0);
@@ -4286,7 +4273,7 @@ impl InlineFormattingContext {
         let total_height = total_height_lines.max(max_float_bottom).max(blocks_bottom);
         let line_max_inline = lines
             .iter()
-            .map(|l| (l.left_offset + l.box_width).max(l.left_offset + l.width + indent_value.abs()))
+            .map(|l| (l.left_offset + l.box_width).max(l.left_offset + l.width + l.indent.abs()))
             .fold(0.0, f32::max);
         let float_max_inline = float_fragments
             .iter()
@@ -4319,11 +4306,10 @@ impl InlineFormattingContext {
         let static_position = if let (Some(first_line), Some((is_last_line, _))) =
             (lines.first(), paragraph_info.first())
         {
-            let indent_raw = if indent_applies_first { indent_value } else { 0.0 };
             let indent_offset = if matches!(first_line.resolved_direction, crate::style::types::Direction::Rtl) {
-                -indent_raw
+                -first_line.indent
             } else {
-                indent_raw
+                first_line.indent
             };
             let mut base_align = map_text_align(style.text_align, first_line.resolved_direction);
             let resolved_justify = resolve_auto_text_justify(style.text_justify, &first_line.items);
@@ -4390,8 +4376,6 @@ impl InlineFormattingContext {
             style.text_align,
             style.text_align_last,
             style.text_justify,
-            if indent_applies_first { indent_value } else { 0.0 },
-            if indent_applies_subsequent { indent_value } else { 0.0 },
             &paragraph_info,
             inline_vertical,
         );
@@ -6304,13 +6288,15 @@ mod tests {
             items,
             constraints.width().unwrap(),
             constraints.width().unwrap(),
+            true,
+            0.0,
+            false,
+            false,
             &strut,
             Some(unicode_bidi::Level::ltr()),
             root.style.direction,
             root.style.unicode_bidi,
             None,
-            0.0,
-            0.0,
             0.0,
         );
         let first = lines.first().expect("first line");
@@ -6392,13 +6378,15 @@ mod tests {
             items,
             constraints.width().unwrap(),
             constraints.width().unwrap(),
+            true,
+            0.0,
+            false,
+            false,
             &strut,
             Some(unicode_bidi::Level::ltr()),
             root.style.direction,
             root.style.unicode_bidi,
             None,
-            0.0,
-            0.0,
             0.0,
         );
         let first = lines.first().expect("first line");
@@ -6980,13 +6968,14 @@ mod tests {
             true,
             200.0,
             200.0,
+            0.0,
+            false,
+            false,
             &strut,
             None,
             crate::style::types::Direction::Ltr,
             crate::style::types::UnicodeBidi::Plaintext,
             None,
-            0.0,
-            0.0,
             0.0,
         );
         assert_eq!(lines.len(), 2, "mandatory breaks should split lines");
@@ -7292,13 +7281,15 @@ mod tests {
             std::mem::take(&mut items),
             1000.0,
             1000.0,
+            true,
+            0.0,
+            false,
+            false,
             &strut,
             None,
             node.style.direction,
             node.style.unicode_bidi,
             None,
-            0.0,
-            0.0,
             0.0,
         );
         let line = &lines[0];
@@ -7343,13 +7334,15 @@ mod tests {
             items,
             200.0,
             200.0,
+            true,
+            0.0,
+            false,
+            false,
             &strut,
             Some(unicode_bidi::Level::ltr()),
             container.style.direction,
             container.style.unicode_bidi,
             Some(&float_ctx),
-            0.0,
-            0.0,
             0.0,
         );
 
@@ -8081,6 +8074,36 @@ mod tests {
                 "each-line indent should shift every line start"
             );
         }
+    }
+
+    #[test]
+    fn text_indent_each_line_does_not_indent_soft_wraps() {
+        let mut root_style = ComputedStyle::default();
+        root_style.text_indent.length = Length::px(12.0);
+        root_style.text_indent.each_line = true;
+        root_style.font_size = 16.0;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::Normal;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "word1 word2 word3 word4".to_string(),
+            )],
+        );
+        let constraints = LayoutConstraints::definite_width(60.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert!(fragment.children.len() >= 2, "long word should wrap");
+        let first_x = fragment.children[0].children[0].bounds.x();
+        let second_x = fragment.children[1].children[0].bounds.x();
+        assert!(first_x >= 10.0, "first line should be indented");
+        assert!(
+            second_x <= 1.0,
+            "soft-wrapped lines should not receive each-line indentation"
+        );
     }
 
     #[test]

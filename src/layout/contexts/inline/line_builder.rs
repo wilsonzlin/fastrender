@@ -1234,6 +1234,9 @@ pub struct Line {
     /// Resolved paragraph direction for this line (LTR/RTL from bidi base level)
     pub resolved_direction: Direction,
 
+    /// Authored text-indent applied to this line in the inline-start direction (can be negative)
+    pub indent: f32,
+
     /// Available width for this line after float shortening
     pub available_width: f32,
 
@@ -1265,6 +1268,7 @@ impl Line {
         Self {
             items: Vec::new(),
             resolved_direction: Direction::Ltr,
+            indent: 0.0,
             available_width: 0.0,
             box_width: 0.0,
             left_offset: 0.0,
@@ -1296,10 +1300,14 @@ pub struct LineBuilder<'a> {
     first_line_width: f32,
     /// Available width for subsequent lines
     subsequent_line_width: f32,
-    /// Positive indentation to subtract from the first line width (e.g., text-indent)
-    first_line_indent_cut: f32,
-    /// Positive indentation to subtract from subsequent line widths
-    subsequent_line_indent_cut: f32,
+    /// Authored text-indent length (can be negative)
+    indent: f32,
+    /// Whether hanging indentation is enabled
+    indent_hanging: bool,
+    /// Whether indentation applies after forced breaks
+    indent_each_line: bool,
+    /// Whether the next line to start is a paragraph start (first or after hard break)
+    next_line_is_para_start: bool,
     /// Float-aware line width provider
     float_integration: Option<InlineFloatIntegration<'a>>,
     /// Current line space when floats are present
@@ -1340,10 +1348,70 @@ pub struct LineBuilder<'a> {
 }
 
 impl<'a> LineBuilder<'a> {
+    fn compute_indent_for_line(&self, is_para_start: bool, is_first_line: bool) -> f32 {
+        if self.indent == 0.0 {
+            return 0.0;
+        }
+        if is_first_line {
+            if self.indent_hanging {
+                if self.indent_each_line {
+                    self.indent
+                } else {
+                    0.0
+                }
+            } else {
+                self.indent
+            }
+        } else if self.indent_hanging {
+            self.indent
+        } else if is_para_start && self.indent_each_line {
+            self.indent
+        } else {
+            0.0
+        }
+    }
+
+    fn start_new_line(&mut self) {
+        let is_first_line = self.lines.is_empty();
+        let para_start = self.next_line_is_para_start;
+        self.next_line_is_para_start = false;
+        let indent_for_line = self.compute_indent_for_line(para_start, is_first_line);
+        let indent_cut = indent_for_line.max(0.0);
+        let base_width = if is_first_line {
+            self.first_line_width
+        } else {
+            self.subsequent_line_width
+        };
+
+        if let Some(integration) = self.float_integration.as_ref() {
+            let space = integration.find_line_space(
+                self.float_base_y + self.current_y,
+                LineSpaceOptions::default().line_height(self.strut_metrics.line_height),
+            );
+            self.current_line_space = Some(space);
+            let width = (space.width - indent_cut).max(0.0);
+            self.current_line.available_width = width;
+            self.current_line.box_width = space.width - indent_cut;
+            self.current_line.left_offset = space.left_edge;
+            self.current_y = self.current_y.max((space.y - self.float_base_y).max(0.0));
+        } else {
+            let w = (base_width - indent_cut).max(0.0);
+            self.current_line_space = None;
+            self.current_line.available_width = w;
+            self.current_line.box_width = w;
+            self.current_line.left_offset = 0.0;
+        }
+        self.current_line.indent = indent_for_line;
+    }
+
     /// Creates a new line builder
     pub fn new(
         first_line_width: f32,
         subsequent_line_width: f32,
+        start_is_para_start: bool,
+        indent: f32,
+        indent_hanging: bool,
+        indent_each_line: bool,
         strut_metrics: BaselineMetrics,
         shaper: ShapingPipeline,
         font_context: FontContext,
@@ -1352,8 +1420,6 @@ impl<'a> LineBuilder<'a> {
         root_direction: Direction,
         float_integration: Option<InlineFloatIntegration<'a>>,
         float_base_y: f32,
-        first_line_indent_cut: f32,
-        subsequent_line_indent_cut: f32,
     ) -> Self {
         let initial_direction = if let Some(level) = base_level {
             if level.is_rtl() {
@@ -1367,6 +1433,10 @@ impl<'a> LineBuilder<'a> {
         let mut builder = Self {
             first_line_width,
             subsequent_line_width,
+            indent,
+            indent_hanging,
+            indent_each_line,
+            next_line_is_para_start: start_is_para_start,
             float_integration,
             current_line_space: None,
             current_y: 0.0,
@@ -1384,44 +1454,15 @@ impl<'a> LineBuilder<'a> {
             base_level,
             root_unicode_bidi,
             root_direction,
-            first_line_indent_cut,
-            subsequent_line_indent_cut,
         };
 
-        if let Some(integration) = builder.float_integration.as_ref() {
-            let space = integration.find_line_space(
-                builder.float_base_y + builder.current_y,
-                LineSpaceOptions::default().line_height(builder.strut_metrics.line_height),
-            );
-            builder.current_line_space = Some(space);
-            let width = (space.width - builder.first_line_indent_cut).max(0.0);
-            builder.current_line.available_width = width;
-            builder.current_line.box_width = space.width;
-            builder.current_line.left_offset = space.left_edge;
-            builder.current_y = (space.y - builder.float_base_y).max(0.0);
-        } else {
-            builder.current_line.available_width = first_line_width;
-            builder.current_line.box_width = first_line_width;
-            builder.current_line.left_offset = 0.0;
-        }
+        builder.start_new_line();
 
         builder
     }
 
     fn current_line_width(&self) -> f32 {
-        if let Some(space) = self.current_line_space {
-            let cut = if self.lines.is_empty() {
-                self.first_line_indent_cut
-            } else {
-                self.subsequent_line_indent_cut
-            };
-            return (space.width - cut).max(0.0);
-        }
-        if self.lines.is_empty() {
-            self.first_line_width
-        } else {
-            self.subsequent_line_width
-        }
+        self.current_line.available_width
     }
 
     /// Adds an inline item to the builder
@@ -1578,9 +1619,11 @@ impl<'a> LineBuilder<'a> {
                 }
             }
 
+            let ended_hard = self.current_line.ends_with_hard_break;
             let finished_height = self.current_line.height;
             self.lines.push(std::mem::take(&mut self.current_line));
             self.current_y += finished_height;
+            self.next_line_is_para_start = ended_hard;
         }
 
         // Reset for new line
@@ -1599,34 +1642,7 @@ impl<'a> LineBuilder<'a> {
             resolved_direction: next_direction,
             ..Line::new()
         };
-
-        if let Some(integration) = self.float_integration.as_ref() {
-            let space = integration.find_line_space(
-                self.float_base_y + self.current_y,
-                LineSpaceOptions::default().line_height(self.strut_metrics.line_height),
-            );
-            self.current_line_space = Some(space);
-            let cut = if self.lines.is_empty() {
-                self.first_line_indent_cut
-            } else {
-                self.subsequent_line_indent_cut
-            };
-            let width = (space.width - cut).max(0.0);
-            self.current_line.available_width = width;
-            self.current_line.box_width = space.width;
-            self.current_line.left_offset = space.left_edge;
-            self.current_y = self.current_y.max((space.y - self.float_base_y).max(0.0));
-        } else {
-            self.current_line_space = None;
-            let w = if self.lines.is_empty() {
-                self.first_line_width
-            } else {
-                self.subsequent_line_width
-            };
-            self.current_line.available_width = w;
-            self.current_line.box_width = w;
-            self.current_line.left_offset = 0.0;
-        }
+        self.start_new_line();
     }
 
     /// Run bidi reordering across all built lines, respecting paragraph boundaries.
@@ -1894,10 +1910,7 @@ fn reorder_paragraph(
     let _paragraph_chars: Vec<char> = paragraph_text.chars().collect();
 
     for (idx, mapping) in byte_map.iter().enumerate() {
-        if let Some(ctx) = paragraph_leaves
-            .get(mapping.leaf_index)
-            .and_then(|p| p.bidi_context)
-        {
+        if let Some(ctx) = paragraph_leaves.get(mapping.leaf_index).and_then(|p| p.bidi_context) {
             if let Some(current) = paragraph_levels.get_mut(idx) {
                 if ctx.override_all || ctx.level > *current {
                     *current = ctx.level;
@@ -2355,6 +2368,10 @@ mod tests {
         LineBuilder::new(
             width,
             width,
+            true,
+            0.0,
+            false,
+            false,
             strut,
             ShapingPipeline::new(),
             FontContext::new(),
@@ -2362,8 +2379,6 @@ mod tests {
             UnicodeBidi::Normal,
             Direction::Ltr,
             None,
-            0.0,
-            0.0,
             0.0,
         )
     }
@@ -2380,6 +2395,10 @@ mod tests {
         LineBuilder::new(
             width,
             width,
+            true,
+            0.0,
+            false,
+            false,
             strut,
             ShapingPipeline::new(),
             FontContext::new(),
@@ -2387,8 +2406,6 @@ mod tests {
             UnicodeBidi::Normal,
             Direction::Ltr,
             None,
-            0.0,
-            0.0,
             0.0,
         )
     }

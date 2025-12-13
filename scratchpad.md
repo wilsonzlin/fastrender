@@ -7,6 +7,7 @@
 
 ## Recent changes (this branch)
 - text-combine-upright boundary detection now tracks edge adjacency: collapsed/explicit whitespace blocks cross-inline combinations, empty inline wrappers are skipped, and boundary flags only set when combinable characters touch both sides. Added regression to ensure whitespace-separated spans still combine independently.
+- text-indent handling matches CSS Text: hanging indents apply to every line after the first (including hard breaks), `each-line` only indents paragraph starts (not soft wraps), and line-level indent offsets are stored per line so forced breaks/RTL map correctly. Added a regression to ensure `each-line` skips soft-wrapped lines.
 - Video posters now honor media context when selecting poster sources, and audio replacements get labeled placeholders in both painter and display list builder. Added tests for audio placeholders and builder labels.
 - List marker positioning is writing-mode aware: outside markers offset to inline-start in vertical flows (vertical-rl/lr) and gaps resolve against inline-end margins instead of always margin-right. Added vertical marker layout tests.
 - Vertical marker inline-start offsets now match for vertical-rl and vertical-lr, and inline-end gaps pull from logical margins in sideways flows; updated the vertical-lr marker test.
