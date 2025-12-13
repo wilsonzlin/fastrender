@@ -62,6 +62,7 @@ use std::collections::HashSet;
 use std::iter::FromIterator;
 use std::str::FromStr;
 use std::sync::Arc;
+use ttf_parser::Face as ParserFace;
 use ttf_parser::Tag;
 use unicode_bidi::{BidiInfo, Level};
 use unicode_vo::{char_orientation, Orientation as VerticalOrientation};
@@ -1271,6 +1272,10 @@ fn synthetic_position_adjustment(
         crate::style::types::FontVariantPosition::Super => {
             if font_context.supports_feature(font, *b"sups") {
                 (1.0, 0.0)
+            } else if let Some((scale, shift)) =
+                os2_position_metrics(font, base_font_size, crate::style::types::FontVariantPosition::Super)
+            {
+                (scale, shift)
             } else {
                 (SYNTHETIC_SCALE, base_font_size * SUPER_SHIFT)
             }
@@ -1278,10 +1283,48 @@ fn synthetic_position_adjustment(
         crate::style::types::FontVariantPosition::Sub => {
             if font_context.supports_feature(font, *b"subs") {
                 (1.0, 0.0)
+            } else if let Some((scale, shift)) =
+                os2_position_metrics(font, base_font_size, crate::style::types::FontVariantPosition::Sub)
+            {
+                (scale, shift)
             } else {
                 (SYNTHETIC_SCALE, base_font_size * SUB_SHIFT)
             }
         }
+    }
+}
+
+fn os2_position_metrics(
+    font: &LoadedFont,
+    base_font_size: f32,
+    position: crate::style::types::FontVariantPosition,
+) -> Option<(f32, f32)> {
+    let face = ParserFace::parse(&font.data, font.index).ok()?;
+    let os2 = face.tables().os2?;
+    let units = face.units_per_em() as f32;
+
+    match position {
+        crate::style::types::FontVariantPosition::Super => {
+            let metrics = os2.superscript_metrics();
+            if metrics.y_size > 0 {
+                let scale = (metrics.y_size as f32 / units).clamp(0.3, 1.2);
+                let shift = metrics.y_offset as f32 * (base_font_size / units);
+                Some((scale, shift))
+            } else {
+                None
+            }
+        }
+        crate::style::types::FontVariantPosition::Sub => {
+            let metrics = os2.subscript_metrics();
+            if metrics.y_size > 0 {
+                let scale = (metrics.y_size as f32 / units).clamp(0.3, 1.2);
+                let shift = -(metrics.y_offset as f32 * (base_font_size / units));
+                Some((scale, shift))
+            } else {
+                None
+            }
+        }
+        crate::style::types::FontVariantPosition::Normal => None,
     }
 }
 
