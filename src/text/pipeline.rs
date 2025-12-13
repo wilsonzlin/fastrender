@@ -1503,6 +1503,44 @@ fn resolve_font_for_char(
     let slope_preferences = slope_preference_order(style);
     let stretch_preferences = stretch_preference_order(stretch);
     for entry in families {
+        if let FamilyEntry::Named(name) = entry {
+            let candidates = font_context.web_fonts_for_family(name);
+            let mut best: Option<(crate::text::font_loader::WebFontScore, LoadedFont)> = None;
+            for weight_choice in &weight_preferences {
+                for slope in slope_preferences {
+                    for stretch_choice in &stretch_preferences {
+                        let stretch_percent = stretch_choice.to_percentage();
+                        for face in &candidates {
+                            if !face.supports_char(ch) {
+                                continue;
+                            }
+                            if let Some(score) = face.score(*weight_choice, *slope, stretch_percent) {
+                                let chosen_weight = face.clamp_weight(*weight_choice);
+                                let chosen_stretch = face.nearest_stretch(stretch_percent);
+                                let candidate = face.to_loaded_font(
+                                    name,
+                                    chosen_weight,
+                                    face.effective_style(*slope),
+                                    chosen_stretch,
+                                );
+
+                                if let Some((best_score, _)) = &best {
+                                    if score < *best_score {
+                                        best = Some((score, candidate));
+                                    }
+                                } else {
+                                    best = Some((score, candidate));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some((_, font)) = best {
+                return Some(font);
+            }
+        }
+
         for weight_choice in &weight_preferences {
             for slope in slope_preferences {
                 for stretch_choice in &stretch_preferences {
@@ -2255,17 +2293,20 @@ impl ClusterMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::css::types::{FontFaceRule, FontFaceSource};
     use crate::style::types::{
         EastAsianVariant, EastAsianWidth, FontFeatureSetting, FontKerning, FontStretch, FontVariantLigatures,
         FontVariationSetting, NumericFigure, NumericFraction, NumericSpacing, TextOrientation, WritingMode,
     };
     use crate::text::font_db::FontDatabase;
-    use crate::text::font_db::{FontStretch as DbFontStretch, FontStyle as DbFontStyle, FontWeight};
+    use crate::text::font_db::{FontStretch as DbFontStretch, FontStyle as DbFontStyle, FontWeight, GenericFamily};
+    use crate::text::font_fallback::FamilyEntry;
     use std::fs;
     use std::path::Path;
     use std::sync::Arc;
     use ttf_parser::name_id;
     use unicode_bidi::Level;
+    use url::Url;
 
     fn load_variable_font() -> (FontContext, String) {
         let font_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fonts/RobotoFlex-VF.ttf");
@@ -2812,6 +2853,52 @@ mod tests {
         assert!(runs
             .iter()
             .all(|r| r.language.as_ref().map(|l| l.as_str()) == Some("srb")));
+    }
+
+    #[test]
+    fn unicode_range_limits_web_font_usage() {
+        let font_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/fonts/Roboto-Regular.ttf");
+        let font_url = Url::from_file_path(&font_path).expect("file url");
+        let face = FontFaceRule {
+            family: Some("RangeFace".to_string()),
+            sources: vec![FontFaceSource::Url(font_url.to_string())],
+            unicode_ranges: vec![(0x0041, 0x005A)],
+            ..Default::default()
+        };
+
+        let ctx = FontContext::new();
+        ctx.load_web_fonts(&[face], None).expect("load web font");
+
+        let families = vec![
+            FamilyEntry::Named("RangeFace".to_string()),
+            FamilyEntry::Generic(GenericFamily::SansSerif),
+        ];
+
+        let mut picker = FontPreferencePicker::new(EmojiPreference::Neutral);
+        let upper = resolve_font_for_char(
+            'A',
+            &families,
+            400,
+            DbFontStyle::Normal,
+            DbFontStretch::Normal,
+            &ctx,
+            &mut picker,
+        )
+        .expect("font for uppercase");
+        assert_eq!(upper.family, "RangeFace");
+
+        let mut picker = FontPreferencePicker::new(EmojiPreference::Neutral);
+        let lower = resolve_font_for_char(
+            'a',
+            &families,
+            400,
+            DbFontStyle::Normal,
+            DbFontStretch::Normal,
+            &ctx,
+            &mut picker,
+        )
+        .expect("fallback font");
+        assert_ne!(lower.family, "RangeFace");
     }
 
     #[test]

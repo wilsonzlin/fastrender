@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- @font-face `unicode-range` is parsed and stored; web fonts register their authored ranges (defaulting to the full plane). Font selection now prefers web faces per family before system fonts and filters them by unicode-range plus glyph coverage; fixed the style/stretch mapping in the picker and added a regression where a range-limited face is used for uppercase but falls back for lowercase.
 - Iframe `srcdoc` is fully rendered: nested HTML is parsed, styled (with @import fetcher that supports data/file/http URLs), laid out with intrinsic replaced sizing, and painted into the iframe rect instead of a placeholder. `ImageCache` now exposes `base_url` for relative resolution.
 - `@font-face` is parsed and collected through @imports/media, with url/file/data/local sources loaded into the shared `FontContext` before layout (including iframes). WOFF/WOFF2 are decoded via `wuff`, descriptors capture style/weight/stretch ranges, and web fonts are preferred over system fonts. Added a data-URL regression for web fonts.
 - Canvas backgrounds respect author colors even when the root box has zero height: root backgrounds expand to the viewport only when the root fragment starts at (0,0), and otherwise stay bounded so unit tests don’t get filled. Background fallback to first child applies only when the root has a style but no paintable background (HTML/body propagation).

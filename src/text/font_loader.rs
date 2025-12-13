@@ -418,6 +418,11 @@ impl FontContext {
             weight: face.weight,
             stretch: face.stretch,
             order,
+            ranges: if face.unicode_ranges.is_empty() {
+                vec![(0, 0x10FFFF)]
+            } else {
+                face.unicode_ranges.clone()
+            },
         });
     }
 
@@ -459,6 +464,19 @@ impl FontContext {
         }
 
         best.map(|(_, font)| font)
+    }
+
+    pub(crate) fn web_fonts_for_family(&self, family: &str) -> Vec<WebFontFace> {
+        self.web_fonts
+            .read()
+            .map(|faces| {
+                faces
+                    .iter()
+                    .filter(|f| f.family.eq_ignore_ascii_case(family))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     // ========================================================================
@@ -615,10 +633,10 @@ impl Default for FontContext {
     }
 }
 
-type WebFontScore = (u8, f32, f32, usize);
+pub type WebFontScore = (u8, f32, f32, usize);
 
 #[derive(Clone)]
-struct WebFontFace {
+pub(crate) struct WebFontFace {
     family: String,
     data: Arc<Vec<u8>>,
     index: u32,
@@ -626,10 +644,22 @@ struct WebFontFace {
     weight: (u16, u16),
     stretch: (f32, f32),
     order: usize,
+    ranges: Vec<(u32, u32)>,
 }
 
 impl WebFontFace {
-    fn score(&self, weight: u16, style: FontStyle, stretch: f32) -> Option<WebFontScore> {
+    pub(crate) fn supports_char(&self, ch: char) -> bool {
+        let cp = ch as u32;
+        if !self.ranges.iter().any(|(s, e)| *s <= cp && cp <= *e) {
+            return false;
+        }
+        ttf_parser::Face::parse(&self.data, self.index)
+            .ok()
+            .and_then(|f| f.glyph_index(ch))
+            .is_some()
+    }
+
+    pub(crate) fn score(&self, weight: u16, style: FontStyle, stretch: f32) -> Option<WebFontScore> {
         let style_score = match (&self.style, style) {
             (FontFaceStyle::Normal, FontStyle::Normal) => 0,
             (FontFaceStyle::Normal, _) => 2,
@@ -660,20 +690,37 @@ impl WebFontFace {
         Some((style_score, weight_distance, stretch_distance, self.order))
     }
 
-    fn clamp_weight(&self, weight: u16) -> u16 {
+    pub(crate) fn clamp_weight(&self, weight: u16) -> u16 {
         weight.clamp(self.weight.0, self.weight.1)
     }
 
-    fn nearest_stretch(&self, requested: f32) -> FontStretch {
+    pub(crate) fn nearest_stretch(&self, requested: f32) -> FontStretch {
         let clamped = requested.clamp(self.stretch.0, self.stretch.1);
         percent_to_stretch_variant(clamped)
     }
 
-    fn effective_style(&self, _requested: FontStyle) -> FontStyle {
+    pub(crate) fn effective_style(&self, _requested: FontStyle) -> FontStyle {
         match self.style {
             FontFaceStyle::Normal => FontStyle::Normal,
             FontFaceStyle::Italic => FontStyle::Italic,
             FontFaceStyle::Oblique { .. } => FontStyle::Oblique,
+        }
+    }
+
+    pub(crate) fn to_loaded_font(
+        &self,
+        family: &str,
+        weight: u16,
+        style: FontStyle,
+        stretch: FontStretch,
+    ) -> LoadedFont {
+        LoadedFont {
+            data: Arc::clone(&self.data),
+            index: self.index,
+            family: family.to_string(),
+            weight: FontWeight::new(weight),
+            style,
+            stretch,
         }
     }
 }
@@ -774,17 +821,21 @@ fn fetch_font_bytes(url: &str) -> Result<(Vec<u8>, Option<String>)> {
 
 fn decode_font_bytes(bytes: Vec<u8>, content_type: Option<&str>) -> Result<Vec<u8>> {
     if bytes.starts_with(b"wOF2") || content_type.map(|c| c.contains("woff2")).unwrap_or(false) {
-        return decompress_woff2(&bytes).map_err(|e| Error::Font(crate::error::FontError::LoadFailed {
-            family: "woff2".into(),
-            reason: format!("{:?}", e),
-        }));
+        return decompress_woff2(&bytes).map_err(|e| {
+            Error::Font(crate::error::FontError::LoadFailed {
+                family: "woff2".into(),
+                reason: format!("{:?}", e),
+            })
+        });
     }
 
     if bytes.starts_with(b"wOFF") || content_type.map(|c| c.contains("woff")).unwrap_or(false) {
-        return decompress_woff1(&bytes).map_err(|e| Error::Font(crate::error::FontError::LoadFailed {
-            family: "woff".into(),
-            reason: format!("{:?}", e),
-        }));
+        return decompress_woff1(&bytes).map_err(|e| {
+            Error::Font(crate::error::FontError::LoadFailed {
+                family: "woff".into(),
+                reason: format!("{:?}", e),
+            })
+        });
     }
 
     Ok(bytes)

@@ -350,6 +350,12 @@ fn parse_font_face_descriptors<'i, 't>(
                     face.stretch = range;
                 }
             }
+            "unicode-range" => {
+                let ranges = parse_unicode_range_list(trimmed_value);
+                if !ranges.is_empty() {
+                    face.unicode_ranges = ranges;
+                }
+            }
             _ => {}
         }
     }
@@ -429,6 +435,52 @@ fn parse_font_face_stretch(value: &str) -> Option<(f32, f32)> {
     }
 }
 
+fn parse_unicode_range_list(value: &str) -> Vec<(u32, u32)> {
+    value
+        .split(',')
+        .filter_map(|part| parse_unicode_range(part.trim()))
+        .collect()
+}
+
+fn parse_unicode_range(part: &str) -> Option<(u32, u32)> {
+    let part = part.trim();
+    if !part.to_ascii_lowercase().starts_with("u+") {
+        return None;
+    }
+    let body = &part[2..];
+    if let Some((start, end)) = body.split_once('-') {
+        let start = u32::from_str_radix(start.trim(), 16).ok()?;
+        let end = u32::from_str_radix(end.trim(), 16).ok()?;
+        if start <= end {
+            return Some((start, end));
+        }
+        return None;
+    }
+
+    if body.contains('?') {
+        let mut start = String::new();
+        let mut end = String::new();
+        for ch in body.chars() {
+            match ch {
+                '?' => {
+                    start.push('0');
+                    end.push('F');
+                }
+                _ => {
+                    start.push(ch);
+                    end.push(ch);
+                }
+            }
+        }
+        let s = u32::from_str_radix(&start, 16).ok()?;
+        let e = u32::from_str_radix(&end, 16).ok()?;
+        return Some((s, e));
+    }
+
+    let single = u32::from_str_radix(body.trim(), 16).ok()?;
+    Some((single, single))
+}
+
 fn parse_font_face_src(value: &str) -> Vec<FontFaceSource> {
     let mut input = ParserInput::new(value);
     let mut parser = Parser::new(&mut input);
@@ -485,10 +537,7 @@ fn parse_string_or_ident<'i, 't>(
         return Ok(s);
     }
 
-    parser
-        .expect_ident()
-        .map(|s| s.to_string())
-        .map_err(ParseError::from)
+    parser.expect_ident().map(|s| s.to_string()).map_err(ParseError::from)
 }
 
 fn parse_angle_token(token: &str) -> Option<f32> {
@@ -752,6 +801,7 @@ mod tests {
             font-weight: 400 700;
             font-style: oblique 10deg 20deg;
             font-stretch: 75% 125%;
+            unicode-range: U+0041-005A, U+0061-007A, U+1F600;
         }"#;
         let stylesheet = parse_stylesheet(css).unwrap();
         assert_eq!(stylesheet.rules.len(), 1);
@@ -762,6 +812,10 @@ mod tests {
                 assert_eq!(face.weight, (400, 700));
                 assert_eq!(face.stretch, (75.0, 125.0));
                 assert!(matches!(face.style, FontFaceStyle::Oblique { .. }));
+                assert_eq!(face.unicode_ranges.len(), 3);
+                assert_eq!(face.unicode_ranges[0], (0x0041, 0x005A));
+                assert_eq!(face.unicode_ranges[1], (0x0061, 0x007A));
+                assert_eq!(face.unicode_ranges[2], (0x1F600, 0x1F600));
             }
             other => panic!("Unexpected rule: {:?}", other),
         }

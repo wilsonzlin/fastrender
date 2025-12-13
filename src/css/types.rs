@@ -286,6 +286,8 @@ pub struct FontFaceRule {
     pub weight: (u16, u16),
     /// Stretch range in percentages.
     pub stretch: (f32, f32),
+    /// Unicode ranges that this face covers (inclusive start,end).
+    pub unicode_ranges: Vec<(u32, u32)>,
 }
 
 impl Default for FontFaceRule {
@@ -296,6 +298,7 @@ impl Default for FontFaceRule {
             style: FontFaceStyle::Normal,
             weight: (400, 400),
             stretch: (100.0, 100.0),
+            unicode_ranges: vec![(0, 0x10FFFF)],
         }
     }
 }
