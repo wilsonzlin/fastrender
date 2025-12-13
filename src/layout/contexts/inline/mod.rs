@@ -1210,10 +1210,12 @@ impl InlineFormattingContext {
                         sub_breaks,
                         false,
                         is_marker,
-                        base_direction,
+                        crate::style::types::Direction::Ltr,
                         bidi_stack,
                     )?;
                     self.compress_text_combine(&mut item, style.font_size);
+                    item.break_opportunities = vec![crate::text::line_break::BreakOpportunity::mandatory(item.text.len())];
+                    item.forced_break_offsets.clear();
                     if !item.text.is_empty() {
                         items.push(InlineItem::Text(item));
                     }
@@ -5298,6 +5300,71 @@ mod tests {
             );
         } else {
             panic!("expected text item");
+        }
+    }
+
+    #[test]
+    fn text_combine_supresses_internal_breaks() {
+        let ifc = InlineFormattingContext::new();
+        let mut style = ComputedStyle::default();
+        style.writing_mode = WritingMode::VerticalRl;
+        style.text_combine_upright = TextCombineUpright::Digits(2);
+        style.font_size = 16.0;
+        let bidi_stack = vec![(style.unicode_bidi, style.direction)];
+        let style = Arc::new(style);
+        let normalized = normalize_text_for_white_space("12", style.white_space);
+        let items = ifc
+            .create_text_items_with_combine(
+                &style,
+                &normalized.text,
+                normalized.forced_breaks.clone(),
+                normalized.allow_soft_wrap,
+                false,
+                crate::style::types::Direction::Ltr,
+                &bidi_stack,
+            )
+            .expect("text items");
+        assert_eq!(items.len(), 1);
+        if let InlineItem::Text(text) = &items[0] {
+            assert_eq!(
+                text.break_opportunities.len(),
+                1,
+                "combined text should behave like a single glyph for breaking"
+            );
+            assert!(text
+                .break_opportunities
+                .iter()
+                .all(|b| matches!(b.break_type, BreakType::Mandatory)));
+        } else {
+            panic!("expected text");
+        }
+    }
+
+    #[test]
+    fn text_combine_isolates_direction_from_parent() {
+        let ifc = InlineFormattingContext::new();
+        let mut style = ComputedStyle::default();
+        style.writing_mode = WritingMode::VerticalRl;
+        style.direction = crate::style::types::Direction::Rtl;
+        style.text_combine_upright = TextCombineUpright::Digits(2);
+        let bidi_stack = vec![(style.unicode_bidi, style.direction)];
+        let style = Arc::new(style);
+        let normalized = normalize_text_for_white_space("12", style.white_space);
+        let items = ifc
+            .create_text_items_with_combine(
+                &style,
+                &normalized.text,
+                normalized.forced_breaks.clone(),
+                normalized.allow_soft_wrap,
+                false,
+                crate::style::types::Direction::Rtl,
+                &bidi_stack,
+            )
+            .expect("text items");
+        if let InlineItem::Text(text) = &items[0] {
+            assert!(text.runs.iter().all(|r| r.direction.is_ltr()));
+        } else {
+            panic!("expected text");
         }
     }
 
