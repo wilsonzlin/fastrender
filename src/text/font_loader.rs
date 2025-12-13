@@ -71,6 +71,7 @@ const EMBEDDED_FALLBACK_FONT: &[u8] = include_bytes!("../../resources/fonts/Robo
 pub struct FontContext {
     db: Arc<FontDatabase>,
     web_fonts: Arc<RwLock<Vec<WebFontFace>>>,
+    web_families: Arc<RwLock<std::collections::HashSet<String>>>,
 }
 
 impl FontContext {
@@ -114,6 +115,7 @@ impl FontContext {
         Self {
             db: Arc::new(db),
             web_fonts: Arc::new(RwLock::new(Vec::new())),
+            web_families: Arc::new(RwLock::new(std::collections::HashSet::new())),
         }
     }
 
@@ -131,6 +133,7 @@ impl FontContext {
         Self {
             db,
             web_fonts: Arc::new(RwLock::new(Vec::new())),
+            web_families: Arc::new(RwLock::new(std::collections::HashSet::new())),
         }
     }
 
@@ -141,6 +144,7 @@ impl FontContext {
         Self {
             db: Arc::new(FontDatabase::empty()),
             web_fonts: Arc::new(RwLock::new(Vec::new())),
+            web_families: Arc::new(RwLock::new(std::collections::HashSet::new())),
         }
     }
 
@@ -207,23 +211,30 @@ impl FontContext {
             FontStyle::Normal
         };
 
-        if let Some(font) = self.match_web_font(families, weight, requested_style, FontStretch::Normal) {
-            return Some(font);
-        }
-
         let stretches = crate::text::pipeline::stretch_preference_order(FontStretch::Normal);
         let slopes = crate::text::pipeline::slope_preference_order(requested_style);
         let weights = crate::text::pipeline::weight_preference_order(weight);
-        for stretch_choice in &stretches {
-            for slope in slopes {
-                for weight_choice in &weights {
-                    let font_weight = FontWeight::new(*weight_choice);
-                    if let Some(id) =
-                        self.db
-                            .resolve_family_list_full(families, font_weight, *slope, (*stretch_choice).into())
-                    {
-                        if let Some(font) = self.db.load_font(id) {
-                            return Some(font);
+        for family in families {
+            if let Some(font) = self.select_web_font(family, weight, requested_style, FontStretch::Normal, None) {
+                return Some(font);
+            }
+            if self.is_web_family_declared(family) {
+                continue;
+            }
+
+            for stretch_choice in &stretches {
+                for slope in slopes {
+                    for weight_choice in &weights {
+                        let font_weight = FontWeight::new(*weight_choice);
+                        if let Some(id) = self.db.resolve_family_list_full(
+                            &[family.clone()],
+                            font_weight,
+                            *slope,
+                            (*stretch_choice).into(),
+                        ) {
+                            if let Some(font) = self.db.load_font(id) {
+                                return Some(font);
+                            }
                         }
                     }
                 }
@@ -262,23 +273,29 @@ impl FontContext {
         style: FontStyle,
         stretch: FontStretch,
     ) -> Option<LoadedFont> {
-        if let Some(font) = self.match_web_font(families, weight, style, stretch) {
-            return Some(font);
-        }
-
         let stretches = crate::text::pipeline::stretch_preference_order(stretch);
         let weights = crate::text::pipeline::weight_preference_order(weight);
-        for stretch_choice in &stretches {
-            for slope in crate::text::pipeline::slope_preference_order(style) {
-                for weight_choice in &weights {
-                    if let Some(id) = self.db.resolve_family_list_full(
-                        families,
-                        FontWeight::new(*weight_choice),
-                        *slope,
-                        *stretch_choice,
-                    ) {
-                        if let Some(font) = self.db.load_font(id) {
-                            return Some(font);
+        let slopes = crate::text::pipeline::slope_preference_order(style);
+        for family in families {
+            if let Some(font) = self.select_web_font(family, weight, style, stretch, None) {
+                return Some(font);
+            }
+            if self.is_web_family_declared(family) {
+                continue;
+            }
+
+            for stretch_choice in &stretches {
+                for slope in slopes {
+                    for weight_choice in &weights {
+                        if let Some(id) = self.db.resolve_family_list_full(
+                            &[family.clone()],
+                            FontWeight::new(*weight_choice),
+                            *slope,
+                            *stretch_choice,
+                        ) {
+                            if let Some(font) = self.db.load_font(id) {
+                                return Some(font);
+                            }
                         }
                     }
                 }
@@ -297,8 +314,11 @@ impl FontContext {
     /// let font = ctx.get_font_simple("Arial", 400, FontStyle::Normal);
     /// ```
     pub fn get_font_simple(&self, family: &str, weight: u16, style: FontStyle) -> Option<LoadedFont> {
-        if let Some(font) = self.match_web_font(&[family.to_string()], weight, style, FontStretch::Normal) {
+        if let Some(font) = self.select_web_font(family, weight, style, FontStretch::Normal, None) {
             return Some(font);
+        }
+        if self.is_web_family_declared(family) {
+            return None;
         }
         let font_weight = FontWeight::new(weight);
         let id = self.db.query(family, font_weight, style)?;
@@ -338,6 +358,9 @@ impl FontContext {
         if let Ok(mut faces) = self.web_fonts.write() {
             faces.clear();
         }
+        if let Ok(mut families) = self.web_families.write() {
+            families.clear();
+        }
     }
 
     /// Loads web fonts defined by @font-face rules into the context.
@@ -349,6 +372,7 @@ impl FontContext {
                 Some(f) => f.clone(),
                 None => continue,
             };
+            self.declare_web_family(&family);
 
             for source in &face.sources {
                 let loaded = match source {
@@ -414,6 +438,7 @@ impl FontContext {
     }
 
     fn register_web_font(&self, family: String, data: Arc<Vec<u8>>, index: u32, face: &FontFaceRule, order: usize) {
+        self.declare_web_family(&family);
         let mut guard = match self.web_fonts.write() {
             Ok(g) => g,
             Err(_) => return,
@@ -443,21 +468,6 @@ impl FontContext {
         ch: char,
     ) -> Option<LoadedFont> {
         self.select_web_font(family, weight, style, stretch, Some(ch))
-    }
-
-    fn match_web_font(
-        &self,
-        families: &[String],
-        weight: u16,
-        style: FontStyle,
-        stretch: FontStretch,
-    ) -> Option<LoadedFont> {
-        for family in families {
-            if let Some(font) = self.select_web_font(family, weight, style, stretch, None) {
-                return Some(font);
-            }
-        }
-        None
     }
 
     fn select_web_font(
@@ -510,17 +520,24 @@ impl FontContext {
         best.map(|(_, font)| font)
     }
 
-    pub(crate) fn web_fonts_for_family(&self, family: &str) -> Vec<WebFontFace> {
+    pub(crate) fn is_web_family_declared(&self, family: &str) -> bool {
+        self.web_families
+            .read()
+            .map(|set| set.iter().any(|f| f.eq_ignore_ascii_case(family)))
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn has_web_faces(&self, family: &str) -> bool {
         self.web_fonts
             .read()
-            .map(|faces| {
-                faces
-                    .iter()
-                    .filter(|f| f.family.eq_ignore_ascii_case(family))
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default()
+            .map(|faces| faces.iter().any(|f| f.family.eq_ignore_ascii_case(family)))
+            .unwrap_or(false)
+    }
+
+    fn declare_web_family(&self, family: &str) {
+        if let Ok(mut families) = self.web_families.write() {
+            families.insert(family.to_ascii_lowercase());
+        }
     }
 
     // ========================================================================
@@ -677,8 +694,6 @@ impl Default for FontContext {
     }
 }
 
-pub type WebFontScore = (u8, f32, f32, usize);
-
 #[derive(Clone)]
 pub(crate) struct WebFontFace {
     family: String,
@@ -701,46 +716,6 @@ impl WebFontFace {
             .ok()
             .and_then(|f| f.glyph_index(ch))
             .is_some()
-    }
-
-    pub(crate) fn score(&self, weight: u16, style: FontStyle, stretch: f32) -> Option<WebFontScore> {
-        let style_score = match (&self.style, style) {
-            (FontFaceStyle::Normal, FontStyle::Normal) => 0,
-            (FontFaceStyle::Normal, _) => 2,
-            (FontFaceStyle::Italic, FontStyle::Italic) => 0,
-            (FontFaceStyle::Italic, FontStyle::Oblique) => 1,
-            (FontFaceStyle::Italic, FontStyle::Normal) => 1,
-            (FontFaceStyle::Oblique { .. }, FontStyle::Oblique) => 0,
-            (FontFaceStyle::Oblique { .. }, FontStyle::Italic) => 1,
-            (FontFaceStyle::Oblique { .. }, FontStyle::Normal) => 1,
-        };
-
-        let weight_distance = if weight < self.weight.0 {
-            (self.weight.0 - weight) as f32
-        } else if weight > self.weight.1 {
-            (weight - self.weight.1) as f32
-        } else {
-            0.0
-        };
-
-        let stretch_distance = if stretch < self.stretch.0 {
-            self.stretch.0 - stretch
-        } else if stretch > self.stretch.1 {
-            stretch - self.stretch.1
-        } else {
-            0.0
-        };
-
-        Some((style_score, weight_distance, stretch_distance, self.order))
-    }
-
-    pub(crate) fn clamp_weight(&self, weight: u16) -> u16 {
-        weight.clamp(self.weight.0, self.weight.1)
-    }
-
-    pub(crate) fn nearest_stretch(&self, requested: f32) -> FontStretch {
-        let clamped = requested.clamp(self.stretch.0, self.stretch.1);
-        percent_to_stretch_variant(clamped)
     }
 
     pub(crate) fn effective_style(&self, _requested: FontStyle) -> FontStyle {
@@ -1086,6 +1061,32 @@ mod tests {
         let families = vec!["WebFont".to_string()];
         let loaded = ctx.get_font_full(&families, 400, FontStyle::Normal, FontStretch::Normal);
         assert!(loaded.is_some());
+    }
+
+    #[test]
+    fn declared_web_family_blocks_platform_fallback() {
+        let font_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/fonts/Roboto-Regular.ttf");
+        let data = fs::read(&font_path).expect("fixture font");
+        let mut db = FontDatabase::empty();
+        db.load_font_data(data).expect("load platform font");
+        let ctx = FontContext::with_database(Arc::new(db));
+
+        let face = FontFaceRule {
+            family: Some("Roboto".to_string()),
+            sources: vec![FontFaceSource::Url("file:///no/such/font.woff".to_string())],
+            ..Default::default()
+        };
+        ctx.load_web_fonts(&[face], None).expect("load declared face");
+
+        assert!(ctx.is_web_family_declared("Roboto"));
+        assert!(!ctx.has_web_faces("Roboto"));
+
+        let families = vec!["Roboto".to_string()];
+        let resolved = ctx.get_font_full(&families, 400, FontStyle::Normal, FontStretch::Normal);
+        assert!(
+            resolved.is_none(),
+            "platform fonts must not satisfy a family declared via @font-face when no faces load"
+        );
     }
 
     #[test]

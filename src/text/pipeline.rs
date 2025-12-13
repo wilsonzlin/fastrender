@@ -1557,6 +1557,9 @@ fn resolve_font_for_char(
             if let Some(font) = font_context.match_web_font_for_char(name, weight, style, stretch, ch) {
                 return Some(font);
             }
+            if font_context.is_web_family_declared(name) {
+                continue;
+            }
         }
 
         for stretch_choice in &stretch_preferences {
