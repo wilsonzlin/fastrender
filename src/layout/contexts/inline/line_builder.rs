@@ -1912,9 +1912,7 @@ fn reorder_paragraph(
     for (idx, mapping) in byte_map.iter().enumerate() {
         if let Some(ctx) = paragraph_leaves.get(mapping.leaf_index).and_then(|p| p.bidi_context) {
             if let Some(current) = paragraph_levels.get_mut(idx) {
-                if ctx.override_all || ctx.level > *current {
-                    *current = ctx.level;
-                }
+                *current = ctx.level;
             }
         }
     }
