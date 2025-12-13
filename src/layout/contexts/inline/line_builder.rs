@@ -1773,6 +1773,7 @@ struct ByteMapping {
     local_start: usize,
     local_end: usize,
     isolate_group: Option<usize>,
+    leaf_isolate: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1843,22 +1844,21 @@ struct VisualSegment {
                 bidi_context,
             });
 
-            let isolate_group = leaf
+            let (isolate_group, leaf_isolate) = if let Some(ctx) = leaf
                 .box_stack
                 .iter()
                 .rev()
                 .find(|ctx| matches!(ctx.unicode_bidi, UnicodeBidi::Isolate | UnicodeBidi::IsolateOverride))
-                .map(|ctx| ctx.id)
-                .or_else(|| {
-                    if matches!(
-                        leaf.item.unicode_bidi(),
-                        UnicodeBidi::Isolate | UnicodeBidi::IsolateOverride
-                    ) {
-                        Some(leaf_index)
-                    } else {
-                        None
-                    }
-                });
+            {
+                (Some(ctx.id), false)
+            } else if matches!(
+                leaf.item.unicode_bidi(),
+                UnicodeBidi::Isolate | UnicodeBidi::IsolateOverride
+            ) {
+                (Some(leaf_index), true)
+            } else {
+                (None, false)
+            };
 
             match &leaf.item {
                 InlineItem::Text(t) => {
@@ -1873,6 +1873,7 @@ struct VisualSegment {
                             local_start: byte_idx,
                             local_end: byte_idx + ch.len_utf8(),
                             isolate_group,
+                            leaf_isolate,
                         });
                         global_offset += 1;
                     }
@@ -1888,6 +1889,7 @@ struct VisualSegment {
                         local_start: 0,
                         local_end: 0,
                         isolate_group,
+                        leaf_isolate,
                     });
                     global_offset += 1;
                 }
@@ -1903,6 +1905,7 @@ struct VisualSegment {
                         local_start: 0,
                         local_end: 0,
                         isolate_group,
+                        leaf_isolate,
                     });
                     global_offset += 1;
                 }
@@ -1979,14 +1982,19 @@ struct VisualSegment {
         let mut segments: Vec<VisualSegment> = Vec::new();
         let push_segment = |mapping: &ByteMapping, level: Level, segments: &mut Vec<VisualSegment>| {
             if let Some(last) = segments.last_mut() {
-                if last.mapping.leaf_index == mapping.leaf_index
-                    && last.level == level
-                    && mapping.start >= last.mapping.end
+                let same_leaf = last.mapping.leaf_index == mapping.leaf_index && last.level == level;
+                let same_isolate_leaf =
+                    mapping.leaf_isolate && last.mapping.leaf_isolate && mapping.isolate_group == last.mapping.isolate_group;
+                let in_isolate = mapping.isolate_group.is_some() || last.mapping.isolate_group.is_some();
+                if same_leaf
+                    && (!in_isolate || same_isolate_leaf)
+                    && (mapping.start == last.mapping.end || mapping.end == last.mapping.start)
                 {
                     last.mapping.start = last.mapping.start.min(mapping.start);
                     last.mapping.end = last.mapping.end.max(mapping.end);
                     last.mapping.local_start = last.mapping.local_start.min(mapping.local_start);
                     last.mapping.local_end = last.mapping.local_end.max(mapping.local_end);
+                    last.mapping.leaf_isolate = last.mapping.leaf_isolate || mapping.leaf_isolate;
                     return;
                 }
             }
@@ -2788,7 +2796,7 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(texts, vec!["ABC ".to_string(), "גאב".to_string(), " DEF".to_string()]);
+        assert_eq!(texts, vec!["ABC ".to_string(), "גבא".to_string(), " DEF".to_string()]);
     }
 
     #[test]
@@ -3507,7 +3515,7 @@ mod tests {
     #[test]
     fn bidi_isolate_resolves_neutrals_across_children() {
         // Single isolate should resolve neutrals using surrounding strong types inside the isolate.
-        let expected = "A בXא Z".to_string();
+        let expected = "A באX Z".to_string();
 
         let mut builder = make_builder(200.0);
         builder.add_item(InlineItem::Text(make_text_item("A ", 20.0)));

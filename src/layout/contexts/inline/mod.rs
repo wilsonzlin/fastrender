@@ -5762,19 +5762,18 @@ mod tests {
         let root = make_inline_container(vec![span1, span2]);
         let constraints = LayoutConstraints::definite_width(200.0);
 
-        fn collect_text_widths(node: &FragmentNode, out: &mut Vec<f32>) {
-            if let FragmentContent::Text { .. } = node.content {
-                out.push(node.bounds.width());
+        fn collect_text_widths(node: &FragmentNode, widths: &mut Vec<f32>) {
+            if let FragmentContent::Text { .. } = &node.content {
+                widths.push(node.bounds.width());
             }
             for child in &node.children {
-                collect_text_widths(child, out);
+                collect_text_widths(child, widths);
             }
         }
 
         let fragment = ifc.layout(&root, &constraints).expect("layout");
         let mut widths = Vec::new();
         collect_text_widths(fragment.children.first().expect("line"), &mut widths);
-
         assert_eq!(widths.len(), 2, "two separate text fragments expected");
         assert!(
             widths.iter().all(|w| *w > style.font_size),

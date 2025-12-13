@@ -6,6 +6,9 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Bidi reorder treats leaf-scoped isolates separately from ancestor isolates: leaf isolates still merge adjacent mappings (so text-combine isolates stay intact), while ancestor isolates keep per-character ordering and ignore outer overrides when resolving internal content. Updated isolate tests now follow the UAX #9 visual ordering for isolate contents.
+- Text-combine runs across inline boundaries stay separate: isolate coalescing only merges within leaf-scoped isolates, preventing vertical digit compression from bridging sibling spans.
+- Spanning percentage widths distribute remaining share across all non-fixed columns using intrinsic min widths as weights; spans with only fixed/percentage columns now grow the percentage columns to meet the requested percentage, and mixed spans balance remaining share instead of leaving existing percentages untouched.
 - Bidi mapping now tracks both paragraph-global and leaf-local byte offsets so isolate text is sliced correctly during reordering; added a regression ensuring bidi-override ancestors don't leak into isolate contents (isolate text now reorders to match UAX#9 instead of collapsing due to mis-indexed slices).
 - Added coverage for bidi overrides with isolated children to ensure override stacks don’t bleed into isolate contents even with multi-byte text.
 - Spanning percentage widths now top up existing column percentages instead of skipping them: percentage spans distribute their remaining share across all non-fixed columns proportionally (preserving authored ratios), with a regression for growing existing percentages.

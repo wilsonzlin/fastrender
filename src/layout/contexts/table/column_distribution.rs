@@ -955,10 +955,10 @@ pub fn distribute_spanning_percentage(columns: &mut [ColumnConstraints], start_c
     }
 
     let remaining = target_pct - existing_pct;
-    // Weight using existing percentages where present to preserve author ratios; fall back to min widths.
+    // Weight by intrinsic rigidity (min width) so wider content receives a proportionally larger share.
     let weights: Vec<f32> = adjustable
         .iter()
-        .map(|&i| span[i].percentage.unwrap_or(span[i].min_width).max(1.0))
+        .map(|&i| span[i].min_width.max(1.0))
         .collect();
     let total_weight: f32 = weights.iter().copied().sum::<f32>().max(std::f32::EPSILON);
     for (idx, weight) in adjustable.into_iter().zip(weights.into_iter()) {
@@ -1682,10 +1682,12 @@ mod tests {
         ];
         distribute_spanning_percentage(&mut columns, 0, 3, 60.0);
 
-        // Existing 20% is preserved and the remaining 40% is split across auto columns.
-        assert_eq!(columns[0].percentage, Some(20.0));
-        assert_eq!(columns[1].percentage, Some(20.0));
-        assert_eq!(columns[2].percentage, Some(20.0));
+        // Remaining share is split across all adjustable columns using intrinsic widths as weights.
+        assert!((columns[0].percentage.unwrap() - 33.333).abs() < 0.5);
+        assert!((columns[1].percentage.unwrap() - 13.333).abs() < 0.5);
+        assert!((columns[2].percentage.unwrap() - 13.333).abs() < 0.5);
+        let total: f32 = columns.iter().filter_map(|c| c.percentage).sum();
+        assert!((total - 60.0).abs() < 0.5);
     }
 
     #[test]
@@ -1697,9 +1699,9 @@ mod tests {
 
         distribute_spanning_percentage(&mut columns, 0, 2, 80.0);
 
-        // No auto columns to receive the remainder, so authored constraints stay untouched.
+        // No auto columns to receive the remainder; the percentage column absorbs the spanning request.
         assert_eq!(columns[0].fixed_width, Some(50.0));
-        assert_eq!(columns[1].percentage, Some(30.0));
+        assert!((columns[1].percentage.unwrap() - 80.0).abs() < 0.5);
     }
 
     // ========== Compute Column Constraints Tests ==========
