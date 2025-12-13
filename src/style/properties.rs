@@ -4310,6 +4310,7 @@ pub fn apply_declaration_with_base(
                 {
                     styles.font_variant_ligatures = FontVariantLigatures::default();
                     styles.font_variant_caps = FontVariantCaps::Normal;
+                    styles.font_variant_alternates = FontVariantAlternates::default();
                     styles.font_variant_numeric = FontVariantNumeric::default();
                     styles.font_variant_east_asian = FontVariantEastAsian::default();
                     styles.font_variant_position = FontVariantPosition::Normal;
@@ -4321,6 +4322,9 @@ pub fn apply_declaration_with_base(
                     styles.font_style = font_style;
                     styles.font_weight = font_weight;
                     styles.font_variant = font_variant;
+                    if matches!(font_variant, FontVariant::SmallCaps) {
+                        styles.font_variant_caps = FontVariantCaps::SmallCaps;
+                    }
                     styles.font_stretch = font_stretch;
                     styles.font_size = font_size;
                     styles.line_height = line_height;
@@ -12620,6 +12624,36 @@ mod tests {
         assert!(matches!(style.font_style, FontStyle::Italic));
         assert!((style.font_size - 16.0).abs() < 0.01);
         assert!(matches!(style.line_height, LineHeight::Length(_)));
+    }
+
+    #[test]
+    fn font_shorthand_resets_variant_subproperties() {
+        let mut style = ComputedStyle::default();
+        style.font_variant_ligatures.common = false;
+        style.font_variant_caps = FontVariantCaps::AllSmallCaps;
+        style.font_variant_alternates.historical_forms = true;
+        style.font_variant_numeric.figure = NumericFigure::Oldstyle;
+        style.font_variant_east_asian.width = Some(EastAsianWidth::FullWidth);
+        style.font_variant_position = FontVariantPosition::Super;
+        style.font_feature_settings.push(FontFeatureSetting { tag: *b"TEST", value: 1 });
+
+        let decl = Declaration {
+            property: "font".to_string(),
+            value: PropertyValue::Keyword("italic bold small-caps 16px serif".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+
+        // font shorthand resets variant subproperties to initial values and maps small-caps to caps.
+        assert_eq!(style.font_variant_ligatures, FontVariantLigatures::default());
+        assert!(matches!(style.font_variant_caps, FontVariantCaps::SmallCaps));
+        assert_eq!(style.font_variant_alternates, FontVariantAlternates::default());
+        assert_eq!(style.font_variant_numeric, FontVariantNumeric::default());
+        assert_eq!(style.font_variant_east_asian, FontVariantEastAsian::default());
+        assert!(matches!(style.font_variant_position, FontVariantPosition::Normal));
+        // font-feature-settings should remain untouched by the shorthand
+        assert_eq!(style.font_feature_settings.len(), 1);
     }
 
     #[test]
