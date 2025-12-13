@@ -1950,11 +1950,29 @@ impl ShapingPipeline {
         }
 
         // Step 1: Bidi analysis
-        let bidi = if let Some(dir) = base_direction {
-            BidiAnalysis::analyze_with_base(text, style, dir, explicit_bidi)
-        } else {
-            BidiAnalysis::analyze(text, style)
-        };
+        let mut resolved_base_dir = base_direction.unwrap_or_else(|| match style.direction {
+            crate::style::types::Direction::Ltr => Direction::LeftToRight,
+            crate::style::types::Direction::Rtl => Direction::RightToLeft,
+        });
+        let mut bidi_context = explicit_bidi;
+
+        // text-orientation: upright sets the used direction to ltr and treats all characters as
+        // strong LTR for bidi reordering in vertical typographic modes per CSS Writing Modes.
+        if is_vertical_typographic_mode(style.writing_mode)
+            && matches!(style.text_orientation, crate::style::types::TextOrientation::Upright)
+        {
+            resolved_base_dir = Direction::LeftToRight;
+            let level = Level::ltr();
+            let mut ctx = bidi_context.unwrap_or(ExplicitBidiContext {
+                level,
+                override_all: false,
+            });
+            ctx.level = level;
+            ctx.override_all = true;
+            bidi_context = Some(ctx);
+        }
+
+        let bidi = BidiAnalysis::analyze_with_base(text, style, resolved_base_dir, bidi_context);
 
         // Step 2: Script itemization
         let itemized_runs = itemize_text(text, &bidi);
@@ -3113,6 +3131,27 @@ mod tests {
         assert!(
             shaped.iter().all(|r| r.rotation == RunRotation::Cw90),
             "sideways writing should rotate text using horizontal metrics regardless of text-orientation"
+        );
+    }
+
+    #[test]
+    fn upright_in_vertical_forces_ltr_bidi_and_preserves_order() {
+        let mut style = ComputedStyle::default();
+        style.direction = crate::style::types::Direction::Rtl;
+        style.writing_mode = crate::style::types::WritingMode::VerticalRl;
+        style.text_orientation = crate::style::types::TextOrientation::Upright;
+
+        let text = "אבג abc";
+        let ctx = FontContext::new();
+        let shaped = ShapingPipeline::new().shape(text, &style, &ctx).unwrap();
+        assert!(
+            shaped.iter().all(|r| r.direction == Direction::LeftToRight),
+            "upright should force LTR direction for all runs in vertical text"
+        );
+        let reconstructed: String = shaped.iter().flat_map(|r| r.text.chars()).collect();
+        assert_eq!(
+            reconstructed, text,
+            "upright should avoid bidi reordering and preserve textual order"
         );
     }
 
