@@ -937,36 +937,34 @@ pub fn distribute_spanning_percentage(columns: &mut [ColumnConstraints], start_c
 
     let span = &mut columns[start_col..end_col];
     let mut existing_pct = 0.0;
-    let mut auto_indices = Vec::new();
+    let mut adjustable = Vec::new();
     for (idx, col) in span.iter().enumerate() {
         if let Some(pct) = col.percentage {
             existing_pct += pct;
-            continue;
         }
+        // Only columns without fixed widths can absorb additional percentage.
         if col.fixed_width.is_none() {
-            auto_indices.push(idx);
+            adjustable.push(idx);
         }
     }
 
-    // If authored percentages already satisfy the span or there are no auto columns to assign,
+    // If authored percentages already satisfy the span or there are no adjustable columns,
     // leave the constraints untouched.
-    if existing_pct >= target_pct || auto_indices.is_empty() {
+    if existing_pct >= target_pct || adjustable.is_empty() {
         return;
     }
 
     let remaining = target_pct - existing_pct;
-    let weights: Vec<f32> = auto_indices.iter().map(|&i| span[i].min_width.max(1.0)).collect();
-    let total_weight: f32 = weights.iter().sum();
-    if total_weight > 0.0 {
-        for (idx, weight) in auto_indices.iter().zip(weights.iter()) {
-            let share = remaining * (*weight / total_weight);
-            span[*idx].set_percentage(share);
-        }
-    } else {
-        let share = remaining / auto_indices.len() as f32;
-        for idx in auto_indices {
-            span[idx].set_percentage(share);
-        }
+    // Weight using existing percentages where present to preserve author ratios; fall back to min widths.
+    let weights: Vec<f32> = adjustable
+        .iter()
+        .map(|&i| span[i].percentage.unwrap_or(span[i].min_width).max(1.0))
+        .collect();
+    let total_weight: f32 = weights.iter().copied().sum::<f32>().max(std::f32::EPSILON);
+    for (idx, weight) in adjustable.into_iter().zip(weights.into_iter()) {
+        let current = span[idx].percentage.unwrap_or(0.0);
+        let share = remaining * (weight / total_weight);
+        span[idx].set_percentage(current + share);
     }
 }
 
@@ -1593,6 +1591,19 @@ mod tests {
         let pct1 = columns[1].percentage.unwrap();
         assert!(pct1 > pct0);
         assert!((pct0 + pct1 - 60.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn distribute_spanning_percentage_can_grow_existing_percentages() {
+        let mut columns = vec![ColumnConstraints::percentage(20.0, 10.0, 200.0), ColumnConstraints::new(80.0, 200.0)];
+        distribute_spanning_percentage(&mut columns, 0, 2, 80.0);
+
+        let pct0 = columns[0].percentage.unwrap();
+        let pct1 = columns[1].percentage.unwrap();
+        // Existing percentage should increase and the flexible column should absorb most of the remainder.
+        assert!(pct0 > 20.0);
+        assert!(pct1 > pct0);
+        assert!((pct0 + pct1 - 80.0).abs() < 0.5);
     }
 
     #[test]
