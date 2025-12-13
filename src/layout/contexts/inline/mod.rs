@@ -1202,6 +1202,8 @@ impl InlineFormattingContext {
                         s.text_orientation = crate::style::types::TextOrientation::Upright;
                         s.letter_spacing = 0.0;
                         s.word_spacing = 0.0;
+                        s.direction = crate::style::types::Direction::Ltr;
+                        s.unicode_bidi = UnicodeBidi::Isolate;
                         Arc::new(s)
                     };
                     let mut item = self.create_text_item_from_normalized(
@@ -5363,6 +5365,7 @@ mod tests {
             .expect("text items");
         if let InlineItem::Text(text) = &items[0] {
             assert!(text.runs.iter().all(|r| r.direction.is_ltr()));
+            assert!(matches!(text.style.unicode_bidi, UnicodeBidi::Isolate));
         } else {
             panic!("expected text");
         }
