@@ -4222,22 +4222,90 @@ pub fn apply_declaration_with_base(
                         _ => {}
                     }
                 } else if !tokens.is_empty() {
-                    // Start from the initial value and apply toggles.
+                    // Start from the initial value and apply toggles, rejecting conflicts/unknowns.
                     let mut lig = FontVariantLigatures::default();
+                    let mut seen_common = false;
+                    let mut seen_disc = false;
+                    let mut seen_hist = false;
+                    let mut seen_ctx = false;
+                    let mut invalid = false;
+
                     for tok in tokens {
                         match tok {
-                            "common-ligatures" => lig.common = true,
-                            "no-common-ligatures" => lig.common = false,
-                            "discretionary-ligatures" => lig.discretionary = true,
-                            "no-discretionary-ligatures" => lig.discretionary = false,
-                            "historical-ligatures" => lig.historical = true,
-                            "no-historical-ligatures" => lig.historical = false,
-                            "contextual" => lig.contextual = true,
-                            "no-contextual" => lig.contextual = false,
-                            _ => {}
+                            "common-ligatures" => {
+                                if seen_common {
+                                    invalid = true;
+                                    break;
+                                }
+                                lig.common = true;
+                                seen_common = true;
+                            }
+                            "no-common-ligatures" => {
+                                if seen_common {
+                                    invalid = true;
+                                    break;
+                                }
+                                lig.common = false;
+                                seen_common = true;
+                            }
+                            "discretionary-ligatures" => {
+                                if seen_disc {
+                                    invalid = true;
+                                    break;
+                                }
+                                lig.discretionary = true;
+                                seen_disc = true;
+                            }
+                            "no-discretionary-ligatures" => {
+                                if seen_disc {
+                                    invalid = true;
+                                    break;
+                                }
+                                lig.discretionary = false;
+                                seen_disc = true;
+                            }
+                            "historical-ligatures" => {
+                                if seen_hist {
+                                    invalid = true;
+                                    break;
+                                }
+                                lig.historical = true;
+                                seen_hist = true;
+                            }
+                            "no-historical-ligatures" => {
+                                if seen_hist {
+                                    invalid = true;
+                                    break;
+                                }
+                                lig.historical = false;
+                                seen_hist = true;
+                            }
+                            "contextual" => {
+                                if seen_ctx {
+                                    invalid = true;
+                                    break;
+                                }
+                                lig.contextual = true;
+                                seen_ctx = true;
+                            }
+                            "no-contextual" => {
+                                if seen_ctx {
+                                    invalid = true;
+                                    break;
+                                }
+                                lig.contextual = false;
+                                seen_ctx = true;
+                            }
+                            _ => {
+                                invalid = true;
+                                break;
+                            }
                         }
                     }
-                    styles.font_variant_ligatures = lig;
+
+                    if !invalid {
+                        styles.font_variant_ligatures = lig;
+                    }
                 }
             }
         }
@@ -12577,6 +12645,34 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!(matches!(style.font_variant_numeric.spacing, NumericSpacing::Proportional));
+    }
+
+    #[test]
+    fn font_variant_ligatures_invalid_token_is_ignored() {
+        let mut style = ComputedStyle::default();
+        style.font_variant_ligatures.common = false;
+        let decl = Declaration {
+            property: "font-variant-ligatures".to_string(),
+            value: PropertyValue::Keyword("foo".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert!(!style.font_variant_ligatures.common);
+    }
+
+    #[test]
+    fn font_variant_ligatures_conflict_invalidates_declaration() {
+        let mut style = ComputedStyle::default();
+        style.font_variant_ligatures.contextual = false;
+        let decl = Declaration {
+            property: "font-variant-ligatures".to_string(),
+            value: PropertyValue::Keyword("contextual no-contextual".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert!(!style.font_variant_ligatures.contextual);
     }
 
     #[test]
