@@ -325,7 +325,8 @@ impl AbsoluteLayout {
             .width
             .resolve_against(cb_width)
             .map(|w| content_size_from_box_sizing(w, total_horizontal_spacing, style.box_sizing));
-        let min_width = content_size_from_box_sizing(style.min_width.to_px(), total_horizontal_spacing, style.box_sizing);
+        let min_width =
+            content_size_from_box_sizing(style.min_width.to_px(), total_horizontal_spacing, style.box_sizing);
         let max_width =
             content_size_from_box_sizing(style.max_width.to_px(), total_horizontal_spacing, style.box_sizing);
 

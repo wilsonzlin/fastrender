@@ -1863,6 +1863,18 @@ pub enum BackgroundBox {
     ContentBox,
 }
 
+/// Reference box for clip-path shapes
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceBox {
+    BorderBox,
+    PaddingBox,
+    ContentBox,
+    MarginBox,
+    FillBox,
+    StrokeBox,
+    ViewBox,
+}
+
 /// Background position component with alignment (percentage of available space)
 /// and an offset applied after alignment.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1883,6 +1895,73 @@ pub enum BackgroundPosition {
         x: BackgroundPositionComponent,
         y: BackgroundPositionComponent,
     },
+}
+
+/// Fill rule used for polygon clip-path shapes
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FillRule {
+    NonZero,
+    EvenOdd,
+}
+
+/// Shape radius keyword or length for circle/ellipse clip-path shapes
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ShapeRadius {
+    Length(Length),
+    ClosestSide,
+    FarthestSide,
+}
+
+/// Rounded corner radii for inset() clip paths
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClipRadii {
+    pub top_left: Length,
+    pub top_right: Length,
+    pub bottom_right: Length,
+    pub bottom_left: Length,
+}
+
+/// Basic shapes supported by CSS clip-path
+#[derive(Debug, Clone, PartialEq)]
+pub enum BasicShape {
+    Inset {
+        top: Length,
+        right: Length,
+        bottom: Length,
+        left: Length,
+        border_radius: Option<ClipRadii>,
+    },
+    Circle {
+        radius: ShapeRadius,
+        position: BackgroundPosition,
+    },
+    Ellipse {
+        radius_x: ShapeRadius,
+        radius_y: ShapeRadius,
+        position: BackgroundPosition,
+    },
+    Polygon {
+        fill: FillRule,
+        points: Vec<(Length, Length)>,
+    },
+}
+
+/// CSS clip-path computed value
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClipPath {
+    None,
+    Box(ReferenceBox),
+    BasicShape(BasicShape, Option<ReferenceBox>),
+}
+
+/// Reference box used by transforms
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransformBox {
+    BorderBox,
+    ContentBox,
+    FillBox,
+    StrokeBox,
+    ViewBox,
 }
 
 /// Background attachment behavior

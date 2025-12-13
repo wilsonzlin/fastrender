@@ -956,10 +956,7 @@ pub fn distribute_spanning_percentage(columns: &mut [ColumnConstraints], start_c
 
     let remaining = target_pct - existing_pct;
     // Weight by intrinsic rigidity (min width) so wider content receives a proportionally larger share.
-    let weights: Vec<f32> = adjustable
-        .iter()
-        .map(|&i| span[i].min_width.max(1.0))
-        .collect();
+    let weights: Vec<f32> = adjustable.iter().map(|&i| span[i].min_width.max(1.0)).collect();
     let total_weight: f32 = weights.iter().copied().sum::<f32>().max(std::f32::EPSILON);
     for (idx, weight) in adjustable.into_iter().zip(weights.into_iter()) {
         let current = span[idx].percentage.unwrap_or(0.0);
@@ -1595,7 +1592,10 @@ mod tests {
 
     #[test]
     fn distribute_spanning_percentage_can_grow_existing_percentages() {
-        let mut columns = vec![ColumnConstraints::percentage(20.0, 10.0, 200.0), ColumnConstraints::new(80.0, 200.0)];
+        let mut columns = vec![
+            ColumnConstraints::percentage(20.0, 10.0, 200.0),
+            ColumnConstraints::new(80.0, 200.0),
+        ];
         distribute_spanning_percentage(&mut columns, 0, 2, 80.0);
 
         let pct0 = columns[0].percentage.unwrap();

@@ -30,6 +30,7 @@ use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem;
 use crate::layout::utils::resolve_font_relative_length;
 use crate::paint::blur::apply_gaussian_blur;
+use crate::paint::clip_path::{resolve_clip_path, ResolvedClipPath};
 use crate::paint::display_list::BorderRadii;
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
 use crate::paint::rasterize::fill_rounded_rect;
@@ -47,7 +48,7 @@ use crate::style::types::{
     ImageRendering, ObjectFit, OrientationTransform, TextDecorationLine, TextDecorationSkipInk, TextDecorationStyle,
     TextDecorationThickness,
 };
-use crate::style::types::{FilterColor, FilterFunction, MixBlendMode, Overflow};
+use crate::style::types::{FilterColor, FilterFunction, MixBlendMode, Overflow, TransformBox};
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStretch, FontStyle, ScaledMetrics};
@@ -138,6 +139,7 @@ enum DisplayCommand {
         backdrop_filters: Vec<ResolvedFilter>,
         radii: BorderRadii,
         clip: Option<(Rect, BorderRadii, bool, bool)>,
+        clip_path: Option<ResolvedClipPath>,
         commands: Vec<DisplayCommand>,
     },
 }
@@ -749,6 +751,8 @@ impl Painter {
             let clip_radii = resolve_clip_radii(style, &rects, crate::style::types::BackgroundBox::PaddingBox);
             Some((clip_rect, clip_radii, clip_x, clip_y))
         });
+        let clip_path = style_ref
+            .and_then(|style| resolve_clip_path(style, abs_bounds, (self.css_width, self.css_height), &self.font_ctx));
         if opacity < 1.0
             || transform.is_some()
             || !matches!(blend_mode, MixBlendMode::Normal)
@@ -756,6 +760,7 @@ impl Painter {
             || has_filters
             || has_backdrop
             || clip.is_some()
+            || clip_path.is_some()
         {
             let radii = resolve_border_radii(style_ref, abs_bounds);
             items.push(DisplayCommand::StackingContext {
@@ -768,6 +773,7 @@ impl Painter {
                 backdrop_filters,
                 radii,
                 clip,
+                clip_path,
                 commands: local_commands,
             });
         } else {
@@ -946,6 +952,7 @@ impl Painter {
                 backdrop_filters,
                 radii,
                 clip,
+                clip_path,
                 commands,
             } => {
                 if opacity <= 0.0 {
@@ -959,6 +966,7 @@ impl Painter {
                     context_rect,
                     transform.as_ref(),
                     clip.as_ref(),
+                    clip_path.as_ref(),
                 ) else {
                     return Ok(());
                 };
@@ -1063,6 +1071,13 @@ impl Painter {
                 }
 
                 let mut layer_pixmap = base_painter.pixmap;
+                if let Some(ref clip_path) = clip_path {
+                    if let Some(size) = IntSize::from_wh(layer_pixmap.width(), layer_pixmap.height()) {
+                        if let Some(mask) = clip_path.mask(self.scale, size) {
+                            layer_pixmap.apply_mask(&mask);
+                        }
+                    }
+                }
                 if !filters.is_empty() {
                     apply_filters(&mut layer_pixmap, &filters, self.scale);
                 }
@@ -4471,26 +4486,40 @@ fn color_to_skia(color: Rgba) -> tiny_skia::Color {
     tiny_skia::Color::from_rgba8(color.r, color.g, color.b, alpha)
 }
 
+fn transform_reference_box(style: &ComputedStyle, bounds: Rect) -> Rect {
+    let rects = background_rects(bounds.x(), bounds.y(), bounds.width(), bounds.height(), style);
+    match style.transform_box {
+        TransformBox::ContentBox => rects.content,
+        TransformBox::BorderBox | TransformBox::FillBox | TransformBox::StrokeBox | TransformBox::ViewBox => {
+            rects.border
+        }
+    }
+}
+
 fn build_transform(style: Option<&ComputedStyle>, bounds: Rect) -> Option<Transform> {
     let style = style?;
     if style.transform.is_empty() {
         return None;
     }
 
+    let reference = transform_reference_box(style, bounds);
+    let percentage_width = reference.width();
+    let percentage_height = reference.height();
+
     let mut ts = Transform::identity();
     for component in &style.transform {
         let next = match component {
             crate::css::types::Transform::Translate(x, y) => {
-                let tx = resolve_transform_length(x, style.font_size, bounds.width());
-                let ty = resolve_transform_length(y, style.font_size, bounds.height());
+                let tx = resolve_transform_length(x, style.font_size, percentage_width);
+                let ty = resolve_transform_length(y, style.font_size, percentage_height);
                 Transform::from_translate(tx, ty)
             }
             crate::css::types::Transform::TranslateX(x) => {
-                let tx = resolve_transform_length(x, style.font_size, bounds.width());
+                let tx = resolve_transform_length(x, style.font_size, percentage_width);
                 Transform::from_translate(tx, 0.0)
             }
             crate::css::types::Transform::TranslateY(y) => {
-                let ty = resolve_transform_length(y, style.font_size, bounds.height());
+                let ty = resolve_transform_length(y, style.font_size, percentage_height);
                 Transform::from_translate(0.0, ty)
             }
             crate::css::types::Transform::Scale(sx, sy) => Transform::from_scale(*sx, *sy),
@@ -4504,9 +4533,9 @@ fn build_transform(style: Option<&ComputedStyle>, bounds: Rect) -> Option<Transf
         ts = ts.pre_concat(next);
     }
 
-    let origin_x = resolve_transform_length(&style.transform_origin.x, style.font_size, bounds.width());
-    let origin_y = resolve_transform_length(&style.transform_origin.y, style.font_size, bounds.height());
-    let origin = Point::new(bounds.x() + origin_x, bounds.y() + origin_y);
+    let origin_x = resolve_transform_length(&style.transform_origin.x, style.font_size, percentage_width);
+    let origin_y = resolve_transform_length(&style.transform_origin.y, style.font_size, percentage_height);
+    let origin = Point::new(reference.x() + origin_x, reference.y() + origin_y);
 
     // Apply transform around the resolved origin.
     ts = Transform::from_translate(origin.x, origin.y)
@@ -4597,6 +4626,7 @@ fn stacking_context_bounds(
     rect: Rect,
     transform: Option<&Transform>,
     clip: Option<&(Rect, BorderRadii, bool, bool)>,
+    clip_path: Option<&ResolvedClipPath>,
 ) -> Option<Rect> {
     let mut base = rect;
     if let Some(desc) = compute_descendant_bounds(commands, rect) {
@@ -4606,6 +4636,10 @@ fn stacking_context_bounds(
             desc
         };
         base = base.union(clipped);
+    }
+    if let Some(path) = clip_path {
+        let clip_bounds = path.bounds();
+        base = base.intersection(clip_bounds).unwrap_or(clip_bounds);
     }
     let (l, t, r, b) = filter_outset(filters);
     let (bl, bt, br, bb) = filter_outset(backdrop_filters);
@@ -4640,6 +4674,7 @@ fn command_bounds(cmd: &DisplayCommand) -> Option<Rect> {
             filters,
             backdrop_filters,
             clip,
+            clip_path,
             rect,
             transform,
             ..
@@ -4650,6 +4685,7 @@ fn command_bounds(cmd: &DisplayCommand) -> Option<Rect> {
             *rect,
             transform.as_ref(),
             clip.as_ref(),
+            clip_path.as_ref(),
         ),
     }
 }
@@ -4740,6 +4776,7 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
                 backdrop_filters,
                 radii,
                 clip,
+                clip_path,
                 commands,
             } => DisplayCommand::StackingContext {
                 rect: rect.translate(offset),
@@ -4751,6 +4788,7 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
                 backdrop_filters,
                 radii,
                 clip: clip.map(|(rect, r, cx, cy)| (rect.translate(offset), r, cx, cy)),
+                clip_path: clip_path.map(|cp| cp.translate(dx, dy)),
                 commands: translate_commands(commands, dx, dy),
             },
         })
@@ -6130,9 +6168,10 @@ mod tests {
     use crate::image_loader::ImageCache;
     use crate::paint::display_list::BorderRadii;
     use crate::style::types::{
-        BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundRepeat, BackgroundSize,
-        BackgroundSizeComponent, BorderImage, BorderImageRepeat, BorderImageSlice, BorderImageSliceValue,
-        BorderImageSource, FilterShadow, Isolation, MixBlendMode, OutlineColor, OutlineStyle, Overflow,
+        BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundPosition, BackgroundPositionComponent,
+        BackgroundRepeat, BackgroundSize, BackgroundSizeComponent, BorderImage, BorderImageRepeat, BorderImageSlice,
+        BorderImageSliceValue, BorderImageSource, ClipPath, FilterShadow, Isolation, MixBlendMode, OutlineColor,
+        OutlineStyle, Overflow, ShapeRadius, TransformBox,
     };
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
@@ -6566,7 +6605,10 @@ mod tests {
             (l - 10.0).abs() < 0.01 && (t - 10.0).abs() < 0.01 && (r - 10.0).abs() < 0.01 && (b - 10.0).abs() < 0.01,
             "negative spread should reduce blur outset (got {l},{t},{r},{b})"
         );
-        assert!(l < l0 && t < t0 && r < r0 && b < b0, "reduced spread should shrink outsets");
+        assert!(
+            l < l0 && t < t0 && r < r0 && b < b0,
+            "reduced spread should shrink outsets"
+        );
     }
 
     #[test]
@@ -7650,7 +7692,8 @@ mod tests {
             },
         ];
         let clip = Some((root_rect, BorderRadii::ZERO, true, true));
-        let bounds = stacking_context_bounds(&commands, &[], &[], root_rect, None, clip.as_ref()).expect("bounds");
+        let bounds =
+            stacking_context_bounds(&commands, &[], &[], root_rect, None, clip.as_ref(), None).expect("bounds");
         assert!((bounds.width() - 1010.0).abs() < 0.01);
         assert!(bounds.min_x().abs() < 0.01);
         assert!((bounds.max_x() - 1010.0).abs() < 0.01);
@@ -8124,6 +8167,7 @@ mod tests {
             backdrop_filters: Vec::new(),
             radii: BorderRadii::uniform(0.5),
             clip: None,
+            clip_path: None,
             commands: vec![DisplayCommand::Background {
                 rect: Rect::from_xywh(1.0, 1.0, 2.0, 2.0),
                 style,
@@ -8139,6 +8183,42 @@ mod tests {
         assert!(
             alpha_near < 255,
             "blurred spill should be softer than solid fill; alpha at (0,1) was {alpha_near}"
+        );
+    }
+
+    #[test]
+    fn clip_path_masks_stacking_contents() {
+        let mut style = ComputedStyle::default();
+        style.background_color = Rgba::RED;
+        style.clip_path = ClipPath::BasicShape(
+            crate::style::types::BasicShape::Circle {
+                radius: ShapeRadius::Length(Length::px(3.0)),
+                position: BackgroundPosition::Position {
+                    x: BackgroundPositionComponent {
+                        alignment: 0.5,
+                        offset: Length::px(0.0),
+                    },
+                    y: BackgroundPositionComponent {
+                        alignment: 0.5,
+                        offset: Length::px(0.0),
+                    },
+                },
+            },
+            None,
+        );
+
+        let mut root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![]);
+        root.style = Some(Arc::new(style));
+        let tree = FragmentTree::new(root);
+
+        let pixmap = paint_tree(&tree, 10, 10, Rgba::WHITE).expect("painted");
+        let center = pixmap.pixel(5, 5).expect("center pixel");
+        let corner = pixmap.pixel(0, 0).expect("corner pixel");
+
+        assert!(center.red() > 200 && center.green() < 60 && center.blue() < 60);
+        assert_eq!(
+            (corner.red(), corner.green(), corner.blue(), corner.alpha()),
+            (255, 255, 255, 255)
         );
     }
 
@@ -8454,6 +8534,45 @@ mod tests {
             (255, 255, 255),
             "center should remain unfilled without border-image fill"
         );
+    }
+
+    #[test]
+    fn transform_box_uses_content_box_for_translate_percentage() {
+        let mut style = ComputedStyle::default();
+        style.transform_box = TransformBox::ContentBox;
+        style.padding_left = Length::px(10.0);
+        style.padding_right = Length::px(10.0);
+        style.border_left_width = Length::px(5.0);
+        style.border_right_width = Length::px(5.0);
+        style.transform.push(crate::css::types::Transform::Translate(
+            Length::percent(50.0),
+            Length::percent(0.0),
+        ));
+
+        let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
+        let transform = build_transform(Some(&style), bounds).expect("transform should build");
+
+        assert!((transform.tx - 85.0).abs() < 1e-3);
+        assert!(transform.ty.abs() < 1e-3);
+    }
+
+    #[test]
+    fn transform_box_moves_origin_into_content_box() {
+        let mut style = ComputedStyle::default();
+        style.transform_box = TransformBox::ContentBox;
+        style.padding_left = Length::px(10.0);
+        style.border_left_width = Length::px(5.0);
+        style.transform_origin = crate::style::types::TransformOrigin {
+            x: Length::percent(0.0),
+            y: Length::percent(0.0),
+        };
+        style.transform.push(crate::css::types::Transform::Scale(2.0, 1.0));
+
+        let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
+        let transform = build_transform(Some(&style), bounds).expect("transform should build");
+
+        assert!((transform.tx + 15.0).abs() < 1e-3);
+        assert!(transform.ty.abs() < 1e-3);
     }
 
     #[test]

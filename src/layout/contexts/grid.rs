@@ -1031,13 +1031,18 @@ impl FormattingContext for GridFormattingContext {
                     &self.font_context,
                 );
                 let static_pos = padding_origin;
-                let preferred_min_inline =
-                    fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent).ok();
-                let preferred_inline =
-                    fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent).ok();
-                let preferred_min_block =
-                    fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent).ok();
-                let preferred_block = fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent).ok();
+                let preferred_min_inline = fc
+                    .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
+                    .ok();
+                let preferred_inline = fc
+                    .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
+                    .ok();
+                let preferred_min_block = fc
+                    .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
+                    .ok();
+                let preferred_block = fc
+                    .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
+                    .ok();
 
                 let mut input = crate::layout::absolute_positioning::AbsoluteLayoutInput::new(
                     positioned_style,

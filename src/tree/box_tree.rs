@@ -232,14 +232,7 @@ impl ReplacedType {
                 }
                 ordered
             }
-            ReplacedType::Video { src, poster } => {
-                let mut urls = Vec::new();
-                if let Some(p) = poster {
-                    urls.push(p.clone());
-                }
-                urls.push(src.clone());
-                urls
-            }
+            ReplacedType::Video { src: _, poster } => poster.iter().cloned().collect(),
             ReplacedType::Svg { content }
             | ReplacedType::Embed { src: content }
             | ReplacedType::Object { data: content }
@@ -1278,5 +1271,26 @@ mod tests {
             "base src should remain available as fallback"
         );
         assert_eq!(sources.len(), 3, "srcset entries and base src should be unique");
+    }
+
+    #[test]
+    fn video_image_sources_prefer_poster_only() {
+        let video = ReplacedType::Video {
+            src: "video.mp4".to_string(),
+            poster: Some("thumb.png".to_string()),
+        };
+        let sources = video.image_sources_with_fallback(ImageSelectionContext {
+            scale: 2.0,
+            slot_width: Some(400.0),
+            viewport: Some(Size::new(800.0, 600.0)),
+            media_context: None,
+            font_size: Some(16.0),
+        });
+
+        assert_eq!(
+            sources,
+            vec!["thumb.png".to_string()],
+            "video should only expose poster for imaging"
+        );
     }
 }

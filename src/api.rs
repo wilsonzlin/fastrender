@@ -815,16 +815,11 @@ impl FastRender {
                     }
                 }
             }
-            ReplacedType::Video { src, poster } => {
+            ReplacedType::Video { src: _, poster } => {
                 let needs_intrinsic = replaced_box.intrinsic_size.is_none();
                 let needs_ratio = replaced_box.aspect_ratio.is_none();
                 if needs_intrinsic || needs_ratio {
-                    let candidates = poster
-                        .as_deref()
-                        .into_iter()
-                        .chain(std::iter::once(src.as_str()))
-                        .filter(|s| !s.is_empty());
-                    for candidate in candidates {
+                    if let Some(candidate) = poster.as_deref().filter(|s| !s.is_empty()) {
                         let image = if candidate.trim_start().starts_with('<') {
                             self.image_cache.render_svg(candidate)
                         } else {
@@ -844,7 +839,6 @@ impl FastRender {
                                 if needs_ratio && h > 0.0 {
                                     replaced_box.aspect_ratio = Some(w / h);
                                 }
-                                break;
                             }
                         }
                     }

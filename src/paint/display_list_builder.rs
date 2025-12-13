@@ -33,11 +33,12 @@ use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::layout::utils::resolve_font_relative_length;
+use crate::paint::clip_path::resolve_clip_path;
 use crate::paint::display_list::{
     BlendMode, BlendModeItem, BorderImageItem, BorderImageSourceItem, BorderItem, BorderSide, BoxShadowItem, ClipItem,
-    ConicGradientItem, DecorationPaint, DecorationStroke, DisplayItem, DisplayList, EmphasisMark, EmphasisText,
-    FillRectItem, FontId, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem,
-    LinearGradientItem, ListMarkerItem, OpacityItem, OutlineItem, RadialGradientItem, ResolvedFilter,
+    ClipShape, ConicGradientItem, DecorationPaint, DecorationStroke, DisplayItem, DisplayList, EmphasisMark,
+    EmphasisText, FillRectItem, FontId, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality,
+    ImageItem, LinearGradientItem, ListMarkerItem, OpacityItem, OutlineItem, RadialGradientItem, ResolvedFilter,
     StackingContextItem, StrokeRectItem, TextDecorationItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
 };
 use crate::paint::object_fit::{compute_object_fit, default_object_position};
@@ -49,7 +50,7 @@ use crate::style::types::{
     BackgroundSize, BackgroundSizeComponent, BackgroundSizeKeyword, BorderImageSource, ImageOrientation,
     ImageRendering, Isolation, MixBlendMode, ObjectFit, ResolvedTextDecoration, TextDecorationLine,
     TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness, TextEmphasisPosition, TextEmphasisStyle,
-    TextUnderlineOffset, TextUnderlinePosition,
+    TextUnderlineOffset, TextUnderlinePosition, TransformBox,
 };
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
@@ -308,8 +309,10 @@ impl DisplayListBuilder {
         // Push clip if needed
         if should_clip {
             self.list.push(DisplayItem::PushClip(ClipItem {
-                rect: absolute_rect,
-                radii: None,
+                shape: ClipShape::Rect {
+                    rect: absolute_rect,
+                    radii: None,
+                },
             }));
         }
 
@@ -374,7 +377,18 @@ impl DisplayListBuilder {
             .unwrap_or((Vec::new(), Vec::new(), crate::paint::display_list::BorderRadii::ZERO));
         let transform = root_style.and_then(|style| Self::build_transform(style, context.bounds));
 
-        let mut pushed_clip = false;
+        let viewport = self
+            .viewport
+            .unwrap_or((context_bounds.width(), context_bounds.height()));
+        let clip_path = root_style.and_then(|style| resolve_clip_path(style, context_bounds, viewport, &self.font_ctx));
+
+        let mut pushed_clips = 0;
+        if let Some(path) = clip_path {
+            self.list.push(DisplayItem::PushClip(ClipItem {
+                shape: ClipShape::Path { path },
+            }));
+            pushed_clips += 1;
+        }
         if paint_contained {
             let clip = root_fragment
                 .and_then(|fragment| {
@@ -386,17 +400,21 @@ impl DisplayListBuilder {
                     let rects = Self::background_rects(rect, style);
                     let radii = Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox);
                     Some(ClipItem {
-                        rect: rects.padding,
-                        radii: if radii.is_zero() { None } else { Some(radii) },
+                        shape: ClipShape::Rect {
+                            rect: rects.padding,
+                            radii: if radii.is_zero() { None } else { Some(radii) },
+                        },
                     })
                 })
                 .unwrap_or(ClipItem {
-                    rect: context_bounds,
-                    radii: None,
+                    shape: ClipShape::Rect {
+                        rect: context_bounds,
+                        radii: None,
+                    },
                 });
 
             self.list.push(DisplayItem::PushClip(clip));
-            pushed_clip = true;
+            pushed_clips += 1;
         }
 
         self.list.push(DisplayItem::PushStackingContext(StackingContextItem {
@@ -430,7 +448,7 @@ impl DisplayListBuilder {
         }
 
         self.list.push(DisplayItem::PopStackingContext);
-        if pushed_clip {
+        for _ in 0..pushed_clips {
             self.list.push(DisplayItem::PopClip);
         }
     }
@@ -479,6 +497,16 @@ impl DisplayListBuilder {
             border: border_rect,
             padding: padding_rect,
             content: content_rect,
+        }
+    }
+
+    fn transform_reference_box(style: &ComputedStyle, bounds: Rect) -> Rect {
+        let rects = Self::background_rects(bounds, style);
+        match style.transform_box {
+            TransformBox::ContentBox => rects.content,
+            TransformBox::BorderBox | TransformBox::FillBox | TransformBox::StrokeBox | TransformBox::ViewBox => {
+                rects.border
+            }
         }
     }
 
@@ -1069,20 +1097,24 @@ impl DisplayListBuilder {
             return None;
         }
 
+        let reference = Self::transform_reference_box(style, bounds);
+        let percentage_width = reference.width();
+        let percentage_height = reference.height();
+
         let mut ts = Transform2D::identity();
         for component in &style.transform {
             let next = match component {
                 crate::css::types::Transform::Translate(x, y) => {
-                    let tx = Self::resolve_transform_length(x, style.font_size, bounds.width());
-                    let ty = Self::resolve_transform_length(y, style.font_size, bounds.height());
+                    let tx = Self::resolve_transform_length(x, style.font_size, percentage_width);
+                    let ty = Self::resolve_transform_length(y, style.font_size, percentage_height);
                     Transform2D::translate(tx, ty)
                 }
                 crate::css::types::Transform::TranslateX(x) => {
-                    let tx = Self::resolve_transform_length(x, style.font_size, bounds.width());
+                    let tx = Self::resolve_transform_length(x, style.font_size, percentage_width);
                     Transform2D::translate(tx, 0.0)
                 }
                 crate::css::types::Transform::TranslateY(y) => {
-                    let ty = Self::resolve_transform_length(y, style.font_size, bounds.height());
+                    let ty = Self::resolve_transform_length(y, style.font_size, percentage_height);
                     Transform2D::translate(0.0, ty)
                 }
                 crate::css::types::Transform::Scale(sx, sy) => Transform2D::scale(*sx, *sy),
@@ -1103,9 +1135,9 @@ impl DisplayListBuilder {
             ts = ts.multiply(&next);
         }
 
-        let origin_x = Self::resolve_transform_length(&style.transform_origin.x, style.font_size, bounds.width());
-        let origin_y = Self::resolve_transform_length(&style.transform_origin.y, style.font_size, bounds.height());
-        let origin = Point::new(bounds.x() + origin_x, bounds.y() + origin_y);
+        let origin_x = Self::resolve_transform_length(&style.transform_origin.x, style.font_size, percentage_width);
+        let origin_y = Self::resolve_transform_length(&style.transform_origin.y, style.font_size, percentage_height);
+        let origin = Point::new(reference.x() + origin_x, reference.y() + origin_y);
 
         let translate_to_origin = Transform2D::translate(origin.x, origin.y);
         let translate_back = Transform2D::translate(-origin.x, -origin.y);
@@ -1487,8 +1519,10 @@ impl DisplayListBuilder {
         let mut pushed_clip = false;
         if !clip_radii.is_zero() {
             self.list.push(DisplayItem::PushClip(ClipItem {
-                rect: clip_rect,
-                radii: Some(clip_radii),
+                shape: ClipShape::Rect {
+                    rect: clip_rect,
+                    radii: Some(clip_radii),
+                },
             }));
             pushed_clip = true;
         }
@@ -1880,7 +1914,9 @@ impl DisplayListBuilder {
 
     /// Begins a clip region
     pub fn push_clip(&mut self, rect: Rect) {
-        self.list.push(DisplayItem::PushClip(ClipItem { rect, radii: None }));
+        self.list.push(DisplayItem::PushClip(ClipItem {
+            shape: ClipShape::Rect { rect, radii: None },
+        }));
     }
 
     /// Ends a clip region
@@ -2877,6 +2913,7 @@ impl Default for DisplayListBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::css::types::Transform;
     use crate::image_loader::ImageCache;
     use crate::paint::stacking::{StackingContext, StackingContextReason};
     use crate::style::color::{Color, Rgba};
@@ -2884,7 +2921,9 @@ mod tests {
     use crate::style::position::Position;
     use crate::style::types::{
         BackgroundImage, BackgroundLayer, BackgroundRepeat, ImageRendering, MixBlendMode, TextDecorationLine,
+        TransformBox,
     };
+    use crate::style::values::Length;
     use crate::style::ComputedStyle;
     use crate::tree::box_tree::ReplacedType;
     use std::path::PathBuf;
@@ -3763,8 +3802,10 @@ mod tests {
 
     #[test]
     fn audio_replaced_uses_labeled_placeholder() {
-        let fragment =
-            FragmentNode::new_replaced(Rect::from_xywh(0.0, 0.0, 30.0, 12.0), ReplacedType::Audio { src: String::new() });
+        let fragment = FragmentNode::new_replaced(
+            Rect::from_xywh(0.0, 0.0, 30.0, 12.0),
+            ReplacedType::Audio { src: String::new() },
+        );
         let builder = DisplayListBuilder::new();
         let list = builder.build(&fragment);
 
@@ -3789,5 +3830,43 @@ mod tests {
 
         assert_eq!(list.len(), 1, "poster image should render as content");
         assert!(matches!(list.items()[0], DisplayItem::Image(_)));
+    }
+
+    #[test]
+    fn transform_box_uses_content_box_for_translate_percentages() {
+        let mut style = ComputedStyle::default();
+        style.transform_box = TransformBox::ContentBox;
+        style.padding_left = Length::px(10.0);
+        style.padding_right = Length::px(10.0);
+        style.border_left_width = Length::px(5.0);
+        style.border_right_width = Length::px(5.0);
+        style
+            .transform
+            .push(Transform::Translate(Length::percent(50.0), Length::percent(0.0)));
+
+        let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
+        let transform = DisplayListBuilder::build_transform(&style, bounds).expect("transform should build");
+
+        assert!((transform.e - 85.0).abs() < 1e-3);
+        assert!((transform.f).abs() < 1e-3);
+    }
+
+    #[test]
+    fn transform_box_shifts_origin_to_content_box() {
+        let mut style = ComputedStyle::default();
+        style.transform_box = TransformBox::ContentBox;
+        style.padding_left = Length::px(10.0);
+        style.border_left_width = Length::px(5.0);
+        style.transform_origin = crate::style::types::TransformOrigin {
+            x: Length::percent(0.0),
+            y: Length::percent(0.0),
+        };
+        style.transform.push(Transform::Scale(2.0, 1.0));
+
+        let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
+        let transform = DisplayListBuilder::build_transform(&style, bounds).expect("transform should build");
+
+        assert!((transform.e + 15.0).abs() < 1e-3);
+        assert!((transform.f).abs() < 1e-3);
     }
 }

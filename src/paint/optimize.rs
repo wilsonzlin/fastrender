@@ -358,8 +358,12 @@ impl DisplayListOptimizer {
                     }
                 }
                 DisplayItem::PushClip(clip) => {
+                    let clip_bounds = match &clip.shape {
+                        crate::paint::display_list::ClipShape::Rect { rect, .. } => *rect,
+                        crate::paint::display_list::ClipShape::Path { path } => path.bounds(),
+                    };
                     let can_cull =
-                        !viewport.intersects(clip.rect) && active_effect_contexts == 0 && active_transform_depth == 0;
+                        !viewport.intersects(clip_bounds) && active_effect_contexts == 0 && active_transform_depth == 0;
                     clip_stack.push(ClipRecord {
                         start_index: result.len(),
                         can_cull,

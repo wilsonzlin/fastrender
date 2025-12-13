@@ -1763,24 +1763,24 @@ fn reorder_paragraph(
         return;
     }
 
-#[derive(Clone, Copy)]
-struct ByteMapping {
-    leaf_index: usize,
-    /// Byte offsets into the paragraph_text buffer
-    start: usize,
-    end: usize,
-    /// Byte offsets within the leaf's own text (for slicing)
-    local_start: usize,
-    local_end: usize,
-    isolate_group: Option<usize>,
-    leaf_isolate: bool,
-}
+    #[derive(Clone, Copy)]
+    struct ByteMapping {
+        leaf_index: usize,
+        /// Byte offsets into the paragraph_text buffer
+        start: usize,
+        end: usize,
+        /// Byte offsets within the leaf's own text (for slicing)
+        local_start: usize,
+        local_end: usize,
+        isolate_group: Option<usize>,
+        leaf_isolate: bool,
+    }
 
-#[derive(Clone, Copy)]
-struct VisualSegment {
-    mapping: ByteMapping,
-    level: Level,
-}
+    #[derive(Clone, Copy)]
+    struct VisualSegment {
+        mapping: ByteMapping,
+        level: Level,
+    }
 
     let mut box_counter = 0usize;
     let mut line_leaves: Vec<Vec<BidiLeaf>> = Vec::with_capacity(lines.len());
@@ -1830,11 +1830,11 @@ struct VisualSegment {
     let mut global_offset = 0usize;
     let mut paragraph_text = String::new();
 
-        for (_line_idx, leaves) in line_leaves.into_iter().enumerate() {
-            let line_start = global_offset;
-            for leaf in leaves {
-                let mut stack: Vec<(UnicodeBidi, Direction)> = vec![(root_unicode_bidi, root_direction)];
-                stack.extend(leaf.box_stack.iter().map(|c| (c.unicode_bidi, c.direction)));
+    for (_line_idx, leaves) in line_leaves.into_iter().enumerate() {
+        let line_start = global_offset;
+        for leaf in leaves {
+            let mut stack: Vec<(UnicodeBidi, Direction)> = vec![(root_unicode_bidi, root_direction)];
+            stack.extend(leaf.box_stack.iter().map(|c| (c.unicode_bidi, c.direction)));
             stack.push((leaf.item.unicode_bidi(), leaf.item.direction()));
             let bidi_context = crate::layout::contexts::inline::explicit_bidi_context(base_dir, &stack);
 
@@ -1983,8 +1983,9 @@ struct VisualSegment {
         let push_segment = |mapping: &ByteMapping, level: Level, segments: &mut Vec<VisualSegment>| {
             if let Some(last) = segments.last_mut() {
                 let same_leaf = last.mapping.leaf_index == mapping.leaf_index && last.level == level;
-                let same_isolate_leaf =
-                    mapping.leaf_isolate && last.mapping.leaf_isolate && mapping.isolate_group == last.mapping.isolate_group;
+                let same_isolate_leaf = mapping.leaf_isolate
+                    && last.mapping.leaf_isolate
+                    && mapping.isolate_group == last.mapping.isolate_group;
                 let in_isolate = mapping.isolate_group.is_some() || last.mapping.isolate_group.is_some();
                 if same_leaf
                     && (!in_isolate || same_isolate_leaf)
@@ -2902,19 +2903,13 @@ mod tests {
         )
         .expect("should compute explicit context");
         assert!(!ctx.override_all, "override should not leak past isolates");
-        assert!(
-            ctx.level.number() % 2 == 0,
-            "isolate should push an even level for LTR"
-        );
+        assert!(ctx.level.number() % 2 == 0, "isolate should push an even level for LTR");
     }
 
     #[test]
     fn explicit_bidi_context_sets_override_for_isolate_override() {
-        let ctx = explicit_bidi_context(
-            Direction::Ltr,
-            &[(UnicodeBidi::IsolateOverride, Direction::Ltr)],
-        )
-        .expect("should compute explicit context");
+        let ctx = explicit_bidi_context(Direction::Ltr, &[(UnicodeBidi::IsolateOverride, Direction::Ltr)])
+            .expect("should compute explicit context");
         assert!(ctx.override_all, "isolate-override should force overriding status");
         assert!(ctx.level.number() % 2 == 0);
     }

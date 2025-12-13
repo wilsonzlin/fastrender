@@ -32,7 +32,7 @@ use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, AspectRatio, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer,
     BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderImage, BorderStyle, BoxSizing,
-    CaptionSide, Containment, CursorImage, CursorKeyword, Direction, EmptyCells, FilterFunction, FlexBasis,
+    CaptionSide, ClipPath, Containment, CursorImage, CursorKeyword, Direction, EmptyCells, FilterFunction, FlexBasis,
     FlexDirection, FlexWrap, FontFeatureSetting, FontKerning, FontLanguageOverride, FontOpticalSizing, FontSizeAdjust,
     FontStretch, FontStyle, FontSynthesis, FontVariant, FontVariantAlternates, FontVariantCaps, FontVariantEastAsian,
     FontVariantEmoji, FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontVariationSetting, FontWeight,
@@ -41,7 +41,7 @@ use types::{
     OutlineColor, OutlineStyle, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast,
     TextCombineUpright, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent,
     TextJustify, TextOrientation, TextOverflow, TextTransform, TextUnderlineOffset, TextUnderlinePosition,
-    TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WillChange, WordBreak, WritingMode,
+    TransformBox, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WillChange, WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -421,6 +421,8 @@ pub struct ComputedStyle {
     pub filter: Vec<FilterFunction>,
     /// Backdrop filters applied to the backdrop behind this element
     pub backdrop_filter: Vec<FilterFunction>,
+    /// Clip-path applied to the element and its contents
+    pub clip_path: ClipPath,
     pub mix_blend_mode: MixBlendMode,
     pub isolation: Isolation,
     /// Author hints for upcoming changes
@@ -433,6 +435,7 @@ pub struct ComputedStyle {
     pub box_shadow: Vec<BoxShadow>,
     pub text_shadow: Vec<TextShadow>,
     pub transform: Vec<Transform>,
+    pub transform_box: TransformBox,
     pub transform_origin: TransformOrigin,
     pub overflow_x: Overflow,
     pub overflow_y: Overflow,
@@ -626,6 +629,7 @@ impl Default for ComputedStyle {
             aspect_ratio: AspectRatio::Auto,
             filter: Vec::new(),
             backdrop_filter: Vec::new(),
+            clip_path: ClipPath::None,
             mix_blend_mode: MixBlendMode::Normal,
             isolation: Isolation::Auto,
             will_change: WillChange::Auto,
@@ -635,6 +639,7 @@ impl Default for ComputedStyle {
             box_shadow: Vec::new(),
             text_shadow: Vec::new(),
             transform: Vec::new(),
+            transform_box: TransformBox::ViewBox,
             transform_origin: TransformOrigin {
                 x: Length::percent(50.0),
                 y: Length::percent(50.0),

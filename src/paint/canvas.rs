@@ -43,12 +43,13 @@
 
 use crate::error::{RenderError, Result};
 use crate::geometry::{Point, Rect, Size};
+use crate::paint::clip_path::ResolvedClipPath;
 use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
 use crate::text::shaper::GlyphPosition;
 use tiny_skia::{
-    BlendMode as SkiaBlendMode, FillRule, Mask, MaskType, Paint, PathBuilder, Pixmap, PixmapPaint, Rect as SkiaRect,
-    Stroke, Transform,
+    BlendMode as SkiaBlendMode, FillRule, IntSize, Mask, MaskType, Paint, PathBuilder, Pixmap, PixmapPaint,
+    Rect as SkiaRect, Stroke, Transform,
 };
 
 use super::display_list::{BlendMode, BorderRadii};
@@ -447,6 +448,27 @@ impl Canvas {
         self.current_state.clip_rect = Some(base_clip);
 
         let new_mask = self.build_clip_mask(rect, radii.unwrap_or(BorderRadii::ZERO));
+        self.current_state.clip_mask = match (new_mask, self.current_state.clip_mask.take()) {
+            (Some(mut next), Some(existing)) => {
+                combine_masks(&mut next, &existing);
+                Some(next)
+            }
+            (Some(mask), None) => Some(mask),
+            (None, existing) => existing,
+        };
+    }
+
+    /// Sets an arbitrary clip path (basic shapes)
+    pub fn set_clip_path(&mut self, path: &ResolvedClipPath, scale: f32) {
+        let bounds = path.bounds();
+        let base_clip = match self.current_state.clip_rect {
+            Some(existing) => existing.intersection(bounds).unwrap_or(Rect::ZERO),
+            None => bounds,
+        };
+        self.current_state.clip_rect = Some(base_clip);
+
+        let new_mask =
+            IntSize::from_wh(self.pixmap.width(), self.pixmap.height()).and_then(|size| path.mask(scale, size));
         self.current_state.clip_mask = match (new_mask, self.current_state.clip_mask.take()) {
             (Some(mut next), Some(existing)) => {
                 combine_masks(&mut next, &existing);

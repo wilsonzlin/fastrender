@@ -3012,9 +3012,11 @@ pub(crate) fn reset_marker_box_properties(styles: &mut ComputedStyle) {
     styles.box_shadow.clear();
     styles.filter.clear();
     styles.backdrop_filter.clear();
+    styles.clip_path = defaults.clip_path.clone();
     styles.mix_blend_mode = defaults.mix_blend_mode;
     styles.isolation = defaults.isolation;
     styles.transform.clear();
+    styles.transform_box = defaults.transform_box;
     styles.transform_origin = defaults.transform_origin.clone();
     styles.overflow_x = defaults.overflow_x;
     styles.overflow_y = defaults.overflow_y;

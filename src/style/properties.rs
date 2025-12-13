@@ -2234,8 +2234,10 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "box-shadow" => styles.box_shadow = source.box_shadow.clone(),
         "text-shadow" => styles.text_shadow = source.text_shadow.clone(),
         "transform" => styles.transform = source.transform.clone(),
+        "transform-box" => styles.transform_box = source.transform_box,
         "filter" => styles.filter = source.filter.clone(),
         "backdrop-filter" => styles.backdrop_filter = source.backdrop_filter.clone(),
+        "clip-path" => styles.clip_path = source.clip_path.clone(),
         "transform-origin" => styles.transform_origin = source.transform_origin.clone(),
         "mix-blend-mode" => styles.mix_blend_mode = source.mix_blend_mode,
         "isolation" => styles.isolation = source.isolation,
@@ -5037,6 +5039,13 @@ pub fn apply_declaration_with_base(
                 styles.transform = transforms.clone();
             }
         }
+        "transform-box" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                if let Some(value) = parse_transform_box(kw) {
+                    styles.transform_box = value;
+                }
+            }
+        }
         "filter" => {
             if let Some(filters) = parse_filter_list(&resolved_value) {
                 styles.filter = filters;
@@ -5045,6 +5054,11 @@ pub fn apply_declaration_with_base(
         "backdrop-filter" => {
             if let Some(filters) = parse_filter_list(&resolved_value) {
                 styles.backdrop_filter = filters;
+            }
+        }
+        "clip-path" => {
+            if let Some(path) = parse_clip_path_value(&resolved_value) {
+                styles.clip_path = path;
             }
         }
         "transform-origin" => {
@@ -6058,6 +6072,17 @@ fn parse_transform_origin(value: &PropertyValue) -> Option<TransformOrigin> {
     let x = x.unwrap_or_else(|| Length::percent(50.0));
     let y = y.unwrap_or_else(|| Length::percent(50.0));
     Some(TransformOrigin { x, y })
+}
+
+fn parse_transform_box(kw: &str) -> Option<TransformBox> {
+    match kw {
+        "border-box" => Some(TransformBox::BorderBox),
+        "content-box" => Some(TransformBox::ContentBox),
+        "fill-box" => Some(TransformBox::FillBox),
+        "stroke-box" => Some(TransformBox::StrokeBox),
+        "view-box" => Some(TransformBox::ViewBox),
+        _ => None,
+    }
 }
 
 fn parse_will_change(value: &PropertyValue) -> Option<WillChange> {
@@ -7524,6 +7549,373 @@ fn parse_background_position_component_y(value: &PropertyValue) -> Option<Backgr
     }
 }
 
+fn parse_clip_path_value(value: &PropertyValue) -> Option<ClipPath> {
+    match value {
+        PropertyValue::Keyword(kw) => parse_clip_path_str(kw),
+        PropertyValue::Multiple(parts) => {
+            let mut joined = String::new();
+            for (idx, part) in parts.iter().enumerate() {
+                let token = match part {
+                    PropertyValue::Keyword(k) => k.as_str(),
+                    _ => return None,
+                };
+                if idx > 0 {
+                    joined.push(' ');
+                }
+                joined.push_str(token);
+            }
+            if joined.is_empty() {
+                None
+            } else {
+                parse_clip_path_str(&joined)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn parse_clip_path_str(input_str: &str) -> Option<ClipPath> {
+    let mut input = ParserInput::new(input_str);
+    let mut parser = Parser::new(&mut input);
+
+    if parser.try_parse(|p| p.expect_ident_matching("none")).is_ok() {
+        parser.expect_exhausted().ok()?;
+        return Some(ClipPath::None);
+    }
+
+    if let Ok(shape) = parser.try_parse(parse_basic_shape) {
+        let reference = parser.try_parse(parse_reference_box).ok();
+        parser.expect_exhausted().ok()?;
+        return Some(ClipPath::BasicShape(shape, reference));
+    }
+
+    if let Ok(reference) = parser.parse_entirely(parse_reference_box) {
+        return Some(ClipPath::Box(reference));
+    }
+
+    None
+}
+
+fn parse_reference_box<'i, 't>(input: &mut Parser<'i, 't>) -> Result<ReferenceBox, cssparser::ParseError<'i, ()>> {
+    let ident = input.expect_ident()?;
+    match &*ident.to_ascii_lowercase() {
+        "border-box" => Ok(ReferenceBox::BorderBox),
+        "padding-box" => Ok(ReferenceBox::PaddingBox),
+        "content-box" => Ok(ReferenceBox::ContentBox),
+        "margin-box" => Ok(ReferenceBox::MarginBox),
+        "fill-box" => Ok(ReferenceBox::FillBox),
+        "stroke-box" => Ok(ReferenceBox::StrokeBox),
+        "view-box" => Ok(ReferenceBox::ViewBox),
+        _ => Err(cssparser::ParseError {
+            kind: cssparser::ParseErrorKind::Custom(()),
+            location: input.current_source_location(),
+        }),
+    }
+}
+
+fn parse_basic_shape<'i, 't>(input: &mut Parser<'i, 't>) -> Result<BasicShape, cssparser::ParseError<'i, ()>> {
+    if let Ok(inset) = input.try_parse(parse_inset_shape) {
+        return Ok(inset);
+    }
+    if let Ok(circle) = input.try_parse(parse_circle_shape) {
+        return Ok(circle);
+    }
+    if let Ok(ellipse) = input.try_parse(parse_ellipse_shape) {
+        return Ok(ellipse);
+    }
+    if let Ok(polygon) = input.try_parse(parse_polygon_shape) {
+        return Ok(polygon);
+    }
+
+    Err(cssparser::ParseError {
+        kind: cssparser::ParseErrorKind::Custom(()),
+        location: input.current_source_location(),
+    })
+}
+
+fn parse_inset_shape<'i, 't>(input: &mut Parser<'i, 't>) -> Result<BasicShape, cssparser::ParseError<'i, ()>> {
+    input.expect_function_matching("inset")?;
+    input.parse_nested_block(|nested| {
+        let mut offsets = Vec::new();
+        for _ in 0..4 {
+            if let Ok(len) = nested.try_parse(parse_length_percentage_component) {
+                offsets.push(len);
+            } else {
+                break;
+            }
+        }
+        if offsets.is_empty() {
+            return Err(cssparser::ParseError {
+                kind: cssparser::ParseErrorKind::Custom(()),
+                location: nested.current_source_location(),
+            });
+        }
+        let offsets = match offsets.len() {
+            1 => vec![offsets[0]; 4],
+            2 => vec![offsets[0], offsets[1], offsets[0], offsets[1]],
+            3 => vec![offsets[0], offsets[1], offsets[2], offsets[1]],
+            _ => offsets.into_iter().take(4).collect(),
+        };
+
+        let mut radii = None;
+        if nested.try_parse(|p| p.expect_ident_matching("round")).is_ok() {
+            radii = Some(parse_clip_radii(nested)?);
+        }
+
+        nested.expect_exhausted()?;
+        Ok(BasicShape::Inset {
+            top: offsets[0],
+            right: offsets[1],
+            bottom: offsets[2],
+            left: offsets[3],
+            border_radius: radii,
+        })
+    })
+}
+
+fn parse_circle_shape<'i, 't>(input: &mut Parser<'i, 't>) -> Result<BasicShape, cssparser::ParseError<'i, ()>> {
+    input.expect_function_matching("circle")?;
+    input.parse_nested_block(|nested| {
+        let radius = nested.try_parse(parse_shape_radius).unwrap_or(ShapeRadius::ClosestSide);
+
+        let position = parse_clip_position(nested)?;
+        nested.expect_exhausted()?;
+        Ok(BasicShape::Circle { radius, position })
+    })
+}
+
+fn parse_ellipse_shape<'i, 't>(input: &mut Parser<'i, 't>) -> Result<BasicShape, cssparser::ParseError<'i, ()>> {
+    input.expect_function_matching("ellipse")?;
+    input.parse_nested_block(|nested| {
+        let radius_x = nested.try_parse(parse_shape_radius).ok();
+        let mut radius_y = radius_x;
+        if let Ok(second) = nested.try_parse(parse_shape_radius) {
+            radius_y = Some(second);
+        }
+
+        let position = parse_clip_position(nested)?;
+        nested.expect_exhausted()?;
+        Ok(BasicShape::Ellipse {
+            radius_x: radius_x.unwrap_or(ShapeRadius::ClosestSide),
+            radius_y: radius_y.unwrap_or(ShapeRadius::ClosestSide),
+            position,
+        })
+    })
+}
+
+fn parse_polygon_shape<'i, 't>(input: &mut Parser<'i, 't>) -> Result<BasicShape, cssparser::ParseError<'i, ()>> {
+    input.expect_function_matching("polygon")?;
+    input.parse_nested_block(|nested| {
+        let state = nested.state();
+        let mut fill_rule = FillRule::NonZero;
+        if let Ok(rule) = nested.try_parse(|p| p.expect_ident_cloned()) {
+            match rule.to_ascii_lowercase().as_str() {
+                "evenodd" => {
+                    fill_rule = FillRule::EvenOdd;
+                    let _ = nested.try_parse(|p| p.expect_comma());
+                }
+                "nonzero" => {
+                    fill_rule = FillRule::NonZero;
+                    let _ = nested.try_parse(|p| p.expect_comma());
+                }
+                _ => nested.reset(&state),
+            }
+        }
+
+        let mut points = Vec::new();
+        while !nested.is_exhausted() {
+            let x = parse_length_percentage_component(nested)?;
+            let y = parse_length_percentage_component(nested)?;
+            points.push((x, y));
+            if nested.try_parse(|p| p.expect_comma()).is_err() {
+                break;
+            }
+        }
+
+        if points.is_empty() {
+            return Err(cssparser::ParseError {
+                kind: cssparser::ParseErrorKind::Custom(()),
+                location: nested.current_source_location(),
+            });
+        }
+        nested.expect_exhausted()?;
+        Ok(BasicShape::Polygon {
+            fill: fill_rule,
+            points,
+        })
+    })
+}
+
+fn parse_shape_radius<'i, 't>(input: &mut Parser<'i, 't>) -> Result<ShapeRadius, cssparser::ParseError<'i, ()>> {
+    if let Ok(len) = input.try_parse(parse_length_percentage_component) {
+        return Ok(ShapeRadius::Length(len));
+    }
+
+    let ident = input.expect_ident()?;
+    match &*ident.to_ascii_lowercase() {
+        "closest-side" => Ok(ShapeRadius::ClosestSide),
+        "farthest-side" => Ok(ShapeRadius::FarthestSide),
+        _ => Err(cssparser::ParseError {
+            kind: cssparser::ParseErrorKind::Custom(()),
+            location: input.current_source_location(),
+        }),
+    }
+}
+
+fn parse_clip_position<'i, 't>(
+    input: &mut Parser<'i, 't>,
+) -> Result<BackgroundPosition, cssparser::ParseError<'i, ()>> {
+    let mut position_tokens = Vec::new();
+    if input.try_parse(|p| p.expect_ident_matching("at")).is_ok() {
+        while !input.is_exhausted() {
+            let token = input.next()?;
+            let pv = match token {
+                Token::Ident(ident) => PropertyValue::Keyword(ident.to_string()),
+                Token::Percentage { unit_value, .. } => PropertyValue::Percentage(unit_value * 100.0),
+                Token::Dimension { value, ref unit, .. } => {
+                    let Some(unit) = length_unit_from_str(unit) else {
+                        return Err(cssparser::ParseError {
+                            kind: cssparser::ParseErrorKind::Custom(()),
+                            location: input.current_source_location(),
+                        });
+                    };
+                    PropertyValue::Length(Length::new(*value, unit))
+                }
+                Token::Number { value, .. } if *value == 0.0 => PropertyValue::Length(Length::px(0.0)),
+                Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
+                    let len = input.parse_nested_block(parse_calc_function_length)?;
+                    PropertyValue::Length(len)
+                }
+                _ => {
+                    return Err(cssparser::ParseError {
+                        kind: cssparser::ParseErrorKind::Custom(()),
+                        location: input.current_source_location(),
+                    })
+                }
+            };
+            position_tokens.push(pv);
+        }
+    }
+
+    if position_tokens.is_empty() {
+        return Ok(BackgroundPosition::Position {
+            x: BackgroundPositionComponent {
+                alignment: 0.5,
+                offset: Length::px(0.0),
+            },
+            y: BackgroundPositionComponent {
+                alignment: 0.5,
+                offset: Length::px(0.0),
+            },
+        });
+    }
+
+    parse_background_position(&PropertyValue::Multiple(position_tokens)).ok_or(cssparser::ParseError {
+        kind: cssparser::ParseErrorKind::Custom(()),
+        location: input.current_source_location(),
+    })
+}
+
+fn parse_clip_radii<'i, 't>(input: &mut Parser<'i, 't>) -> Result<ClipRadii, cssparser::ParseError<'i, ()>> {
+    let mut values = Vec::new();
+    for _ in 0..4 {
+        if let Ok(len) = input.try_parse(parse_length_percentage_component) {
+            values.push(len);
+        } else {
+            break;
+        }
+    }
+
+    if values.is_empty() {
+        return Err(cssparser::ParseError {
+            kind: cssparser::ParseErrorKind::Custom(()),
+            location: input.current_source_location(),
+        });
+    }
+
+    if input.try_parse(|p| p.expect_delim('/')).is_ok() {
+        return Err(cssparser::ParseError {
+            kind: cssparser::ParseErrorKind::Custom(()),
+            location: input.current_source_location(),
+        });
+    }
+
+    while values.len() < 4 {
+        if let Some(last) = values.last().cloned() {
+            values.push(last);
+        }
+    }
+
+    Ok(ClipRadii {
+        top_left: values[0],
+        top_right: values[1],
+        bottom_right: values[2],
+        bottom_left: values[3],
+    })
+}
+
+fn parse_length_percentage_component<'i, 't>(
+    input: &mut Parser<'i, 't>,
+) -> Result<Length, cssparser::ParseError<'i, ()>> {
+    let token = input.next()?;
+    match token {
+        Token::Percentage { unit_value, .. } => Ok(Length::percent(unit_value * 100.0)),
+        Token::Dimension { value, ref unit, .. } => {
+            let Some(unit) = length_unit_from_str(unit) else {
+                return Err(cssparser::ParseError {
+                    kind: cssparser::ParseErrorKind::Custom(()),
+                    location: input.current_source_location(),
+                });
+            };
+            Ok(Length::new(*value, unit))
+        }
+        Token::Number { value, .. } if *value == 0.0 => Ok(Length::px(0.0)),
+        Token::Function(ref name) => {
+            let owned = name.to_string();
+            parse_function_length_token(&owned, input)
+        }
+        _ => Err(cssparser::ParseError {
+            kind: cssparser::ParseErrorKind::Custom(()),
+            location: input.current_source_location(),
+        }),
+    }
+}
+
+fn parse_function_length_token<'i, 't>(
+    name: &str,
+    input: &mut Parser<'i, 't>,
+) -> Result<Length, cssparser::ParseError<'i, ()>> {
+    if name.eq_ignore_ascii_case("calc") {
+        input.parse_nested_block(parse_calc_function_length)
+    } else {
+        Err(cssparser::ParseError {
+            kind: cssparser::ParseErrorKind::Custom(()),
+            location: input.current_source_location(),
+        })
+    }
+}
+
+fn length_unit_from_str(unit: &str) -> Option<LengthUnit> {
+    match unit.to_ascii_lowercase().as_str() {
+        "px" => Some(LengthUnit::Px),
+        "pt" => Some(LengthUnit::Pt),
+        "pc" => Some(LengthUnit::Pc),
+        "in" => Some(LengthUnit::In),
+        "cm" => Some(LengthUnit::Cm),
+        "mm" => Some(LengthUnit::Mm),
+        "q" => Some(LengthUnit::Q),
+        "em" => Some(LengthUnit::Em),
+        "rem" => Some(LengthUnit::Rem),
+        "ex" => Some(LengthUnit::Ex),
+        "ch" => Some(LengthUnit::Ch),
+        "vw" => Some(LengthUnit::Vw),
+        "vh" => Some(LengthUnit::Vh),
+        "vmin" => Some(LengthUnit::Vmin),
+        "vmax" => Some(LengthUnit::Vmax),
+        _ => None,
+    }
+}
+
 fn parse_text_decoration_line(value: &PropertyValue) -> Option<TextDecorationLine> {
     let components: Vec<&PropertyValue> = match value {
         PropertyValue::Multiple(values) if !values.is_empty() => values.iter().collect(),
@@ -8301,7 +8693,7 @@ mod tests {
         ListStylePosition, ListStyleType, MixBlendMode, OutlineColor, OutlineStyle, PositionComponent, PositionKeyword,
         TextCombineUpright, TextDecorationLine, TextDecorationStyle, TextDecorationThickness, TextEmphasisFill,
         TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle, TextOrientation, TextOverflowSide, TextTransform,
-        WritingMode,
+        TransformBox, WritingMode,
     };
     use cssparser::{Parser, ParserInput};
 
@@ -8349,6 +8741,121 @@ mod tests {
             16.0,
         );
         assert_eq!(style.image_rendering, ImageRendering::CrispEdges);
+    }
+
+    #[test]
+    fn parses_clip_path_basic_shapes() {
+        let decl = Declaration {
+            property: "clip-path".to_string(),
+            value: PropertyValue::Keyword("inset(10px 20% round 5px)".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        let mut style = ComputedStyle::default();
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+
+        match &style.clip_path {
+            ClipPath::BasicShape(
+                BasicShape::Inset {
+                    top,
+                    right,
+                    bottom,
+                    left,
+                    border_radius,
+                },
+                None,
+            ) => {
+                assert_eq!(*top, Length::px(10.0));
+                assert_eq!(*bottom, Length::px(10.0));
+                assert_eq!(*right, Length::percent(20.0));
+                assert_eq!(*left, Length::percent(20.0));
+                let radii = border_radius.as_ref().expect("radii present");
+                assert_eq!(radii.top_left, Length::px(5.0));
+                assert_eq!(radii.bottom_right, Length::px(5.0));
+            }
+            other => panic!("unexpected clip-path parsed: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_clip_path_circle_position() {
+        let decl = Declaration {
+            property: "clip-path".to_string(),
+            value: PropertyValue::Keyword("circle(30% at left 10px top 20%)".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        let mut style = ComputedStyle::default();
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+
+        match &style.clip_path {
+            ClipPath::BasicShape(BasicShape::Circle { radius, position }, None) => {
+                match radius {
+                    ShapeRadius::Length(len) => {
+                        assert_eq!(len.unit, LengthUnit::Percent);
+                        assert!((len.value - 30.0).abs() < 1e-3);
+                    }
+                    _ => panic!("expected length radius"),
+                }
+                let BackgroundPosition::Position { x, y } = position;
+                assert_eq!(x.alignment, 0.0);
+                assert_eq!(y.alignment, 0.0);
+                assert_eq!(x.offset, Length::px(10.0));
+                assert_eq!(y.offset, Length::percent(20.0));
+            }
+            other => panic!("unexpected clip-path parsed: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_transform_box_keyword_and_inherit() {
+        let mut style = ComputedStyle::default();
+        let parent = ComputedStyle {
+            transform_box: TransformBox::ContentBox,
+            ..ComputedStyle::default()
+        };
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "transform-box".to_string(),
+                value: PropertyValue::Keyword("view-box".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.transform_box, TransformBox::ViewBox);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "transform-box".to_string(),
+                value: PropertyValue::Keyword("inherit".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.transform_box, TransformBox::ContentBox);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "transform-box".to_string(),
+                value: PropertyValue::Keyword("bogus".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.transform_box, TransformBox::ContentBox);
     }
 
     #[test]

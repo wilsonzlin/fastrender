@@ -37,6 +37,7 @@
 //! ```
 
 use crate::geometry::{Point, Rect, Size};
+use crate::paint::clip_path::ResolvedClipPath;
 use crate::style::color::Rgba;
 use crate::style::types::{
     BackgroundImage, BorderImageOutset, BorderImageRepeat, BorderImageSlice, BorderImageWidth,
@@ -152,7 +153,10 @@ impl DisplayItem {
             DisplayItem::ConicGradient(item) => Some(item.rect),
             DisplayItem::Border(item) => Some(item.rect),
             DisplayItem::ListMarker(item) => Some(list_marker_bounds(item)),
-            DisplayItem::PushClip(item) => Some(item.rect),
+            DisplayItem::PushClip(item) => Some(match &item.shape {
+                ClipShape::Rect { rect, .. } => *rect,
+                ClipShape::Path { path } => path.bounds(),
+            }),
             DisplayItem::TextDecoration(item) => Some(item.bounds),
             // Stack operations don't have bounds
             DisplayItem::PopClip
@@ -915,11 +919,13 @@ pub enum BorderImageSourceItem {
 /// Clip region
 #[derive(Debug, Clone)]
 pub struct ClipItem {
-    /// Clip rectangle
-    pub rect: Rect,
+    pub shape: ClipShape,
+}
 
-    /// Border radii (for rounded clips)
-    pub radii: Option<BorderRadii>,
+#[derive(Debug, Clone)]
+pub enum ClipShape {
+    Rect { rect: Rect, radii: Option<BorderRadii> },
+    Path { path: ResolvedClipPath },
 }
 
 /// Opacity layer

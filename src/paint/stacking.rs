@@ -441,6 +441,11 @@ pub fn creates_stacking_context(style: &ComputedStyle, parent_style: Option<&Com
         return true;
     }
 
+    // 6d. Clip-path
+    if !matches!(style.clip_path, crate::style::types::ClipPath::None) {
+        return true;
+    }
+
     // 7. Mix-blend-mode or isolation
     if !matches!(style.mix_blend_mode, crate::style::types::MixBlendMode::Normal) {
         return true;
@@ -542,6 +547,10 @@ pub fn get_stacking_context_reason(
 
     if !style.backdrop_filter.is_empty() {
         return Some(StackingContextReason::BackdropFilter);
+    }
+
+    if !matches!(style.clip_path, crate::style::types::ClipPath::None) {
+        return Some(StackingContextReason::ClipPath);
     }
 
     if style.will_change.creates_stacking_context() {

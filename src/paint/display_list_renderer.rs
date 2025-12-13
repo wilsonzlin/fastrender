@@ -11,10 +11,10 @@ use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::canvas::Canvas;
 use crate::paint::display_list::{
     BlendMode, BorderImageItem, BorderImageSourceItem, BorderItem, BorderRadii, BorderSide, BoxShadowItem, ClipItem,
-    ConicGradientItem, DecorationPaint, DecorationStroke, DisplayItem, DisplayList, EmphasisMark, FillRectItem, FontId,
-    GlyphInstance, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, ListMarkerItem, OpacityItem,
-    OutlineItem, RadialGradientItem, ResolvedFilter, StrokeRectItem, TextEmphasis, TextItem, TextShadowItem,
-    TransformItem,
+    ClipShape, ConicGradientItem, DecorationPaint, DecorationStroke, DisplayItem, DisplayList, EmphasisMark,
+    FillRectItem, FontId, GlyphInstance, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, ListMarkerItem,
+    OpacityItem, OutlineItem, RadialGradientItem, ResolvedFilter, StrokeRectItem, TextEmphasis, TextItem,
+    TextShadowItem, TransformItem,
 };
 use crate::paint::rasterize::{fill_rounded_rect, render_box_shadow, BoxShadow};
 use crate::paint::text_shadow::PathBounds;
@@ -2648,8 +2648,15 @@ impl DisplayListRenderer {
 
     fn push_clip(&mut self, clip: &ClipItem) {
         self.canvas.save();
-        let radii = clip.radii.map(|r| self.ds_radii(r));
-        self.canvas.set_clip_with_radii(self.ds_rect(clip.rect), radii);
+        match &clip.shape {
+            ClipShape::Rect { rect, radii } => {
+                let radii = radii.map(|r| self.ds_radii(r));
+                self.canvas.set_clip_with_radii(self.ds_rect(*rect), radii);
+            }
+            ClipShape::Path { path } => {
+                self.canvas.set_clip_path(path, self.scale);
+            }
+        }
     }
 
     fn pop_clip(&mut self) {
@@ -3372,9 +3379,9 @@ mod tests {
     use super::*;
     use crate::geometry::{Point, Rect};
     use crate::paint::display_list::{
-        BorderImageItem, BorderImageSourceItem, BorderItem, BorderRadii, BorderSide, BoxShadowItem, DecorationPaint,
-        DecorationStroke, DisplayItem, DisplayList, FillRectItem, GlyphInstance, GradientSpread, GradientStop,
-        ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem, BlendMode,
+        BlendMode, BorderImageItem, BorderImageSourceItem, BorderItem, BorderRadii, BorderSide, BoxShadowItem,
+        DecorationPaint, DecorationStroke, DisplayItem, DisplayList, FillRectItem, GlyphInstance, GradientSpread,
+        GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem,
         StackingContextItem, TextDecorationItem, TextEmphasis, TextItem, TextShadowItem, Transform2D,
     };
     use crate::paint::display_list_builder::DisplayListBuilder;
@@ -4027,7 +4034,10 @@ mod tests {
             (l - 10.0).abs() < 0.01 && (t - 10.0).abs() < 0.01 && (r - 10.0).abs() < 0.01 && (b - 10.0).abs() < 0.01,
             "negative spread should reduce blur outset (got {l},{t},{r},{b})"
         );
-        assert!(l < l0 && t < t0 && r < r0 && b < b0, "reduced spread should shrink outsets");
+        assert!(
+            l < l0 && t < t0 && r < r0 && b < b0,
+            "reduced spread should shrink outsets"
+        );
     }
 
     #[test]
@@ -4394,8 +4404,10 @@ mod tests {
         let mut list = DisplayList::new();
         // Outer clip to a 4x4 square.
         list.push(DisplayItem::PushClip(ClipItem {
-            rect: Rect::from_xywh(1.0, 1.0, 4.0, 4.0),
-            radii: None,
+            shape: ClipShape::Rect {
+                rect: Rect::from_xywh(1.0, 1.0, 4.0, 4.0),
+                radii: None,
+            },
         }));
         // Start stacking context and narrow the clip further.
         list.push(DisplayItem::PushStackingContext(
@@ -4412,8 +4424,10 @@ mod tests {
             },
         ));
         list.push(DisplayItem::PushClip(ClipItem {
-            rect: Rect::from_xywh(2.0, 2.0, 2.0, 2.0),
-            radii: None,
+            shape: ClipShape::Rect {
+                rect: Rect::from_xywh(2.0, 2.0, 2.0, 2.0),
+                radii: None,
+            },
         }));
         list.push(DisplayItem::FillRect(FillRectItem {
             rect: Rect::from_xywh(0.0, 0.0, 6.0, 6.0),
@@ -4431,6 +4445,28 @@ mod tests {
         let pixmap = renderer.render(&list).unwrap();
         // Pixel inside outer clip but outside inner clip should be blue (second fill) not red.
         assert_eq!(pixel(&pixmap, 1, 1), (0, 0, 255, 255));
+    }
+
+    #[test]
+    fn clip_path_pushes_path_mask() {
+        let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
+        let mut list = DisplayList::new();
+        let triangle = crate::paint::clip_path::ResolvedClipPath::Polygon {
+            points: vec![Point::new(0.0, 0.0), Point::new(4.0, 0.0), Point::new(0.0, 4.0)],
+            fill_rule: tiny_skia::FillRule::Winding,
+        };
+        list.push(DisplayItem::PushClip(ClipItem {
+            shape: ClipShape::Path { path: triangle },
+        }));
+        list.push(DisplayItem::FillRect(FillRectItem {
+            rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+            color: Rgba::rgb(0, 0, 255),
+        }));
+        list.push(DisplayItem::PopClip);
+
+        let pixmap = renderer.render(&list).unwrap();
+        assert_eq!(pixel(&pixmap, 0, 0), (0, 0, 255, 255));
+        assert_eq!(pixel(&pixmap, 3, 3), (255, 255, 255, 255));
     }
 
     #[test]

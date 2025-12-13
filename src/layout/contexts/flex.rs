@@ -232,13 +232,18 @@ impl FormattingContext for FlexFormattingContext {
                 let positioned_style =
                     resolve_positioned_style(&child.style, &cb, self.viewport_size, &self.font_context);
                 let static_pos = padding_origin;
-                let preferred_min_inline =
-                    fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent).ok();
-                let preferred_inline =
-                    fc.compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent).ok();
-                let preferred_min_block =
-                    fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent).ok();
-                let preferred_block = fc.compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent).ok();
+                let preferred_min_inline = fc
+                    .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
+                    .ok();
+                let preferred_inline = fc
+                    .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
+                    .ok();
+                let preferred_min_block = fc
+                    .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
+                    .ok();
+                let preferred_block = fc
+                    .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
+                    .ok();
                 let mut input = AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, static_pos);
                 input.preferred_min_inline_size = preferred_min_inline;
                 input.preferred_inline_size = preferred_inline;
