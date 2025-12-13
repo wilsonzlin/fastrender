@@ -501,7 +501,7 @@ impl FontContext {
     ) -> Option<LoadedFont> {
         let guard = self.web_fonts.read().ok()?;
         let desired_stretch = stretch.to_percentage();
-        let mut best: Option<((u8, f32, u8, f32, (u8, f32), usize), LoadedFont)> = None;
+        let mut best: Option<((u8, f32, f32, u8, (u8, f32), usize), LoadedFont)> = None;
 
         let family_folded = case_fold(family);
         for face in guard.iter().filter(|f| case_fold(&f.family) == family_folded) {
@@ -874,42 +874,47 @@ fn weight_match(face: &WebFontFace, desired: u16) -> Option<((u8, f32), u16)> {
     None
 }
 
-fn style_rank(face: &WebFontFace, desired: FontStyle, angle: Option<f32>) -> (u8, f32) {
-    match desired {
-        FontStyle::Normal => match &face.style {
-            FontFaceStyle::Oblique { range } => (0, oblique_distance(range, angle.unwrap_or(0.0))),
-            FontFaceStyle::Italic => (1, 0.0),
-            FontFaceStyle::Normal => (2, 0.0),
-        },
-        FontStyle::Italic => match &face.style {
-            FontFaceStyle::Italic => (0, 0.0),
-            FontFaceStyle::Oblique { range } => {
-                (1, oblique_distance(range, angle.unwrap_or(DEFAULT_OBLIQUE_ANGLE_DEG)))
-            }
-            FontFaceStyle::Normal => (2, 0.0),
-        },
-        FontStyle::Oblique => match &face.style {
-            FontFaceStyle::Oblique { range } => {
-                (0, oblique_distance(range, angle.unwrap_or(DEFAULT_OBLIQUE_ANGLE_DEG)))
-            }
-            FontFaceStyle::Italic => (1, 0.0),
-            FontFaceStyle::Normal => (2, 0.0),
-        },
+fn style_rank(face: &WebFontFace, desired: FontStyle, angle: Option<f32>) -> (f32, u8) {
+    #[derive(Copy, Clone, Eq, PartialEq)]
+    enum FaceKind {
+        Normal,
+        Oblique,
+        Italic,
     }
-}
 
-fn oblique_distance(range: &Option<(f32, f32)>, desired: f32) -> f32 {
-    if let Some((start, end)) = range {
-        if *start <= desired && desired <= *end {
-            0.0
-        } else if desired < *start {
-            *start - desired
-        } else {
-            desired - *end
+    let requested_angle = match desired {
+        FontStyle::Normal => 0.0,
+        FontStyle::Italic => DEFAULT_OBLIQUE_ANGLE_DEG,
+        FontStyle::Oblique => angle.unwrap_or(DEFAULT_OBLIQUE_ANGLE_DEG),
+    };
+
+    let face_kind = match face.style {
+        FontFaceStyle::Normal => FaceKind::Normal,
+        FontFaceStyle::Italic => FaceKind::Italic,
+        FontFaceStyle::Oblique { .. } => FaceKind::Oblique,
+    };
+
+    let distance = match &face.style {
+        FontFaceStyle::Normal => requested_angle.abs(),
+        FontFaceStyle::Italic => (requested_angle - DEFAULT_OBLIQUE_ANGLE_DEG).abs(),
+        FontFaceStyle::Oblique { range } => {
+            let (start, end) = range.unwrap_or((DEFAULT_OBLIQUE_ANGLE_DEG, DEFAULT_OBLIQUE_ANGLE_DEG));
+            let clamped = requested_angle.clamp(start, end);
+            (requested_angle - clamped).abs()
         }
-    } else {
-        0.0
-    }
+    };
+
+    let preference = match desired {
+        FontStyle::Normal => [FaceKind::Normal, FaceKind::Oblique, FaceKind::Italic],
+        FontStyle::Italic => [FaceKind::Italic, FaceKind::Oblique, FaceKind::Normal],
+        FontStyle::Oblique => [FaceKind::Oblique, FaceKind::Italic, FaceKind::Normal],
+    };
+    let tie_bias = preference
+        .iter()
+        .position(|k| *k == face_kind)
+        .unwrap_or(preference.len()) as u8;
+
+    (distance, tie_bias)
 }
 
 fn case_fold(name: &str) -> String {
@@ -1221,6 +1226,82 @@ mod tests {
             chosen.weight.value(),
             900,
             "face covering the requested oblique angle should win even with a heavier weight"
+        );
+    }
+
+    #[test]
+    fn normal_style_prefers_normal_face_over_oblique_with_zero_distance() {
+        let font_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/fonts/Roboto-Regular.ttf");
+        let font_url = url::Url::from_file_path(&font_path).expect("file url");
+        let family = "StylePreference".to_string();
+
+        let faces = vec![
+            FontFaceRule {
+                family: Some(family.clone()),
+                sources: vec![FontFaceSource::Url(font_url.to_string())],
+                style: FontFaceStyle::Normal,
+                weight: (400, 400),
+                ..Default::default()
+            },
+            FontFaceRule {
+                family: Some(family.clone()),
+                sources: vec![FontFaceSource::Url(font_url.to_string())],
+                style: FontFaceStyle::Oblique {
+                    range: Some((0.0, 20.0)),
+                },
+                weight: (400, 400),
+                ..Default::default()
+            },
+        ];
+
+        let ctx = FontContext::empty();
+        ctx.load_web_fonts(&faces, None).expect("load faces");
+
+        let chosen = ctx
+            .match_web_font_for_char(&family, 400, FontStyle::Normal, FontStretch::Normal, None, 'A')
+            .expect("choose face");
+        assert_eq!(
+            chosen.style,
+            FontStyle::Normal,
+            "normal requests should pick the normal face when distance ties"
+        );
+    }
+
+    #[test]
+    fn italic_style_prefers_italic_over_oblique_at_same_angle() {
+        let font_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/fonts/Roboto-Regular.ttf");
+        let font_url = url::Url::from_file_path(&font_path).expect("file url");
+        let family = "ItalicPreference".to_string();
+
+        let faces = vec![
+            FontFaceRule {
+                family: Some(family.clone()),
+                sources: vec![FontFaceSource::Url(font_url.to_string())],
+                style: FontFaceStyle::Italic,
+                weight: (400, 400),
+                ..Default::default()
+            },
+            FontFaceRule {
+                family: Some(family.clone()),
+                sources: vec![FontFaceSource::Url(font_url.to_string())],
+                style: FontFaceStyle::Oblique {
+                    range: Some((0.0, 90.0)),
+                },
+                weight: (400, 400),
+                ..Default::default()
+            },
+        ];
+
+        let ctx = FontContext::empty();
+        ctx.load_web_fonts(&faces, None).expect("load faces");
+
+        let chosen = ctx
+            .match_web_font_for_char(&family, 400, FontStyle::Italic, FontStretch::Normal, None, 'A')
+            .expect("choose face");
+        assert_eq!(
+            chosen.style,
+            FontStyle::Italic,
+            "italic requests should prefer italic faces over oblique when distance is equal"
         );
     }
 
