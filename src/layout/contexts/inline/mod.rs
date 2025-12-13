@@ -1177,71 +1177,87 @@ impl InlineFormattingContext {
         let mut idx = 0usize;
         while idx < chars.len() {
             let (byte_offset, ch) = chars[idx];
-            let combinable = can_combine_for_mode(ch, style.text_combine_upright) && !forced_set.contains(&byte_offset);
-            if combinable {
-                let combine_style = {
-                    let mut s = (**style).clone();
-                    s.text_orientation = crate::style::types::TextOrientation::Upright;
-                    Arc::new(s)
-                };
-                let mut end = idx + 1;
-                let mut count = 1usize;
+            let combinable_start =
+                can_combine_for_mode(ch, style.text_combine_upright) && !forced_set.contains(&byte_offset);
+            if combinable_start {
+                let mut end = idx;
                 while end < chars.len() {
                     let (next_off, next_ch) = chars[end];
-                    if forced_set.contains(&next_off) {
-                        break;
-                    }
-                    if !can_combine_for_mode(next_ch, style.text_combine_upright) {
-                        break;
-                    }
-                    if count >= max_len {
-                        break;
-                    }
-                    count += 1;
-                    end += 1;
-                }
-                let end_byte = chars.get(end).map(|p| p.0).unwrap_or_else(|| text.len());
-                let sub_breaks = slice_breaks(&forced_breaks, byte_offset, end_byte);
-                let mut item = self.create_text_item_from_normalized(
-                    &combine_style,
-                    &text[byte_offset..end_byte],
-                    sub_breaks,
-                    false,
-                    is_marker,
-                    base_direction,
-                    bidi_stack,
-                )?;
-                self.compress_text_combine(&mut item, style.font_size);
-                if !item.text.is_empty() {
-                    items.push(InlineItem::Text(item));
-                }
-                idx = end;
-            } else {
-                let mut end = idx + 1;
-                while end < chars.len() {
-                    let next_off = chars[end].0;
-                    if forced_set.contains(&next_off) || can_combine_for_mode(chars[end].1, style.text_combine_upright)
-                    {
+                    if forced_set.contains(&next_off) || !can_combine_for_mode(next_ch, style.text_combine_upright) {
                         break;
                     }
                     end += 1;
                 }
+                let run_len = end - idx;
+                let min_len = match style.text_combine_upright {
+                    TextCombineUpright::Digits(_) => 2,
+                    TextCombineUpright::All => 1,
+                    TextCombineUpright::None => usize::MAX,
+                };
                 let end_byte = chars.get(end).map(|p| p.0).unwrap_or_else(|| text.len());
                 let sub_breaks = slice_breaks(&forced_breaks, byte_offset, end_byte);
-                let item = self.create_text_item_from_normalized(
-                    style,
-                    &text[byte_offset..end_byte],
-                    sub_breaks,
-                    allow_soft_wrap,
-                    is_marker,
-                    base_direction,
-                    bidi_stack,
-                )?;
-                if !item.text.is_empty() {
-                    items.push(InlineItem::Text(item));
+                if run_len >= min_len && run_len <= max_len {
+                    let combine_style = {
+                        let mut s = (**style).clone();
+                        s.text_orientation = crate::style::types::TextOrientation::Upright;
+                        s.letter_spacing = 0.0;
+                        s.word_spacing = 0.0;
+                        Arc::new(s)
+                    };
+                    let mut item = self.create_text_item_from_normalized(
+                        &combine_style,
+                        &text[byte_offset..end_byte],
+                        sub_breaks,
+                        false,
+                        is_marker,
+                        base_direction,
+                        bidi_stack,
+                    )?;
+                    self.compress_text_combine(&mut item, style.font_size);
+                    if !item.text.is_empty() {
+                        items.push(InlineItem::Text(item));
+                    }
+                } else {
+                    let item = self.create_text_item_from_normalized(
+                        style,
+                        &text[byte_offset..end_byte],
+                        sub_breaks,
+                        allow_soft_wrap,
+                        is_marker,
+                        base_direction,
+                        bidi_stack,
+                    )?;
+                    if !item.text.is_empty() {
+                        items.push(InlineItem::Text(item));
+                    }
                 }
                 idx = end;
+                continue;
             }
+
+            let mut end = idx + 1;
+            while end < chars.len() {
+                let next_off = chars[end].0;
+                if forced_set.contains(&next_off) || can_combine_for_mode(chars[end].1, style.text_combine_upright) {
+                    break;
+                }
+                end += 1;
+            }
+            let end_byte = chars.get(end).map(|p| p.0).unwrap_or_else(|| text.len());
+            let sub_breaks = slice_breaks(&forced_breaks, byte_offset, end_byte);
+            let item = self.create_text_item_from_normalized(
+                style,
+                &text[byte_offset..end_byte],
+                sub_breaks,
+                allow_soft_wrap,
+                is_marker,
+                base_direction,
+                bidi_stack,
+            )?;
+            if !item.text.is_empty() {
+                items.push(InlineItem::Text(item));
+            }
+            idx = end;
         }
 
         Ok(items)
@@ -4571,7 +4587,7 @@ fn is_vertical_typographic_mode(mode: WritingMode) -> bool {
 
 fn can_combine_for_mode(ch: char, mode: TextCombineUpright) -> bool {
     match mode {
-        TextCombineUpright::Digits(_) => ch.to_digit(10).is_some(),
+        TextCombineUpright::Digits(_) => ch.is_ascii_digit(),
         TextCombineUpright::All => !ch.is_whitespace() && !ch.is_control(),
         TextCombineUpright::None => false,
     }
@@ -5127,11 +5143,11 @@ mod tests {
         let ifc = InlineFormattingContext::new();
         let mut style = ComputedStyle::default();
         style.writing_mode = WritingMode::VerticalRl;
-        style.text_combine_upright = TextCombineUpright::Digits(2);
+        style.text_combine_upright = TextCombineUpright::Digits(4);
         style.font_size = 16.0;
         let bidi_stack = vec![(style.unicode_bidi, style.direction)];
         let style = Arc::new(style);
-        let normalized = normalize_text_for_white_space("123", style.white_space);
+        let normalized = normalize_text_for_white_space("1234", style.white_space);
         let items = ifc
             .create_text_items_with_combine(
                 &style,
@@ -5156,7 +5172,7 @@ mod tests {
     }
 
     #[test]
-    fn text_combine_accepts_fullwidth_digits() {
+    fn text_combine_ignores_non_ascii_digits() {
         let ifc = InlineFormattingContext::new();
         let mut style = ComputedStyle::default();
         style.writing_mode = WritingMode::VerticalRl;
@@ -5179,8 +5195,74 @@ mod tests {
         assert!(!items.is_empty());
         if let InlineItem::Text(text) = &items[0] {
             assert!(
-                text.advance_for_layout <= 16.0 + 0.01,
-                "fullwidth digits should combine and fit within 1em"
+                text.break_opportunities
+                    .iter()
+                    .any(|b| matches!(b.break_type, BreakType::Allowed)),
+                "non-ASCII digits should stay breakable and avoid text-combine compression"
+            );
+        } else {
+            panic!("expected text item");
+        }
+    }
+
+    #[test]
+    fn text_combine_skips_sequences_longer_than_limit() {
+        let ifc = InlineFormattingContext::new();
+        let mut style = ComputedStyle::default();
+        style.writing_mode = WritingMode::VerticalRl;
+        style.text_combine_upright = TextCombineUpright::Digits(2);
+        style.font_size = 16.0;
+        let bidi_stack = vec![(style.unicode_bidi, style.direction)];
+        let style = Arc::new(style);
+        let normalized = normalize_text_for_white_space("123", style.white_space);
+        let items = ifc
+            .create_text_items_with_combine(
+                &style,
+                &normalized.text,
+                normalized.forced_breaks.clone(),
+                normalized.allow_soft_wrap,
+                false,
+                crate::style::types::Direction::Ltr,
+                &bidi_stack,
+            )
+            .expect("text items");
+        assert_eq!(items.len(), 1);
+        if let InlineItem::Text(text) = &items[0] {
+            assert!(
+                text.advance_for_layout > style.font_size * 1.5,
+                "digit runs longer than the limit should not be combined or compressed"
+            );
+        } else {
+            panic!("expected text item");
+        }
+    }
+
+    #[test]
+    fn text_combine_digits_require_two_characters() {
+        let ifc = InlineFormattingContext::new();
+        let mut style = ComputedStyle::default();
+        style.writing_mode = WritingMode::VerticalRl;
+        style.text_combine_upright = TextCombineUpright::Digits(3);
+        style.font_size = 16.0;
+        let bidi_stack = vec![(style.unicode_bidi, style.direction)];
+        let style = Arc::new(style);
+        let normalized = normalize_text_for_white_space("1", style.white_space);
+        let items = ifc
+            .create_text_items_with_combine(
+                &style,
+                &normalized.text,
+                normalized.forced_breaks.clone(),
+                normalized.allow_soft_wrap,
+                false,
+                crate::style::types::Direction::Ltr,
+                &bidi_stack,
+            )
+            .expect("text items");
+        assert!(!items.is_empty());
+        if let InlineItem::Text(text) = &items[0] {
+            assert!(
+                text.runs.iter().all(|r| (r.scale - 1.0).abs() < 1e-6),
+                "single digits should not be compressed by text-combine-upright"
             );
         } else {
             panic!("expected text item");
