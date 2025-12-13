@@ -2624,15 +2624,7 @@ impl DisplayListBuilder {
             blend_mode: BlendMode::Normal,
         }));
 
-        let label = match replaced_type {
-            ReplacedType::Video { .. } => Some("video"),
-            ReplacedType::Audio { .. } => Some("audio"),
-            ReplacedType::Iframe { .. } => Some("iframe"),
-            ReplacedType::Canvas => Some("canvas"),
-            ReplacedType::Embed { .. } => Some("embed"),
-            ReplacedType::Object { .. } => Some("object"),
-            _ => None,
-        };
+        let label = replaced_type.placeholder_label();
 
         if let Some(label_text) = label {
             let label_style = fragment.style.as_deref().map(|style| {

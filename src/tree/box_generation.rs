@@ -73,6 +73,9 @@ pub struct DOMNode {
 
     /// Poster image for video elements
     pub poster: Option<String>,
+
+    /// Inline HTML for iframe srcdoc
+    pub srcdoc: Option<String>,
 }
 
 impl DOMNode {
@@ -90,6 +93,7 @@ impl DOMNode {
             alt: None,
             srcset: None,
             poster: None,
+            srcdoc: None,
         }
     }
 
@@ -107,6 +111,7 @@ impl DOMNode {
             alt: None,
             srcset: None,
             poster: None,
+            srcdoc: None,
         }
     }
 
@@ -151,6 +156,31 @@ impl DOMNode {
             alt: None,
             srcset: None,
             poster: None,
+            srcdoc: None,
+        }
+    }
+
+    /// Creates a new replaced element with optional srcdoc (for iframes).
+    pub fn new_replaced_with_srcdoc(
+        tag_name: impl Into<String>,
+        style: Arc<ComputedStyle>,
+        src: impl Into<String>,
+        intrinsic_size: Option<Size>,
+        srcdoc: Option<String>,
+    ) -> Self {
+        Self {
+            tag_name: Some(tag_name.into()),
+            id: None,
+            classes: Vec::new(),
+            style,
+            text: None,
+            children: Vec::new(),
+            intrinsic_size,
+            src: Some(src.into()),
+            alt: None,
+            srcset: None,
+            poster: None,
+            srcdoc,
         }
     }
 
@@ -263,6 +293,7 @@ impl DOMNode {
         let alt = self.alt.clone().filter(|s| !s.is_empty());
         let srcset = self.srcset.as_ref().map(|v| parse_srcset(v)).unwrap_or_default();
         let poster = self.poster.clone().filter(|s| !s.is_empty());
+        let srcdoc = self.srcdoc.clone().filter(|s| !s.is_empty());
 
         match tag.as_str() {
             "img" => Some(ReplacedType::Image {
@@ -274,7 +305,7 @@ impl DOMNode {
             "video" => Some(ReplacedType::Video { src, poster }),
             "canvas" => Some(ReplacedType::Canvas),
             "svg" => Some(ReplacedType::Svg { content: src }),
-            "iframe" => Some(ReplacedType::Iframe { src }),
+            "iframe" => Some(ReplacedType::Iframe { src, srcdoc }),
             _ => None,
         }
     }
@@ -1661,7 +1692,10 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
         "svg" => ReplacedType::Svg {
             content: serialize_dom_subtree(&styled.node),
         },
-        "iframe" => ReplacedType::Iframe { src },
+        "iframe" => {
+            let srcdoc = styled.node.get_attribute("srcdoc").filter(|s| !s.is_empty());
+            ReplacedType::Iframe { src, srcdoc }
+        }
         "embed" => ReplacedType::Embed { src },
         "object" => ReplacedType::Object { data: data_attr },
         _ => ReplacedType::Image {

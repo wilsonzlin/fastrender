@@ -2894,7 +2894,7 @@ impl Painter {
             ReplacedType::Svg { content }
             | ReplacedType::Embed { src: content }
             | ReplacedType::Object { data: content }
-            | ReplacedType::Iframe { src: content } => {
+            | ReplacedType::Iframe { src: content, .. } => {
                 if self.paint_svg(
                     content,
                     style,
@@ -3222,15 +3222,7 @@ impl Painter {
         }
 
         // Optional label to hint the missing resource type
-        let label = match replaced_type {
-            ReplacedType::Video { .. } => Some("video"),
-            ReplacedType::Audio { .. } => Some("audio"),
-            ReplacedType::Iframe { .. } => Some("iframe"),
-            ReplacedType::Canvas => Some("canvas"),
-            ReplacedType::Embed { .. } => Some("embed"),
-            ReplacedType::Object { .. } => Some("object"),
-            _ => None,
-        };
+        let label = replaced_type.placeholder_label();
 
         if let (Some(style), Some(label_text)) = (style, label) {
             let mut label_style = style.clone();

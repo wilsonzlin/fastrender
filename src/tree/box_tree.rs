@@ -173,6 +173,8 @@ pub enum ReplacedType {
     Iframe {
         /// Source URL
         src: String,
+        /// Inline HTML content overriding src
+        srcdoc: Option<String>,
     },
 
     /// `<embed>` element
@@ -236,8 +238,21 @@ impl ReplacedType {
             ReplacedType::Svg { content }
             | ReplacedType::Embed { src: content }
             | ReplacedType::Object { data: content }
-            | ReplacedType::Iframe { src: content } => vec![content.clone()],
+            | ReplacedType::Iframe { src: content, .. } => vec![content.clone()],
             _ => Vec::new(),
+        }
+    }
+
+    /// Returns a placeholder label for non-image replaced content.
+    pub fn placeholder_label(&self) -> Option<&str> {
+        match self {
+            ReplacedType::Video { .. } => Some("video"),
+            ReplacedType::Audio { .. } => Some("audio"),
+            ReplacedType::Iframe { srcdoc, .. } => srcdoc.as_deref().or(Some("iframe")),
+            ReplacedType::Canvas => Some("canvas"),
+            ReplacedType::Embed { .. } => Some("embed"),
+            ReplacedType::Object { .. } => Some("object"),
+            _ => None,
         }
     }
 
@@ -1271,6 +1286,21 @@ mod tests {
             "base src should remain available as fallback"
         );
         assert_eq!(sources.len(), 3, "srcset entries and base src should be unique");
+    }
+
+    #[test]
+    fn iframe_srcdoc_prefers_inline_html_for_placeholder() {
+        let iframe = ReplacedType::Iframe {
+            src: "https://example.com".to_string(),
+            srcdoc: Some("hello world".to_string()),
+        };
+        assert_eq!(iframe.placeholder_label(), Some("hello world"));
+
+        let iframe_no_srcdoc = ReplacedType::Iframe {
+            src: "https://example.com".to_string(),
+            srcdoc: None,
+        };
+        assert_eq!(iframe_no_srcdoc.placeholder_label(), Some("iframe"));
     }
 
     #[test]

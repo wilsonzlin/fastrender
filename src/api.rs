@@ -876,7 +876,7 @@ impl FastRender {
                     }
                 }
             }
-            ReplacedType::Embed { src } | ReplacedType::Object { data: src } | ReplacedType::Iframe { src } => {
+            ReplacedType::Embed { src } | ReplacedType::Object { data: src } | ReplacedType::Iframe { src, .. } => {
                 let needs_intrinsic = replaced_box.intrinsic_size.is_none();
                 let needs_ratio = replaced_box.aspect_ratio.is_none();
                 if (needs_intrinsic || needs_ratio) && !src.is_empty() {
