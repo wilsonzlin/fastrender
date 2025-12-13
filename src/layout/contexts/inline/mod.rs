@@ -1147,7 +1147,7 @@ impl InlineFormattingContext {
             }
         }
 
-        if !is_vertical_writing_mode(style.writing_mode)
+        if !is_vertical_typographic_mode(style.writing_mode)
             || matches!(style.text_combine_upright, TextCombineUpright::None)
         {
             let item = self.create_text_item_from_normalized(
@@ -4560,6 +4560,10 @@ fn is_vertical_writing_mode(mode: WritingMode) -> bool {
     )
 }
 
+fn is_vertical_typographic_mode(mode: WritingMode) -> bool {
+    matches!(mode, WritingMode::VerticalRl | WritingMode::VerticalLr)
+}
+
 fn can_combine_for_mode(ch: char, mode: TextCombineUpright) -> bool {
     match mode {
         TextCombineUpright::Digits(_) => ch.is_ascii_digit(),
@@ -5141,6 +5145,38 @@ mod tests {
                 .break_opportunities
                 .iter()
                 .all(|b| matches!(b.break_type, BreakType::Mandatory)));
+        } else {
+            panic!("expected text item");
+        }
+    }
+
+    #[test]
+    fn text_combine_ignored_in_sideways_writing_mode() {
+        let ifc = InlineFormattingContext::new();
+        let mut style = ComputedStyle::default();
+        style.writing_mode = WritingMode::SidewaysRl;
+        style.text_combine_upright = TextCombineUpright::All;
+        style.font_size = 16.0;
+        let bidi_stack = vec![(style.unicode_bidi, style.direction)];
+        let style = Arc::new(style);
+        let normalized = normalize_text_for_white_space("1234", style.white_space);
+        let items = ifc
+            .create_text_items_with_combine(
+                &style,
+                &normalized.text,
+                normalized.forced_breaks.clone(),
+                normalized.allow_soft_wrap,
+                false,
+                crate::style::types::Direction::Ltr,
+                &bidi_stack,
+            )
+            .expect("text items");
+        assert!(!items.is_empty());
+        if let InlineItem::Text(text) = &items[0] {
+            assert!(
+                text.advance_for_layout > style.font_size * 1.4,
+                "sideways writing should keep horizontal metrics and not compress to 1em"
+            );
         } else {
             panic!("expected text item");
         }
