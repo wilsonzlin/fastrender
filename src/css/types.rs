@@ -106,6 +106,13 @@ impl StyleSheet {
         result
     }
 
+    /// Collects all @font-face rules that apply to the current media context.
+    pub fn collect_font_face_rules(&self, media_ctx: &MediaContext) -> Vec<FontFaceRule> {
+        let mut result = Vec::new();
+        collect_font_faces_recursive(&self.rules, media_ctx, &mut result);
+        result
+    }
+
     /// Resolve @import rules by fetching external stylesheets and inlining their rules.
     ///
     /// Imports are processed in order; only imports whose media lists match the provided
@@ -177,6 +184,34 @@ fn collect_rules_recursive<'a>(
                 let path = registry.ensure_path(current_layer, &layer_rule.names[0]);
                 collect_rules_recursive(&layer_rule.rules, media_ctx, registry, &path, out);
             }
+            CssRule::FontFace(_) => {}
+        }
+    }
+}
+
+fn collect_font_faces_recursive(rules: &[CssRule], media_ctx: &MediaContext, out: &mut Vec<FontFaceRule>) {
+    for rule in rules {
+        match rule {
+            CssRule::FontFace(face) => out.push(face.clone()),
+            CssRule::Media(media_rule) => {
+                if media_ctx.evaluate(&media_rule.query) {
+                    collect_font_faces_recursive(&media_rule.rules, media_ctx, out);
+                }
+            }
+            CssRule::Layer(layer_rule) => {
+                if layer_rule.rules.is_empty() {
+                    continue;
+                }
+                if layer_rule.anonymous {
+                    collect_font_faces_recursive(&layer_rule.rules, media_ctx, out);
+                    continue;
+                }
+                if layer_rule.names.len() != 1 {
+                    continue;
+                }
+                collect_font_faces_recursive(&layer_rule.rules, media_ctx, out);
+            }
+            CssRule::Style(_) | CssRule::Import(_) => {}
         }
     }
 }
@@ -198,6 +233,8 @@ pub enum CssRule {
     Import(ImportRule),
     /// A @layer rule establishing cascade layers
     Layer(LayerRule),
+    /// A @font-face rule defining a downloadable font.
+    FontFace(FontFaceRule),
 }
 
 /// A @media rule containing conditional rules
@@ -234,6 +271,53 @@ pub struct LayerRule {
     pub rules: Vec<CssRule>,
     /// Whether this is an anonymous layer (no names).
     pub anonymous: bool,
+}
+
+/// A @font-face rule with parsed descriptors.
+#[derive(Debug, Clone)]
+pub struct FontFaceRule {
+    /// The family name exposed to CSS.
+    pub family: Option<String>,
+    /// Ordered font sources from the `src` descriptor.
+    pub sources: Vec<FontFaceSource>,
+    /// Style descriptor (normal/italic/oblique with optional angle range).
+    pub style: FontFaceStyle,
+    /// Weight range expressed in CSS absolute weights.
+    pub weight: (u16, u16),
+    /// Stretch range in percentages.
+    pub stretch: (f32, f32),
+}
+
+impl Default for FontFaceRule {
+    fn default() -> Self {
+        Self {
+            family: None,
+            sources: Vec::new(),
+            style: FontFaceStyle::Normal,
+            weight: (400, 400),
+            stretch: (100.0, 100.0),
+        }
+    }
+}
+
+/// A single font source in `src`.
+#[derive(Debug, Clone)]
+pub enum FontFaceSource {
+    /// A downloadable URL source.
+    Url(String),
+    /// A locally installed font name.
+    Local(String),
+}
+
+/// Font style descriptor for @font-face.
+#[derive(Debug, Clone)]
+pub enum FontFaceStyle {
+    Normal,
+    Italic,
+    /// Oblique with an optional angle range (degrees).
+    Oblique {
+        range: Option<(f32, f32)>,
+    },
 }
 
 /// A CSS property declaration
@@ -308,6 +392,7 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
                     }
                 }
             }
+            CssRule::FontFace(_) => out.push(rule.clone()),
         }
     }
 }

@@ -4,7 +4,10 @@
 
 use super::properties::parse_property_value;
 use super::selectors::PseudoClassParser;
-use super::types::{CssRule, Declaration, ImportRule, LayerRule, MediaRule, StyleRule, StyleSheet};
+use super::types::{
+    CssRule, Declaration, FontFaceRule, FontFaceSource, FontFaceStyle, ImportRule, LayerRule, MediaRule, StyleRule,
+    StyleSheet,
+};
 use crate::dom::DomNode;
 use crate::error::Result;
 use crate::style::media::MediaQuery;
@@ -80,6 +83,7 @@ fn parse_rule<'i, 't>(
                 "import" => parse_import_rule(p),
                 "media" => parse_media_rule(p),
                 "layer" => parse_layer_rule(p),
+                "font-face" => parse_font_face_rule(p),
                 _ => {
                     skip_at_rule(p);
                     Ok(None)
@@ -259,6 +263,285 @@ fn parse_layer_rule<'i, 't>(
     })))
 }
 
+fn parse_font_face_rule<'i, 't>(
+    parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+    parser
+        .expect_curly_bracket_block()
+        .map_err(|_| parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into())))?;
+
+    let face = parser.parse_nested_block(|parser| parse_font_face_descriptors(parser))?;
+    Ok(face.map(CssRule::FontFace))
+}
+
+fn parse_font_face_descriptors<'i, 't>(
+    parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Option<FontFaceRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+    let mut face = FontFaceRule::default();
+
+    while !parser.is_exhausted() {
+        parser.skip_whitespace();
+        if parser.is_exhausted() {
+            break;
+        }
+
+        let property = match parser.expect_ident() {
+            Ok(id) => id.to_string(),
+            Err(_) => {
+                skip_to_semicolon(parser);
+                continue;
+            }
+        };
+
+        if parser.expect_colon().is_err() {
+            skip_to_semicolon(parser);
+            continue;
+        }
+
+        let value_start = parser.position();
+        let mut important = false;
+        loop {
+            match parser.next() {
+                Ok(Token::Semicolon) | Err(_) => break,
+                Ok(Token::Delim('!')) => {
+                    if parser.try_parse(|p| p.expect_ident_matching("important")).is_ok() {
+                        important = true;
+                        skip_to_semicolon(parser);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let full_value = parser.slice_from(value_start);
+        let trimmed_value = if important {
+            full_value
+                .rsplit_once("!important")
+                .map(|(before, _)| before.trim_end_matches(';').trim())
+                .unwrap_or(full_value.trim_end_matches(';').trim())
+        } else {
+            full_value.trim_end_matches(';').trim()
+        };
+
+        let prop = property.to_ascii_lowercase();
+        match prop.as_str() {
+            "font-family" => {
+                face.family = parse_font_face_family(trimmed_value);
+            }
+            "src" => {
+                let parsed = parse_font_face_src(trimmed_value);
+                if !parsed.is_empty() {
+                    face.sources = parsed;
+                }
+            }
+            "font-style" => {
+                if let Some(style) = parse_font_face_style(trimmed_value) {
+                    face.style = style;
+                }
+            }
+            "font-weight" => {
+                if let Some(range) = parse_font_face_weight(trimmed_value) {
+                    face.weight = range;
+                }
+            }
+            "font-stretch" => {
+                if let Some(range) = parse_font_face_stretch(trimmed_value) {
+                    face.stretch = range;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if face.family.is_none() || face.sources.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(face))
+}
+
+fn parse_font_face_family(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let unquoted = trimmed
+        .strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .or_else(|| trimmed.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+        .unwrap_or(trimmed);
+    if unquoted.is_empty() {
+        None
+    } else {
+        Some(unquoted.to_string())
+    }
+}
+
+fn parse_font_face_style(value: &str) -> Option<FontFaceStyle> {
+    let tokens: Vec<&str> = value.split_whitespace().collect();
+    if tokens.is_empty() {
+        return None;
+    }
+    match tokens[0].to_ascii_lowercase().as_str() {
+        "normal" => Some(FontFaceStyle::Normal),
+        "italic" => Some(FontFaceStyle::Italic),
+        "oblique" => {
+            let angles: Vec<f32> = tokens[1..].iter().filter_map(|t| parse_angle_token(t)).collect();
+            let range = match angles.as_slice() {
+                [a, b] => Some((a.min(*b), a.max(*b))),
+                [a] => Some((*a, *a)),
+                _ => None,
+            };
+            Some(FontFaceStyle::Oblique { range })
+        }
+        _ => None,
+    }
+}
+
+fn parse_font_face_weight(value: &str) -> Option<(u16, u16)> {
+    let weights: Vec<u16> = value
+        .split_whitespace()
+        .filter_map(|token| parse_weight_token(token))
+        .collect();
+    match weights.as_slice() {
+        [w] => Some((*w, *w)),
+        [a, b] => {
+            let (a, b) = (*a, *b);
+            Some((a.min(b), a.max(b)))
+        }
+        _ => None,
+    }
+}
+
+fn parse_font_face_stretch(value: &str) -> Option<(f32, f32)> {
+    let stretches: Vec<f32> = value
+        .split_whitespace()
+        .filter_map(|token| parse_stretch_token(token))
+        .collect();
+    match stretches.as_slice() {
+        [s] => Some((*s, *s)),
+        [a, b] => {
+            let (a, b) = (*a, *b);
+            Some((a.min(b), a.max(b)))
+        }
+        _ => None,
+    }
+}
+
+fn parse_font_face_src(value: &str) -> Vec<FontFaceSource> {
+    let mut input = ParserInput::new(value);
+    let mut parser = Parser::new(&mut input);
+    let mut sources = Vec::new();
+
+    while !parser.is_exhausted() {
+        parser.skip_whitespace();
+        if parser.is_exhausted() {
+            break;
+        }
+
+        if let Ok(url) = parser.try_parse(|p| p.expect_url()) {
+            sources.push(FontFaceSource::Url(url.as_ref().to_string()));
+            let _ = parser.try_parse(|p| p.expect_comma());
+            continue;
+        }
+
+        let parsed = match parser.next_including_whitespace() {
+            Ok(Token::Function(f)) if f.as_ref().eq_ignore_ascii_case("url") => parser
+                .parse_nested_block(|p| parse_string_or_ident(p))
+                .ok()
+                .map(FontFaceSource::Url),
+            Ok(Token::Function(f)) if f.as_ref().eq_ignore_ascii_case("local") => parser
+                .parse_nested_block(|p| parse_string_or_ident(p))
+                .ok()
+                .map(FontFaceSource::Local),
+            Ok(Token::Comma) => None,
+            Ok(_) => None,
+            Err(_) => break,
+        };
+        if let Some(src) = parsed {
+            sources.push(src);
+        }
+        loop {
+            let state = parser.state();
+            match parser.next_including_whitespace() {
+                Ok(Token::Comma) | Err(_) => {
+                    parser.reset(&state);
+                    break;
+                }
+                _ => continue,
+            }
+        }
+        let _ = parser.try_parse(|p| p.expect_comma());
+    }
+
+    sources
+}
+
+fn parse_string_or_ident<'i, 't>(
+    parser: &mut Parser<'i, 't>,
+) -> std::result::Result<String, ParseError<'i, SelectorParseErrorKind<'i>>> {
+    if let Ok(s) = parser.try_parse(|p| p.expect_string().map(|cow| cow.as_ref().to_string())) {
+        return Ok(s);
+    }
+
+    parser
+        .expect_ident()
+        .map(|s| s.to_string())
+        .map_err(ParseError::from)
+}
+
+fn parse_angle_token(token: &str) -> Option<f32> {
+    let trimmed = token.trim();
+    if trimmed.ends_with("deg") {
+        trimmed[..trimmed.len() - 3].trim().parse::<f32>().ok()
+    } else if trimmed.ends_with("rad") {
+        trimmed[..trimmed.len() - 3]
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|r| r.to_degrees())
+    } else if trimmed.ends_with("turn") {
+        trimmed[..trimmed.len() - 4]
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|t| t * 360.0)
+    } else if trimmed.ends_with("grad") {
+        trimmed[..trimmed.len() - 4].trim().parse::<f32>().ok().map(|g| g * 0.9)
+    } else {
+        None
+    }
+}
+
+fn parse_weight_token(token: &str) -> Option<u16> {
+    let lower = token.to_ascii_lowercase();
+    match lower.as_str() {
+        "normal" => Some(400),
+        "bold" => Some(700),
+        _ => token.trim().parse::<u16>().ok().map(|w| w.clamp(1, 1000)),
+    }
+}
+
+fn parse_stretch_token(token: &str) -> Option<f32> {
+    let lower = token.to_ascii_lowercase();
+    if lower.ends_with('%') {
+        return lower[..lower.len() - 1].trim().parse::<f32>().ok();
+    }
+    match lower.as_str() {
+        "ultra-condensed" => Some(50.0),
+        "extra-condensed" => Some(62.5),
+        "condensed" => Some(75.0),
+        "semi-condensed" => Some(87.5),
+        "normal" => Some(100.0),
+        "semi-expanded" => Some(112.5),
+        "expanded" => Some(125.0),
+        "extra-expanded" => Some(150.0),
+        "ultra-expanded" => Some(200.0),
+        _ => None,
+    }
+}
+
 /// Skip an unknown @-rule
 fn skip_at_rule<'i, 't>(parser: &mut Parser<'i, 't>) {
     loop {
@@ -434,7 +717,7 @@ pub fn extract_css(dom: &DomNode) -> Result<StyleSheet> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::css::types::CssImportLoader;
+    use crate::css::types::{CssImportLoader, FontFaceStyle};
     use crate::PropertyValue;
 
     #[test]
@@ -458,6 +741,29 @@ mod tests {
             assert_eq!(import.href, "https://example.com/base.css");
         } else {
             panic!("Expected import rule");
+        }
+    }
+
+    #[test]
+    fn parses_font_face_rule() {
+        let css = r#"@font-face {
+            font-family: "TestFamily";
+            src: url("fonts/test.woff2") format("woff2"), local(TestLocal);
+            font-weight: 400 700;
+            font-style: oblique 10deg 20deg;
+            font-stretch: 75% 125%;
+        }"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        assert_eq!(stylesheet.rules.len(), 1);
+        match &stylesheet.rules[0] {
+            CssRule::FontFace(face) => {
+                assert_eq!(face.family.as_deref(), Some("TestFamily"));
+                assert_eq!(face.sources.len(), 2);
+                assert_eq!(face.weight, (400, 700));
+                assert_eq!(face.stretch, (75.0, 125.0));
+                assert!(matches!(face.style, FontFaceStyle::Oblique { .. }));
+            }
+            other => panic!("Unexpected rule: {:?}", other),
         }
     }
 

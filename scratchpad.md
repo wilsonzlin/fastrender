@@ -7,6 +7,7 @@
 
 ## Recent changes (this branch)
 - Iframe `srcdoc` is fully rendered: nested HTML is parsed, styled (with @import fetcher that supports data/file/http URLs), laid out with intrinsic replaced sizing, and painted into the iframe rect instead of a placeholder. `ImageCache` now exposes `base_url` for relative resolution.
+- `@font-face` is parsed and collected through @imports/media, with url/file/data/local sources loaded into the shared `FontContext` before layout (including iframes). WOFF/WOFF2 are decoded via `wuff`, descriptors capture style/weight/stretch ranges, and web fonts are preferred over system fonts. Added a data-URL regression for web fonts.
 - Canvas backgrounds respect author colors even when the root box has zero height: root backgrounds expand to the viewport only when the root fragment starts at (0,0), and otherwise stay bounded so unit tests don’t get filled. Background fallback to first child applies only when the root has a style but no paintable background (HTML/body propagation).
 - `background` shorthand now recognizes color keywords (e.g., `background: red`) via `Color::parse`, fixing missing backgrounds for shorthand-only rules.
 - Added `percent-encoding` dependency for data URL decoding in the embedded import loader.
@@ -701,7 +702,6 @@
 - `text-indent` hanging/each-line semantics are approximate; indentation doesn’t yet handle hanging outdents per spec nuances.
 - Max-content sizing now honors mandatory breaks but still ignores anonymous inline box generation and percent-driven height constraints.
 - Table layout still partial: row/col spans not fully honored (rowspan baselines, percent/fixed widths still simplified vs CSS 2.1), colspan distribution still heuristic.
-- Non-image replaced content (iframe/video/etc.) remains unrendered; need full replaced-element handling beyond images/SVG.
 - Painting still lacks 3D transforms/transform-origin z and fuller filter/blend/isolation interplay, and the richer display list module remains partially integrated.
 - Root line strut still provides minimum line-height rather than full descendant baseline synthesis.
 
@@ -712,15 +712,13 @@
    - Harden RTL run positioning and visual reordering in painter/layout so mixed-direction text paints correctly.
 2. Tables:
    - Finish CSS 2.1 auto table layout: full border-collapse model including per-segment conflict resolution, style-aware painting (dotted/dashed/double geometry), percent/fixed widths resolved per spec, correct colspan/rowspan distribution (including baseline handling for rowspans), and row height/baseline behavior under collapsed borders.
-3. Replaced content:
-   - Render images for `ReplacedType::Image` instead of placeholders.
-4. General bidi:
+3. General bidi:
    - Ensure visual ordering in layout and paint for RTL/mixed runs.
-5. Inline blocks:
+4. Inline blocks:
    - Generate proper anonymous inline wrappers; validate remaining percentage/min-height edge cases and baseline behavior in nested formatting contexts.
-6. Lists/markers:
+5. Lists/markers:
    - Implement ::marker property restrictions and inside positioning geometry; round out counter style coverage and marker inheritance edge cases.
-7. Positioning:
+6. Positioning:
    - Propagate positioned containing blocks through any remaining formatting contexts; derive static positions from hypothetical in-flow placement even when padding box height is unresolved.
 
 ## Notes

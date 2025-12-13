@@ -24,10 +24,18 @@
 //! }
 //! ```
 
+use crate::css::types::{FontFaceRule, FontFaceSource, FontFaceStyle};
+use crate::error::{Error, Result};
 use crate::text::font_db::{FontDatabase, FontStretch, FontStyle, FontWeight, LoadedFont, ScaledMetrics};
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
+use percent_encoding::percent_decode_str;
 use rustybuzz::{Direction, Face, UnicodeBuffer};
 use std::fs;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+use ureq::Agent;
+use url::Url;
+use wuff::{decompress_woff1, decompress_woff2};
 
 const EMBEDDED_FALLBACK_FONT: &[u8] = include_bytes!("../../resources/fonts/Roboto-Regular.ttf");
 
@@ -62,6 +70,7 @@ const EMBEDDED_FALLBACK_FONT: &[u8] = include_bytes!("../../resources/fonts/Robo
 #[derive(Clone)]
 pub struct FontContext {
     db: Arc<FontDatabase>,
+    web_fonts: Arc<RwLock<Vec<WebFontFace>>>,
 }
 
 impl FontContext {
@@ -102,7 +111,10 @@ impl FontContext {
             }
         }
 
-        Self { db: Arc::new(db) }
+        Self {
+            db: Arc::new(db),
+            web_fonts: Arc::new(RwLock::new(Vec::new())),
+        }
     }
 
     /// Creates a font context with a custom font database
@@ -116,7 +128,10 @@ impl FontContext {
     /// let ctx = FontContext::with_database(db);
     /// ```
     pub fn with_database(db: Arc<FontDatabase>) -> Self {
-        Self { db }
+        Self {
+            db,
+            web_fonts: Arc::new(RwLock::new(Vec::new())),
+        }
     }
 
     /// Creates an empty font context (no fonts loaded)
@@ -125,6 +140,7 @@ impl FontContext {
     pub fn empty() -> Self {
         Self {
             db: Arc::new(FontDatabase::empty()),
+            web_fonts: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -191,6 +207,10 @@ impl FontContext {
             FontStyle::Normal
         };
 
+        if let Some(font) = self.match_web_font(families, weight, requested_style, FontStretch::Normal) {
+            return Some(font);
+        }
+
         let weights = crate::text::pipeline::weight_preference_order(weight);
         for weight_choice in &weights {
             let font_weight = FontWeight::new(*weight_choice);
@@ -235,6 +255,10 @@ impl FontContext {
         style: FontStyle,
         stretch: FontStretch,
     ) -> Option<LoadedFont> {
+        if let Some(font) = self.match_web_font(families, weight, style, stretch) {
+            return Some(font);
+        }
+
         let stretches = crate::text::pipeline::stretch_preference_order(stretch.into());
         let weights = crate::text::pipeline::weight_preference_order(weight);
         for weight_choice in &weights {
@@ -265,6 +289,9 @@ impl FontContext {
     /// let font = ctx.get_font_simple("Arial", 400, FontStyle::Normal);
     /// ```
     pub fn get_font_simple(&self, family: &str, weight: u16, style: FontStyle) -> Option<LoadedFont> {
+        if let Some(font) = self.match_web_font(&[family.to_string()], weight, style, FontStretch::Normal) {
+            return Some(font);
+        }
         let font_weight = FontWeight::new(weight);
         let id = self.db.query(family, font_weight, style)?;
         self.db.load_font(id)
@@ -296,6 +323,142 @@ impl FontContext {
     /// from disk on next access.
     pub fn clear_cache(&self) {
         self.db.clear_cache();
+    }
+
+    /// Clears any previously loaded @font-face entries.
+    pub fn clear_web_fonts(&self) {
+        if let Ok(mut faces) = self.web_fonts.write() {
+            faces.clear();
+        }
+    }
+
+    /// Loads web fonts defined by @font-face rules into the context.
+    ///
+    /// Relative URLs are resolved against `base_url` when provided.
+    pub fn load_web_fonts(&self, faces: &[FontFaceRule], base_url: Option<&str>) -> Result<()> {
+        for (order, face) in faces.iter().enumerate() {
+            let family = match &face.family {
+                Some(f) => f.clone(),
+                None => continue,
+            };
+
+            for source in &face.sources {
+                let loaded = match source {
+                    FontFaceSource::Local(name) => self.load_local_face(&family, name, face, order),
+                    FontFaceSource::Url(url) => self.load_remote_face(&family, url, face, base_url, order),
+                };
+
+                if loaded.is_ok() {
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn load_local_face(&self, family: &str, local_name: &str, face: &FontFaceRule, order: usize) -> Result<()> {
+        let target_style = match face.style {
+            FontFaceStyle::Italic => FontStyle::Italic,
+            FontFaceStyle::Oblique { .. } => FontStyle::Oblique,
+            FontFaceStyle::Normal => FontStyle::Normal,
+        };
+        let target_weight = face.weight.0;
+        if let Some(id) = self.db.resolve_family_list_full(
+            &[local_name.to_string()],
+            FontWeight::new(target_weight),
+            target_style,
+            FontStretch::Normal,
+        ) {
+            if let Some(font) = self.db.load_font(id) {
+                self.register_web_font(family.to_string(), Arc::clone(&font.data), font.index, face, order);
+                return Ok(());
+            }
+        }
+        Err(Error::Font(crate::error::FontError::LoadFailed {
+            family: local_name.to_string(),
+            reason: "local() source not found".into(),
+        }))
+    }
+
+    fn load_remote_face(
+        &self,
+        family: &str,
+        url: &str,
+        face: &FontFaceRule,
+        base_url: Option<&str>,
+        order: usize,
+    ) -> Result<()> {
+        let resolved = resolve_font_url(url, base_url);
+        let (bytes, content_type) = fetch_font_bytes(&resolved)?;
+        let decoded = decode_font_bytes(bytes, content_type.as_deref())?;
+        let data = Arc::new(decoded);
+
+        let face_count = ttf_parser::fonts_in_collection(&data).unwrap_or(1);
+        for idx in 0..face_count.max(1) {
+            if ttf_parser::Face::parse(&data, idx).is_err() {
+                continue;
+            }
+            self.register_web_font(family.to_string(), Arc::clone(&data), idx, face, order);
+        }
+
+        Ok(())
+    }
+
+    fn register_web_font(&self, family: String, data: Arc<Vec<u8>>, index: u32, face: &FontFaceRule, order: usize) {
+        let mut guard = match self.web_fonts.write() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        guard.push(WebFontFace {
+            family,
+            data,
+            index,
+            style: face.style.clone(),
+            weight: face.weight,
+            stretch: face.stretch,
+            order,
+        });
+    }
+
+    fn match_web_font(
+        &self,
+        families: &[String],
+        weight: u16,
+        style: FontStyle,
+        stretch: FontStretch,
+    ) -> Option<LoadedFont> {
+        let guard = self.web_fonts.read().ok()?;
+        let requested_stretch = stretch.to_percentage();
+
+        let mut best: Option<(WebFontScore, LoadedFont)> = None;
+
+        for family in families {
+            for face in guard.iter().filter(|f| f.family.eq_ignore_ascii_case(family)) {
+                let score = face.score(weight, style, requested_stretch)?;
+                let chosen_weight = face.clamp_weight(weight);
+                let chosen_stretch = face.nearest_stretch(requested_stretch);
+
+                let candidate = LoadedFont {
+                    data: Arc::clone(&face.data),
+                    index: face.index,
+                    family: family.clone(),
+                    weight: FontWeight::new(chosen_weight),
+                    style: face.effective_style(style),
+                    stretch: chosen_stretch,
+                };
+
+                if let Some((best_score, _)) = &best {
+                    if score < *best_score {
+                        best = Some((score, candidate));
+                    }
+                } else {
+                    best = Some((score, candidate));
+                }
+            }
+        }
+
+        best.map(|(_, font)| font)
     }
 
     // ========================================================================
@@ -452,6 +615,213 @@ impl Default for FontContext {
     }
 }
 
+type WebFontScore = (u8, f32, f32, usize);
+
+#[derive(Clone)]
+struct WebFontFace {
+    family: String,
+    data: Arc<Vec<u8>>,
+    index: u32,
+    style: FontFaceStyle,
+    weight: (u16, u16),
+    stretch: (f32, f32),
+    order: usize,
+}
+
+impl WebFontFace {
+    fn score(&self, weight: u16, style: FontStyle, stretch: f32) -> Option<WebFontScore> {
+        let style_score = match (&self.style, style) {
+            (FontFaceStyle::Normal, FontStyle::Normal) => 0,
+            (FontFaceStyle::Normal, _) => 2,
+            (FontFaceStyle::Italic, FontStyle::Italic) => 0,
+            (FontFaceStyle::Italic, FontStyle::Oblique) => 1,
+            (FontFaceStyle::Italic, FontStyle::Normal) => 1,
+            (FontFaceStyle::Oblique { .. }, FontStyle::Oblique) => 0,
+            (FontFaceStyle::Oblique { .. }, FontStyle::Italic) => 1,
+            (FontFaceStyle::Oblique { .. }, FontStyle::Normal) => 1,
+        };
+
+        let weight_distance = if weight < self.weight.0 {
+            (self.weight.0 - weight) as f32
+        } else if weight > self.weight.1 {
+            (weight - self.weight.1) as f32
+        } else {
+            0.0
+        };
+
+        let stretch_distance = if stretch < self.stretch.0 {
+            self.stretch.0 - stretch
+        } else if stretch > self.stretch.1 {
+            stretch - self.stretch.1
+        } else {
+            0.0
+        };
+
+        Some((style_score, weight_distance, stretch_distance, self.order))
+    }
+
+    fn clamp_weight(&self, weight: u16) -> u16 {
+        weight.clamp(self.weight.0, self.weight.1)
+    }
+
+    fn nearest_stretch(&self, requested: f32) -> FontStretch {
+        let clamped = requested.clamp(self.stretch.0, self.stretch.1);
+        percent_to_stretch_variant(clamped)
+    }
+
+    fn effective_style(&self, _requested: FontStyle) -> FontStyle {
+        match self.style {
+            FontFaceStyle::Normal => FontStyle::Normal,
+            FontFaceStyle::Italic => FontStyle::Italic,
+            FontFaceStyle::Oblique { .. } => FontStyle::Oblique,
+        }
+    }
+}
+
+fn percent_to_stretch_variant(percent: f32) -> FontStretch {
+    if percent <= 56.25 {
+        FontStretch::UltraCondensed
+    } else if percent <= 68.75 {
+        FontStretch::ExtraCondensed
+    } else if percent <= 81.25 {
+        FontStretch::Condensed
+    } else if percent <= 93.75 {
+        FontStretch::SemiCondensed
+    } else if percent <= 106.25 {
+        FontStretch::Normal
+    } else if percent <= 118.75 {
+        FontStretch::SemiExpanded
+    } else if percent <= 137.5 {
+        FontStretch::Expanded
+    } else if percent <= 175.0 {
+        FontStretch::ExtraExpanded
+    } else {
+        FontStretch::UltraExpanded
+    }
+}
+
+fn resolve_font_url(url: &str, base_url: Option<&str>) -> String {
+    if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("data:") || url.starts_with("file:")
+    {
+        return url.to_string();
+    }
+
+    if let Some(base) = base_url {
+        if let Ok(base) =
+            Url::parse(base).or_else(|_| Url::from_file_path(base).map_err(|_| url::ParseError::RelativeUrlWithoutBase))
+        {
+            if let Ok(resolved) = base.join(url) {
+                return resolved.to_string();
+            }
+        }
+    }
+
+    url.to_string()
+}
+
+fn fetch_font_bytes(url: &str) -> Result<(Vec<u8>, Option<String>)> {
+    if url.starts_with("data:") {
+        return decode_data_url(url);
+    }
+
+    if url.starts_with("http://") || url.starts_with("https://") {
+        let agent: Agent = Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(30)))
+            .build()
+            .into();
+        let mut response = agent.get(url).call().map_err(|e| {
+            Error::Font(crate::error::FontError::LoadFailed {
+                family: url.to_string(),
+                reason: e.to_string(),
+            })
+        })?;
+        let bytes = response
+            .body_mut()
+            .with_config()
+            .limit(50 * 1024 * 1024)
+            .read_to_vec()
+            .map_err(|e| {
+                Error::Font(crate::error::FontError::LoadFailed {
+                    family: url.to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string());
+        return Ok((bytes, content_type));
+    }
+
+    if url.starts_with("file://") {
+        let path = url.trim_start_matches("file://");
+        return std::fs::read(path).map(|b| (b, None)).map_err(|e| {
+            Error::Font(crate::error::FontError::LoadFailed {
+                family: url.to_string(),
+                reason: e.to_string(),
+            })
+        });
+    }
+
+    std::fs::read(url).map(|b| (b, None)).map_err(|e| {
+        Error::Font(crate::error::FontError::LoadFailed {
+            family: url.to_string(),
+            reason: e.to_string(),
+        })
+    })
+}
+
+fn decode_font_bytes(bytes: Vec<u8>, content_type: Option<&str>) -> Result<Vec<u8>> {
+    if bytes.starts_with(b"wOF2") || content_type.map(|c| c.contains("woff2")).unwrap_or(false) {
+        return decompress_woff2(&bytes).map_err(|e| Error::Font(crate::error::FontError::LoadFailed {
+            family: "woff2".into(),
+            reason: format!("{:?}", e),
+        }));
+    }
+
+    if bytes.starts_with(b"wOFF") || content_type.map(|c| c.contains("woff")).unwrap_or(false) {
+        return decompress_woff1(&bytes).map_err(|e| Error::Font(crate::error::FontError::LoadFailed {
+            family: "woff".into(),
+            reason: format!("{:?}", e),
+        }));
+    }
+
+    Ok(bytes)
+}
+
+fn decode_data_url(url: &str) -> Result<(Vec<u8>, Option<String>)> {
+    let without_prefix = url.trim_start_matches("data:");
+    let mut parts = without_prefix.splitn(2, ',');
+    let meta = parts.next().unwrap_or("");
+    let data = parts.next().ok_or_else(|| {
+        Error::Font(crate::error::FontError::LoadFailed {
+            family: "data-url".into(),
+            reason: "missing data".into(),
+        })
+    })?;
+    let is_base64 = meta.to_ascii_lowercase().contains(";base64");
+    let mime = meta.split(';').next().filter(|s| !s.is_empty()).map(|s| s.to_string());
+
+    if is_base64 {
+        let decoded = BASE64_STANDARD.decode(data.as_bytes()).map_err(|e| {
+            Error::Font(crate::error::FontError::LoadFailed {
+                family: "data-url".into(),
+                reason: e.to_string(),
+            })
+        })?;
+        return Ok((decoded, mime));
+    }
+
+    let decoded = percent_decode_str(data).decode_utf8().map_err(|e| {
+        Error::Font(crate::error::FontError::LoadFailed {
+            family: "data-url".into(),
+            reason: e.to_string(),
+        })
+    })?;
+    Ok((decoded.as_bytes().to_vec(), mime))
+}
+
 // ============================================================================
 // TextMeasurement
 // ============================================================================
@@ -478,6 +848,7 @@ pub struct TextMeasurement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::media::MediaContext;
 
     #[test]
     fn test_font_context_creation() {
@@ -501,6 +872,28 @@ mod tests {
 
         let ctx = FontContext::with_database(db);
         assert_eq!(ctx.font_count(), count);
+    }
+
+    #[test]
+    fn loads_web_font_from_data_url() {
+        // Build a @font-face pointing at the embedded fallback font.
+        let data_url = format!(
+            "data:font/ttf;base64,{}",
+            BASE64_STANDARD.encode(EMBEDDED_FALLBACK_FONT)
+        );
+        let css = format!(
+            "@font-face {{ font-family: \"WebFont\"; src: url(\"{}\"); font-style: normal; font-weight: 400; }}",
+            data_url
+        );
+        let sheet = crate::css::parser::parse_stylesheet(&css).unwrap();
+        let media_ctx = MediaContext::screen(800.0, 600.0);
+        let faces = sheet.collect_font_face_rules(&media_ctx);
+
+        let ctx = FontContext::empty();
+        assert!(ctx.load_web_fonts(&faces, None).is_ok());
+        let families = vec!["WebFont".to_string()];
+        let loaded = ctx.get_font_full(&families, 400, FontStyle::Normal, FontStretch::Normal);
+        assert!(loaded.is_some());
     }
 
     #[test]

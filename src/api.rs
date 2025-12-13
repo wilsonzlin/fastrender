@@ -66,7 +66,7 @@ use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
 use crate::layout::contexts::inline::line_builder::TextItem;
 use crate::layout::engine::{LayoutConfig, LayoutEngine};
 use crate::paint::painter::paint_tree_with_resources_scaled;
-use crate::style::cascade::apply_styles_with_media_target_and_imports;
+use crate::style::cascade::apply_styles_with_media_and_target;
 use crate::style::color::Rgba;
 use crate::style::media::MediaContext;
 use crate::style::ComputedStyle;
@@ -615,14 +615,13 @@ impl FastRender {
         let import_loader = CssImportFetcher {
             base_url: self.base_url.clone(),
         };
-        let styled_tree = apply_styles_with_media_target_and_imports(
-            dom,
-            &stylesheet,
-            &media_ctx,
-            target_fragment.as_deref(),
-            Some(&import_loader),
-            self.base_url.as_deref(),
-        );
+        let resolved_stylesheet = stylesheet.resolve_imports(&import_loader, self.base_url.as_deref(), &media_ctx);
+        self.font_context.clear_web_fonts();
+        let font_faces = resolved_stylesheet.collect_font_face_rules(&media_ctx);
+        // Best-effort loading; rendering should continue even if a web font fails.
+        let _ = self.font_context.load_web_fonts(&font_faces, self.base_url.as_deref());
+        let styled_tree =
+            apply_styles_with_media_and_target(dom, &resolved_stylesheet, &media_ctx, target_fragment.as_deref());
 
         // Generate box tree
         let mut box_tree = generate_box_tree(&styled_tree);
