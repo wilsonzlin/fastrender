@@ -4137,20 +4137,71 @@ pub fn apply_declaration_with_base(
                     styles.font_variant_numeric = FontVariantNumeric::default();
                 } else if !tokens.is_empty() {
                     let mut numeric = FontVariantNumeric::default();
+                    let mut seen_figure = false;
+                    let mut seen_spacing = false;
+                    let mut seen_fraction = false;
+                    let mut invalid = false;
                     for tok in tokens {
                         match tok {
-                            "lining-nums" => numeric.figure = NumericFigure::Lining,
-                            "oldstyle-nums" => numeric.figure = NumericFigure::Oldstyle,
-                            "proportional-nums" => numeric.spacing = NumericSpacing::Proportional,
-                            "tabular-nums" => numeric.spacing = NumericSpacing::Tabular,
-                            "diagonal-fractions" => numeric.fraction = NumericFraction::Diagonal,
-                            "stacked-fractions" => numeric.fraction = NumericFraction::Stacked,
+                            "lining-nums" => {
+                                if seen_figure {
+                                    invalid = true;
+                                    break;
+                                }
+                                numeric.figure = NumericFigure::Lining;
+                                seen_figure = true;
+                            }
+                            "oldstyle-nums" => {
+                                if seen_figure {
+                                    invalid = true;
+                                    break;
+                                }
+                                numeric.figure = NumericFigure::Oldstyle;
+                                seen_figure = true;
+                            }
+                            "proportional-nums" => {
+                                if seen_spacing {
+                                    invalid = true;
+                                    break;
+                                }
+                                numeric.spacing = NumericSpacing::Proportional;
+                                seen_spacing = true;
+                            }
+                            "tabular-nums" => {
+                                if seen_spacing {
+                                    invalid = true;
+                                    break;
+                                }
+                                numeric.spacing = NumericSpacing::Tabular;
+                                seen_spacing = true;
+                            }
+                            "diagonal-fractions" => {
+                                if seen_fraction {
+                                    invalid = true;
+                                    break;
+                                }
+                                numeric.fraction = NumericFraction::Diagonal;
+                                seen_fraction = true;
+                            }
+                            "stacked-fractions" => {
+                                if seen_fraction {
+                                    invalid = true;
+                                    break;
+                                }
+                                numeric.fraction = NumericFraction::Stacked;
+                                seen_fraction = true;
+                            }
                             "ordinal" => numeric.ordinal = true,
                             "slashed-zero" => numeric.slashed_zero = true,
-                            _ => {}
+                            _ => {
+                                invalid = true;
+                                break;
+                            }
                         }
                     }
-                    styles.font_variant_numeric = numeric;
+                    if !invalid {
+                        styles.font_variant_numeric = numeric;
+                    }
                 }
             }
         }
@@ -12498,6 +12549,34 @@ mod tests {
         assert!(matches!(style.font_variant_numeric.fraction, NumericFraction::Normal));
         assert!(!style.font_variant_numeric.ordinal);
         assert!(!style.font_variant_numeric.slashed_zero);
+    }
+
+    #[test]
+    fn font_variant_numeric_invalid_token_is_ignored() {
+        let mut style = ComputedStyle::default();
+        style.font_variant_numeric.figure = NumericFigure::Lining;
+        let decl = Declaration {
+            property: "font-variant-numeric".to_string(),
+            value: PropertyValue::Keyword("bogus".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert!(matches!(style.font_variant_numeric.figure, NumericFigure::Lining));
+    }
+
+    #[test]
+    fn font_variant_numeric_conflict_invalidates_declaration() {
+        let mut style = ComputedStyle::default();
+        style.font_variant_numeric.spacing = NumericSpacing::Proportional;
+        let decl = Declaration {
+            property: "font-variant-numeric".to_string(),
+            value: PropertyValue::Keyword("tabular-nums proportional-nums".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert!(matches!(style.font_variant_numeric.spacing, NumericSpacing::Proportional));
     }
 
     #[test]
