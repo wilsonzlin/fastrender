@@ -543,8 +543,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.text_emphasis_color = parent.text_emphasis_color;
     styles.text_emphasis_position = parent.text_emphasis_position;
     styles.text_transform = parent.text_transform;
-    styles.text_combine_upright = parent.text_combine_upright;
-    // text-orientation is non-inherited; leave as initial value
+    // text-orientation and text-combine-upright are non-inherited; leave as initial values
     styles.writing_mode = parent.writing_mode;
     styles.letter_spacing = parent.letter_spacing;
     styles.word_spacing = parent.word_spacing;
@@ -783,6 +782,16 @@ mod tests {
         let child = styled.children.first().expect("child");
         assert_eq!(child.styles.color, ComputedStyle::default().color);
         assert_ne!(child.styles.color, styled.styles.color);
+    }
+
+    #[test]
+    fn text_combine_upright_does_not_inherit() {
+        let mut parent = ComputedStyle::default();
+        parent.text_combine_upright = TextCombineUpright::Digits(3);
+        let mut child = ComputedStyle::default();
+        inherit_styles(&mut child, &parent);
+        assert_eq!(parent.text_combine_upright, TextCombineUpright::Digits(3));
+        assert_eq!(child.text_combine_upright, TextCombineUpright::None);
     }
 
     #[test]

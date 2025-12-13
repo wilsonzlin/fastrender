@@ -19,6 +19,7 @@
 - Parsing for `text-combine-upright: digits(n)` now follows the spec range (2–4) and rejects non-integer or out-of-range values; invalid declarations leave the previous value unchanged.
 - text-combine runs now force upright text-orientation so combined digits stay upright even when the default orientation would rotate them; added regression. `text-orientation: sideways-right` parses and computes to `sideways` per spec aliasing.
 - Digits eligible for `text-combine-upright` now follow the Unicode decimal digit definition (fullwidth digits included); regression ensures fullwidth digits combine into a 1em box.
+- text-combine-upright is treated as non-inherited in the cascade (per CSS Writing Modes), with a regression covering inheritance behavior.
 - list-style-type now accepts strings per CSS Lists: parsing stores `ListStyleType::String`, and marker generation renders the string marker (with trailing space) instead of counters. Added parsing and marker-generation tests.
 - text-align parsing now preserves `justify-all` as a distinct computed value and sets `text-align-last` to justify per CSS Text; `text-align-all` no longer resets `text-align-last`, keeping the longhand split faithful to the spec. Inline layout treats `justify-all` as justification on all lines. Added cascade coverage.
 - ::marker now follows the CSS Lists/Pseudo supported property set more closely: cursor is honored, while text-align/text-align-last/text-indent are reset to defaults even when inherited. Added cascade tests to lock cursor support and ignore alignment on markers.
