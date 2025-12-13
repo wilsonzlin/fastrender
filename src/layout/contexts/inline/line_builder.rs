@@ -3331,6 +3331,57 @@ mod tests {
         assert_eq!(visual, expected);
     }
 
+    #[test]
+    fn bidi_override_parent_preserves_isolate_contents() {
+        let mut builder = make_builder(200.0);
+
+        let mut inner = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            1,
+            Direction::Ltr,
+            UnicodeBidi::Isolate,
+        );
+        inner.add_child(InlineItem::Text(make_text_item("אב", 20.0)));
+
+        let mut outer = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            0,
+            Direction::Rtl,
+            UnicodeBidi::BidiOverride,
+        );
+        outer.add_child(InlineItem::Text(make_text_item("x", 10.0)));
+        outer.add_child(InlineItem::InlineBox(inner));
+        outer.add_child(InlineItem::Text(make_text_item("y", 10.0)));
+
+        builder.add_item(InlineItem::InlineBox(outer));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 1);
+        let mut visual = String::new();
+        for positioned in &lines[0].items {
+            collect_text(&positioned.item, &mut visual);
+        }
+
+        let logical = "\u{202E}x\u{2066}אב\u{2069}y\u{202C}";
+        let info = BidiInfo::new(logical, Some(Level::ltr()));
+        let para = &info.paragraphs[0];
+        let expected: String = info
+            .reorder_line(para, para.range.clone())
+            .chars()
+            .filter(|c| !is_bidi_control(*c))
+            .collect();
+
+        assert_eq!(visual, expected);
+    }
+
     fn nested_inline_box_with_depth(
         depth: usize,
         ub: UnicodeBidi,
