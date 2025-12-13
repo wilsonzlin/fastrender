@@ -16,6 +16,7 @@
 - `text-orientation: upright` now forces used `direction: ltr` in vertical text and treats all characters as strong LTR for bidi, preventing reordering; shaping tests cover the preserved order.
 - Inline layout also resolves base direction to LTR for vertical upright text so paragraph direction and bidi shaping stay aligned; added a layout-level regression.
 - `text-combine-upright` now only applies in vertical typographic modes (not sideways writing), preventing sideways flows from compressing digits; regression checks width stays unconstrained in sideways-rl.
+- Parsing for `text-combine-upright: digits(n)` now follows the spec range (2–4) and rejects non-integer or out-of-range values; invalid declarations leave the previous value unchanged.
 - list-style-type now accepts strings per CSS Lists: parsing stores `ListStyleType::String`, and marker generation renders the string marker (with trailing space) instead of counters. Added parsing and marker-generation tests.
 - text-align parsing now preserves `justify-all` as a distinct computed value and sets `text-align-last` to justify per CSS Text; `text-align-all` no longer resets `text-align-last`, keeping the longhand split faithful to the spec. Inline layout treats `justify-all` as justification on all lines. Added cascade coverage.
 - ::marker now follows the CSS Lists/Pseudo supported property set more closely: cursor is honored, while text-align/text-align-last/text-indent are reset to defaults even when inherited. Added cascade tests to lock cursor support and ignore alignment on markers.

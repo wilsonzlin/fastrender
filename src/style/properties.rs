@@ -7891,12 +7891,21 @@ fn parse_text_combine_upright(value: &PropertyValue) -> Option<TextCombineUprigh
             }
             if let PropertyValue::Keyword(first) = &values[0] {
                 if first == "digits" {
-                    let count = values.get(1).and_then(|v| match v {
-                        PropertyValue::Number(n) => Some(*n as i32),
-                        _ => None,
-                    });
-                    let clamped = count.unwrap_or(2).clamp(1, 4) as u8;
-                    return Some(TextCombineUpright::Digits(clamped));
+                    if values.len() == 1 {
+                        return Some(TextCombineUpright::Digits(2));
+                    }
+                    if values.len() == 2 {
+                        if let PropertyValue::Number(n) = values[1] {
+                            if n.fract() == 0.0 {
+                                let count = n as i32;
+                                if (2..=4).contains(&count) {
+                                    return Some(TextCombineUpright::Digits(count as u8));
+                                }
+                            }
+                        }
+                        return None;
+                    }
+                    return None;
                 }
             }
             if values.len() == 1 {
@@ -8818,6 +8827,75 @@ mod tests {
             16.0,
         );
         assert_eq!(styles.text_combine_upright, TextCombineUpright::All);
+    }
+
+    #[test]
+    fn rejects_out_of_range_text_combine_digits() {
+        let mut styles = ComputedStyle::default();
+        styles.text_combine_upright = TextCombineUpright::Digits(2);
+
+        apply_declaration(
+            &mut styles,
+            &Declaration {
+                property: "text-combine-upright".into(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("digits".into()),
+                    PropertyValue::Number(5.0),
+                ]),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(
+            styles.text_combine_upright,
+            TextCombineUpright::Digits(2),
+            "digits(5) should be invalid and leave the value unchanged"
+        );
+
+        apply_declaration(
+            &mut styles,
+            &Declaration {
+                property: "text-combine-upright".into(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("digits".into()),
+                    PropertyValue::Number(1.0),
+                ]),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(
+            styles.text_combine_upright,
+            TextCombineUpright::Digits(2),
+            "digits(1) should be invalid and leave the value unchanged"
+        );
+
+        apply_declaration(
+            &mut styles,
+            &Declaration {
+                property: "text-combine-upright".into(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("digits".into()),
+                    PropertyValue::Number(2.5),
+                ]),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(
+            styles.text_combine_upright,
+            TextCombineUpright::Digits(2),
+            "non-integer digits() should be invalid and leave the value unchanged"
+        );
     }
 
     #[test]
