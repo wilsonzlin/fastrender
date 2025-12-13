@@ -95,8 +95,8 @@ fn has_native_small_caps(style: &ComputedStyle, font_context: &FontContext) -> b
         },
         DbFontStretch::from_percentage(style.font_stretch.to_percentage()),
     ) {
-        let has_smcp = font_has_feature(&font, *b"smcp");
-        let has_c2sc = !needs_c2sc || font_has_feature(&font, *b"c2sc");
+        let has_smcp = font_context.supports_feature(&font, *b"smcp");
+        let has_c2sc = !needs_c2sc || font_context.supports_feature(&font, *b"c2sc");
         return has_smcp && has_c2sc;
     }
 
