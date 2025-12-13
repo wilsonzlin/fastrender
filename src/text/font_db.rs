@@ -526,6 +526,8 @@ pub struct FontDatabase {
     db: FontDbDatabase,
     /// Cached font data (font ID -> binary data)
     cache: RwLock<HashMap<ID, Arc<Vec<u8>>>>,
+    /// Cached list of math-capable fonts (IDs with a MATH table)
+    math_fonts: RwLock<Option<Vec<ID>>>,
 }
 
 impl FontDatabase {
@@ -548,6 +550,7 @@ impl FontDatabase {
         Self {
             db,
             cache: RwLock::new(HashMap::new()),
+            math_fonts: RwLock::new(None),
         }
     }
 
@@ -558,6 +561,7 @@ impl FontDatabase {
         Self {
             db: FontDbDatabase::new(),
             cache: RwLock::new(HashMap::new()),
+            math_fonts: RwLock::new(None),
         }
     }
 
@@ -566,6 +570,9 @@ impl FontDatabase {
     /// Recursively scans the directory for font files.
     pub fn load_fonts_dir<P: AsRef<Path>>(&mut self, path: P) {
         self.db.load_fonts_dir(path);
+        if let Ok(mut cached) = self.math_fonts.write() {
+            *cached = None;
+        }
     }
 
     /// Loads a font from binary data
@@ -582,6 +589,9 @@ impl FontDatabase {
         })?;
 
         self.db.load_font_data(data);
+        if let Ok(mut cached) = self.math_fonts.write() {
+            *cached = None;
+        }
         Ok(())
     }
 
@@ -778,6 +788,9 @@ impl FontDatabase {
         if let Ok(mut cache) = self.cache.write() {
             cache.clear();
         }
+        if let Ok(mut cached) = self.math_fonts.write() {
+            *cached = None;
+        }
     }
 
     /// Returns the number of cached fonts
@@ -907,6 +920,38 @@ impl FontDatabase {
         }
 
         emoji_fonts
+    }
+
+    /// Returns the IDs of fonts that advertise OpenType math support (MATH table present).
+    pub fn find_math_fonts(&self) -> Vec<ID> {
+        if let Ok(cache) = self.math_fonts.read() {
+            if let Some(list) = &*cache {
+                return list.clone();
+            }
+        }
+
+        let mut math_fonts = Vec::new();
+        for face in self.db.faces() {
+            let has_math = self
+                .db
+                .with_face_data(face.id, |data, face_index| {
+                    ttf_parser::Face::parse(data, face_index)
+                        .ok()
+                        .and_then(|f| f.tables().math)
+                        .is_some()
+                })
+                .unwrap_or(false);
+
+            if has_math {
+                math_fonts.push(face.id);
+            }
+        }
+
+        if let Ok(mut cache) = self.math_fonts.write() {
+            *cache = Some(math_fonts.clone());
+        }
+
+        math_fonts
     }
 }
 

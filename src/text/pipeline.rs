@@ -1654,7 +1654,51 @@ fn resolve_font_for_char(
     let weight_preferences = weight_preference_order(weight);
     let slope_preferences = slope_preference_order(style);
     let stretch_preferences = stretch_preference_order(stretch);
+    let math_families = || {
+        let mut seen = HashSet::new();
+        let mut families = Vec::new();
+        for id in db.find_math_fonts() {
+            if let Some(face) = db.inner().face(id) {
+                if let Some((name, _)) = face.families.first() {
+                    let folded = name.to_lowercase();
+                    if seen.insert(folded) {
+                        families.push(name.clone());
+                    }
+                }
+            }
+        }
+        families
+    };
     for entry in families {
+        if let FamilyEntry::Generic(crate::text::font_db::GenericFamily::Math) = entry {
+            let math_families = math_families();
+            for family in &math_families {
+                for stretch_choice in &stretch_preferences {
+                    for slope in slope_preferences {
+                        for weight_choice in &weight_preferences {
+                            let query = fontdb::Query {
+                                families: &[Family::Name(family.as_str())],
+                                weight: fontdb::Weight(*weight_choice),
+                                stretch: (*stretch_choice).into(),
+                                style: (*slope).into(),
+                            };
+                            if let Some(id) = db.inner().query(&query) {
+                                if let Some(font) = db.load_font(id) {
+                                    let is_emoji_font = font_is_emoji_font(&font);
+                                    let idx = picker.bump_order();
+                                    picker.record_any(&font, is_emoji_font, idx);
+                                    if db.has_glyph(id, ch) {
+                                        if let Some(font) = picker.consider(font, is_emoji_font, idx) {
+                                            return Some(font);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if let FamilyEntry::Named(name) = entry {
             if let Some(font) = font_context.match_web_font_for_char(name, weight, style, stretch, oblique_angle, ch) {
                 return Some(font);
@@ -2460,6 +2504,27 @@ mod tests {
         (ctx, family)
     }
 
+    fn load_font_fixture(path: &Path) -> (Vec<u8>, String) {
+        let data = fs::read(path).expect("read font fixture");
+        let face = ttf_parser::Face::parse(&data, 0).expect("parse font fixture");
+        let family = face
+            .names()
+            .into_iter()
+            .find_map(|name| {
+                if name.name_id == name_id::FAMILY {
+                    name.to_string()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| {
+                path.file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "Unknown".to_string())
+            });
+        (data, family)
+    }
+
     #[test]
     fn test_direction_from_level() {
         assert!(Direction::from_level(Level::ltr()).is_ltr());
@@ -3070,6 +3135,50 @@ mod tests {
         assert!(runs
             .iter()
             .all(|r| r.language.as_ref().map(|l| l.as_str()) == Some("srb")));
+    }
+
+    #[test]
+    fn math_generic_prefers_math_fonts() {
+        let font_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fonts/STIXTwoMath-Regular.otf");
+        let (math_data, math_family) = load_font_fixture(&font_path);
+
+        let mut db = FontDatabase::empty();
+        db.load_font_data(math_data).expect("load math font");
+        let ctx = FontContext::with_database(Arc::new(db));
+
+        let mut style = ComputedStyle::default();
+        style.font_family = vec!["math".to_string()];
+        style.font_size = 18.0;
+
+        let runs = ShapingPipeline::new()
+            .shape("x", &style, &ctx)
+            .expect("shape with math generic");
+        if runs.is_empty() {
+            return;
+        }
+        assert_eq!(runs[0].font.family, math_family);
+    }
+
+    #[test]
+    fn math_generic_falls_back_without_math_fonts() {
+        let roboto_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/fonts/Roboto-Regular.ttf");
+        let (roboto_data, roboto_family) = load_font_fixture(&roboto_path);
+
+        let mut db = FontDatabase::empty();
+        db.load_font_data(roboto_data).expect("load fallback font");
+        let ctx = FontContext::with_database(Arc::new(db));
+
+        let mut style = ComputedStyle::default();
+        style.font_family = vec!["math".to_string(), roboto_family.clone()];
+        style.font_size = 16.0;
+
+        let runs = ShapingPipeline::new()
+            .shape("x", &style, &ctx)
+            .expect("shape without math font");
+        if runs.is_empty() {
+            return;
+        }
+        assert_eq!(runs[0].font.family, roboto_family);
     }
 
     #[test]

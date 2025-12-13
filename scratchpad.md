@@ -6,6 +6,7 @@
 - Goal: make the renderer spec-faithful (tables, text shaping, painting) and remove site-specific hacks.
 
 ## Recent changes (this branch)
+- Math generic fonts now prefer real OpenType math faces: FontDatabase caches MATH-table faces, the math generic walks those families before falling back to generic sans, and regression tests cover selecting STIXTwoMath and falling back when no math font is available (new fixture `tests/fixtures/fonts/STIXTwoMath-Regular.otf`).
 - @font-face `unicode-range` is parsed and stored; web fonts register their authored ranges (defaulting to the full plane). Font selection now prefers web faces per family before system fonts and filters them by unicode-range plus glyph coverage; fixed the style/stretch mapping in the picker and added a regression where a range-limited face is used for uppercase but falls back for lowercase.
 - Font matching now follows CSS Fonts selection order (stretch → style → weight) and treats @font-face families as authoritative: declared web families never fall back to platform fonts when no faces load, and resolution iterates families sequentially; added regression that a broken @font-face blocks platform fallback for that family.
 - Font family matching is Unicode-caseless: names fold via a lightweight casefold (covers ß/ẞ→ss, sigma, Kelvin/Å signs) so families match regardless of case or German sharp-s usage; regression STRASSE vs Straße now passes.
