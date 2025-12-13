@@ -639,7 +639,7 @@ impl Default for ComputedStyle {
             box_shadow: Vec::new(),
             text_shadow: Vec::new(),
             transform: Vec::new(),
-            transform_box: TransformBox::ViewBox,
+            transform_box: TransformBox::BorderBox,
             transform_origin: TransformOrigin {
                 x: Length::percent(50.0),
                 y: Length::percent(50.0),
