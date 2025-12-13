@@ -1080,13 +1080,17 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
     Ok(font_runs)
 }
 
-fn is_vertical_writing_mode(mode: crate::style::types::WritingMode) -> bool {
+fn is_vertical_typographic_mode(mode: crate::style::types::WritingMode) -> bool {
     matches!(
         mode,
-        crate::style::types::WritingMode::VerticalRl
-            | crate::style::types::WritingMode::VerticalLr
-            | crate::style::types::WritingMode::SidewaysRl
-            | crate::style::types::WritingMode::SidewaysLr
+        crate::style::types::WritingMode::VerticalRl | crate::style::types::WritingMode::VerticalLr
+    )
+}
+
+fn is_sideways_writing_mode(mode: crate::style::types::WritingMode) -> bool {
+    matches!(
+        mode,
+        crate::style::types::WritingMode::SidewaysRl | crate::style::types::WritingMode::SidewaysLr
     )
 }
 
@@ -1114,6 +1118,15 @@ fn apply_vertical_text_orientation(
             .collect(),
         TextOrientation::Mixed => runs.into_iter().flat_map(split_run_by_vertical_orientation).collect(),
     }
+}
+
+fn apply_sideways_text_orientation(runs: Vec<FontRun>) -> Vec<FontRun> {
+    runs.into_iter()
+        .map(|mut run| {
+            run.rotation = RunRotation::Cw90;
+            run
+        })
+        .collect()
 }
 
 fn split_run_by_vertical_orientation(run: FontRun) -> Vec<FontRun> {
@@ -1952,8 +1965,10 @@ impl ShapingPipeline {
 
         // Step 4: Shape each run, applying vertical text-orientation when needed.
         let mut font_runs = font_runs;
-        if is_vertical_writing_mode(style.writing_mode) {
+        if is_vertical_typographic_mode(style.writing_mode) {
             font_runs = apply_vertical_text_orientation(font_runs, style.text_orientation);
+        } else if is_sideways_writing_mode(style.writing_mode) {
+            font_runs = apply_sideways_text_orientation(font_runs);
         }
 
         let mut shaped_runs = Vec::with_capacity(font_runs.len());
@@ -3073,6 +3088,32 @@ mod tests {
         let ctx = FontContext::new();
         let shaped = ShapingPipeline::new().shape("Abc", &style, &ctx).unwrap();
         assert!(shaped.iter().all(|r| r.rotation == RunRotation::Cw90));
+    }
+
+    #[test]
+    fn sideways_writing_rotates_all_runs_regardless_of_text_orientation() {
+        let mut style = ComputedStyle::default();
+        style.writing_mode = crate::style::types::WritingMode::SidewaysRl;
+        style.text_orientation = crate::style::types::TextOrientation::Upright;
+        let ctx = FontContext::new();
+        let shaped = ShapingPipeline::new().shape("Abc本", &style, &ctx).unwrap();
+        assert!(
+            shaped.iter().all(|r| r.rotation == RunRotation::Cw90),
+            "sideways writing should set horizontal typographic mode and rotate text regardless of text-orientation"
+        );
+    }
+
+    #[test]
+    fn sideways_writing_uses_horizontal_metrics() {
+        let mut style = ComputedStyle::default();
+        style.writing_mode = crate::style::types::WritingMode::SidewaysLr;
+        style.text_orientation = crate::style::types::TextOrientation::Mixed;
+        let ctx = FontContext::new();
+        let shaped = ShapingPipeline::new().shape("Abc", &style, &ctx).unwrap();
+        assert!(
+            shaped.iter().all(|r| r.rotation == RunRotation::Cw90),
+            "sideways writing should rotate text using horizontal metrics regardless of text-orientation"
+        );
     }
 
     #[test]
