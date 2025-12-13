@@ -4112,21 +4112,85 @@ pub fn apply_declaration_with_base(
                     styles.font_variant_east_asian = FontVariantEastAsian::default();
                 } else if !tokens.is_empty() {
                     let mut east = FontVariantEastAsian::default();
+                    let mut seen_variant = false;
+                    let mut seen_width = false;
+                    let mut invalid = false;
                     for tok in tokens {
                         match tok {
-                            "jis78" => east.variant = Some(EastAsianVariant::Jis78),
-                            "jis83" => east.variant = Some(EastAsianVariant::Jis83),
-                            "jis90" => east.variant = Some(EastAsianVariant::Jis90),
-                            "jis04" => east.variant = Some(EastAsianVariant::Jis04),
-                            "simplified" => east.variant = Some(EastAsianVariant::Simplified),
-                            "traditional" => east.variant = Some(EastAsianVariant::Traditional),
-                            "full-width" => east.width = Some(EastAsianWidth::FullWidth),
-                            "proportional-width" => east.width = Some(EastAsianWidth::ProportionalWidth),
+                            "jis78" => {
+                                if seen_variant {
+                                    invalid = true;
+                                    break;
+                                }
+                                east.variant = Some(EastAsianVariant::Jis78);
+                                seen_variant = true;
+                            }
+                            "jis83" => {
+                                if seen_variant {
+                                    invalid = true;
+                                    break;
+                                }
+                                east.variant = Some(EastAsianVariant::Jis83);
+                                seen_variant = true;
+                            }
+                            "jis90" => {
+                                if seen_variant {
+                                    invalid = true;
+                                    break;
+                                }
+                                east.variant = Some(EastAsianVariant::Jis90);
+                                seen_variant = true;
+                            }
+                            "jis04" => {
+                                if seen_variant {
+                                    invalid = true;
+                                    break;
+                                }
+                                east.variant = Some(EastAsianVariant::Jis04);
+                                seen_variant = true;
+                            }
+                            "simplified" => {
+                                if seen_variant {
+                                    invalid = true;
+                                    break;
+                                }
+                                east.variant = Some(EastAsianVariant::Simplified);
+                                seen_variant = true;
+                            }
+                            "traditional" => {
+                                if seen_variant {
+                                    invalid = true;
+                                    break;
+                                }
+                                east.variant = Some(EastAsianVariant::Traditional);
+                                seen_variant = true;
+                            }
+                            "full-width" => {
+                                if seen_width {
+                                    invalid = true;
+                                    break;
+                                }
+                                east.width = Some(EastAsianWidth::FullWidth);
+                                seen_width = true;
+                            }
+                            "proportional-width" => {
+                                if seen_width {
+                                    invalid = true;
+                                    break;
+                                }
+                                east.width = Some(EastAsianWidth::ProportionalWidth);
+                                seen_width = true;
+                            }
                             "ruby" => east.ruby = true,
-                            _ => {}
+                            _ => {
+                                invalid = true;
+                                break;
+                            }
                         }
                     }
-                    styles.font_variant_east_asian = east;
+                    if !invalid {
+                        styles.font_variant_east_asian = east;
+                    }
                 }
             }
         }
@@ -12585,6 +12649,40 @@ mod tests {
         assert!(style.font_variant_east_asian.variant.is_none());
         assert!(style.font_variant_east_asian.width.is_none());
         assert!(!style.font_variant_east_asian.ruby);
+    }
+
+    #[test]
+    fn font_variant_east_asian_invalid_token_is_ignored() {
+        let mut style = ComputedStyle::default();
+        style.font_variant_east_asian.variant = Some(EastAsianVariant::Jis78);
+        let decl = Declaration {
+            property: "font-variant-east-asian".to_string(),
+            value: PropertyValue::Keyword("bogus".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert!(matches!(
+            style.font_variant_east_asian.variant,
+            Some(EastAsianVariant::Jis78)
+        ));
+    }
+
+    #[test]
+    fn font_variant_east_asian_conflict_invalidates_declaration() {
+        let mut style = ComputedStyle::default();
+        style.font_variant_east_asian.width = Some(EastAsianWidth::FullWidth);
+        let decl = Declaration {
+            property: "font-variant-east-asian".to_string(),
+            value: PropertyValue::Keyword("full-width proportional-width".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert!(matches!(
+            style.font_variant_east_asian.width,
+            Some(EastAsianWidth::FullWidth)
+        ));
     }
 
     #[test]
