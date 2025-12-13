@@ -503,7 +503,8 @@ impl FontContext {
         let desired_stretch = stretch.to_percentage();
         let mut best: Option<((u8, f32, u8, f32, (u8, f32), usize), LoadedFont)> = None;
 
-        for face in guard.iter().filter(|f| f.family.eq_ignore_ascii_case(family)) {
+        let family_folded = case_fold(family);
+        for face in guard.iter().filter(|f| case_fold(&f.family) == family_folded) {
             if let Some(ch) = ch {
                 if !face.supports_char(ch) {
                     continue;
@@ -549,22 +550,24 @@ impl FontContext {
     }
 
     pub(crate) fn is_web_family_declared(&self, family: &str) -> bool {
+        let folded = case_fold(family);
         self.web_families
             .read()
-            .map(|set| set.iter().any(|f| f.eq_ignore_ascii_case(family)))
+            .map(|set| set.contains(&folded))
             .unwrap_or(false)
     }
 
     pub(crate) fn has_web_faces(&self, family: &str) -> bool {
+        let folded = case_fold(family);
         self.web_fonts
             .read()
-            .map(|faces| faces.iter().any(|f| f.family.eq_ignore_ascii_case(family)))
+            .map(|faces| faces.iter().any(|f| case_fold(&f.family) == folded))
             .unwrap_or(false)
     }
 
     fn declare_web_family(&self, family: &str) {
         if let Ok(mut families) = self.web_families.write() {
-            families.insert(family.to_ascii_lowercase());
+            families.insert(case_fold(family));
         }
     }
 
@@ -909,6 +912,25 @@ fn oblique_distance(range: &Option<(f32, f32)>, desired: f32) -> f32 {
     }
 }
 
+fn case_fold(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.chars() {
+        match ch {
+            // Unicode case folding special-cases
+            '\u{00DF}' | '\u{1E9E}' => out.push_str("ss"), // ß/ẞ
+            '\u{03C2}' => out.push('\u{03C3}'),            // final sigma -> sigma
+            '\u{212A}' => out.push('k'),                   // Kelvin sign
+            '\u{212B}' => out.push('\u{00E5}'),            // Angstrom sign -> å
+            _ => {
+                for lower in ch.to_lowercase() {
+                    out.push(lower);
+                }
+            }
+        }
+    }
+    out
+}
+
 fn resolve_font_url(url: &str, base_url: Option<&str>) -> String {
     if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("data:") || url.starts_with("file:")
     {
@@ -1133,6 +1155,33 @@ mod tests {
             resolved.is_none(),
             "platform fonts must not satisfy a family declared via @font-face when no faces load"
         );
+    }
+
+    #[test]
+    fn caseless_family_matching_handles_unicode() {
+        let font_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/fonts/Roboto-Regular.ttf");
+        let font_url = url::Url::from_file_path(&font_path).expect("file url");
+        let face = FontFaceRule {
+            family: Some("Straße".to_string()),
+            sources: vec![FontFaceSource::Url(font_url.to_string())],
+            ..Default::default()
+        };
+
+        let ctx = FontContext::empty();
+        ctx.load_web_fonts(&[face], None).expect("load face");
+
+        let families = vec!["STRASSE".to_string()];
+        let font = ctx
+            .match_web_font_for_char(
+                families[0].as_str(),
+                400,
+                FontStyle::Normal,
+                FontStretch::Normal,
+                None,
+                'A',
+            )
+            .expect("find caseless match");
+        assert_eq!(case_fold(&font.family), case_fold("Straße"));
     }
 
     #[test]
