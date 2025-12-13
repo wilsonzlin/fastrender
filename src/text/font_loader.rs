@@ -30,6 +30,7 @@ use crate::text::font_db::{FontDatabase, FontStretch, FontStyle, FontWeight, Loa
 use crate::text::pipeline::DEFAULT_OBLIQUE_ANGLE_DEG;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use std::collections::HashSet;
 use percent_encoding::percent_decode_str;
 use rustybuzz::ttf_parser::Tag;
 use rustybuzz::{Direction, Face, Feature, UnicodeBuffer};
@@ -466,6 +467,10 @@ impl FontContext {
 
     fn register_web_font(&self, family: String, data: Arc<Vec<u8>>, index: u32, face: &FontFaceRule, order: usize) {
         self.declare_web_family(&family);
+        let has_math = ttf_parser::Face::parse(&data, index)
+            .ok()
+            .and_then(|f| f.tables().math)
+            .is_some();
         let mut guard = match self.web_fonts.write() {
             Ok(g) => g,
             Err(_) => return,
@@ -483,6 +488,7 @@ impl FontContext {
             } else {
                 face.unicode_ranges.clone()
             },
+            has_math,
         });
     }
 
@@ -586,6 +592,37 @@ impl FontContext {
             cache.insert(key, supported);
         }
         supported
+    }
+
+    /// Returns font family names that advertise OpenType math support (MATH table).
+    ///
+    /// The list is ordered by web font declaration order first, then system fonts.
+    /// Duplicates (case-insensitive) are removed.
+    pub(crate) fn math_family_names(&self) -> Vec<String> {
+        let mut seen = HashSet::new();
+        let mut names = Vec::new();
+
+        if let Ok(guard) = self.web_fonts.read() {
+            for face in guard.iter().filter(|f| f.has_math) {
+                let folded = case_fold(&face.family);
+                if seen.insert(folded) {
+                    names.push(face.family.clone());
+                }
+            }
+        }
+
+        for id in self.db.find_math_fonts() {
+            if let Some(info) = self.db.inner().face(id) {
+                if let Some((name, _)) = info.families.first() {
+                    let folded = case_fold(name);
+                    if seen.insert(folded) {
+                        names.push(name.clone());
+                    }
+                }
+            }
+        }
+
+        names
     }
 
     fn declare_web_family(&self, family: &str) {
@@ -758,6 +795,7 @@ pub(crate) struct WebFontFace {
     stretch: (f32, f32),
     order: usize,
     ranges: Vec<(u32, u32)>,
+    has_math: bool,
 }
 
 impl WebFontFace {

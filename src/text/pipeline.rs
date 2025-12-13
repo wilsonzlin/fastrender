@@ -1654,25 +1654,20 @@ fn resolve_font_for_char(
     let weight_preferences = weight_preference_order(weight);
     let slope_preferences = slope_preference_order(style);
     let stretch_preferences = stretch_preference_order(stretch);
-    let math_families = || {
-        let mut seen = HashSet::new();
-        let mut families = Vec::new();
-        for id in db.find_math_fonts() {
-            if let Some(face) = db.inner().face(id) {
-                if let Some((name, _)) = face.families.first() {
-                    let folded = name.to_lowercase();
-                    if seen.insert(folded) {
-                        families.push(name.clone());
-                    }
-                }
-            }
-        }
-        families
-    };
+    let math_families = font_context.math_family_names();
     for entry in families {
         if let FamilyEntry::Generic(crate::text::font_db::GenericFamily::Math) = entry {
-            let math_families = math_families();
             for family in &math_families {
+                if let Some(font) = font_context.match_web_font_for_char(
+                    family,
+                    weight,
+                    style,
+                    stretch,
+                    oblique_angle,
+                    ch,
+                ) {
+                    return Some(font);
+                }
                 for stretch_choice in &stretch_preferences {
                     for slope in slope_preferences {
                         for weight_choice in &weight_preferences {
@@ -3151,12 +3146,39 @@ mod tests {
         style.font_size = 18.0;
 
         let runs = ShapingPipeline::new()
-            .shape("x", &style, &ctx)
+            .shape("∑", &style, &ctx)
             .expect("shape with math generic");
         if runs.is_empty() {
             return;
         }
         assert_eq!(runs[0].font.family, math_family);
+    }
+
+    #[test]
+    fn math_generic_prefers_web_math_fonts() {
+        let font_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fonts/STIXTwoMath-Regular.otf");
+        let font_url = Url::from_file_path(&font_path).expect("file url");
+        let face = FontFaceRule {
+            family: Some("WebMath".to_string()),
+            sources: vec![FontFaceSource::Url(font_url.to_string())],
+            ..Default::default()
+        };
+
+        let db = FontDatabase::empty();
+        let ctx = FontContext::with_database(Arc::new(db));
+        ctx.load_web_fonts(&[face], None).expect("load web math");
+
+        let mut style = ComputedStyle::default();
+        style.font_family = vec!["math".to_string()];
+        style.font_size = 16.0;
+
+        let runs = ShapingPipeline::new()
+            .shape("∑", &style, &ctx)
+            .expect("shape with math generic");
+        if runs.is_empty() {
+            return;
+        }
+        assert_eq!(runs[0].font.family, "WebMath");
     }
 
     #[test]
@@ -3173,7 +3195,7 @@ mod tests {
         style.font_size = 16.0;
 
         let runs = ShapingPipeline::new()
-            .shape("x", &style, &ctx)
+            .shape("∑", &style, &ctx)
             .expect("shape without math font");
         if runs.is_empty() {
             return;
