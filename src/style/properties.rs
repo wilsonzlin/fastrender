@@ -8859,6 +8859,30 @@ mod tests {
     }
 
     #[test]
+    fn transform_box_defaults_to_border_box_and_ignores_invalid() {
+        let mut style = ComputedStyle::default();
+        assert_eq!(style.transform_box, TransformBox::BorderBox);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "transform-box".to_string(),
+                value: PropertyValue::Keyword("invalid-value".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(
+            style.transform_box,
+            TransformBox::BorderBox,
+            "invalid keywords should be ignored"
+        );
+    }
+
+    #[test]
     fn parses_image_resolution_values() {
         let mut style = ComputedStyle::default();
         apply_declaration(
