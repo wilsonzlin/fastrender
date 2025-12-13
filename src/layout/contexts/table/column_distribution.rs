@@ -1607,6 +1607,25 @@ mod tests {
     }
 
     #[test]
+    fn distribute_spanning_percentage_skips_fixed_columns() {
+        let mut columns = vec![
+            ColumnConstraints::fixed(100.0),
+            ColumnConstraints::percentage(30.0, 10.0, 200.0),
+            ColumnConstraints::new(10.0, 200.0),
+        ];
+        distribute_spanning_percentage(&mut columns, 0, 3, 90.0);
+
+        let pct0 = columns[0].percentage;
+        let pct1 = columns[1].percentage.unwrap();
+        let pct2 = columns[2].percentage.unwrap();
+        // Fixed column should remain without percentage; remaining share goes to other columns.
+        assert!(pct0.is_none());
+        assert!(pct1 > 30.0);
+        assert!(pct2 > 0.0);
+        assert!((pct1 + pct2 - 90.0).abs() < 0.5);
+    }
+
+    #[test]
     fn distribute_spanning_max_prefers_headroom_then_even() {
         let mut columns = vec![ColumnConstraints::new(50.0, 70.0), ColumnConstraints::new(50.0, 120.0)];
 
