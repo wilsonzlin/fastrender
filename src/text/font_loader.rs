@@ -211,13 +211,20 @@ impl FontContext {
             return Some(font);
         }
 
+        let stretches = crate::text::pipeline::stretch_preference_order(FontStretch::Normal);
+        let slopes = crate::text::pipeline::slope_preference_order(requested_style);
         let weights = crate::text::pipeline::weight_preference_order(weight);
-        for weight_choice in &weights {
-            let font_weight = FontWeight::new(*weight_choice);
-            for slope in crate::text::pipeline::slope_preference_order(requested_style) {
-                if let Some(id) = self.db.resolve_family_list(families, font_weight, *slope) {
-                    if let Some(font) = self.db.load_font(id) {
-                        return Some(font);
+        for stretch_choice in &stretches {
+            for slope in slopes {
+                for weight_choice in &weights {
+                    let font_weight = FontWeight::new(*weight_choice);
+                    if let Some(id) =
+                        self.db
+                            .resolve_family_list_full(families, font_weight, *slope, (*stretch_choice).into())
+                    {
+                        if let Some(font) = self.db.load_font(id) {
+                            return Some(font);
+                        }
                     }
                 }
             }
@@ -259,16 +266,17 @@ impl FontContext {
             return Some(font);
         }
 
-        let stretches = crate::text::pipeline::stretch_preference_order(stretch.into());
+        let stretches = crate::text::pipeline::stretch_preference_order(stretch);
         let weights = crate::text::pipeline::weight_preference_order(weight);
-        for weight_choice in &weights {
-            let font_weight = FontWeight::new(*weight_choice);
+        for stretch_choice in &stretches {
             for slope in crate::text::pipeline::slope_preference_order(style) {
-                for stretch_choice in &stretches {
-                    if let Some(id) = self
-                        .db
-                        .resolve_family_list_full(families, font_weight, *slope, *stretch_choice)
-                    {
+                for weight_choice in &weights {
+                    if let Some(id) = self.db.resolve_family_list_full(
+                        families,
+                        FontWeight::new(*weight_choice),
+                        *slope,
+                        *stretch_choice,
+                    ) {
                         if let Some(font) = self.db.load_font(id) {
                             return Some(font);
                         }
@@ -426,6 +434,17 @@ impl FontContext {
         });
     }
 
+    pub(crate) fn match_web_font_for_char(
+        &self,
+        family: &str,
+        weight: u16,
+        style: FontStyle,
+        stretch: FontStretch,
+        ch: char,
+    ) -> Option<LoadedFont> {
+        self.select_web_font(family, weight, style, stretch, Some(ch))
+    }
+
     fn match_web_font(
         &self,
         families: &[String],
@@ -433,33 +452,58 @@ impl FontContext {
         style: FontStyle,
         stretch: FontStretch,
     ) -> Option<LoadedFont> {
-        let guard = self.web_fonts.read().ok()?;
-        let requested_stretch = stretch.to_percentage();
-
-        let mut best: Option<(WebFontScore, LoadedFont)> = None;
-
         for family in families {
-            for face in guard.iter().filter(|f| f.family.eq_ignore_ascii_case(family)) {
-                let score = face.score(weight, style, requested_stretch)?;
-                let chosen_weight = face.clamp_weight(weight);
-                let chosen_stretch = face.nearest_stretch(requested_stretch);
+            if let Some(font) = self.select_web_font(family, weight, style, stretch, None) {
+                return Some(font);
+            }
+        }
+        None
+    }
 
-                let candidate = LoadedFont {
-                    data: Arc::clone(&face.data),
-                    index: face.index,
-                    family: family.clone(),
-                    weight: FontWeight::new(chosen_weight),
-                    style: face.effective_style(style),
-                    stretch: chosen_stretch,
-                };
+    fn select_web_font(
+        &self,
+        family: &str,
+        weight: u16,
+        style: FontStyle,
+        stretch: FontStretch,
+        ch: Option<char>,
+    ) -> Option<LoadedFont> {
+        let guard = self.web_fonts.read().ok()?;
+        let desired_stretch = stretch.to_percentage();
+        let mut best: Option<((u8, f32, u8, (u8, f32), usize), LoadedFont)> = None;
 
-                if let Some((best_score, _)) = &best {
-                    if score < *best_score {
-                        best = Some((score, candidate));
-                    }
-                } else {
-                    best = Some((score, candidate));
+        for face in guard.iter().filter(|f| f.family.eq_ignore_ascii_case(family)) {
+            if let Some(ch) = ch {
+                if !face.supports_char(ch) {
+                    continue;
                 }
+            }
+
+            let (stretch_rank, matched_stretch) = match stretch_match(face, desired_stretch) {
+                Some(r) => r,
+                None => continue,
+            };
+            let style_rank = style_rank(face, style);
+            let (weight_rank, matched_weight) = match weight_match(face, weight) {
+                Some(r) => r,
+                None => continue,
+            };
+
+            let key = (stretch_rank.0, stretch_rank.1, style_rank.0, weight_rank, face.order);
+            let chosen_stretch = percent_to_stretch_variant(matched_stretch);
+            let candidate = face.to_loaded_font(
+                &face.family,
+                matched_weight,
+                face.effective_style(style),
+                chosen_stretch,
+            );
+
+            if let Some((best_key, _)) = &best {
+                if key < *best_key {
+                    best = Some((key, candidate));
+                }
+            } else {
+                best = Some((key, candidate));
             }
         }
 
@@ -744,6 +788,103 @@ fn percent_to_stretch_variant(percent: f32) -> FontStretch {
         FontStretch::ExtraExpanded
     } else {
         FontStretch::UltraExpanded
+    }
+}
+
+fn stretch_match(face: &WebFontFace, desired: f32) -> Option<((u8, f32), f32)> {
+    let (min, max) = face.stretch;
+    if min <= desired && desired <= max {
+        return Some(((0, 0.0), desired));
+    }
+
+    if desired <= 100.0 {
+        if max <= desired {
+            return Some(((1, desired - max), max));
+        }
+        if min >= desired {
+            return Some(((2, min - desired), min));
+        }
+    } else {
+        if min >= desired {
+            return Some(((1, min - desired), min));
+        }
+        if max <= desired {
+            return Some(((2, desired - max), max));
+        }
+    }
+
+    None
+}
+
+fn weight_match(face: &WebFontFace, desired: u16) -> Option<((u8, f32), u16)> {
+    let (min, max) = face.weight;
+    let desired = desired.clamp(1, 1000);
+
+    if min <= desired && desired <= max {
+        return Some(((0, 0.0), desired));
+    }
+
+    if (400..=500).contains(&desired) {
+        // Phase 1: weights >= desired and <= 500 (ascending)
+        if max >= desired && min <= 500 {
+            let candidate = desired.max(min).min(500);
+            return Some(((1, (candidate as f32 - desired as f32).abs()), candidate));
+        }
+        // Phase 2: weights below desired (descending)
+        if max < desired {
+            let candidate = max;
+            return Some(((2, (desired as f32 - candidate as f32).abs()), candidate));
+        }
+        // Phase 3: weights above 500 (ascending)
+        if min > 500 {
+            let candidate = min;
+            return Some(((3, (candidate as f32 - desired as f32).abs()), candidate));
+        }
+    } else if desired < 400 {
+        // Phase 1: weights <= desired (descending)
+        if max <= desired {
+            let candidate = max;
+            return Some(((1, (desired as f32 - candidate as f32).abs()), candidate));
+        }
+        // Phase 2: weights above desired (ascending)
+        if min > desired {
+            let candidate = min;
+            return Some(((2, (candidate as f32 - desired as f32).abs()), candidate));
+        }
+    } else {
+        // desired > 500
+        // Phase 1: weights >= desired (ascending)
+        if min >= desired {
+            let candidate = min;
+            return Some(((1, (candidate as f32 - desired as f32).abs()), candidate));
+        }
+        // Phase 2: weights below desired (descending)
+        if max < desired {
+            let candidate = max;
+            return Some(((2, (desired as f32 - candidate as f32).abs()), candidate));
+        }
+    }
+
+    None
+}
+
+fn style_rank(face: &WebFontFace, desired: FontStyle) -> (u8, f32) {
+    match desired {
+        FontStyle::Normal => match face.style {
+            FontFaceStyle::Normal => (0, 0.0),
+            FontFaceStyle::Oblique { .. } => (1, 0.0),
+            FontFaceStyle::Italic => (2, 0.0),
+        },
+        FontStyle::Italic => match face.style {
+            FontFaceStyle::Italic => (0, 0.0),
+            FontFaceStyle::Oblique { .. } => (1, 0.0),
+            FontFaceStyle::Normal => (2, 0.0),
+        },
+        FontStyle::Oblique => match face.style {
+            FontFaceStyle::Oblique { .. } => (0, 0.0),
+            FontFaceStyle::Italic => (1, 0.0),
+            FontFaceStyle::Normal => (2, 0.0),
+        },
     }
 }
 

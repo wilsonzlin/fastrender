@@ -1236,15 +1236,17 @@ pub(crate) fn slope_preference_order(style: FontStyle) -> &'static [FontStyle] {
 }
 
 pub(crate) fn weight_preference_order(weight: u16) -> Vec<u16> {
-    let desired = weight.clamp(100, 900);
+    let desired = weight.clamp(1, 1000);
     let mut candidates: Vec<u16> = (1..=9).map(|i| i * 100).collect();
+    if !candidates.contains(&desired) {
+        candidates.push(desired);
+    }
     candidates.sort_by(|a, b| {
-        let da = (*a as i32 - desired as i32).abs();
-        let db = (*b as i32 - desired as i32).abs();
-        da.cmp(&db)
-            .then_with(|| if desired >= 400 { b.cmp(a) } else { a.cmp(b) })
+        weight_order_key(*a, desired)
+            .cmp(&weight_order_key(*b, desired))
             .then_with(|| a.cmp(b))
     });
+    candidates.dedup();
     candidates
 }
 
@@ -1262,15 +1264,63 @@ pub(crate) fn stretch_preference_order(stretch: DbFontStretch) -> Vec<DbFontStre
         DbFontStretch::UltraExpanded,
     ];
     variants.sort_by(|a, b| {
-        let da = (a.to_percentage() - target).abs();
-        let db = (b.to_percentage() - target).abs();
-        da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal).then_with(|| {
-            a.to_percentage()
-                .partial_cmp(&b.to_percentage())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        let ka = stretch_order_key(a.to_percentage(), target);
+        let kb = stretch_order_key(b.to_percentage(), target);
+        match ka.0.cmp(&kb.0) {
+            std::cmp::Ordering::Equal => ka.1.partial_cmp(&kb.1).unwrap_or(std::cmp::Ordering::Equal),
+            other => other,
+        }
     });
     variants.to_vec()
+}
+
+fn weight_order_key(candidate: u16, desired: u16) -> (u8, i32) {
+    let desired = desired.clamp(1, 1000) as i32;
+    let candidate = candidate as i32;
+
+    if (400..=500).contains(&desired) {
+        if candidate >= desired && candidate <= 500 {
+            return (0, (candidate - desired).abs());
+        }
+        if candidate < desired {
+            return (1, (desired - candidate).abs());
+        }
+        return (2, (candidate - desired).abs());
+    }
+
+    if desired < 400 {
+        if candidate <= desired {
+            return (0, (desired - candidate).abs());
+        }
+        return (1, (candidate - desired).abs());
+    }
+
+    // desired > 500
+    if candidate >= desired {
+        (0, (candidate - desired).abs())
+    } else {
+        (1, (desired - candidate).abs())
+    }
+}
+
+fn stretch_order_key(candidate: f32, desired: f32) -> (u8, f32) {
+    if (candidate - desired).abs() < f32::EPSILON {
+        return (0, 0.0);
+    }
+
+    if desired <= 100.0 {
+        if candidate <= desired {
+            return (0, (desired - candidate).abs());
+        }
+        return (1, (candidate - desired).abs());
+    }
+
+    // desired > 100
+    if candidate >= desired {
+        (0, (candidate - desired).abs())
+    } else {
+        (1, (desired - candidate).abs())
+    }
 }
 
 fn is_bidi_control_char(ch: char) -> bool {
@@ -1504,46 +1554,14 @@ fn resolve_font_for_char(
     let stretch_preferences = stretch_preference_order(stretch);
     for entry in families {
         if let FamilyEntry::Named(name) = entry {
-            let candidates = font_context.web_fonts_for_family(name);
-            let mut best: Option<(crate::text::font_loader::WebFontScore, LoadedFont)> = None;
-            for weight_choice in &weight_preferences {
-                for slope in slope_preferences {
-                    for stretch_choice in &stretch_preferences {
-                        let stretch_percent = stretch_choice.to_percentage();
-                        for face in &candidates {
-                            if !face.supports_char(ch) {
-                                continue;
-                            }
-                            if let Some(score) = face.score(*weight_choice, *slope, stretch_percent) {
-                                let chosen_weight = face.clamp_weight(*weight_choice);
-                                let chosen_stretch = face.nearest_stretch(stretch_percent);
-                                let candidate = face.to_loaded_font(
-                                    name,
-                                    chosen_weight,
-                                    face.effective_style(*slope),
-                                    chosen_stretch,
-                                );
-
-                                if let Some((best_score, _)) = &best {
-                                    if score < *best_score {
-                                        best = Some((score, candidate));
-                                    }
-                                } else {
-                                    best = Some((score, candidate));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if let Some((_, font)) = best {
+            if let Some(font) = font_context.match_web_font_for_char(name, weight, style, stretch, ch) {
                 return Some(font);
             }
         }
 
-        for weight_choice in &weight_preferences {
+        for stretch_choice in &stretch_preferences {
             for slope in slope_preferences {
-                for stretch_choice in &stretch_preferences {
+                for weight_choice in &weight_preferences {
                     let query = match entry {
                         FamilyEntry::Named(name) => fontdb::Query {
                             families: &[Family::Name(name)],
@@ -3183,6 +3201,29 @@ mod tests {
         assert!(order_350.iter().position(|w| *w == 300) < order_350.iter().position(|w| *w == 400));
         let order_600 = weight_preference_order(600);
         assert!(order_600.iter().position(|w| *w == 700) < order_600.iter().position(|w| *w == 500));
+        let order_450 = weight_preference_order(450);
+        assert!(
+            order_450.iter().position(|w| *w == 500) < order_450.iter().position(|w| *w == 400),
+            "for weights between 400-500, heavier weights up to 500 should be preferred first"
+        );
+    }
+
+    #[test]
+    fn stretch_preferences_follow_css_ordering() {
+        use crate::text::font_db::FontStretch as DbStretch;
+        let order_narrow = stretch_preference_order(DbStretch::SemiCondensed);
+        assert!(
+            order_narrow.iter().position(|s| *s == DbStretch::Condensed)
+                < order_narrow.iter().position(|s| *s == DbStretch::Normal),
+            "when desired stretch is below 100%, narrower widths are tried before wider ones"
+        );
+
+        let order_wide = stretch_preference_order(DbStretch::Expanded);
+        assert!(
+            order_wide.iter().position(|s| *s == DbStretch::ExtraExpanded)
+                < order_wide.iter().position(|s| *s == DbStretch::Normal),
+            "when desired stretch is above 100%, wider widths are tried before narrower ones"
+        );
     }
 
     #[test]
