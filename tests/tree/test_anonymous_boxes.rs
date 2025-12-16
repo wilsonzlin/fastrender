@@ -24,6 +24,15 @@ fn style_with_display(display: Display) -> Arc<ComputedStyle> {
     Arc::new(style)
 }
 
+fn subtree_contains_text(node: &BoxNode, needle: &str) -> bool {
+    if let Some(text) = node.text() {
+        if text == needle {
+            return true;
+        }
+    }
+    node.children.iter().any(|child| subtree_contains_text(child, needle))
+}
+
 // =============================================================================
 // Basic Fixup Tests
 // =============================================================================
@@ -398,6 +407,71 @@ fn test_nested_inline_in_block() {
     let inline_fixed = &fixed.children[0];
     assert_eq!(inline_fixed.children.len(), 1);
     assert!(inline_fixed.children[0].is_anonymous());
+}
+
+// =============================================================================
+// Inline boxes containing block descendants
+// =============================================================================
+
+#[test]
+fn test_inline_with_block_descendant_is_split_into_block_flow() {
+    let style = default_style();
+    let text_before = BoxNode::new_text(style.clone(), "Before".to_string());
+    let text_after = BoxNode::new_text(style.clone(), "After".to_string());
+    let block = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
+    let inline = BoxNode::new_inline(style.clone(), vec![text_before, block.clone(), text_after]);
+
+    let container = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![inline]);
+    let fixed = AnonymousBoxCreator::fixup_tree(container);
+
+    assert_eq!(fixed.children.len(), 3);
+    assert!(fixed.children[0].is_anonymous());
+    assert!(fixed.children[1].is_block_level());
+    assert!(fixed.children[2].is_anonymous());
+
+    assert!(subtree_contains_text(&fixed.children[0], "Before"));
+    assert!(subtree_contains_text(&fixed.children[2], "After"));
+
+    // Inline fragments should preserve the inline's style.
+    assert!(!fixed.children[0].children.is_empty());
+    assert!(std::sync::Arc::ptr_eq(&fixed.children[0].children[0].style, &style));
+}
+
+#[test]
+fn test_nested_inline_with_block_descendant_splits_at_outer() {
+    let style = default_style();
+    let before = BoxNode::new_text(style.clone(), "Before".to_string());
+    let block = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
+    let inner_inline = BoxNode::new_inline(style.clone(), vec![before, block.clone()]);
+    let after = BoxNode::new_text(style.clone(), "After".to_string());
+    let outer_inline = BoxNode::new_inline(style.clone(), vec![inner_inline, after]);
+
+    let container = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![outer_inline]);
+    let fixed = AnonymousBoxCreator::fixup_tree(container);
+
+    assert_eq!(fixed.children.len(), 3);
+    assert!(fixed.children[0].is_anonymous());
+    assert!(fixed.children[1].is_block_level());
+    assert!(fixed.children[2].is_anonymous());
+
+    assert!(subtree_contains_text(&fixed.children[0], "Before"));
+    assert!(subtree_contains_text(&fixed.children[2], "After"));
+}
+
+#[test]
+fn test_inline_block_with_block_children_is_not_split() {
+    let inline_block_style = style_with_display(Display::InlineBlock);
+    let block_child = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
+    let inline_block =
+        BoxNode::new_inline_block(inline_block_style.clone(), FormattingContextType::Block, vec![block_child]);
+
+    let container =
+        BoxNode::new_block(default_style(), FormattingContextType::Block, vec![inline_block.clone()]);
+    let fixed = AnonymousBoxCreator::fixup_tree(container);
+
+    assert_eq!(fixed.children.len(), 1);
+    assert!(fixed.children[0].is_inline_level());
+    assert_eq!(fixed.children[0].children.len(), 1);
 }
 
 // =============================================================================

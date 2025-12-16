@@ -40,8 +40,9 @@
 //! let fixed_tree = AnonymousBoxCreator::fixup_tree(box_tree);
 //! ```
 
-use crate::style::ComputedStyle;
-use crate::tree::box_tree::{AnonymousBox, AnonymousType, BoxNode, BoxType};
+use crate::style::{display::Display, ComputedStyle};
+use crate::tree::box_tree::{AnonymousBox, AnonymousType, BoxNode, BoxType, InlineBox};
+use crate::tree::debug::DebugInfo;
 use std::sync::Arc;
 
 /// Creates anonymous boxes in a box tree
@@ -98,12 +99,24 @@ impl AnonymousBoxCreator {
     /// assert_eq!(fixed.children.len(), 2);
     /// assert!(fixed.children[0].is_anonymous());
     /// ```
-    pub fn fixup_tree(mut box_node: BoxNode) -> BoxNode {
+    pub fn fixup_tree(box_node: BoxNode) -> BoxNode {
+        Self::fixup_tree_with_parent(box_node, None)
+    }
+
+    fn fixup_tree_with_parent(mut box_node: BoxNode, parent_style: Option<&ComputedStyle>) -> BoxNode {
         // First, recursively fix children (bottom-up traversal)
-        box_node.children = box_node.children.into_iter().map(Self::fixup_tree).collect();
+        box_node.children = box_node
+            .children
+            .into_iter()
+            .map(|child| Self::fixup_tree_with_parent(child, Some(&box_node.style)))
+            .collect();
 
         // Then fix this node's children based on its type
-        box_node.children = Self::fixup_children(box_node.children, &box_node.box_type);
+        box_node.children = Self::fixup_children(
+            box_node.children,
+            &box_node.box_type,
+            parent_style.unwrap_or(&box_node.style),
+        );
 
         box_node
     }
@@ -112,33 +125,191 @@ impl AnonymousBoxCreator {
     ///
     /// Dispatches to appropriate fixup method based on whether parent is
     /// a block container or inline container.
-    fn fixup_children(children: Vec<BoxNode>, parent_type: &BoxType) -> Vec<BoxNode> {
+    fn fixup_children(children: Vec<BoxNode>, parent_type: &BoxType, parent_style: &ComputedStyle) -> Vec<BoxNode> {
         if children.is_empty() {
             return children;
         }
 
         match parent_type {
             // Block containers need block fixup
-            BoxType::Block(_) => Self::fixup_block_children(children),
+            BoxType::Block(_) => Self::fixup_block_children(children, parent_style),
 
             // Inline containers need inline fixup
-            BoxType::Inline(_) => Self::fixup_inline_children(children),
+            BoxType::Inline(_) => Self::fixup_inline_children(children, parent_style),
 
             // Anonymous block containers also need block fixup
             BoxType::Anonymous(anon)
                 if matches!(anon.anonymous_type, AnonymousType::Block | AnonymousType::TableCell) =>
             {
-                Self::fixup_block_children(children)
+                Self::fixup_block_children(children, parent_style)
             }
 
             // Anonymous inline containers need inline fixup
             BoxType::Anonymous(anon) if matches!(anon.anonymous_type, AnonymousType::Inline) => {
-                Self::fixup_inline_children(children)
+                Self::fixup_inline_children(children, parent_style)
             }
 
             // Text boxes, replaced elements, and others don't need fixup
             _ => children,
         }
+    }
+
+    /// Determines whether a child should participate as inline-level content for fixup.
+    ///
+    /// Replaced elements with inline display behave as inline-level boxes even though
+    /// `BoxType::is_inline_level` returns false.
+    fn is_inline_level_child(child: &BoxNode) -> bool {
+        match &child.box_type {
+            BoxType::Replaced(_) => child.style.display.is_inline_level(),
+            _ => child.is_inline_level(),
+        }
+    }
+
+    /// Determines whether a child should participate as block-level content for fixup.
+    ///
+    /// Replaced elements with inline display are treated as inline-level and shouldn't
+    /// be counted as blocks when deciding anonymous box insertion.
+    fn is_block_level_child(child: &BoxNode) -> bool {
+        match &child.box_type {
+            BoxType::Replaced(_) => !child.style.display.is_inline_level(),
+            _ => child.is_block_level(),
+        }
+    }
+
+    /// Returns true if an inline box (without its own formatting context) contains
+    /// any block-level descendants.
+    fn inline_contains_block_descendants(node: &BoxNode) -> bool {
+        if node.formatting_context().is_some() {
+            return false;
+        }
+
+        node.children.iter().any(|child| {
+            if Self::is_block_level_child(child) {
+                true
+            } else if Self::is_inline_level_child(child) && child.formatting_context().is_none() {
+                Self::inline_contains_block_descendants(child)
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Splits an inline box around any block-level descendants, returning a list of boxes
+    /// that should replace the original inline in its parent.
+    ///
+    /// Inline fragments preserve the original inline's style/debug info; block descendants
+    /// are lifted into the returned list so callers can place them directly in the block
+    /// formatting context.
+    fn split_inline_with_blocks(inline: BoxNode) -> Vec<BoxNode> {
+        let style = inline.style.clone();
+        let box_type = inline.box_type.clone();
+        let debug_info = inline.debug_info.clone();
+        let styled_node_id = inline.styled_node_id;
+        let children = inline.children;
+
+        let mut result = Vec::new();
+        let mut inline_run: Vec<BoxNode> = Vec::new();
+
+        let flush_run = |run: &mut Vec<BoxNode>, out: &mut Vec<BoxNode>| {
+            if run.is_empty() {
+                return;
+            }
+            let fragment = Self::clone_inline_fragment(
+                &style,
+                &box_type,
+                debug_info.as_ref(),
+                styled_node_id,
+                std::mem::take(run),
+            );
+            out.push(fragment);
+        };
+
+        for child in children {
+            if Self::is_block_level_child(&child) {
+                flush_run(&mut inline_run, &mut result);
+                result.push(child);
+                continue;
+            }
+
+            if Self::is_inline_level_child(&child)
+                && child.formatting_context().is_none()
+                && Self::inline_contains_block_descendants(&child)
+            {
+                let pieces = Self::split_inline_with_blocks(child);
+                for piece in pieces {
+                    if Self::is_block_level_child(&piece) {
+                        flush_run(&mut inline_run, &mut result);
+                        result.push(piece);
+                    } else {
+                        inline_run.push(piece);
+                    }
+                }
+                continue;
+            }
+
+            inline_run.push(child);
+        }
+
+        flush_run(&mut inline_run, &mut result);
+        result
+    }
+
+    /// Splits inline-level children that contain block-level descendants so that block
+    /// boxes participate directly in the parent's block formatting context.
+    fn split_inline_children_with_block_descendants(children: Vec<BoxNode>) -> Vec<BoxNode> {
+        let mut result = Vec::new();
+
+        for child in children {
+            if Self::is_inline_level_child(&child)
+                && child.formatting_context().is_none()
+                && Self::inline_contains_block_descendants(&child)
+            {
+                let pieces = Self::split_inline_with_blocks(child);
+                result.extend(pieces);
+            } else {
+                result.push(child);
+            }
+        }
+
+        result
+    }
+
+    /// Clones an inline box fragment preserving the inline/anonymous inline identity and debug info.
+    fn clone_inline_fragment(
+        style: &Arc<ComputedStyle>,
+        box_type: &BoxType,
+        debug_info: Option<&DebugInfo>,
+        styled_node_id: Option<usize>,
+        children: Vec<BoxNode>,
+    ) -> BoxNode {
+        let fragment = match box_type {
+            BoxType::Inline(inline) => BoxNode {
+                style: style.clone(),
+                box_type: BoxType::Inline(InlineBox {
+                    formatting_context: inline.formatting_context,
+                }),
+                children,
+                id: 0,
+                debug_info: debug_info.cloned(),
+                styled_node_id,
+            },
+            BoxType::Anonymous(anon) if matches!(anon.anonymous_type, AnonymousType::Inline) => BoxNode {
+                style: style.clone(),
+                box_type: BoxType::Anonymous(anon.clone()),
+                children,
+                id: 0,
+                debug_info: debug_info.cloned(),
+                styled_node_id,
+            },
+            _ => {
+                let mut node = BoxNode::new_inline(style.clone(), children);
+                node.debug_info = debug_info.cloned();
+                node.styled_node_id = styled_node_id;
+                node
+            }
+        };
+
+        fragment
     }
 
     /// Fixes up children of block containers
@@ -155,18 +326,22 @@ impl AnonymousBoxCreator {
     /// 2. If all block-level: no changes needed
     /// 3. If all inline-level: wrap any bare text in anonymous inline boxes
     /// 4. If mixed: wrap runs of inline content in anonymous block boxes
-    fn fixup_block_children(children: Vec<BoxNode>) -> Vec<BoxNode> {
-        // Determine what kind of content we have
-        let has_block = children.iter().any(|c| c.is_block_level());
-        let has_inline = children.iter().any(|c| c.is_inline_level());
+    fn fixup_block_children(children: Vec<BoxNode>, parent_style: &ComputedStyle) -> Vec<BoxNode> {
+        // First, split any inline boxes that illegally contain block-level descendants
+        // so the block descendants participate directly in the block formatting context.
+        let children = Self::split_inline_children_with_block_descendants(children);
+
+        // Determine what kind of content we have after splitting
+        let has_block = children.iter().any(Self::is_block_level_child);
+        let has_inline = children.iter().any(Self::is_inline_level_child);
 
         if has_block && has_inline {
             // Mixed content - wrap inline runs in anonymous blocks
-            Self::wrap_inline_runs_in_anonymous_blocks(children)
+            Self::wrap_inline_runs_in_anonymous_blocks(children, parent_style)
         } else if !has_block && has_inline {
             // All inline content - wrap bare text in anonymous inlines
             // (This maintains proper inline structure)
-            Self::wrap_bare_text_in_anonymous_inline(children)
+            Self::wrap_bare_text_in_anonymous_inline(children, parent_style)
         } else {
             // All block or empty - no fixup needed
             children
@@ -181,13 +356,13 @@ impl AnonymousBoxCreator {
     /// CSS 2.1 Section 9.2.2.1: "Any text that is directly contained inside
     /// a block container element (not inside an inline element) must be
     /// treated as an anonymous inline element."
-    fn fixup_inline_children(children: Vec<BoxNode>) -> Vec<BoxNode> {
+    fn fixup_inline_children(children: Vec<BoxNode>, parent_style: &ComputedStyle) -> Vec<BoxNode> {
         // Wrap bare text nodes in anonymous inline boxes
         children
             .into_iter()
             .map(|child| {
                 if child.is_text() {
-                    Self::create_anonymous_inline(child.style.clone(), vec![child])
+                    Self::create_anonymous_inline(Arc::new(parent_style.clone()), vec![child])
                 } else {
                     child
                 }
@@ -210,18 +385,18 @@ impl AnonymousBoxCreator {
     ///
     /// Consecutive inline elements are wrapped together in a single anonymous
     /// block, preserving the document order.
-    fn wrap_inline_runs_in_anonymous_blocks(children: Vec<BoxNode>) -> Vec<BoxNode> {
+    fn wrap_inline_runs_in_anonymous_blocks(children: Vec<BoxNode>, parent_style: &ComputedStyle) -> Vec<BoxNode> {
         let mut result = Vec::new();
         let mut inline_run: Vec<BoxNode> = Vec::new();
 
         for child in children {
-            if child.is_inline_level() {
+            if Self::is_inline_level_child(&child) {
                 // Accumulate inline boxes
                 inline_run.push(child);
             } else {
                 // Block box encountered - flush any inline run
                 if !inline_run.is_empty() {
-                    let anon_block = Self::create_anonymous_block_from_run(&mut inline_run);
+                    let anon_block = Self::create_anonymous_block_from_run(&mut inline_run, parent_style);
                     result.push(anon_block);
                 }
                 result.push(child);
@@ -230,7 +405,7 @@ impl AnonymousBoxCreator {
 
         // Flush remaining inline run at end
         if !inline_run.is_empty() {
-            let anon_block = Self::create_anonymous_block_from_run(&mut inline_run);
+            let anon_block = Self::create_anonymous_block_from_run(&mut inline_run, parent_style);
             result.push(anon_block);
         }
 
@@ -241,13 +416,14 @@ impl AnonymousBoxCreator {
     ///
     /// CSS 2.1 Section 9.2.2.1: Text directly inside a block container
     /// that isn't inside an inline element gets an anonymous inline box.
-    fn wrap_bare_text_in_anonymous_inline(children: Vec<BoxNode>) -> Vec<BoxNode> {
+    fn wrap_bare_text_in_anonymous_inline(children: Vec<BoxNode>, parent_style: &ComputedStyle) -> Vec<BoxNode> {
         children
             .into_iter()
             .map(|child| {
                 if child.is_text() {
                     // Wrap text in anonymous inline
-                    Self::create_anonymous_inline(child.style.clone(), vec![child])
+                    let inherited = inherited_style(parent_style);
+                    Self::create_anonymous_inline(Arc::new(inherited), vec![child])
                 } else {
                     child
                 }
@@ -258,17 +434,11 @@ impl AnonymousBoxCreator {
     /// Creates an anonymous block box from a run of inline boxes
     ///
     /// Takes ownership of the inline run and clears it.
-    fn create_anonymous_block_from_run(inline_run: &mut Vec<BoxNode>) -> BoxNode {
-        // Get style from first child (anonymous boxes inherit from parent,
-        // but we need a style reference - use default for now)
-        let style = if let Some(first) = inline_run.first() {
-            first.style.clone()
-        } else {
-            Arc::new(ComputedStyle::default())
-        };
-
+    fn create_anonymous_block_from_run(inline_run: &mut Vec<BoxNode>, parent_style: &ComputedStyle) -> BoxNode {
+        let mut style = inherited_style(parent_style);
+        style.display = Display::Block;
         let children = std::mem::take(inline_run);
-        Self::create_anonymous_block(style, children)
+        Self::create_anonymous_block(Arc::new(style), children)
     }
 
     /// Creates an anonymous block box
@@ -283,13 +453,17 @@ impl AnonymousBoxCreator {
     /// Currently uses default style as a placeholder - proper inheritance
     /// should be handled during style computation.
     pub fn create_anonymous_block(style: Arc<ComputedStyle>, children: Vec<BoxNode>) -> BoxNode {
+        let mut style = (*style).clone();
+        style.display = Display::Block;
         BoxNode {
-            style,
+            style: Arc::new(style),
             box_type: BoxType::Anonymous(AnonymousBox {
                 anonymous_type: AnonymousType::Block,
             }),
             children,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -301,13 +475,17 @@ impl AnonymousBoxCreator {
     /// a block container element (not inside an inline element) must be
     /// treated as an anonymous inline element."
     pub fn create_anonymous_inline(style: Arc<ComputedStyle>, children: Vec<BoxNode>) -> BoxNode {
+        let mut style = (*style).clone();
+        style.display = Display::Inline;
         BoxNode {
-            style,
+            style: Arc::new(style),
             box_type: BoxType::Anonymous(AnonymousBox {
                 anonymous_type: AnonymousType::Inline,
             }),
             children,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -321,7 +499,9 @@ impl AnonymousBoxCreator {
                 anonymous_type: AnonymousType::TableRow,
             }),
             children,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -335,7 +515,9 @@ impl AnonymousBoxCreator {
                 anonymous_type: AnonymousType::TableCell,
             }),
             children,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -343,19 +525,19 @@ impl AnonymousBoxCreator {
     ///
     /// Returns true if children contain both block-level and inline-level boxes.
     pub fn has_mixed_content(children: &[BoxNode]) -> bool {
-        let has_block = children.iter().any(|c| c.is_block_level());
-        let has_inline = children.iter().any(|c| c.is_inline_level());
+        let has_block = children.iter().any(Self::is_block_level_child);
+        let has_inline = children.iter().any(Self::is_inline_level_child);
         has_block && has_inline
     }
 
     /// Checks if all children are block-level
     pub fn all_block_level(children: &[BoxNode]) -> bool {
-        children.iter().all(|c| c.is_block_level())
+        children.iter().all(Self::is_block_level_child)
     }
 
     /// Checks if all children are inline-level
     pub fn all_inline_level(children: &[BoxNode]) -> bool {
-        children.iter().all(|c| c.is_inline_level())
+        children.iter().all(Self::is_inline_level_child)
     }
 
     /// Counts the number of anonymous boxes that would be created
@@ -366,6 +548,71 @@ impl AnonymousBoxCreator {
         let children_count: usize = node.children.iter().map(Self::count_anonymous_boxes).sum();
         self_count + children_count
     }
+}
+
+/// Build a style that inherits inheritable properties from the parent while leaving
+/// non-inherited properties at their initial values.
+fn inherited_style(parent: &ComputedStyle) -> ComputedStyle {
+    let mut style = ComputedStyle::default();
+    // Typography / text
+    style.font_family = parent.font_family.clone();
+    style.font_size = parent.font_size;
+    style.root_font_size = parent.root_font_size;
+    style.font_weight = parent.font_weight;
+    style.font_style = parent.font_style;
+    style.font_variant = parent.font_variant;
+    style.font_variant_caps = parent.font_variant_caps;
+    style.font_variant_alternates = parent.font_variant_alternates.clone();
+    style.font_variant_numeric = parent.font_variant_numeric;
+    style.font_variant_east_asian = parent.font_variant_east_asian;
+    style.font_variant_ligatures = parent.font_variant_ligatures;
+    style.font_variant_position = parent.font_variant_position;
+    style.font_size_adjust = parent.font_size_adjust;
+    style.font_synthesis = parent.font_synthesis;
+    style.font_feature_settings = parent.font_feature_settings.clone();
+    style.font_optical_sizing = parent.font_optical_sizing;
+    style.font_variation_settings = parent.font_variation_settings.clone();
+    style.font_language_override = parent.font_language_override.clone();
+    style.font_variant_emoji = parent.font_variant_emoji;
+    style.font_stretch = parent.font_stretch;
+    style.font_kerning = parent.font_kerning;
+    style.line_height = parent.line_height.clone();
+    style.direction = parent.direction;
+    style.text_align = parent.text_align;
+    style.text_align_last = parent.text_align_last;
+    style.text_justify = parent.text_justify;
+    style.text_indent = parent.text_indent;
+    style.text_decoration_skip_ink = parent.text_decoration_skip_ink;
+    style.text_underline_offset = parent.text_underline_offset;
+    style.text_underline_position = parent.text_underline_position;
+    style.text_emphasis_style = parent.text_emphasis_style.clone();
+    style.text_emphasis_color = parent.text_emphasis_color;
+    style.text_emphasis_position = parent.text_emphasis_position;
+    style.text_transform = parent.text_transform;
+    style.text_combine_upright = parent.text_combine_upright;
+    style.writing_mode = parent.writing_mode;
+    style.letter_spacing = parent.letter_spacing;
+    style.word_spacing = parent.word_spacing;
+    style.justify_items = parent.justify_items;
+    style.visibility = parent.visibility;
+    style.white_space = parent.white_space;
+    style.line_break = parent.line_break;
+    style.tab_size = parent.tab_size;
+    style.caption_side = parent.caption_side;
+    style.empty_cells = parent.empty_cells;
+    style.hyphens = parent.hyphens;
+    style.word_break = parent.word_break;
+    style.overflow_wrap = parent.overflow_wrap;
+    style.language = parent.language.clone();
+    style.list_style_type = parent.list_style_type.clone();
+    style.list_style_position = parent.list_style_position;
+    style.list_style_image = parent.list_style_image.clone();
+    style.quotes = parent.quotes.clone();
+    style.cursor = parent.cursor;
+    style.cursor_images = parent.cursor_images.clone();
+    style.color = parent.color;
+    style.custom_properties = parent.custom_properties.clone();
+    style
 }
 
 #[cfg(test)]

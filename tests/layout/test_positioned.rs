@@ -9,9 +9,11 @@
 //! - CSS Position Module Level 3: Sticky positioning
 
 use fastrender::geometry::{EdgeOffsets, Point, Rect, Size};
+use fastrender::style::types::FontSizeAdjust;
+use fastrender::text::font_loader::FontContext;
 use fastrender::FragmentNode;
 use fastrender::{ContainingBlock, PositionedLayout, StickyConstraints};
-use fastrender::{LengthOrAuto, Position, PositionedStyle};
+use fastrender::{Length, LengthOrAuto, LengthUnit, Position, PositionedStyle};
 
 // ============================================================================
 // Test Fixtures
@@ -96,7 +98,7 @@ fn test_sticky_constraints_from_style_with_values() {
     style.left = LengthOrAuto::px(5.0);
 
     let cb = create_containing_block(800.0, 600.0);
-    let constraints = StickyConstraints::from_style(&style, &cb);
+    let constraints = StickyConstraints::from_style(&style, &cb, &FontContext::new());
 
     assert_eq!(constraints.top, Some(10.0));
     assert_eq!(constraints.right, Some(80.0)); // 10% of 800
@@ -112,6 +114,31 @@ fn test_sticky_constraints_has_constraints() {
 
     constraints.top = Some(0.0);
     assert!(constraints.has_constraints());
+}
+
+#[test]
+fn sticky_constraints_use_font_metrics_for_relative_units() {
+    let font_context = FontContext::new();
+    let Some(font) = font_context.get_sans_serif() else {
+        return;
+    };
+    let Ok(metrics) = font.metrics() else { return };
+    let font_size = 20.0;
+    let Some(x_height) = metrics.scale(font_size).x_height else {
+        return;
+    };
+
+    let mut style = default_style();
+    style.position = Position::Sticky;
+    style.font_family = vec![font.family.clone()];
+    style.font_size = font_size;
+    style.root_font_size = font_size;
+    style.top = LengthOrAuto::Length(Length::new(1.0, LengthUnit::Ex));
+
+    let cb = create_containing_block(800.0, 600.0);
+    let constraints = StickyConstraints::from_style(&style, &cb, &font_context);
+
+    assert!((constraints.top.unwrap_or(0.0) - x_height).abs() < 1e-3);
 }
 
 // ============================================================================
@@ -239,6 +266,42 @@ fn test_relative_position_negative_values() {
 }
 
 #[test]
+fn relative_offsets_use_font_metrics_and_adjust() {
+    let font_context = FontContext::new();
+    let Some(font) = font_context.get_sans_serif() else {
+        return;
+    };
+    let Ok(metrics) = font.metrics() else { return };
+    let Some(aspect) = metrics.aspect_ratio() else { return };
+    let font_size = 18.0;
+    let adjust = aspect * 1.25;
+    let used_size = if aspect > 0.0 {
+        font_size * (adjust / aspect)
+    } else {
+        font_size
+    };
+    let Some(x_height) = metrics.scale(used_size).x_height else {
+        return;
+    };
+
+    let layout = PositionedLayout::new();
+    let fragment = create_fragment(0.0, 0.0, 50.0, 50.0);
+
+    let mut style = default_style();
+    style.position = Position::Relative;
+    style.font_family = vec![font.family.clone()];
+    style.font_size = font_size;
+    style.root_font_size = font_size;
+    style.font_size_adjust = FontSizeAdjust::Number(adjust);
+    style.top = LengthOrAuto::Length(Length::new(1.0, LengthUnit::Ex));
+
+    let cb = create_containing_block(800.0, 600.0);
+    let result = layout.apply_relative_positioning(&fragment, &style, &cb).unwrap();
+
+    assert!((result.bounds.y() - x_height).abs() < 1e-3);
+}
+
+#[test]
 fn test_static_position_ignores_offsets() {
     let layout = PositionedLayout::new();
     let fragment = create_fragment(100.0, 100.0, 100.0, 100.0);
@@ -361,6 +424,57 @@ fn test_absolute_position_uses_intrinsic_when_auto() {
     // Should use intrinsic size
     assert_eq!(size.width, 200.0);
     assert_eq!(size.height, 150.0);
+}
+
+#[test]
+fn absolute_auto_height_uses_aspect_ratio_with_specified_width() {
+    let layout = PositionedLayout::new();
+    let mut style = default_style();
+    style.position = Position::Absolute;
+    style.width = LengthOrAuto::px(120.0);
+    style.height = LengthOrAuto::Auto;
+    style.aspect_ratio = fastrender::style::types::AspectRatio::Ratio(2.0);
+
+    let cb = create_containing_block(300.0, 300.0);
+    let intrinsic = Size::new(0.0, 0.0);
+
+    let (_pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+    assert!((size.width - 120.0).abs() < 0.01, "width was {}", size.width);
+    assert!((size.height - 60.0).abs() < 0.01, "height was {}", size.height);
+}
+
+#[test]
+fn absolute_auto_width_uses_aspect_ratio_with_specified_height() {
+    let layout = PositionedLayout::new();
+    let mut style = default_style();
+    style.position = Position::Absolute;
+    style.height = LengthOrAuto::px(50.0);
+    style.width = LengthOrAuto::Auto;
+    style.aspect_ratio = fastrender::style::types::AspectRatio::Ratio(2.0);
+
+    let cb = create_containing_block(300.0, 300.0);
+    let intrinsic = Size::new(0.0, 0.0);
+
+    let (_pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+    assert!((size.height - 50.0).abs() < 0.01, "height was {}", size.height);
+    assert!((size.width - 100.0).abs() < 0.01, "width was {}", size.width);
+}
+
+#[test]
+fn absolute_auto_both_uses_aspect_ratio_and_intrinsic() {
+    let layout = PositionedLayout::new();
+    let mut style = default_style();
+    style.position = Position::Absolute;
+    style.width = LengthOrAuto::Auto;
+    style.height = LengthOrAuto::Auto;
+    style.aspect_ratio = fastrender::style::types::AspectRatio::Ratio(2.0);
+
+    let cb = create_containing_block(300.0, 300.0);
+    let intrinsic = Size::new(80.0, 40.0);
+
+    let (_pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+    assert!((size.width - 80.0).abs() < 0.01, "width was {}", size.width);
+    assert!((size.height - 40.0).abs() < 0.01, "height was {}", size.height);
 }
 
 #[test]

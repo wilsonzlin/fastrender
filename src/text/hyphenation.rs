@@ -54,6 +54,10 @@
 
 use crate::error::{Result, TextError};
 use hyphenation::{Language, Load, Standard};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+
+static PATTERN_CACHE: OnceLock<Mutex<HashMap<SupportedLanguage, Arc<HyphenationPatterns>>>> = OnceLock::new();
 
 /// Hyphenation patterns for a specific language
 ///
@@ -98,6 +102,18 @@ impl HyphenationPatterns {
         // Some languages have special rules beyond pattern matching
         matches!(self.language, SupportedLanguage::German | SupportedLanguage::Dutch)
     }
+}
+
+fn cached_patterns(language: SupportedLanguage) -> Result<Arc<HyphenationPatterns>> {
+    let cache = PATTERN_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(existing) = cache.lock().expect("pattern cache poisoned").get(&language).cloned() {
+        return Ok(existing);
+    }
+
+    let loaded = Arc::new(HyphenationPatterns::new(language)?);
+    let mut guard = cache.lock().expect("pattern cache poisoned");
+    guard.insert(language, Arc::clone(&loaded));
+    Ok(loaded)
 }
 
 impl std::fmt::Debug for HyphenationPatterns {
@@ -356,7 +372,7 @@ impl SupportedLanguage {
 #[derive(Debug, Clone)]
 pub struct Hyphenator {
     /// Hyphenation patterns
-    patterns: HyphenationPatterns,
+    patterns: Arc<HyphenationPatterns>,
 
     /// Minimum characters before first hyphen (left hyphen min)
     left_min: usize,
@@ -402,7 +418,7 @@ impl Hyphenator {
             reason: "Unsupported language".to_string(),
         })?;
 
-        let patterns = HyphenationPatterns::new(lang)?;
+        let patterns = cached_patterns(lang)?;
 
         Ok(Self {
             patterns,

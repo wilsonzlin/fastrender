@@ -40,11 +40,14 @@ taffy = { path = "vendor/taffy" }
 rustybuzz = "0.20"
 ttf-parser = "0.25"
 fontdb = "0.23"
+wuff = "0.2"
 
 # Unicode text processing
 unicode-linebreak = "0.1"
 unicode-bidi = "0.3"
 unicode-script = "0.5"
+unicode-segmentation = "1.11"
+unicode-vo = "0.1"
 
 # Hyphenation
 hyphenation = { version = "0.8", features = ["embed_en-us"] }
@@ -58,6 +61,7 @@ tiny-skia = "0.11"
 
 # Image encoding/decoding
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+kamadak-exif = "0.6"
 
 # SVG rendering
 resvg = "0.43"
@@ -72,6 +76,9 @@ csscolorparser = "0.6"
 # URL handling
 url = "2.5"
 urlencoding = "2.1"
+encoding_rs = "0.8"
+percent-encoding = "2.3"
+memchr = "2.7"
 
 # Error handling
 thiserror = "1.0"
@@ -81,6 +88,9 @@ ureq = "3.1"
 
 # Base64 encoding for data URLs
 base64 = "0.22"
+rayon = "1.10.0"
+num_cpus = "1.17.0"
+chrono = "0.4.42"
 
 # ============================================================================
 # Development Dependencies

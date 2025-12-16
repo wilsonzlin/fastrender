@@ -27,7 +27,9 @@
 //! ```
 
 use crate::geometry::Rect;
-use crate::paint::display_list::{BlendMode, DisplayItem, DisplayList, FillRectItem};
+use crate::paint::display_list::{
+    BlendMode, DisplayItem, DisplayList, FillRectItem, ResolvedFilter, StackingContextItem,
+};
 
 // ============================================================================
 // Optimization Configuration
@@ -205,6 +207,9 @@ impl DisplayListOptimizer {
             DisplayItem::FillRoundedRect(item) => item.color.a == 0.0,
             DisplayItem::StrokeRoundedRect(item) => item.color.a == 0.0,
             DisplayItem::Text(item) => item.color.a == 0.0,
+            DisplayItem::TextDecoration(item) => item.decorations.iter().all(|d| {
+                d.color.a == 0.0 || (d.underline.is_none() && d.overline.is_none() && d.line_through.is_none())
+            }),
             DisplayItem::BoxShadow(item) => item.color.a == 0.0,
             DisplayItem::PushOpacity(item) => item.opacity <= 0.0,
             _ => false,
@@ -255,90 +260,173 @@ impl DisplayListOptimizer {
     /// Cull items outside the viewport
     fn cull_items(&self, items: Vec<DisplayItem>, viewport: Rect) -> Vec<DisplayItem> {
         let mut result = Vec::with_capacity(items.len());
-        let mut stack_depth = 0;
-        let mut skip_until_depth: Option<usize> = None;
+        let mut transform_stack: Vec<bool> = Vec::new();
+        let mut active_transform_depth = 0usize;
+        let mut context_stack: Vec<ContextRecord> = Vec::new();
+        let mut active_effect_contexts = 0usize;
+        let mut clip_stack: Vec<ClipRecord> = Vec::new();
+
+        let refresh_context_clipping = |contexts: &mut [ContextRecord], clips: &[ClipRecord]| {
+            let clipped = clips.iter().any(|c| c.can_cull);
+            for ctx in contexts {
+                ctx.clipped_by_clip = clipped;
+            }
+        };
 
         for item in items {
-            // Track stack depth for push/pop operations
-            let is_push = matches!(
-                item,
-                DisplayItem::PushClip(_)
-                    | DisplayItem::PushOpacity(_)
-                    | DisplayItem::PushTransform(_)
-                    | DisplayItem::PushBlendMode(_)
-                    | DisplayItem::PushStackingContext(_)
-            );
-            let is_pop = matches!(
-                item,
-                DisplayItem::PopClip
-                    | DisplayItem::PopOpacity
-                    | DisplayItem::PopTransform
-                    | DisplayItem::PopBlendMode
-                    | DisplayItem::PopStackingContext
-            );
+            let mut include_item = false;
+            let mut item_bounds: Option<Rect> = None;
 
-            if is_push {
-                stack_depth += 1;
-            }
-
-            // If we're skipping, check if we can stop
-            if let Some(target_depth) = skip_until_depth {
-                if is_pop && stack_depth <= target_depth {
-                    skip_until_depth = None;
+            match &item {
+                DisplayItem::PushTransform(t) => {
+                    let non_identity = !t.transform.is_identity();
+                    transform_stack.push(non_identity);
+                    if non_identity {
+                        active_transform_depth += 1;
+                        for clip in &mut clip_stack {
+                            clip.can_cull = false;
+                        }
+                        refresh_context_clipping(&mut context_stack, &clip_stack);
+                    }
+                    include_item = true;
                 }
-                if is_pop {
-                    stack_depth -= 1;
+                DisplayItem::PopTransform => {
+                    if transform_stack.pop().unwrap_or(false) && active_transform_depth > 0 {
+                        active_transform_depth -= 1;
+                    }
+                    include_item = true;
                 }
-                continue;
-            }
-
-            // Check if this item intersects the viewport
-            let should_include = match &item {
-                // Check bounds for drawable items
-                DisplayItem::FillRect(i) => viewport.intersects(i.rect),
-                DisplayItem::StrokeRect(i) => viewport.intersects(i.rect.inflate(i.width / 2.0)),
-                DisplayItem::FillRoundedRect(i) => viewport.intersects(i.rect),
-                DisplayItem::StrokeRoundedRect(i) => viewport.intersects(i.rect.inflate(i.width / 2.0)),
-                DisplayItem::Text(item) => {
-                    let bounds = Rect::from_xywh(item.origin.x, item.origin.y, item.advance_width, item.font_size);
-                    viewport.intersects(bounds)
+                DisplayItem::PushStackingContext(sc) => {
+                    let effects = !sc.filters.is_empty() || !sc.backdrop_filters.is_empty();
+                    if effects {
+                        active_effect_contexts += 1;
+                        for clip in &mut clip_stack {
+                            clip.can_cull = false;
+                        }
+                        refresh_context_clipping(&mut context_stack, &clip_stack);
+                    }
+                    let has_transform = sc.transform.map_or(false, |t| !t.is_identity());
+                    if has_transform {
+                        active_transform_depth += 1;
+                        for clip in &mut clip_stack {
+                            clip.can_cull = false;
+                        }
+                        refresh_context_clipping(&mut context_stack, &clip_stack);
+                    }
+                    context_stack.push(ContextRecord {
+                        start_index: result.len(),
+                        bounds: None,
+                        item: sc.clone(),
+                        transform_active: active_transform_depth > 0,
+                        has_transform,
+                        has_effects: effects,
+                        clipped_by_clip: clip_stack.iter().any(|c| c.can_cull),
+                    });
+                    include_item = true;
                 }
-                DisplayItem::Image(i) => viewport.intersects(i.dest_rect),
-                DisplayItem::BoxShadow(i) => {
-                    let shadow_bounds = i.rect.inflate(i.blur_radius + i.spread_radius);
-                    viewport.intersects(shadow_bounds)
-                }
-                DisplayItem::LinearGradient(i) => viewport.intersects(i.rect),
-                DisplayItem::RadialGradient(i) => viewport.intersects(i.rect),
-
-                // Clip items: if clip doesn't intersect viewport, skip all children
-                DisplayItem::PushClip(clip) => {
-                    if !viewport.intersects(clip.rect) {
-                        skip_until_depth = Some(stack_depth);
-                        false
-                    } else {
-                        true
+                DisplayItem::PopStackingContext => {
+                    include_item = true;
+                    if let Some(record) = context_stack.pop() {
+                        if record.has_transform && active_transform_depth > 0 {
+                            active_transform_depth -= 1;
+                        }
+                        if record.has_effects && active_effect_contexts > 0 {
+                            active_effect_contexts -= 1;
+                        }
+                        let keep = if record.transform_active {
+                            true
+                        } else if record.clipped_by_clip {
+                            false
+                        } else {
+                            let ctx_bounds = self.stacking_context_bounds(&record.item, record.bounds);
+                            viewport.intersects(ctx_bounds)
+                        };
+                        if keep {
+                            if let Some(parent) = context_stack.last_mut() {
+                                if !parent.transform_active && !parent.clipped_by_clip {
+                                    let ctx_bounds = self.stacking_context_bounds(&record.item, record.bounds);
+                                    parent.bounds = Some(match parent.bounds {
+                                        Some(b) => b.union(ctx_bounds),
+                                        None => ctx_bounds,
+                                    });
+                                }
+                            }
+                        } else {
+                            result.truncate(record.start_index);
+                            continue;
+                        }
                     }
                 }
-
-                // Always include pop operations and other push operations
-                DisplayItem::PopClip
-                | DisplayItem::PopOpacity
-                | DisplayItem::PopTransform
-                | DisplayItem::PopBlendMode
-                | DisplayItem::PopStackingContext
-                | DisplayItem::PushOpacity(_)
-                | DisplayItem::PushTransform(_)
-                | DisplayItem::PushBlendMode(_)
-                | DisplayItem::PushStackingContext(_) => true,
-            };
-
-            if is_pop {
-                stack_depth -= 1;
+                DisplayItem::PushClip(clip) => {
+                    let clip_bounds = match &clip.shape {
+                        crate::paint::display_list::ClipShape::Rect { rect, .. } => *rect,
+                        crate::paint::display_list::ClipShape::Path { path } => path.bounds(),
+                    };
+                    let can_cull =
+                        !viewport.intersects(clip_bounds) && active_effect_contexts == 0 && active_transform_depth == 0;
+                    clip_stack.push(ClipRecord {
+                        start_index: result.len(),
+                        can_cull,
+                    });
+                    refresh_context_clipping(&mut context_stack, &clip_stack);
+                    include_item = true;
+                }
+                DisplayItem::PopClip => {
+                    if let Some(record) = clip_stack.pop() {
+                        if record.can_cull {
+                            result.truncate(record.start_index);
+                            continue;
+                        }
+                    }
+                    refresh_context_clipping(&mut context_stack, &clip_stack);
+                    include_item = true;
+                }
+                _ => {}
             }
 
-            if should_include {
-                result.push(item);
+            let force_active = active_transform_depth > 0 || active_effect_contexts > 0;
+
+            if !include_item {
+                if force_active {
+                    include_item = true;
+                } else {
+                    item_bounds = self.item_bounds(&item);
+                    include_item = match (item_bounds, &item) {
+                        (Some(bounds), _) => viewport.intersects(bounds),
+                        (None, _) => matches!(
+                            item,
+                            DisplayItem::PushClip(_)
+                                | DisplayItem::PopClip
+                                | DisplayItem::PushOpacity(_)
+                                | DisplayItem::PopOpacity
+                                | DisplayItem::PushTransform(_)
+                                | DisplayItem::PopTransform
+                                | DisplayItem::PushBlendMode(_)
+                                | DisplayItem::PopBlendMode
+                                | DisplayItem::PushStackingContext(_)
+                                | DisplayItem::PopStackingContext
+                        ),
+                    };
+                }
+            }
+
+            if include_item {
+                result.push(item.clone());
+                if active_transform_depth == 0 && !clip_stack.iter().any(|c| c.can_cull) {
+                    if item_bounds.is_none() {
+                        item_bounds = self.item_bounds(result.last().unwrap());
+                    }
+                    if let Some(bounds) = item_bounds {
+                        if let Some(context) = context_stack.last_mut() {
+                            if !context.transform_active && !context.clipped_by_clip {
+                                context.bounds = Some(match context.bounds {
+                                    Some(b) => b.union(bounds),
+                                    None => bounds,
+                                });
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -437,6 +525,102 @@ impl DisplayListOptimizer {
         result
     }
 
+    fn item_bounds(&self, item: &DisplayItem) -> Option<Rect> {
+        match item {
+            DisplayItem::FillRect(i) => Some(i.rect),
+            DisplayItem::StrokeRect(i) => Some(i.rect.inflate(i.width / 2.0)),
+            DisplayItem::FillRoundedRect(i) => Some(i.rect),
+            DisplayItem::StrokeRoundedRect(i) => Some(i.rect.inflate(i.width / 2.0)),
+            DisplayItem::Text(item) => Some(crate::paint::display_list::text_bounds(item)),
+            DisplayItem::TextDecoration(item) => Some(item.bounds),
+            DisplayItem::Image(i) => Some(i.dest_rect),
+            DisplayItem::BoxShadow(i) => {
+                if i.inset {
+                    Some(i.rect)
+                } else {
+                    let blur_outset = i.blur_radius.abs() * 3.0;
+                    let spread = i.spread_radius;
+                    let shadow_rect = Rect::from_xywh(
+                        i.rect.x() + i.offset.x - spread,
+                        i.rect.y() + i.offset.y - spread,
+                        i.rect.width() + spread * 2.0,
+                        i.rect.height() + spread * 2.0,
+                    )
+                    .inflate(blur_outset);
+                    Some(shadow_rect)
+                }
+            }
+            DisplayItem::Border(b) => {
+                let max_w = b.top.width.max(b.right.width).max(b.bottom.width).max(b.left.width);
+                Some(b.rect.inflate(max_w * 0.5))
+            }
+            DisplayItem::LinearGradient(i) => Some(i.rect),
+            DisplayItem::RadialGradient(i) => Some(i.rect),
+            DisplayItem::ConicGradient(i) => Some(i.rect),
+            _ => None,
+        }
+    }
+
+    fn stacking_context_bounds(&self, item: &StackingContextItem, children: Option<Rect>) -> Rect {
+        let (l, t, r, b) = Self::filter_outset(&item.filters);
+        let (bl, bt, br, bb) = Self::filter_outset(&item.backdrop_filters);
+        let expand_left = l.max(bl);
+        let expand_top = t.max(bt);
+        let expand_right = r.max(br);
+        let expand_bottom = b.max(bb);
+
+        let mut bounds = children.unwrap_or(item.bounds);
+        if expand_left > 0.0 || expand_top > 0.0 || expand_right > 0.0 || expand_bottom > 0.0 {
+            bounds = Rect::from_xywh(
+                bounds.min_x() - expand_left,
+                bounds.min_y() - expand_top,
+                bounds.width() + expand_left + expand_right,
+                bounds.height() + expand_top + expand_bottom,
+            );
+        }
+
+        if let Some(transform) = item.transform {
+            bounds = transform.transform_rect(bounds);
+        }
+
+        bounds
+    }
+
+    fn filter_outset(filters: &[ResolvedFilter]) -> (f32, f32, f32, f32) {
+        let mut left: f32 = 0.0;
+        let mut top: f32 = 0.0;
+        let mut right: f32 = 0.0;
+        let mut bottom: f32 = 0.0;
+
+        for filter in filters {
+            match *filter {
+                ResolvedFilter::Blur(radius) => {
+                    let delta = radius.abs() * 3.0;
+                    left = left.max(delta);
+                    right = right.max(delta);
+                    top = top.max(delta);
+                    bottom = bottom.max(delta);
+                }
+                ResolvedFilter::DropShadow {
+                    offset_x,
+                    offset_y,
+                    blur_radius,
+                    spread,
+                    ..
+                } => {
+                    let delta = blur_radius.abs() * 3.0 + spread.max(0.0);
+                    left = left.max(delta - offset_x.min(0.0));
+                    right = right.max(delta + offset_x.max(0.0));
+                    top = top.max(delta - offset_y.min(0.0));
+                    bottom = bottom.max(delta + offset_y.max(0.0));
+                }
+                _ => {}
+            }
+        }
+
+        (left, top, right, bottom)
+    }
+
     /// Try to merge two fill rects
     ///
     /// Fills can be merged if they have the same color and share an edge.
@@ -508,6 +692,23 @@ impl DisplayListOptimizer {
 
         None
     }
+}
+
+#[derive(Clone)]
+struct ContextRecord {
+    start_index: usize,
+    bounds: Option<Rect>,
+    item: StackingContextItem,
+    transform_active: bool,
+    has_transform: bool,
+    has_effects: bool,
+    clipped_by_clip: bool,
+}
+
+#[derive(Clone)]
+struct ClipRecord {
+    start_index: usize,
+    can_cull: bool,
 }
 
 impl Default for DisplayListOptimizer {

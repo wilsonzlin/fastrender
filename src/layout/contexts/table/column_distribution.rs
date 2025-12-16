@@ -66,16 +66,22 @@ pub struct ColumnConstraints {
     /// without wrapping.
     pub max_width: f32,
 
+    /// Whether `max_width` is an authored cap (from max-width on the cell/column)
+    ///
+    /// Content-based max widths should not cap specified percentage/fixed widths, but
+    /// authored max-width values should.
+    pub has_max_cap: bool,
+
     /// Fixed width specified by CSS `width` property
     ///
     /// If set, this column should be exactly this width (subject to min_width).
     /// Takes precedence over percentage and auto sizing.
     pub fixed_width: Option<f32>,
 
-    /// Percentage width relative to table width
+    /// Percentage width relative to table width (can exceed 100%)
     ///
     /// If set, this column's width is a percentage of the table's width.
-    /// The percentage is a value from 0.0 to 100.0.
+    /// Values may exceed 100% and are treated as over-constrained requests.
     pub percentage: Option<f32>,
 
     /// Whether this column can be resized during distribution
@@ -108,6 +114,7 @@ impl ColumnConstraints {
         Self {
             min_width,
             max_width: max_width.max(min_width), // max must be >= min
+            has_max_cap: false,
             fixed_width: None,
             percentage: None,
             is_flexible: true,
@@ -135,6 +142,7 @@ impl ColumnConstraints {
         Self {
             min_width: width,
             max_width: width,
+            has_max_cap: false,
             fixed_width: Some(width),
             percentage: None,
             is_flexible: false,
@@ -147,7 +155,7 @@ impl ColumnConstraints {
     ///
     /// # Arguments
     ///
-    /// * `percentage` - Percentage value (0.0 to 100.0)
+    /// * `percentage` - Percentage value (may exceed 100; negative clamped to 0)
     /// * `min_width` - Minimum content width (fallback)
     /// * `max_width` - Maximum content width
     ///
@@ -164,10 +172,18 @@ impl ColumnConstraints {
         Self {
             min_width,
             max_width: max_width.max(min_width),
+            has_max_cap: false,
             fixed_width: None,
-            percentage: Some(percentage.clamp(0.0, 100.0)),
+            percentage: Some(percentage.max(0.0)),
             is_flexible: false,
         }
+    }
+
+    /// Marks this column as percentage-based using the current min/max widths.
+    pub fn set_percentage(&mut self, percentage: f32) {
+        self.percentage = Some(percentage.max(0.0));
+        self.fixed_width = None;
+        self.is_flexible = false;
     }
 
     /// Creates a zero-sized column (placeholder)
@@ -448,29 +464,58 @@ impl ColumnDistributor {
     fn distribute_fixed(&self, columns: &[ColumnConstraints], available_width: f32) -> ColumnWidthDistributionResult {
         let mut widths = vec![0.0; columns.len()];
         let mut remaining_width = available_width;
-        let mut flexible_count = 0;
+        let mut flexible_indices = Vec::new();
+        let mut percent_indices = Vec::new();
 
         // Phase 1: Apply fixed widths
         for (i, col) in columns.iter().enumerate() {
             if let Some(fixed) = col.fixed_width {
-                let width = fixed.max(self.min_column_width);
+                let mut width = fixed.max(col.min_width).max(self.min_column_width);
+                if col.has_max_cap && col.max_width.is_finite() {
+                    width = width.min(col.max_width.max(col.min_width));
+                }
                 widths[i] = width;
                 remaining_width -= width;
             } else if let Some(pct) = col.percentage {
-                let width = (pct / 100.0 * available_width).max(self.min_column_width);
-                widths[i] = width;
-                remaining_width -= width;
+                percent_indices.push((i, pct));
             } else {
-                flexible_count += 1;
+                flexible_indices.push(i);
             }
         }
 
-        // Phase 2: Distribute remaining to flexible columns
-        if flexible_count > 0 && remaining_width > 0.0 {
-            let per_column = remaining_width / flexible_count as f32;
-            for (i, col) in columns.iter().enumerate() {
-                if col.fixed_width.is_none() && col.percentage.is_none() {
-                    widths[i] = per_column.max(self.min_column_width);
+        // Phase 2: Allocate percentage columns. Percentages are relative to the table width and
+        // can overrun the available width; the table expands when columns over-commit.
+        for (idx, pct) in percent_indices {
+            let col = &columns[idx];
+            let raw = (pct / 100.0) * available_width;
+            let mut width = raw.max(col.min_width).max(self.min_column_width);
+            if col.has_max_cap && col.max_width.is_finite() {
+                width = width.min(col.max_width.max(col.min_width));
+            }
+            widths[idx] = width;
+            remaining_width -= width;
+        }
+
+        // Phase 3: Distribute remaining to flexible columns (auto). If no space remains, auto
+        // columns still honor their minimum widths.
+        if !flexible_indices.is_empty() {
+            if remaining_width > 0.0 {
+                let per_column = remaining_width / flexible_indices.len() as f32;
+                for (i, col) in columns.iter().enumerate() {
+                    if col.fixed_width.is_none() && col.percentage.is_none() {
+                        widths[i] = per_column
+                            .max(col.min_width)
+                            .max(self.min_column_width)
+                            .min(col.max_width.max(col.min_width));
+                    }
+                }
+            } else {
+                for &idx in &flexible_indices {
+                    let col = &columns[idx];
+                    widths[idx] = col
+                        .min_width
+                        .max(self.min_column_width)
+                        .min(col.max_width.max(col.min_width));
                 }
             }
         }
@@ -486,7 +531,7 @@ impl ColumnDistributor {
 
         ColumnWidthDistributionResult {
             widths,
-            total_width: total.min(available_width),
+            total_width: total,
             is_over_constrained,
             overflow_amount,
         }
@@ -506,6 +551,7 @@ impl ColumnDistributor {
         // Step 1: Compute sum of min and max widths
         let total_min: f32 = columns.iter().map(|c| c.min_width.max(self.min_column_width)).sum();
         let total_max: f32 = columns.iter().map(|c| c.max_width.max(self.min_column_width)).sum();
+        let has_percentage = columns.iter().any(|c| c.percentage.is_some());
 
         // Step 2: Handle edge cases
         if available_width <= 0.0 {
@@ -513,7 +559,7 @@ impl ColumnDistributor {
             return self.distribute_at_minimum(columns);
         }
 
-        if available_width >= total_max {
+        if available_width >= total_max && !has_percentage {
             // Plenty of space, give each column its max
             return self.distribute_at_maximum(columns);
         }
@@ -545,31 +591,14 @@ impl ColumnDistributor {
         columns: &[ColumnConstraints],
         available_width: f32,
     ) -> ColumnWidthDistributionResult {
-        let total_min: f32 = columns.iter().map(|c| c.min_width.max(self.min_column_width)).sum();
-
-        if total_min == 0.0 {
-            // Avoid division by zero - distribute equally
-            let per_column = available_width / columns.len() as f32;
-            return ColumnWidthDistributionResult {
-                widths: vec![per_column; columns.len()],
-                total_width: available_width,
-                is_over_constrained: true,
-                overflow_amount: 0.0,
-            };
-        }
-
-        // Scale down proportionally
-        let scale = available_width / total_min;
-        let widths: Vec<f32> = columns
-            .iter()
-            .map(|c| c.min_width.max(self.min_column_width) * scale)
-            .collect();
+        let widths: Vec<f32> = columns.iter().map(|c| c.min_width.max(self.min_column_width)).collect();
+        let total_min: f32 = widths.iter().sum();
 
         ColumnWidthDistributionResult {
             widths,
-            total_width: available_width,
+            total_width: total_min,
             is_over_constrained: true,
-            overflow_amount: total_min - available_width,
+            overflow_amount: (total_min - available_width).max(0.0),
         }
     }
 
@@ -585,6 +614,7 @@ impl ColumnDistributor {
         let mut widths = vec![0.0; columns.len()];
         let mut remaining_width = available_width;
         let mut flexible_indices = Vec::new();
+        let mut percent_indices = Vec::new();
 
         for (i, col) in columns.iter().enumerate() {
             if let Some(fixed) = col.fixed_width {
@@ -592,13 +622,28 @@ impl ColumnDistributor {
                 widths[i] = width;
                 remaining_width -= width;
             } else if let Some(pct) = col.percentage {
-                let width = (pct / 100.0 * available_width)
-                    .max(col.min_width)
-                    .max(self.min_column_width);
-                widths[i] = width;
-                remaining_width -= width;
+                percent_indices.push((i, pct));
             } else {
                 flexible_indices.push(i);
+            }
+        }
+
+        // Apply percentages relative to the table's available width. Percent columns can overrun the
+        // remaining budget; over-constraint is reported to the caller instead of scaling them down.
+        if !percent_indices.is_empty() {
+            for (idx, pct) in percent_indices {
+                let col = &columns[idx];
+                let raw = (pct / 100.0) * available_width;
+                let min_bound = col.min_width.max(self.min_column_width);
+                let unclamped = raw.max(min_bound);
+                let cap = if col.has_max_cap && col.max_width.is_finite() {
+                    Some(col.max_width.max(min_bound))
+                } else {
+                    None
+                };
+                let width = cap.map_or(unclamped, |cap| unclamped.min(cap));
+                widths[idx] = width;
+                remaining_width -= width;
             }
         }
 
@@ -657,34 +702,60 @@ impl ColumnDistributor {
         }
 
         if remaining_width <= flexible_min {
-            // Not enough for minimums - scale down
-            let scale = if flexible_min > 0.0 {
-                remaining_width / flexible_min
-            } else {
-                0.0
-            };
+            // Not enough for minimums - keep mins and let caller mark over-constraint.
             for &i in flexible_indices {
-                widths[i] = columns[i].min_width.max(self.min_column_width) * scale;
+                widths[i] = columns[i].min_width.max(self.min_column_width);
             }
             return;
         }
 
-        // Between min and max - distribute proportionally to flexibility range
-        let total_flex_range: f32 = flexible_indices.iter().map(|&i| columns[i].flexibility_range()).sum();
+        // Between min and max - distribute proportionally to flexibility range, with explicit
+        // handling for unbounded ranges so we don't end up dividing by infinity and producing NaN.
         let excess = remaining_width - flexible_min;
-
+        let mut finite_flex_total = 0.0;
+        let mut infinite_indices = Vec::new();
         for &i in flexible_indices {
-            let col = &columns[i];
-            let col_min = col.min_width.max(self.min_column_width);
-
-            if total_flex_range > 0.0 {
-                let proportion = col.flexibility_range() / total_flex_range;
-                let extra = excess * proportion;
-                widths[i] = (col_min + extra).min(col.max_width);
+            let range = columns[i].flexibility_range();
+            if range.is_finite() {
+                finite_flex_total += range;
             } else {
-                // All columns have same min/max - distribute equally
+                infinite_indices.push(i);
+            }
+            widths[i] = columns[i].min_width.max(self.min_column_width);
+        }
+
+        let mut remaining_excess = excess;
+
+        // First, allocate to columns with finite headroom proportionally to their range, capped at
+        // their max. If the excess exceeds the total finite headroom, leave the remainder for
+        // unbounded columns.
+        if finite_flex_total > 0.0 {
+            for &i in flexible_indices {
+                let range = columns[i].flexibility_range();
+                if !range.is_finite() {
+                    continue;
+                }
+                let share = excess * (range / finite_flex_total);
+                let clamped = share.min(range);
+                widths[i] = (columns[i].min_width.max(self.min_column_width) + clamped).min(columns[i].max_width);
+                remaining_excess -= clamped;
+            }
+            remaining_excess = remaining_excess.max(0.0);
+        }
+
+        // Any leftover space goes to unbounded columns; divide evenly to keep the result stable.
+        if remaining_excess > 0.0 {
+            if !infinite_indices.is_empty() {
+                let per = remaining_excess / infinite_indices.len() as f32;
+                for idx in infinite_indices {
+                    widths[idx] += per;
+                }
+            } else if finite_flex_total == 0.0 {
+                // No range information at all (min == max for every column); split evenly.
                 let per_column = remaining_width / flexible_indices.len() as f32;
-                widths[i] = per_column;
+                for &i in flexible_indices {
+                    widths[i] = per_column;
+                }
             }
         }
     }
@@ -745,34 +816,200 @@ pub fn distribute_spanning_cell_width(
         return;
     }
 
-    let spanned_count = end_col - start_col;
+    let spanned = &mut columns[start_col..end_col];
 
-    // Compute current sum of spanned columns
-    let current_min: f32 = columns[start_col..end_col].iter().map(|c| c.min_width).sum();
-    let current_max: f32 = columns[start_col..end_col].iter().map(|c| c.max_width).sum();
+    let distribute_min = |cols: &mut [ColumnConstraints], indices: &[usize], need: f32| -> f32 {
+        if indices.is_empty() || need <= 0.0 {
+            return need;
+        }
+        // Prefer columns with existing headroom so we don't immediately burst past their maxima.
+        let headrooms: Vec<f32> = indices
+            .iter()
+            .map(|&i| (cols[i].max_width - cols[i].min_width).max(0.0))
+            .collect();
+        let total_headroom: f32 = headrooms.iter().sum();
 
-    // Distribute extra width if needed
-    if cell_min > current_min {
-        let extra = cell_min - current_min;
-        let per_column = extra / spanned_count as f32;
-        for col in &mut columns[start_col..end_col] {
-            col.min_width += per_column;
+        if total_headroom > 0.0 {
+            for (&idx, headroom) in indices.iter().zip(headrooms.iter()) {
+                if *headroom <= 0.0 {
+                    continue;
+                }
+                let share = need * (*headroom / total_headroom);
+                let delta = share.min(*headroom);
+                cols[idx].min_width += delta;
+                if cols[idx].min_width > cols[idx].max_width {
+                    cols[idx].max_width = cols[idx].min_width;
+                }
+            }
+        } else {
+            // No headroom left—fall back to weighting by current widths.
+            let weights: Vec<f32> = indices.iter().map(|&i| cols[i].min_width.max(1.0)).collect();
+            let total_weight: f32 = weights.iter().sum();
+            if total_weight <= 0.0 {
+                return need;
+            }
+            for (&idx, weight) in indices.iter().zip(weights.iter()) {
+                let delta = need * (*weight / total_weight);
+                cols[idx].min_width += delta;
+                if cols[idx].min_width > cols[idx].max_width {
+                    cols[idx].max_width = cols[idx].min_width;
+                }
+            }
+        }
+
+        let new_sum: f32 = cols.iter().map(|c| c.min_width).sum();
+        (cell_min - new_sum).max(0.0)
+    };
+
+    let current_min_sum: f32 = spanned.iter().map(|c| c.min_width).sum();
+    if cell_min > current_min_sum {
+        let mut need = cell_min - current_min_sum;
+        let flex_indices: Vec<usize> = spanned
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| if c.is_flexible { Some(i) } else { None })
+            .collect();
+        need = distribute_min(spanned, &flex_indices, need);
+
+        if need > 0.0 {
+            let percent_indices: Vec<usize> = spanned
+                .iter()
+                .enumerate()
+                .filter_map(|(i, c)| if c.percentage.is_some() { Some(i) } else { None })
+                .collect();
+            need = distribute_min(spanned, &percent_indices, need);
+        }
+
+        if need > 0.0 {
+            let all_indices: Vec<usize> = (0..spanned.len()).collect();
+            need = distribute_min(spanned, &all_indices, need);
+        }
+
+        if need > 0.0 {
+            let per = need / spanned.len() as f32;
+            for col in spanned.iter_mut() {
+                col.min_width += per;
+                if col.max_width < col.min_width {
+                    col.max_width = col.min_width;
+                }
+            }
         }
     }
 
-    if cell_max > current_max {
-        let extra = cell_max - current_max;
-        let per_column = extra / spanned_count as f32;
-        for col in &mut columns[start_col..end_col] {
-            col.max_width += per_column;
+    // Then ensure the span can satisfy the cell's maximum width request, preferring flexible and percentage columns.
+    let current_max_sum: f32 = spanned.iter().map(|c| c.max_width).sum();
+    if cell_max > current_max_sum {
+        let distribute_max = |cols: &mut [ColumnConstraints], indices: &[usize], need: f32| -> f32 {
+            if indices.is_empty() || need <= 0.0 {
+                return need;
+            }
+
+            let headrooms: Vec<f32> = indices
+                .iter()
+                .map(|&i| (cols[i].max_width - cols[i].min_width).max(0.0))
+                .collect();
+            let total_headroom: f32 = headrooms.iter().sum();
+            let mut remaining = need;
+
+            if total_headroom > 0.0 {
+                let to_distribute = remaining.min(total_headroom);
+                let mut distributed = 0.0;
+                for (&idx, headroom) in indices.iter().zip(headrooms.iter()) {
+                    if *headroom <= 0.0 {
+                        continue;
+                    }
+                    let delta = (to_distribute * (*headroom / total_headroom)).min(*headroom);
+                    cols[idx].max_width += delta;
+                    if cols[idx].max_width < cols[idx].min_width {
+                        cols[idx].max_width = cols[idx].min_width;
+                    }
+                    distributed += delta;
+                }
+                remaining -= distributed;
+            }
+
+            if remaining > 0.0 {
+                let weights: Vec<f32> = indices.iter().map(|&i| cols[i].max_width.max(1.0)).collect();
+                let total_weight: f32 = weights.iter().sum();
+                if total_weight > 0.0 {
+                    let mut distributed = 0.0;
+                    for (&idx, weight) in indices.iter().zip(weights.iter()) {
+                        let delta = remaining * (*weight / total_weight);
+                        cols[idx].max_width += delta;
+                        if cols[idx].max_width < cols[idx].min_width {
+                            cols[idx].max_width = cols[idx].min_width;
+                        }
+                        distributed += delta;
+                    }
+                    remaining -= distributed;
+                }
+            }
+
+            remaining
+        };
+
+        let mut extra = cell_max - current_max_sum;
+        let adjustable: Vec<usize> = spanned
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| {
+                if c.max_width > c.min_width + 0.01 {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if !adjustable.is_empty() {
+            extra = distribute_max(spanned, &adjustable, extra);
+        }
+
+        if extra > 0.0 {
+            let all_indices: Vec<usize> = (0..spanned.len()).collect();
+            distribute_max(spanned, &all_indices, extra);
+        }
+    }
+}
+
+/// Assign a percentage width to a spanning cell by splitting it across columns.
+///
+/// Each column receives an equal share of the percentage value; fixed widths remain untouched.
+pub fn distribute_spanning_percentage(columns: &mut [ColumnConstraints], start_col: usize, end_col: usize, pct: f32) {
+    if start_col >= end_col || end_col > columns.len() {
+        return;
+    }
+    let target_pct = pct.max(0.0);
+    if target_pct <= 0.0 {
+        return;
+    }
+
+    let span = &mut columns[start_col..end_col];
+    let mut existing_pct = 0.0;
+    let mut adjustable = Vec::new();
+    for (idx, col) in span.iter().enumerate() {
+        if let Some(pct) = col.percentage {
+            existing_pct += pct;
+        }
+        // Only columns without fixed widths can absorb additional percentage.
+        if col.fixed_width.is_none() {
+            adjustable.push(idx);
         }
     }
 
-    // Ensure max >= min for all affected columns
-    for col in &mut columns[start_col..end_col] {
-        if col.max_width < col.min_width {
-            col.max_width = col.min_width;
-        }
+    // If authored percentages already satisfy the span or there are no adjustable columns,
+    // leave the constraints untouched.
+    if existing_pct >= target_pct || adjustable.is_empty() {
+        return;
+    }
+
+    let remaining = target_pct - existing_pct;
+    // Weight by intrinsic rigidity (min width) so wider content receives a proportionally larger share.
+    let weights: Vec<f32> = adjustable.iter().map(|&i| span[i].min_width.max(1.0)).collect();
+    let total_weight: f32 = weights.iter().copied().sum::<f32>().max(std::f32::EPSILON);
+    for (idx, weight) in adjustable.into_iter().zip(weights.into_iter()) {
+        let current = span[idx].percentage.unwrap_or(0.0);
+        let share = remaining * (weight / total_weight);
+        span[idx].set_percentage(current + share);
     }
 }
 
@@ -894,7 +1131,7 @@ mod tests {
     #[test]
     fn test_column_constraints_percentage_clamping() {
         let col = ColumnConstraints::percentage(150.0, 0.0, 100.0);
-        assert_eq!(col.percentage, Some(100.0)); // Clamped to 100%
+        assert_eq!(col.percentage, Some(150.0)); // Values above 100% are allowed
 
         let col2 = ColumnConstraints::percentage(-10.0, 0.0, 100.0);
         assert_eq!(col2.percentage, Some(0.0)); // Clamped to 0%
@@ -1027,6 +1264,130 @@ mod tests {
         assert_eq!(result.widths[0], 100.0);
     }
 
+    #[test]
+    fn percentage_columns_respect_max_width_caps() {
+        // Percentage columns should still honor their max-width caps even when the requested percent is larger.
+        let mut capped = ColumnConstraints::percentage(80.0, 5.0, 30.0);
+        capped.has_max_cap = true;
+        let columns = vec![capped];
+        let distributor = ColumnDistributor::new(DistributionMode::Auto);
+
+        let result = distributor.distribute(&columns, 200.0);
+        // 80% of 200 would be 160px, but the max-width cap keeps it at 30px.
+        assert!((result.widths[0] - 30.0).abs() < 0.01);
+        assert!(!result.is_over_constrained);
+    }
+
+    #[test]
+    fn percentage_columns_ignore_content_max_without_cap() {
+        // Content-based max widths should not cap percentages unless an authored cap exists.
+        let columns = vec![ColumnConstraints::percentage(50.0, 5.0, 20.0)];
+        let distributor = ColumnDistributor::new(DistributionMode::Fixed);
+
+        let result = distributor.distribute(&columns, 100.0);
+        // 50% of 100 is 50; since no authored cap is present, the content max of 20 should not clamp.
+        assert!((result.widths[0] - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn percentage_columns_honor_cap_in_fixed_layout() {
+        let mut capped = ColumnConstraints::percentage(75.0, 5.0, 25.0);
+        capped.has_max_cap = true;
+        let columns = vec![capped];
+        let distributor = ColumnDistributor::new(DistributionMode::Fixed);
+
+        let result = distributor.distribute(&columns, 200.0);
+        // 75% of 200 = 150, but the authored cap clamps to 25.
+        assert!((result.widths[0] - 25.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn distributor_handles_infinite_max_widths_without_nan() {
+        let mut wide = ColumnConstraints::new(50.0, f32::INFINITY);
+        let mut capped = ColumnConstraints::new(50.0, 100.0);
+        wide.is_flexible = true;
+        capped.is_flexible = true;
+
+        let columns = vec![wide, capped];
+        let distributor = ColumnDistributor::new(DistributionMode::Auto);
+
+        let result = distributor.distribute(&columns, 300.0);
+        assert!(result.widths.iter().all(|w| w.is_finite()));
+        // The capped column should max out at 100, leaving the remainder to the unbounded one.
+        assert!((result.widths[1] - 100.0).abs() < 0.01);
+        assert!((result.widths[0] - 200.0).abs() < 0.01);
+        assert!((result.total_width - 300.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn distributor_splits_excess_evenly_across_unbounded_columns() {
+        let mut a = ColumnConstraints::new(30.0, f32::INFINITY);
+        let mut b = ColumnConstraints::new(20.0, f32::INFINITY);
+        a.is_flexible = true;
+        b.is_flexible = true;
+
+        let columns = vec![a, b];
+        let distributor = ColumnDistributor::new(DistributionMode::Auto);
+
+        let result = distributor.distribute(&columns, 200.0);
+        assert!(result.widths.iter().all(|w| w.is_finite()));
+        // Min widths are 30 and 20, leaving 150px to share: 75px each.
+        assert!((result.widths[0] - 105.0).abs() < 0.01);
+        assert!((result.widths[1] - 95.0).abs() < 0.01);
+        assert!((result.total_width - 200.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn percentage_columns_scale_when_over_budget() {
+        // Two percentage columns that sum to 140% of the available width.
+        let columns = vec![
+            ColumnConstraints::percentage(60.0, 20.0, 500.0),
+            ColumnConstraints::percentage(80.0, 20.0, 500.0),
+        ];
+        let distributor = ColumnDistributor::new(DistributionMode::Auto);
+
+        let result = distributor.distribute(&columns, 100.0);
+        // Percentages are applied against the table width even when they exceed 100%, so the table
+        // becomes over-constrained instead of scaling the percents down.
+        assert!((result.widths[0] - 60.0).abs() < 0.1);
+        assert!((result.widths[1] - 80.0).abs() < 0.1);
+        assert!(result.is_over_constrained);
+    }
+
+    #[test]
+    fn percentage_columns_scale_after_fixed_columns() {
+        // A fixed column leaves less room than the percentages demand; the percents should normalize.
+        let columns = vec![
+            ColumnConstraints::fixed(200.0),
+            ColumnConstraints::percentage(70.0, 10.0, 500.0),
+            ColumnConstraints::percentage(50.0, 10.0, 500.0),
+        ];
+        let distributor = ColumnDistributor::new(DistributionMode::Auto);
+
+        let result = distributor.distribute(&columns, 400.0);
+        assert!((result.widths[0] - 200.0).abs() < 0.1);
+        assert!((result.widths[1] - 280.0).abs() < 0.1); // 70% of 400
+        assert!((result.widths[2] - 200.0).abs() < 0.1); // 50% of 400
+        assert!(result.is_over_constrained);
+        assert!((result.total_width - 680.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn percentage_over_budget_still_clamps_to_min() {
+        // Percentages over budget with mins that force an over-constraint.
+        let columns = vec![
+            ColumnConstraints::percentage(90.0, 60.0, 500.0),
+            ColumnConstraints::percentage(30.0, 60.0, 500.0),
+        ];
+        let distributor = ColumnDistributor::new(DistributionMode::Auto);
+
+        let result = distributor.distribute(&columns, 100.0);
+        // Available space is below the summed minimum, so we clamp to mins and report overflow.
+        assert!((result.widths[0] - 60.0).abs() < 0.5);
+        assert!((result.widths[1] - 60.0).abs() < 0.5);
+        assert!(result.is_over_constrained);
+    }
+
     // ========== ColumnDistributor Tests - Proportional ==========
 
     #[test]
@@ -1085,7 +1446,7 @@ mod tests {
     }
 
     #[test]
-    fn test_distributor_scale_down_proportionally() {
+    fn test_distributor_over_constrained_keeps_min_widths() {
         let columns = vec![
             ColumnConstraints::new(100.0, 200.0),
             ColumnConstraints::new(100.0, 200.0),
@@ -1093,10 +1454,13 @@ mod tests {
         let distributor = ColumnDistributor::new(DistributionMode::Auto);
 
         let result = distributor.distribute(&columns, 100.0);
-        // Total min = 200, available = 100, scale = 0.5
-        // Both columns should be scaled equally
-        assert!((result.widths[0] - 50.0).abs() < 0.01);
-        assert!((result.widths[1] - 50.0).abs() < 0.01);
+        // Total min = 200, available = 100.
+        // Spec keeps minimum column widths and reports overflow instead of scaling below min.
+        assert!((result.widths[0] - 100.0).abs() < 0.01);
+        assert!((result.widths[1] - 100.0).abs() < 0.01);
+        assert!(result.is_over_constrained);
+        assert!((result.overflow_amount - 100.0).abs() < 0.01);
+        assert!((result.total_width - 200.0).abs() < 0.01);
     }
 
     // ========== ColumnDistributor Tests - Fixed Mode ==========
@@ -1196,6 +1560,271 @@ mod tests {
 
         // Original values unchanged
         assert_eq!(columns[0].min_width, 50.0);
+    }
+
+    #[test]
+    fn percentages_do_not_shrink_with_flex_even_when_overconstrained() {
+        let columns = vec![
+            ColumnConstraints {
+                min_width: 200.0,
+                max_width: 200.0,
+                has_max_cap: false,
+                fixed_width: Some(200.0),
+                percentage: None,
+                is_flexible: false,
+            },
+            ColumnConstraints::percentage(60.0, 50.0, 300.0),
+            ColumnConstraints::new(100.0, 200.0),
+        ];
+
+        let distributor = ColumnDistributor::new(DistributionMode::Auto);
+        let result = distributor.distribute(&columns, 400.0);
+
+        // Percent column uses its authored percentage of the table width; flex stays at its min.
+        assert!((result.widths[1] - 240.0).abs() < 0.5);
+        assert!(result.widths[2] >= 100.0);
+        assert!(result.is_over_constrained);
+    }
+
+    #[test]
+    fn percentages_respect_min_even_when_target_is_smaller() {
+        let columns = vec![
+            ColumnConstraints::percentage(90.0, 120.0, 300.0),
+            ColumnConstraints::new(80.0, 150.0),
+        ];
+
+        let distributor = ColumnDistributor::new(DistributionMode::Auto);
+        let result = distributor.distribute(&columns, 150.0);
+
+        // Percentage column keeps its min, so table is over-constrained.
+        assert!((result.widths[0] - 120.0).abs() < 0.5);
+        assert!((result.widths[1] - 80.0).abs() < 0.5);
+        assert!(result.is_over_constrained);
+    }
+
+    #[test]
+    fn percentages_over_hundred_normalize_without_flex() {
+        let columns = vec![
+            ColumnConstraints::percentage(60.0, 10.0, 500.0),
+            ColumnConstraints::percentage(80.0, 10.0, 500.0),
+        ];
+
+        let distributor = ColumnDistributor::new(DistributionMode::Auto);
+        let result = distributor.distribute(&columns, 400.0);
+
+        // Percentages are applied as-authored; table overflows rather than scaling them down.
+        assert!((result.widths[0] - 240.0).abs() < 0.5);
+        assert!((result.widths[1] - 320.0).abs() < 0.5);
+        assert!(result.is_over_constrained);
+        assert!(result.widths[0] < result.widths[1]);
+    }
+
+    #[test]
+    fn percentages_over_hundred_respect_min_and_overconstrain() {
+        let columns = vec![
+            ColumnConstraints::percentage(60.0, 300.0, 500.0),
+            ColumnConstraints::percentage(80.0, 300.0, 500.0),
+        ];
+
+        let distributor = ColumnDistributor::new(DistributionMode::Auto);
+        let result = distributor.distribute(&columns, 400.0);
+
+        // Mins prevent fitting into 400px; we keep mins and report overflow.
+        assert!((result.widths[0] - 300.0).abs() < 0.5);
+        assert!((result.widths[1] - 300.0).abs() < 0.5);
+        assert!(result.is_over_constrained);
+        assert!(result.total_width > 400.0);
+    }
+
+    #[test]
+    fn distribute_spanning_prefers_existing_headroom() {
+        let mut columns = vec![ColumnConstraints::new(10.0, 100.0), ColumnConstraints::new(30.0, 60.0)];
+
+        distribute_spanning_cell_width(&mut columns, 0, 2, 150.0, 180.0);
+
+        let total_min: f32 = columns.iter().map(|c| c.min_width).sum();
+        let total_max: f32 = columns.iter().map(|c| c.max_width).sum();
+
+        assert!((total_min - 150.0).abs() < 0.5);
+        assert!((total_max - 180.0).abs() < 0.5);
+        // The wider headroom column should absorb more of the required width.
+        assert!(columns[0].min_width > columns[1].min_width + 30.0);
+        assert!(columns[0].max_width > columns[1].max_width);
+    }
+
+    #[test]
+    fn distribute_spanning_respects_fixed_columns() {
+        // First column is fixed; span should grow only the flexible column.
+        let mut columns = vec![ColumnConstraints::fixed(50.0), ColumnConstraints::new(10.0, 100.0)];
+        distribute_spanning_cell_width(&mut columns, 0, 2, 120.0, 180.0);
+        assert!((columns[0].min_width - 50.0).abs() < 0.01);
+        assert!((columns[0].max_width - 50.0).abs() < 0.01);
+        // Flexible column absorbs the extra.
+        assert!(columns[1].min_width > 60.0);
+        assert!(columns[1].max_width > 120.0);
+    }
+
+    #[test]
+    fn distribute_spanning_falls_back_to_even_when_no_headroom() {
+        let mut columns = vec![ColumnConstraints::new(50.0, 50.0), ColumnConstraints::new(50.0, 50.0)];
+
+        distribute_spanning_cell_width(&mut columns, 0, 2, 150.0, 150.0);
+
+        let total_min: f32 = columns.iter().map(|c| c.min_width).sum();
+        let total_max: f32 = columns.iter().map(|c| c.max_width).sum();
+
+        assert!((total_min - 150.0).abs() < 0.5);
+        assert!((total_max - 150.0).abs() < 0.5);
+        assert!((columns[0].min_width - 75.0).abs() < 0.5);
+        assert!((columns[1].min_width - 75.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn distribute_spanning_weights_minimums_by_current_widths() {
+        // Wider column should receive a larger share of the required minimum.
+        let mut columns = vec![ColumnConstraints::new(20.0, 200.0), ColumnConstraints::new(60.0, 200.0)];
+        distribute_spanning_cell_width(&mut columns, 0, 2, 120.0, 200.0);
+
+        let total_min: f32 = columns.iter().map(|c| c.min_width).sum();
+        assert!((total_min - 120.0).abs() < 0.5);
+        assert!(columns[1].min_width > columns[0].min_width + 15.0);
+    }
+
+    #[test]
+    fn distribute_spanning_max_scales_by_existing_widths() {
+        let mut columns = vec![
+            ColumnConstraints::new(20.0, 60.0), // smaller max
+            ColumnConstraints::new(20.0, 100.0),
+        ];
+        // Sum max = 160; need 200 -> extra 40 should favor second column.
+        distribute_spanning_cell_width(&mut columns, 0, 2, 80.0, 200.0);
+        assert!((columns.iter().map(|c| c.max_width).sum::<f32>() - 200.0).abs() < 0.5);
+        assert!(columns[1].max_width > columns[0].max_width + 10.0);
+    }
+
+    #[test]
+    fn distribute_spanning_percentage_weights_by_widths() {
+        let mut columns = vec![ColumnConstraints::new(20.0, 200.0), ColumnConstraints::new(80.0, 200.0)];
+        distribute_spanning_percentage(&mut columns, 0, 2, 60.0);
+        // Heavier column should receive a larger percentage share.
+        let pct0 = columns[0].percentage.unwrap();
+        let pct1 = columns[1].percentage.unwrap();
+        assert!(pct1 > pct0);
+        assert!((pct0 + pct1 - 60.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn distribute_spanning_percentage_can_grow_existing_percentages() {
+        let mut columns = vec![
+            ColumnConstraints::percentage(20.0, 10.0, 200.0),
+            ColumnConstraints::new(80.0, 200.0),
+        ];
+        distribute_spanning_percentage(&mut columns, 0, 2, 80.0);
+
+        let pct0 = columns[0].percentage.unwrap();
+        let pct1 = columns[1].percentage.unwrap();
+        // Existing percentage should increase and the flexible column should absorb most of the remainder.
+        assert!(pct0 > 20.0);
+        assert!(pct1 > pct0);
+        assert!((pct0 + pct1 - 80.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn distribute_spanning_percentage_skips_fixed_columns() {
+        let mut columns = vec![
+            ColumnConstraints::fixed(100.0),
+            ColumnConstraints::percentage(30.0, 10.0, 200.0),
+            ColumnConstraints::new(10.0, 200.0),
+        ];
+        distribute_spanning_percentage(&mut columns, 0, 3, 90.0);
+
+        let pct0 = columns[0].percentage;
+        let pct1 = columns[1].percentage.unwrap();
+        let pct2 = columns[2].percentage.unwrap();
+        // Fixed column should remain without percentage; remaining share goes to other columns.
+        assert!(pct0.is_none());
+        assert!(pct1 > 30.0);
+        assert!(pct2 > 0.0);
+        assert!((pct1 + pct2 - 90.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn distribute_spanning_max_prefers_headroom_then_even() {
+        let mut columns = vec![ColumnConstraints::new(50.0, 70.0), ColumnConstraints::new(50.0, 120.0)];
+
+        // Need 260 total max; headroom is 20 + 70 before even split.
+        distribute_spanning_cell_width(&mut columns, 0, 2, 100.0, 260.0);
+
+        let total_max: f32 = columns.iter().map(|c| c.max_width).sum();
+        assert!((total_max - 260.0).abs() < 0.5);
+        assert!(columns[1].max_width > columns[0].max_width);
+    }
+
+    #[test]
+    fn distribute_spanning_max_uses_headroom_before_busting_caps() {
+        let mut columns = vec![ColumnConstraints::new(20.0, 60.0), ColumnConstraints::new(80.0, 90.0)];
+        // Sum max = 150; need 200. Prefer the 40px headroom before pushing the tight column.
+        distribute_spanning_cell_width(&mut columns, 0, 2, 100.0, 200.0);
+
+        let total_max: f32 = columns.iter().map(|c| c.max_width).sum();
+        assert!((total_max - 200.0).abs() < 0.5);
+        // The roomy column should grow substantially more than the tight one.
+        let growth0 = columns[0].max_width - 60.0;
+        let growth1 = columns[1].max_width - 90.0;
+        assert!(growth0 > growth1 + 20.0);
+    }
+
+    #[test]
+    fn spanning_growth_prefers_flexible_columns() {
+        let mut columns = vec![ColumnConstraints::fixed(100.0), ColumnConstraints::new(10.0, 200.0)];
+
+        distribute_spanning_cell_width(&mut columns, 0, 2, 210.0, 210.0);
+
+        // Fixed column stays at its authored width; flexible column absorbs the remainder.
+        assert_eq!(columns[0].min_width, 100.0);
+        assert!(columns[1].min_width > 100.0);
+    }
+
+    #[test]
+    fn spanning_percentage_splits_across_columns() {
+        let mut columns = vec![ColumnConstraints::new(0.0, 100.0), ColumnConstraints::new(0.0, 100.0)];
+        distribute_spanning_percentage(&mut columns, 0, 2, 50.0);
+
+        assert_eq!(columns[0].percentage, Some(25.0));
+        assert_eq!(columns[1].percentage, Some(25.0));
+        assert!(!columns[0].is_flexible);
+        assert!(!columns[1].is_flexible);
+    }
+
+    #[test]
+    fn spanning_percentage_respects_existing_percentages_and_fills_rest() {
+        let mut columns = vec![
+            ColumnConstraints::percentage(20.0, 0.0, 100.0),
+            ColumnConstraints::new(0.0, 100.0),
+            ColumnConstraints::new(0.0, 100.0),
+        ];
+        distribute_spanning_percentage(&mut columns, 0, 3, 60.0);
+
+        // Remaining share is split across all adjustable columns using intrinsic widths as weights.
+        assert!((columns[0].percentage.unwrap() - 33.333).abs() < 0.5);
+        assert!((columns[1].percentage.unwrap() - 13.333).abs() < 0.5);
+        assert!((columns[2].percentage.unwrap() - 13.333).abs() < 0.5);
+        let total: f32 = columns.iter().filter_map(|c| c.percentage).sum();
+        assert!((total - 60.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn spanning_percentage_skips_when_only_fixed_or_percent_columns() {
+        let mut columns = vec![
+            ColumnConstraints::fixed(50.0),
+            ColumnConstraints::percentage(30.0, 0.0, 100.0),
+        ];
+
+        distribute_spanning_percentage(&mut columns, 0, 2, 80.0);
+
+        // No auto columns to receive the remainder; the percentage column absorbs the spanning request.
+        assert_eq!(columns[0].fixed_width, Some(50.0));
+        assert!((columns[1].percentage.unwrap() - 80.0).abs() < 0.5);
     }
 
     // ========== Compute Column Constraints Tests ==========

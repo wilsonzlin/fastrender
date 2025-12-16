@@ -329,24 +329,35 @@ pub fn establishes_bfc(style: &ComputedStyle) -> bool {
     use crate::style::display::Display;
     use crate::style::types::Overflow;
 
+    if style.containment.size || style.containment.inline_size || style.containment.layout {
+        return true;
+    }
     if style.position == Position::Absolute || style.position == Position::Fixed {
         return true;
     }
-    if matches!(style.display, Display::InlineBlock) {
+    if matches!(
+        style.display,
+        Display::InlineBlock
+            | Display::InlineFlex
+            | Display::InlineGrid
+            | Display::FlowRoot
+            | Display::Table
+            | Display::InlineTable
+            | Display::TableCell
+            | Display::TableCaption
+    ) {
         return true;
     }
     if style.overflow_x != Overflow::Visible || style.overflow_y != Overflow::Visible {
         return true;
     }
-    if matches!(style.display, Display::Flex | Display::Grid) {
-        return true;
-    }
-    false
+    matches!(style.display, Display::Flex | Display::Grid)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::display::Display;
     use crate::style::values::Length;
 
     // ==========================================================================
@@ -592,5 +603,47 @@ mod tests {
     fn test_establishes_bfc_static() {
         let style = ComputedStyle::default();
         assert!(!establishes_bfc(&style));
+    }
+
+    #[test]
+    fn test_establishes_bfc_containment() {
+        let mut style = ComputedStyle::default();
+        style.containment = crate::style::types::Containment::with_flags(true, false, false, false, false);
+        assert!(establishes_bfc(&style));
+
+        style.containment = crate::style::types::Containment::with_flags(false, true, false, false, false);
+        assert!(establishes_bfc(&style));
+
+        style.containment = crate::style::types::Containment::with_flags(false, false, true, false, false);
+        assert!(establishes_bfc(&style));
+    }
+
+    #[test]
+    fn test_establishes_bfc_flow_root_and_inline_flex_grid() {
+        let mut style = ComputedStyle::default();
+        style.display = Display::FlowRoot;
+        assert!(establishes_bfc(&style));
+
+        style.display = Display::InlineFlex;
+        assert!(establishes_bfc(&style));
+
+        style.display = Display::InlineGrid;
+        assert!(establishes_bfc(&style));
+    }
+
+    #[test]
+    fn test_establishes_bfc_table_cell_and_caption() {
+        let mut style = ComputedStyle::default();
+        style.display = Display::TableCell;
+        assert!(establishes_bfc(&style));
+
+        style.display = Display::TableCaption;
+        assert!(establishes_bfc(&style));
+
+        style.display = Display::Table;
+        assert!(establishes_bfc(&style));
+
+        style.display = Display::InlineTable;
+        assert!(establishes_bfc(&style));
     }
 }

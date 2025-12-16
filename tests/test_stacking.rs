@@ -11,7 +11,7 @@ use fastrender::FragmentNode;
 use fastrender::{
     build_stacking_tree, creates_stacking_context, get_stacking_context_reason, StackingContext, StackingContextReason,
 };
-use fastrender::{ComputedStyle, Display, Overflow, Position};
+use fastrender::{ComputedStyle, Display, Float, Overflow, Position};
 use std::sync::Arc;
 
 // Helper functions
@@ -76,7 +76,7 @@ fn test_sticky_positioning_creates_stacking_context() {
 fn test_positioned_with_z_index_creates_stacking_context() {
     let mut style = ComputedStyle::default();
     style.position = Position::Relative;
-    style.z_index = 10;
+    style.z_index = Some(10);
     assert!(creates_stacking_context(&style, None, false));
     assert_eq!(
         get_stacking_context_reason(&style, None, false),
@@ -84,16 +84,14 @@ fn test_positioned_with_z_index_creates_stacking_context() {
     );
 }
 
-// Test: Positioned element with z-index: 0 doesn't create stacking context
-// (z-index: 0 is like z-index: auto for this purpose)
+// Test: Positioned element with z-index: 0 does create stacking context when specified
 
 #[test]
-fn test_positioned_with_zero_z_index_no_stacking_context() {
+fn test_positioned_with_zero_z_index_creates_stacking_context() {
     let mut style = ComputedStyle::default();
     style.position = Position::Relative;
-    style.z_index = 0;
-    // z-index: 0 (default) doesn't create stacking context
-    assert!(!creates_stacking_context(&style, None, false));
+    style.z_index = Some(0);
+    assert!(creates_stacking_context(&style, None, false));
 }
 
 // Test: Opacity < 1 creates stacking context
@@ -135,7 +133,7 @@ fn test_flex_item_with_z_index_creates_stacking_context() {
     parent_style.display = Display::Flex;
 
     let mut child_style = ComputedStyle::default();
-    child_style.z_index = 5;
+    child_style.z_index = Some(5);
 
     assert!(creates_stacking_context(&child_style, Some(&parent_style), false));
     assert_eq!(
@@ -152,7 +150,7 @@ fn test_grid_item_with_z_index_creates_stacking_context() {
     parent_style.display = Display::Grid;
 
     let mut child_style = ComputedStyle::default();
-    child_style.z_index = 5;
+    child_style.z_index = Some(5);
 
     assert!(creates_stacking_context(&child_style, Some(&parent_style), false));
     assert_eq!(
@@ -426,6 +424,69 @@ fn test_layer_classification_positioned() {
     assert_eq!(sc.layer6_positioned.len(), 1);
 }
 
+// Test: Layer classification - floats
+
+#[test]
+fn test_layer_classification_floats() {
+    let mut sc = StackingContext::root();
+    let fragment = block_fragment(0.0, 0.0, 80.0, 20.0);
+    let mut style = ComputedStyle::default();
+    style.display = Display::Block;
+    style.float = Float::Left;
+
+    sc.add_fragment_to_layer(fragment, Some(&style));
+
+    assert!(sc.layer3_blocks.is_empty());
+    assert_eq!(sc.layer4_floats.len(), 1);
+    assert!(sc.layer5_inlines.is_empty());
+    assert!(sc.layer6_positioned.is_empty());
+}
+
+// Test: Floats on positioned elements stay in positioned layer
+
+#[test]
+fn test_layer_classification_floats_ignored_for_positioned() {
+    let mut sc = StackingContext::root();
+    let fragment = block_fragment(0.0, 0.0, 80.0, 20.0);
+    let mut style = ComputedStyle::default();
+    style.display = Display::Block;
+    style.float = Float::Left;
+    style.position = Position::Absolute;
+
+    sc.add_fragment_to_layer(fragment, Some(&style));
+
+    assert!(sc.layer4_floats.is_empty());
+    assert_eq!(sc.layer6_positioned.len(), 1);
+}
+
+// Test: Paint order includes floats between blocks and inlines
+
+#[test]
+fn test_paint_order_with_float_layer() {
+    let mut sc = StackingContext::root();
+    sc.fragments.push(block_fragment(0.0, 0.0, 10.0, 10.0));
+
+    let mut block_style = ComputedStyle::default();
+    block_style.display = Display::Block;
+    sc.add_fragment_to_layer(block_fragment(10.0, 0.0, 10.0, 10.0), Some(&block_style));
+
+    let mut float_style = ComputedStyle::default();
+    float_style.display = Display::Block;
+    float_style.float = Float::Left;
+    sc.add_fragment_to_layer(block_fragment(20.0, 0.0, 10.0, 10.0), Some(&float_style));
+
+    let mut inline_style = ComputedStyle::default();
+    inline_style.display = Display::Inline;
+    sc.add_fragment_to_layer(text_fragment(30.0, 0.0, 10.0, 10.0, "x"), Some(&inline_style));
+
+    let mut positioned_style = ComputedStyle::default();
+    positioned_style.position = Position::Relative;
+    sc.add_fragment_to_layer(block_fragment(40.0, 0.0, 10.0, 10.0), Some(&positioned_style));
+
+    let order: Vec<f32> = sc.iter_paint_order().map(|f| f.bounds.x()).collect();
+    assert_eq!(order, vec![0.0, 10.0, 20.0, 30.0, 40.0]);
+}
+
 // Test: Bounds computation
 
 #[test]
@@ -488,6 +549,19 @@ fn test_positioned_overflow_creates_stacking_context() {
     );
 }
 
+#[test]
+fn test_positioned_overflow_clip_creates_stacking_context() {
+    let mut style = ComputedStyle::default();
+    style.position = Position::Relative;
+    style.overflow_y = Overflow::Clip;
+
+    assert!(creates_stacking_context(&style, None, false));
+    assert_eq!(
+        get_stacking_context_reason(&style, None, false),
+        Some(StackingContextReason::OverflowClip)
+    );
+}
+
 // Test: Multiple stacking context triggers (opacity takes precedence order)
 
 #[test]
@@ -522,7 +596,7 @@ fn test_inline_flex_item_with_z_index() {
     parent_style.display = Display::InlineFlex;
 
     let mut child_style = ComputedStyle::default();
-    child_style.z_index = 2;
+    child_style.z_index = Some(2);
 
     assert!(creates_stacking_context(&child_style, Some(&parent_style), false));
 }
@@ -535,7 +609,7 @@ fn test_inline_grid_item_with_z_index() {
     parent_style.display = Display::InlineGrid;
 
     let mut child_style = ComputedStyle::default();
-    child_style.z_index = 2;
+    child_style.z_index = Some(2);
 
     assert!(creates_stacking_context(&child_style, Some(&parent_style), false));
 }
@@ -546,7 +620,7 @@ fn test_inline_grid_item_with_z_index() {
 fn test_absolute_with_z_index() {
     let mut style = ComputedStyle::default();
     style.position = Position::Absolute;
-    style.z_index = 100;
+    style.z_index = Some(100);
 
     assert!(creates_stacking_context(&style, None, false));
     assert_eq!(
@@ -561,7 +635,7 @@ fn test_absolute_with_z_index() {
 fn test_negative_z_index() {
     let mut style = ComputedStyle::default();
     style.position = Position::Relative;
-    style.z_index = -5;
+    style.z_index = Some(-5);
 
     assert!(creates_stacking_context(&style, None, false));
     assert_eq!(

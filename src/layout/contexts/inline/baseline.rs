@@ -33,6 +33,7 @@
 //! - **Inline-block**: Bottom margin edge (or content baseline if has in-flow content)
 //! - **Replaced elements**: Bottom margin edge
 
+use crate::geometry::Size;
 use crate::style::ComputedStyle;
 use crate::text::font_db::FontMetrics;
 
@@ -119,6 +120,9 @@ pub struct BaselineMetrics {
 
     /// Line height from CSS (may differ from ascent + descent)
     pub line_height: f32,
+
+    /// Font x-height if available (used for middle alignment)
+    pub x_height: Option<f32>,
 }
 
 impl BaselineMetrics {
@@ -132,6 +136,7 @@ impl BaselineMetrics {
             descent: scaled.descent,
             line_gap: scaled.line_gap,
             line_height,
+            x_height: scaled.x_height,
         }
     }
 
@@ -146,6 +151,7 @@ impl BaselineMetrics {
             descent: 0.0,
             line_gap: 0.0,
             line_height: height,
+            x_height: None,
         }
     }
 
@@ -158,6 +164,9 @@ impl BaselineMetrics {
             descent,
             line_gap: 0.0,
             line_height: height,
+            // When true font metrics are unavailable, approximate x-height as half the ascent so
+            // vertical-align: middle still has a reasonable fallback.
+            x_height: Some(ascent * 0.5),
         }
     }
 
@@ -276,10 +285,13 @@ impl LineBaselineAccumulator {
             VerticalAlign::Baseline => 0.0,
 
             VerticalAlign::Middle => {
-                // Align center of box with parent baseline + x-height/2
-                // x-height is approximately 0.5 * font-size
-                let x_height = parent_metrics.map(|m| m.ascent * 0.5).unwrap_or(0.0);
-                x_height - (metrics.height / 2.0) + metrics.baseline_offset
+                // Align center of box with parent baseline + x-height/2.
+                // Spec: middle aligns the box midpoint with the parent's x-height midpoint.
+                let x_height_half = parent_metrics
+                    .and_then(|m| m.x_height.map(|xh| xh * 0.5))
+                    .or_else(|| parent_metrics.map(|m| m.ascent * 0.5))
+                    .unwrap_or(0.0);
+                metrics.baseline_offset - (metrics.height * 0.5) + x_height_half
             }
 
             VerticalAlign::Sub => {
@@ -355,20 +367,65 @@ impl LineBaselineAccumulator {
 /// - `<length>`: Use the absolute value
 /// - `<percentage>`: Multiply font-size by percentage/100
 pub fn compute_line_height(style: &ComputedStyle) -> f32 {
+    compute_line_height_with_metrics(style, None)
+}
+
+/// Computes line height, optionally using scaled font metrics and viewport size when available.
+pub fn compute_line_height_with_metrics_viewport(
+    style: &ComputedStyle,
+    metrics: Option<&crate::text::font_db::ScaledMetrics>,
+    viewport: Option<Size>,
+) -> f32 {
     use crate::style::types::LineHeight;
 
     let font_size = style.font_size;
+    let (vw, vh) = viewport
+        .and_then(|s| {
+            if s.width.is_finite() && s.height.is_finite() {
+                Some((s.width, s.height))
+            } else {
+                None
+            }
+        })
+        .unwrap_or((1200.0, 800.0));
 
     match &style.line_height {
-        LineHeight::Normal => font_size * 1.2,
+        LineHeight::Normal => {
+            if let Some(m) = metrics {
+                m.line_height
+            } else {
+                font_size * 1.2
+            }
+        }
         LineHeight::Number(n) => font_size * n,
-        LineHeight::Length(len) => len.to_px(),
+        LineHeight::Length(len) => match len.unit {
+            u if u.is_absolute() => len.to_px(),
+            crate::style::values::LengthUnit::Em => len.value * font_size,
+            crate::style::values::LengthUnit::Rem => len.value * style.root_font_size,
+            crate::style::values::LengthUnit::Ex => {
+                let x_height = metrics.and_then(|m| m.x_height).unwrap_or(font_size * 0.5);
+                len.value * x_height
+            }
+            crate::style::values::LengthUnit::Ch => len.value * font_size * 0.5,
+            u if u.is_viewport_relative() => len.resolve_with_viewport(vw, vh),
+            _ => len.value,
+        },
+        LineHeight::Percentage(pct) => font_size * (pct / 100.0),
     }
+}
+
+/// Computes line height, optionally using scaled font metrics when available.
+pub fn compute_line_height_with_metrics(
+    style: &ComputedStyle,
+    metrics: Option<&crate::text::font_db::ScaledMetrics>,
+) -> f32 {
+    compute_line_height_with_metrics_viewport(style, metrics, None)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::text::font_db::ScaledMetrics;
 
     #[test]
     fn test_vertical_align_default() {
@@ -420,9 +477,104 @@ mod tests {
             descent: 4.0,
             line_gap: 0.0,
             line_height: 24.0,
+            x_height: None,
         };
         // line_height=24, ascent+descent=16, leading=8, half=4
         assert_eq!(metrics.half_leading(), 4.0);
+    }
+
+    #[test]
+    fn middle_alignment_prefers_parent_x_height() {
+        let mut acc = LineBaselineAccumulator::new(&BaselineMetrics::new(10.0, 14.0, 10.0, 4.0));
+
+        let parent_with_x = BaselineMetrics {
+            baseline_offset: 20.0,
+            height: 30.0,
+            ascent: 20.0,
+            descent: 10.0,
+            line_gap: 0.0,
+            line_height: 30.0,
+            x_height: Some(6.0),
+        };
+        let parent_no_x = BaselineMetrics {
+            x_height: None,
+            ..parent_with_x
+        };
+
+        let item = BaselineMetrics {
+            baseline_offset: 8.0,
+            height: 10.0,
+            ascent: 8.0,
+            descent: 2.0,
+            line_gap: 0.0,
+            line_height: 10.0,
+            x_height: None,
+        };
+
+        let shift_with_x = acc.add_baseline_relative(&item, VerticalAlign::Middle, Some(&parent_with_x));
+        let shift_without_x = acc.add_baseline_relative(&item, VerticalAlign::Middle, Some(&parent_no_x));
+
+        assert!(
+            (shift_with_x - 6.0).abs() < 1e-3,
+            "middle should use parent x-height midpoint"
+        );
+        assert!(
+            (shift_without_x - 13.0).abs() < 1e-3,
+            "fallback uses 0.5em proxy when x-height is absent"
+        );
+        assert!(
+            shift_with_x < shift_without_x,
+            "x-height should produce a smaller shift than half-ascent"
+        );
+    }
+
+    #[test]
+    fn middle_alignment_applies_to_replaced_elements() {
+        // Replaced elements use their bottom edge as baseline; vertical-align: middle should still
+        // use the parent's x-height to shift them relative to the line.
+        let parent = BaselineMetrics {
+            baseline_offset: 18.0,
+            height: 24.0,
+            ascent: 18.0,
+            descent: 6.0,
+            line_gap: 0.0,
+            line_height: 24.0,
+            x_height: Some(6.0),
+        };
+
+        let replaced = BaselineMetrics::for_replaced(12.0);
+        let mut acc = LineBaselineAccumulator::new(&parent);
+        let shift = acc.add_baseline_relative(&replaced, VerticalAlign::Middle, Some(&parent));
+
+        // Expected shift: x-height/2 (3) minus half the box height (6) plus baseline_offset (12) = 9
+        assert!(
+            (shift - 9.0).abs() < 1e-3,
+            "unexpected middle shift for replaced element: {}",
+            shift
+        );
+    }
+
+    #[test]
+    fn middle_alignment_respects_parent_x_height_with_overflowing_inline_block() {
+        // Overflow-hidden inline-block uses bottom-edge baseline; middle alignment should still
+        // align its midpoint with the parent's x-height midpoint.
+        let parent = BaselineMetrics {
+            baseline_offset: 16.0,
+            height: 22.0,
+            ascent: 16.0,
+            descent: 6.0,
+            line_gap: 0.0,
+            line_height: 22.0,
+            x_height: Some(8.0),
+        };
+        let child = BaselineMetrics::for_replaced(20.0); // baseline at bottom edge
+        let mut acc = LineBaselineAccumulator::new(&parent);
+        let shift = acc.add_baseline_relative(&child, VerticalAlign::Middle, Some(&parent));
+        // parent x-height midpoint = 4; child midpoint (baseline_offset - height/2) = 10; shift = 10 + 4 = 14.
+        assert!(
+            (shift - 14.0).abs() < 1e-3,
+            "middle shift should reflect parent x-height midpoint and child height"
+        );
     }
 
     #[test]
@@ -527,5 +679,45 @@ mod tests {
         // Even empty line has strut height
         assert!(acc.line_height() > 0.0);
         assert!(acc.baseline_position() > 0.0);
+    }
+
+    #[test]
+    fn compute_line_height_prefers_scaled_metrics_for_normal() {
+        let mut style = ComputedStyle::default();
+        style.line_height = crate::style::types::LineHeight::Normal;
+        style.font_size = 16.0;
+        let metrics = ScaledMetrics {
+            font_size: 16.0,
+            scale: 1.0,
+            ascent: 10.0,
+            descent: 4.0,
+            line_gap: 2.0,
+            line_height: 16.0,
+            x_height: Some(8.0),
+            cap_height: Some(12.0),
+            underline_position: 2.0,
+            underline_thickness: 1.0,
+        };
+
+        assert!((compute_line_height(&style) - 19.2).abs() < 0.01);
+        assert!((compute_line_height_with_metrics(&style, Some(&metrics)) - 16.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn compute_line_height_viewport_relative_uses_real_viewport() {
+        use crate::style::values::{Length, LengthUnit};
+
+        let mut style = ComputedStyle::default();
+        style.font_size = 10.0;
+        style.line_height = crate::style::types::LineHeight::Length(Length::new(10.0, LengthUnit::Vh));
+
+        // With a 500px high viewport, 10vh should be 50px. The viewport-aware helper should use
+        // the provided size instead of the 1200x800 fallback.
+        let vh_500 = compute_line_height_with_metrics_viewport(&style, None, Some(Size::new(800.0, 500.0)));
+        assert!((vh_500 - 50.0).abs() < 0.001);
+
+        // And with a different viewport height, the result should change accordingly.
+        let vh_900 = compute_line_height_with_metrics_viewport(&style, None, Some(Size::new(800.0, 900.0)));
+        assert!((vh_900 - 90.0).abs() < 0.001);
     }
 }

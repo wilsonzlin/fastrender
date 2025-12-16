@@ -41,9 +41,12 @@
 
 use crate::geometry::{Point, Rect, Size};
 use crate::layout::formatting_context::LayoutError;
-use crate::layout::utils::resolve_offset;
+use crate::layout::utils::{
+    content_size_from_box_sizing, resolve_length_with_percentage, resolve_offset_for_positioned,
+};
 use crate::style::computed::PositionedStyle;
 use crate::style::position::Position;
+use crate::text::font_loader::FontContext;
 use crate::tree::fragment_tree::FragmentNode;
 
 /// Represents a containing block for positioned elements
@@ -65,28 +68,51 @@ pub struct ContainingBlock {
     /// For absolute positioning, this is the padding box.
     /// For fixed positioning, this is the viewport.
     pub rect: Rect,
+    viewport_size: Size,
+    inline_percentage_base: Option<f32>,
+    block_percentage_base: Option<f32>,
 }
 
 impl ContainingBlock {
     /// Creates a new containing block from a rectangle
     pub const fn new(rect: Rect) -> Self {
-        Self { rect }
+        Self::with_viewport_and_bases(rect, rect.size, Some(rect.size.width), Some(rect.size.height))
+    }
+
+    /// Creates a containing block from a rectangle and an explicit viewport size
+    pub const fn with_viewport(rect: Rect, viewport_size: Size) -> Self {
+        Self::with_viewport_and_bases(rect, viewport_size, Some(rect.size.width), Some(rect.size.height))
+    }
+
+    /// Creates a containing block with explicit percentage bases.
+    ///
+    /// When the containing block's inline/block sizes are auto (content-driven),
+    /// the percentage bases should be set to `None` so percentage offsets resolve
+    /// to `auto` per CSS 2.1 §10.5/10.6 instead of being treated as 0px.
+    pub const fn with_viewport_and_bases(
+        rect: Rect,
+        viewport_size: Size,
+        inline_base: Option<f32>,
+        block_base: Option<f32>,
+    ) -> Self {
+        Self {
+            rect,
+            viewport_size,
+            inline_percentage_base: inline_base,
+            block_percentage_base: block_base,
+        }
     }
 
     /// Creates a containing block from position and size
     pub fn from_origin_size(origin: Point, size: Size) -> Self {
-        Self {
-            rect: Rect::new(origin, size),
-        }
+        Self::with_viewport_and_bases(Rect::new(origin, size), size, Some(size.width), Some(size.height))
     }
 
     /// Creates a containing block representing the viewport
     ///
     /// Used for fixed positioning and as the initial containing block.
     pub fn viewport(size: Size) -> Self {
-        Self {
-            rect: Rect::new(Point::ZERO, size),
-        }
+        Self::with_viewport_and_bases(Rect::new(Point::ZERO, size), size, Some(size.width), Some(size.height))
     }
 
     /// Returns the width of the containing block
@@ -102,6 +128,24 @@ impl ContainingBlock {
     /// Returns the origin of the containing block
     pub fn origin(&self) -> Point {
         self.rect.origin
+    }
+
+    /// Returns the viewport size associated with this containing block.
+    ///
+    /// For viewport CBs this is the viewport; for other CBs this falls back
+    /// to the rect size when no explicit viewport is available.
+    pub fn viewport_size(&self) -> Size {
+        self.viewport_size
+    }
+
+    /// Percentage base for inline-axis offsets (Some(width) when definite).
+    pub fn inline_percentage_base(&self) -> Option<f32> {
+        self.inline_percentage_base
+    }
+
+    /// Percentage base for block-axis offsets (None when block-size is auto).
+    pub fn block_percentage_base(&self) -> Option<f32> {
+        self.block_percentage_base
     }
 }
 
@@ -139,12 +183,15 @@ impl StickyConstraints {
     }
 
     /// Creates sticky constraints from computed style
-    pub fn from_style(style: &PositionedStyle, containing_block: &ContainingBlock) -> Self {
+    pub fn from_style(style: &PositionedStyle, containing_block: &ContainingBlock, font_context: &FontContext) -> Self {
+        let viewport = containing_block.viewport_size();
+        let inline_base = containing_block.inline_percentage_base();
+        let block_base = containing_block.block_percentage_base();
         Self {
-            top: resolve_offset(&style.top, containing_block.height()),
-            right: resolve_offset(&style.right, containing_block.width()),
-            bottom: resolve_offset(&style.bottom, containing_block.height()),
-            left: resolve_offset(&style.left, containing_block.width()),
+            top: resolve_offset_for_positioned(&style.top, block_base, viewport, style, font_context),
+            right: resolve_offset_for_positioned(&style.right, inline_base, viewport, style, font_context),
+            bottom: resolve_offset_for_positioned(&style.bottom, block_base, viewport, style, font_context),
+            left: resolve_offset_for_positioned(&style.left, inline_base, viewport, style, font_context),
         }
     }
 
@@ -167,13 +214,23 @@ impl StickyConstraints {
 /// # Thread Safety
 ///
 /// PositionedLayout is stateless and can be shared across threads.
-#[derive(Debug, Clone, Default)]
-pub struct PositionedLayout;
+#[derive(Clone)]
+pub struct PositionedLayout {
+    font_context: FontContext,
+}
+
+impl Default for PositionedLayout {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl PositionedLayout {
     /// Creates a new positioned layout handler
-    pub const fn new() -> Self {
-        Self
+    pub fn new() -> Self {
+        Self {
+            font_context: FontContext::new(),
+        }
     }
 
     /// Applies relative positioning to a fragment
@@ -229,13 +286,15 @@ impl PositionedLayout {
         // Apply offset to fragment position
         let new_bounds = fragment.bounds.translate(offset);
 
-        // Create new fragment with adjusted bounds but same children
+        // Create new fragment with adjusted bounds but same children and style.
         // Note: Children positions are relative to parent, so they don't change
-        Ok(FragmentNode::new(
-            new_bounds,
-            fragment.content.clone(),
-            fragment.children.clone(),
-        ))
+        Ok(FragmentNode {
+            bounds: new_bounds,
+            content: fragment.content.clone(),
+            baseline: fragment.baseline,
+            children: fragment.children.clone(),
+            style: fragment.style.clone(),
+        })
     }
 
     /// Computes the offset for relative positioning
@@ -246,25 +305,53 @@ impl PositionedLayout {
     fn compute_relative_offset(&self, style: &PositionedStyle, containing_block: &ContainingBlock) -> Point {
         let mut offset_x = 0.0;
         let mut offset_y = 0.0;
-
-        let cb_width = containing_block.width();
-        let cb_height = containing_block.height();
+        let viewport = containing_block.viewport_size();
+        let inline_base = containing_block.inline_percentage_base();
+        let block_base = containing_block.block_percentage_base();
 
         // Vertical offset: top takes precedence over bottom
-        if let Some(top) = resolve_offset(&style.top, cb_height) {
+        if let Some(top) = resolve_offset_for_positioned(&style.top, block_base, viewport, style, &self.font_context) {
             offset_y = top;
-        } else if let Some(bottom) = resolve_offset(&style.bottom, cb_height) {
+        } else if let Some(bottom) =
+            resolve_offset_for_positioned(&style.bottom, block_base, viewport, style, &self.font_context)
+        {
             offset_y = -bottom;
         }
 
         // Horizontal offset: left takes precedence over right (LTR)
-        if let Some(left) = resolve_offset(&style.left, cb_width) {
+        if let Some(left) = resolve_offset_for_positioned(&style.left, inline_base, viewport, style, &self.font_context)
+        {
             offset_x = left;
-        } else if let Some(right) = resolve_offset(&style.right, cb_width) {
+        } else if let Some(right) =
+            resolve_offset_for_positioned(&style.right, inline_base, viewport, style, &self.font_context)
+        {
             offset_x = -right;
         }
 
         Point::new(offset_x, offset_y)
+    }
+
+    /// Resolves a length-or-auto for width/height using percentage, viewport, or font bases.
+    ///
+    /// Percentages use the provided base, viewport units use the containing viewport, and
+    /// font-relative units use the element/root font sizes. Returns `None` for `auto`.
+    fn resolve_length_for_size(
+        &self,
+        value: &crate::style::values::LengthOrAuto,
+        percentage_base: Option<f32>,
+        viewport: Size,
+        style: &PositionedStyle,
+    ) -> Option<f32> {
+        match value {
+            crate::style::values::LengthOrAuto::Auto => None,
+            crate::style::values::LengthOrAuto::Length(length) => resolve_length_with_percentage(
+                *length,
+                percentage_base,
+                viewport,
+                style.font_size,
+                style.root_font_size,
+            ),
+        }
     }
 
     /// Computes the position and size for an absolutely positioned element
@@ -295,12 +382,39 @@ impl PositionedLayout {
     ) -> Result<(Point, Size), LayoutError> {
         let cb_width = containing_block.width();
         let cb_height = containing_block.height();
+        let viewport = containing_block.viewport_size();
+        let inline_base = containing_block.inline_percentage_base();
+        let block_base = containing_block.block_percentage_base();
 
         // Compute horizontal position and width
-        let (x, width) = self.compute_absolute_horizontal(style, cb_width, intrinsic_size.width)?;
+        let (x, width) =
+            self.compute_absolute_horizontal(style, cb_width, inline_base, viewport, intrinsic_size.width)?;
 
         // Compute vertical position and height
-        let (y, height) = self.compute_absolute_vertical(style, cb_height, intrinsic_size.height)?;
+        let (y, height) =
+            self.compute_absolute_vertical(style, cb_height, block_base, viewport, intrinsic_size.height)?;
+
+        let mut width = width;
+        let mut height = height;
+        if let crate::style::types::AspectRatio::Ratio(ratio) = style.aspect_ratio {
+            if ratio > 0.0 {
+                let width_auto = matches!(style.width, crate::style::values::LengthOrAuto::Auto);
+                let height_auto = matches!(style.height, crate::style::values::LengthOrAuto::Auto);
+                if width_auto && !height_auto {
+                    width = height * ratio;
+                } else if height_auto && !width_auto {
+                    height = width / ratio;
+                } else if width_auto && height_auto {
+                    if intrinsic_size.width > 0.0 {
+                        width = intrinsic_size.width;
+                        height = width / ratio;
+                    } else if intrinsic_size.height > 0.0 {
+                        height = intrinsic_size.height;
+                        width = height * ratio;
+                    }
+                }
+            }
+        }
 
         // Position is relative to containing block origin
         let position = Point::new(containing_block.origin().x + x, containing_block.origin().y + y);
@@ -316,13 +430,12 @@ impl PositionedLayout {
         &self,
         style: &PositionedStyle,
         cb_width: f32,
+        inline_base: Option<f32>,
+        viewport: Size,
         intrinsic_width: f32,
     ) -> Result<(f32, f32), LayoutError> {
-        let left = resolve_offset(&style.left, cb_width);
-        let right = resolve_offset(&style.right, cb_width);
-
-        // Get width value (may be auto)
-        let specified_width = style.width.resolve_against(cb_width);
+        let left = resolve_offset_for_positioned(&style.left, inline_base, viewport, style, &self.font_context);
+        let right = resolve_offset_for_positioned(&style.right, inline_base, viewport, style, &self.font_context);
 
         // Get margin values (auto margins = 0 for absolute positioning unless overconstrained)
         let margin_left = style.margin.left;
@@ -335,6 +448,11 @@ impl PositionedLayout {
         let border_right = style.border_width.right;
 
         let total_horizontal = padding_left + padding_right + border_left + border_right;
+
+        // Get width value (may be auto)
+        let specified_width = self
+            .resolve_length_for_size(&style.width, inline_base, viewport, style)
+            .map(|w| content_size_from_box_sizing(w, total_horizontal, style.box_sizing));
 
         match (left, specified_width, right) {
             // Case 1: All three specified (overconstrained) - ignore right for LTR
@@ -395,13 +513,12 @@ impl PositionedLayout {
         &self,
         style: &PositionedStyle,
         cb_height: f32,
+        block_base: Option<f32>,
+        viewport: Size,
         intrinsic_height: f32,
     ) -> Result<(f32, f32), LayoutError> {
-        let top = resolve_offset(&style.top, cb_height);
-        let bottom = resolve_offset(&style.bottom, cb_height);
-
-        // Get height value (may be auto)
-        let specified_height = style.height.resolve_against(cb_height);
+        let top = resolve_offset_for_positioned(&style.top, block_base, viewport, style, &self.font_context);
+        let bottom = resolve_offset_for_positioned(&style.bottom, block_base, viewport, style, &self.font_context);
 
         // Get margin values
         let margin_top = style.margin.top;
@@ -414,6 +531,11 @@ impl PositionedLayout {
         let border_bottom = style.border_width.bottom;
 
         let total_vertical = padding_top + padding_bottom + border_top + border_bottom;
+
+        // Get height value (may be auto)
+        let specified_height = self
+            .resolve_length_for_size(&style.height, block_base, viewport, style)
+            .map(|h| content_size_from_box_sizing(h, total_vertical, style.box_sizing));
 
         match (top, specified_height, bottom) {
             // All three specified (overconstrained) - ignore bottom
@@ -497,13 +619,27 @@ impl PositionedLayout {
             Position::Static | Position::Relative | Position::Sticky => {
                 // Use nearest block container ancestor, or viewport if none
                 block_ancestor_rect
-                    .map(ContainingBlock::new)
+                    .map(|rect| {
+                        let block_base = if rect.size.height > 0.0 {
+                            Some(rect.size.height)
+                        } else {
+                            None
+                        };
+                        ContainingBlock::with_viewport_and_bases(rect, viewport_size, Some(rect.size.width), block_base)
+                    })
                     .unwrap_or_else(|| ContainingBlock::viewport(viewport_size))
             }
             Position::Absolute => {
                 // Use nearest positioned ancestor, or viewport if none (initial containing block)
                 positioned_ancestor_rect
-                    .map(ContainingBlock::new)
+                    .map(|rect| {
+                        let block_base = if rect.size.height > 0.0 {
+                            Some(rect.size.height)
+                        } else {
+                            None
+                        };
+                        ContainingBlock::with_viewport_and_bases(rect, viewport_size, Some(rect.size.width), block_base)
+                    })
                     .unwrap_or_else(|| ContainingBlock::viewport(viewport_size))
             }
             Position::Fixed => {
@@ -538,7 +674,7 @@ impl PositionedLayout {
             return StickyConstraints::none();
         }
 
-        StickyConstraints::from_style(style, containing_block)
+        StickyConstraints::from_style(style, containing_block, &self.font_context)
     }
 
     /// Checks if an element creates a stacking context
@@ -557,19 +693,7 @@ impl PositionedLayout {
     ///
     /// True if the element creates a stacking context
     pub fn creates_stacking_context(&self, style: &PositionedStyle) -> bool {
-        // Positioned with z-index
-        if style.position.is_positioned() && style.z_index.is_some() {
-            return true;
-        }
-
-        // Opacity < 1
-        if style.opacity < 1.0 {
-            return true;
-        }
-
-        // TODO: Add transform, filter, isolation checks when those properties are available
-
-        false
+        style.creates_stacking_context()
     }
 }
 
@@ -579,7 +703,9 @@ mod tests {
     use crate::geometry::EdgeOffsets;
     use crate::style::computed::PositionedStyle;
 
-    use crate::style::values::LengthOrAuto;
+    use crate::layout::utils::resolve_offset;
+    use crate::style::values::{Length, LengthOrAuto, LengthUnit};
+    use crate::text::font_loader::FontContext;
 
     fn default_style() -> PositionedStyle {
         let mut style = PositionedStyle::default();
@@ -631,7 +757,7 @@ mod tests {
         style.left = LengthOrAuto::percent(5.0);
 
         let cb = create_containing_block(800.0, 600.0);
-        let constraints = StickyConstraints::from_style(&style, &cb);
+        let constraints = StickyConstraints::from_style(&style, &cb, &FontContext::new());
 
         assert_eq!(constraints.top, Some(10.0));
         assert_eq!(constraints.left, Some(40.0)); // 5% of 800
@@ -838,6 +964,41 @@ mod tests {
     }
 
     #[test]
+    fn test_absolute_position_width_with_viewport_units() {
+        let layout = PositionedLayout::new();
+
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.width = LengthOrAuto::Length(Length::new(50.0, LengthUnit::Vw));
+
+        let cb = create_containing_block(200.0, 150.0);
+        let intrinsic = Size::new(10.0, 10.0);
+
+        let (_pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+
+        // 50vw of a 200px viewport = 100px
+        assert!((size.width - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_absolute_position_width_with_font_relative_units() {
+        let layout = PositionedLayout::new();
+
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.font_size = 18.0;
+        style.root_font_size = 18.0;
+        style.width = LengthOrAuto::Length(Length::em(2.0));
+
+        let cb = create_containing_block(300.0, 200.0);
+        let intrinsic = Size::new(5.0, 5.0);
+
+        let (_pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+
+        assert!((size.width - 36.0).abs() < 0.01);
+    }
+
+    #[test]
     fn test_absolute_position_with_top_and_height() {
         let layout = PositionedLayout::new();
 
@@ -985,6 +1146,31 @@ mod tests {
     }
 
     #[test]
+    fn test_creates_stacking_context_transform() {
+        let layout = PositionedLayout::new();
+
+        let mut style = default_style();
+        style
+            .transform
+            .push(crate::css::types::Transform::Rotate(std::f32::consts::FRAC_PI_2));
+
+        assert!(layout.creates_stacking_context(&style));
+    }
+
+    #[test]
+    fn test_creates_stacking_context_will_change() {
+        let layout = PositionedLayout::new();
+
+        let mut style = default_style();
+        style.will_change =
+            crate::style::types::WillChange::Hints(vec![crate::style::types::WillChangeHint::Property(
+                "opacity".into(),
+            )]);
+
+        assert!(layout.creates_stacking_context(&style));
+    }
+
+    #[test]
     fn test_creates_stacking_context_static_no_z_index() {
         let layout = PositionedLayout::new();
 
@@ -1001,18 +1187,24 @@ mod tests {
     #[test]
     fn test_resolve_offset_auto() {
         let value = LengthOrAuto::Auto;
-        assert_eq!(resolve_offset(&value, 100.0), None);
+        assert_eq!(resolve_offset(&value, 100.0, Size::new(800.0, 600.0), 16.0, 16.0), None);
     }
 
     #[test]
     fn test_resolve_offset_px() {
         let value = LengthOrAuto::px(50.0);
-        assert_eq!(resolve_offset(&value, 100.0), Some(50.0));
+        assert_eq!(
+            resolve_offset(&value, 100.0, Size::new(800.0, 600.0), 16.0, 16.0),
+            Some(50.0)
+        );
     }
 
     #[test]
     fn test_resolve_offset_percent() {
         let value = LengthOrAuto::percent(25.0);
-        assert_eq!(resolve_offset(&value, 200.0), Some(50.0));
+        assert_eq!(
+            resolve_offset(&value, 200.0, Size::new(800.0, 600.0), 16.0, 16.0),
+            Some(50.0)
+        );
     }
 }

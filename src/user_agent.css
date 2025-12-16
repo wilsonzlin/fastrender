@@ -1,7 +1,10 @@
 /* User Agent Stylesheet - Default browser styles */
 
 /* Document structure */
-html, body {
+html {
+    display: block;
+}
+body {
     display: block;
     margin: 8px;
 }
@@ -73,10 +76,43 @@ ul, ol {
     margin-top: 1em;
     margin-bottom: 1em;
     padding-left: 40px;
+    counter-reset: list-item;
 }
 
 li {
     display: list-item;
+    counter-increment: list-item;
+}
+
+menu, dir {
+    display: block;
+    margin-top: 1em;
+    margin-bottom: 1em;
+    padding-left: 40px;
+    list-style-type: disc;
+}
+
+/* Obsolete center element */
+center {
+    display: block;
+    text-align: center;
+}
+center > * {
+    text-align: center;
+}
+center > table,
+center > div,
+center > blockquote,
+center > pre,
+center > ul,
+center > ol,
+center > form,
+center > p,
+center > section,
+center > article,
+center > main {
+    margin-left: auto;
+    margin-right: auto;
 }
 
 /* Block elements */
@@ -126,6 +162,7 @@ tr {
 td, th {
     display: table-cell;
     padding: 1px;
+    vertical-align: middle;
 }
 
 th {
@@ -140,6 +177,14 @@ span, a, strong, em, b, i, u, small, mark, code {
 
 strong, b {
     font-weight: bold;
+}
+
+bdi {
+    unicode-bidi: isolate;
+}
+
+bdo {
+    unicode-bidi: bidi-override;
 }
 
 em, i {
@@ -179,6 +224,52 @@ input[type="submit"], input[type="button"], button {
 
 textarea {
     white-space: pre-wrap;
+}
+
+input[type="hidden"] {
+    display: none;
+}
+
+option {
+    display: block;
+    white-space: pre;
+}
+
+optgroup {
+    display: block;
+    white-space: pre;
+    font-weight: bold;
+}
+
+fieldset {
+    display: block;
+    margin: 0.35em 2px 0.625em;
+    padding: 0.35em 0.75em 0.625em;
+    border: 2px groove #c0c0c0;
+}
+
+legend {
+    display: block;
+    padding-left: 2px;
+    padding-right: 2px;
+}
+
+details {
+    display: block;
+}
+
+summary {
+    display: list-item;
+    cursor: pointer;
+    list-style: disclosure-closed outside;
+}
+
+details[open] > summary {
+    list-style-type: disclosure-open;
+}
+
+details:not([open]) > :not(summary) {
+    display: none;
 }
 
 /* Hidden elements - these should not be rendered */

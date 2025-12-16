@@ -134,11 +134,12 @@ fn test_fixed_width_exceeds_available() {
 
     let result = distributor.distribute(&columns, 300.0);
 
-    // When overconstrained, widths are scaled proportionally to fit
-    // Both columns have same min, so they scale equally: 300/2 = 150 each
-    assert_eq!(result.widths[0], 150.0);
-    assert_eq!(result.widths[1], 150.0);
+    // When overconstrained, fixed widths hold and we report overflow instead of scaling.
+    assert!((result.widths[0] - 200.0).abs() < 0.01);
+    assert!((result.widths[1] - 200.0).abs() < 0.01);
     assert!(result.is_over_constrained);
+    assert!((result.overflow_amount - 100.0).abs() < 0.01);
+    assert!((result.total_width - 400.0).abs() < 0.01);
 }
 
 // =============================================================================
@@ -180,10 +181,11 @@ fn test_percentage_width_exceeds_100() {
 
     let result = distributor.distribute(&columns, 400.0);
 
-    // Both should get 60% of 400 = 240 each
+    // Percentages above 100% are applied as-authored, making the table over-constrained.
     assert!((result.widths[0] - 240.0).abs() < 0.01);
     assert!((result.widths[1] - 240.0).abs() < 0.01);
-    assert!(result.is_over_constrained || result.total_width > 400.0);
+    assert!(result.is_over_constrained);
+    assert!((result.total_width - 480.0).abs() < 0.01);
 }
 
 #[test]
@@ -241,7 +243,7 @@ fn test_mixed_all_types_complex() {
 // =============================================================================
 
 #[test]
-fn test_over_constrained_scales_down() {
+fn test_over_constrained_keeps_minimums() {
     let columns = vec![
         ColumnConstraints::new(100.0, 200.0),
         ColumnConstraints::new(100.0, 200.0),
@@ -252,13 +254,15 @@ fn test_over_constrained_scales_down() {
     let result = distributor.distribute(&columns, 100.0);
 
     assert!(result.is_over_constrained);
-    // Should scale proportionally
-    assert!((result.widths[0] - result.widths[1]).abs() < 0.01);
-    assert_total_width(&result.widths, 100.0, 0.01);
+    // Keep minimum widths and expose the overflow rather than scaling below min.
+    assert!((result.widths[0] - 100.0).abs() < 0.01);
+    assert!((result.widths[1] - 100.0).abs() < 0.01);
+    assert!((result.overflow_amount - 100.0).abs() < 0.01);
+    assert!((result.total_width - 200.0).abs() < 0.01);
 }
 
 #[test]
-fn test_over_constrained_unequal_minimums() {
+fn test_over_constrained_unequal_minimums_keep_minimums() {
     let columns = vec![
         ColumnConstraints::new(200.0, 400.0),
         ColumnConstraints::new(100.0, 200.0),
@@ -269,9 +273,11 @@ fn test_over_constrained_unequal_minimums() {
     let result = distributor.distribute(&columns, 150.0);
 
     assert!(result.is_over_constrained);
-    // Should scale proportionally: 200 -> 100, 100 -> 50
-    assert!((result.widths[0] - 100.0).abs() < 0.01);
-    assert!((result.widths[1] - 50.0).abs() < 0.01);
+    // Minimum widths are preserved even when over-constrained.
+    assert!((result.widths[0] - 200.0).abs() < 0.01);
+    assert!((result.widths[1] - 100.0).abs() < 0.01);
+    assert!((result.overflow_amount - 150.0).abs() < 0.01);
+    assert!((result.total_width - 300.0).abs() < 0.01);
 }
 
 // =============================================================================

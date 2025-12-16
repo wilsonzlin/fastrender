@@ -43,11 +43,13 @@
 
 use crate::error::{RenderError, Result};
 use crate::geometry::{Point, Rect, Size};
+use crate::paint::clip_path::ResolvedClipPath;
 use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
 use crate::text::shaper::GlyphPosition;
 use tiny_skia::{
-    BlendMode as SkiaBlendMode, FillRule, Paint, PathBuilder, Pixmap, Rect as SkiaRect, Stroke, Transform,
+    BlendMode as SkiaBlendMode, FillRule, IntSize, Mask, MaskType, Paint, PathBuilder, Pixmap, PixmapPaint,
+    Rect as SkiaRect, Stroke, Transform,
 };
 
 use super::display_list::{BlendMode, BorderRadii};
@@ -67,7 +69,9 @@ struct CanvasState {
     /// Current opacity (0.0 to 1.0)
     opacity: f32,
     /// Clip rectangle (if any)
-    clip: Option<Rect>,
+    clip_rect: Option<Rect>,
+    /// Clip mask (respects radii/intersections)
+    clip_mask: Option<Mask>,
     /// Blend mode
     blend_mode: SkiaBlendMode,
 }
@@ -78,19 +82,25 @@ impl CanvasState {
         Self {
             transform: Transform::identity(),
             opacity: 1.0,
-            clip: None,
+            clip_rect: None,
+            clip_mask: None,
             blend_mode: SkiaBlendMode::SourceOver,
         }
     }
 
     /// Creates a paint with the current state applied
     fn create_paint(&self, color: Rgba) -> Paint<'static> {
+        self.create_paint_with_blend(color, self.blend_mode)
+    }
+
+    /// Creates a paint with an explicit blend mode override
+    fn create_paint_with_blend(&self, color: Rgba, blend_mode: SkiaBlendMode) -> Paint<'static> {
         let mut paint = Paint::default();
         // Apply opacity to alpha (color.a is already 0.0-1.0)
         let alpha = color.a * self.opacity;
         paint.set_color_rgba8(color.r, color.g, color.b, (alpha * 255.0) as u8);
         paint.anti_alias = true;
-        paint.blend_mode = self.blend_mode;
+        paint.blend_mode = blend_mode;
         paint
     }
 }
@@ -99,6 +109,15 @@ impl Default for CanvasState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[derive(Debug)]
+struct LayerRecord {
+    pixmap: Pixmap,
+    state_stack: Vec<CanvasState>,
+    current_state: CanvasState,
+    opacity: f32,
+    composite_blend: Option<SkiaBlendMode>,
 }
 
 // ============================================================================
@@ -125,6 +144,8 @@ pub struct Canvas {
     pixmap: Pixmap,
     /// Stack of graphics states
     state_stack: Vec<CanvasState>,
+    /// Stack of offscreen layers for grouped effects
+    layer_stack: Vec<LayerRecord>,
     /// Current graphics state
     current_state: CanvasState,
 }
@@ -167,6 +188,7 @@ impl Canvas {
         let mut canvas = Self {
             pixmap,
             state_stack: Vec::new(),
+            layer_stack: Vec::new(),
             current_state: CanvasState::new(),
         };
 
@@ -304,6 +326,72 @@ impl Canvas {
         self.current_state.opacity
     }
 
+    /// Pushes a new offscreen layer for grouped compositing (e.g., opacity).
+    pub fn push_layer(&mut self, opacity: f32) -> Result<()> {
+        self.push_layer_with_blend(opacity, None)
+    }
+
+    /// Pushes a new offscreen layer with an explicit composite blend mode.
+    pub fn push_layer_with_blend(&mut self, opacity: f32, blend: Option<SkiaBlendMode>) -> Result<()> {
+        let new_pixmap =
+            Pixmap::new(self.pixmap.width(), self.pixmap.height()).ok_or_else(|| RenderError::InvalidParameters {
+                message: "Failed to create layer pixmap".into(),
+            })?;
+
+        let record = LayerRecord {
+            pixmap: std::mem::replace(&mut self.pixmap, new_pixmap),
+            state_stack: self.state_stack.clone(),
+            current_state: self.current_state.clone(),
+            opacity: opacity.clamp(0.0, 1.0),
+            composite_blend: blend,
+        };
+        self.layer_stack.push(record);
+        // Painting inside the layer should start from a neutral state.
+        self.current_state.opacity = 1.0;
+        self.current_state.blend_mode = SkiaBlendMode::SourceOver;
+        Ok(())
+    }
+
+    /// Pops the most recent offscreen layer without compositing it.
+    ///
+    /// Returns the layer pixmap, the effective opacity (including parent opacity),
+    /// and any explicit composite blend mode that was requested.
+    pub fn pop_layer_raw(&mut self) -> Result<(Pixmap, f32, Option<SkiaBlendMode>)> {
+        let Some(record) = self.layer_stack.pop() else {
+            return Err(RenderError::InvalidParameters {
+                message: "pop_layer without matching push".into(),
+            }
+            .into());
+        };
+
+        let layer_pixmap = std::mem::replace(&mut self.pixmap, record.pixmap);
+        self.state_stack = record.state_stack;
+        self.current_state = record.current_state;
+        let opacity = (record.opacity * self.current_state.opacity).clamp(0.0, 1.0);
+        Ok((layer_pixmap, opacity, record.composite_blend))
+    }
+
+    /// Pops the most recent offscreen layer and composites it into the parent.
+    pub fn pop_layer(&mut self) -> Result<()> {
+        let (layer_pixmap, opacity, composite_blend) = self.pop_layer_raw()?;
+
+        let mut paint = PixmapPaint::default();
+        paint.opacity = opacity;
+        paint.blend_mode = composite_blend.unwrap_or(self.current_state.blend_mode);
+        let clip = self.current_state.clip_mask.clone();
+        let transform = self.current_state.transform;
+
+        self.pixmap
+            .draw_pixmap(0, 0, layer_pixmap.as_ref(), &paint, transform, clip.as_ref());
+        Ok(())
+    }
+
+    /// Returns the current blend mode.
+    #[inline]
+    pub(crate) fn blend_mode(&self) -> SkiaBlendMode {
+        self.current_state.blend_mode
+    }
+
     /// Sets the current transform
     ///
     /// # Examples
@@ -348,12 +436,63 @@ impl Canvas {
     ///
     /// Subsequent drawing operations will be clipped to this rectangle.
     pub fn set_clip(&mut self, rect: Rect) {
-        self.current_state.clip = Some(rect);
+        self.set_clip_with_radii(rect, None);
+    }
+
+    /// Sets a clip rectangle with optional corner radii.
+    pub fn set_clip_with_radii(&mut self, rect: Rect, radii: Option<BorderRadii>) {
+        let base_clip = match self.current_state.clip_rect {
+            Some(existing) => existing.intersection(rect).unwrap_or(Rect::ZERO),
+            None => rect,
+        };
+        self.current_state.clip_rect = Some(base_clip);
+
+        let new_mask = self.build_clip_mask(rect, radii.unwrap_or(BorderRadii::ZERO));
+        self.current_state.clip_mask = match (new_mask, self.current_state.clip_mask.take()) {
+            (Some(mut next), Some(existing)) => {
+                combine_masks(&mut next, &existing);
+                Some(next)
+            }
+            (Some(mask), None) => Some(mask),
+            (None, existing) => existing,
+        };
+    }
+
+    /// Sets an arbitrary clip path (basic shapes)
+    pub fn set_clip_path(&mut self, path: &ResolvedClipPath, scale: f32) {
+        let bounds = path.bounds();
+        let base_clip = match self.current_state.clip_rect {
+            Some(existing) => existing.intersection(bounds).unwrap_or(Rect::ZERO),
+            None => bounds,
+        };
+        self.current_state.clip_rect = Some(base_clip);
+
+        let new_mask =
+            IntSize::from_wh(self.pixmap.width(), self.pixmap.height()).and_then(|size| path.mask(scale, size));
+        self.current_state.clip_mask = match (new_mask, self.current_state.clip_mask.take()) {
+            (Some(mut next), Some(existing)) => {
+                combine_masks(&mut next, &existing);
+                Some(next)
+            }
+            (Some(mask), None) => Some(mask),
+            (None, existing) => existing,
+        };
     }
 
     /// Clears the clip rectangle
     pub fn clear_clip(&mut self) {
-        self.current_state.clip = None;
+        self.current_state.clip_rect = None;
+        self.current_state.clip_mask = None;
+    }
+
+    /// Returns the current clip bounds if any.
+    pub(crate) fn clip_bounds(&self) -> Option<Rect> {
+        self.current_state.clip_rect
+    }
+
+    /// Returns the current clip mask, including any rounded radii.
+    pub(crate) fn clip_mask(&self) -> Option<&Mask> {
+        self.current_state.clip_mask.as_ref()
     }
 
     // ========================================================================
@@ -388,8 +527,13 @@ impl Canvas {
         if let Some(skia_rect) = self.to_skia_rect(rect) {
             let path = PathBuilder::from_rect(skia_rect);
             let paint = self.current_state.create_paint(color);
-            self.pixmap
-                .fill_path(&path, &paint, FillRule::Winding, self.current_state.transform, None);
+            self.pixmap.fill_path(
+                &path,
+                &paint,
+                FillRule::Winding,
+                self.current_state.transform,
+                self.current_state.clip_mask.as_ref(),
+            );
         }
     }
 
@@ -418,8 +562,36 @@ impl Canvas {
                 width,
                 ..Default::default()
             };
-            self.pixmap
-                .stroke_path(&path, &paint, &stroke, self.current_state.transform, None);
+            self.pixmap.stroke_path(
+                &path,
+                &paint,
+                &stroke,
+                self.current_state.transform,
+                self.current_state.clip_mask.as_ref(),
+            );
+        }
+    }
+
+    /// Draws a stroked rectangle outline using an explicit blend mode override.
+    pub fn stroke_rect_with_blend(&mut self, rect: Rect, color: Rgba, width: f32, blend_mode: BlendMode) {
+        if color.a == 0.0 && self.current_state.opacity == 0.0 {
+            return;
+        }
+
+        if let Some(skia_rect) = self.to_skia_rect(rect) {
+            let path = PathBuilder::from_rect(skia_rect);
+            let paint = self.current_state.create_paint_with_blend(color, blend_mode.to_skia());
+            let stroke = Stroke {
+                width,
+                ..Default::default()
+            };
+            self.pixmap.stroke_path(
+                &path,
+                &paint,
+                &stroke,
+                self.current_state.transform,
+                self.current_state.clip_mask.as_ref(),
+            );
         }
     }
 
@@ -447,10 +619,21 @@ impl Canvas {
             return self.draw_rect(rect, color);
         }
 
+        if let Some(clip) = self.current_state.clip_rect {
+            if rect.intersection(clip).is_none() {
+                return;
+            }
+        }
+
         if let Some(path) = self.build_rounded_rect_path(rect, radii) {
             let paint = self.current_state.create_paint(color);
-            self.pixmap
-                .fill_path(&path, &paint, FillRule::Winding, self.current_state.transform, None);
+            self.pixmap.fill_path(
+                &path,
+                &paint,
+                FillRule::Winding,
+                self.current_state.transform,
+                self.current_state.clip_mask.as_ref(),
+            );
         }
     }
 
@@ -464,14 +647,25 @@ impl Canvas {
             return self.stroke_rect(rect, color, width);
         }
 
+        if let Some(clip) = self.current_state.clip_rect {
+            if rect.intersection(clip).is_none() {
+                return;
+            }
+        }
+
         if let Some(path) = self.build_rounded_rect_path(rect, radii) {
             let paint = self.current_state.create_paint(color);
             let stroke = Stroke {
                 width,
                 ..Default::default()
             };
-            self.pixmap
-                .stroke_path(&path, &paint, &stroke, self.current_state.transform, None);
+            self.pixmap.stroke_path(
+                &path,
+                &paint,
+                &stroke,
+                self.current_state.transform,
+                self.current_state.clip_mask.as_ref(),
+            );
         }
     }
 
@@ -501,6 +695,8 @@ impl Canvas {
         font: &LoadedFont,
         font_size: f32,
         color: Rgba,
+        synthetic_bold: f32,
+        synthetic_oblique: f32,
     ) {
         if glyphs.is_empty() || (color.a == 0.0 && self.current_state.opacity == 0.0) {
             return;
@@ -523,9 +719,29 @@ impl Canvas {
             let glyph_y = position.y + glyph.offset_y;
 
             // Get the glyph outline
-            if let Some(path) = self.build_glyph_path(&face, glyph.glyph_id as u16, glyph_x, glyph_y, scale) {
-                self.pixmap
-                    .fill_path(&path, &paint, FillRule::Winding, self.current_state.transform, None);
+            if let Some(path) =
+                self.build_glyph_path(&face, glyph.glyph_id as u16, glyph_x, glyph_y, scale, synthetic_oblique)
+            {
+                self.pixmap.fill_path(
+                    &path,
+                    &paint,
+                    FillRule::Winding,
+                    self.current_state.transform,
+                    self.current_state.clip_mask.as_ref(),
+                );
+                if synthetic_bold > 0.0 {
+                    let mut stroke = Stroke::default();
+                    stroke.width = synthetic_bold * 2.0;
+                    stroke.line_join = tiny_skia::LineJoin::Round;
+                    stroke.line_cap = tiny_skia::LineCap::Round;
+                    self.pixmap.stroke_path(
+                        &path,
+                        &paint,
+                        &stroke,
+                        self.current_state.transform,
+                        self.current_state.clip_mask.as_ref(),
+                    );
+                }
             }
 
             x += glyph.advance;
@@ -555,8 +771,13 @@ impl Canvas {
                 width,
                 ..Default::default()
             };
-            self.pixmap
-                .stroke_path(&path, &paint, &stroke, self.current_state.transform, None);
+            self.pixmap.stroke_path(
+                &path,
+                &paint,
+                &stroke,
+                self.current_state.transform,
+                self.current_state.clip_mask.as_ref(),
+            );
         }
     }
 
@@ -574,8 +795,13 @@ impl Canvas {
 
         if let Some(path) = self.build_circle_path(center, radius) {
             let paint = self.current_state.create_paint(color);
-            self.pixmap
-                .fill_path(&path, &paint, FillRule::Winding, self.current_state.transform, None);
+            self.pixmap.fill_path(
+                &path,
+                &paint,
+                FillRule::Winding,
+                self.current_state.transform,
+                self.current_state.clip_mask.as_ref(),
+            );
         }
     }
 
@@ -591,8 +817,13 @@ impl Canvas {
                 width,
                 ..Default::default()
             };
-            self.pixmap
-                .stroke_path(&path, &paint, &stroke, self.current_state.transform, None);
+            self.pixmap.stroke_path(
+                &path,
+                &paint,
+                &stroke,
+                self.current_state.transform,
+                self.current_state.clip_mask.as_ref(),
+            );
         }
     }
 
@@ -606,12 +837,33 @@ impl Canvas {
     }
 
     /// Applies the current clip to a rectangle
-    fn apply_clip(&self, rect: Rect) -> Option<Rect> {
-        if let Some(clip) = self.current_state.clip {
+    /// Applies the current clip to a rectangle.
+    pub(crate) fn apply_clip(&self, rect: Rect) -> Option<Rect> {
+        if let Some(clip) = self.current_state.clip_rect {
+            if clip.width() <= 0.0 || clip.height() <= 0.0 {
+                return None;
+            }
             rect.intersection(clip)
         } else {
             Some(rect)
         }
+    }
+
+    fn build_clip_mask(&self, rect: Rect, radii: BorderRadii) -> Option<Mask> {
+        if rect.width() <= 0.0 || rect.height() <= 0.0 || self.width() == 0 || self.height() == 0 {
+            return None;
+        }
+
+        let mut mask_pixmap = Pixmap::new(self.width(), self.height())?;
+        let paint = {
+            let mut p = Paint::default();
+            p.set_color_rgba8(255, 255, 255, 255);
+            p
+        };
+
+        let path = self.build_rounded_rect_path(rect, radii)?;
+        mask_pixmap.fill_path(&path, &paint, FillRule::Winding, self.current_state.transform, None);
+        Some(Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha))
     }
 
     /// Builds a path for a rounded rectangle
@@ -741,11 +993,12 @@ impl Canvas {
         x: f32,
         y: f32,
         scale: f32,
+        synthetic_oblique: f32,
     ) -> Option<tiny_skia::Path> {
         let glyph_id = ttf_parser::GlyphId(glyph_id);
 
         // Create a path builder that collects glyph outline
-        let mut builder = GlyphPathBuilder::new(x, y, scale);
+        let mut builder = GlyphPathBuilder::new(x, y, scale, synthetic_oblique);
 
         face.outline_glyph(glyph_id, &mut builder);
 
@@ -763,20 +1016,22 @@ struct GlyphPathBuilder {
     x: f32,
     y: f32,
     scale: f32,
+    skew: f32,
 }
 
 impl GlyphPathBuilder {
-    fn new(x: f32, y: f32, scale: f32) -> Self {
+    fn new(x: f32, y: f32, scale: f32, skew: f32) -> Self {
         Self {
             path_builder: PathBuilder::new(),
             x,
             y,
             scale,
+            skew,
         }
     }
 
-    fn transform_x(&self, gx: f32) -> f32 {
-        self.x + gx * self.scale
+    fn transform_x(&self, gx: f32, gy: f32) -> f32 {
+        self.x + (gx + self.skew * gy) * self.scale
     }
 
     fn transform_y(&self, gy: f32) -> f32 {
@@ -791,35 +1046,46 @@ impl GlyphPathBuilder {
 
 impl ttf_parser::OutlineBuilder for GlyphPathBuilder {
     fn move_to(&mut self, x: f32, y: f32) {
-        self.path_builder.move_to(self.transform_x(x), self.transform_y(y));
+        self.path_builder.move_to(self.transform_x(x, y), self.transform_y(y));
     }
 
     fn line_to(&mut self, x: f32, y: f32) {
-        self.path_builder.line_to(self.transform_x(x), self.transform_y(y));
+        self.path_builder.line_to(self.transform_x(x, y), self.transform_y(y));
     }
 
     fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
         self.path_builder.quad_to(
-            self.transform_x(x1),
+            self.transform_x(x1, y1),
             self.transform_y(y1),
-            self.transform_x(x),
+            self.transform_x(x, y),
             self.transform_y(y),
         );
     }
 
     fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
         self.path_builder.cubic_to(
-            self.transform_x(x1),
+            self.transform_x(x1, y1),
             self.transform_y(y1),
-            self.transform_x(x2),
+            self.transform_x(x2, y2),
             self.transform_y(y2),
-            self.transform_x(x),
+            self.transform_x(x, y),
             self.transform_y(y),
         );
     }
 
     fn close(&mut self) {
         self.path_builder.close();
+    }
+}
+
+fn combine_masks(into: &mut Mask, existing: &Mask) {
+    if into.width() != existing.width() || into.height() != existing.height() {
+        return;
+    }
+
+    for (dst, src) in into.data_mut().iter_mut().zip(existing.data().iter()) {
+        let multiplied = (*dst as u16 * *src as u16 + 127) / 255;
+        *dst = multiplied as u8;
     }
 }
 
@@ -848,10 +1114,11 @@ impl BlendModeExt for BlendMode {
             BlendMode::SoftLight => SkiaBlendMode::SoftLight,
             BlendMode::Difference => SkiaBlendMode::Difference,
             BlendMode::Exclusion => SkiaBlendMode::Exclusion,
-            // Additional blend modes map to SourceOver (normal) for now
-            BlendMode::Hue | BlendMode::Saturation | BlendMode::Color | BlendMode::Luminosity => {
-                SkiaBlendMode::SourceOver
-            }
+            BlendMode::Hue => SkiaBlendMode::Hue,
+            BlendMode::Saturation => SkiaBlendMode::Saturation,
+            BlendMode::Color => SkiaBlendMode::Color,
+            BlendMode::Luminosity => SkiaBlendMode::Luminosity,
+            BlendMode::PlusLighter => SkiaBlendMode::Plus,
         }
     }
 }
@@ -863,6 +1130,13 @@ impl BlendModeExt for BlendMode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
+        let width = pixmap.width();
+        let idx = ((y * width + x) * 4) as usize;
+        let data = pixmap.data();
+        (data[idx], data[idx + 1], data[idx + 2], data[idx + 3])
+    }
 
     #[test]
     fn test_canvas_creation() {
@@ -1075,5 +1349,27 @@ mod tests {
         canvas.clear_clip();
 
         let _ = canvas.into_pixmap();
+    }
+
+    #[test]
+    fn clip_limits_rect_fill() {
+        let mut canvas = Canvas::new(10, 10, Rgba::WHITE).unwrap();
+        canvas.set_clip(Rect::from_xywh(2.0, 2.0, 4.0, 4.0));
+        canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), Rgba::rgb(255, 0, 0));
+        let pixmap = canvas.into_pixmap();
+
+        assert_eq!(pixel(&pixmap, 3, 3), (255, 0, 0, 255));
+        assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
+    }
+
+    #[test]
+    fn rounded_clip_masks_corners() {
+        let mut canvas = Canvas::new(12, 12, Rgba::WHITE).unwrap();
+        canvas.set_clip_with_radii(Rect::from_xywh(2.0, 2.0, 8.0, 8.0), Some(BorderRadii::uniform(4.0)));
+        canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 12.0, 12.0), Rgba::rgb(0, 0, 255));
+        let pixmap = canvas.into_pixmap();
+
+        assert_eq!(pixel(&pixmap, 6, 6), (0, 0, 255, 255));
+        assert_eq!(pixel(&pixmap, 2, 2), (255, 255, 255, 255));
     }
 }

@@ -3,13 +3,22 @@
 //! These tests verify the display list types work correctly for the paint system.
 //! Unit tests are in the display_list module itself; these are integration tests.
 
+use fastrender::css::types::{BoxShadow, ColorStop};
 use fastrender::geometry::{Point, Rect};
-use fastrender::Rgba;
+use fastrender::paint::display_list::ClipShape;
+use fastrender::style::types::{
+    BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle, Containment,
+};
+use fastrender::style::values::Length;
+use fastrender::tree::box_tree::ReplacedType;
+use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode};
 use fastrender::{
     BlendMode, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FillRoundedRectItem,
-    GlyphInstance, GradientStop, ImageData, ImageItem, LinearGradientItem, OpacityItem, PaintTextItem as TextItem,
-    RadialGradientItem, StrokeRectItem, StrokeRoundedRectItem, Transform2D, TransformItem,
+    GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem,
+    OpacityItem, PaintTextItem as TextItem, RadialGradientItem, StrokeRectItem, StrokeRoundedRectItem, Transform2D,
+    TransformItem,
 };
+use fastrender::{Color, ComputedStyle, Rgba};
 use std::sync::Arc;
 
 // ============================================================================
@@ -45,6 +54,322 @@ fn test_display_list_from_items() {
 
     let list = DisplayList::from_items(items);
     assert_eq!(list.len(), 2);
+}
+
+#[test]
+fn fragment_background_emits_fill() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.background_color = Rgba::RED;
+    style.border_top_width = fastrender::style::values::Length::px(0.0);
+    style.border_right_width = fastrender::style::values::Length::px(0.0);
+    style.border_bottom_width = fastrender::style::values::Length::px(0.0);
+    style.border_left_width = fastrender::style::values::Length::px(0.0);
+    let fragment =
+        fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    assert!(!list.is_empty());
+    match &list.items()[0] {
+        DisplayItem::FillRect(item) => {
+            assert_eq!(item.rect.width(), 20.0);
+            assert_eq!(item.color, Rgba::RED);
+        }
+        _ => panic!("expected background fill"),
+    }
+}
+
+#[test]
+fn fragment_uniform_border_emits_stroke() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.border_top_width = fastrender::style::values::Length::px(2.0);
+    style.border_right_width = fastrender::style::values::Length::px(2.0);
+    style.border_bottom_width = fastrender::style::values::Length::px(2.0);
+    style.border_left_width = fastrender::style::values::Length::px(2.0);
+    style.border_top_style = fastrender::style::types::BorderStyle::Solid;
+    style.border_right_style = fastrender::style::types::BorderStyle::Solid;
+    style.border_bottom_style = fastrender::style::types::BorderStyle::Solid;
+    style.border_left_style = fastrender::style::types::BorderStyle::Solid;
+    style.border_top_color = Rgba::BLUE;
+    style.border_right_color = Rgba::BLUE;
+    style.border_bottom_color = Rgba::BLUE;
+    style.border_left_color = Rgba::BLUE;
+
+    let fragment =
+        fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    assert!(list.items().iter().any(|i| matches!(
+        i,
+        DisplayItem::StrokeRect(_) | DisplayItem::StrokeRoundedRect(_) | DisplayItem::Border(_)
+    )));
+}
+
+#[test]
+fn fragment_mixed_borders_emit_border_item() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.border_top_width = fastrender::style::values::Length::px(1.0);
+    style.border_right_width = fastrender::style::values::Length::px(2.0);
+    style.border_bottom_width = fastrender::style::values::Length::px(0.0);
+    style.border_left_width = fastrender::style::values::Length::px(3.0);
+    style.border_top_style = BorderStyle::Dotted;
+    style.border_right_style = BorderStyle::Dashed;
+    style.border_bottom_style = BorderStyle::Solid;
+    style.border_left_style = BorderStyle::Double;
+    style.border_top_color = Rgba::RED;
+    style.border_right_color = Rgba::BLUE;
+    style.border_left_color = Rgba::GREEN;
+    style.border_bottom_color = Rgba::TRANSPARENT;
+
+    let fragment =
+        fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    let border = list
+        .items()
+        .iter()
+        .find_map(|i| if let DisplayItem::Border(b) = i { Some(b) } else { None });
+
+    let border = border.expect("expected border item");
+    assert_eq!(border.top.style, BorderStyle::Dotted);
+    assert_eq!(border.right.style, BorderStyle::Dashed);
+    assert_eq!(border.left.style, BorderStyle::Double);
+    assert_eq!(border.top.width, 1.0);
+    assert_eq!(border.right.width, 2.0);
+    assert_eq!(border.left.width, 3.0);
+}
+
+#[test]
+fn fragment_background_gradient_emits_linear_gradient() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.background_color = Rgba::TRANSPARENT;
+    style.set_background_layers(vec![BackgroundLayer {
+        image: Some(BackgroundImage::LinearGradient {
+            angle: 0.0,
+            stops: vec![
+                ColorStop {
+                    color: Color::Rgba(Rgba::RED),
+                    position: Some(0.0),
+                },
+                ColorStop {
+                    color: Color::Rgba(Rgba::BLUE),
+                    position: Some(1.0),
+                },
+            ],
+        }),
+        repeat: BackgroundRepeat::no_repeat(),
+        ..Default::default()
+    }]);
+
+    let fragment =
+        fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 30.0, 10.0), vec![], Arc::new(style));
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    assert!(list.items().iter().any(|i| matches!(i, DisplayItem::LinearGradient(_))));
+}
+
+#[test]
+fn fragment_background_image_emits_image_item() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.background_color = Rgba::TRANSPARENT;
+    style.set_background_layers(vec![BackgroundLayer {
+        image: Some(BackgroundImage::Url(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"><rect width=\"1\" height=\"1\" fill=\"blue\"/></svg>"
+                .into(),
+        )),
+        repeat: BackgroundRepeat::no_repeat(),
+        ..Default::default()
+    }]);
+    let fragment =
+        fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    let image = list.items().iter().find_map(|i| {
+        if let DisplayItem::Image(img) = i {
+            Some(img)
+        } else {
+            None
+        }
+    });
+    let image = image.expect("background image should emit an image item");
+    assert_eq!(image.dest_rect.width(), 1.0);
+    assert_eq!(image.dest_rect.height(), 1.0);
+}
+
+#[test]
+fn display_list_background_layers_paint_top_to_bottom() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.background_color = Rgba::TRANSPARENT;
+    let top = BackgroundLayer {
+        image: Some(BackgroundImage::LinearGradient {
+            angle: 0.0,
+            stops: vec![
+                ColorStop {
+                    color: Color::Rgba(Rgba::from_rgba8(0, 255, 0, 128)),
+                    position: Some(0.0),
+                },
+                ColorStop {
+                    color: Color::Rgba(Rgba::from_rgba8(0, 255, 0, 128)),
+                    position: Some(1.0),
+                },
+            ],
+        }),
+        ..Default::default()
+    };
+    let bottom = BackgroundLayer {
+        image: Some(BackgroundImage::LinearGradient {
+            angle: 0.0,
+            stops: vec![
+                ColorStop {
+                    color: Color::Rgba(Rgba::BLUE),
+                    position: Some(0.0),
+                },
+                ColorStop {
+                    color: Color::Rgba(Rgba::BLUE),
+                    position: Some(1.0),
+                },
+            ],
+        }),
+        ..Default::default()
+    };
+    style.set_background_layers(vec![top, bottom]);
+
+    let fragment =
+        fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+
+    let gradients: Vec<_> = list
+        .items()
+        .iter()
+        .filter_map(|i| match i {
+            DisplayItem::LinearGradient(item) => Some(item),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(gradients.len(), 2, "expected two background gradient items");
+    // First emitted gradient should be the bottom layer (blue), second the top layer (green overlay).
+    let bottom_color = gradients[0].stops[0].color;
+    let top_color = gradients[1].stops[0].color;
+    assert_eq!(bottom_color, Rgba::BLUE);
+    assert_eq!(top_color, Rgba::from_rgba8(0, 255, 0, 128));
+}
+
+#[test]
+fn display_list_background_layers_use_per_layer_clip() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.background_color = Rgba::TRANSPARENT;
+    style.padding_left = fastrender::style::values::Length::px(4.0);
+    style.padding_right = fastrender::style::values::Length::px(4.0);
+    style.padding_top = fastrender::style::values::Length::px(4.0);
+    style.padding_bottom = fastrender::style::values::Length::px(4.0);
+
+    let top = BackgroundLayer {
+        image: Some(BackgroundImage::LinearGradient {
+            angle: 0.0,
+            stops: vec![ColorStop {
+                color: Color::Rgba(Rgba::GREEN),
+                position: Some(0.0),
+            }],
+        }),
+        clip: BackgroundBox::ContentBox,
+        ..Default::default()
+    };
+    let bottom = BackgroundLayer {
+        image: Some(BackgroundImage::LinearGradient {
+            angle: 0.0,
+            stops: vec![ColorStop {
+                color: Color::Rgba(Rgba::BLUE),
+                position: Some(0.0),
+            }],
+        }),
+        clip: BackgroundBox::BorderBox,
+        ..Default::default()
+    };
+    style.set_background_layers(vec![top, bottom]);
+
+    let fragment =
+        fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+
+    let gradients: Vec<_> = list
+        .items()
+        .iter()
+        .filter_map(|i| match i {
+            DisplayItem::LinearGradient(item) => Some(item),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(gradients.len(), 2, "expected two background gradient items");
+    // Bottom layer should cover border box, top should be clipped to content box (20x20 minus 4px padding).
+    assert_eq!(gradients[0].rect, Rect::from_xywh(0.0, 0.0, 20.0, 20.0));
+    assert_eq!(gradients[1].rect, Rect::from_xywh(4.0, 4.0, 12.0, 12.0));
+}
+#[test]
+fn fragment_box_shadow_emits_items() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.box_shadow = vec![
+        BoxShadow {
+            offset_x: fastrender::style::values::Length::px(2.0),
+            offset_y: fastrender::style::values::Length::px(3.0),
+            blur_radius: fastrender::style::values::Length::px(4.0),
+            spread_radius: fastrender::style::values::Length::px(1.0),
+            color: Rgba::BLACK,
+            inset: false,
+        },
+        BoxShadow {
+            offset_x: fastrender::style::values::Length::px(-1.0),
+            offset_y: fastrender::style::values::Length::px(-2.0),
+            blur_radius: fastrender::style::values::Length::px(0.0),
+            spread_radius: fastrender::style::values::Length::px(0.0),
+            color: Rgba::RED,
+            inset: true,
+        },
+    ];
+
+    let fragment =
+        fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    let shadows: Vec<_> = list
+        .items()
+        .iter()
+        .filter_map(|i| {
+            if let DisplayItem::BoxShadow(s) = i {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(shadows.len(), 2, "expected inset and outset shadows");
+    assert!(shadows.iter().any(|s| !s.inset && s.offset == Point::new(2.0, 3.0)));
+    assert!(shadows.iter().any(|s| s.inset && s.color == Rgba::RED));
+}
+
+#[test]
+fn fragment_opacity_wraps_display_items() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.opacity = 0.5;
+    style.color = Rgba::BLACK;
+    let fragment = fastrender::FragmentNode {
+        bounds: Rect::from_xywh(0.0, 0.0, 20.0, 10.0),
+        content: fastrender::FragmentContent::Text {
+            text: "hi".to_string(),
+            baseline_offset: 8.0,
+            shaped: None,
+            box_id: None,
+            is_marker: false,
+        },
+        baseline: None,
+        children: vec![],
+        style: Some(Arc::new(style)),
+    };
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    let items = list.items();
+    assert_eq!(items.len(), 3, "opacity should wrap content");
+    assert!(matches!(items[0], DisplayItem::PushOpacity(_)));
+    assert!(matches!(items[1], DisplayItem::Text(_)));
+    assert!(matches!(items[2], DisplayItem::PopOpacity));
 }
 
 // ============================================================================
@@ -85,6 +410,7 @@ fn test_stroke_rect_item() {
         rect: Rect::from_xywh(0.0, 0.0, 200.0, 100.0),
         color: Rgba::BLUE,
         width: 2.0,
+        blend_mode: BlendMode::Normal,
     }));
 
     assert_eq!(list.len(), 1);
@@ -166,9 +492,14 @@ fn test_text_item() {
             },
         ],
         color: Rgba::BLACK,
+        shadows: Vec::new(),
         font_size: 16.0,
         advance_width: 22.0,
         font_id: None,
+        synthetic_bold: 0.0,
+        synthetic_oblique: 0.0,
+        emphasis: None,
+        decorations: Vec::new(),
     }));
 
     if let DisplayItem::Text(item) = &list.items()[0] {
@@ -189,11 +520,12 @@ fn test_image_item() {
     let mut list = DisplayList::new();
 
     let pixels = vec![255u8; 32 * 32 * 4]; // 32x32 RGBA image
-    let image_data = Arc::new(ImageData::new(32, 32, pixels));
+    let image_data = Arc::new(ImageData::new_pixels(32, 32, pixels));
 
     list.push(DisplayItem::Image(ImageItem {
         dest_rect: Rect::from_xywh(10.0, 10.0, 64.0, 64.0),
         image: image_data.clone(),
+        filter_quality: ImageFilterQuality::Linear,
         src_rect: None,
     }));
 
@@ -210,11 +542,12 @@ fn test_image_item() {
 #[test]
 fn test_image_with_src_rect() {
     let pixels = vec![0u8; 100 * 100 * 4];
-    let image_data = Arc::new(ImageData::new(100, 100, pixels));
+    let image_data = Arc::new(ImageData::new_pixels(100, 100, pixels));
 
     let item = ImageItem {
         dest_rect: Rect::from_xywh(0.0, 0.0, 50.0, 50.0),
         image: image_data,
+        filter_quality: ImageFilterQuality::Linear,
         src_rect: Some(Rect::from_xywh(0.0, 0.0, 50.0, 50.0)), // Top-left quadrant
     };
 
@@ -282,6 +615,7 @@ fn test_linear_gradient() {
         rect: Rect::from_xywh(0.0, 0.0, 200.0, 100.0),
         start: Point::new(0.0, 0.0),
         end: Point::new(200.0, 0.0),
+        spread: GradientSpread::Pad,
         stops: vec![
             GradientStop {
                 position: 0.0,
@@ -310,7 +644,8 @@ fn test_radial_gradient() {
     list.push(DisplayItem::RadialGradient(RadialGradientItem {
         rect: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
         center: Point::new(50.0, 50.0),
-        radius: 50.0,
+        radii: Point::new(50.0, 50.0),
+        spread: GradientSpread::Pad,
         stops: vec![
             GradientStop {
                 position: 0.0,
@@ -330,7 +665,7 @@ fn test_radial_gradient() {
     if let DisplayItem::RadialGradient(item) = &list.items()[0] {
         assert_eq!(item.stops.len(), 3);
         assert_eq!(item.center.x, 50.0);
-        assert_eq!(item.radius, 50.0);
+        assert_eq!(item.radii, Point::new(50.0, 50.0));
     } else {
         panic!("Expected RadialGradient item");
     }
@@ -345,8 +680,10 @@ fn test_push_pop_clip() {
     let mut list = DisplayList::new();
 
     list.push(DisplayItem::PushClip(ClipItem {
-        rect: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-        radii: None,
+        shape: ClipShape::Rect {
+            rect: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+            radii: None,
+        },
     }));
 
     list.push(DisplayItem::FillRect(FillRectItem {
@@ -365,11 +702,16 @@ fn test_push_pop_clip() {
 #[test]
 fn test_rounded_clip() {
     let item = ClipItem {
-        rect: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-        radii: Some(BorderRadii::uniform(10.0)),
+        shape: ClipShape::Rect {
+            rect: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+            radii: Some(BorderRadii::uniform(10.0)),
+        },
     };
 
-    assert!(item.radii.is_some());
+    match &item.shape {
+        ClipShape::Rect { radii, .. } => assert!(radii.is_some()),
+        _ => panic!("expected rect clip"),
+    }
 }
 
 #[test]
@@ -602,12 +944,14 @@ fn test_optimize_removes_transparent_strokes() {
         rect: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
         color: Rgba::BLACK,
         width: 1.0,
+        blend_mode: BlendMode::Normal,
     }));
 
     list.push(DisplayItem::StrokeRect(StrokeRectItem {
         rect: Rect::from_xywh(50.0, 50.0, 100.0, 100.0),
         color: Rgba::TRANSPARENT,
         width: 2.0,
+        blend_mode: BlendMode::Normal,
     }));
 
     list.optimize();
@@ -729,9 +1073,14 @@ fn test_complex_display_list() {
         origin: Point::new(120.0, 150.0),
         glyphs: vec![],
         color: Rgba::BLACK,
+        shadows: Vec::new(),
         font_size: 16.0,
         advance_width: 100.0,
         font_id: None,
+        synthetic_bold: 0.0,
+        synthetic_oblique: 0.0,
+        emphasis: None,
+        decorations: Vec::new(),
     }));
 
     // Border
@@ -787,6 +1136,12 @@ fn test_stacking_context() {
         z_index: 10,
         creates_stacking_context: true,
         bounds: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+        mix_blend_mode: BlendMode::Normal,
+        is_isolated: false,
+        transform: None,
+        filters: Vec::new(),
+        backdrop_filters: Vec::new(),
+        radii: BorderRadii::ZERO,
     }));
 
     list.push(DisplayItem::FillRect(FillRectItem {
@@ -799,6 +1154,95 @@ fn test_stacking_context() {
     assert_eq!(list.len(), 3);
     assert!(list.items()[0].is_stack_operation());
     assert!(list.items()[2].is_stack_operation());
+}
+
+#[test]
+fn paint_containment_clips_stacking_context() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.containment = Containment::with_flags(false, false, false, false, true);
+    style.border_top_width = Length::px(2.0);
+    style.border_right_width = Length::px(2.0);
+    style.border_bottom_width = Length::px(2.0);
+    style.border_left_width = Length::px(2.0);
+    style.border_top_left_radius = Length::px(5.0);
+    style.border_top_right_radius = Length::px(5.0);
+    style.border_bottom_right_radius = Length::px(5.0);
+    style.border_bottom_left_radius = Length::px(5.0);
+
+    let fragment =
+        fastrender::FragmentNode::new_block_styled(Rect::from_xywh(10.0, 20.0, 50.0, 30.0), vec![], Arc::new(style));
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build_with_stacking_tree(&fragment);
+    let items = list.items();
+
+    let clip_start = items
+        .iter()
+        .position(|item| matches!(item, DisplayItem::PushClip(_)))
+        .expect("paint containment should push a clip");
+    let clip_end = items
+        .iter()
+        .rposition(|item| matches!(item, DisplayItem::PopClip))
+        .expect("paint containment should pop a clip");
+
+    assert!(clip_end > clip_start, "clip should wrap the stacking context");
+    let stacking_idx = items
+        .iter()
+        .position(|item| matches!(item, DisplayItem::PushStackingContext(_)))
+        .expect("stacking context should be present");
+    assert!(stacking_idx > clip_start && stacking_idx < clip_end);
+
+    match &items[clip_start] {
+        DisplayItem::PushClip(ClipItem {
+            shape: ClipShape::Rect { rect, radii },
+        }) => {
+            assert_eq!(*rect, Rect::from_xywh(12.0, 22.0, 46.0, 26.0));
+            assert_eq!(*radii, Some(BorderRadii::uniform(3.0)));
+        }
+        other => panic!("expected PushClip, got {:?}", other),
+    }
+}
+
+#[test]
+fn video_replaced_element_uses_poster_image_in_display_list() {
+    // Create a tiny PNG poster on disk so the display list builder can decode it.
+    let mut poster_path = std::env::temp_dir();
+    poster_path.push(format!(
+        "fastrender_dl_video_poster_{}.png",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut img = image::RgbaImage::new(1, 1);
+    img.put_pixel(0, 0, image::Rgba([0, 0, 0, 0]));
+    img.save(&poster_path).expect("poster image saved");
+
+    let replaced_type = ReplacedType::Video {
+        src: "unused".to_string(),
+        poster: Some(poster_path.to_string_lossy().to_string()),
+    };
+    let style = Arc::new(ComputedStyle::default());
+    let fragment = FragmentNode::new_with_style(
+        Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+        FragmentContent::Replaced {
+            replaced_type: replaced_type.clone(),
+            box_id: None,
+        },
+        vec![],
+        style,
+    );
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    let image = list.items().iter().find_map(|item| {
+        if let DisplayItem::Image(img) = item {
+            Some(img)
+        } else {
+            None
+        }
+    });
+    let image = image.expect("video replaced element should emit an image from poster");
+    assert_eq!(image.dest_rect, Rect::from_xywh(0.0, 0.0, 10.0, 10.0));
+    let _ = std::fs::remove_file(&poster_path);
 }
 
 // ============================================================================

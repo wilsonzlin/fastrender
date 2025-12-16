@@ -8,6 +8,7 @@
 //! - Embedded var() in other CSS functions
 //! - Edge cases and error handling
 
+use fastrender::style::values::LengthUnit;
 use fastrender::style::var_resolution::{
     contains_var, extract_var_references, is_valid_custom_property_name, resolve_var, resolve_var_with_depth,
 };
@@ -220,12 +221,11 @@ fn test_resolve_var_in_calc() {
     let value = PropertyValue::Keyword("calc(var(--base-size) * 2)".to_string());
     let resolved = resolve_var(&value, &props);
 
-    match resolved {
-        PropertyValue::Keyword(kw) => {
-            assert!(kw.contains("calc(16px * 2)"));
-        }
-        _ => panic!("Expected Keyword with calc, got {:?}", resolved),
-    }
+    assert!(
+        matches!(resolved, PropertyValue::Length(len) if (len.value - 32.0).abs() < f32::EPSILON && len.unit == LengthUnit::Px),
+        "Expected resolved calc length, got {:?}",
+        resolved
+    );
 }
 
 #[test]

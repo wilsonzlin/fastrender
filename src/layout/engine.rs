@@ -19,6 +19,7 @@ use crate::geometry::Size;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::formatting_context::{IntrinsicSizingMode, LayoutError};
+use crate::text::font_loader::FontContext;
 use crate::tree::box_tree::{BoxNode, BoxTree};
 use crate::tree::fragment_tree::{FragmentNode, FragmentTree};
 
@@ -60,6 +61,9 @@ pub struct LayoutConfig {
     ///
     /// When true, only changed subtrees will be re-laid out.
     pub enable_incremental: bool,
+
+    /// Optional identifier for profiling/logging (e.g., page name)
+    pub name: Option<String>,
 }
 
 impl LayoutConfig {
@@ -79,6 +83,7 @@ impl LayoutConfig {
             initial_containing_block,
             enable_cache: false,
             enable_incremental: false,
+            name: None,
         }
     }
 
@@ -99,6 +104,12 @@ impl LayoutConfig {
     /// ```
     pub fn for_viewport(viewport: Size) -> Self {
         Self::new(viewport)
+    }
+
+    /// Sets an optional identifier (e.g., page name) for logging/profiling.
+    pub fn with_identifier(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
     }
 }
 
@@ -195,6 +206,9 @@ pub struct LayoutEngine {
     /// Formatting context factory
     factory: FormattingContextFactory,
 
+    /// Shared font context used for all layout text shaping and measurement.
+    font_context: FontContext,
+
     /// Layout cache (placeholder for future optimization)
     _cache: LayoutCache,
 }
@@ -212,9 +226,22 @@ impl LayoutEngine {
     /// let engine = LayoutEngine::new(config);
     /// ```
     pub fn new(config: LayoutConfig) -> Self {
+        Self::with_font_context(config, FontContext::new())
+    }
+
+    /// Creates a layout engine that uses the provided font context for all text measurement.
+    ///
+    /// Sharing the font context with paint keeps font fallback, cache warming, and font loading
+    /// consistent across the pipeline.
+    pub fn with_font_context(config: LayoutConfig, font_context: FontContext) -> Self {
+        let factory = FormattingContextFactory::with_font_context_and_viewport(
+            font_context.clone(),
+            config.initial_containing_block,
+        );
         Self {
             config,
-            factory: FormattingContextFactory::new(),
+            factory,
+            font_context,
             _cache: LayoutCache::new(),
         }
     }
@@ -276,6 +303,24 @@ impl LayoutEngine {
     /// let fragment_tree = engine.layout_tree(&box_tree).unwrap();
     /// ```
     pub fn layout_tree(&self, box_tree: &BoxTree) -> Result<FragmentTree, LayoutError> {
+        self.layout_tree_internal(box_tree, true)
+    }
+
+    /// Performs layout on a box tree, optionally reusing shared caches.
+    ///
+    /// When `reset_caches` is false, flex measurement/layout caches are preserved, allowing
+    /// callers (e.g., container query second passes) to reuse expensive measurements when
+    /// the box structure is stable across cascades.
+    pub fn layout_tree_reuse_caches(&self, box_tree: &BoxTree) -> Result<FragmentTree, LayoutError> {
+        self.layout_tree_internal(box_tree, false)
+    }
+
+    fn layout_tree_internal(&self, box_tree: &BoxTree, reset_caches: bool) -> Result<FragmentTree, LayoutError> {
+        if reset_caches {
+            // Reset any per-run caches so a fresh layout starts from a clean slate.
+            self.factory.reset_caches();
+        }
+
         // Create root constraints from initial containing block
         let icb = &self.config.initial_containing_block;
         let constraints = LayoutConstraints::definite(icb.width, icb.height);
@@ -350,8 +395,32 @@ impl LayoutEngine {
         // Create the appropriate formatting context via factory
         let fc = self.factory.create(fc_type);
 
+        // Optional slow-layout logging for debugging large pages.
+        static SLOW_LAYOUT_MS: std::sync::OnceLock<Option<u128>> = std::sync::OnceLock::new();
+        let slow_threshold_ms = *SLOW_LAYOUT_MS.get_or_init(|| {
+            std::env::var("FASTR_LOG_SLOW_LAYOUT_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+        });
+        let slow_timer = slow_threshold_ms.map(|_| std::time::Instant::now());
+
         // Call the FC's layout method
         let fragment = fc.layout(box_node, constraints)?;
+
+        if let (Some(threshold), Some(start)) = (slow_threshold_ms, slow_timer) {
+            let elapsed = start.elapsed().as_millis();
+            if elapsed >= threshold {
+                let selector = box_node
+                    .debug_info
+                    .as_ref()
+                    .map(|d| d.to_selector())
+                    .unwrap_or_else(|| "<anon>".to_string());
+                eprintln!(
+                    "[layout-slow] id={} fc={:?} ms={} selector={}",
+                    box_node.id, fc_type, elapsed, selector
+                );
+            }
+        }
 
         // Future: Store in cache
         // self.store_in_cache(box_node, constraints, &fragment);
@@ -410,6 +479,11 @@ impl LayoutEngine {
     /// Returns the engine's configuration
     pub fn config(&self) -> &LayoutConfig {
         &self.config
+    }
+
+    /// Returns the font context backing layout text shaping and intrinsic sizing.
+    pub fn font_context(&self) -> &FontContext {
+        &self.font_context
     }
 
     /// Returns statistics about layout operations

@@ -740,7 +740,16 @@ impl<'a> TextRunBuilder<'a> {
         // Get font
         let font = self
             .font_context
-            .get_font(families, weight, italic, false)
+            .get_font_full(
+                families,
+                weight,
+                if italic {
+                    crate::text::font_db::FontStyle::Italic
+                } else {
+                    crate::text::font_db::FontStyle::Normal
+                },
+                crate::text::font_db::FontStretch::Normal,
+            )
             .ok_or(Error::Font(FontError::NoFontsAvailable))?;
 
         // Get metrics
@@ -850,7 +859,16 @@ impl<'a> TextRunBuilder<'a> {
         // Get font once for all words
         let font = self
             .font_context
-            .get_font(families, weight, italic, false)
+            .get_font_full(
+                families,
+                weight,
+                if italic {
+                    crate::text::font_db::FontStyle::Italic
+                } else {
+                    crate::text::font_db::FontStyle::Normal
+                },
+                crate::text::font_db::FontStretch::Normal,
+            )
             .ok_or(Error::Font(FontError::NoFontsAvailable))?;
 
         // Split by whitespace while tracking positions

@@ -1,7 +1,7 @@
 //! Enhanced tree printing and visualization utilities
 
 use crate::geometry::Rect;
-use crate::tree::box_tree::{BoxNode, BoxType};
+use crate::tree::box_tree::{BoxNode, BoxType, MarkerContent};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 use std::fmt::Write as _;
 
@@ -197,6 +197,23 @@ impl EnhancedTreePrinter {
                         self.colorize(&text, colors::GREEN)
                     );
                 }
+                BoxType::Marker(m) => match &m.content {
+                    MarkerContent::Text(t) => {
+                        let text = truncate(t, 20);
+                        return format!(
+                            "{} Marker: \"{}\"",
+                            self.colorize(&selector, colors::CYAN),
+                            self.colorize(&text, colors::GREEN)
+                        );
+                    }
+                    MarkerContent::Image(_) => {
+                        return format!(
+                            "{} Marker: {}",
+                            self.colorize(&selector, colors::CYAN),
+                            self.colorize("[image]", colors::GREEN)
+                        );
+                    }
+                },
                 BoxType::Replaced(_) => "Replaced",
                 BoxType::Anonymous(_) => "Anonymous",
             };

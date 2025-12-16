@@ -407,9 +407,7 @@ pub fn creates_stacking_context(style: &ComputedStyle, parent_style: Option<&Com
     }
 
     // 2. Positioned element with z-index != auto
-    // Note: In ComputedStyle, z_index is i32 with default 0
-    // We need to check if it was explicitly set (non-zero implies explicit)
-    if is_positioned(style) && style.z_index != 0 {
+    if is_positioned(style) && style.z_index.is_some() {
         return true;
     }
 
@@ -433,12 +431,49 @@ pub fn creates_stacking_context(style: &ComputedStyle, parent_style: Option<&Com
         return true;
     }
 
+    // 6b. Has CSS filter (filter list is non-empty)
+    if !style.filter.is_empty() {
+        return true;
+    }
+
+    // 6c. Backdrop filter
+    if !style.backdrop_filter.is_empty() {
+        return true;
+    }
+
+    // 6d. Clip-path
+    if !matches!(style.clip_path, crate::style::types::ClipPath::None) {
+        return true;
+    }
+
+    // 7. Mix-blend-mode or isolation
+    if !matches!(style.mix_blend_mode, crate::style::types::MixBlendMode::Normal) {
+        return true;
+    }
+    if matches!(style.isolation, crate::style::types::Isolation::Isolate) {
+        return true;
+    }
+
+    // 7b. Will-change on a stacking-context-creating property
+    if style.will_change.creates_stacking_context() {
+        return true;
+    }
+
+    // 7c. paint containment (or strict/content which imply paint)
+    if style.containment.creates_stacking_context() {
+        return true;
+    }
+
     // 7. Overflow hidden/scroll/auto with visible overflow on the other axis
     // This creates a stacking context in some browsers
     // For simplicity, we create stacking context for any non-visible overflow
-    if matches!(style.overflow_x, Overflow::Hidden | Overflow::Scroll | Overflow::Auto)
-        || matches!(style.overflow_y, Overflow::Hidden | Overflow::Scroll | Overflow::Auto)
-    {
+    if matches!(
+        style.overflow_x,
+        Overflow::Hidden | Overflow::Scroll | Overflow::Auto | Overflow::Clip
+    ) || matches!(
+        style.overflow_y,
+        Overflow::Hidden | Overflow::Scroll | Overflow::Auto | Overflow::Clip
+    ) {
         // Only if positioned, this creates a stacking context
         if is_positioned(style) {
             return true;
@@ -452,7 +487,7 @@ pub fn creates_stacking_context(style: &ComputedStyle, parent_style: Option<&Com
             parent.display,
             Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
         );
-        if parent_is_flex_or_grid && style.z_index != 0 {
+        if parent_is_flex_or_grid && style.z_index.is_some() {
             return true;
         }
     }
@@ -486,7 +521,7 @@ pub fn get_stacking_context_reason(
         return Some(StackingContextReason::Root);
     }
 
-    if is_positioned(style) && style.z_index != 0 {
+    if is_positioned(style) && style.z_index.is_some() {
         return Some(StackingContextReason::PositionedWithZIndex);
     }
 
@@ -506,9 +541,34 @@ pub fn get_stacking_context_reason(
         return Some(StackingContextReason::Transform);
     }
 
+    if !style.filter.is_empty() {
+        return Some(StackingContextReason::Filter);
+    }
+
+    if !style.backdrop_filter.is_empty() {
+        return Some(StackingContextReason::BackdropFilter);
+    }
+
+    if !matches!(style.clip_path, crate::style::types::ClipPath::None) {
+        return Some(StackingContextReason::ClipPath);
+    }
+
+    if style.will_change.creates_stacking_context() {
+        return Some(StackingContextReason::WillChange);
+    }
+
+    if style.containment.creates_stacking_context() {
+        return Some(StackingContextReason::Containment);
+    }
+
     if is_positioned(style)
-        && (matches!(style.overflow_x, Overflow::Hidden | Overflow::Scroll | Overflow::Auto)
-            || matches!(style.overflow_y, Overflow::Hidden | Overflow::Scroll | Overflow::Auto))
+        && (matches!(
+            style.overflow_x,
+            Overflow::Hidden | Overflow::Scroll | Overflow::Auto | Overflow::Clip
+        ) || matches!(
+            style.overflow_y,
+            Overflow::Hidden | Overflow::Scroll | Overflow::Auto | Overflow::Clip
+        ))
     {
         return Some(StackingContextReason::OverflowClip);
     }
@@ -517,10 +577,10 @@ pub fn get_stacking_context_reason(
         let parent_is_flex = matches!(parent.display, Display::Flex | Display::InlineFlex);
         let parent_is_grid = matches!(parent.display, Display::Grid | Display::InlineGrid);
 
-        if parent_is_flex && style.z_index != 0 {
+        if parent_is_flex && style.z_index.is_some() {
             return Some(StackingContextReason::FlexItemWithZIndex);
         }
-        if parent_is_grid && style.z_index != 0 {
+        if parent_is_grid && style.z_index.is_some() {
             return Some(StackingContextReason::GridItemWithZIndex);
         }
     }
@@ -535,11 +595,15 @@ fn is_positioned(style: &ComputedStyle) -> bool {
 
 /// Checks if an element is a float
 ///
-/// Note: Float is not currently in ComputedStyle, so we return false.
-/// When Float support is added, this should check style.float != Float::None
-fn is_float(_style: &ComputedStyle) -> bool {
-    // TODO: Check style.float when Float is added to ComputedStyle
-    false
+/// Floats participate in layer 4 of the stacking order (between blocks and
+/// inlines). Spec-wise floats are ignored for absolutely/fixed positioned
+/// elements because their used value becomes `none`; we mirror that so
+/// positioned elements stay in the positioned layer.
+fn is_float(style: &ComputedStyle) -> bool {
+    if matches!(style.position, Position::Absolute | Position::Fixed) {
+        return false;
+    }
+    style.float.is_floating()
 }
 
 /// Checks if an element is inline-level
@@ -619,7 +683,7 @@ fn build_stacking_tree_internal(
 
     if creates_context {
         // Create a new stacking context
-        let z_index = style.map_or(0, |s| s.z_index);
+        let z_index = style.and_then(|s| s.z_index).unwrap_or(0);
         let reason = style
             .and_then(|s| get_stacking_context_reason(s, parent_style, is_root))
             .unwrap_or(StackingContextReason::Root);
@@ -636,18 +700,19 @@ fn build_stacking_tree_internal(
                 style, false, tree_order,
             );
 
-            // If child created its own stacking context, add as child
-            // Otherwise, merge its fragments into appropriate layers
-            if child_context.reason != StackingContextReason::Root || !child_context.children.is_empty() {
+            let child_creates_context =
+                child_context.reason != StackingContextReason::Root || child_context.z_index != 0;
+
+            if child_creates_context {
                 // Child has its own stacking context structure
                 context.add_child(child_context);
             } else {
-                // Merge child's fragments into our layers
-                context.layer3_blocks.extend(child_context.layer3_blocks);
-                context.layer4_floats.extend(child_context.layer4_floats);
-                context.layer5_inlines.extend(child_context.layer5_inlines);
-                context.layer6_positioned.extend(child_context.layer6_positioned);
-                context.fragments.extend(child_context.fragments);
+                // Propagate any nested child contexts upward
+                if !child_context.children.is_empty() {
+                    context.children.extend(child_context.children);
+                }
+                // Keep the direct child in the appropriate layer; children will be painted via recursion
+                context.add_fragment_to_layer(child.clone(), None);
             }
         }
 
@@ -676,20 +741,16 @@ fn build_stacking_tree_internal(
         for child in &fragment.children {
             let child_context = build_stacking_tree_internal(child, None, style, false, tree_order);
 
-            // Check if child created its own stacking context
-            let child_creates_context = !child_context.children.is_empty()
-                || child_context.reason != StackingContextReason::Root
-                || child_context.z_index != 0;
+            let child_creates_context =
+                child_context.reason != StackingContextReason::Root || child_context.z_index != 0;
 
             if child_creates_context {
                 context.add_child(child_context);
             } else {
-                // Merge fragments
-                context.layer3_blocks.extend(child_context.layer3_blocks);
-                context.layer4_floats.extend(child_context.layer4_floats);
-                context.layer5_inlines.extend(child_context.layer5_inlines);
-                context.layer6_positioned.extend(child_context.layer6_positioned);
-                context.fragments.extend(child_context.fragments);
+                if !child_context.children.is_empty() {
+                    context.children.extend(child_context.children);
+                }
+                context.add_fragment_to_layer(child.clone(), None);
             }
         }
 
@@ -730,6 +791,11 @@ where
     context
 }
 
+/// Builds a stacking context tree from a fragment tree using the fragment's embedded styles.
+pub fn build_stacking_tree_from_fragment_tree(root: &FragmentNode) -> StackingContext {
+    build_stacking_tree_with_styles(root, |fragment| fragment.style.clone())
+}
+
 /// Internal recursive function to build stacking context tree with styles
 fn build_stacking_tree_with_styles_internal<F>(
     fragment: &FragmentNode,
@@ -745,6 +811,12 @@ where
     let current_order = *tree_order;
     *tree_order += 1;
 
+    if let Some(style) = style {
+        if !matches!(style.visibility, crate::style::computed::Visibility::Visible) {
+            return StackingContext::new(0);
+        }
+    }
+
     let creates_context = if let Some(s) = style {
         creates_stacking_context(s, parent_style, is_root)
     } else {
@@ -752,7 +824,7 @@ where
     };
 
     if creates_context {
-        let z_index = style.map_or(0, |s| s.z_index);
+        let z_index = style.and_then(|s| s.z_index).unwrap_or(0);
         let reason = style
             .and_then(|s| get_stacking_context_reason(s, parent_style, is_root))
             .unwrap_or(StackingContextReason::Root);
@@ -771,14 +843,16 @@ where
                 get_style,
             );
 
-            if child_context.reason != StackingContextReason::Root || !child_context.children.is_empty() {
+            let child_creates_context =
+                child_context.reason != StackingContextReason::Root || child_context.z_index != 0;
+
+            if child_creates_context {
                 context.add_child(child_context);
             } else {
-                context.layer3_blocks.extend(child_context.layer3_blocks);
-                context.layer4_floats.extend(child_context.layer4_floats);
-                context.layer5_inlines.extend(child_context.layer5_inlines);
-                context.layer6_positioned.extend(child_context.layer6_positioned);
-                context.fragments.extend(child_context.fragments);
+                if !child_context.children.is_empty() {
+                    context.children.extend(child_context.children);
+                }
+                context.add_fragment_to_layer(child.clone(), child_style.as_deref());
             }
         }
 
@@ -811,18 +885,16 @@ where
                 get_style,
             );
 
-            let child_creates_context = !child_context.children.is_empty()
-                || child_context.reason != StackingContextReason::Root
-                || child_context.z_index != 0;
+            let child_creates_context =
+                child_context.reason != StackingContextReason::Root || child_context.z_index != 0;
 
             if child_creates_context {
                 context.add_child(child_context);
             } else {
-                context.layer3_blocks.extend(child_context.layer3_blocks);
-                context.layer4_floats.extend(child_context.layer4_floats);
-                context.layer5_inlines.extend(child_context.layer5_inlines);
-                context.layer6_positioned.extend(child_context.layer6_positioned);
-                context.fragments.extend(child_context.fragments);
+                if !child_context.children.is_empty() {
+                    context.children.extend(child_context.children);
+                }
+                context.add_fragment_to_layer(child.clone(), child_style.as_deref());
             }
         }
 
@@ -964,6 +1036,7 @@ impl StackingContext {
 mod tests {
     use super::*;
     use crate::geometry::Rect;
+    use crate::style::types::{WillChange, WillChangeHint};
 
     // Helper function to create a simple fragment
     fn create_block_fragment(x: f32, y: f32, width: f32, height: f32) -> FragmentNode {
@@ -992,7 +1065,7 @@ mod tests {
     fn test_creates_stacking_context_positioned_with_z_index() {
         let mut style = ComputedStyle::default();
         style.position = Position::Relative;
-        style.z_index = 1;
+        style.z_index = Some(1);
         assert!(creates_stacking_context(&style, None, false));
     }
 
@@ -1000,8 +1073,8 @@ mod tests {
     fn test_creates_stacking_context_positioned_with_zero_z_index() {
         let mut style = ComputedStyle::default();
         style.position = Position::Relative;
-        style.z_index = 0; // z-index: 0 doesn't create stacking context in this impl
-        assert!(!creates_stacking_context(&style, None, false));
+        style.z_index = Some(0); // explicit zero still creates stacking context
+        assert!(creates_stacking_context(&style, None, false));
     }
 
     #[test]
@@ -1040,12 +1113,34 @@ mod tests {
     }
 
     #[test]
+    fn test_creates_stacking_context_will_change_transform() {
+        let mut style = ComputedStyle::default();
+        style.will_change = WillChange::Hints(vec![WillChangeHint::Property("transform".into())]);
+        assert!(creates_stacking_context(&style, None, false));
+        assert_eq!(
+            get_stacking_context_reason(&style, None, false),
+            Some(StackingContextReason::WillChange)
+        );
+    }
+
+    #[test]
+    fn test_creates_stacking_context_containment() {
+        let mut style = ComputedStyle::default();
+        style.containment = crate::style::types::Containment::with_flags(false, false, false, false, true);
+        assert!(creates_stacking_context(&style, None, false));
+        assert_eq!(
+            get_stacking_context_reason(&style, None, false),
+            Some(StackingContextReason::Containment)
+        );
+    }
+
+    #[test]
     fn test_creates_stacking_context_flex_item_with_z_index() {
         let mut parent_style = ComputedStyle::default();
         parent_style.display = Display::Flex;
 
         let mut child_style = ComputedStyle::default();
-        child_style.z_index = 1;
+        child_style.z_index = Some(1);
 
         assert!(creates_stacking_context(&child_style, Some(&parent_style), false));
     }
@@ -1056,7 +1151,7 @@ mod tests {
         parent_style.display = Display::Grid;
 
         let mut child_style = ComputedStyle::default();
-        child_style.z_index = 1;
+        child_style.z_index = Some(1);
 
         assert!(creates_stacking_context(&child_style, Some(&parent_style), false));
     }
@@ -1355,7 +1450,7 @@ mod tests {
     fn test_get_stacking_context_reason_positioned_with_z_index() {
         let mut style = ComputedStyle::default();
         style.position = Position::Relative;
-        style.z_index = 5;
+        style.z_index = Some(5);
         let reason = get_stacking_context_reason(&style, None, false);
         assert_eq!(reason, Some(StackingContextReason::PositionedWithZIndex));
     }

@@ -206,6 +206,9 @@ pub struct BidiAnalysis {
     /// The base (paragraph) direction.
     base_direction: Direction,
 
+    /// Byte starts for each character.
+    char_starts: Vec<usize>,
+
     /// Embedding level for each character.
     levels: Vec<Level>,
 
@@ -239,10 +242,15 @@ impl BidiAnalysis {
     ///
     /// Returns the base level if the index is out of bounds.
     pub fn level_at(&self, byte_index: usize) -> Level {
-        // Convert byte index to char index
-        let char_index = self.text[..byte_index.min(self.text.len())].chars().count();
+        if self.levels.is_empty() {
+            return self.base_direction.to_level();
+        }
+        let pos = match self.char_starts.binary_search(&byte_index) {
+            Ok(idx) => idx,
+            Err(idx) => idx.saturating_sub(1),
+        };
         self.levels
-            .get(char_index)
+            .get(pos)
             .copied()
             .unwrap_or_else(|| self.base_direction.to_level())
     }
@@ -449,6 +457,7 @@ impl BidiAnalyzer {
             return BidiAnalysis {
                 text: String::new(),
                 base_direction,
+                char_starts: Vec::new(),
                 levels: Vec::new(),
                 paragraph: ParagraphInfo {
                     range: 0..0,
@@ -475,6 +484,7 @@ impl BidiAnalyzer {
 
         // Copy levels
         let levels = bidi_info.levels.clone();
+        let char_starts: Vec<usize> = text.char_indices().map(|(i, _)| i).collect();
 
         // Check if any RTL content exists
         let has_rtl = levels.iter().any(|&level| level.is_rtl());
@@ -482,6 +492,7 @@ impl BidiAnalyzer {
         BidiAnalysis {
             text: text.to_string(),
             base_direction,
+            char_starts,
             levels,
             paragraph,
             has_rtl,

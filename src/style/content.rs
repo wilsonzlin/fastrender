@@ -79,6 +79,14 @@ pub enum ContentValue {
     Items(Vec<ContentItem>),
 }
 
+/// Default quote pairs used for `quotes: auto`
+pub fn default_quotes() -> Vec<(String, String)> {
+    vec![
+        ("\u{201C}".to_string(), "\u{201D}".to_string()),
+        ("\u{2018}".to_string(), "\u{2019}".to_string()),
+    ]
+}
+
 impl ContentValue {
     /// Creates a content value from a single string
     ///
@@ -349,6 +357,15 @@ pub enum CounterStyle {
     /// Decimal with leading zeros (01, 02, ...)
     DecimalLeadingZero,
 
+    /// Uppercase Armenian numerals (Ա, Բ, Գ, ...)
+    Armenian,
+
+    /// Lowercase Armenian numerals (ա, բ, գ, ...)
+    LowerArmenian,
+
+    /// Georgian numerals (ა, ბ, გ, ...)
+    Georgian,
+
     /// Lowercase Roman numerals (i, ii, iii, ...)
     LowerRoman,
 
@@ -392,7 +409,10 @@ impl CounterStyle {
     pub fn format(&self, value: i32) -> String {
         match self {
             CounterStyle::Decimal => value.to_string(),
-            CounterStyle::DecimalLeadingZero => format!("{:02}", value),
+            CounterStyle::DecimalLeadingZero => format_decimal_leading_zero(value),
+            CounterStyle::Armenian => format_additive(value, ARMENIAN_UPPER, 9999),
+            CounterStyle::LowerArmenian => format_additive(value, ARMENIAN_LOWER, 9999),
+            CounterStyle::Georgian => format_additive(value, GEORGIAN_SYMBOLS, 19999),
             CounterStyle::LowerRoman => to_roman(value).to_lowercase(),
             CounterStyle::UpperRoman => to_roman(value),
             CounterStyle::LowerAlpha => to_alpha(value, false),
@@ -420,6 +440,9 @@ impl CounterStyle {
         match s.trim().to_lowercase().as_str() {
             "decimal" => Some(CounterStyle::Decimal),
             "decimal-leading-zero" => Some(CounterStyle::DecimalLeadingZero),
+            "armenian" | "upper-armenian" => Some(CounterStyle::Armenian),
+            "lower-armenian" => Some(CounterStyle::LowerArmenian),
+            "georgian" => Some(CounterStyle::Georgian),
             "lower-roman" => Some(CounterStyle::LowerRoman),
             "upper-roman" => Some(CounterStyle::UpperRoman),
             "lower-alpha" | "lower-latin" => Some(CounterStyle::LowerAlpha),
@@ -445,6 +468,9 @@ impl fmt::Display for CounterStyle {
         let s = match self {
             CounterStyle::Decimal => "decimal",
             CounterStyle::DecimalLeadingZero => "decimal-leading-zero",
+            CounterStyle::Armenian => "armenian",
+            CounterStyle::LowerArmenian => "lower-armenian",
+            CounterStyle::Georgian => "georgian",
             CounterStyle::LowerRoman => "lower-roman",
             CounterStyle::UpperRoman => "upper-roman",
             CounterStyle::LowerAlpha => "lower-alpha",
@@ -459,9 +485,154 @@ impl fmt::Display for CounterStyle {
     }
 }
 
+const ARMENIAN_UPPER: &[(i32, &str)] = &[
+    (9000, "Ք"),
+    (8000, "Փ"),
+    (7000, "Ւ"),
+    (6000, "Ց"),
+    (5000, "Ր"),
+    (4000, "Տ"),
+    (3000, "Վ"),
+    (2000, "Ս"),
+    (1000, "Ռ"),
+    (900, "Ջ"),
+    (800, "Պ"),
+    (700, "Չ"),
+    (600, "Ո"),
+    (500, "Շ"),
+    (400, "Ն"),
+    (300, "Յ"),
+    (200, "Մ"),
+    (100, "Ճ"),
+    (90, "Ղ"),
+    (80, "Ձ"),
+    (70, "Հ"),
+    (60, "Կ"),
+    (50, "Ծ"),
+    (40, "Խ"),
+    (30, "Լ"),
+    (20, "Ի"),
+    (10, "Ժ"),
+    (9, "Թ"),
+    (8, "Ը"),
+    (7, "Է"),
+    (6, "Զ"),
+    (5, "Ե"),
+    (4, "Դ"),
+    (3, "Գ"),
+    (2, "Բ"),
+    (1, "Ա"),
+];
+
+const ARMENIAN_LOWER: &[(i32, &str)] = &[
+    (9000, "ք"),
+    (8000, "փ"),
+    (7000, "ւ"),
+    (6000, "ց"),
+    (5000, "ր"),
+    (4000, "տ"),
+    (3000, "վ"),
+    (2000, "ս"),
+    (1000, "ռ"),
+    (900, "ջ"),
+    (800, "պ"),
+    (700, "չ"),
+    (600, "ո"),
+    (500, "շ"),
+    (400, "ն"),
+    (300, "յ"),
+    (200, "մ"),
+    (100, "ճ"),
+    (90, "ղ"),
+    (80, "ձ"),
+    (70, "հ"),
+    (60, "կ"),
+    (50, "ծ"),
+    (40, "խ"),
+    (30, "լ"),
+    (20, "ի"),
+    (10, "ժ"),
+    (9, "թ"),
+    (8, "ը"),
+    (7, "է"),
+    (6, "զ"),
+    (5, "ե"),
+    (4, "դ"),
+    (3, "գ"),
+    (2, "բ"),
+    (1, "ա"),
+];
+
+const GEORGIAN_SYMBOLS: &[(i32, &str)] = &[
+    (10000, "ჵ"),
+    (9000, "ჰ"),
+    (8000, "ჯ"),
+    (7000, "ჴ"),
+    (6000, "ხ"),
+    (5000, "ჭ"),
+    (4000, "წ"),
+    (3000, "ძ"),
+    (2000, "ც"),
+    (1000, "ჩ"),
+    (900, "შ"),
+    (800, "ყ"),
+    (700, "ღ"),
+    (600, "ქ"),
+    (500, "ფ"),
+    (400, "ჳ"),
+    (300, "ტ"),
+    (200, "ს"),
+    (100, "რ"),
+    (90, "ჟ"),
+    (80, "პ"),
+    (70, "ო"),
+    (60, "ჲ"),
+    (50, "ნ"),
+    (40, "მ"),
+    (30, "ლ"),
+    (20, "კ"),
+    (10, "ი"),
+    (9, "თ"),
+    (8, "ჱ"),
+    (7, "ზ"),
+    (6, "ვ"),
+    (5, "ე"),
+    (4, "დ"),
+    (3, "გ"),
+    (2, "ბ"),
+    (1, "ა"),
+];
+
+fn format_additive(mut n: i32, symbols: &[(i32, &str)], max: i32) -> String {
+    if n <= 0 || n > max {
+        return n.to_string();
+    }
+
+    let mut result = String::new();
+    for (value, glyph) in symbols {
+        while n >= *value {
+            result.push_str(glyph);
+            n -= *value;
+        }
+    }
+    result
+}
+
+/// Formats a decimal number with at least two digits, preserving the sign.
+fn format_decimal_leading_zero(n: i32) -> String {
+    if n >= 0 {
+        format!("{:02}", n)
+    } else {
+        // Avoid overflow on i32::MIN by widening.
+        let abs = (n as i64).abs();
+        format!("-{:02}", abs)
+    }
+}
+
 /// Converts a number to Roman numerals
 fn to_roman(mut n: i32) -> String {
-    if n <= 0 {
+    // CSS Counter Styles define roman only for positive values; out-of-range falls back to decimal.
+    if n <= 0 || n > 3999 {
         return n.to_string();
     }
 
@@ -570,10 +741,7 @@ impl ContentContext {
             counters: HashMap::new(),
             attributes: HashMap::new(),
             quote_depth: 0,
-            quotes: vec![
-                ("\u{201C}".to_string(), "\u{201D}".to_string()), // " "
-                ("\u{2018}".to_string(), "\u{2019}".to_string()), // ' '
-            ],
+            quotes: default_quotes(),
         }
     }
 
@@ -603,6 +771,11 @@ impl ContentContext {
         } else {
             *entry.last_mut().unwrap() = value;
         }
+    }
+
+    /// Sets the full counter stack (outermost → innermost) for a given name.
+    pub fn set_counter_stack(&mut self, name: &str, values: Vec<i32>) {
+        self.counters.insert(name.to_string(), values);
     }
 
     /// Pushes a new counter scope (for nested counters)
@@ -689,6 +862,9 @@ impl ContentContext {
 
     /// Gets the current open quote character
     pub fn open_quote(&self) -> &str {
+        if self.quotes.is_empty() {
+            return "";
+        }
         let index = self.quote_depth.min(self.quotes.len().saturating_sub(1));
         self.quotes.get(index).map(|(open, _)| open.as_str()).unwrap_or("\"")
     }
@@ -698,6 +874,9 @@ impl ContentContext {
     /// This returns the close quote for the current nesting level.
     /// Should be called BEFORE `pop_quote()` to get the correct character.
     pub fn close_quote(&self) -> &str {
+        if self.quotes.is_empty() {
+            return "";
+        }
         // Use current depth minus 1 (since open quote incremented it)
         let depth = self.quote_depth.saturating_sub(1);
         let index = depth.min(self.quotes.len().saturating_sub(1));
@@ -1098,6 +1277,13 @@ fn parse_function(name: &str, args: &str) -> Option<ContentItem> {
                 };
             Some(ContentItem::Url(url.to_string()))
         }
+        "image-set" => {
+            let full = format!("image-set({})", args);
+            match crate::style::properties::parse_image_set(&full) {
+                Some(crate::style::types::BackgroundImage::Url(url)) => Some(ContentItem::Url(url)),
+                _ => None,
+            }
+        }
 
         _ => None,
     }
@@ -1210,6 +1396,13 @@ mod tests {
     }
 
     #[test]
+    fn test_counter_style_decimal_leading_zero_negative() {
+        assert_eq!(CounterStyle::DecimalLeadingZero.format(-1), "-01");
+        assert_eq!(CounterStyle::DecimalLeadingZero.format(-9), "-09");
+        assert_eq!(CounterStyle::DecimalLeadingZero.format(-12), "-12");
+    }
+
+    #[test]
     fn test_counter_style_lower_roman() {
         assert_eq!(CounterStyle::LowerRoman.format(1), "i");
         assert_eq!(CounterStyle::LowerRoman.format(4), "iv");
@@ -1223,6 +1416,9 @@ mod tests {
         assert_eq!(CounterStyle::UpperRoman.format(1), "I");
         assert_eq!(CounterStyle::UpperRoman.format(4), "IV");
         assert_eq!(CounterStyle::UpperRoman.format(1999), "MCMXCIX");
+        // Outside the defined range, fall back to decimal per CSS Counter Styles.
+        assert_eq!(CounterStyle::UpperRoman.format(0), "0");
+        assert_eq!(CounterStyle::UpperRoman.format(4000), "4000");
     }
 
     #[test]
@@ -1248,6 +1444,25 @@ mod tests {
     }
 
     #[test]
+    fn test_counter_style_armenian_variants() {
+        assert_eq!(CounterStyle::Armenian.format(1), "Ա");
+        assert_eq!(CounterStyle::Armenian.format(1492), "ՌՆՂԲ");
+        assert_eq!(CounterStyle::LowerArmenian.format(58), "ծը");
+        assert_eq!(CounterStyle::LowerArmenian.format(1492), "ռնղբ");
+        assert_eq!(CounterStyle::Armenian.format(0), "0");
+        assert_eq!(CounterStyle::Armenian.format(10000), "10000");
+    }
+
+    #[test]
+    fn test_counter_style_georgian() {
+        assert_eq!(CounterStyle::Georgian.format(1), "ა");
+        assert_eq!(CounterStyle::Georgian.format(24), "კდ");
+        assert_eq!(CounterStyle::Georgian.format(19999), "ჵჰშჟთ");
+        assert_eq!(CounterStyle::Georgian.format(0), "0");
+        assert_eq!(CounterStyle::Georgian.format(20000), "20000");
+    }
+
+    #[test]
     fn test_counter_style_markers() {
         assert_eq!(CounterStyle::Disc.format(1), "•");
         assert_eq!(CounterStyle::Circle.format(1), "◦");
@@ -1261,6 +1476,10 @@ mod tests {
         assert_eq!(CounterStyle::parse("lower-roman"), Some(CounterStyle::LowerRoman));
         assert_eq!(CounterStyle::parse("upper-alpha"), Some(CounterStyle::UpperAlpha));
         assert_eq!(CounterStyle::parse("lower-latin"), Some(CounterStyle::LowerAlpha));
+        assert_eq!(CounterStyle::parse("armenian"), Some(CounterStyle::Armenian));
+        assert_eq!(CounterStyle::parse("upper-armenian"), Some(CounterStyle::Armenian));
+        assert_eq!(CounterStyle::parse("lower-armenian"), Some(CounterStyle::LowerArmenian));
+        assert_eq!(CounterStyle::parse("georgian"), Some(CounterStyle::Georgian));
         assert_eq!(CounterStyle::parse("unknown"), None);
     }
 
@@ -1521,6 +1740,15 @@ mod tests {
         assert_eq!(
             content,
             ContentValue::Items(vec![ContentItem::Url("image.png".to_string())])
+        );
+    }
+
+    #[test]
+    fn test_parse_image_set() {
+        let content = parse_content("image-set(url(\"one.png\") 1x, url(\"two.png\") 2x)").unwrap();
+        assert_eq!(
+            content,
+            ContentValue::Items(vec![ContentItem::Url("one.png".to_string())])
         );
     }
 

@@ -213,7 +213,9 @@ impl TableStructureFixer {
                 anonymous_type: AnonymousType::TableRow,
             }),
             children: cells,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -227,7 +229,9 @@ impl TableStructureFixer {
                 anonymous_type: AnonymousType::TableRowGroup,
             }),
             children: rows,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -241,7 +245,9 @@ impl TableStructureFixer {
                 anonymous_type: AnonymousType::TableCell,
             }),
             children,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -255,7 +261,9 @@ impl TableStructureFixer {
                 anonymous_type: AnonymousType::TableWrapper,
             }),
             children: vec![table],
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -446,11 +454,7 @@ impl TableStructureFixer {
         row.children
             .iter()
             .filter(|c| Self::is_table_cell(c))
-            .map(|_cell| {
-                // TODO: Get colspan from cell style when table layout properties are added
-                // For now, assume colspan=1
-                1
-            })
+            .map(|_cell| _cell.debug_info.as_ref().map(|info| info.colspan.max(1)).unwrap_or(1))
             .sum()
     }
 
@@ -535,6 +539,7 @@ impl TableStructureFixer {
 mod tests {
     use super::*;
     use crate::tree::box_tree::BlockBox;
+    use crate::tree::debug::DebugInfo;
 
     // Helper to create a default style
     fn default_style() -> Arc<ComputedStyle> {
@@ -581,8 +586,10 @@ mod tests {
             box_type: BoxType::Block(BlockBox {
                 formatting_context: FormattingContextType::Block,
             }),
+            id: 0,
             children: cells,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -593,8 +600,10 @@ mod tests {
             box_type: BoxType::Block(BlockBox {
                 formatting_context: FormattingContextType::Block,
             }),
+            id: 0,
             children: content,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -605,8 +614,10 @@ mod tests {
             box_type: BoxType::Block(BlockBox {
                 formatting_context: FormattingContextType::Block,
             }),
+            id: 0,
             children: rows,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -617,8 +628,10 @@ mod tests {
             box_type: BoxType::Block(BlockBox {
                 formatting_context: FormattingContextType::Block,
             }),
+            id: 0,
             children: content,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -877,6 +890,16 @@ mod tests {
 
         let count = TableStructureFixer::count_columns(&row);
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_column_count_accounts_for_colspan() {
+        let mut spanning = cell_box(vec![]);
+        spanning.debug_info = Some(DebugInfo::new(None, None, vec![]).with_spans(3, 1));
+        let row = row_box(vec![spanning, cell_box(vec![])]);
+
+        let count = TableStructureFixer::count_columns(&row);
+        assert_eq!(count, 4);
     }
 
     // ==================== Validation Tests ====================

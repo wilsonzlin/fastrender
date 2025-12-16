@@ -320,6 +320,16 @@ impl LoadedFont {
     }
 }
 
+/// Returns true if the font advertises an OpenType GSUB feature with the given tag.
+pub fn font_has_feature(font: &LoadedFont, tag: [u8; 4]) -> bool {
+    if let Ok(face) = ttf_parser::Face::parse(&font.data, font.index) {
+        if let Some(gsub) = face.tables().gsub {
+            return gsub.features.index(ttf_parser::Tag::from_bytes(&tag)).is_some();
+        }
+    }
+    false
+}
+
 /// Generic font families as defined by CSS
 ///
 /// These are abstract font families that map to actual system fonts.
@@ -516,6 +526,8 @@ pub struct FontDatabase {
     db: FontDbDatabase,
     /// Cached font data (font ID -> binary data)
     cache: RwLock<HashMap<ID, Arc<Vec<u8>>>>,
+    /// Cached list of math-capable fonts (IDs with a MATH table)
+    math_fonts: RwLock<Option<Vec<ID>>>,
 }
 
 impl FontDatabase {
@@ -538,6 +550,7 @@ impl FontDatabase {
         Self {
             db,
             cache: RwLock::new(HashMap::new()),
+            math_fonts: RwLock::new(None),
         }
     }
 
@@ -548,6 +561,7 @@ impl FontDatabase {
         Self {
             db: FontDbDatabase::new(),
             cache: RwLock::new(HashMap::new()),
+            math_fonts: RwLock::new(None),
         }
     }
 
@@ -556,6 +570,9 @@ impl FontDatabase {
     /// Recursively scans the directory for font files.
     pub fn load_fonts_dir<P: AsRef<Path>>(&mut self, path: P) {
         self.db.load_fonts_dir(path);
+        if let Ok(mut cached) = self.math_fonts.write() {
+            *cached = None;
+        }
     }
 
     /// Loads a font from binary data
@@ -572,6 +589,9 @@ impl FontDatabase {
         })?;
 
         self.db.load_font_data(data);
+        if let Ok(mut cached) = self.math_fonts.write() {
+            *cached = None;
+        }
         Ok(())
     }
 
@@ -768,6 +788,9 @@ impl FontDatabase {
         if let Ok(mut cache) = self.cache.write() {
             cache.clear();
         }
+        if let Ok(mut cached) = self.math_fonts.write() {
+            *cached = None;
+        }
     }
 
     /// Returns the number of cached fonts
@@ -791,6 +814,11 @@ impl FontDatabase {
     #[inline]
     pub fn faces(&self) -> impl Iterator<Item = &fontdb::FaceInfo> {
         self.db.faces()
+    }
+
+    /// Loads the first available font in the database, if any
+    pub fn first_font(&self) -> Option<LoadedFont> {
+        self.faces().next().and_then(|face| self.load_font(face.id))
     }
 
     /// Checks if a font has a glyph for the given character.
@@ -892,6 +920,38 @@ impl FontDatabase {
         }
 
         emoji_fonts
+    }
+
+    /// Returns the IDs of fonts that advertise OpenType math support (MATH table present).
+    pub fn find_math_fonts(&self) -> Vec<ID> {
+        if let Ok(cache) = self.math_fonts.read() {
+            if let Some(list) = &*cache {
+                return list.clone();
+            }
+        }
+
+        let mut math_fonts = Vec::new();
+        for face in self.db.faces() {
+            let has_math = self
+                .db
+                .with_face_data(face.id, |data, face_index| {
+                    ttf_parser::Face::parse(data, face_index)
+                        .ok()
+                        .and_then(|f| f.tables().math)
+                        .is_some()
+                })
+                .unwrap_or(false);
+
+            if has_math {
+                math_fonts.push(face.id);
+            }
+        }
+
+        if let Ok(mut cache) = self.math_fonts.write() {
+            *cache = Some(math_fonts.clone());
+        }
+
+        math_fonts
     }
 }
 
@@ -1053,6 +1113,13 @@ impl FontMetrics {
     #[inline]
     pub fn normal_line_height(&self, font_size: f32) -> f32 {
         (self.line_height as f32) * font_size / (self.units_per_em as f32)
+    }
+
+    /// Returns the aspect ratio (x-height / em).
+    pub fn aspect_ratio(&self) -> Option<f32> {
+        self.x_height
+            .map(|xh| xh as f32 / (self.units_per_em as f32))
+            .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
     }
 }
 

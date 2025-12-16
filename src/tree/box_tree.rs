@@ -69,6 +69,23 @@ pub struct TextBox {
     pub text: String,
 }
 
+#[derive(Debug, Clone)]
+pub enum MarkerContent {
+    Text(String),
+    Image(ReplacedBox),
+}
+
+/// A list marker box
+///
+/// Generated for list items. Carries marker text but participates as its own
+/// box type so inline/layout can treat markers specially (e.g., position
+/// outside the principal block).
+#[derive(Debug, Clone)]
+pub struct MarkerBox {
+    /// Marker payload (text or image)
+    pub content: MarkerContent,
+}
+
 /// A replaced element box
 ///
 /// Replaced elements have intrinsic dimensions provided by external content.
@@ -92,6 +109,29 @@ pub struct ReplacedBox {
     pub aspect_ratio: Option<f32>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum SrcsetDescriptor {
+    Density(f32),
+    Width(u32),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SrcsetCandidate {
+    pub url: String,
+    pub descriptor: SrcsetDescriptor,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SizesEntry {
+    pub media: Option<Vec<crate::style::media::MediaQuery>>,
+    pub length: crate::style::values::Length,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SizesList {
+    pub entries: Vec<SizesEntry>,
+}
+
 /// Types of replaced elements
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReplacedType {
@@ -99,10 +139,23 @@ pub enum ReplacedType {
     Image {
         /// Source URL or data URI
         src: String,
+        /// Alternative text for fallback rendering
+        alt: Option<String>,
+        /// Srcset candidates for density-aware selection
+        srcset: Vec<SrcsetCandidate>,
+        /// Sizes attribute values for width-descriptor selection
+        sizes: Option<SizesList>,
     },
 
     /// Video element
     Video {
+        /// Source URL
+        src: String,
+        /// Poster image URL or data URI
+        poster: Option<String>,
+    },
+    /// Audio element
+    Audio {
         /// Source URL
         src: String,
     },
@@ -120,7 +173,220 @@ pub enum ReplacedType {
     Iframe {
         /// Source URL
         src: String,
+        /// Inline HTML content overriding src
+        srcdoc: Option<String>,
     },
+
+    /// `<embed>` element
+    Embed {
+        /// Source URL
+        src: String,
+    },
+
+    /// `<object>` element
+    Object {
+        /// Data URL
+        data: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ImageSelectionContext<'a> {
+    pub scale: f32,
+    pub slot_width: Option<f32>,
+    pub viewport: Option<crate::geometry::Size>,
+    pub media_context: Option<&'a crate::style::media::MediaContext>,
+    pub font_size: Option<f32>,
+}
+
+impl ReplacedType {
+    /// Returns a priority-ordered list of candidate image sources for painting.
+    ///
+    /// The first entry is the best-fit srcset candidate (or the base src when
+    /// no srcset applies), followed by the base `src` (if different) and any
+    /// remaining srcset URLs. Duplicate URLs are removed while preserving order.
+    pub fn image_sources_with_fallback(&self, ctx: ImageSelectionContext<'_>) -> Vec<String> {
+        match self {
+            ReplacedType::Image {
+                src, srcset, sizes: _, ..
+            } => {
+                let primary = self.image_source_for_context(ctx);
+                let mut seen = std::collections::HashSet::new();
+                let mut ordered = Vec::new();
+                let push_unique = |url: &str, out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
+                    if seen.insert(url.to_string()) {
+                        out.push(url.to_string());
+                    }
+                };
+
+                push_unique(primary, &mut ordered, &mut seen);
+                push_unique(src, &mut ordered, &mut seen);
+                for cand in srcset {
+                    let url = &cand.url;
+                    // Skip candidates whose descriptors depend on sizes when sizes cannot be evaluated.
+                    if matches!(cand.descriptor, SrcsetDescriptor::Width(_))
+                        && ctx.slot_width.is_none()
+                        && ctx.viewport.is_none()
+                    {
+                        continue;
+                    }
+                    push_unique(url, &mut ordered, &mut seen);
+                }
+                ordered
+            }
+            ReplacedType::Video { src: _, poster } => poster.iter().cloned().collect(),
+            ReplacedType::Svg { content }
+            | ReplacedType::Embed { src: content }
+            | ReplacedType::Object { data: content }
+            | ReplacedType::Iframe { src: content, .. } => vec![content.clone()],
+            _ => Vec::new(),
+        }
+    }
+
+    /// Returns a placeholder label for non-image replaced content.
+    pub fn placeholder_label(&self) -> Option<&str> {
+        match self {
+            ReplacedType::Video { .. } => Some("video"),
+            ReplacedType::Audio { .. } => Some("audio"),
+            ReplacedType::Iframe { srcdoc, .. } => srcdoc.as_deref().or(Some("iframe")),
+            ReplacedType::Canvas => Some("canvas"),
+            ReplacedType::Embed { .. } => Some("embed"),
+            ReplacedType::Object { .. } => Some("object"),
+            _ => None,
+        }
+    }
+
+    /// Selects the best image source for the given device scale and slot width.
+    ///
+    /// Returns the authored `src` when no better candidate exists.
+    pub fn image_source_for_context<'a>(&'a self, ctx: ImageSelectionContext<'_>) -> &'a str {
+        match self {
+            ReplacedType::Image { src, srcset, sizes, .. } => {
+                if srcset.is_empty() || !ctx.scale.is_finite() || ctx.scale <= 0.0 {
+                    return src;
+                }
+
+                let slot_width = ctx.slot_width.filter(|w| *w > 0.0 && w.is_finite());
+
+                let has_width_descriptors = srcset
+                    .iter()
+                    .any(|c| matches!(c.descriptor, SrcsetDescriptor::Width(_)));
+
+                let effective_slot_width = slot_width.or_else(|| {
+                    let viewport = ctx.viewport?;
+                    if let (Some(sizes_list), Some(media_ctx)) = (sizes, ctx.media_context) {
+                        Some(sizes_list.evaluate(media_ctx, viewport, ctx.font_size.unwrap_or(16.0)))
+                    } else if has_width_descriptors {
+                        Some(viewport.width)
+                    } else {
+                        Some(viewport.width)
+                    }
+                });
+
+                // Pick the smallest density >= scale; if none, the largest below.
+                let mut best: Option<(&SrcsetCandidate, f32)> = None;
+                for candidate in srcset {
+                    let density = candidate.density_for_slot(effective_slot_width);
+                    if let Some(density) = density {
+                        if density <= 0.0 || !density.is_finite() {
+                            continue;
+                        }
+                        match best {
+                            Some((_, current_density)) if current_density >= ctx.scale => {
+                                if density >= ctx.scale && density < current_density {
+                                    best = Some((candidate, density));
+                                }
+                            }
+                            Some((_, current_density)) => {
+                                if density >= ctx.scale {
+                                    best = Some((candidate, density));
+                                } else if current_density < ctx.scale && density > current_density {
+                                    best = Some((candidate, density));
+                                }
+                            }
+                            None => best = Some((candidate, density)),
+                        }
+                    }
+                }
+                best.map(|(c, _)| c.url.as_str()).unwrap_or(src)
+            }
+            _ => "",
+        }
+    }
+}
+
+impl SrcsetCandidate {
+    pub fn density_for_slot(&self, slot_width: Option<f32>) -> Option<f32> {
+        match self.descriptor {
+            SrcsetDescriptor::Density(d) => Some(d),
+            SrcsetDescriptor::Width(w) => {
+                let slot = slot_width?;
+                if slot <= 0.0 || !slot.is_finite() {
+                    return None;
+                }
+                Some(w as f32 / slot)
+            }
+        }
+    }
+}
+
+impl SizesList {
+    pub fn evaluate(
+        &self,
+        media_ctx: &crate::style::media::MediaContext,
+        viewport: crate::geometry::Size,
+        font_size: f32,
+    ) -> f32 {
+        let mut last_entry: Option<crate::style::values::Length> = None;
+        for entry in &self.entries {
+            last_entry = Some(entry.length);
+            let media_matches = entry.media.as_ref().map(|q| media_ctx.evaluate_list(q)).unwrap_or(true);
+            if media_matches {
+                if let Some(resolved) = resolve_sizes_length(entry.length, viewport, font_size) {
+                    let clamped = resolved.max(0.0);
+                    if clamped.is_finite() {
+                        return clamped;
+                    }
+                }
+            }
+        }
+
+        if let Some(len) = last_entry {
+            if let Some(resolved) = resolve_sizes_length(len, viewport, font_size) {
+                let clamped = resolved.max(0.0);
+                if clamped.is_finite() {
+                    return clamped;
+                }
+            }
+        }
+
+        // Spec fallback: 100vw when all entries are missing/invalid.
+        resolve_sizes_length(
+            crate::style::values::Length::new(100.0, crate::style::values::LengthUnit::Vw),
+            viewport,
+            font_size,
+        )
+        .unwrap_or(viewport.width)
+    }
+}
+
+fn resolve_sizes_length(
+    length: crate::style::values::Length,
+    viewport: crate::geometry::Size,
+    font_size: f32,
+) -> Option<f32> {
+    use crate::style::values::LengthUnit;
+    match length.unit {
+        LengthUnit::Percent => length.resolve_against(viewport.width),
+        LengthUnit::Vw | LengthUnit::Vh | LengthUnit::Vmin | LengthUnit::Vmax => {
+            Some(length.resolve_with_viewport(viewport.width, viewport.height))
+        }
+        LengthUnit::Em | LengthUnit::Rem => Some(font_size * length.value),
+        LengthUnit::Ex | LengthUnit::Ch => Some(font_size * length.value * 0.5),
+        _ if length.unit.is_absolute() => Some(length.to_px()),
+        // Unsupported units in sizes make the entry invalid; caller will fall back.
+        _ => None,
+    }
 }
 
 /// An anonymous box generated by the layout algorithm
@@ -187,6 +453,9 @@ pub enum BoxType {
     /// Text box (actual text content)
     Text(TextBox),
 
+    /// List marker box
+    Marker(MarkerBox),
+
     /// Replaced element (img, video, canvas, etc.)
     Replaced(ReplacedBox),
 
@@ -214,7 +483,7 @@ impl BoxType {
     /// Returns true if this box type is inline-level
     pub fn is_inline_level(&self) -> bool {
         match self {
-            BoxType::Inline(_) | BoxType::Text(_) => true,
+            BoxType::Inline(_) | BoxType::Text(_) | BoxType::Marker(_) => true,
             BoxType::Anonymous(anon) => matches!(anon.anonymous_type, AnonymousType::Inline),
             _ => false,
         }
@@ -222,7 +491,12 @@ impl BoxType {
 
     /// Returns true if this is a text box
     pub fn is_text(&self) -> bool {
-        matches!(self, BoxType::Text(_))
+        matches!(self, BoxType::Text(_) | BoxType::Marker(_))
+    }
+
+    /// Returns true if this is a list marker box
+    pub fn is_marker(&self) -> bool {
+        matches!(self, BoxType::Marker(_))
     }
 
     /// Returns true if this is a replaced element
@@ -252,6 +526,7 @@ impl fmt::Display for BoxType {
             BoxType::Block(_) => write!(f, "Block"),
             BoxType::Inline(_) => write!(f, "Inline"),
             BoxType::Text(_) => write!(f, "Text"),
+            BoxType::Marker(_) => write!(f, "Marker"),
             BoxType::Replaced(_) => write!(f, "Replaced"),
             BoxType::Anonymous(anon) => match anon.anonymous_type {
                 AnonymousType::Block => write!(f, "AnonymousBlock"),
@@ -308,10 +583,16 @@ pub struct BoxNode {
     /// Child boxes in document order
     pub children: Vec<BoxNode>,
 
+    /// Unique identifier for caching and debugging
+    pub id: usize,
+
     /// Debug information (element name, class, id)
     ///
     /// Optional - only populated in debug builds or with dev tools enabled
     pub debug_info: Option<DebugInfo>,
+
+    /// Styled node identifier that produced this box (pre-order traversal id).
+    pub styled_node_id: Option<usize>,
 }
 
 impl BoxNode {
@@ -338,7 +619,9 @@ impl BoxNode {
             style,
             box_type: BoxType::Block(BlockBox { formatting_context: fc }),
             children,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -350,7 +633,9 @@ impl BoxNode {
                 formatting_context: None,
             }),
             children,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -362,7 +647,9 @@ impl BoxNode {
                 formatting_context: Some(fc),
             }),
             children,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -372,7 +659,21 @@ impl BoxNode {
             style,
             box_type: BoxType::Text(TextBox { text }),
             children: Vec::new(),
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
+        }
+    }
+
+    /// Creates a new list marker box
+    pub fn new_marker(style: Arc<ComputedStyle>, content: MarkerContent) -> Self {
+        Self {
+            style,
+            box_type: BoxType::Marker(MarkerBox { content }),
+            children: Vec::new(),
+            id: 0,
+            debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -391,7 +692,9 @@ impl BoxNode {
                 aspect_ratio,
             }),
             children: Vec::new(),
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -403,7 +706,9 @@ impl BoxNode {
                 anonymous_type: AnonymousType::Block,
             }),
             children,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -415,7 +720,9 @@ impl BoxNode {
                 anonymous_type: AnonymousType::Inline,
             }),
             children,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -425,6 +732,11 @@ impl BoxNode {
     pub fn with_debug_info(mut self, info: DebugInfo) -> Self {
         self.debug_info = Some(info);
         self
+    }
+
+    /// Unique identifier for this box within the box tree.
+    pub fn id(&self) -> usize {
+        self.id
     }
 
     // Type query methods
@@ -514,6 +826,10 @@ impl BoxNode {
     pub fn text(&self) -> Option<&str> {
         match &self.box_type {
             BoxType::Text(text_box) => Some(&text_box.text),
+            BoxType::Marker(marker_box) => match &marker_box.content {
+                MarkerContent::Text(text) => Some(text.as_str()),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -557,9 +873,20 @@ pub struct BoxTree {
     pub root: BoxNode,
 }
 
+fn assign_box_ids(node: &mut BoxNode, next_id: &mut usize) {
+    node.id = *next_id;
+    *next_id += 1;
+    for child in &mut node.children {
+        assign_box_ids(child, next_id);
+    }
+}
+
 impl BoxTree {
     /// Creates a new box tree with the given root
     pub fn new(root: BoxNode) -> Self {
+        let mut root = root;
+        let mut next_id = 1;
+        assign_box_ids(&mut root, &mut next_id);
         Self { root }
     }
 
@@ -584,7 +911,10 @@ impl BoxTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::Size;
     use crate::style::display::FormattingContextType;
+    use crate::style::media::MediaContext;
+    use crate::style::values::{Length, LengthUnit};
 
     fn default_style() -> Arc<ComputedStyle> {
         Arc::new(ComputedStyle::default())
@@ -624,6 +954,9 @@ mod tests {
             default_style(),
             ReplacedType::Image {
                 src: "image.png".to_string(),
+                alt: None,
+                sizes: None,
+                srcset: Vec::new(),
             },
             Some(Size::new(100.0, 50.0)),
             Some(2.0),
@@ -740,6 +1073,9 @@ mod tests {
             default_style(),
             ReplacedType::Image {
                 src: "img.png".to_string(),
+                alt: None,
+                sizes: None,
+                srcset: Vec::new(),
             },
             None,
             None,
@@ -824,5 +1160,260 @@ mod tests {
         assert_eq!(format!("{}", text), "Text");
         assert_eq!(format!("{}", anon_block), "AnonymousBlock");
         assert_eq!(format!("{}", anon_inline), "AnonymousInline");
+    }
+
+    #[test]
+    fn image_source_prefers_width_descriptor_with_sizes() {
+        let img = ReplacedType::Image {
+            src: "fallback".to_string(),
+            alt: None,
+            srcset: vec![
+                SrcsetCandidate {
+                    url: "100w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(100),
+                },
+                SrcsetCandidate {
+                    url: "300w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(300),
+                },
+            ],
+            sizes: Some(SizesList {
+                entries: vec![SizesEntry {
+                    media: None,
+                    length: Length::new(50.0, LengthUnit::Vw),
+                }],
+            }),
+        };
+
+        let viewport = Size::new(200.0, 100.0);
+        let media_ctx = MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(2.0);
+        let chosen = img.image_source_for_context(ImageSelectionContext {
+            scale: 2.0,
+            slot_width: None,
+            viewport: Some(viewport),
+            media_context: Some(&media_ctx),
+            font_size: Some(16.0),
+        });
+
+        assert_eq!(chosen, "300w");
+    }
+
+    #[test]
+    fn sizes_default_to_last_entry_when_no_media_match() {
+        let img = ReplacedType::Image {
+            src: "fallback".to_string(),
+            alt: None,
+            srcset: vec![
+                SrcsetCandidate {
+                    url: "100w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(100),
+                },
+                SrcsetCandidate {
+                    url: "400w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(400),
+                },
+            ],
+            sizes: Some(SizesList {
+                entries: vec![
+                    SizesEntry {
+                        media: Some(vec![
+                            crate::style::media::MediaQuery::parse("(max-width: 10px)").unwrap()
+                        ]),
+                        length: Length::new(50.0, LengthUnit::Vw),
+                    },
+                    SizesEntry {
+                        media: None,
+                        length: Length::px(300.0),
+                    },
+                ],
+            }),
+        };
+
+        let viewport = Size::new(1200.0, 800.0);
+        let media_ctx = MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(1.0);
+        let chosen = img.image_source_for_context(ImageSelectionContext {
+            scale: 1.0,
+            slot_width: None,
+            viewport: Some(viewport),
+            media_context: Some(&media_ctx),
+            font_size: Some(16.0),
+        });
+
+        assert_eq!(chosen, "400w", "last sizes entry (300px) should drive selection");
+    }
+
+    #[test]
+    fn sizes_resolve_ex_ch_lengths() {
+        let img = ReplacedType::Image {
+            src: "fallback".to_string(),
+            alt: None,
+            srcset: vec![
+                SrcsetCandidate {
+                    url: "100w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(100),
+                },
+                SrcsetCandidate {
+                    url: "300w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(300),
+                },
+            ],
+            sizes: Some(SizesList {
+                entries: vec![SizesEntry {
+                    media: None,
+                    // 10ch at 16px font size = 80px slot width; smallest density >=1 is 100w.
+                    length: Length::new(10.0, LengthUnit::Ch),
+                }],
+            }),
+        };
+
+        let viewport = Size::new(200.0, 100.0);
+        let media_ctx = MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(1.0);
+        let chosen = img.image_source_for_context(ImageSelectionContext {
+            scale: 1.0,
+            slot_width: None,
+            viewport: Some(viewport),
+            media_context: Some(&media_ctx),
+            font_size: Some(16.0),
+        });
+
+        assert_eq!(chosen, "100w");
+    }
+
+    #[test]
+    fn width_descriptors_default_to_viewport_when_no_sizes_and_no_slot() {
+        let img = ReplacedType::Image {
+            src: "fallback".to_string(),
+            alt: None,
+            srcset: vec![
+                SrcsetCandidate {
+                    url: "400w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(400),
+                },
+                SrcsetCandidate {
+                    url: "800w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(800),
+                },
+            ],
+            sizes: None,
+        };
+
+        // With viewport width 500 and DPR 2, density candidates are 0.8 and 1.6.
+        let viewport = Size::new(500.0, 300.0);
+        let media_ctx = MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(2.0);
+        let chosen = img.image_source_for_context(ImageSelectionContext {
+            scale: 2.0,
+            slot_width: None,
+            viewport: Some(viewport),
+            media_context: Some(&media_ctx),
+            font_size: Some(16.0),
+        });
+
+        assert_eq!(chosen, "800w", "viewport fallback should make 800w best for DPR=2");
+    }
+
+    #[test]
+    fn non_positive_slot_width_falls_back_to_viewport_for_width_descriptors() {
+        let img = ReplacedType::Image {
+            src: "fallback".to_string(),
+            alt: None,
+            srcset: vec![
+                SrcsetCandidate {
+                    url: "100w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(100),
+                },
+                SrcsetCandidate {
+                    url: "400w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(400),
+                },
+            ],
+            sizes: None,
+        };
+
+        // Slot width is zero (e.g., auto-sized placeholder), so selection should fall back to viewport.
+        let viewport = Size::new(400.0, 300.0);
+        let media_ctx = MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(1.0);
+        let chosen = img.image_source_for_context(ImageSelectionContext {
+            scale: 1.0,
+            slot_width: Some(0.0),
+            viewport: Some(viewport),
+            media_context: Some(&media_ctx),
+            font_size: Some(16.0),
+        });
+
+        assert_eq!(
+            chosen, "400w",
+            "zero-width slot should use viewport width for width descriptors"
+        );
+    }
+
+    #[test]
+    fn image_sources_with_fallback_prioritizes_selected_then_src() {
+        let img = ReplacedType::Image {
+            src: "base".to_string(),
+            alt: None,
+            srcset: vec![
+                SrcsetCandidate {
+                    url: "2x".to_string(),
+                    descriptor: SrcsetDescriptor::Density(2.0),
+                },
+                SrcsetCandidate {
+                    url: "1x".to_string(),
+                    descriptor: SrcsetDescriptor::Density(1.0),
+                },
+            ],
+            sizes: None,
+        };
+
+        let media_ctx = MediaContext::screen(800.0, 600.0).with_device_pixel_ratio(2.0);
+        let sources = img.image_sources_with_fallback(ImageSelectionContext {
+            scale: 2.0,
+            slot_width: Some(400.0),
+            viewport: Some(Size::new(800.0, 600.0)),
+            media_context: Some(&media_ctx),
+            font_size: Some(16.0),
+        });
+
+        assert_eq!(sources[0], "2x", "selected srcset candidate should lead");
+        assert!(
+            sources.contains(&"base".to_string()),
+            "base src should remain available as fallback"
+        );
+        assert_eq!(sources.len(), 3, "srcset entries and base src should be unique");
+    }
+
+    #[test]
+    fn iframe_srcdoc_prefers_inline_html_for_placeholder() {
+        let iframe = ReplacedType::Iframe {
+            src: "https://example.com".to_string(),
+            srcdoc: Some("hello world".to_string()),
+        };
+        assert_eq!(iframe.placeholder_label(), Some("hello world"));
+
+        let iframe_no_srcdoc = ReplacedType::Iframe {
+            src: "https://example.com".to_string(),
+            srcdoc: None,
+        };
+        assert_eq!(iframe_no_srcdoc.placeholder_label(), Some("iframe"));
+    }
+
+    #[test]
+    fn video_image_sources_prefer_poster_only() {
+        let video = ReplacedType::Video {
+            src: "video.mp4".to_string(),
+            poster: Some("thumb.png".to_string()),
+        };
+        let sources = video.image_sources_with_fallback(ImageSelectionContext {
+            scale: 2.0,
+            slot_width: Some(400.0),
+            viewport: Some(Size::new(800.0, 600.0)),
+            media_context: None,
+            font_size: Some(16.0),
+        });
+
+        assert_eq!(
+            sources,
+            vec!["thumb.png".to_string()],
+            "video should only expose poster for imaging"
+        );
     }
 }

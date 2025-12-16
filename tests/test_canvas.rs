@@ -402,7 +402,7 @@ fn test_draw_text_empty() {
     let font = font_ctx.get_sans_serif().unwrap();
 
     // Draw empty glyphs - should not crash
-    canvas.draw_text(Point::new(10.0, 50.0), &[], &font, 16.0, Rgba::BLACK);
+    canvas.draw_text(Point::new(10.0, 50.0), &[], &font, 16.0, Rgba::BLACK, 0.0, 0.0);
 
     let _ = canvas.into_pixmap();
 }
@@ -428,7 +428,15 @@ fn test_draw_text_with_glyphs() {
         .unwrap();
 
     // Draw the glyphs
-    canvas.draw_text(Point::new(10.0, 30.0), &shaped.glyphs, &font, 16.0, Rgba::BLACK);
+    canvas.draw_text(
+        Point::new(10.0, 30.0),
+        &shaped.glyphs,
+        &font,
+        16.0,
+        Rgba::BLACK,
+        0.0,
+        0.0,
+    );
 
     let pixmap = canvas.into_pixmap();
     assert!(pixmap.data().iter().any(|&b| b != 255)); // Some non-white pixels
@@ -455,6 +463,8 @@ fn test_draw_text_colored() {
         &font,
         20.0,
         Rgba::rgb(255, 0, 0),
+        0.0,
+        0.0,
     );
 
     let _ = canvas.into_pixmap();
@@ -477,7 +487,15 @@ fn test_draw_text_with_opacity() {
     let shaped = shaper
         .shape_text("Faded", &font, 24.0, Script::Latin, TextDirection::Ltr)
         .unwrap();
-    canvas.draw_text(Point::new(10.0, 35.0), &shaped.glyphs, &font, 24.0, Rgba::BLACK);
+    canvas.draw_text(
+        Point::new(10.0, 35.0),
+        &shaped.glyphs,
+        &font,
+        24.0,
+        Rgba::BLACK,
+        0.0,
+        0.0,
+    );
 
     let _ = canvas.into_pixmap();
 }

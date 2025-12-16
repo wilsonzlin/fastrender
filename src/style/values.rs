@@ -51,6 +51,9 @@ pub enum LengthUnit {
     /// Millimeters (mm)
     Mm,
 
+    /// Quarter-millimeters (Q)
+    Q,
+
     /// Em units - relative to element's font size
     Em,
 
@@ -77,6 +80,9 @@ pub enum LengthUnit {
 
     /// Percentage (%) - relative to containing block or font size
     Percent,
+
+    /// Calculated length from `calc()`, `min()`, `max()`, or `clamp()`
+    Calc,
 }
 
 impl LengthUnit {
@@ -95,7 +101,10 @@ impl LengthUnit {
     /// assert!(!LengthUnit::Em.is_absolute());
     /// ```
     pub fn is_absolute(self) -> bool {
-        matches!(self, Self::Px | Self::Pt | Self::Pc | Self::In | Self::Cm | Self::Mm)
+        matches!(
+            self,
+            Self::Px | Self::Pt | Self::Pc | Self::In | Self::Cm | Self::Mm | Self::Q
+        )
     }
 
     /// Returns true if this is a font-relative unit (em, rem, ex, ch)
@@ -156,6 +165,7 @@ impl LengthUnit {
             Self::In => "in",
             Self::Cm => "cm",
             Self::Mm => "mm",
+            Self::Q => "q",
             Self::Em => "em",
             Self::Rem => "rem",
             Self::Ex => "ex",
@@ -165,7 +175,157 @@ impl LengthUnit {
             Self::Vmin => "vmin",
             Self::Vmax => "vmax",
             Self::Percent => "%",
+            Self::Calc => "calc",
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CalcTerm {
+    pub unit: LengthUnit,
+    pub value: f32,
+}
+
+const MAX_CALC_TERMS: usize = 8;
+const EMPTY_TERM: CalcTerm = CalcTerm {
+    unit: LengthUnit::Px,
+    value: 0.0,
+};
+
+/// Linear combination of length units produced by `calc()`, `min()`, `max()`, or `clamp()`.
+///
+/// Terms are stored as unit coefficients (e.g., `50% + 10px - 2vw`), and resolved later with
+/// the appropriate percentage base, viewport, and font metrics.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CalcLength {
+    terms: [CalcTerm; MAX_CALC_TERMS],
+    term_count: u8,
+}
+
+impl CalcLength {
+    pub const fn empty() -> Self {
+        Self {
+            terms: [EMPTY_TERM; MAX_CALC_TERMS],
+            term_count: 0,
+        }
+    }
+
+    pub fn single(unit: LengthUnit, value: f32) -> Self {
+        let mut calc = Self::empty();
+        let _ = calc.push(unit, value);
+        calc
+    }
+
+    pub fn terms(&self) -> &[CalcTerm] {
+        &self.terms[..self.term_count as usize]
+    }
+
+    fn push(&mut self, unit: LengthUnit, value: f32) -> Result<(), ()> {
+        if value == 0.0 {
+            return Ok(());
+        }
+        if let Some(existing) = self.terms().iter().position(|t| t.unit == unit).map(|idx| idx as usize) {
+            self.terms[existing].value += value;
+            if self.terms[existing].value == 0.0 {
+                // Remove zeroed term
+                let len = self.term_count as usize;
+                for i in existing..len - 1 {
+                    self.terms[i] = self.terms[i + 1];
+                }
+                self.terms[len - 1] = EMPTY_TERM;
+                self.term_count -= 1;
+            }
+            return Ok(());
+        }
+
+        let len = self.term_count as usize;
+        if len >= MAX_CALC_TERMS {
+            return Err(()); // overflow; reject overly complex expressions
+        }
+        self.terms[len] = CalcTerm { unit, value };
+        self.term_count += 1;
+        Ok(())
+    }
+
+    pub fn scale(&self, factor: f32) -> Self {
+        let mut out = Self::empty();
+        for term in self.terms() {
+            let _ = out.push(term.unit, term.value * factor);
+        }
+        out
+    }
+
+    pub fn add_scaled(&self, other: &CalcLength, scale: f32) -> Option<Self> {
+        let mut out = *self;
+        for term in other.terms() {
+            if out.push(term.unit, term.value * scale).is_err() {
+                return None;
+            }
+        }
+        Some(out)
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.term_count == 0 || self.terms().iter().all(|t| t.value == 0.0)
+    }
+
+    pub fn has_percentage(&self) -> bool {
+        self.terms().iter().any(|t| t.unit == LengthUnit::Percent)
+    }
+
+    pub fn resolve(
+        &self,
+        percentage_base: Option<f32>,
+        viewport_width: f32,
+        viewport_height: f32,
+        font_size_px: f32,
+        root_font_size_px: f32,
+    ) -> Option<f32> {
+        let mut total = 0.0;
+        for term in self.terms() {
+            let resolved = match term.unit {
+                LengthUnit::Percent => percentage_base.map(|b| (term.value / 100.0) * b),
+                u if u.is_absolute() => Some(Length::new(term.value, u).to_px()),
+                u if u.is_viewport_relative() => {
+                    Some(Length::new(term.value, u).resolve_with_viewport(viewport_width, viewport_height))
+                }
+                LengthUnit::Em => Some(term.value * font_size_px),
+                LengthUnit::Ex | LengthUnit::Ch => Some(term.value * font_size_px * 0.5),
+                LengthUnit::Rem => Some(term.value * root_font_size_px),
+                LengthUnit::Calc => None,
+                _ => None,
+            }?;
+            total += resolved;
+        }
+        Some(total)
+    }
+
+    pub fn single_term(&self) -> Option<CalcTerm> {
+        if self.term_count == 1 {
+            Some(self.terms[0])
+        } else {
+            None
+        }
+    }
+
+    pub fn requires_context(&self) -> bool {
+        self.terms().iter().any(|t| {
+            t.unit.is_percentage()
+                || t.unit.is_viewport_relative()
+                || t.unit.is_font_relative()
+                || matches!(t.unit, LengthUnit::Calc)
+        })
+    }
+
+    pub fn absolute_sum(&self) -> Option<f32> {
+        let mut total = 0.0;
+        for term in self.terms() {
+            match term.unit {
+                u if u.is_absolute() => total += Length::new(term.value, u).to_px(),
+                _ => return None,
+            }
+        }
+        Some(total)
     }
 }
 
@@ -179,6 +339,7 @@ mod tests {
         assert!(LengthUnit::Px.is_absolute());
         assert!(LengthUnit::Pt.is_absolute());
         assert!(LengthUnit::In.is_absolute());
+        assert!(LengthUnit::Q.is_absolute());
 
         assert!(LengthUnit::Em.is_font_relative());
         assert!(LengthUnit::Rem.is_font_relative());
@@ -235,8 +396,17 @@ mod tests {
     #[test]
     fn test_length_percentage_resolution() {
         let percent = Length::percent(50.0);
-        assert_eq!(percent.resolve_against(200.0), 100.0);
-        assert_eq!(percent.resolve_against(100.0), 50.0);
+        assert_eq!(percent.resolve_against(200.0), Some(100.0));
+        assert_eq!(percent.resolve_against(100.0), Some(50.0));
+    }
+
+    #[test]
+    fn test_length_resolution_without_context_returns_none() {
+        let em = Length::em(2.0);
+        assert_eq!(em.resolve_against(100.0), None);
+
+        let vw = Length::new(10.0, LengthUnit::Vw);
+        assert_eq!(vw.resolve_against(100.0), None);
     }
 
     #[test]
@@ -246,6 +416,12 @@ mod tests {
 
         let rem = Length::rem(1.5);
         assert_eq!(rem.resolve_with_font_size(16.0), 24.0);
+
+        let ex = Length::ex(2.0);
+        assert_eq!(ex.resolve_with_font_size(16.0), 16.0);
+
+        let ch = Length::ch(3.0);
+        assert_eq!(ch.resolve_with_font_size(16.0), 24.0);
     }
 
     #[test]
@@ -271,9 +447,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Cannot convert em to px without context")]
-    fn test_length_to_px_panics_on_relative_units() {
-        Length::em(2.0).to_px();
+    fn test_length_to_px_relative_units_fallback() {
+        assert_eq!(Length::em(2.0).to_px(), 2.0);
+        assert_eq!(Length::percent(50.0).to_px(), 50.0);
     }
 
     // LengthOrAuto tests
@@ -378,6 +554,8 @@ pub struct Length {
     pub value: f32,
     /// The unit
     pub unit: LengthUnit,
+    /// Optional calc() expression (takes precedence over `value`/`unit`)
+    pub calc: Option<CalcLength>,
 }
 
 impl Length {
@@ -392,7 +570,20 @@ impl Length {
     /// assert_eq!(length.value, 10.0);
     /// ```
     pub const fn new(value: f32, unit: LengthUnit) -> Self {
-        Self { value, unit }
+        Self {
+            value,
+            unit,
+            calc: None,
+        }
+    }
+
+    /// Creates a length from a calc expression
+    pub const fn calc(calc: CalcLength) -> Self {
+        Self {
+            value: 0.0,
+            unit: LengthUnit::Calc,
+            calc: Some(calc),
+        }
     }
 
     // Convenience constructors for absolute units
@@ -427,6 +618,11 @@ impl Length {
         Self::new(value, LengthUnit::Mm)
     }
 
+    /// Creates a length in quarter-millimeters (1Q = 0.25mm)
+    pub const fn q(value: f32) -> Self {
+        Self::new(value, LengthUnit::Q)
+    }
+
     // Convenience constructors for relative units
 
     /// Creates a length in em units
@@ -458,12 +654,10 @@ impl Length {
 
     /// Converts this length to pixels
     ///
-    /// For absolute units, this performs unit conversion.
-    /// For relative units, you must use the context-specific resolve methods.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called on a relative unit (em, rem, %, etc.)
+    /// For absolute units, this performs unit conversion. For relative or
+    /// percentage units, this is a best-effort fallback that returns the raw
+    /// numeric value when no context is available; use the context-aware
+    /// resolve helpers when you need spec-accurate resolution.
     ///
     /// # Examples
     ///
@@ -472,8 +666,16 @@ impl Length {
     ///
     /// assert_eq!(Length::px(100.0).to_px(), 100.0);
     /// assert_eq!(Length::pt(72.0).to_px(), 96.0); // 72pt = 1in = 96px
+    /// assert_eq!(Length::em(2.0).to_px(), 2.0);   // relative units return raw value without context
     /// ```
     pub fn to_px(self) -> f32 {
+        if let Some(calc) = self.calc {
+            if let Some(abs) = calc.absolute_sum() {
+                return abs;
+            }
+            // Best-effort fallback when context is missing: treat unresolved units as raw values.
+            return calc.terms().iter().map(|t| t.value).sum();
+        }
         match self.unit {
             LengthUnit::Px => self.value,
             LengthUnit::Pt => self.value * (96.0 / 72.0), // 1pt = 1/72 inch
@@ -481,11 +683,15 @@ impl Length {
             LengthUnit::In => self.value * 96.0,          // 1in = 96px (CSS spec)
             LengthUnit::Cm => self.value * 37.795276,     // 1cm = 96px/2.54
             LengthUnit::Mm => self.value * 3.7795276,     // 1mm = 1/10 cm
-            _ => panic!("Cannot convert {} to px without context", self.unit.as_str()),
+            LengthUnit::Q => self.value * 0.944882,       // 1Q = 1/4 mm
+            _ => self.value,
         }
     }
 
-    /// Resolves this length to pixels using a percentage base
+    /// Resolves this length to pixels using a percentage base.
+    ///
+    /// Returns `None` when the unit cannot be resolved with the provided base
+    /// (e.g., font-relative or viewport-relative units).
     ///
     /// Used when the length is relative to a containing block dimension.
     ///
@@ -495,16 +701,19 @@ impl Length {
     /// use fastrender::Length;
     ///
     /// let length = Length::percent(50.0);
-    /// assert_eq!(length.resolve_against(200.0), 100.0);
+    /// assert_eq!(length.resolve_against(200.0), Some(100.0));
     ///
     /// let px_length = Length::px(100.0);
-    /// assert_eq!(px_length.resolve_against(200.0), 100.0); // Absolute units ignore base
+    /// assert_eq!(px_length.resolve_against(200.0), Some(100.0)); // Absolute units ignore base
     /// ```
-    pub fn resolve_against(self, percentage_base: f32) -> f32 {
+    pub fn resolve_against(self, percentage_base: f32) -> Option<f32> {
+        if let Some(calc) = self.calc {
+            return calc.resolve(Some(percentage_base), 0.0, 0.0, 0.0, 0.0);
+        }
         match self.unit {
-            LengthUnit::Percent => (self.value / 100.0) * percentage_base,
-            _ if self.unit.is_absolute() => self.to_px(),
-            _ => panic!("Cannot resolve {} without additional context", self.unit.as_str()),
+            LengthUnit::Percent => Some((self.value / 100.0) * percentage_base),
+            _ if self.unit.is_absolute() => Some(self.to_px()),
+            _ => None,
         }
     }
 
@@ -520,10 +729,21 @@ impl Length {
     ///
     /// let rem_length = Length::rem(1.5);
     /// assert_eq!(rem_length.resolve_with_font_size(16.0), 24.0);
+    ///
+    /// // ex/ch fallback to 0.5em when font metrics are unavailable
+    /// let ex_length = Length::ex(2.0);
+    /// assert_eq!(ex_length.resolve_with_font_size(16.0), 16.0);
     /// ```
     pub fn resolve_with_font_size(self, font_size_px: f32) -> f32 {
+        if let Some(calc) = self.calc {
+            return calc
+                .resolve(None, 0.0, 0.0, font_size_px, font_size_px)
+                .unwrap_or(self.value * font_size_px);
+        }
         match self.unit {
             LengthUnit::Em | LengthUnit::Rem => self.value * font_size_px,
+            // Approximate ex/ch with font metrics; fallback to 0.5em when actual x-height/zero-width is unknown.
+            LengthUnit::Ex | LengthUnit::Ch => self.value * font_size_px * 0.5,
             _ if self.unit.is_absolute() => self.to_px(),
             _ => panic!("Cannot resolve {} with only font size", self.unit.as_str()),
         }
@@ -543,6 +763,11 @@ impl Length {
     /// assert_eq!(vh_length.resolve_with_viewport(800.0, 600.0), 300.0);
     /// ```
     pub fn resolve_with_viewport(self, viewport_width: f32, viewport_height: f32) -> f32 {
+        if let Some(calc) = self.calc {
+            return calc
+                .resolve(None, viewport_width, viewport_height, 0.0, 0.0)
+                .unwrap_or(self.value);
+        }
         match self.unit {
             LengthUnit::Vw => (self.value / 100.0) * viewport_width,
             LengthUnit::Vh => (self.value / 100.0) * viewport_height,
@@ -550,6 +775,57 @@ impl Length {
             LengthUnit::Vmax => (self.value / 100.0) * viewport_width.max(viewport_height),
             _ if self.unit.is_absolute() => self.to_px(),
             _ => panic!("Cannot resolve {} with only viewport dimensions", self.unit.as_str()),
+        }
+    }
+
+    /// Resolves a length (including calc expressions) with all available context.
+    ///
+    /// Returns `None` when a percentage-based term lacks a base.
+    pub fn resolve_with_context(
+        &self,
+        percentage_base: Option<f32>,
+        viewport_width: f32,
+        viewport_height: f32,
+        font_size_px: f32,
+        root_font_size_px: f32,
+    ) -> Option<f32> {
+        if let Some(calc) = self.calc {
+            return calc.resolve(
+                percentage_base,
+                viewport_width,
+                viewport_height,
+                font_size_px,
+                root_font_size_px,
+            );
+        }
+
+        if self.unit.is_percentage() {
+            percentage_base.map(|b| (self.value / 100.0) * b)
+        } else if self.unit.is_viewport_relative() {
+            Some(self.resolve_with_viewport(viewport_width, viewport_height))
+        } else if self.unit.is_font_relative() {
+            Some(self.resolve_with_font_size(if self.unit == LengthUnit::Rem {
+                root_font_size_px
+            } else {
+                font_size_px
+            }))
+        } else if self.unit.is_absolute() {
+            Some(self.to_px())
+        } else {
+            Some(self.value)
+        }
+    }
+
+    /// Returns true if this length (or any calc term) uses a percentage component.
+    ///
+    /// Percentages in the block axis require a containing block height to resolve,
+    /// so callers can use this to decide whether available block-size changes should
+    /// invalidate cached measurements.
+    pub fn has_percentage(&self) -> bool {
+        if let Some(calc) = self.calc {
+            calc.has_percentage()
+        } else {
+            self.unit.is_percentage()
         }
     }
 
@@ -564,6 +840,9 @@ impl Length {
     /// assert!(!Length::px(0.1).is_zero());
     /// ```
     pub fn is_zero(self) -> bool {
+        if let Some(calc) = self.calc {
+            return calc.is_zero();
+        }
         self.value == 0.0
     }
 }
@@ -683,10 +962,7 @@ impl LengthOrAuto {
     /// assert_eq!(LengthOrAuto::Auto.resolve_against(200.0), None);
     /// ```
     pub fn resolve_against(self, percentage_base: f32) -> Option<f32> {
-        match self {
-            Self::Length(length) => Some(length.resolve_against(percentage_base)),
-            Self::Auto => None,
-        }
+        self.length().and_then(|length| length.resolve_against(percentage_base))
     }
 
     /// Resolves this value, substituting a default for Auto
@@ -701,7 +977,7 @@ impl LengthOrAuto {
     /// ```
     pub fn resolve_or(self, default: f32, percentage_base: f32) -> f32 {
         match self {
-            Self::Length(length) => length.resolve_against(percentage_base),
+            Self::Length(length) => length.resolve_against(percentage_base).unwrap_or(default),
             Self::Auto => default,
         }
     }

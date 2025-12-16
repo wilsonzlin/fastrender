@@ -34,6 +34,10 @@
 use crate::layout::constraints::LayoutConstraints;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 /// Intrinsic sizing mode for content-based size queries
 ///
@@ -56,7 +60,7 @@ use crate::tree::fragment_tree::FragmentNode;
 /// # Reference
 ///
 /// CSS Sizing Module Level 3: <https://www.w3.org/TR/css-sizing-3/>
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntrinsicSizingMode {
     /// Minimum content size (narrowest possible without overflow)
     ///
@@ -69,6 +73,82 @@ pub enum IntrinsicSizingMode {
     /// Corresponds to CSS `max-content` keyword.
     /// For text, this is the width needed to fit all content on one line.
     MaxContent,
+}
+
+thread_local! {
+    static INTRINSIC_INLINE_CACHE: RefCell<HashMap<(usize, usize, IntrinsicSizingMode), f32>> =
+        RefCell::new(HashMap::new());
+}
+
+static CACHE_LOOKUPS: AtomicUsize = AtomicUsize::new(0);
+static CACHE_HITS: AtomicUsize = AtomicUsize::new(0);
+static CACHE_STORES: AtomicUsize = AtomicUsize::new(0);
+static BLOCK_INTRINSIC_CALLS: AtomicUsize = AtomicUsize::new(0);
+static FLEX_INTRINSIC_CALLS: AtomicUsize = AtomicUsize::new(0);
+static INLINE_INTRINSIC_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+fn cache_key(node: &BoxNode, mode: IntrinsicSizingMode) -> Option<(usize, usize, IntrinsicSizingMode)> {
+    let id = node.id();
+    if id == 0 {
+        return None;
+    }
+    let style_ptr = Arc::as_ptr(&node.style) as usize;
+    Some((id, style_ptr, mode))
+}
+
+pub(crate) fn intrinsic_cache_lookup(node: &BoxNode, mode: IntrinsicSizingMode) -> Option<f32> {
+    CACHE_LOOKUPS.fetch_add(1, Ordering::Relaxed);
+    let key = cache_key(node, mode)?;
+    let hit = INTRINSIC_INLINE_CACHE.with(|cache| cache.borrow().get(&key).copied());
+    if hit.is_some() {
+        CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+    }
+    hit
+}
+
+pub(crate) fn intrinsic_cache_store(node: &BoxNode, mode: IntrinsicSizingMode, value: f32) {
+    if let Some(key) = cache_key(node, mode) {
+        INTRINSIC_INLINE_CACHE.with(|cache| {
+            cache.borrow_mut().insert(key, value);
+        });
+        CACHE_STORES.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+pub(crate) fn intrinsic_cache_clear() {
+    INTRINSIC_INLINE_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+pub(crate) fn intrinsic_cache_reset_counters() {
+    CACHE_LOOKUPS.store(0, Ordering::Relaxed);
+    CACHE_HITS.store(0, Ordering::Relaxed);
+    CACHE_STORES.store(0, Ordering::Relaxed);
+    BLOCK_INTRINSIC_CALLS.store(0, Ordering::Relaxed);
+    FLEX_INTRINSIC_CALLS.store(0, Ordering::Relaxed);
+    INLINE_INTRINSIC_CALLS.store(0, Ordering::Relaxed);
+}
+
+pub(crate) fn intrinsic_cache_stats() -> (usize, usize, usize, usize, usize, usize) {
+    (
+        CACHE_LOOKUPS.load(Ordering::Relaxed),
+        CACHE_HITS.load(Ordering::Relaxed),
+        CACHE_STORES.load(Ordering::Relaxed),
+        BLOCK_INTRINSIC_CALLS.load(Ordering::Relaxed),
+        FLEX_INTRINSIC_CALLS.load(Ordering::Relaxed),
+        INLINE_INTRINSIC_CALLS.load(Ordering::Relaxed),
+    )
+}
+
+pub(crate) fn count_block_intrinsic_call() {
+    BLOCK_INTRINSIC_CALLS.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn count_flex_intrinsic_call() {
+    FLEX_INTRINSIC_CALLS.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn count_inline_intrinsic_call() {
+    INLINE_INTRINSIC_CALLS.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Common trait for all formatting contexts
@@ -187,6 +267,15 @@ pub trait FormattingContext: Send + Sync {
     /// This method may be called multiple times during layout (e.g., for table
     /// column sizing). Implementations should consider caching if expensive.
     fn compute_intrinsic_inline_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError>;
+
+    /// Computes intrinsic size for a box in the block axis
+    ///
+    /// Used for shrink-to-fit resolution of absolutely positioned height when
+    /// both vertical insets are specified, mirroring the inline shrink path.
+    fn compute_intrinsic_block_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
+        // Default to inline size for contexts that have symmetric handling.
+        self.compute_intrinsic_inline_size(box_node, mode)
+    }
 }
 
 /// Layout errors

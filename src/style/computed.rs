@@ -23,10 +23,15 @@
 //! assert_eq!(style.font_size, 16.0); // Default font size
 //! ```
 
+use crate::css::types::Transform;
 use crate::geometry::EdgeOffsets;
 use crate::style::color::{Color, Rgba};
 use crate::style::display::Display;
 use crate::style::position::Position;
+use crate::style::types::{
+    BoxSizing, Containment, FilterFunction, FontSizeAdjust, FontStretch, Isolation, MixBlendMode, Overflow,
+    TextAlignLast, TextIndent, TextJustify, WillChange,
+};
 use crate::style::values::{Length, LengthOrAuto};
 
 /// Computed CSS styles for an element
@@ -86,6 +91,11 @@ pub struct PositionedStyle {
     /// CSS: `max-width`
     /// Initial: none (represented as f32::INFINITY)
     pub max_width: Length,
+    /// Whether width/height apply to content-box or border-box
+    ///
+    /// CSS: `box-sizing`
+    /// Initial: content-box
+    pub box_sizing: BoxSizing,
 
     /// Minimum height
     ///
@@ -105,6 +115,11 @@ pub struct PositionedStyle {
     /// Initial: 0
     /// Note: Auto margins are handled during layout
     pub margin: EdgeOffsets,
+    /// Whether each margin side was authored as `auto`
+    pub margin_left_auto: bool,
+    pub margin_right_auto: bool,
+    pub margin_top_auto: bool,
+    pub margin_bottom_auto: bool,
 
     /// Padding on all sides
     ///
@@ -182,6 +197,60 @@ pub struct PositionedStyle {
     /// Range: 0.0 to 1.0
     pub opacity: f32,
 
+    /// CSS filters
+    ///
+    /// CSS: `filter`
+    /// Initial: none
+    pub filter: Vec<FilterFunction>,
+
+    /// Backdrop filters
+    ///
+    /// CSS: `backdrop-filter`
+    /// Initial: none
+    pub backdrop_filter: Vec<FilterFunction>,
+
+    /// Mix blend mode
+    ///
+    /// CSS: `mix-blend-mode`
+    /// Initial: normal
+    pub mix_blend_mode: MixBlendMode,
+
+    /// Isolation
+    ///
+    /// CSS: `isolation`
+    /// Initial: auto
+    pub isolation: Isolation,
+
+    /// Will-change hints
+    ///
+    /// CSS: `will-change`
+    /// Initial: auto
+    pub will_change: WillChange,
+
+    /// CSS containment
+    ///
+    /// CSS: `contain`
+    /// Initial: none
+    pub containment: Containment,
+
+    /// Transforms
+    ///
+    /// CSS: `transform`
+    /// Initial: none
+    pub transform: Vec<Transform>,
+
+    /// Overflow on the x axis
+    ///
+    /// CSS: `overflow-x`
+    /// Initial: visible
+    pub overflow_x: Overflow,
+
+    /// Overflow on the y axis
+    ///
+    /// CSS: `overflow-y`
+    /// Initial: visible
+    pub overflow_y: Overflow,
+
     // ===== COLORS =====
     /// Text color
     ///
@@ -209,6 +278,8 @@ pub struct PositionedStyle {
     /// Note: Already resolved to px at computed value time
     pub font_size: f32,
 
+    pub root_font_size: f32,
+
     /// Font weight
     ///
     /// CSS: `font-weight`
@@ -222,11 +293,24 @@ pub struct PositionedStyle {
     /// Initial: normal
     pub font_style: FontStyle,
 
+    /// Font stretch
+    ///
+    /// CSS: `font-stretch`
+    /// Initial: normal (100%)
+    pub font_stretch: super::types::FontStretch,
+    /// Preferred aspect ratio (non-replaced elements)
+    pub aspect_ratio: super::types::AspectRatio,
+    /// Font size adjust
+    ///
+    /// CSS: `font-size-adjust`
+    /// Initial: none
+    pub font_size_adjust: FontSizeAdjust,
+
     /// Line height
     ///
     /// CSS: `line-height`
     /// Initial: normal (1.2)
-    /// Note: Can be length or number
+    /// Note: Can be length, number, or percentage
     pub line_height: LineHeight,
 
     /// Text alignment
@@ -234,6 +318,17 @@ pub struct PositionedStyle {
     /// CSS: `text-align`
     /// Initial: start
     pub text_align: TextAlign,
+    pub text_align_last: TextAlignLast,
+    /// Justification mode
+    ///
+    /// CSS: `text-justify`
+    /// Initial: auto
+    pub text_justify: TextJustify,
+    /// Indentation
+    ///
+    /// CSS: `text-indent`
+    /// Initial: 0
+    pub text_indent: TextIndent,
 
     // ===== FLEXBOX =====
     /// Flex direction
@@ -284,7 +379,7 @@ pub struct PositionedStyle {
 /// Border colors for all four sides
 ///
 /// Allows different colors per side
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BorderColors {
     pub top: Color,
     pub right: Color,
@@ -294,11 +389,11 @@ pub struct BorderColors {
 
 impl BorderColors {
     /// Creates border colors with the same color on all sides
-    pub const fn all(color: Color) -> Self {
+    pub fn all(color: Color) -> Self {
         Self {
-            top: color,
-            right: color,
-            bottom: color,
+            top: color.clone(),
+            right: color.clone(),
+            bottom: color.clone(),
             left: color,
         }
     }
@@ -313,11 +408,12 @@ pub enum Visibility {
 }
 
 /// CSS font-style property values
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FontStyle {
     Normal,
     Italic,
-    Oblique,
+    /// Oblique may carry an optional angle in degrees (-90..90)
+    Oblique(Option<f32>),
 }
 
 /// CSS line-height property values
@@ -329,6 +425,8 @@ pub enum LineHeight {
     Number(f32),
     /// Length in pixels
     Length(f32),
+    /// Percentage of font size
+    Percentage(f32),
 }
 
 /// CSS text-align property values
@@ -373,6 +471,10 @@ pub enum JustifyContent {
 /// CSS align-items property values
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlignItems {
+    Start,
+    End,
+    SelfStart,
+    SelfEnd,
     FlexStart,
     FlexEnd,
     Center,
@@ -392,9 +494,14 @@ impl Default for PositionedStyle {
             height: LengthOrAuto::Auto,
             min_width: Length::px(0.0),
             max_width: Length::px(f32::INFINITY),
+            box_sizing: BoxSizing::ContentBox,
             min_height: Length::px(0.0),
             max_height: Length::px(f32::INFINITY),
             margin: EdgeOffsets::ZERO,
+            margin_left_auto: false,
+            margin_right_auto: false,
+            margin_top_auto: false,
+            margin_bottom_auto: false,
             padding: EdgeOffsets::ZERO,
             border_width: EdgeOffsets::all(3.0), // medium = 3px
             border_color: BorderColors::all(Color::Rgba(Rgba::BLACK)),
@@ -411,6 +518,15 @@ impl Default for PositionedStyle {
             display: Display::Inline,
             visibility: Visibility::Visible,
             opacity: 1.0,
+            filter: Vec::new(),
+            backdrop_filter: Vec::new(),
+            mix_blend_mode: MixBlendMode::Normal,
+            isolation: Isolation::Auto,
+            will_change: WillChange::default(),
+            containment: Containment::none(),
+            transform: Vec::new(),
+            overflow_x: Overflow::Visible,
+            overflow_y: Overflow::Visible,
 
             // Color defaults
             color: Color::Rgba(Rgba::BLACK),
@@ -418,11 +534,18 @@ impl Default for PositionedStyle {
 
             // Text defaults
             font_family: vec!["serif".to_string()],
-            font_size: 16.0,  // medium = 16px
+            font_size: 16.0, // medium = 16px
+            root_font_size: 16.0,
             font_weight: 400, // normal
             font_style: FontStyle::Normal,
+            font_stretch: FontStretch::Normal,
+            aspect_ratio: super::types::AspectRatio::Auto,
+            font_size_adjust: FontSizeAdjust::None,
             line_height: LineHeight::Normal,
             text_align: TextAlign::Start,
+            text_align_last: TextAlignLast::Auto,
+            text_justify: TextJustify::Auto,
+            text_indent: TextIndent::default(),
 
             // Flexbox defaults
             flex_direction: FlexDirection::Row,
@@ -495,9 +618,54 @@ impl PositionedStyle {
 
     /// Returns true if this element creates a stacking context
     ///
-    /// Simplified check - real implementation has more conditions
     pub fn creates_stacking_context(&self) -> bool {
-        self.is_positioned() && self.z_index.is_some() || self.opacity < 1.0
+        if (self.is_positioned() && self.z_index.is_some())
+            || matches!(self.position, Position::Fixed | Position::Sticky)
+        {
+            return true;
+        }
+
+        if self.opacity < 1.0 {
+            return true;
+        }
+
+        if !self.transform.is_empty() {
+            return true;
+        }
+
+        if !self.filter.is_empty() || !self.backdrop_filter.is_empty() {
+            return true;
+        }
+
+        if !matches!(self.mix_blend_mode, crate::style::types::MixBlendMode::Normal) {
+            return true;
+        }
+
+        if matches!(self.isolation, crate::style::types::Isolation::Isolate) {
+            return true;
+        }
+
+        if self.will_change.creates_stacking_context() {
+            return true;
+        }
+
+        if self.containment.creates_stacking_context() {
+            return true;
+        }
+
+        if self.is_positioned()
+            && (matches!(
+                self.overflow_x,
+                Overflow::Hidden | Overflow::Scroll | Overflow::Auto | Overflow::Clip
+            ) || matches!(
+                self.overflow_y,
+                Overflow::Hidden | Overflow::Scroll | Overflow::Auto | Overflow::Clip
+            ))
+        {
+            return true;
+        }
+
+        false
     }
 
     // === Display Helpers ===
@@ -532,6 +700,7 @@ impl PositionedStyle {
             LineHeight::Normal => self.font_size * 1.2,
             LineHeight::Number(n) => self.font_size * n,
             LineHeight::Length(px) => px,
+            LineHeight::Percentage(pct) => self.font_size * (pct / 100.0),
         }
     }
 
@@ -595,6 +764,21 @@ impl PositionedStyleBuilder {
         self
     }
 
+    pub fn root_font_size(mut self, size: f32) -> Self {
+        self.style.root_font_size = size;
+        self
+    }
+
+    pub fn font_size_adjust(mut self, adjust: FontSizeAdjust) -> Self {
+        self.style.font_size_adjust = adjust;
+        self
+    }
+
+    pub fn aspect_ratio(mut self, ratio: super::types::AspectRatio) -> Self {
+        self.style.aspect_ratio = ratio;
+        self
+    }
+
     pub fn width(mut self, width: LengthOrAuto) -> Self {
         self.style.width = width;
         self
@@ -634,6 +818,7 @@ impl Default for PositionedStyleBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::AspectRatio;
 
     #[test]
     fn test_default_values() {
@@ -652,7 +837,10 @@ mod tests {
 
         // Text
         assert_eq!(style.font_size, 16.0);
+        assert_eq!(style.root_font_size, 16.0);
         assert_eq!(style.font_weight, 400);
+        assert!(matches!(style.font_size_adjust, FontSizeAdjust::None));
+        assert!(matches!(style.aspect_ratio, AspectRatio::Auto));
     }
 
     #[test]
@@ -722,6 +910,10 @@ mod tests {
         // Length
         style.line_height = LineHeight::Length(25.0);
         assert_eq!(style.computed_line_height(), 25.0);
+
+        // Percentage
+        style.line_height = LineHeight::Percentage(150.0);
+        assert_eq!(style.computed_line_height(), 30.0);
     }
 
     #[test]
@@ -765,6 +957,37 @@ mod tests {
         style = PositionedStyle::default();
         style.opacity = 0.5;
         assert!(style.creates_stacking_context());
+
+        style = PositionedStyle::default();
+        style.transform.push(Transform::Rotate(0.5));
+        assert!(style.creates_stacking_context());
+
+        style = PositionedStyle::default();
+        style
+            .filter
+            .push(FilterFunction::Blur(crate::style::values::Length::px(2.0)));
+        assert!(style.creates_stacking_context());
+
+        style = PositionedStyle::default();
+        style.mix_blend_mode = MixBlendMode::Multiply;
+        assert!(style.creates_stacking_context());
+
+        style = PositionedStyle::default();
+        style.isolation = Isolation::Isolate;
+        assert!(style.creates_stacking_context());
+
+        style = PositionedStyle::default();
+        style.will_change = WillChange::Hints(vec![crate::style::types::WillChangeHint::Property("transform".into())]);
+        assert!(style.creates_stacking_context());
+
+        style = PositionedStyle::default();
+        style.position = Position::Absolute;
+        style.overflow_x = Overflow::Hidden;
+        assert!(style.creates_stacking_context());
+
+        style = PositionedStyle::default();
+        style.containment = Containment::with_flags(false, false, false, false, true);
+        assert!(style.creates_stacking_context());
     }
 
     #[test]
@@ -793,10 +1016,12 @@ mod tests {
     fn test_font_style_enum() {
         let style1 = FontStyle::Normal;
         let style2 = FontStyle::Italic;
-        let style3 = FontStyle::Oblique;
+        let style3 = FontStyle::Oblique(None);
+        let style4 = FontStyle::Oblique(Some(12.0));
 
         assert_ne!(style1, style2);
         assert_ne!(style2, style3);
+        assert_ne!(style3, style4);
     }
 
     #[test]

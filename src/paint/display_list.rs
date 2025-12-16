@@ -37,9 +37,16 @@
 //! ```
 
 use crate::geometry::{Point, Rect, Size};
+use crate::paint::clip_path::ResolvedClipPath;
 use crate::style::color::Rgba;
+use crate::style::types::{
+    BackgroundImage, BorderImageOutset, BorderImageRepeat, BorderImageSlice, BorderImageWidth,
+    BorderStyle as CssBorderStyle, ResolvedTextDecoration, TextEmphasisPosition, TextEmphasisStyle,
+};
+use crate::text::font_db::{FontStretch, FontStyle};
 use std::fmt;
 use std::sync::Arc;
+use tiny_skia::FilterQuality;
 
 // ============================================================================
 // Display Item Types
@@ -57,6 +64,9 @@ pub enum DisplayItem {
     /// Stroke a rectangle outline
     StrokeRect(StrokeRectItem),
 
+    /// Outline drawn outside the border box with CSS outline semantics
+    Outline(OutlineItem),
+
     /// Fill a rounded rectangle (border-radius)
     FillRoundedRect(FillRoundedRectItem),
 
@@ -72,11 +82,23 @@ pub enum DisplayItem {
     /// Draw a box shadow
     BoxShadow(BoxShadowItem),
 
+    /// Draw a list marker (text-based marker)
+    ListMarker(ListMarkerItem),
+
     /// Draw a linear gradient
     LinearGradient(LinearGradientItem),
 
     /// Draw a radial gradient
     RadialGradient(RadialGradientItem),
+
+    /// Draw a conic gradient
+    ConicGradient(ConicGradientItem),
+
+    /// Draw CSS borders with per-side styles
+    Border(BorderItem),
+
+    /// Draw text decorations for an inline fragment
+    TextDecoration(TextDecorationItem),
 
     /// Begin a clip region
     PushClip(ClipItem),
@@ -119,10 +141,8 @@ impl DisplayItem {
             DisplayItem::StrokeRect(item) => Some(item.rect),
             DisplayItem::FillRoundedRect(item) => Some(item.rect),
             DisplayItem::StrokeRoundedRect(item) => Some(item.rect),
-            DisplayItem::Text(item) => {
-                // Approximate text bounds using origin and font size
-                Some(Rect::new(item.origin, Size::new(item.advance_width, item.font_size)))
-            }
+            DisplayItem::Outline(item) => Some(item.outer_rect()),
+            DisplayItem::Text(item) => Some(text_bounds(item)),
             DisplayItem::Image(item) => Some(item.dest_rect),
             DisplayItem::BoxShadow(item) => {
                 // Box shadow extends beyond rect by blur + spread
@@ -130,7 +150,14 @@ impl DisplayItem {
             }
             DisplayItem::LinearGradient(item) => Some(item.rect),
             DisplayItem::RadialGradient(item) => Some(item.rect),
-            DisplayItem::PushClip(item) => Some(item.rect),
+            DisplayItem::ConicGradient(item) => Some(item.rect),
+            DisplayItem::Border(item) => Some(item.rect),
+            DisplayItem::ListMarker(item) => Some(list_marker_bounds(item)),
+            DisplayItem::PushClip(item) => Some(match &item.shape {
+                ClipShape::Rect { rect, .. } => *rect,
+                ClipShape::Path { path } => path.bounds(),
+            }),
+            DisplayItem::TextDecoration(item) => Some(item.bounds),
             // Stack operations don't have bounds
             DisplayItem::PopClip
             | DisplayItem::PushOpacity(_)
@@ -190,6 +217,43 @@ pub struct StrokeRectItem {
 
     /// Stroke width in pixels
     pub width: f32,
+
+    /// Blend mode for the stroke (defaults to normal)
+    pub blend_mode: BlendMode,
+}
+
+/// Outline item
+#[derive(Debug, Clone)]
+pub struct OutlineItem {
+    /// Border-rect in CSS px (before offset expansion)
+    pub rect: Rect,
+
+    /// Outline width in CSS px
+    pub width: f32,
+
+    /// Outline style resolved to a border style
+    pub style: CssBorderStyle,
+
+    /// Outline color
+    pub color: Rgba,
+
+    /// Outline offset in CSS px
+    pub offset: f32,
+
+    /// Whether to invert using difference blend mode
+    pub invert: bool,
+}
+
+impl OutlineItem {
+    pub fn outer_rect(&self) -> Rect {
+        let expand = self.offset + self.width * 0.5;
+        Rect::from_xywh(
+            self.rect.x() - expand,
+            self.rect.y() - expand,
+            self.rect.width() + 2.0 * expand,
+            self.rect.height() + 2.0 * expand,
+        )
+    }
 }
 
 /// Fill a rounded rectangle
@@ -371,6 +435,9 @@ pub struct TextItem {
     /// Text color
     pub color: Rgba,
 
+    /// Shadows to paint before the fill
+    pub shadows: Vec<TextShadowItem>,
+
     /// Font size in pixels
     pub font_size: f32,
 
@@ -379,6 +446,22 @@ pub struct TextItem {
 
     /// Font identifier (for looking up font data)
     pub font_id: Option<FontId>,
+
+    /// Synthetic bold stroke width in pixels (0 = none).
+    pub synthetic_bold: f32,
+
+    /// Synthetic oblique shear factor (tan(angle); 0 = none).
+    pub synthetic_oblique: f32,
+
+    /// Optional emphasis marks to render for this run.
+    pub emphasis: Option<TextEmphasis>,
+
+    /// Decorations to paint for this run's fragment.
+    ///
+    /// Decorations are emitted as separate display items; this field is unused by text rendering
+    /// but kept for forward compatibility.
+    #[allow(dead_code)]
+    pub decorations: Vec<ResolvedTextDecoration>,
 }
 
 /// A single glyph instance for rendering
@@ -394,6 +477,43 @@ pub struct GlyphInstance {
     pub advance: f32,
 }
 
+/// Emphasis mark to render relative to the text run.
+#[derive(Debug, Clone)]
+pub struct EmphasisMark {
+    pub center: Point,
+}
+
+/// Shaped emphasis string glyphs (for string emphasis styles).
+#[derive(Debug, Clone)]
+pub struct EmphasisText {
+    pub glyphs: Vec<GlyphInstance>,
+    pub font_id: Option<FontId>,
+    pub font_size: f32,
+    pub width: f32,
+    pub height: f32,
+    pub baseline_offset: f32,
+}
+
+/// Resolved emphasis data for a text run.
+#[derive(Debug, Clone)]
+pub struct TextEmphasis {
+    pub style: TextEmphasisStyle,
+    pub color: Rgba,
+    pub position: TextEmphasisPosition,
+    pub size: f32,
+    pub marks: Vec<EmphasisMark>,
+    pub inline_vertical: bool,
+    pub text: Option<EmphasisText>,
+}
+
+/// A resolved text shadow ready for painting
+#[derive(Debug, Clone)]
+pub struct TextShadowItem {
+    pub offset: Point,
+    pub blur_radius: f32,
+    pub color: Rgba,
+}
+
 /// Font identifier for looking up font data
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FontId {
@@ -403,8 +523,122 @@ pub struct FontId {
     /// Font weight (100-900)
     pub weight: u16,
 
-    /// Is italic?
-    pub italic: bool,
+    /// Font style (normal/italic/oblique)
+    pub style: FontStyle,
+
+    /// Font stretch (percentage of normal width)
+    pub stretch: FontStretch,
+}
+
+/// A resolved text decoration set to paint over a fragment.
+#[derive(Debug, Clone)]
+pub struct TextDecorationItem {
+    /// Bounding box for culling/optimization
+    pub bounds: Rect,
+    /// Line start position for decorations
+    pub line_start: f32,
+    /// Total inline length available for the decoration
+    pub line_width: f32,
+    /// Whether the inline axis is vertical (lines run vertically)
+    pub inline_vertical: bool,
+    /// Decorations to paint
+    pub decorations: Vec<DecorationPaint>,
+}
+
+/// Paint data for a single resolved decoration (underline/overline/line-through).
+#[derive(Debug, Clone)]
+pub struct DecorationPaint {
+    pub style: crate::style::types::TextDecorationStyle,
+    pub color: Rgba,
+    pub underline: Option<DecorationStroke>,
+    pub overline: Option<DecorationStroke>,
+    pub line_through: Option<DecorationStroke>,
+}
+
+/// Geometry for one decoration stroke.
+#[derive(Debug, Clone)]
+pub struct DecorationStroke {
+    pub center: f32,
+    pub thickness: f32,
+    /// Optional carved segments for underline skip-ink handling.
+    pub segments: Option<Vec<(f32, f32)>>,
+}
+
+/// Conservative bounds for a text item using glyph offsets and font size.
+pub fn text_bounds(item: &TextItem) -> Rect {
+    let mut min_x = item.origin.x;
+    let mut max_x = item.origin.x + item.advance_width;
+    for glyph in &item.glyphs {
+        let gx = item.origin.x + glyph.offset.x;
+        min_x = min_x.min(gx);
+        max_x = max_x.max(gx + glyph.advance);
+    }
+    // Assume glyph outlines extend roughly one font-size above the baseline and a quarter below.
+    let ascent = item.font_size;
+    let descent = item.font_size * 0.25;
+    Rect::from_xywh(
+        min_x,
+        item.origin.y - ascent,
+        (max_x - min_x).max(0.0),
+        ascent + descent,
+    )
+}
+
+/// Conservative bounds for a list marker item.
+pub fn list_marker_bounds(item: &ListMarkerItem) -> Rect {
+    let mut min_x = item.origin.x;
+    let mut max_x = item.origin.x + item.advance_width;
+    for glyph in &item.glyphs {
+        let gx = item.origin.x + glyph.offset.x;
+        min_x = min_x.min(gx);
+        max_x = max_x.max(gx + glyph.advance);
+    }
+
+    let ascent = item.font_size;
+    let descent = item.font_size * 0.25;
+    Rect::from_xywh(
+        min_x,
+        item.origin.y - ascent,
+        (max_x - min_x).max(0.0),
+        ascent + descent,
+    )
+}
+
+/// List marker paint item
+#[derive(Debug, Clone)]
+pub struct ListMarkerItem {
+    /// Origin in CSS px (baseline-aligned)
+    pub origin: Point,
+
+    /// Shaped glyphs for the marker text
+    pub glyphs: Vec<GlyphInstance>,
+
+    /// Text color
+    pub color: Rgba,
+
+    /// Text shadows applied to the marker
+    pub shadows: Vec<TextShadowItem>,
+
+    /// Font size in CSS px
+    pub font_size: f32,
+
+    /// Total advance width for the marker run
+    pub advance_width: f32,
+
+    /// Resolved font id for glyph lookup
+    pub font_id: Option<FontId>,
+
+    /// Synthetic bold stroke width in CSS px (0 = none)
+    pub synthetic_bold: f32,
+
+    /// Synthetic oblique shear factor (tan(angle); 0 = none)
+    pub synthetic_oblique: f32,
+
+    /// Optional text emphasis marks to render over the marker
+    pub emphasis: Option<TextEmphasis>,
+
+    /// Optional background behind the marker (CSS px)
+    pub background: Option<Rgba>,
 }
 
 // ============================================================================
@@ -420,9 +654,28 @@ pub struct ImageItem {
     /// Image data
     pub image: Arc<ImageData>,
 
+    /// Sampling quality to apply when scaling
+    pub filter_quality: ImageFilterQuality,
+
     /// Source rectangle (for sprite sheets, etc.)
     /// If None, uses the entire image
     pub src_rect: Option<Rect>,
+}
+
+/// Sampling quality for raster images
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageFilterQuality {
+    Nearest,
+    Linear,
+}
+
+impl From<ImageFilterQuality> for FilterQuality {
+    fn from(q: ImageFilterQuality) -> Self {
+        match q {
+            ImageFilterQuality::Nearest => FilterQuality::Nearest,
+            ImageFilterQuality::Linear => FilterQuality::Bilinear,
+        }
+    }
 }
 
 /// Image data for rendering
@@ -433,6 +686,12 @@ pub struct ImageData {
 
     /// Image height in pixels
     pub height: u32,
+
+    /// Natural image width in CSS px after applying image-resolution/orientation
+    pub css_width: f32,
+
+    /// Natural image height in CSS px after applying image-resolution/orientation
+    pub css_height: f32,
 
     /// Pixel data in RGBA8 format (4 bytes per pixel)
     pub pixels: Arc<Vec<u8>>,
@@ -445,19 +704,33 @@ impl ImageData {
     ///
     /// * `width` - Image width in pixels
     /// * `height` - Image height in pixels
+    /// * `css_width` - Natural width in CSS px
+    /// * `css_height` - Natural height in CSS px
     /// * `pixels` - Pixel data in RGBA8 format
-    pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Self {
+    pub fn new(width: u32, height: u32, css_width: f32, css_height: f32, pixels: Vec<u8>) -> Self {
         debug_assert_eq!(pixels.len(), (width * height * 4) as usize, "Pixel data size mismatch");
         Self {
             width,
             height,
+            css_width,
+            css_height,
             pixels: Arc::new(pixels),
         }
+    }
+
+    /// Creates image data assuming 1dppx (CSS size equals pixel size).
+    pub fn new_pixels(width: u32, height: u32, pixels: Vec<u8>) -> Self {
+        Self::new(width, height, width as f32, height as f32, pixels)
     }
 
     /// Get the size of the image as a Size
     pub fn size(&self) -> Size {
         Size::new(self.width as f32, self.height as f32)
+    }
+
+    /// Natural CSS size of the image
+    pub fn css_size(&self) -> Size {
+        Size::new(self.css_width, self.css_height)
     }
 }
 
@@ -508,6 +781,9 @@ pub struct LinearGradientItem {
 
     /// Color stops
     pub stops: Vec<GradientStop>,
+
+    /// Spread mode for tiling beyond 0..1
+    pub spread: GradientSpread,
 }
 
 /// Draw a radial gradient
@@ -519,11 +795,33 @@ pub struct RadialGradientItem {
     /// Gradient center (relative to rect)
     pub center: Point,
 
-    /// Gradient radius
-    pub radius: f32,
+    /// Gradient radii on the x/y axes (relative to rect)
+    pub radii: Point,
 
     /// Color stops
     pub stops: Vec<GradientStop>,
+
+    /// Spread mode for tiling beyond 0..1
+    pub spread: GradientSpread,
+}
+
+/// Draw a conic gradient
+#[derive(Debug, Clone)]
+pub struct ConicGradientItem {
+    /// Rectangle to fill
+    pub rect: Rect,
+
+    /// Gradient center (relative to rect)
+    pub center: Point,
+
+    /// Start angle in degrees
+    pub from_angle: f32,
+
+    /// Color stops
+    pub stops: Vec<GradientStop>,
+
+    /// Repeating?
+    pub repeating: bool,
 }
 
 /// Gradient color stop
@@ -536,6 +834,93 @@ pub struct GradientStop {
     pub color: Rgba,
 }
 
+/// Spread mode for gradients
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GradientSpread {
+    Pad,
+    Repeat,
+    Reflect,
+}
+
+/// CSS border with per-side styles/colors/widths.
+#[derive(Debug, Clone)]
+pub struct BorderItem {
+    /// Border rectangle (outer border box)
+    pub rect: Rect,
+
+    /// Top border side
+    pub top: BorderSide,
+
+    /// Right border side
+    pub right: BorderSide,
+
+    /// Bottom border side
+    pub bottom: BorderSide,
+
+    /// Left border side
+    pub left: BorderSide,
+
+    /// Optional border-image to draw instead of styled strokes.
+    pub image: Option<BorderImageItem>,
+
+    /// Border corner radii (currently informational)
+    pub radii: BorderRadii,
+}
+
+/// One border side definition.
+#[derive(Debug, Clone)]
+pub struct BorderSide {
+    /// Stroke width in CSS px after resolution
+    pub width: f32,
+
+    /// Border style
+    pub style: CssBorderStyle,
+
+    /// Border color
+    pub color: Rgba,
+}
+
+/// Resolved border-image data for rendering.
+#[derive(Debug, Clone)]
+pub struct BorderImageItem {
+    /// The source image: either pre-decoded pixels or a generated background.
+    pub source: BorderImageSourceItem,
+
+    /// Slice geometry.
+    pub slice: BorderImageSlice,
+
+    /// Target border widths (length or percent).
+    pub width: BorderImageWidth,
+
+    /// Border image outset.
+    pub outset: BorderImageOutset,
+
+    /// Repeat modes for x/y.
+    pub repeat: (BorderImageRepeat, BorderImageRepeat),
+
+    /// Current color for resolving `currentColor` stops.
+    pub current_color: Rgba,
+
+    /// Font size at the element for resolving font-relative lengths.
+    pub font_size: f32,
+
+    /// Root font size for rem units.
+    pub root_font_size: f32,
+
+    /// Viewport used to resolve viewport-relative units.
+    pub viewport: Option<(f32, f32)>,
+}
+
+/// Border-image source variants.
+#[derive(Debug, Clone)]
+pub enum BorderImageSourceItem {
+    /// Pre-decoded raster pixels.
+    Raster(ImageData),
+
+    /// Generated image such as a gradient.
+    Generated(BackgroundImage),
+}
+
 // ============================================================================
 // Effect Items (Push/Pop)
 // ============================================================================
@@ -543,11 +928,13 @@ pub struct GradientStop {
 /// Clip region
 #[derive(Debug, Clone)]
 pub struct ClipItem {
-    /// Clip rectangle
-    pub rect: Rect,
+    pub shape: ClipShape,
+}
 
-    /// Border radii (for rounded clips)
-    pub radii: Option<BorderRadii>,
+#[derive(Debug, Clone)]
+pub enum ClipShape {
+    Rect { rect: Rect, radii: Option<BorderRadii> },
+    Path { path: ResolvedClipPath },
 }
 
 /// Opacity layer
@@ -813,6 +1200,8 @@ pub enum BlendMode {
     Color,
     /// Luminosity
     Luminosity,
+    /// Plus-lighter
+    PlusLighter,
 }
 
 /// Stacking context
@@ -826,6 +1215,45 @@ pub struct StackingContextItem {
 
     /// Bounds of the stacking context
     pub bounds: Rect,
+
+    /// mix-blend-mode applied when compositing this stacking context
+    pub mix_blend_mode: BlendMode,
+
+    /// Whether the stacking context is isolated from backdrop blending
+    pub is_isolated: bool,
+
+    /// Optional transform applied to this stacking context
+    pub transform: Option<Transform2D>,
+
+    /// Resolved filter() list applied to this context
+    pub filters: Vec<ResolvedFilter>,
+
+    /// Resolved backdrop-filter() list applied behind this context
+    pub backdrop_filters: Vec<ResolvedFilter>,
+
+    /// Border radii used for filter/backdrop clipping
+    pub radii: BorderRadii,
+}
+
+/// Resolved filter functions (after length resolution).
+#[derive(Debug, Clone)]
+pub enum ResolvedFilter {
+    Blur(f32),
+    Brightness(f32),
+    Contrast(f32),
+    Grayscale(f32),
+    Sepia(f32),
+    Saturate(f32),
+    HueRotate(f32),
+    Invert(f32),
+    Opacity(f32),
+    DropShadow {
+        offset_x: f32,
+        offset_y: f32,
+        blur_radius: f32,
+        spread: f32,
+        color: Rgba,
+    },
 }
 
 // ============================================================================
@@ -892,6 +1320,60 @@ impl DisplayList {
         // Invalidate cached bounds
         self.bounds = None;
         self.items.push(item);
+    }
+
+    /// Convenience for linear gradients
+    pub fn push_linear_gradient(
+        &mut self,
+        rect: Rect,
+        start: Point,
+        end: Point,
+        stops: Vec<GradientStop>,
+        spread: GradientSpread,
+    ) {
+        self.push(DisplayItem::LinearGradient(LinearGradientItem {
+            rect,
+            start,
+            end,
+            stops,
+            spread,
+        }));
+    }
+
+    /// Convenience for radial gradients
+    pub fn push_radial_gradient(
+        &mut self,
+        rect: Rect,
+        center: Point,
+        radii: Point,
+        stops: Vec<GradientStop>,
+        spread: GradientSpread,
+    ) {
+        self.push(DisplayItem::RadialGradient(RadialGradientItem {
+            rect,
+            center,
+            radii,
+            stops,
+            spread,
+        }));
+    }
+
+    /// Convenience for conic gradients
+    pub fn push_conic_gradient(
+        &mut self,
+        rect: Rect,
+        center: Point,
+        from_angle: f32,
+        stops: Vec<GradientStop>,
+        repeating: bool,
+    ) {
+        self.push(DisplayItem::ConicGradient(ConicGradientItem {
+            rect,
+            center,
+            from_angle,
+            stops,
+            repeating,
+        }));
     }
 
     /// Extend the display list with items from an iterator
@@ -1321,11 +1803,12 @@ mod tests {
     #[test]
     fn test_image_data() {
         let pixels = vec![255u8; 100 * 100 * 4];
-        let image = ImageData::new(100, 100, pixels);
+        let image = ImageData::new(100, 100, 100.0, 100.0, pixels);
 
         assert_eq!(image.width, 100);
         assert_eq!(image.height, 100);
         assert_eq!(image.size(), Size::new(100.0, 100.0));
+        assert_eq!(image.css_size(), Size::new(100.0, 100.0));
     }
 
     // ========================================================================

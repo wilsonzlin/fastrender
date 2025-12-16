@@ -24,9 +24,12 @@ use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::flex::FlexFormattingContext;
 use crate::layout::contexts::grid::GridFormattingContext;
 use crate::layout::contexts::inline::InlineFormattingContext;
+use crate::layout::contexts::positioned::ContainingBlock;
 use crate::layout::formatting_context::{FormattingContext, LayoutError};
 use crate::layout::table::TableFormattingContext;
 use crate::style::display::FormattingContextType;
+use crate::text::font_loader::FontContext;
+use crate::text::pipeline::ShapingPipeline;
 use crate::tree::box_tree::BoxNode;
 
 // =============================================================================
@@ -58,14 +61,140 @@ use crate::tree::box_tree::BoxNode;
 ///
 /// # Design Notes
 ///
-/// - Factory is stateless for simplicity
+/// - Carries a shared `FontContext` so all formatting contexts use the same font cache
 /// - Returns `Box<dyn FormattingContext>` for polymorphism
-pub struct FormattingContextFactory;
+#[derive(Clone)]
+pub struct FormattingContextFactory {
+    font_context: FontContext,
+    viewport_size: crate::geometry::Size,
+    nearest_positioned_cb: ContainingBlock,
+    flex_measure_cache: std::sync::Arc<std::sync::Mutex<crate::layout::contexts::flex::FlexMeasureCache>>,
+    flex_layout_cache: std::sync::Arc<
+        std::sync::Mutex<
+            std::collections::HashMap<
+                u64,
+                std::collections::HashMap<
+                    (Option<u32>, Option<u32>),
+                    (
+                        crate::geometry::Size,
+                        std::sync::Arc<crate::tree::fragment_tree::FragmentNode>,
+                    ),
+                >,
+            >,
+        >,
+    >,
+    shaping_pipeline: crate::text::pipeline::ShapingPipeline,
+}
+
+impl std::fmt::Debug for FormattingContextFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FormattingContextFactory").finish_non_exhaustive()
+    }
+}
 
 impl FormattingContextFactory {
     /// Creates a new factory
     pub fn new() -> Self {
-        Self
+        let viewport_size = crate::geometry::Size::new(800.0, 600.0);
+        Self::with_font_context_viewport_and_cb(
+            FontContext::new(),
+            viewport_size,
+            ContainingBlock::viewport(viewport_size),
+        )
+    }
+
+    /// Creates a factory wired to a specific font context, allowing layout to share
+    /// font caches with paint and callers.
+    pub fn with_font_context(font_context: FontContext) -> Self {
+        let viewport_size = crate::geometry::Size::new(800.0, 600.0);
+        Self::with_font_context_viewport_and_cb(font_context, viewport_size, ContainingBlock::viewport(viewport_size))
+    }
+
+    /// Creates a factory wired to a specific font context and viewport size, allowing layout to share
+    /// both font caches and viewport-dependent resolution with callers.
+    pub fn with_font_context_and_viewport(font_context: FontContext, viewport_size: crate::geometry::Size) -> Self {
+        let cb = ContainingBlock::viewport(viewport_size);
+        Self::with_font_context_viewport_and_cb(font_context, viewport_size, cb)
+    }
+
+    /// Creates a factory with explicit font context, viewport, and nearest positioned containing block.
+    pub fn with_font_context_viewport_and_cb(
+        font_context: FontContext,
+        viewport_size: crate::geometry::Size,
+        nearest_positioned_cb: ContainingBlock,
+    ) -> Self {
+        Self::with_font_context_viewport_cb_and_cache(
+            font_context,
+            viewport_size,
+            nearest_positioned_cb,
+            std::sync::Arc::new(std::sync::Mutex::new(
+                crate::layout::contexts::flex::FlexMeasureCache::new(),
+            )),
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        )
+    }
+
+    pub fn with_font_context_viewport_cb_and_cache(
+        font_context: FontContext,
+        viewport_size: crate::geometry::Size,
+        nearest_positioned_cb: ContainingBlock,
+        flex_measure_cache: std::sync::Arc<std::sync::Mutex<crate::layout::contexts::flex::FlexMeasureCache>>,
+        flex_layout_cache: std::sync::Arc<
+            std::sync::Mutex<
+                std::collections::HashMap<
+                    u64,
+                    std::collections::HashMap<
+                        (Option<u32>, Option<u32>),
+                        (
+                            crate::geometry::Size,
+                            std::sync::Arc<crate::tree::fragment_tree::FragmentNode>,
+                        ),
+                    >,
+                >,
+            >,
+        >,
+    ) -> Self {
+        Self {
+            font_context,
+            viewport_size,
+            nearest_positioned_cb,
+            flex_measure_cache,
+            flex_layout_cache,
+            shaping_pipeline: ShapingPipeline::new(),
+        }
+    }
+
+    /// Returns a copy of this factory with an updated nearest positioned containing block.
+    pub fn with_positioned_cb(&self, cb: ContainingBlock) -> Self {
+        let mut clone = self.clone();
+        clone.nearest_positioned_cb = cb;
+        clone
+    }
+
+    /// Clears any shared caches held by formatting contexts.
+    pub fn reset_caches(&self) {
+        if let Ok(mut cache) = self.flex_measure_cache.lock() {
+            cache.clear();
+        }
+        if let Ok(mut cache) = self.flex_layout_cache.lock() {
+            cache.clear();
+        }
+        self.shaping_pipeline.clear_cache();
+    }
+
+    /// Returns the font context backing formatting context construction.
+    pub fn font_context(&self) -> &FontContext {
+        &self.font_context
+    }
+
+    /// Returns the viewport size used for viewport-relative length resolution.
+    pub fn viewport_size(&self) -> crate::geometry::Size {
+        self.viewport_size
+    }
+
+    /// Returns the nearest positioned containing block threaded into newly constructed contexts.
+    pub fn nearest_positioned_cb(&self) -> ContainingBlock {
+        self.nearest_positioned_cb
     }
 
     /// Creates the appropriate FormattingContext for a box
@@ -115,11 +244,32 @@ impl FormattingContextFactory {
     /// - Reusable (can be used for multiple layouts)
     pub fn create(&self, fc_type: FormattingContextType) -> Box<dyn FormattingContext> {
         match fc_type {
-            FormattingContextType::Block => Box::new(BlockFormattingContext::new()),
-            FormattingContextType::Inline => Box::new(InlineFormattingContext::new()),
-            FormattingContextType::Flex => Box::new(FlexFormattingContext::new()),
-            FormattingContextType::Grid => Box::new(GridFormattingContext::new()),
-            FormattingContextType::Table => Box::new(TableFormattingContext::new()),
+            FormattingContextType::Block => Box::new(BlockFormattingContext::with_font_context_viewport_and_cb(
+                self.font_context.clone(),
+                self.viewport_size,
+                self.nearest_positioned_cb,
+            )),
+            FormattingContextType::Inline => {
+                Box::new(InlineFormattingContext::with_font_context_viewport_cb_and_pipeline(
+                    self.font_context.clone(),
+                    self.viewport_size,
+                    self.nearest_positioned_cb,
+                    self.shaping_pipeline.clone(),
+                ))
+            }
+            FormattingContextType::Flex => Box::new(FlexFormattingContext::with_viewport_and_cb(
+                self.viewport_size,
+                self.nearest_positioned_cb,
+                self.font_context.clone(),
+                self.flex_measure_cache.clone(),
+                self.flex_layout_cache.clone(),
+            )),
+            FormattingContextType::Grid => Box::new(GridFormattingContext::with_viewport_and_cb(
+                self.viewport_size,
+                self.nearest_positioned_cb,
+                self.font_context.clone(),
+            )),
+            FormattingContextType::Table => Box::new(TableFormattingContext::with_factory(self.clone())),
         }
     }
 
@@ -188,7 +338,7 @@ mod tests {
     #[test]
     fn test_factory_creation() {
         let _factory = FormattingContextFactory::new();
-        let _default = FormattingContextFactory;
+        let _default = FormattingContextFactory::default();
     }
 
     #[test]

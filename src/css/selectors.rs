@@ -7,6 +7,13 @@ use cssparser::{ParseError, Parser, ToCss, Token};
 use selectors::parser::{SelectorImpl, SelectorParseErrorKind};
 use std::fmt;
 
+/// Direction keyword for :dir()
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextDirection {
+    Ltr,
+    Rtl,
+}
+
 // ============================================================================
 // Selector implementation for FastRender
 // ============================================================================
@@ -42,6 +49,17 @@ pub enum PseudoClass {
     NthChild(i32, i32), // an + b
     NthLastChild(i32, i32),
     OnlyChild,
+    FirstOfType,
+    LastOfType,
+    OnlyOfType,
+    NthOfType(i32, i32),
+    NthLastOfType(i32, i32),
+    Lang(Vec<String>),
+    Dir(TextDirection),
+    AnyLink,
+    Target,
+    Scope,
+    Empty,
     Hover,
     Active,
     Focus,
@@ -73,6 +91,29 @@ impl ToCss for PseudoClass {
             PseudoClass::NthChild(a, b) => write!(dest, ":nth-child({}n+{})", a, b),
             PseudoClass::NthLastChild(a, b) => write!(dest, ":nth-last-child({}n+{})", a, b),
             PseudoClass::OnlyChild => dest.write_str(":only-child"),
+            PseudoClass::FirstOfType => dest.write_str(":first-of-type"),
+            PseudoClass::LastOfType => dest.write_str(":last-of-type"),
+            PseudoClass::OnlyOfType => dest.write_str(":only-of-type"),
+            PseudoClass::NthOfType(a, b) => write!(dest, ":nth-of-type({}n+{})", a, b),
+            PseudoClass::NthLastOfType(a, b) => write!(dest, ":nth-last-of-type({}n+{})", a, b),
+            PseudoClass::Lang(langs) => {
+                dest.write_str(":lang(")?;
+                for (i, lang) in langs.iter().enumerate() {
+                    if i > 0 {
+                        dest.write_str(", ")?;
+                    }
+                    dest.write_str(lang)?;
+                }
+                dest.write_str(")")
+            }
+            PseudoClass::Dir(dir) => match dir {
+                TextDirection::Ltr => dest.write_str(":dir(ltr)"),
+                TextDirection::Rtl => dest.write_str(":dir(rtl)"),
+            },
+            PseudoClass::AnyLink => dest.write_str(":any-link"),
+            PseudoClass::Target => dest.write_str(":target"),
+            PseudoClass::Scope => dest.write_str(":scope"),
+            PseudoClass::Empty => dest.write_str(":empty"),
             PseudoClass::Hover => dest.write_str(":hover"),
             PseudoClass::Active => dest.write_str(":active"),
             PseudoClass::Focus => dest.write_str(":focus"),
@@ -87,10 +128,11 @@ impl ToCss for PseudoClass {
 // ============================================================================
 
 /// Pseudo-elements we support
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PseudoElement {
     Before,
     After,
+    Marker,
 }
 
 impl selectors::parser::PseudoElement for PseudoElement {
@@ -105,6 +147,7 @@ impl ToCss for PseudoElement {
         match self {
             PseudoElement::Before => dest.write_str("::before"),
             PseudoElement::After => dest.write_str("::after"),
+            PseudoElement::Marker => dest.write_str("::marker"),
         }
     }
 }
@@ -130,11 +173,18 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
             "first-child" => Ok(PseudoClass::FirstChild),
             "last-child" => Ok(PseudoClass::LastChild),
             "only-child" => Ok(PseudoClass::OnlyChild),
+            "first-of-type" => Ok(PseudoClass::FirstOfType),
+            "last-of-type" => Ok(PseudoClass::LastOfType),
+            "only-of-type" => Ok(PseudoClass::OnlyOfType),
+            "empty" => Ok(PseudoClass::Empty),
             "hover" => Ok(PseudoClass::Hover),
             "active" => Ok(PseudoClass::Active),
             "focus" => Ok(PseudoClass::Focus),
             "link" => Ok(PseudoClass::Link),
             "visited" => Ok(PseudoClass::Visited),
+            "any-link" => Ok(PseudoClass::AnyLink),
+            "target" => Ok(PseudoClass::Target),
+            "scope" => Ok(PseudoClass::Scope),
             _ => Err(ParseError {
                 kind: cssparser::ParseErrorKind::Basic(cssparser::BasicParseErrorKind::UnexpectedToken(Token::Ident(
                     name,
@@ -163,6 +213,54 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
                 })?;
                 Ok(PseudoClass::NthLastChild(a, b))
             }
+            "nth-of-type" => {
+                let (a, b) = parse_nth(parser).map_err(|_| {
+                    parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone()))
+                })?;
+                Ok(PseudoClass::NthOfType(a, b))
+            }
+            "nth-last-of-type" => {
+                let (a, b) = parse_nth(parser).map_err(|_| {
+                    parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone()))
+                })?;
+                Ok(PseudoClass::NthLastOfType(a, b))
+            }
+            "dir" => {
+                let dir = match parser.expect_ident() {
+                    Ok(d) => d,
+                    Err(_) => {
+                        return Err(parser
+                            .new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone())))
+                    }
+                };
+                let lowered = dir.to_ascii_lowercase();
+                match lowered.as_str() {
+                    "ltr" => Ok(PseudoClass::Dir(TextDirection::Ltr)),
+                    "rtl" => Ok(PseudoClass::Dir(TextDirection::Rtl)),
+                    _ => {
+                        Err(parser
+                            .new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone())))
+                    }
+                }
+            }
+            "lang" => {
+                let mut langs = Vec::new();
+                loop {
+                    let range = match parser.expect_ident_or_string() {
+                        Ok(r) => r,
+                        Err(_) => {
+                            return Err(parser.new_custom_error(
+                                SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone()),
+                            ))
+                        }
+                    };
+                    langs.push(range.as_ref().to_ascii_lowercase());
+                    if parser.try_parse(|p| p.expect_comma()).is_err() {
+                        break;
+                    }
+                }
+                Ok(PseudoClass::Lang(langs))
+            }
             _ => Err(parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name))),
         }
     }
@@ -175,6 +273,7 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
         match &*name {
             "before" => Ok(PseudoElement::Before),
             "after" => Ok(PseudoElement::After),
+            "marker" => Ok(PseudoElement::Marker),
             _ => Err(ParseError {
                 kind: cssparser::ParseErrorKind::Basic(cssparser::BasicParseErrorKind::UnexpectedToken(Token::Ident(
                     name,
@@ -192,21 +291,57 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
 
 /// Parse nth-child/nth-last-child expressions
 fn parse_nth<'i, 't>(parser: &mut Parser<'i, 't>) -> std::result::Result<(i32, i32), ParseError<'i, ()>> {
-    // Simplified: just handle numbers and "odd"/"even"
-    let location = parser.current_source_location();
-    let token = parser.next()?.clone();
-    match &token {
-        Token::Number { int_value: Some(b), .. } => {
-            // Just a number: 0n+b
-            Ok((0, *b))
-        }
-        Token::Ident(ident) => {
-            match &**ident {
-                "odd" => Ok((2, 1)),  // 2n+1
-                "even" => Ok((2, 0)), // 2n+0
-                _ => Err(location.new_unexpected_token_error(token.clone())),
-            }
-        }
-        _ => Err(location.new_unexpected_token_error(token)),
+    cssparser::parse_nth(parser).map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cssparser::{ParserInput, ToCss};
+
+    fn parse(expr: &str) -> (i32, i32) {
+        let mut input = ParserInput::new(expr);
+        let mut parser = Parser::new(&mut input);
+        parse_nth(&mut parser).expect("should parse nth expression")
+    }
+
+    #[test]
+    fn parses_an_plus_b_syntax() {
+        assert_eq!(parse("odd"), (2, 1));
+        assert_eq!(parse("even"), (2, 0));
+        assert_eq!(parse("2n+1"), (2, 1));
+        assert_eq!(parse("-2n+3"), (-2, 3));
+        assert_eq!(parse("n"), (1, 0));
+        assert_eq!(parse("+n-1"), (1, -1));
+        assert_eq!(parse("4"), (0, 4));
+        assert_eq!(parse("-5"), (0, -5));
+    }
+
+    #[test]
+    fn rejects_invalid_nth_expression() {
+        let mut input = ParserInput::new("n+");
+        let mut parser = Parser::new(&mut input);
+        assert!(parse_nth(&mut parser).is_err());
+    }
+
+    #[test]
+    fn to_css_serializes_new_pseudo_classes() {
+        assert_eq!(PseudoClass::FirstOfType.to_css_string(), ":first-of-type");
+        assert_eq!(PseudoClass::LastOfType.to_css_string(), ":last-of-type");
+        assert_eq!(PseudoClass::OnlyOfType.to_css_string(), ":only-of-type");
+        assert_eq!(PseudoClass::Empty.to_css_string(), ":empty");
+        assert_eq!(PseudoClass::NthOfType(2, 1).to_css_string(), ":nth-of-type(2n+1)");
+        assert_eq!(
+            PseudoClass::NthLastOfType(-1, 3).to_css_string(),
+            ":nth-last-of-type(-1n+3)"
+        );
+        assert_eq!(
+            PseudoClass::Lang(vec!["en".into(), "fr-ca".into()]).to_css_string(),
+            ":lang(en, fr-ca)"
+        );
+        assert_eq!(PseudoClass::Dir(TextDirection::Ltr).to_css_string(), ":dir(ltr)");
+        assert_eq!(PseudoClass::AnyLink.to_css_string(), ":any-link");
+        assert_eq!(PseudoClass::Target.to_css_string(), ":target");
+        assert_eq!(PseudoClass::Scope.to_css_string(), ":scope");
     }
 }

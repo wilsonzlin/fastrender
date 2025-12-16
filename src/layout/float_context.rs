@@ -466,6 +466,7 @@ impl FloatContext {
     /// 2. Left floats go as far left as possible
     /// 3. Right floats go as far right as possible
     /// 4. Floats may not overlap horizontally with other floats
+    /// 5. The float's full height must fit alongside existing floats
     ///
     /// # Arguments
     ///
@@ -494,12 +495,12 @@ impl FloatContext {
     /// let (x, y) = ctx.compute_float_position(FloatSide::Left, 200.0, 100.0, 0.0);
     /// assert_eq!((x, y), (200.0, 0.0));
     /// ```
-    pub fn compute_float_position(&self, side: FloatSide, width: f32, _height: f32, min_y: f32) -> (f32, f32) {
+    pub fn compute_float_position(&self, side: FloatSide, width: f32, height: f32, min_y: f32) -> (f32, f32) {
         // Start at the minimum Y position
         let mut y = min_y;
 
         loop {
-            let (left_edge, available_width) = self.available_width_at_y(y);
+            let (left_edge, available_width) = self.available_width_in_range(y, y + height);
 
             // Check if the float fits at this Y position
             if width <= available_width {
@@ -517,9 +518,10 @@ impl FloatContext {
             if next_y <= y {
                 // No more floats to clear, force fit at current position
                 // This handles edge cases where the float is wider than available space
+                let (left_edge, available_width) = self.available_width_in_range(y, y + height);
                 let x = match side {
                     FloatSide::Left => left_edge,
-                    FloatSide::Right => (self.containing_block_width - width).max(0.0),
+                    FloatSide::Right => (left_edge + available_width - width).max(left_edge),
                 };
                 return (x, y);
             }
@@ -962,6 +964,18 @@ mod tests {
         // Float respects min_y
         let (x, y) = ctx.compute_float_position(FloatSide::Left, 200.0, 100.0, 50.0);
         assert_eq!((x, y), (0.0, 50.0));
+    }
+
+    #[test]
+    fn test_compute_float_position_considers_height_overlap() {
+        let mut ctx = FloatContext::new(400.0);
+
+        // Existing float sits lower in the flow.
+        ctx.add_float_at(FloatSide::Left, 0.0, 50.0, 200.0, 150.0); // spans 50..200
+
+        // New float would overlap vertically if kept at y=0; it should drop below.
+        let (x, y) = ctx.compute_float_position(FloatSide::Left, 300.0, 80.0, 0.0);
+        assert_eq!((x, y), (0.0, 200.0));
     }
 
     // ==================== Other Tests ====================

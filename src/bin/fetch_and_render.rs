@@ -2,14 +2,27 @@
 #![allow(clippy::redundant_closure)]
 #![allow(clippy::len_zero)]
 
+use encoding_rs::{Encoding, WINDOWS_1252};
+use fastrender::css::encoding::decode_css_bytes;
+use fastrender::css::loader::{
+    absolutize_css_urls, extract_css_links, extract_embedded_css_urls, infer_base_url, inject_css_into_html,
+    inline_imports,
+};
 use fastrender::{Error, FastRender, Result};
+use std::collections::HashSet;
 use std::env;
+use std::sync::mpsc::{channel, RecvTimeoutError};
+use std::thread;
+use std::time::Duration;
 
-fn fetch_url(url: &str) -> Result<String> {
+const STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
+
+fn fetch_bytes(url: &str) -> Result<(Vec<u8>, Option<String>)> {
     // Handle file:// URLs
     if url.starts_with("file://") {
         let path = url.strip_prefix("file://").unwrap();
-        return std::fs::read_to_string(path).map_err(|e| Error::Io(e));
+        let bytes = std::fs::read(path).map_err(Error::Io)?;
+        return Ok((bytes, None));
     }
 
     // Configure agent with timeout for ureq 3.x
@@ -23,170 +36,335 @@ fn fetch_url(url: &str) -> Result<String> {
         .call()
         .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
-    let body = response
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
+
+    let bytes = response
         .body_mut()
-        .read_to_string()
+        .read_to_vec()
         .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
-    Ok(body)
+    Ok((bytes, content_type))
 }
 
-fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
-    let mut css_urls = Vec::new();
+fn decode_html_bytes(bytes: &[u8], content_type: Option<&str>) -> String {
+    if bytes.is_empty() {
+        return String::new();
+    }
 
-    // Simple regex-like extraction of <link> tags with CSS
-    let lower = html.to_lowercase();
-    let mut pos = 0;
+    if let Some((enc, bom_len)) = Encoding::for_bom(bytes) {
+        return enc.decode_without_bom_handling(&bytes[bom_len..]).0.into_owned();
+    }
 
-    while let Some(link_start) = lower[pos..].find("<link") {
-        let abs_start = pos + link_start;
-        if let Some(link_end) = lower[abs_start..].find('>') {
-            let link_tag = &html[abs_start..abs_start + link_end + 1];
-            let link_tag_lower = link_tag.to_lowercase();
-
-            // Check if it's a stylesheet
-            if link_tag_lower.contains("stylesheet") {
-                // Extract href
-                if let Some(href_start) = link_tag_lower.find("href") {
-                    let href_section = &link_tag[href_start..];
-                    if let Some(quote_start) = href_section.find('"').or_else(|| href_section.find('\'')) {
-                        let quote_char = href_section.chars().nth(quote_start).unwrap();
-                        let after_quote = &href_section[quote_start + 1..];
-                        if let Some(quote_end) = after_quote.find(quote_char) {
-                            let href = &after_quote[..quote_end];
-
-                            // Resolve relative URLs
-                            let full_url = if href.starts_with("http://") || href.starts_with("https://") {
-                                href.to_string()
-                            } else if href.starts_with("//") {
-                                format!("https:{}", href)
-                            } else if href.starts_with('/') {
-                                // Absolute path
-                                let base_parts: Vec<&str> = base_url.splitn(4, '/').collect();
-                                if base_parts.len() >= 3 {
-                                    format!("{}//{}{}", base_parts[0], base_parts[2], href)
-                                } else {
-                                    href.to_string()
-                                }
-                            } else {
-                                // Relative path - need to append to base URL's directory
-                                // Parse the base URL to handle it correctly
-                                if base_url.contains("://") {
-                                    // Find the path part after the domain
-                                    let protocol_end = base_url.find("://").unwrap() + 3;
-                                    let after_protocol = &base_url[protocol_end..];
-
-                                    // Find where the path starts (after the domain)
-                                    let path_start = after_protocol.find('/').map(|p| protocol_end + p);
-
-                                    let base_without_file = if let Some(path_pos) = path_start {
-                                        // There's a path - find the last / to get directory
-                                        if let Some(last_slash) = base_url[path_pos..].rfind('/') {
-                                            &base_url[..=path_pos + last_slash]
-                                        } else {
-                                            // No slash in path, use the path start
-                                            &base_url[..=path_pos]
-                                        }
-                                    } else {
-                                        // No path, just domain - add trailing slash
-                                        base_url
-                                    };
-
-                                    format!("{}/{}", base_without_file.trim_end_matches('/'), href)
-                                } else {
-                                    // Fallback for non-URL base paths
-                                    format!("{}/{}", base_url.trim_end_matches('/'), href)
-                                }
-                            };
-
-                            css_urls.push(full_url);
-                        }
-                    }
-                }
-            }
-
-            pos = abs_start + link_end + 1;
-        } else {
-            break;
+    if let Some(label) = content_type.and_then(charset_from_content_type) {
+        if let Some(enc) = Encoding::for_label(label.as_bytes()) {
+            return enc.decode_with_bom_removal(bytes).0.into_owned();
         }
     }
 
-    css_urls
+    if let Some(enc) = sniff_html_meta_charset(bytes) {
+        return enc.decode_with_bom_removal(bytes).0.into_owned();
+    }
+
+    // HTML default encoding is Windows-1252 per HTML Living Standard.
+    WINDOWS_1252.decode_with_bom_removal(bytes).0.into_owned()
 }
 
-fn inject_css_into_html(html: &str, css: &str) -> String {
-    // Find </head> or <body> and inject <style> tag before it
-    let style_tag = format!("<style>{}</style>", css);
+fn charset_from_content_type(content_type: &str) -> Option<String> {
+    for param in content_type.split(';').skip(1) {
+        let mut parts = param.splitn(2, '=');
+        let name = parts.next()?.trim();
+        if !name.eq_ignore_ascii_case("charset") {
+            continue;
+        }
+        let value = parts.next()?.trim().trim_matches('"').trim_matches('\'');
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
 
-    if let Some(head_end) = html.find("</head>") {
-        let mut result = String::with_capacity(html.len() + style_tag.len());
-        result.push_str(&html[..head_end]);
-        result.push_str(&style_tag);
-        result.push_str(&html[head_end..]);
-        result
-    } else if let Some(body_start) = html.find("<body") {
-        let mut result = String::with_capacity(html.len() + style_tag.len());
-        result.push_str(&html[..body_start]);
-        result.push_str(&style_tag);
-        result.push_str(&html[body_start..]);
-        result
+/// Pre-scan the first bytes of an HTML document to find a `<meta charset>` declaration.
+/// Follows the HTML encoding sniffing algorithm in spirit (ASCII scan, Windows-1252 default).
+fn sniff_html_meta_charset(bytes: &[u8]) -> Option<&'static Encoding> {
+    let limit = bytes.len().min(4096);
+    let slice = &bytes[..limit];
+    let lower: Vec<u8> = slice.iter().map(|b| b.to_ascii_lowercase()).collect();
+    let mut i = 0;
+    while i < lower.len() {
+        if lower[i] == b'<' {
+            if lower[i..].starts_with(b"<!--") {
+                if let Some(end) = find_bytes(&lower[i + 4..], b"-->") {
+                    i += 4 + end + 3;
+                    continue;
+                } else {
+                    break;
+                }
+            }
+            if lower[i..].starts_with(b"<meta") {
+                if let Some(tag_end) = find_tag_end(&lower, i + 5) {
+                    let attrs = &lower[i + 5..tag_end];
+                    if let Some(enc) = parse_meta_charset(attrs) {
+                        return Some(enc);
+                    }
+                    i = tag_end + 1;
+                    continue;
+                } else {
+                    break;
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+fn find_tag_end(bytes: &[u8], mut idx: usize) -> Option<usize> {
+    while idx < bytes.len() {
+        if bytes[idx] == b'>' {
+            return Some(idx);
+        }
+        idx += 1;
+    }
+    None
+}
+
+fn parse_meta_charset(attrs_lower: &[u8]) -> Option<&'static Encoding> {
+    // Look for charset attribute.
+    if let Some(pos) = find_bytes(attrs_lower, b"charset") {
+        let after = &attrs_lower[pos + "charset".len()..];
+        let (raw_val, _) = parse_attr_value(after);
+        if let Some(label) = raw_val {
+            if let Some(enc) = Encoding::for_label(label.as_bytes()) {
+                return Some(enc);
+            }
+        }
+    }
+
+    // Look for http-equiv/content pair specifying charset
+    if let Some(http_equiv_pos) = find_bytes(attrs_lower, b"http-equiv") {
+        let (http_equiv, _) = parse_attr_value(&attrs_lower[http_equiv_pos + "http-equiv".len()..]);
+        if http_equiv.as_deref() != Some("content-type") {
+            return None;
+        }
+        if let Some(content_pos) = find_bytes(attrs_lower, b"content") {
+            let (content, _) = parse_attr_value(&attrs_lower[content_pos + "content".len()..]);
+            if let Some(content) = content {
+                if let Some(idx) = content.to_ascii_lowercase().find("charset=") {
+                    let label = content[idx + "charset=".len()..].trim_matches(['\'', '"', ' ', ';']);
+                    if let Some(enc) = Encoding::for_label(label.as_bytes()) {
+                        return Some(enc);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Parses an attribute value after the attribute name.
+/// Returns (value, bytes_consumed_from_lowercase_slice_after_name)
+fn parse_attr_value(slice_lower: &[u8]) -> (Option<String>, usize) {
+    let mut i = 0;
+    while i < slice_lower.len() && (slice_lower[i].is_ascii_whitespace() || slice_lower[i] == b'=') {
+        i += 1;
+    }
+    if i >= slice_lower.len() {
+        return (None, i);
+    }
+    let (value, consumed) = if slice_lower[i] == b'"' || slice_lower[i] == b'\'' {
+        let quote = slice_lower[i];
+        i += 1;
+        let start = i;
+        while i < slice_lower.len() && slice_lower[i] != quote {
+            i += 1;
+        }
+        let end = i.min(slice_lower.len());
+        let value_bytes = &slice_lower[start..end];
+        (Some(String::from_utf8_lossy(value_bytes).into_owned()), end + 1)
     } else {
-        // No head or body, just prepend
-        format!("{}{}", style_tag, html)
+        let start = i;
+        while i < slice_lower.len() && !slice_lower[i].is_ascii_whitespace() && slice_lower[i] != b'>' {
+            i += 1;
+        }
+        let end = i;
+        let value_bytes = &slice_lower[start..end];
+        (Some(String::from_utf8_lossy(value_bytes).into_owned()), end)
+    };
+    (value, consumed)
+}
+
+/// Best-effort extraction of CSS URLs that appear inside inline scripts or attributes.
+///
+/// Some sites load their primary stylesheets dynamically and never emit a
+/// `<link rel="stylesheet">` element in the static HTML. To render those pages
+/// without executing JavaScript, scan the raw HTML for any substring that looks
+/// like a CSS URL (ends with `.css`, possibly with a query string) and try to
+/// resolve and fetch it as a stylesheet.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fastrender::css::loader::resolve_href;
+
+    #[test]
+    fn resolves_relative_http_links() {
+        let base = "https://example.com/a/b/page.html";
+        let href = "../styles/site.css";
+        let resolved = resolve_href(base, href).expect("resolved");
+        assert_eq!(resolved, "https://example.com/a/styles/site.css");
+    }
+
+    #[test]
+    fn resolves_protocol_relative_links() {
+        let base = "https://example.com/index.html";
+        let href = "//cdn.example.com/main.css";
+        let resolved = resolve_href(base, href).expect("resolved");
+        assert_eq!(resolved, "https://cdn.example.com/main.css");
+    }
+
+    #[test]
+    fn resolves_file_scheme_links() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let base = format!("file://{}", dir.path().join("page.html").display());
+        let href = "css/app.css";
+        let resolved = resolve_href(&base, href).expect("resolved");
+        assert!(resolved.ends_with("/css/app.css"), "resolved={}", resolved);
+    }
+
+    #[test]
+    fn absolutizes_css_urls_against_stylesheet() {
+        let css = r#"
+            body { background: url("../img/bg.png") no-repeat; }
+            @font-face { src: url('fonts/font.woff2'); }
+        "#;
+        let base = "https://example.com/assets/css/main.css";
+        let out = absolutize_css_urls(css, base);
+        assert!(out.contains("url(\"https://example.com/assets/img/bg.png\")"));
+        assert!(out.contains("url(\"https://example.com/assets/css/fonts/font.woff2\")"));
+    }
+
+    #[test]
+    fn inlines_imports_with_media_wrapping() {
+        fn fake_fetch(url: &str) -> Result<String> {
+            match url {
+                "https://example.com/css/imported.css" => Ok("h1 { color: red; }".to_string()),
+                _ => Err(Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "not found",
+                ))),
+            }
+        }
+        let css = r#"@import url("https://example.com/css/imported.css") screen;"#;
+        let mut seen = HashSet::new();
+        let inlined = inline_imports(css, "https://example.com/css/main.css", &fake_fetch, &mut seen);
+        assert!(inlined.contains("@media screen"), "expected media wrapper: {}", inlined);
+        assert!(inlined.contains("color: red"));
+    }
+
+    #[test]
+    fn extracts_stylesheet_hrefs_with_resolution() {
+        let html = r#"
+            <html><head>
+                <link rel="stylesheet" href="../styles/a.css">
+                <link rel="icon" href="/favicon.ico">
+            </head><body></body></html>
+        "#;
+        let urls = extract_css_links(html, "https://example.com/site/page.html");
+        assert_eq!(urls, vec!["https://example.com/styles/a.css".to_string()]);
+    }
+
+    #[test]
+    fn decode_html_uses_content_type_charset() {
+        let encoded = encoding_rs::SHIFT_JIS.encode("abcデ").0;
+        let decoded = decode_html_bytes(&encoded, Some("text/html; charset=shift_jis"));
+        assert!(decoded.contains('デ'), "decoded text should include kana: {}", decoded);
+    }
+
+    #[test]
+    fn decode_html_uses_meta_charset() {
+        let mut encoded = encoding_rs::WINDOWS_1252
+            .encode("<html><head><meta charset=\"windows-1252\"></head><body>\u{00a3}</body></html>")
+            .0;
+        let decoded = decode_html_bytes(&encoded, None);
+        assert!(
+            decoded.contains('£'),
+            "decoded text should contain pound sign when meta declares charset: {}",
+            decoded
+        );
+
+        encoded = encoding_rs::SHIFT_JIS
+            .encode("<html><head><meta charset='shift_jis'></head><body>デ</body></html>")
+            .0;
+        let decoded = decode_html_bytes(&encoded, None);
+        assert!(
+            decoded.contains('デ'),
+            "decoded text should contain kana when meta declares charset: {}",
+            decoded
+        );
+    }
+
+    #[test]
+    fn decode_html_defaults_to_windows_1252() {
+        let bytes = vec![0xA3]; // U+00A3 in Windows-1252
+        let decoded = decode_html_bytes(&bytes, None);
+        assert_eq!(decoded, "£");
     }
 }
 
-fn main() -> Result<()> {
-    let args: Vec<String> = env::args().collect();
+fn usage(program: &str) {
+    eprintln!("Usage: {program} [--timeout SECONDS] <url> [output.png] [width] [height] [scroll_y]");
+    eprintln!("Example: {program} --timeout 120 https://www.example.com output.png 1200 800 0");
+    eprintln!("  width: viewport width (default: 1200)");
+    eprintln!("  height: viewport height (default: 800)");
+    eprintln!("  scroll_y: vertical scroll offset (default: 0; not yet supported)");
+}
 
-    if args.len() < 2 {
-        eprintln!("Usage: {} <url> [output.png] [width] [height] [scroll_y]", args[0]);
-        eprintln!("Example: {} https://www.example.com output.png 1200 800 0", args[0]);
-        eprintln!("  width: viewport width (default: 1200)");
-        eprintln!("  height: viewport height (default: 800)");
-        eprintln!("  scroll_y: vertical scroll offset (default: 0)");
-        std::process::exit(1);
-    }
-
-    let url = &args[1];
-    let output = if args.len() >= 3 {
-        args[2].clone()
-    } else {
-        "fetched_output.png".to_string()
-    };
-
-    let width = if args.len() >= 4 {
-        args[3].parse::<u32>().unwrap_or(1200)
-    } else {
-        1200
-    };
-
-    let height = if args.len() >= 5 {
-        args[4].parse::<u32>().unwrap_or(800)
-    } else {
-        800
-    };
-
-    let scroll_y = if args.len() >= 6 {
-        args[5].parse::<u32>().unwrap_or(0)
-    } else {
-        0
-    };
-
+fn render_once(url: &str, output: &str, width: u32, height: u32, scroll_y: u32) -> Result<()> {
     println!("Fetching HTML from: {}", url);
-    let html = fetch_url(url)?;
+    let (html_bytes, html_content_type) = fetch_bytes(url)?;
+    let html = decode_html_bytes(&html_bytes, html_content_type.as_deref());
+    let resource_base = infer_base_url(&html, url).into_owned();
 
     println!("Extracting CSS links...");
-    let css_links = extract_css_links(&html, url);
+    let mut css_links = extract_css_links(&html, &resource_base);
+
+    // Fallback: also scan inline content for CSS URLs that are not linked.
+    let mut seen = HashSet::new();
+    for link in &css_links {
+        seen.insert(link.clone());
+    }
+    for extra in extract_embedded_css_urls(&html, &resource_base) {
+        if seen.insert(extra.clone()) {
+            css_links.push(extra);
+        }
+    }
 
     println!("Found {} CSS link(s)", css_links.len());
 
     let mut combined_css = String::new();
+    let mut seen_imports = HashSet::new();
     for css_url in css_links {
         println!("Fetching CSS from: {}", css_url);
-        match fetch_url(&css_url) {
-            Ok(css) => {
-                combined_css.push_str(&css);
+        seen_imports.insert(css_url.clone());
+        match fetch_bytes(&css_url) {
+            Ok((bytes, content_type)) => {
+                let css_text = decode_css_bytes(&bytes, content_type.as_deref());
+                let rewritten = absolutize_css_urls(&css_text, &css_url);
+                let inlined = inline_imports(
+                    &rewritten,
+                    &css_url,
+                    &|u| fetch_bytes(u).map(|(b, ct)| decode_css_bytes(&b, ct.as_deref())),
+                    &mut seen_imports,
+                );
+                combined_css.push_str(&inlined);
                 combined_css.push('\n');
             }
             Err(e) => {
@@ -204,6 +382,7 @@ fn main() -> Result<()> {
 
     println!("Rendering to image ({}x{} viewport)...", width, height);
     let mut renderer = FastRender::new()?;
+    renderer.set_base_url(resource_base.clone());
     // Note: scroll_y is currently not supported, will render from top
     if scroll_y != 0 {
         eprintln!("Warning: scroll_y parameter is not yet supported, rendering from top");
@@ -215,6 +394,69 @@ fn main() -> Result<()> {
 
     println!("✓ Successfully rendered {} to {}", url, output);
     println!("  Image size: {} bytes", std::fs::metadata(&output)?.len());
-
     Ok(())
+}
+
+fn main() -> Result<()> {
+    let program = env::args().next().unwrap_or_else(|| "fetch_and_render".to_string());
+    let mut args = env::args().skip(1);
+    let mut timeout_secs: Option<u64> = None;
+    let mut positional: Vec<String> = Vec::new();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--timeout" => {
+                if let Some(val) = args.next() {
+                    timeout_secs = val.parse().ok();
+                }
+            }
+            _ => positional.push(arg),
+        }
+    }
+
+    if positional.is_empty() {
+        usage(&program);
+        std::process::exit(1);
+    }
+
+    let url = positional.get(0).cloned().unwrap();
+    let output = positional
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| "fetched_output.png".to_string());
+    let width = positional.get(2).and_then(|v| v.parse::<u32>().ok()).unwrap_or(1200);
+    let height = positional.get(3).and_then(|v| v.parse::<u32>().ok()).unwrap_or(800);
+    let scroll_y = positional.get(4).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+
+    let (tx, rx) = channel();
+    let url_clone = url.clone();
+    let output_clone = output.clone();
+    thread::Builder::new()
+        .name("fetch_and_render-worker".to_string())
+        .stack_size(STACK_SIZE)
+        .spawn(move || {
+            let _ = tx.send(render_once(&url_clone, &output_clone, width, height, scroll_y));
+        })
+        .expect("spawn render worker");
+
+    if let Some(secs) = timeout_secs {
+        match rx.recv_timeout(Duration::from_secs(secs)) {
+            Ok(res) => res,
+            Err(RecvTimeoutError::Timeout) => {
+                eprintln!("Render timed out after {secs} seconds");
+                std::process::exit(1);
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                eprintln!("Render worker exited unexpectedly");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        match rx.recv() {
+            Ok(res) => res,
+            Err(_) => {
+                eprintln!("Render worker exited unexpectedly");
+                std::process::exit(1);
+            }
+        }
+    }
 }

@@ -33,8 +33,7 @@
 use std::fmt;
 use std::fmt::Write as _;
 
-use crate::tree::box_tree::BoxNode;
-use crate::tree::box_tree::BoxType;
+use crate::tree::box_tree::{BoxNode, BoxType, MarkerContent};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 
 /// Debug information linking a box to its source DOM element
@@ -80,12 +79,15 @@ pub struct DebugInfo {
     /// String representation of the path from root to this element
     /// Example: "html > body > div#main > p"
     pub dom_path: Option<String>,
-    
+
     /// Table cell colspan attribute (default 1)
     pub colspan: usize,
-    
+
     /// Table cell rowspan attribute (default 1)
     pub rowspan: usize,
+
+    /// Table column / colgroup span (default 1)
+    pub column_span: usize,
 }
 
 impl DebugInfo {
@@ -114,9 +116,10 @@ impl DebugInfo {
             dom_path: None,
             colspan: 1,
             rowspan: 1,
+            column_span: 1,
         }
     }
-    
+
     /// Creates debug info with colspan and rowspan
     pub fn with_spans(mut self, colspan: usize, rowspan: usize) -> Self {
         self.colspan = colspan;
@@ -142,6 +145,7 @@ impl DebugInfo {
             dom_path: None,
             colspan: 1,
             rowspan: 1,
+            column_span: 1,
         }
     }
 
@@ -163,6 +167,7 @@ impl DebugInfo {
             dom_path: None,
             colspan: 1,
             rowspan: 1,
+            column_span: 1,
         }
     }
 
@@ -325,11 +330,18 @@ impl TreePrinter {
             .unwrap_or_else(|| "#unknown".to_string());
 
         let box_type = match &node.box_type {
-            BoxType::Block(_) => "Block",
-            BoxType::Inline(_) => "Inline",
-            BoxType::Text(text) => &format!("Text({})", truncate(&text.text, 20)),
-            BoxType::Replaced(_) => "Replaced",
-            BoxType::Anonymous(_) => "Anonymous",
+            BoxType::Block(_) => "Block".to_string(),
+            BoxType::Inline(_) => "Inline".to_string(),
+            BoxType::Text(text) => format!("Text({})", truncate(&text.text, 20)),
+            BoxType::Marker(marker) => {
+                let payload = match &marker.content {
+                    MarkerContent::Text(text) => truncate(text, 20),
+                    MarkerContent::Image(_) => "Image".to_string(),
+                };
+                format!("Marker({})", payload)
+            }
+            BoxType::Replaced(_) => "Replaced".to_string(),
+            BoxType::Anonymous(_) => "Anonymous".to_string(),
         };
 
         output.push_str(prefix);

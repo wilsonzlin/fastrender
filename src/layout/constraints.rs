@@ -201,7 +201,10 @@ impl AvailableSpace {
     /// assert_eq!(clamped, AvailableSpace::Definite(100.0));
     /// ```
     pub fn clamp(self, min: f32, max: f32) -> Self {
-        self.map(|v| v.clamp(min, max))
+        // CSS sizing rules treat a max value below min as if max equals min. Mirror
+        // that to avoid panics from f32::clamp when callers provide inverted bounds.
+        let adjusted_max = if max < min { min } else { max };
+        self.map(|v| v.max(min).min(adjusted_max))
     }
 }
 
@@ -243,6 +246,12 @@ pub struct LayoutConstraints {
 
     /// Available space in the block direction (height for horizontal-tb)
     pub available_height: AvailableSpace,
+
+    /// The containing block inline size used for resolving percentage-based lengths. This remains
+    /// available even when `available_width` is intrinsic (min-/max-content) or indefinite so that
+    /// percentage resolution can still use a definite parent width instead of falling back to the
+    /// viewport.
+    pub inline_percentage_base: Option<f32>,
 }
 
 impl LayoutConstraints {
@@ -262,10 +271,21 @@ impl LayoutConstraints {
     /// assert!(constraints.is_height_definite());
     /// ```
     pub const fn new(available_width: AvailableSpace, available_height: AvailableSpace) -> Self {
+        let inline_percentage_base = match available_width {
+            AvailableSpace::Definite(w) => Some(w),
+            _ => None,
+        };
         Self {
             available_width,
             available_height,
+            inline_percentage_base,
         }
+    }
+
+    /// Overrides the inline percentage base while keeping the available space unchanged.
+    pub fn with_inline_percentage_base(mut self, base: Option<f32>) -> Self {
+        self.inline_percentage_base = base;
+        self
     }
 
     /// Creates constraints with definite width and height

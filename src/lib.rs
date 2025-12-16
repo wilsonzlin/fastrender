@@ -181,6 +181,7 @@ pub mod debug;
 pub mod dom;
 pub mod image_loader;
 pub mod image_output;
+pub mod resource;
 
 // ============================================================================
 // Public API
@@ -230,10 +231,10 @@ pub use style::float::{Clear, Float};
 // Paint
 pub use paint::canvas::Canvas;
 pub use paint::display_list::{
-    BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem,
-    FillRoundedRectItem, GlyphInstance, GradientStop, ImageData, ImageItem, LinearGradientItem, OpacityItem,
-    RadialGradientItem, StackingContextItem, StrokeRectItem, StrokeRoundedRectItem, TextItem as PaintTextItem,
-    Transform2D, TransformItem,
+    BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, ConicGradientItem, DisplayItem, DisplayList,
+    FillRectItem, FillRoundedRectItem, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality,
+    ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem, StackingContextItem, StrokeRectItem,
+    StrokeRoundedRectItem, TextItem as PaintTextItem, Transform2D, TransformItem,
 };
 pub use paint::optimize::{DisplayListOptimizer, OptimizationConfig};
 pub use paint::stacking::{
@@ -254,10 +255,14 @@ pub use text::hyphenation::{
 pub use text::shaper::{Script, TextDirection, TextShaper};
 
 // CSS
-pub use css::types::{PropertyValue, Transform};
+pub use css::parser::parse_stylesheet_with_errors;
+pub use css::types::{CssParseError, CssParseResult, PropertyValue, Transform};
 
 // Image output
 pub use image_output::OutputFormat;
+
+// Resource fetching
+pub use resource::{FetchedResource, HttpFetcher, ResourceFetcher};
 
 // Debug tools
 pub use debug::tree_printer::{ColorMode, DiffMode, DotExporter, EnhancedTreePrinter, PrintConfig, TreeDiff};

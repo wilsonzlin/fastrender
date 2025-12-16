@@ -31,6 +31,15 @@ fn create_cb_at(x: f32, y: f32, width: f32, height: f32) -> ContainingBlock {
     ContainingBlock::new(Rect::from_xywh(x, y, width, height))
 }
 
+fn create_cb_with_auto_block(width: f32) -> ContainingBlock {
+    ContainingBlock::with_viewport_and_bases(
+        Rect::from_xywh(0.0, 0.0, width, 0.0),
+        Size::new(width, 0.0),
+        Some(width),
+        None,
+    )
+}
+
 fn create_input(style: PositionedStyle, intrinsic: Size) -> AbsoluteLayoutInput {
     AbsoluteLayoutInput::new(style, intrinsic, Point::ZERO)
 }
@@ -97,16 +106,16 @@ fn test_absolute_left_and_right_stretch_width() {
     style.position = Position::Absolute;
     style.left = LengthOrAuto::px(50.0);
     style.right = LengthOrAuto::px(50.0);
-    // width is auto - should stretch
+    // width is auto - shrink-to-fit the intrinsic width between insets
 
     let input = create_input(style, Size::new(100.0, 100.0));
     let cb = create_cb(400.0, 300.0);
 
     let result = layout.layout_absolute(&input, &cb).unwrap();
 
-    // Width = 400 - 50 - 50 = 300
+    // Width = shrink-to-fit 100px within the 300px slot
     assert_eq!(result.position.x, 50.0);
-    assert_eq!(result.size.width, 300.0);
+    assert_eq!(result.size.width, 100.0);
 }
 
 #[test]
@@ -185,6 +194,27 @@ fn test_absolute_all_auto_uses_intrinsic_and_static_position() {
     assert_eq!(result.position.y, 120.0); // static
     assert_eq!(result.size.width, 150.0);
     assert_eq!(result.size.height, 100.0);
+}
+
+#[test]
+fn percent_offsets_ignore_auto_block_base() {
+    let layout = AbsoluteLayout::new();
+
+    let mut style = default_style();
+    style.position = Position::Absolute;
+    style.top = LengthOrAuto::Length(fastrender::Length::percent(50.0));
+    style.height = LengthOrAuto::Length(fastrender::Length::percent(50.0));
+
+    let intrinsic = Size::new(40.0, 30.0);
+    let static_pos = Point::new(5.0, 10.0);
+    let input = create_input_with_static(style, intrinsic, static_pos);
+    let cb = create_cb_with_auto_block(200.0);
+
+    let result = layout.layout_absolute(&input, &cb).unwrap();
+
+    // With an auto block-size on the containing block, percentage top/height behave as auto.
+    assert_eq!(result.position.y, 10.0);
+    assert_eq!(result.size.height, 30.0);
 }
 
 // ============================================================================
@@ -450,8 +480,8 @@ fn test_negative_computed_width_clamped() {
 
     let result = layout.layout_absolute(&input, &cb).unwrap();
 
-    // Width should be clamped to 0
-    assert_eq!(result.size.width, 0.0);
+    // Width should shrink to the intrinsic 50px rather than clamping to 0
+    assert_eq!(result.size.width, 50.0);
 }
 
 #[test]

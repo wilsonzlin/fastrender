@@ -4,12 +4,13 @@
 //! in various scenarios including edge cases.
 
 use fastrender::geometry::{Point, Rect};
+use fastrender::paint::display_list::{ClipShape, ResolvedFilter};
 use fastrender::Rgba;
 use fastrender::{
     BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, DisplayListOptimizer,
-    FillRectItem, FillRoundedRectItem, GradientStop, ImageData, ImageItem, LinearGradientItem, OpacityItem,
-    OptimizationConfig, PaintTextItem as TextItem, RadialGradientItem, StackingContextItem, StrokeRectItem,
-    StrokeRoundedRectItem, Transform2D, TransformItem,
+    FillRectItem, FillRoundedRectItem, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem,
+    LinearGradientItem, OpacityItem, OptimizationConfig, PaintTextItem as TextItem, RadialGradientItem,
+    StackingContextItem, StrokeRectItem, StrokeRoundedRectItem, Transform2D, TransformItem,
 };
 use std::sync::Arc;
 
@@ -29,6 +30,7 @@ fn make_stroke_rect(x: f32, y: f32, w: f32, h: f32, color: Rgba, width: f32) -> 
         rect: Rect::from_xywh(x, y, w, h),
         color,
         width,
+        blend_mode: BlendMode::Normal,
     })
 }
 
@@ -37,9 +39,14 @@ fn make_text(x: f32, y: f32, color: Rgba) -> DisplayItem {
         origin: Point::new(x, y),
         glyphs: vec![],
         color,
+        shadows: Vec::new(),
         font_size: 16.0,
         advance_width: 100.0,
         font_id: None,
+        synthetic_bold: 0.0,
+        synthetic_oblique: 0.0,
+        emphasis: None,
+        decorations: Vec::new(),
     })
 }
 
@@ -47,7 +54,8 @@ fn make_image(x: f32, y: f32, w: f32, h: f32) -> DisplayItem {
     let pixels = vec![255u8; 4]; // 1x1 pixel
     DisplayItem::Image(ImageItem {
         dest_rect: Rect::from_xywh(x, y, w, h),
-        image: Arc::new(ImageData::new(1, 1, pixels)),
+        image: Arc::new(ImageData::new_pixels(1, 1, pixels)),
+        filter_quality: ImageFilterQuality::Linear,
         src_rect: None,
     })
 }
@@ -574,12 +582,32 @@ fn test_box_shadow_outside_viewport() {
 }
 
 #[test]
+fn test_box_shadow_offset_into_view_kept() {
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::BoxShadow(BoxShadowItem {
+        rect: Rect::from_xywh(-300.0, 0.0, 50.0, 50.0),
+        radii: BorderRadii::ZERO,
+        offset: Point::new(320.0, 0.0),
+        blur_radius: 5.0,
+        spread_radius: 0.0,
+        color: Rgba::new(0, 0, 0, 0.5),
+        inset: false,
+    }));
+
+    let optimizer = DisplayListOptimizer::new();
+    let (optimized, _stats) = optimizer.optimize(list, small_viewport());
+
+    assert_eq!(optimized.len(), 1, "shadow drawn into viewport should remain");
+}
+
+#[test]
 fn test_linear_gradient_culling() {
     let mut list = DisplayList::new();
     list.push(DisplayItem::LinearGradient(LinearGradientItem {
         rect: Rect::from_xywh(10.0, 10.0, 80.0, 80.0),
         start: Point::new(0.0, 0.0),
         end: Point::new(80.0, 80.0),
+        spread: GradientSpread::Pad,
         stops: vec![
             GradientStop {
                 position: 0.0,
@@ -604,7 +632,8 @@ fn test_radial_gradient_culling() {
     list.push(DisplayItem::RadialGradient(RadialGradientItem {
         rect: Rect::from_xywh(10.0, 10.0, 80.0, 80.0),
         center: Point::new(40.0, 40.0),
-        radius: 40.0,
+        radii: Point::new(40.0, 40.0),
+        spread: GradientSpread::Pad,
         stops: vec![
             GradientStop {
                 position: 0.0,
@@ -652,8 +681,10 @@ fn test_rounded_rect_items() {
 fn test_clip_inside_viewport() {
     let mut list = DisplayList::new();
     list.push(DisplayItem::PushClip(ClipItem {
-        rect: Rect::from_xywh(10.0, 10.0, 80.0, 80.0),
-        radii: None,
+        shape: ClipShape::Rect {
+            rect: Rect::from_xywh(10.0, 10.0, 80.0, 80.0),
+            radii: None,
+        },
     }));
     list.push(make_fill_rect(20.0, 20.0, 60.0, 60.0, Rgba::RED));
     list.push(DisplayItem::PopClip);
@@ -668,8 +699,10 @@ fn test_clip_inside_viewport() {
 fn test_clip_outside_viewport_culls_children() {
     let mut list = DisplayList::new();
     list.push(DisplayItem::PushClip(ClipItem {
-        rect: Rect::from_xywh(500.0, 500.0, 80.0, 80.0),
-        radii: None,
+        shape: ClipShape::Rect {
+            rect: Rect::from_xywh(500.0, 500.0, 80.0, 80.0),
+            radii: None,
+        },
     }));
     list.push(make_fill_rect(510.0, 510.0, 60.0, 60.0, Rgba::RED));
     list.push(DisplayItem::PopClip);
@@ -680,6 +713,30 @@ fn test_clip_outside_viewport_culls_children() {
     // Clip is outside viewport, so children should be culled
     // Only the balanced stack operations remain
     assert!(optimized.len() <= 2);
+}
+
+#[test]
+fn transform_keeps_clipped_content_from_being_culled() {
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushClip(ClipItem {
+        shape: ClipShape::Rect {
+            rect: Rect::from_xywh(500.0, 500.0, 50.0, 50.0),
+            radii: None,
+        },
+    }));
+    // Transform could reposition content relative to the viewport, so the optimizer should not drop it.
+    list.push(DisplayItem::PushTransform(TransformItem {
+        transform: Transform2D::translate(-450.0, -450.0),
+    }));
+    list.push(make_fill_rect(500.0, 500.0, 20.0, 20.0, Rgba::RED));
+    list.push(DisplayItem::PopTransform);
+    list.push(DisplayItem::PopClip);
+
+    let optimizer = DisplayListOptimizer::new();
+    let (optimized, _stats) = optimizer.optimize(list, small_viewport());
+
+    // Clip would normally cull, but the active transform means we conservatively keep the content.
+    assert_eq!(optimized.len(), 5);
 }
 
 // ============================================================================
@@ -817,12 +874,92 @@ fn test_stacking_context_preserved() {
         z_index: 1,
         creates_stacking_context: true,
         bounds: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+        mix_blend_mode: BlendMode::Normal,
+        is_isolated: false,
+        transform: None,
+        filters: Vec::new(),
+        backdrop_filters: Vec::new(),
+        radii: BorderRadii::ZERO,
     }));
     list.push(make_fill_rect(0.0, 0.0, 100.0, 100.0, Rgba::RED));
     list.push(DisplayItem::PopStackingContext);
 
     let optimizer = DisplayListOptimizer::new();
     let (optimized, _stats) = optimizer.optimize(list, full_viewport());
+
+    assert_eq!(optimized.len(), 3);
+}
+
+#[test]
+fn stacking_context_filters_expand_cull_bounds() {
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+        z_index: 0,
+        creates_stacking_context: true,
+        bounds: Rect::from_xywh(-10.0, 0.0, 5.0, 5.0),
+        mix_blend_mode: BlendMode::Normal,
+        is_isolated: false,
+        transform: None,
+        filters: vec![ResolvedFilter::DropShadow {
+            offset_x: 20.0,
+            offset_y: 0.0,
+            blur_radius: 0.0,
+            spread: 0.0,
+            color: Rgba::BLACK,
+        }],
+        backdrop_filters: Vec::new(),
+        radii: BorderRadii::ZERO,
+    }));
+    list.push(make_fill_rect(-10.0, 0.0, 5.0, 5.0, Rgba::RED));
+    list.push(DisplayItem::PopStackingContext);
+
+    let optimizer = DisplayListOptimizer::new();
+    let (optimized, _stats) = optimizer.optimize(list, small_viewport());
+
+    // Drop shadow spills into the viewport, so the context and its content should be preserved.
+    assert_eq!(optimized.len(), 3);
+}
+
+#[test]
+fn offscreen_filtered_stacking_context_is_culled() {
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+        z_index: 0,
+        creates_stacking_context: true,
+        bounds: Rect::from_xywh(500.0, 500.0, 10.0, 10.0),
+        mix_blend_mode: BlendMode::Normal,
+        is_isolated: false,
+        transform: None,
+        filters: vec![ResolvedFilter::DropShadow {
+            offset_x: 5.0,
+            offset_y: 5.0,
+            blur_radius: 0.0,
+            spread: 0.0,
+            color: Rgba::BLACK,
+        }],
+        backdrop_filters: Vec::new(),
+        radii: BorderRadii::ZERO,
+    }));
+    list.push(make_fill_rect(500.0, 500.0, 10.0, 10.0, Rgba::RED));
+    list.push(DisplayItem::PopStackingContext);
+
+    let optimizer = DisplayListOptimizer::new();
+    let (optimized, _stats) = optimizer.optimize(list, small_viewport());
+
+    assert!(optimized.is_empty());
+}
+
+#[test]
+fn transforms_keep_children_from_being_culled() {
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushTransform(TransformItem {
+        transform: Transform2D::translate(150.0, 0.0),
+    }));
+    list.push(make_fill_rect(-120.0, 0.0, 10.0, 10.0, Rgba::RED));
+    list.push(DisplayItem::PopTransform);
+
+    let optimizer = DisplayListOptimizer::new();
+    let (optimized, _stats) = optimizer.optimize(list, small_viewport());
 
     assert_eq!(optimized.len(), 3);
 }
