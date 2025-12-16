@@ -5,11 +5,11 @@
 use crate::style::color::{Color, Rgba};
 use crate::style::media::{MediaContext, MediaQuery};
 use crate::style::values::Length;
-use cssparser::ToCss;
+use cssparser::{Parser, ParserInput, ToCss};
 use selectors::parser::SelectorList;
 use std::fmt;
 
-use super::selectors::FastRenderSelectorImpl;
+use super::selectors::{FastRenderSelectorImpl, PseudoClassParser};
 
 // ============================================================================
 // CSS Parse Errors
@@ -151,6 +151,8 @@ pub struct CollectedRule<'a> {
     pub rule: &'a StyleRule,
     /// Cascade layer order (lexicographic; unlayered rules use a sentinel of u32::MAX).
     pub layer_order: Vec<u32>,
+    /// Container query conditions that must match at cascade time.
+    pub container_conditions: Vec<ContainerCondition>,
 }
 
 /// Stylesheet containing CSS rules
@@ -179,7 +181,7 @@ impl StyleSheet {
     pub fn collect_style_rules(&self, media_ctx: &MediaContext) -> Vec<CollectedRule<'_>> {
         let mut result = Vec::new();
         let mut registry = LayerRegistry::new();
-        collect_rules_recursive(&self.rules, media_ctx, &mut registry, &[], &mut result);
+        collect_rules_recursive(&self.rules, media_ctx, &mut registry, &[], &[], &mut result);
         result
     }
 
@@ -205,6 +207,36 @@ impl StyleSheet {
         resolve_rules(&self.rules, loader, base_url, media_ctx, &mut seen, &mut resolved);
         StyleSheet { rules: resolved }
     }
+
+    /// Returns true if the stylesheet (or any nested blocks) contains @container rules.
+    pub fn has_container_rules(&self) -> bool {
+        fn walk(rules: &[CssRule]) -> bool {
+            for rule in rules {
+                match rule {
+                    CssRule::Container(_) => return true,
+                    CssRule::Media(media) => {
+                        if walk(&media.rules) {
+                            return true;
+                        }
+                    }
+                    CssRule::Supports(supports) => {
+                        if walk(&supports.rules) {
+                            return true;
+                        }
+                    }
+                    CssRule::Layer(layer) => {
+                        if walk(&layer.rules) {
+                            return true;
+                        }
+                    }
+                    CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) => {}
+                }
+            }
+            false
+        }
+
+        walk(&self.rules)
+    }
 }
 
 /// Helper to recursively collect style rules from nested @media/@layer blocks
@@ -213,6 +245,7 @@ fn collect_rules_recursive<'a>(
     media_ctx: &MediaContext,
     registry: &mut LayerRegistry,
     current_layer: &[u32],
+    container_conditions: &[ContainerCondition],
     out: &mut Vec<CollectedRule<'a>>,
 ) {
     for rule in rules {
@@ -226,12 +259,47 @@ fn collect_rules_recursive<'a>(
                 out.push(CollectedRule {
                     rule: style_rule,
                     layer_order,
+                    container_conditions: container_conditions.to_vec(),
                 });
             }
             CssRule::Media(media_rule) => {
                 // Only include rules from @media blocks that match
                 if media_ctx.evaluate(&media_rule.query) {
-                    collect_rules_recursive(&media_rule.rules, media_ctx, registry, current_layer, out);
+                    collect_rules_recursive(
+                        &media_rule.rules,
+                        media_ctx,
+                        registry,
+                        current_layer,
+                        container_conditions,
+                        out,
+                    );
+                }
+            }
+            CssRule::Container(container_rule) => {
+                let mut updated_conditions = container_conditions.to_vec();
+                updated_conditions.push(ContainerCondition {
+                    name: container_rule.name.clone(),
+                    query: container_rule.query.clone(),
+                });
+                collect_rules_recursive(
+                    &container_rule.rules,
+                    media_ctx,
+                    registry,
+                    current_layer,
+                    &updated_conditions,
+                    out,
+                );
+            }
+            CssRule::Supports(supports_rule) => {
+                if supports_rule.condition.matches() {
+                    collect_rules_recursive(
+                        &supports_rule.rules,
+                        media_ctx,
+                        registry,
+                        current_layer,
+                        container_conditions,
+                        out,
+                    );
                 }
             }
             CssRule::Import(_) => {
@@ -250,7 +318,7 @@ fn collect_rules_recursive<'a>(
 
                 if layer_rule.anonymous {
                     let path = registry.ensure_anonymous(current_layer);
-                    collect_rules_recursive(&layer_rule.rules, media_ctx, registry, &path, out);
+                    collect_rules_recursive(&layer_rule.rules, media_ctx, registry, &path, container_conditions, out);
                     continue;
                 }
 
@@ -259,7 +327,7 @@ fn collect_rules_recursive<'a>(
                     continue;
                 }
                 let path = registry.ensure_path(current_layer, &layer_rule.names[0]);
-                collect_rules_recursive(&layer_rule.rules, media_ctx, registry, &path, out);
+                collect_rules_recursive(&layer_rule.rules, media_ctx, registry, &path, container_conditions, out);
             }
             CssRule::FontFace(_) => {}
         }
@@ -273,6 +341,16 @@ fn collect_font_faces_recursive(rules: &[CssRule], media_ctx: &MediaContext, out
             CssRule::Media(media_rule) => {
                 if media_ctx.evaluate(&media_rule.query) {
                     collect_font_faces_recursive(&media_rule.rules, media_ctx, out);
+                }
+            }
+            CssRule::Container(container_rule) => {
+                if media_ctx.evaluate(&container_rule.query) {
+                    collect_font_faces_recursive(&container_rule.rules, media_ctx, out);
+                }
+            }
+            CssRule::Supports(supports_rule) => {
+                if supports_rule.condition.matches() {
+                    collect_font_faces_recursive(&supports_rule.rules, media_ctx, out);
                 }
             }
             CssRule::Layer(layer_rule) => {
@@ -293,6 +371,183 @@ fn collect_font_faces_recursive(rules: &[CssRule], media_ctx: &MediaContext, out
     }
 }
 
+impl SupportsCondition {
+    /// Evaluate the @supports condition according to the features we implement.
+    ///
+    /// The declaration form is considered supported when the property is known and the value parses.
+    pub fn matches(&self) -> bool {
+        match self {
+            SupportsCondition::Declaration { property, value } => supports_value_is_valid(property, value),
+            SupportsCondition::Selector(selector_list) => supports_selector_is_valid(selector_list),
+            SupportsCondition::Not(cond) => !cond.matches(),
+            SupportsCondition::And(conds) => conds.iter().all(|c| c.matches()),
+            SupportsCondition::Or(conds) => conds.iter().any(|c| c.matches()),
+            SupportsCondition::True => true,
+            SupportsCondition::False => false,
+        }
+    }
+}
+
+/// Determines whether a property/value pair is supported for @supports feature queries.
+///
+/// This follows the CSS Conditional Rules requirement that the declaration must be recognized
+/// (property known) *and* the value valid per the property's grammar. We allow a conservative
+/// subset of keywords for properties we parse as enums; other successfully parsed values pass.
+fn supports_value_is_valid(property: &str, value: &str) -> bool {
+    // Custom properties are always supported and accept any value per CSS Variables.
+    if property.starts_with("--") {
+        return true;
+    }
+
+    // Unknown properties are not supported.
+    let parsed = super::properties::parse_property_value(property, value);
+    let Some(parsed) = parsed else { return false };
+    let prop = property.to_ascii_lowercase();
+    let value_lower = value.trim().to_ascii_lowercase();
+
+    match prop.as_str() {
+        // Color properties: require a color parse to succeed.
+        "color"
+        | "background-color"
+        | "border-color"
+        | "border-top-color"
+        | "border-right-color"
+        | "border-bottom-color"
+        | "border-left-color" => return crate::style::color::Color::parse(value).is_ok(),
+
+        "display" => {
+            return matches!(
+                value_lower.as_str(),
+                "block"
+                    | "inline"
+                    | "inline-block"
+                    | "flex"
+                    | "inline-flex"
+                    | "grid"
+                    | "inline-grid"
+                    | "flow-root"
+                    | "contents"
+                    | "list-item"
+                    | "table"
+                    | "table-row"
+                    | "table-cell"
+                    | "table-row-group"
+                    | "table-header-group"
+                    | "table-footer-group"
+                    | "table-column"
+                    | "table-column-group"
+                    | "table-caption"
+                    | "none"
+            );
+        }
+        "position" => {
+            return matches!(
+                value_lower.as_str(),
+                "static" | "relative" | "absolute" | "fixed" | "sticky"
+            );
+        }
+        "float" => {
+            return matches!(
+                value_lower.as_str(),
+                "left" | "right" | "none" | "inline-start" | "inline-end"
+            )
+        }
+        "clear" => {
+            return matches!(
+                value_lower.as_str(),
+                "left" | "right" | "both" | "none" | "inline-start" | "inline-end"
+            );
+        }
+        "overflow" | "overflow-x" | "overflow-y" => {
+            return matches!(value_lower.as_str(), "visible" | "hidden" | "scroll" | "auto" | "clip");
+        }
+        "writing-mode" => {
+            return matches!(
+                value_lower.as_str(),
+                "horizontal-tb" | "vertical-rl" | "vertical-lr" | "sideways-rl" | "sideways-lr"
+            );
+        }
+        "direction" => return matches!(value_lower.as_str(), "ltr" | "rtl"),
+        "visibility" => return matches!(value_lower.as_str(), "visible" | "hidden" | "collapse"),
+        "flex-direction" => {
+            return matches!(
+                value_lower.as_str(),
+                "row" | "row-reverse" | "column" | "column-reverse"
+            );
+        }
+        "flex-wrap" => return matches!(value_lower.as_str(), "nowrap" | "wrap" | "wrap-reverse"),
+        "align-items" | "align-self" | "align-content" | "justify-items" | "justify-self" | "justify-content" => {
+            return matches!(
+                value_lower.as_str(),
+                "flex-start"
+                    | "flex-end"
+                    | "center"
+                    | "start"
+                    | "end"
+                    | "self-start"
+                    | "self-end"
+                    | "baseline"
+                    | "stretch"
+                    | "space-between"
+                    | "space-around"
+                    | "space-evenly"
+            );
+        }
+        "text-align" => {
+            return matches!(
+                value_lower.as_str(),
+                "left" | "right" | "center" | "justify" | "start" | "end" | "match-parent"
+            );
+        }
+        _ => {}
+    }
+
+    // For other properties, if we parsed successfully, consider it supported.
+    // This keeps behavior permissive while still rejecting unknown properties/values above.
+    match parsed {
+        super::types::PropertyValue::Keyword(_) => true,
+        _ => true,
+    }
+}
+
+/// Determines whether a selector list is supported for @supports selector() queries.
+///
+/// The selector is considered supported when it parses successfully with the engine's selector
+/// grammar. Selectors that use unsupported pseudo-classes/elements (e.g., :has) evaluate to false.
+fn supports_selector_is_valid(selector_list: &str) -> bool {
+    let mut input = ParserInput::new(selector_list);
+    let mut parser = Parser::new(&mut input);
+    match SelectorList::parse(&PseudoClassParser, &mut parser, selectors::parser::ParseRelative::No) {
+        Ok(_) => true,
+        Err(err) => {
+            #[cfg(test)]
+            eprintln!("selector() query parse failed for `{}`: {:?}", selector_list, err);
+            let _ = err;
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn supports_selector_matches_for_basic_selector() {
+        let cond = SupportsCondition::Selector("div > span".into());
+        assert!(cond.matches(), "simple selector list should be supported");
+    }
+
+    #[test]
+    fn supports_selector_rejects_unsupported_pseudo() {
+        let cond = SupportsCondition::Selector("div:has(span)".into());
+        assert!(
+            !cond.matches(),
+            ":has() is unsupported and should fail selector() queries"
+        );
+    }
+}
+
 impl Default for StyleSheet {
     fn default() -> Self {
         Self::new()
@@ -306,6 +561,10 @@ pub enum CssRule {
     Style(StyleRule),
     /// A @media rule containing conditional rules
     Media(MediaRule),
+    /// A @container rule containing conditional rules (container queries)
+    Container(ContainerRule),
+    /// A @supports rule containing conditional rules
+    Supports(SupportsRule),
     /// An @import rule (href + optional media list)
     Import(ImportRule),
     /// A @layer rule establishing cascade layers
@@ -321,6 +580,54 @@ pub struct MediaRule {
     pub query: MediaQuery,
     /// Rules that apply when query matches (can be nested)
     pub rules: Vec<CssRule>,
+}
+
+/// A @container rule containing conditional rules
+#[derive(Debug, Clone)]
+pub struct ContainerRule {
+    /// Optional named container list to target (ignored for now).
+    pub name: Option<String>,
+    /// The container query to evaluate (size queries only).
+    pub query: MediaQuery,
+    /// Rules that apply when query matches (can be nested)
+    pub rules: Vec<CssRule>,
+}
+
+/// Container query condition attached to collected rules.
+#[derive(Debug, Clone)]
+pub struct ContainerCondition {
+    /// Optional container name to match (None targets the nearest container).
+    pub name: Option<String>,
+    /// The parsed container query (size queries only at present).
+    pub query: MediaQuery,
+}
+
+/// A @supports rule containing conditional rules
+#[derive(Debug, Clone)]
+pub struct SupportsRule {
+    /// The feature condition to evaluate
+    pub condition: SupportsCondition,
+    /// Rules that apply when the condition is satisfied
+    pub rules: Vec<CssRule>,
+}
+
+/// A parsed @supports condition
+#[derive(Debug, Clone)]
+pub enum SupportsCondition {
+    /// `(property: value)` feature query
+    Declaration { property: String, value: String },
+    /// `selector(<selector-list>)` feature query
+    Selector(String),
+    /// Logical negation
+    Not(Box<SupportsCondition>),
+    /// Logical conjunction
+    And(Vec<SupportsCondition>),
+    /// Logical disjunction
+    Or(Vec<SupportsCondition>),
+    /// Always true (used for parsing fallbacks)
+    True,
+    /// Always false (used when parsing fails)
+    False,
 }
 
 /// A @import rule targeting another stylesheet
@@ -423,6 +730,37 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
     for rule in rules {
         match rule {
             CssRule::Style(_) | CssRule::Media(_) => out.push(rule.clone()),
+            CssRule::Container(container_rule) => {
+                let mut resolved_children = Vec::new();
+                resolve_rules(
+                    &container_rule.rules,
+                    loader,
+                    base_url,
+                    media_ctx,
+                    seen,
+                    &mut resolved_children,
+                );
+                out.push(CssRule::Container(ContainerRule {
+                    name: container_rule.name.clone(),
+                    query: container_rule.query.clone(),
+                    rules: resolved_children,
+                }));
+            }
+            CssRule::Supports(supports_rule) => {
+                let mut resolved_children = Vec::new();
+                resolve_rules(
+                    &supports_rule.rules,
+                    loader,
+                    base_url,
+                    media_ctx,
+                    seen,
+                    &mut resolved_children,
+                );
+                out.push(CssRule::Supports(SupportsRule {
+                    condition: supports_rule.condition.clone(),
+                    rules: resolved_children,
+                }));
+            }
             CssRule::Layer(layer_rule) => {
                 let mut resolved_children = Vec::new();
                 resolve_rules(

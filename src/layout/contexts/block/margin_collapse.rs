@@ -337,17 +337,21 @@ pub fn establishes_bfc(style: &ComputedStyle) -> bool {
     }
     if matches!(
         style.display,
-        Display::InlineBlock | Display::InlineFlex | Display::InlineGrid | Display::FlowRoot
+        Display::InlineBlock
+            | Display::InlineFlex
+            | Display::InlineGrid
+            | Display::FlowRoot
+            | Display::Table
+            | Display::InlineTable
+            | Display::TableCell
+            | Display::TableCaption
     ) {
         return true;
     }
     if style.overflow_x != Overflow::Visible || style.overflow_y != Overflow::Visible {
         return true;
     }
-    if matches!(style.display, Display::Flex | Display::Grid) {
-        return true;
-    }
-    false
+    matches!(style.display, Display::Flex | Display::Grid)
 }
 
 #[cfg(test)]
@@ -624,6 +628,22 @@ mod tests {
         assert!(establishes_bfc(&style));
 
         style.display = Display::InlineGrid;
+        assert!(establishes_bfc(&style));
+    }
+
+    #[test]
+    fn test_establishes_bfc_table_cell_and_caption() {
+        let mut style = ComputedStyle::default();
+        style.display = Display::TableCell;
+        assert!(establishes_bfc(&style));
+
+        style.display = Display::TableCaption;
+        assert!(establishes_bfc(&style));
+
+        style.display = Display::Table;
+        assert!(establishes_bfc(&style));
+
+        style.display = Display::InlineTable;
         assert!(establishes_bfc(&style));
     }
 }

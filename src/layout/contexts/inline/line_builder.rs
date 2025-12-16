@@ -34,6 +34,7 @@
 use super::baseline::{BaselineMetrics, LineBaselineAccumulator, VerticalAlign};
 use crate::geometry::Size;
 use crate::layout::inline::float_integration::{InlineFloatIntegration, LineSpaceOptions};
+use crate::style::display::Display;
 use crate::style::types::{Direction, ListStylePosition, OverflowWrap, UnicodeBidi, WhiteSpace, WordBreak};
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
@@ -304,6 +305,7 @@ impl TextItem {
         let mut ascent: f32 = 0.0;
         let mut descent: f32 = 0.0;
         let mut line_gap: f32 = 0.0;
+        let mut x_height: Option<f32> = None;
 
         for run in runs {
             if let Ok(metrics) = run.font.metrics() {
@@ -311,6 +313,9 @@ impl TextItem {
                 ascent = ascent.max(scaled.ascent);
                 descent = descent.max(scaled.descent);
                 line_gap = line_gap.max(scaled.line_gap);
+                if x_height.is_none() {
+                    x_height = scaled.x_height;
+                }
             }
         }
 
@@ -326,6 +331,7 @@ impl TextItem {
             descent,
             line_gap,
             line_height,
+            x_height,
         }
     }
 
@@ -978,19 +984,35 @@ impl InlineBlockItem {
         unicode_bidi: UnicodeBidi,
         margin_left: f32,
         margin_right: f32,
+        has_line_baseline: bool,
     ) -> Self {
         let width = fragment.bounds.width();
         let height = fragment.bounds.height();
+        let mut first_baseline: Option<f32> = None;
         let mut last_baseline: Option<f32> = None;
-        collect_last_line_baseline(&fragment, 0.0, &mut last_baseline);
+        if has_line_baseline {
+            collect_line_baselines(&fragment, 0.0, &mut first_baseline, &mut last_baseline);
+        }
 
-        let metrics = if let Some(baseline) = last_baseline {
-            let clamped_baseline = baseline.clamp(0.0, height);
-            let descent = (height - clamped_baseline).max(0.0);
-            BaselineMetrics::new(clamped_baseline, height, clamped_baseline, descent)
+        let chosen_baseline = if let Some(style) = fragment.style.as_ref() {
+            if matches!(style.display, Display::Table | Display::InlineTable) {
+                first_baseline.or(last_baseline)
+            } else {
+                last_baseline
+            }
         } else {
-            BaselineMetrics::for_replaced(height)
+            last_baseline
         };
+
+        let metrics = chosen_baseline.map_or_else(
+            || BaselineMetrics::for_replaced(height),
+            |baseline| {
+                let upper = height.max(0.0);
+                let clamped_baseline = baseline.max(0.0).min(upper);
+                let descent = (height - clamped_baseline).max(0.0);
+                BaselineMetrics::new(clamped_baseline, height, clamped_baseline, descent)
+            },
+        );
 
         Self {
             fragment,
@@ -1016,13 +1038,24 @@ impl InlineBlockItem {
     }
 }
 
-fn collect_last_line_baseline(fragment: &FragmentNode, y_offset: f32, last: &mut Option<f32>) {
+fn collect_line_baselines(fragment: &FragmentNode, y_offset: f32, first: &mut Option<f32>, last: &mut Option<f32>) {
     let current_offset = y_offset + fragment.bounds.y();
+    if let Some(baseline) = fragment.baseline {
+        let absolute = current_offset + baseline;
+        if first.is_none() {
+            *first = Some(absolute);
+        }
+        *last = Some(absolute);
+    }
     if let FragmentContent::Line { baseline } = fragment.content {
-        *last = Some(current_offset + baseline);
+        let absolute = current_offset + baseline;
+        if first.is_none() {
+            *first = Some(absolute);
+        }
+        *last = Some(absolute);
     }
     for child in &fragment.children {
-        collect_last_line_baseline(child, current_offset, last);
+        collect_line_baselines(child, current_offset, first, last);
     }
 }
 
@@ -1566,7 +1599,11 @@ impl<'a> LineBuilder<'a> {
             self.baseline_acc.add_line_relative(&metrics, vertical_align);
             0.0 // Will be adjusted in finalization
         } else {
-            self.baseline_acc.add_baseline_relative(&metrics, vertical_align, None)
+            // Baseline-relative alignments (e.g., middle/sub/super/text-top) depend on the
+            // parent's font metrics. The strut represents the parent inline box, so thread it
+            // through to compute x-height/ascent-based offsets correctly.
+            self.baseline_acc
+                .add_baseline_relative(&metrics, vertical_align, Some(&self.strut_metrics))
         };
 
         let positioned = PositionedItem {
@@ -2569,7 +2606,7 @@ mod tests {
         let mut builder = make_builder(200.0);
 
         let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 80.0, 40.0), vec![]);
-        let inline_block = InlineBlockItem::new(fragment, Direction::Ltr, UnicodeBidi::Normal, 0.0, 0.0);
+        let inline_block = InlineBlockItem::new(fragment, Direction::Ltr, UnicodeBidi::Normal, 0.0, 0.0, true);
         builder.add_item(InlineItem::InlineBlock(inline_block));
 
         let lines = builder.finish();
@@ -2583,11 +2620,66 @@ mod tests {
         let line = FragmentNode::new_line(Rect::from_xywh(0.0, 5.0, 60.0, 10.0), 8.0, vec![]);
         let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 80.0, 20.0), vec![line]);
 
-        let inline_block = InlineBlockItem::new(fragment, Direction::Ltr, UnicodeBidi::Normal, 0.0, 0.0);
+        let inline_block = InlineBlockItem::new(fragment, Direction::Ltr, UnicodeBidi::Normal, 0.0, 0.0, true);
 
         // Baseline should be derived from the line (5 + 8 = 13) rather than the bottom border edge (20).
         assert!((inline_block.metrics.baseline_offset - 13.0).abs() < 0.001);
         assert!((inline_block.metrics.descent - 7.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn inline_block_baseline_falls_back_when_overflow_clips() {
+        // Even with a line box present, non-visible overflow forces the baseline to the bottom margin edge.
+        let line = FragmentNode::new_line(Rect::from_xywh(0.0, 2.0, 40.0, 8.0), 6.0, vec![]);
+        let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 16.0), vec![line]);
+        let inline_block = InlineBlockItem::new(
+            fragment,
+            Direction::Ltr,
+            UnicodeBidi::Normal,
+            0.0,
+            0.0,
+            false, // overflow != visible
+        );
+
+        assert!((inline_block.metrics.baseline_offset - 16.0).abs() < 0.001);
+        assert!((inline_block.metrics.descent - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn inline_block_baseline_falls_back_when_no_lines() {
+        // Overflow visible but no in-flow line boxes: baseline should be the bottom edge.
+        let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 30.0, 12.0), vec![]);
+        let inline_block = InlineBlockItem::new(fragment, Direction::Ltr, UnicodeBidi::Normal, 0.0, 0.0, true);
+
+        assert!((inline_block.metrics.baseline_offset - 12.0).abs() < 0.001);
+        assert!((inline_block.metrics.descent - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn inline_table_baseline_uses_first_row_baseline() {
+        // Simulate an inline-table fragment with two lines; baseline should come from the first line.
+        let line1 = FragmentNode::new(
+            Rect::from_xywh(0.0, 0.0, 20.0, 10.0),
+            FragmentContent::Line { baseline: 4.0 },
+            vec![],
+        );
+        let line2 = FragmentNode::new(
+            Rect::from_xywh(0.0, 10.0, 20.0, 10.0),
+            FragmentContent::Line { baseline: 6.0 },
+            vec![],
+        );
+        let mut style = ComputedStyle::default();
+        style.display = Display::InlineTable;
+        let fragment = FragmentNode::new_with_style(
+            Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
+            FragmentContent::Block { box_id: None },
+            vec![line1, line2],
+            Arc::new(style),
+        );
+        let inline_block = InlineBlockItem::new(fragment, Direction::Ltr, UnicodeBidi::Normal, 0.0, 0.0, true);
+
+        assert!((inline_block.metrics.baseline_offset - 4.0).abs() < 0.001);
+        assert!((inline_block.metrics.descent - 16.0).abs() < 0.001);
     }
 
     #[test]
@@ -2628,6 +2720,21 @@ mod tests {
     fn test_vertical_align_default() {
         let item = make_text_item("Test", 40.0);
         assert_eq!(item.vertical_align, VerticalAlign::Baseline);
+    }
+
+    #[test]
+    fn vertical_align_middle_uses_parent_strut_metrics() {
+        let mut item = make_text_item("Test", 40.0).with_vertical_align(VerticalAlign::Middle);
+        // Give the item predictable metrics to compare against the parent strut (which has x-height 6).
+        item.metrics = BaselineMetrics::new(12.0, 16.0, 12.0, 4.0);
+
+        let mut builder = make_builder(200.0);
+        builder.add_item(InlineItem::Text(item));
+        let lines = builder.finish();
+
+        // With parent x-height 6, middle shift = 12 - 8 + 3 = 7.
+        let first = &lines[0].items[0];
+        assert!((first.baseline_offset - 7.0).abs() < 1e-3);
     }
 
     #[test]

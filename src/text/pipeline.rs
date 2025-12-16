@@ -1658,14 +1658,9 @@ fn resolve_font_for_char(
     for entry in families {
         if let FamilyEntry::Generic(crate::text::font_db::GenericFamily::Math) = entry {
             for family in &math_families {
-                if let Some(font) = font_context.match_web_font_for_char(
-                    family,
-                    weight,
-                    style,
-                    stretch,
-                    oblique_angle,
-                    ch,
-                ) {
+                if let Some(font) =
+                    font_context.match_web_font_for_char(family, weight, style, stretch, oblique_angle, ch)
+                {
                     return Some(font);
                 }
                 for stretch_choice in &stretch_preferences {
@@ -2095,14 +2090,140 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
 /// ```
 #[derive(Debug, Default, Clone)]
 pub struct ShapingPipeline {
-    // Reserved for future caching/configuration
-    _private: (),
+    cache: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<ShapingCacheKey, std::sync::Arc<Vec<ShapedRun>>>>>,
+    style_hashes: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<usize, u64>>>,
+}
+
+#[derive(Clone, Eq, Debug)]
+struct ShapingCacheKey {
+    text: std::sync::Arc<str>,
+    style_hash: u64,
+}
+
+fn shaping_style_hash(style: &ComputedStyle) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+
+    std::mem::discriminant(&style.direction).hash(&mut hasher);
+    std::mem::discriminant(&style.unicode_bidi).hash(&mut hasher);
+    std::mem::discriminant(&style.writing_mode).hash(&mut hasher);
+    std::mem::discriminant(&style.text_orientation).hash(&mut hasher);
+    style.language.hash(&mut hasher);
+    style.font_family.hash(&mut hasher);
+    style.font_size.to_bits().hash(&mut hasher);
+    style.font_weight.to_u16().hash(&mut hasher);
+    style.font_stretch.to_percentage().to_bits().hash(&mut hasher);
+
+    match style.font_style {
+        CssFontStyle::Normal => 0u8.hash(&mut hasher),
+        CssFontStyle::Italic => 1u8.hash(&mut hasher),
+        CssFontStyle::Oblique(angle) => {
+            2u8.hash(&mut hasher);
+            angle.unwrap_or_default().to_bits().hash(&mut hasher);
+        }
+    }
+
+    std::mem::discriminant(&style.font_variant).hash(&mut hasher);
+    std::mem::discriminant(&style.font_variant_caps).hash(&mut hasher);
+    std::mem::discriminant(&style.font_variant_emoji).hash(&mut hasher);
+    std::mem::discriminant(&style.font_variant_position).hash(&mut hasher);
+    std::mem::discriminant(&style.font_variant_numeric.figure).hash(&mut hasher);
+    std::mem::discriminant(&style.font_variant_numeric.spacing).hash(&mut hasher);
+    std::mem::discriminant(&style.font_variant_numeric.fraction).hash(&mut hasher);
+    (style.font_variant_numeric.ordinal as u8).hash(&mut hasher);
+    (style.font_variant_numeric.slashed_zero as u8).hash(&mut hasher);
+
+    (style.font_variant_ligatures.common as u8).hash(&mut hasher);
+    (style.font_variant_ligatures.discretionary as u8).hash(&mut hasher);
+    (style.font_variant_ligatures.historical as u8).hash(&mut hasher);
+    (style.font_variant_ligatures.contextual as u8).hash(&mut hasher);
+
+    style.font_variant_alternates.historical_forms.hash(&mut hasher);
+    style.font_variant_alternates.stylistic.hash(&mut hasher);
+    style.font_variant_alternates.stylesets.hash(&mut hasher);
+
+    match style.font_variant_east_asian.variant {
+        Some(var) => {
+            1u8.hash(&mut hasher);
+            std::mem::discriminant(&var).hash(&mut hasher);
+        }
+        None => 0u8.hash(&mut hasher),
+    }
+    match style.font_variant_east_asian.width {
+        Some(width) => {
+            1u8.hash(&mut hasher);
+            std::mem::discriminant(&width).hash(&mut hasher);
+        }
+        None => 0u8.hash(&mut hasher),
+    }
+    (style.font_variant_east_asian.ruby as u8).hash(&mut hasher);
+
+    std::mem::discriminant(&style.font_kerning).hash(&mut hasher);
+    (style.font_synthesis.weight as u8).hash(&mut hasher);
+    (style.font_synthesis.style as u8).hash(&mut hasher);
+    (style.font_synthesis.small_caps as u8).hash(&mut hasher);
+    (style.font_synthesis.position as u8).hash(&mut hasher);
+    std::mem::discriminant(&style.font_optical_sizing).hash(&mut hasher);
+
+    match style.font_language_override.clone() {
+        FontLanguageOverride::Normal => 0u8.hash(&mut hasher),
+        FontLanguageOverride::Override(tag) => {
+            1u8.hash(&mut hasher);
+            tag.hash(&mut hasher);
+        }
+    }
+
+    match style.font_size_adjust {
+        FontSizeAdjust::None => 0u8.hash(&mut hasher),
+        FontSizeAdjust::Number(v) => {
+            1u8.hash(&mut hasher);
+            v.to_bits().hash(&mut hasher);
+        }
+        FontSizeAdjust::FromFont => 2u8.hash(&mut hasher),
+    }
+
+    for setting in &style.font_feature_settings {
+        setting.tag.hash(&mut hasher);
+        setting.value.hash(&mut hasher);
+    }
+    for setting in &style.font_variation_settings {
+        setting.tag.hash(&mut hasher);
+        setting.value.to_bits().hash(&mut hasher);
+    }
+
+    hasher.finish()
+}
+
+impl std::hash::Hash for ShapingCacheKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.style_hash.hash(state);
+        self.text.hash(state);
+    }
+}
+
+impl PartialEq for ShapingCacheKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.style_hash == other.style_hash && self.text.as_ref() == other.text.as_ref()
+    }
 }
 
 impl ShapingPipeline {
     /// Creates a new shaping pipeline.
     pub fn new() -> Self {
-        Self { _private: () }
+        Self {
+            cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            style_hashes: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        }
+    }
+
+    /// Clears the shaping cache. Useful when reusing a pipeline across multiple documents.
+    pub fn clear_cache(&self) {
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.clear();
+        }
+        if let Ok(mut hashes) = self.style_hashes.lock() {
+            hashes.clear();
+        }
     }
 
     /// Shapes text into positioned glyphs.
@@ -2151,6 +2272,23 @@ impl ShapingPipeline {
         {
             if !has_native_small_caps(style, font_context) && style.font_synthesis.small_caps {
                 return self.shape_small_caps(text, style, font_context, base_direction, explicit_bidi);
+            }
+        }
+
+        let cache_text = std::sync::Arc::<str>::from(text);
+        let style_ptr = style as *const ComputedStyle as usize;
+        let style_hash = if let Ok(mut hashes) = self.style_hashes.lock() {
+            *hashes.entry(style_ptr).or_insert_with(|| shaping_style_hash(style))
+        } else {
+            shaping_style_hash(style)
+        };
+        let cache_key = ShapingCacheKey {
+            text: cache_text.clone(),
+            style_hash,
+        };
+        if let Ok(cache) = self.cache.lock() {
+            if let Some(cached) = cache.get(&cache_key) {
+                return Ok((**cached).clone());
             }
         }
 
@@ -2204,6 +2342,10 @@ impl ShapingPipeline {
         // Step 5: Reorder for bidi if needed
         if bidi.needs_reordering() {
             reorder_runs(&mut shaped_runs, bidi.paragraphs());
+        }
+
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.insert(cache_key, std::sync::Arc::new(shaped_runs.clone()));
         }
 
         Ok(shaped_runs)

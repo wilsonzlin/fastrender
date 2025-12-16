@@ -128,7 +128,7 @@ impl ToCss for PseudoClass {
 // ============================================================================
 
 /// Pseudo-elements we support
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PseudoElement {
     Before,
     After,

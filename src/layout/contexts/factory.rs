@@ -29,6 +29,7 @@ use crate::layout::formatting_context::{FormattingContext, LayoutError};
 use crate::layout::table::TableFormattingContext;
 use crate::style::display::FormattingContextType;
 use crate::text::font_loader::FontContext;
+use crate::text::pipeline::ShapingPipeline;
 use crate::tree::box_tree::BoxNode;
 
 // =============================================================================
@@ -67,6 +68,22 @@ pub struct FormattingContextFactory {
     font_context: FontContext,
     viewport_size: crate::geometry::Size,
     nearest_positioned_cb: ContainingBlock,
+    flex_measure_cache: std::sync::Arc<std::sync::Mutex<crate::layout::contexts::flex::FlexMeasureCache>>,
+    flex_layout_cache: std::sync::Arc<
+        std::sync::Mutex<
+            std::collections::HashMap<
+                u64,
+                std::collections::HashMap<
+                    (Option<u32>, Option<u32>),
+                    (
+                        crate::geometry::Size,
+                        std::sync::Arc<crate::tree::fragment_tree::FragmentNode>,
+                    ),
+                >,
+            >,
+        >,
+    >,
+    shaping_pipeline: crate::text::pipeline::ShapingPipeline,
 }
 
 impl std::fmt::Debug for FormattingContextFactory {
@@ -106,10 +123,44 @@ impl FormattingContextFactory {
         viewport_size: crate::geometry::Size,
         nearest_positioned_cb: ContainingBlock,
     ) -> Self {
+        Self::with_font_context_viewport_cb_and_cache(
+            font_context,
+            viewport_size,
+            nearest_positioned_cb,
+            std::sync::Arc::new(std::sync::Mutex::new(
+                crate::layout::contexts::flex::FlexMeasureCache::new(),
+            )),
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        )
+    }
+
+    pub fn with_font_context_viewport_cb_and_cache(
+        font_context: FontContext,
+        viewport_size: crate::geometry::Size,
+        nearest_positioned_cb: ContainingBlock,
+        flex_measure_cache: std::sync::Arc<std::sync::Mutex<crate::layout::contexts::flex::FlexMeasureCache>>,
+        flex_layout_cache: std::sync::Arc<
+            std::sync::Mutex<
+                std::collections::HashMap<
+                    u64,
+                    std::collections::HashMap<
+                        (Option<u32>, Option<u32>),
+                        (
+                            crate::geometry::Size,
+                            std::sync::Arc<crate::tree::fragment_tree::FragmentNode>,
+                        ),
+                    >,
+                >,
+            >,
+        >,
+    ) -> Self {
         Self {
             font_context,
             viewport_size,
             nearest_positioned_cb,
+            flex_measure_cache,
+            flex_layout_cache,
+            shaping_pipeline: ShapingPipeline::new(),
         }
     }
 
@@ -118,6 +169,17 @@ impl FormattingContextFactory {
         let mut clone = self.clone();
         clone.nearest_positioned_cb = cb;
         clone
+    }
+
+    /// Clears any shared caches held by formatting contexts.
+    pub fn reset_caches(&self) {
+        if let Ok(mut cache) = self.flex_measure_cache.lock() {
+            cache.clear();
+        }
+        if let Ok(mut cache) = self.flex_layout_cache.lock() {
+            cache.clear();
+        }
+        self.shaping_pipeline.clear_cache();
     }
 
     /// Returns the font context backing formatting context construction.
@@ -187,15 +249,20 @@ impl FormattingContextFactory {
                 self.viewport_size,
                 self.nearest_positioned_cb,
             )),
-            FormattingContextType::Inline => Box::new(InlineFormattingContext::with_font_context_viewport_and_cb(
-                self.font_context.clone(),
-                self.viewport_size,
-                self.nearest_positioned_cb,
-            )),
+            FormattingContextType::Inline => {
+                Box::new(InlineFormattingContext::with_font_context_viewport_cb_and_pipeline(
+                    self.font_context.clone(),
+                    self.viewport_size,
+                    self.nearest_positioned_cb,
+                    self.shaping_pipeline.clone(),
+                ))
+            }
             FormattingContextType::Flex => Box::new(FlexFormattingContext::with_viewport_and_cb(
                 self.viewport_size,
                 self.nearest_positioned_cb,
                 self.font_context.clone(),
+                self.flex_measure_cache.clone(),
+                self.flex_layout_cache.clone(),
             )),
             FormattingContextType::Grid => Box::new(GridFormattingContext::with_viewport_and_cb(
                 self.viewport_size,

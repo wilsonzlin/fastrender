@@ -37,6 +37,7 @@ use crate::layout::contexts::table::column_distribution::{
     DistributionMode,
 };
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
+use crate::layout::profile::{layout_timer, LayoutKind};
 use crate::style::color::Rgba;
 use crate::style::computed::Visibility;
 use crate::style::display::Display;
@@ -47,7 +48,7 @@ use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::{BoxNode, BoxType, MarkerContent};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 // ============================================================================
 // Table Structure Types
@@ -108,6 +109,15 @@ pub struct ColumnInfo {
     /// Source column index prior to any filtering (0-based)
     pub source_index: usize,
 
+    /// Author-specified minimum width (from `min-width` on <col>/<colgroup>)
+    pub author_min_width: Option<crate::style::values::Length>,
+
+    /// Author-specified maximum width (from `max-width` on <col>/<colgroup>)
+    pub author_max_width: Option<crate::style::values::Length>,
+
+    /// Font size to resolve relative column lengths (em/rem)
+    pub font_size: f32,
+
     /// Visibility state for this column
     pub visibility: Visibility,
 
@@ -130,12 +140,123 @@ impl ColumnInfo {
         Self {
             index,
             source_index: index,
+            author_min_width: None,
+            author_max_width: None,
+            font_size: 0.0,
             visibility: Visibility::Visible,
             specified_width: None,
             min_width: 0.0,
             max_width: f32::INFINITY,
             computed_width: 0.0,
         }
+    }
+}
+
+/// Distribute a spanning cell's minimum width across the covered columns.
+///
+/// Extra width is allocated proportionally to each column's remaining growth
+/// (max - min). If no column has remaining capacity, the remainder is spread
+/// evenly and max widths are lifted to stay ≥ min.
+fn distribute_span_min(columns: &mut [ColumnInfo], start: usize, end: usize, required_min: f32) {
+    if start >= end || end > columns.len() {
+        return;
+    }
+    let span = &mut columns[start..end];
+    let current: f32 = span.iter().map(|c| c.min_width).sum();
+    if required_min <= current {
+        return;
+    }
+    let deficit = required_min - current;
+
+    let capacities: Vec<f32> = span
+        .iter()
+        .map(|c| {
+            let cap = c.max_width - c.min_width;
+            if cap.is_finite() && cap > 0.0 {
+                cap
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    let total_cap: f32 = capacities.iter().sum();
+    let mut remaining = deficit;
+
+    if total_cap > 0.0 {
+        let mut allocated = 0.0;
+        for (col, cap) in span.iter_mut().zip(capacities.iter()) {
+            if *cap > 0.0 {
+                let share = deficit * (*cap / total_cap);
+                let growth = share.min(*cap);
+                col.min_width += growth;
+                allocated += growth;
+            }
+        }
+        remaining = (deficit - allocated).max(0.0);
+    }
+
+    if remaining > 0.0 {
+        let per = remaining / span.len() as f32;
+        for col in span.iter_mut() {
+            col.min_width += per;
+        }
+    }
+
+    for col in span.iter_mut() {
+        col.max_width = col.max_width.max(col.min_width);
+    }
+}
+
+/// Distribute a spanning cell's maximum width across the covered columns.
+///
+/// Extra preferred width is allocated using each column's flexibility
+/// (max - min). If no flexibility exists, the remainder is spread evenly.
+fn distribute_span_max(columns: &mut [ColumnInfo], start: usize, end: usize, required_max: f32) {
+    if !required_max.is_finite() || start >= end || end > columns.len() {
+        return;
+    }
+    let span = &mut columns[start..end];
+    let current: f32 = span.iter().map(|c| c.max_width).sum();
+    if required_max <= current {
+        return;
+    }
+    let deficit = required_max - current;
+
+    let flex_ranges: Vec<f32> = span
+        .iter()
+        .map(|c| {
+            let range = c.max_width - c.min_width;
+            if range.is_finite() && range > 0.0 {
+                range
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    let total_flex: f32 = flex_ranges.iter().sum();
+    let mut remaining = deficit;
+
+    if total_flex > 0.0 {
+        let mut allocated = 0.0;
+        for (col, range) in span.iter_mut().zip(flex_ranges.iter()) {
+            if *range > 0.0 {
+                let growth = deficit * (*range / total_flex);
+                col.max_width += growth;
+                allocated += growth;
+            }
+        }
+        remaining = (deficit - allocated).max(0.0);
+    }
+
+    if remaining > 0.0 {
+        let per = remaining / span.len() as f32;
+        for col in span.iter_mut() {
+            col.max_width += per;
+        }
+    }
+
+    for col in span.iter_mut() {
+        col.max_width = col.max_width.max(col.min_width);
     }
 }
 
@@ -231,6 +352,7 @@ fn distribute_rowspan_targets(
     remaining: f32,
     percent_base: Option<f32>,
     row_floor: &dyn Fn(usize, f32) -> f32,
+    combine: &dyn Fn(f32, f32) -> f32,
 ) {
     if targets.is_empty() || remaining <= 0.0 {
         return;
@@ -325,7 +447,7 @@ fn distribute_rowspan_targets(
 
     for (target_idx, share) in targets.iter().zip(shares.iter()) {
         if let Some(slot) = row_heights.get_mut(*target_idx) {
-            *slot = slot.max(*share);
+            *slot = combine(*slot, *share);
         }
     }
 }
@@ -1082,7 +1204,9 @@ impl TableStructure {
 
         // Initialize columns
         for i in 0..structure.column_count {
-            structure.columns.push(ColumnInfo::new(i));
+            let mut col = ColumnInfo::new(i);
+            col.font_size = table_box.style.font_size;
+            structure.columns.push(col);
         }
 
         // Apply column widths from <col>/<colgroup> if present
@@ -1093,10 +1217,15 @@ impl TableStructure {
                     let span = child.debug_info.as_ref().map(|d| d.column_span).unwrap_or(1).max(1);
                     for _ in 0..span {
                         if col_cursor >= structure.columns.len() {
-                            structure.columns.push(ColumnInfo::new(col_cursor));
+                            let mut col = ColumnInfo::new(col_cursor);
+                            col.font_size = child.style.font_size;
+                            structure.columns.push(col);
                         }
                         if let Some(col) = structure.columns.get_mut(col_cursor) {
                             col.visibility = child.style.visibility;
+                            col.author_min_width = child.style.min_width.clone();
+                            col.author_max_width = child.style.max_width.clone();
+                            col.font_size = child.style.font_size;
                             if let Some(width) = &child.style.width {
                                 col.specified_width = Some(Self::length_to_specified_width(width));
                             }
@@ -1118,7 +1247,9 @@ impl TableStructure {
                                     .max(1);
                                 for _ in 0..span {
                                     if col_cursor >= structure.columns.len() {
-                                        structure.columns.push(ColumnInfo::new(col_cursor));
+                                        let mut col = ColumnInfo::new(col_cursor);
+                                        col.font_size = group_child.style.font_size;
+                                        structure.columns.push(col);
                                     }
                                     if let Some(col) = structure.columns.get_mut(col_cursor) {
                                         col.visibility = if matches!(group_visibility, Visibility::Collapse) {
@@ -1126,6 +1257,9 @@ impl TableStructure {
                                         } else {
                                             group_child.style.visibility
                                         };
+                                        col.author_min_width = group_child.style.min_width.clone();
+                                        col.author_max_width = group_child.style.max_width.clone();
+                                        col.font_size = group_child.style.font_size;
                                         if let Some(width) = &group_child.style.width {
                                             col.specified_width = Some(Self::length_to_specified_width(width));
                                         }
@@ -1138,10 +1272,15 @@ impl TableStructure {
                         let span = child.debug_info.as_ref().map(|d| d.column_span).unwrap_or(1).max(1);
                         for _ in 0..span {
                             if col_cursor >= structure.columns.len() {
-                                structure.columns.push(ColumnInfo::new(col_cursor));
+                                let mut col = ColumnInfo::new(col_cursor);
+                                col.font_size = child.style.font_size;
+                                structure.columns.push(col);
                             }
                             if let Some(col) = structure.columns.get_mut(col_cursor) {
                                 col.visibility = child.style.visibility;
+                                col.author_min_width = child.style.min_width.clone();
+                                col.author_max_width = child.style.max_width.clone();
+                                col.font_size = child.style.font_size;
                                 if let Some(width) = &child.style.width {
                                     col.specified_width = Some(Self::length_to_specified_width(width));
                                 }
@@ -1441,6 +1580,11 @@ impl Default for TableStructure {
 }
 
 fn resolve_border_spacing_length(length: &crate::style::values::Length, font_size: f32) -> f32 {
+    if length.unit == LengthUnit::Calc {
+        return length
+            .resolve_with_context(None, 0.0, 0.0, font_size, font_size)
+            .unwrap_or(0.0);
+    }
     match length.unit {
         LengthUnit::Em | LengthUnit::Rem => length.value * font_size,
         _ if length.unit.is_absolute() => length.to_px(),
@@ -1461,6 +1605,15 @@ fn resolve_length_against(
     font_size: f32,
     containing_width: Option<f32>,
 ) -> Option<f32> {
+    if length.unit == LengthUnit::Calc {
+        return length.resolve_with_context(
+            containing_width,
+            containing_width.unwrap_or(0.0),
+            0.0,
+            font_size,
+            font_size,
+        );
+    }
     match length.unit {
         LengthUnit::Percent => containing_width.map(|w| (length.value / 100.0) * w),
         LengthUnit::Em | LengthUnit::Rem => Some(length.value * font_size),
@@ -1510,6 +1663,35 @@ fn horizontal_padding(style: &crate::style::ComputedStyle) -> f32 {
     };
 
     resolve_abs(&style.padding_left) + resolve_abs(&style.padding_right)
+}
+
+/// Computes the grid line centers and item start offsets for the collapsed border model.
+/// Line widths are centered on the grid lines; outer lines contribute half their width to
+/// the measured extent so the remaining half may spill into the table's margin area
+/// (CSS 2.2 §17.6.2).
+fn collapsed_line_positions(
+    sizes: &[f32],
+    line_widths: &[f32],
+    padding_start: f32,
+    padding_end: f32,
+) -> (Vec<f32>, Vec<f32>, f32) {
+    debug_assert!(line_widths.len() >= sizes.len().saturating_add(1));
+
+    let mut line_pos = Vec::with_capacity(sizes.len() + 1);
+    let mut offsets = Vec::with_capacity(sizes.len());
+    let mut cursor = padding_start;
+    line_pos.push(cursor);
+
+    for (idx, size) in sizes.iter().enumerate() {
+        let prev_half = line_widths.get(idx).copied().unwrap_or(0.0) * 0.5;
+        let next_half = line_widths.get(idx + 1).copied().unwrap_or(0.0) * 0.5;
+        offsets.push(cursor + prev_half);
+        cursor += prev_half + size + next_half;
+        line_pos.push(cursor);
+    }
+
+    let extent = cursor + padding_end;
+    (line_pos, offsets, extent)
 }
 
 /// Splits a spanning cell's baseline so the portion below the baseline is
@@ -1640,17 +1822,21 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
             return BorderCandidate::none();
         }
 
-        // CSS 2.2 border conflict resolution (17.6.2.1): width wins first, then style,
-        // then element type, then physical position (left/top in LTR, right/top in RTL).
+        // CSS 2.2 border conflict resolution (17.6.2.1):
+        // 1) hidden wins (handled above)
+        // 2) highest priority style wins
+        // 3) if styles tie, pick the greatest width
+        // 4) if still tied, prefer the element type (cell > row > row group > column > column group > table)
+        // 5) finally, choose the border that is physically first (top, then left/right per direction) and source order.
+        let best_style = non_none.iter().map(|c| style_rank(c.style)).max().unwrap_or(0);
+        non_none.retain(|c| style_rank(c.style) == best_style);
+
         let max_width = non_none
             .iter()
             .map(|c| c.width)
             .fold(0.0f32, |acc, w| if w > acc { w } else { acc });
         let width_epsilon = 1e-6f32;
         non_none.retain(|c| (c.width - max_width).abs() <= width_epsilon);
-
-        let best_style = non_none.iter().map(|c| style_rank(c.style)).max().unwrap_or(0);
-        non_none.retain(|c| style_rank(c.style) == best_style);
 
         let best_origin = non_none.iter().map(|c| origin_priority(c.origin)).max().unwrap_or(0);
         non_none.retain(|c| origin_priority(c.origin) == best_origin);
@@ -2164,6 +2350,9 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
 
 fn find_first_baseline(fragment: &FragmentNode, parent_offset: f32) -> Option<f32> {
     let origin = parent_offset + fragment.bounds.y();
+    if let Some(baseline) = fragment.baseline {
+        return Some(origin + baseline);
+    }
     match &fragment.content {
         FragmentContent::Line { baseline } => return Some(origin + *baseline),
         FragmentContent::Text { baseline_offset, .. } => return Some(origin + *baseline_offset),
@@ -2264,6 +2453,14 @@ pub fn calculate_fixed_layout_widths(structure: &mut TableStructure, available_w
     let spacing = structure.total_horizontal_spacing();
     let content_width = (available_width - spacing).max(0.0);
 
+    let clamp = |width: f32, min: f32, max: f32| -> f32 {
+        let mut w = width.max(min);
+        if max.is_finite() {
+            w = w.min(max);
+        }
+        w
+    };
+
     // Phase 1: Collect specified widths
     let mut specified_total = 0.0;
     let mut auto_count = 0;
@@ -2286,11 +2483,114 @@ pub fn calculate_fixed_layout_widths(structure: &mut TableStructure, available_w
 
     // Phase 3: Assign computed widths
     for col in &mut structure.columns {
-        col.computed_width = match col.specified_width {
+        let raw = match col.specified_width {
             Some(SpecifiedWidth::Fixed(w)) => w,
             Some(SpecifiedWidth::Percent(p)) => content_width * p / 100.0,
             _ => auto_width,
         };
+        col.computed_width = clamp(raw, col.min_width, col.max_width);
+    }
+
+    // Phase 4: Normalize to available width while respecting min/max.
+    let total: f32 = structure.columns.iter().map(|c| c.computed_width).sum();
+    if total > content_width + 0.01 {
+        // Shrink auto columns first; if only percentages/fixed remain, allow overflow (CSS fixed layout permits overrun).
+        let mut shrink = total - content_width;
+        let shrink_pass = |cols: &mut [ColumnInfo], shrink: &mut f32, predicate: &dyn Fn(&ColumnInfo) -> bool| {
+            if *shrink <= 0.0 {
+                return;
+            }
+            let mut headroom_total = 0.0;
+            let mut headrooms = Vec::with_capacity(cols.len());
+            for col in cols.iter() {
+                if !predicate(col) {
+                    headrooms.push(0.0);
+                    continue;
+                }
+                let room = (col.computed_width - col.min_width).max(0.0);
+                headrooms.push(room);
+                headroom_total += room;
+            }
+            if headroom_total <= 0.0 {
+                return;
+            }
+            for (col, room) in cols.iter_mut().zip(headrooms.into_iter()) {
+                if room <= 0.0 {
+                    continue;
+                }
+                let delta = (*shrink * (room / headroom_total)).min(room);
+                col.computed_width -= delta;
+                *shrink -= delta;
+                if *shrink <= 0.0 {
+                    break;
+                }
+            }
+        };
+
+        // Prefer shrinking only auto columns. Percent/fixed columns may legitimately overrun.
+        shrink_pass(&mut structure.columns, &mut shrink, &|c: &ColumnInfo| {
+            matches!(c.specified_width, None)
+        });
+    } else if total + 0.01 < content_width {
+        // Grow flexible columns up to their max, leave remaining slack unused if max caps are hit.
+        let mut extra = content_width - total;
+        let grow_pass = |cols: &mut [ColumnInfo], extra: &mut f32, predicate: &dyn Fn(&ColumnInfo) -> bool| {
+            if *extra <= 0.0 {
+                return;
+            }
+            let mut headroom_total = 0.0;
+            let mut has_infinite = false;
+            let mut headrooms = Vec::with_capacity(cols.len());
+            for col in cols.iter() {
+                if !predicate(col) {
+                    headrooms.push(0.0);
+                    continue;
+                }
+                let cap = if col.max_width.is_finite() {
+                    (col.max_width - col.computed_width).max(0.0)
+                } else {
+                    f32::INFINITY
+                };
+                headrooms.push(cap);
+                if cap.is_finite() {
+                    headroom_total += cap;
+                } else {
+                    has_infinite = true;
+                }
+            }
+            if headroom_total > 0.0 {
+                for (col, cap) in cols.iter_mut().zip(headrooms.iter()) {
+                    if !cap.is_finite() || *cap <= 0.0 {
+                        continue;
+                    }
+                    let delta = (*extra * (*cap / headroom_total)).min(*cap);
+                    col.computed_width += delta;
+                    *extra -= delta;
+                }
+            } else if has_infinite {
+                // Only unconstrained columns can grow; spread evenly across those.
+                let eligible: Vec<_> = cols
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| predicate(c) && !c.max_width.is_finite())
+                    .map(|(i, _)| i)
+                    .collect();
+                if !eligible.is_empty() {
+                    let per = *extra / eligible.len() as f32;
+                    for idx in eligible {
+                        cols[idx].computed_width += per;
+                    }
+                    *extra = 0.0;
+                }
+            }
+        };
+
+        // Grow auto/percent columns first.
+        grow_pass(&mut structure.columns, &mut extra, &|c: &ColumnInfo| {
+            !matches!(c.specified_width, Some(SpecifiedWidth::Fixed(_)))
+        });
+        // Then any columns with remaining headroom.
+        grow_pass(&mut structure.columns, &mut extra, &|_c| true);
     }
 }
 
@@ -2324,7 +2624,12 @@ pub fn calculate_auto_layout_widths(structure: &mut TableStructure, available_wi
         if cell.colspan == 1 {
             let col = &mut structure.columns[cell.col];
             col.min_width = col.min_width.max(cell.min_width);
-            col.max_width = col.max_width.min(cell.max_width).max(col.min_width);
+            let cell_max = cell.max_width.max(col.min_width);
+            col.max_width = if col.max_width.is_finite() {
+                col.max_width.max(cell_max)
+            } else {
+                cell_max
+            };
         }
     }
 
@@ -2335,67 +2640,8 @@ pub fn calculate_auto_layout_widths(structure: &mut TableStructure, available_wi
             let span_start = cell.col;
             let span_end = (cell.col + cell.colspan).min(structure.column_count);
 
-            let current_min: f32 = structure.columns[span_start..span_end]
-                .iter()
-                .map(|c| c.min_width)
-                .sum();
-
-            // If cell needs more, distribute proportionally
-            if cell.min_width > current_min {
-                let extra = cell.min_width - current_min;
-                let weights: Vec<f32> = structure.columns[span_start..span_end]
-                    .iter()
-                    .map(|c| c.min_width.max(0.0))
-                    .collect();
-                let weight_sum: f32 = weights.iter().sum();
-                let default_weight = if weight_sum == 0.0 {
-                    1.0 / (span_end - span_start) as f32
-                } else {
-                    0.0
-                };
-                for (idx, col) in structure.columns[span_start..span_end].iter_mut().enumerate() {
-                    let weight = if weight_sum == 0.0 {
-                        default_weight
-                    } else {
-                        weights[idx] / weight_sum
-                    };
-                    col.min_width += extra * weight;
-                }
-            }
-
-            // Distribute additional max width if the cell's max exceeds the span total.
-            let current_max: f32 = structure.columns[span_start..span_end]
-                .iter()
-                .map(|c| c.max_width)
-                .sum();
-            if cell.max_width.is_finite() && cell.max_width > current_max {
-                let extra = cell.max_width - current_max;
-                let weights: Vec<f32> = structure.columns[span_start..span_end]
-                    .iter()
-                    .map(|c| {
-                        c.max_width
-                            .is_finite()
-                            .then_some(c.max_width)
-                            .unwrap_or(c.min_width)
-                            .max(0.0)
-                    })
-                    .collect();
-                let weight_sum: f32 = weights.iter().sum();
-                let default_weight = if weight_sum == 0.0 {
-                    1.0 / (span_end - span_start) as f32
-                } else {
-                    0.0
-                };
-                for (idx, col) in structure.columns[span_start..span_end].iter_mut().enumerate() {
-                    let weight = if weight_sum == 0.0 {
-                        default_weight
-                    } else {
-                        weights[idx] / weight_sum
-                    };
-                    // Keep max at least as large as min.
-                    col.max_width = (col.max_width + extra * weight).max(col.min_width);
-                }
-            }
+            distribute_span_min(&mut structure.columns, span_start, span_end, cell.min_width);
+            distribute_span_max(&mut structure.columns, span_start, span_end, cell.max_width);
         }
     }
 
@@ -2546,6 +2792,7 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
                     remaining,
                     percent_base,
                     &row_floor_fn,
+                    &|current, share| current.max(share),
                 );
                 for (idx, val) in mins.into_iter().enumerate() {
                     if let Some(row) = structure.rows.get_mut(idx) {
@@ -2644,7 +2891,8 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
     // Phase 4: calculate positions using the computed heights.
     let mut y = spacing;
     for (idx, row) in structure.rows.iter_mut().enumerate() {
-        row.computed_height = computed.get(idx).copied().unwrap_or(0.0);
+        let h = computed.get(idx).copied().unwrap_or(0.0);
+        row.computed_height = if h.is_finite() { h.max(0.0) } else { 0.0 };
         row.y_position = y;
         y += row.computed_height + spacing;
     }
@@ -2774,23 +3022,60 @@ impl TableFormattingContext {
             let Some(cell_box) = self.get_cell_box(table_box, cell) else {
                 continue;
             };
-            let (min_w, max_w) = match mode {
+            let width_decl = cell_box.style.width.as_ref();
+            let width_is_percent = matches!(width_decl.map(|w| w.unit), Some(LengthUnit::Percent));
+            let (mut min_w, mut max_w) = match mode {
                 DistributionMode::Fixed => (0.0, f32::INFINITY), // content is ignored in fixed layout
                 _ => self.measure_cell_intrinsic_widths(cell_box, structure.border_collapse),
             };
+            let mut has_max_cap = false;
+            // Apply min-width/max-width from the cell itself. Percentages only participate when the
+            // table width is definite per CSS 2.1 §10.4 (percentage on width/min/max). Clamp max to
+            // remain ≥ min so constraints stay sane.
+            if let Some(min_len) = cell_box
+                .style
+                .min_width
+                .as_ref()
+                .and_then(|len| resolve_length_against(len, cell_box.style.font_size, percent_base))
+            {
+                min_w = min_w.max(min_len);
+                max_w = max_w.max(min_w);
+            }
+            if let Some(max_len) = cell_box
+                .style
+                .max_width
+                .as_ref()
+                .and_then(|len| resolve_length_against(len, cell_box.style.font_size, percent_base))
+            {
+                let cap = max_len.max(min_w);
+                max_w = if max_w.is_finite() { max_w.min(cap) } else { cap };
+                max_w = max_w.max(min_w);
+                has_max_cap = true;
+            }
+            let effective_max = if has_max_cap { max_w } else { f32::INFINITY };
             let specified_width = cell_box.style.width.as_ref().and_then(|width| match width.unit {
-                LengthUnit::Percent => percent_base.map(|base| (width.value / 100.0) * base),
-                _ => Some(width.to_px()),
+                LengthUnit::Percent => {
+                    percent_base.map(|base| ((width.value / 100.0) * base).clamp(min_w, effective_max))
+                }
+                _ => Some(width.to_px().clamp(min_w, effective_max)),
             });
+            let span_specified_width = if width_is_percent && cell.colspan > 1 {
+                None
+            } else {
+                specified_width
+            };
 
             if cell.colspan == 1 {
-                if let Some(width) = &cell_box.style.width {
+                if let Some(width) = width_decl {
                     match width.unit {
                         LengthUnit::Percent if percent_base.is_some() => {
                             let col = &mut constraints[cell.col];
                             col.set_percentage(width.value);
                             col.min_width = col.min_width.max(min_w);
                             col.max_width = col.max_width.max(max_w);
+                            if has_max_cap {
+                                col.has_max_cap = true;
+                            }
                             continue;
                         }
                         LengthUnit::Percent => {
@@ -2799,11 +3084,14 @@ impl TableFormattingContext {
                             col.max_width = col.max_width.max(max_w);
                         }
                         _ => {
-                            let px = width.to_px().max(min_w);
+                            let px = width.to_px().clamp(min_w, effective_max);
                             let col = &mut constraints[cell.col];
                             col.fixed_width = Some(px);
                             col.min_width = col.min_width.max(min_w);
                             col.max_width = col.max_width.max(px.max(max_w));
+                            if has_max_cap {
+                                col.has_max_cap = true;
+                            }
                             continue;
                         }
                     }
@@ -2812,20 +3100,23 @@ impl TableFormattingContext {
                 let col = &mut constraints[cell.col];
                 col.min_width = col.min_width.max(min_w);
                 col.max_width = col.max_width.max(max_w);
+                if has_max_cap {
+                    col.has_max_cap = true;
+                }
             } else {
                 let start = cell.col;
                 let end = (cell.col + cell.colspan).min(constraints.len());
-                if let Some(width) = &cell_box.style.width {
-                    if let LengthUnit::Percent = width.unit {
-                        if percent_base.is_some() {
-                            // Split percentage across spanned columns so the span consumes its share of the table width.
-                            distribute_spanning_percentage(constraints, start, end, width.value);
-                        }
+                if width_is_percent && percent_base.is_some() {
+                    distribute_spanning_percentage(constraints, start, end, width_decl.unwrap().value);
+                }
+                let target_min = span_specified_width.unwrap_or(min_w);
+                let target_max = span_specified_width.unwrap_or(max_w);
+                distribute_spanning_cell_width(constraints, start, end, target_min, target_max);
+                if has_max_cap {
+                    for col in constraints.iter_mut().take(end).skip(start) {
+                        col.has_max_cap = true;
                     }
                 }
-                let target_min = specified_width.map(|w| min_w.max(w)).unwrap_or(min_w);
-                let target_max = specified_width.map(|w| max_w.max(w)).unwrap_or(max_w);
-                distribute_spanning_cell_width(constraints, start, end, target_min, target_max);
             }
         }
 
@@ -2833,6 +3124,11 @@ impl TableFormattingContext {
         for (i, col_info) in structure.columns.iter().enumerate() {
             let Some(constraint) = constraints.get_mut(i) else {
                 continue;
+            };
+            let font_size = if col_info.font_size > 0.0 {
+                col_info.font_size
+            } else {
+                table_box.style.font_size
             };
             if let Some(specified) = col_info.specified_width {
                 match specified {
@@ -2853,6 +3149,28 @@ impl TableFormattingContext {
                     SpecifiedWidth::Auto => {}
                 }
             }
+            if let Some(min_len) = col_info
+                .author_min_width
+                .as_ref()
+                .and_then(|len| resolve_length_against(len, font_size, percent_base))
+            {
+                constraint.min_width = constraint.min_width.max(min_len);
+                constraint.max_width = constraint.max_width.max(constraint.min_width);
+            }
+            if let Some(max_len) = col_info
+                .author_max_width
+                .as_ref()
+                .and_then(|len| resolve_length_against(len, font_size, percent_base))
+            {
+                let cap = max_len.max(constraint.min_width);
+                constraint.max_width = if constraint.max_width.is_finite() {
+                    constraint.max_width.min(cap)
+                } else {
+                    cap
+                };
+                constraint.max_width = constraint.max_width.max(constraint.min_width);
+                constraint.has_max_cap = true;
+            }
         }
     }
 
@@ -2870,14 +3188,26 @@ impl TableFormattingContext {
         if hide_empty {
             let mut style = (*cloned.style).clone();
             style.reset_background_to_initial();
-            style.border_left_width = crate::style::values::Length::px(0.0);
-            style.border_right_width = crate::style::values::Length::px(0.0);
-            style.border_top_width = crate::style::values::Length::px(0.0);
-            style.border_bottom_width = crate::style::values::Length::px(0.0);
-            style.border_left_style = BorderStyle::None;
-            style.border_right_style = BorderStyle::None;
-            style.border_top_style = BorderStyle::None;
-            style.border_bottom_style = BorderStyle::None;
+            // Hide borders without affecting layout: keep widths/styles but make them transparent.
+            style.border_left_color = Rgba::TRANSPARENT;
+            style.border_right_color = Rgba::TRANSPARENT;
+            style.border_top_color = Rgba::TRANSPARENT;
+            style.border_bottom_color = Rgba::TRANSPARENT;
+            cloned.style = std::sync::Arc::new(style);
+        }
+
+        // The cell's used width is the computed column width; authored widths have already been
+        // accounted for during column distribution, so clear them here to avoid double-applying
+        // percentages/lengths. Table cells don't participate in margin resolution, so zero them.
+        {
+            let mut style = (*cloned.style).clone();
+            style.width = None;
+            style.min_width = None;
+            style.max_width = None;
+            style.margin_left = Some(Length::px(0.0));
+            style.margin_right = Some(Length::px(0.0));
+            style.margin_top = Some(Length::px(0.0));
+            style.margin_bottom = Some(Length::px(0.0));
             cloned.style = std::sync::Arc::new(style);
         }
 
@@ -2983,6 +3313,13 @@ impl Default for TableFormattingContext {
 impl FormattingContext for TableFormattingContext {
     /// Performs full table layout following CSS table algorithms (auto layout)
     fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
+        let _profile = layout_timer(LayoutKind::Table);
+        static DUMP_TABLE: OnceLock<bool> = OnceLock::new();
+        let dump = *DUMP_TABLE.get_or_init(|| {
+            std::env::var("FASTR_DUMP_TABLE")
+                .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+                .unwrap_or(false)
+        });
         let mut positioned_children: Vec<BoxNode> = Vec::new();
         for child in &box_node.children {
             if matches!(
@@ -2994,6 +3331,30 @@ impl FormattingContext for TableFormattingContext {
         }
 
         let structure = TableStructure::from_box_tree(box_node);
+        if dump {
+            let cw = match constraints.available_width {
+                AvailableSpace::Definite(w) => format!("{:.2}", w),
+                AvailableSpace::MaxContent => "max-content".to_string(),
+                AvailableSpace::MinContent => "min-content".to_string(),
+                AvailableSpace::Indefinite => "indefinite".to_string(),
+            };
+            let ch = match constraints.available_height {
+                AvailableSpace::Definite(h) => format!("{:.2}", h),
+                AvailableSpace::MaxContent => "max-content".to_string(),
+                AvailableSpace::MinContent => "min-content".to_string(),
+                AvailableSpace::Indefinite => "indefinite".to_string(),
+            };
+            eprintln!(
+                "table constraints: width={} height={} display={:?} id={} border_spacing=({:.2},{:.2}) collapse={:?}",
+                cw,
+                ch,
+                box_node.style.display,
+                box_node.id,
+                structure.border_spacing.0,
+                structure.border_spacing.1,
+                structure.border_collapse
+            );
+        }
         let captions: Vec<&BoxNode> = box_node
             .children
             .iter()
@@ -3050,6 +3411,32 @@ impl FormattingContext for TableFormattingContext {
             _ => None,
         };
 
+        // Captions impose a minimum width on the table: CSS 2.1 §17.4 requires the table box to be
+        // at least as wide as its caption. Resolve authored widths first; otherwise fall back to the
+        // caption's intrinsic max-content width.
+        let caption_pref_width = captions
+            .iter()
+            .copied()
+            .filter(|c| {
+                !matches!(
+                    c.style.position,
+                    crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
+                )
+            })
+            .map(|caption| {
+                if let Some(width) = caption.style.width.as_ref() {
+                    resolve_length_against(width, caption.style.font_size, containing_width).unwrap_or(0.0)
+                } else {
+                    let fc_type = caption
+                        .formatting_context()
+                        .unwrap_or(crate::style::display::FormattingContextType::Block);
+                    let fc = self.factory.create(fc_type);
+                    fc.compute_intrinsic_inline_size(caption, IntrinsicSizingMode::MaxContent)
+                        .unwrap_or(0.0)
+                }
+            })
+            .fold(0.0, f32::max);
+
         // Honor explicit table width if present.
         let font_size = box_node.style.font_size;
         let specified_width = box_node
@@ -3057,8 +3444,15 @@ impl FormattingContext for TableFormattingContext {
             .width
             .as_ref()
             .and_then(|len| resolve_length_against(len, font_size, containing_width));
-        let min_width = resolve_opt_length_against(box_node.style.min_width.as_ref(), font_size, containing_width);
+        let resolved_min_width =
+            resolve_opt_length_against(box_node.style.min_width.as_ref(), font_size, containing_width);
+        let resolved_max_width =
+            resolve_opt_length_against(box_node.style.max_width.as_ref(), font_size, containing_width);
+        let mut min_width = resolve_opt_length_against(box_node.style.min_width.as_ref(), font_size, containing_width);
         let max_width = resolve_opt_length_against(box_node.style.max_width.as_ref(), font_size, containing_width);
+        if caption_pref_width > 0.0 && specified_width.is_none() {
+            min_width = Some(min_width.unwrap_or(0.0).max(caption_pref_width));
+        }
 
         // Table width for sizing; percentages on columns use a definite table width when available (specified or containing).
         let table_width = specified_width
@@ -3077,10 +3471,17 @@ impl FormattingContext for TableFormattingContext {
         let outer_border_top = resolve_abs(&box_node.style.border_top_width);
         let outer_border_bottom = resolve_abs(&box_node.style.border_bottom_width);
         let outer_border_v = outer_border_top + outer_border_bottom;
-        let pad_left = resolve_abs(&box_node.style.padding_left);
-        let pad_right = resolve_abs(&box_node.style.padding_right);
-        let pad_top = resolve_abs(&box_node.style.padding_top);
-        let pad_bottom = resolve_abs(&box_node.style.padding_bottom);
+        let mut pad_left = resolve_abs(&box_node.style.padding_left);
+        let mut pad_right = resolve_abs(&box_node.style.padding_right);
+        let mut pad_top = resolve_abs(&box_node.style.padding_top);
+        let mut pad_bottom = resolve_abs(&box_node.style.padding_bottom);
+        // In the collapsing border model, the table box has no padding (CSS 2.2 §17.6.2).
+        if structure.border_collapse == BorderCollapse::Collapse {
+            pad_left = 0.0;
+            pad_right = 0.0;
+            pad_top = 0.0;
+            pad_bottom = 0.0;
+        }
         let (border_left, border_right, border_top, border_bottom) =
             if structure.border_collapse == BorderCollapse::Collapse {
                 (0.0, 0.0, 0.0, 0.0)
@@ -3111,7 +3512,7 @@ impl FormattingContext for TableFormattingContext {
             if positioned_children.is_empty() {
                 return Ok(());
             }
-            let abs = AbsoluteLayout::new();
+            let abs = AbsoluteLayout::with_font_context(self.factory.font_context().clone());
             for child in &positioned_children {
                 let mut layout_child = child.clone();
                 let mut style = (*layout_child.style).clone();
@@ -3173,7 +3574,17 @@ impl FormattingContext for TableFormattingContext {
                             height - border_top - border_bottom,
                         ),
                     );
-                    ContainingBlock::with_viewport(padding_rect, self.viewport_size)
+                    let block_base = if box_node.style.height.is_some() {
+                        Some(padding_rect.size.height)
+                    } else {
+                        None
+                    };
+                    ContainingBlock::with_viewport_and_bases(
+                        padding_rect,
+                        self.viewport_size,
+                        Some(padding_rect.size.width),
+                        block_base,
+                    )
                 } else {
                     self.nearest_positioned_cb
                 };
@@ -3202,6 +3613,21 @@ impl FormattingContext for TableFormattingContext {
         self.populate_column_constraints(box_node, &structure, &mut column_constraints, mode, percent_base);
         self.normalize_percentage_constraints(&mut column_constraints, percent_base);
 
+        if dump {
+            let desc: String = column_constraints
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    format!(
+                        "#{} min={:.2} max={:.2} fixed={:?} pct={:?} flex={}",
+                        i, c.min_width, c.max_width, c.fixed_width, c.percentage, c.is_flexible
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" | ");
+            eprintln!("column constraints: {}", desc);
+        }
+
         let min_content_sum: f32 = column_constraints.iter().map(|c| c.min_width).sum();
         let max_content_sum: f32 = column_constraints.iter().map(|c| c.max_width).sum();
         let mut available_content = match (table_width, constraints.available_width) {
@@ -3220,29 +3646,6 @@ impl FormattingContext for TableFormattingContext {
             let max_content = (max_w - spacing - edge_consumption).max(0.0);
             available_content = available_content.min(max_content);
         }
-        if !captions.is_empty() {
-            let mut caption_min: f32 = 0.0;
-            for caption in &captions {
-                let fc_type = caption
-                    .formatting_context()
-                    .unwrap_or(crate::style::display::FormattingContextType::Block);
-                let fc = self.factory.create(fc_type);
-                if let Ok(w) = fc.compute_intrinsic_inline_size(caption, IntrinsicSizingMode::MaxContent) {
-                    caption_min = caption_min.max(w);
-                }
-            }
-            if caption_min > 0.0 {
-                let required_content = (caption_min - edge_consumption).max(0.0);
-                let capped_required = if let Some(max_w) = max_width {
-                    let max_content = (max_w - spacing - edge_consumption).max(0.0);
-                    required_content.min(max_content)
-                } else {
-                    required_content
-                };
-                available_content = available_content.max(capped_required);
-            }
-        }
-
         let distributor = ColumnDistributor::new(mode).with_min_column_width(0.0);
         let distribution = distributor.distribute(&column_constraints, available_content);
         let mut col_widths = if distribution.widths.len() == structure.column_count {
@@ -3265,23 +3668,73 @@ impl FormattingContext for TableFormattingContext {
         {
             let current: f32 = col_widths.iter().sum();
             if available_content > current + 0.01 {
-                let mut flex_indices: Vec<usize> = column_constraints
+                let flex_indices: Vec<usize> = column_constraints
                     .iter()
                     .enumerate()
                     .filter(|(_, c)| c.is_flexible && c.fixed_width.is_none() && c.percentage.is_none())
                     .map(|(i, _)| i)
                     .collect();
-                if flex_indices.is_empty() {
-                    flex_indices.extend(0..col_widths.len());
-                }
+                let indices = if flex_indices.is_empty() {
+                    (0..col_widths.len()).collect()
+                } else {
+                    flex_indices
+                };
                 let extra = available_content - current;
-                let share = extra / flex_indices.len() as f32;
-                for i in flex_indices {
-                    if let Some(col) = col_widths.get_mut(i) {
-                        *col += share;
+                let mut finite_total = 0.0;
+                let mut infinite_indices = Vec::new();
+                for &idx in &indices {
+                    let flex = column_constraints
+                        .get(idx)
+                        .map(|c| c.flexibility_range())
+                        .unwrap_or(0.0);
+                    if flex.is_finite() {
+                        finite_total += flex;
+                    } else {
+                        infinite_indices.push(idx);
+                    }
+                }
+
+                if !infinite_indices.is_empty() {
+                    let share = extra / infinite_indices.len() as f32;
+                    for idx in infinite_indices {
+                        if let Some(col) = col_widths.get_mut(idx) {
+                            *col += share;
+                        }
+                    }
+                } else if finite_total > 0.0 {
+                    for idx in indices {
+                        let flex = column_constraints
+                            .get(idx)
+                            .map(|c| c.flexibility_range())
+                            .unwrap_or(0.0);
+                        let weight = flex / finite_total;
+                        if let Some(col) = col_widths.get_mut(idx) {
+                            *col += extra * weight;
+                        }
+                    }
+                } else {
+                    let share = extra / indices.len() as f32;
+                    for idx in indices {
+                        if let Some(col) = col_widths.get_mut(idx) {
+                            *col += share;
+                        }
                     }
                 }
             }
+        }
+        if dump {
+            let widths: String = col_widths
+                .iter()
+                .map(|w| format!("{:.2}", w))
+                .collect::<Vec<_>>()
+                .join(", ");
+            eprintln!(
+                "table columns ({} cols): [{}] (available_content {:.2}, table_width {:?})",
+                col_widths.len(),
+                widths,
+                available_content,
+                table_width
+            );
         }
 
         let mut fragments = Vec::new();
@@ -3298,22 +3751,44 @@ impl FormattingContext for TableFormattingContext {
 
         // Layout all cells to obtain their fragments and measure heights, then distribute row heights with rowspans.
         let mut laid_out_cells: Vec<LaidOutCell> = Vec::new();
+        let mut failed_cells = 0usize;
         for cell in &structure.cells {
             let span_end = (cell.col + cell.colspan).min(col_widths.len());
             let width: f32 = col_widths[cell.col..span_end].iter().sum::<f32>()
                 + h_spacing * (cell.colspan.saturating_sub(1) as f32);
+            if dump {
+                eprintln!(
+                    "  cell r{} c{} span={} width={:.2} min={:.2} max={:.2}",
+                    cell.row, cell.col, cell.colspan, width, cell.min_width, cell.max_width
+                );
+            }
 
             if let Some(cell_box) = self.get_cell_box(box_node, cell) {
-                if let Ok(fragment) = self.layout_cell(cell_box, width, structure.border_collapse) {
-                    let height = fragment.bounds.height();
-                    let baseline = cell_baseline(&fragment);
-                    laid_out_cells.push(LaidOutCell {
-                        cell,
-                        fragment,
-                        vertical_align: cell_box.style.vertical_align,
-                        baseline,
-                        height,
-                    });
+                match self.layout_cell(cell_box, width, structure.border_collapse) {
+                    Ok(fragment) => {
+                        if dump {
+                            let b = fragment.bounds;
+                            eprintln!(
+                                "    cell fragment raw bounds: x={:.2} y={:.2} w={:.2} h={:.2}",
+                                b.x(),
+                                b.y(),
+                                b.width(),
+                                b.height()
+                            );
+                        }
+                        let height = fragment.bounds.height();
+                        let baseline = cell_baseline(&fragment);
+                        laid_out_cells.push(LaidOutCell {
+                            cell,
+                            fragment,
+                            vertical_align: cell_box.style.vertical_align,
+                            baseline,
+                            height,
+                        });
+                    }
+                    Err(_) => {
+                        failed_cells += 1;
+                    }
                 }
             }
         }
@@ -3400,24 +3875,23 @@ impl FormattingContext for TableFormattingContext {
                 } else {
                     (span_start..span_end).collect()
                 };
-                if !targets.is_empty() {
+                let current_total: f32 = row_heights
+                    .get(span_start..span_end)
+                    .map(|slice| slice.iter().sum())
+                    .unwrap_or(0.0);
+                let remaining = (span_height - current_total).max(0.0);
+                if remaining > 0.0 && !targets.is_empty() {
                     let percent_base = percent_height_base;
-                    let mut working = row_heights.clone();
                     let row_floor_fn = |idx: usize, _current: f32| -> f32 { row_floor(idx, 0.0) };
-                    let remaining = span_height;
                     distribute_rowspan_targets(
                         &targets,
-                        &mut working,
+                        &mut row_heights,
                         &structure.rows,
                         remaining,
                         percent_base,
                         &row_floor_fn,
+                        &|current, share| current + share,
                     );
-                    for (idx, val) in working.into_iter().enumerate() {
-                        if let Some(row) = row_heights.get_mut(idx) {
-                            *row = row.max(val);
-                        }
-                    }
                 }
             }
         }
@@ -3517,6 +3991,29 @@ impl FormattingContext for TableFormattingContext {
             &content_min_heights,
         );
 
+        if dump {
+            let min_col = col_widths.iter().copied().fold(f32::INFINITY, f32::min);
+            let max_col = col_widths.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let sum_col: f32 = col_widths.iter().sum();
+            let min_row = row_heights.iter().copied().fold(f32::INFINITY, f32::min);
+            let max_row = row_heights.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let sum_row: f32 = row_heights.iter().sum();
+            eprintln!(
+                "table layout: cols={} rows={} cells={} laid_out={} failed={} col_sum={:.2} col_min={:.2} col_max={:.2} row_sum={:.2} row_min={:.2} row_max={:.2}",
+                structure.column_count,
+                structure.row_count,
+                structure.cells.len(),
+                laid_out_cells.len(),
+                failed_cells,
+                sum_col,
+                min_col,
+                max_col,
+                sum_row,
+                min_row,
+                max_row
+            );
+        }
+
         let mut row_metrics: Vec<RowMetrics> = row_heights.iter().map(|h| RowMetrics::new(*h)).collect();
 
         for laid in &laid_out_cells {
@@ -3529,16 +4026,12 @@ impl FormattingContext for TableFormattingContext {
             };
             row.max_cell_height = row.max_cell_height.max(contribution);
 
-            if laid.vertical_align.is_baseline_relative() {
+            // CSS 2.1 §17.5.3: the row baseline comes from the first non-rowspanning cell.
+            if laid.vertical_align.is_baseline_relative() && laid.cell.rowspan == 1 && !row.has_baseline {
                 let baseline = laid.baseline.unwrap_or(laid.height).min(laid.height);
-                let (top, bottom) = if laid.cell.rowspan > 1 {
-                    let span_end = (laid.cell.row + laid.cell.rowspan).min(structure.row_count);
-                    spanning_baseline_allocation(laid.height, baseline, laid.cell.row, span_end, &row_heights)
-                } else {
-                    let clamped = baseline.min(row_height);
-                    let bottom = (row_height - clamped).max(0.0);
-                    (clamped, bottom)
-                };
+                let clamped = baseline.min(row_height);
+                let bottom = (row_height - clamped).max(0.0);
+                let (top, bottom) = (clamped, bottom);
                 row.has_baseline = true;
                 row.baseline_top = row.baseline_top.max(top);
                 row.baseline_bottom = row.baseline_bottom.max(bottom);
@@ -3567,12 +4060,7 @@ impl FormattingContext for TableFormattingContext {
         // If the table has a definite (or minimum) height and rows don't fill it, distribute the extra.
         if let Some(target_height) = table_height {
             let rows_space: f32 = row_metrics.iter().map(|r| r.height).sum();
-            let spacing_total = if structure.border_collapse == BorderCollapse::Collapse {
-                0.0
-            } else {
-                v_spacing * (structure.row_count as f32 + 1.0)
-            };
-            let target_rows = (target_height - spacing_total).max(0.0);
+            let target_rows = percent_height_base.unwrap_or_else(|| compute_percent_height_base(target_height));
             if target_rows > rows_space && !row_metrics.is_empty() {
                 let extra = target_rows - rows_space;
                 let flex_indices: Vec<usize> = structure
@@ -3614,88 +4102,127 @@ impl FormattingContext for TableFormattingContext {
             }
         };
 
-        let vertical_line_max: Vec<f32> = collapsed_borders
-            .vertical
-            .iter()
-            .map(|segments| segments.iter().map(|b| b.width).fold(0.0, f32::max))
-            .collect();
+        let mut vertical_line_max: Vec<f32> = Vec::with_capacity(structure.column_count + 1);
+        for (idx, segments) in collapsed_borders.vertical.iter().enumerate() {
+            let width = if idx == 0 || idx == structure.column_count {
+                // Table left/right border widths are based on the first row's collapsed border
+                // (CSS 2.2 §17.6.2), with any excess in later rows spilling into the margin.
+                if structure.row_count > 0 {
+                    segments.get(0).map(|b| b.width).unwrap_or(0.0)
+                } else {
+                    0.0
+                }
+            } else {
+                segments.iter().map(|b| b.width).fold(0.0, f32::max)
+            };
+            vertical_line_max.push(width);
+        }
         let horizontal_line_max: Vec<f32> = collapsed_borders
             .horizontal
             .iter()
             .map(|segments| segments.iter().map(|b| b.width).fold(0.0, f32::max))
             .collect();
 
-        let content_origin_y = if structure.border_collapse == BorderCollapse::Collapse {
-            pad_top
-        } else {
-            border_top + pad_top
-        };
+        let mut column_line_pos = Vec::new();
+        let mut row_line_pos = Vec::new();
         let mut row_offsets = Vec::with_capacity(structure.row_count);
-        let mut y = if structure.border_collapse == BorderCollapse::Collapse {
-            content_origin_y
-        } else {
-            content_origin_y + v_spacing
-        };
+        let mut col_offsets = Vec::with_capacity(structure.column_count);
+        let content_width: f32;
+        let content_height: f32;
 
-        for (row_idx, row) in row_metrics.iter().enumerate() {
-            if structure.border_collapse == BorderCollapse::Collapse {
-                y += horizontal_line_max.get(row_idx).copied().unwrap_or(0.0);
+        // Collapsed borders place border strokes on grid lines, with half of the outer
+        // borders inside the table box and half potentially spilling into the margin
+        // area (CSS 2.2 §17.6.2). Compute line centers and cell start offsets from the
+        // resolved line widths so that the table width/height include only half of the
+        // outer collapsed borders.
+        if structure.border_collapse == BorderCollapse::Collapse {
+            let (cols, starts, collapsed_width) =
+                collapsed_line_positions(&col_widths, &vertical_line_max, pad_left, pad_right);
+            column_line_pos = cols;
+            col_offsets = starts;
+
+            let row_heights: Vec<f32> = row_metrics.iter().map(|r| r.height).collect();
+            let (rows, starts, collapsed_height) =
+                collapsed_line_positions(&row_heights, &horizontal_line_max, pad_top, pad_bottom);
+            row_line_pos = rows;
+            row_offsets = starts;
+
+            content_width = collapsed_width;
+            content_height = collapsed_height;
+        } else {
+            let content_origin_y = border_top + pad_top;
+            let mut y = content_origin_y + v_spacing;
+
+            if dump {
+                let preview: String = row_metrics
+                    .iter()
+                    .take(8)
+                    .map(|r| format!("{:.2}", r.height))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                eprintln!(
+                    "  row heights (first {} of {}): {}",
+                    row_metrics.len().min(8),
+                    row_metrics.len(),
+                    preview
+                );
             }
-            row_offsets.push(y);
-            y += row.height;
-            if structure.border_collapse != BorderCollapse::Collapse {
+
+            for row in &row_metrics {
+                row_offsets.push(y);
+                y += row.height;
                 y += v_spacing;
             }
-        }
 
-        // Precompute column offsets for positioning
-        let content_origin_x = if structure.border_collapse == BorderCollapse::Collapse {
-            pad_left
-        } else {
-            border_left + pad_left
-        };
-        let mut col_offsets = Vec::with_capacity(structure.column_count);
-        if structure.border_collapse == BorderCollapse::Collapse {
-            let mut x = content_origin_x;
-            for col_idx in 0..structure.column_count {
-                x += vertical_line_max.get(col_idx).copied().unwrap_or(0.0);
-                col_offsets.push(x);
-                x += col_widths[col_idx];
+            if dump {
+                let preview: String = row_offsets
+                    .iter()
+                    .take(8)
+                    .map(|offset| format!("{:.2}", offset))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                eprintln!(
+                    "  row offsets (first {} of {}): {}",
+                    row_offsets.len().min(8),
+                    row_offsets.len(),
+                    preview
+                );
             }
-        } else {
-            let mut x = content_origin_x + h_spacing;
+
+            // Precompute column offsets for positioning in the separated model.
+            let start_x = border_left + pad_left;
+            let mut x = start_x + h_spacing;
             for col_idx in 0..structure.column_count {
                 col_offsets.push(x);
                 x += col_widths[col_idx] + h_spacing;
             }
-        }
 
-        let content_width: f32 = if col_widths.is_empty() {
-            available_content
-        } else if structure.border_collapse == BorderCollapse::Collapse {
-            col_widths.iter().sum::<f32>() + vertical_line_max.iter().copied().sum::<f32>()
-        } else {
-            col_widths.iter().sum::<f32>() + spacing
-        };
-
-        let content_height = if structure.row_count > 0 {
-            if structure.border_collapse == BorderCollapse::Collapse {
-                let mut h = horizontal_line_max.get(0).copied().unwrap_or(0.0);
-                for (idx, row) in row_metrics.iter().enumerate() {
-                    h += row.height;
-                    h += horizontal_line_max.get(idx + 1).copied().unwrap_or(0.0);
-                }
-                h
+            content_width = if col_widths.is_empty() {
+                available_content
             } else {
+                col_widths.iter().sum::<f32>() + spacing
+            };
+            content_height = if structure.row_count > 0 {
                 row_offsets
                     .last()
                     .map(|start| start + row_metrics.last().map(|r| r.height).unwrap_or(0.0))
                     .unwrap_or(0.0)
                     + v_spacing
                     - content_origin_y
-            }
+            } else {
+                0.0
+            };
+        }
+
+        let content_origin_x = if structure.border_collapse == BorderCollapse::Collapse {
+            col_offsets.first().copied().unwrap_or(pad_left) - vertical_line_max.first().copied().unwrap_or(0.0) * 0.5
         } else {
-            0.0
+            border_left + pad_left
+        };
+        let content_origin_y = if structure.border_collapse == BorderCollapse::Collapse {
+            row_offsets.first().copied().unwrap_or(pad_top) - horizontal_line_max.first().copied().unwrap_or(0.0) * 0.5
+        } else {
+            border_top + pad_top
         };
 
         // Column group and column backgrounds precede row backgrounds/cells.
@@ -3875,6 +4402,25 @@ impl FormattingContext for TableFormattingContext {
 
         // Position cell fragments with vertical alignment within their row block
         let row_metric_heights: Vec<f32> = row_metrics.iter().map(|r| r.height).collect();
+        // Ensure baseline selection follows row/column order (CSS 2.1 row baseline rules).
+        let mut laid_out_cells = laid_out_cells;
+        laid_out_cells.sort_by_key(|c| (c.cell.row, c.cell.col));
+
+        // Compute table baseline per CSS 2.1: the baseline of the first row that has a
+        // baseline-aligned, non-rowspanning cell; otherwise the bottom content edge of the first row.
+        let table_baseline = row_metrics
+            .iter()
+            .enumerate()
+            .find(|(idx, r)| r.has_baseline && *idx < row_offsets.len())
+            .map(|(idx, r)| row_offsets[idx] + r.baseline_top)
+            .or_else(|| {
+                if !row_metrics.is_empty() && !row_offsets.is_empty() {
+                    Some(row_offsets[0] + row_metrics[0].height)
+                } else {
+                    None
+                }
+            });
+
         for laid in laid_out_cells {
             let cell = laid.cell;
             // Compute horizontal position
@@ -3891,12 +4437,9 @@ impl FormattingContext for TableFormattingContext {
             let row_start = cell.row;
             let span_end = (cell.row + cell.rowspan).min(row_metrics.len());
             let spanned_height: f32 = if structure.border_collapse == BorderCollapse::Collapse {
-                let mut h = horizontal_line_max.get(row_start).copied().unwrap_or(0.0);
-                for r in row_start..span_end {
-                    h += row_metrics[r].height;
-                    h += horizontal_line_max.get(r + 1).copied().unwrap_or(0.0);
-                }
-                h
+                let start = row_line_pos.get(row_start).copied().unwrap_or(0.0);
+                let end = row_line_pos.get(span_end).copied().unwrap_or(start);
+                (end - start).max(0.0)
             } else {
                 row_metrics[row_start..span_end].iter().map(|r| r.height).sum::<f32>()
                     + v_spacing * cell.rowspan.saturating_sub(1) as f32
@@ -3923,22 +4466,37 @@ impl FormattingContext for TableFormattingContext {
                 }
             };
 
-            let y = row_offsets.get(row_start).cloned().unwrap_or(0.0) + y_offset;
-            fragments.push(laid.fragment.translate(Point::new(x, y)));
+            let base_y = row_offsets.get(row_start).cloned().unwrap_or(0.0);
+            let mut fragment = laid.fragment;
+            // Position the cell box at the start of its row span and give it the full spanned height so
+            // backgrounds and borders cover the row. Vertical-align is applied to the cell contents by
+            // shifting children inside the cell.
+            fragment.bounds = crate::geometry::Rect::from_xywh(x, base_y, fragment.bounds.width(), spanned_height);
+
+            if y_offset.abs() > 0.0 {
+                fn translate_children(node: &mut FragmentNode, delta: Point) {
+                    for child in &mut node.children {
+                        child.bounds = child.bounds.translate(delta);
+                        translate_children(child, delta);
+                    }
+                }
+                translate_children(&mut fragment, Point::new(0.0, y_offset));
+            }
+            fragments.push(fragment);
         }
 
         let mut total_width = if structure.border_collapse == BorderCollapse::Collapse {
-            content_width + padding_h
+            content_width
         } else {
             content_width + padding_h + border_h
         };
         total_width = clamp_to_min_max(total_width, min_width, max_width);
-        let total_height = if let Some(specified) = table_height {
+        let mut total_height = if let Some(specified) = table_height {
             specified
         } else {
             let mut h = content_height
                 + if structure.border_collapse == BorderCollapse::Collapse {
-                    padding_v
+                    0.0
                 } else {
                     padding_v + border_v
                 };
@@ -3950,6 +4508,19 @@ impl FormattingContext for TableFormattingContext {
             }
             h
         };
+        // Apply non-visual min/max clamps from the table box to the final border box per CSS 2.1 §17.5/§10.4.
+        if let Some(min_w) = resolved_min_width {
+            total_width = total_width.max(min_w);
+        }
+        if let Some(max_w) = resolved_max_width {
+            total_width = total_width.min(max_w);
+        }
+        if let Some(min_h) = min_height {
+            total_height = total_height.max(min_h);
+        }
+        if let Some(max_h) = max_height {
+            total_height = total_height.min(max_h);
+        }
         let table_bounds = Rect::from_xywh(0.0, 0.0, total_width.max(0.0), total_height);
 
         if structure.border_collapse == BorderCollapse::Collapse {
@@ -3980,32 +4551,6 @@ impl FormattingContext for TableFormattingContext {
                 Arc::new(style)
             };
 
-            let mut column_line_pos = Vec::with_capacity(structure.column_count + 1);
-            let mut x_cursor = 0.0;
-            column_line_pos.push(x_cursor);
-            for col_idx in 0..structure.column_count {
-                x_cursor += vertical_line_max.get(col_idx).copied().unwrap_or(0.0) + col_widths[col_idx];
-                column_line_pos.push(x_cursor);
-            }
-            if let Some(last) = vertical_line_max.get(structure.column_count) {
-                if let Some(end) = column_line_pos.last_mut() {
-                    *end += *last;
-                }
-            }
-
-            let mut row_line_pos = Vec::with_capacity(structure.row_count + 1);
-            let mut y_cursor = 0.0;
-            row_line_pos.push(y_cursor);
-            for row_idx in 0..structure.row_count {
-                y_cursor += horizontal_line_max.get(row_idx).copied().unwrap_or(0.0) + row_metrics[row_idx].height;
-                row_line_pos.push(y_cursor);
-            }
-            if let Some(last) = horizontal_line_max.get(structure.row_count) {
-                if let Some(end) = row_line_pos.last_mut() {
-                    *end += *last;
-                }
-            }
-
             // Vertical grid lines: border before column 0, between columns, after last column.
             for col_idx in 0..collapsed_borders.vertical.len() {
                 let base_x = column_line_pos.get(col_idx).copied().unwrap_or(0.0);
@@ -4014,24 +4559,50 @@ impl FormattingContext for TableFormattingContext {
                     if border.width <= 0.0 || matches!(border.style, BorderStyle::None | BorderStyle::Hidden) {
                         continue;
                     }
-                    let x = base_x - border.width * 0.5;
+                    let is_left_edge = col_idx == 0;
+                    let is_right_edge = col_idx == structure.column_count;
+                    let base_edge_width = if is_left_edge {
+                        vertical_line_max.get(0).copied().unwrap_or(border.width)
+                    } else if is_right_edge {
+                        vertical_line_max
+                            .get(structure.column_count)
+                            .copied()
+                            .unwrap_or(border.width)
+                    } else {
+                        border.width
+                    };
+                    // Per CSS 2.2 §17.6.2, only the first row sets the table’s outer border
+                    // thickness; any excess on later rows spills into the margin. Keep the
+                    // interior portion capped at half the baseline edge width and push any
+                    // extra outward.
+                    let inside = if is_left_edge || is_right_edge {
+                        (border.width.min(base_edge_width)) * 0.5
+                    } else {
+                        border.width * 0.5
+                    };
+                    let x = if is_left_edge {
+                        base_x - (border.width - inside)
+                    } else {
+                        base_x - inside
+                    };
                     let row_start = row_line_pos.get(row_idx).copied().unwrap_or(0.0);
-                    let row_height = row_metrics[row_idx].height;
-                    let top_adjacent = collapsed_borders
-                        .horizontal
+                    let row_end = row_line_pos.get(row_idx + 1).copied().unwrap_or(row_start);
+                    let corner_top = collapsed_borders
+                        .corners
                         .get(row_idx)
                         .and_then(|row| row.get(col_idx))
-                        .map(|b| b.width * 0.5)
+                        .map(|c| c.width * 0.5)
                         .unwrap_or(0.0);
-                    let bottom_adjacent = collapsed_borders
-                        .horizontal
+                    let corner_bottom = collapsed_borders
+                        .corners
                         .get(row_idx + 1)
                         .and_then(|row| row.get(col_idx))
-                        .map(|b| b.width * 0.5)
+                        .map(|c| c.width * 0.5)
                         .unwrap_or(0.0);
-                    let height = row_height + top_adjacent + bottom_adjacent;
-                    let y = row_start - top_adjacent;
-                    let rect = Rect::from_xywh(x, y, border.width, height);
+                    let y_start = row_start + corner_top;
+                    let y_end = row_end - corner_bottom;
+                    let height = (y_end - y_start).max(0.0);
+                    let rect = Rect::from_xywh(x, y_start, border.width, height);
                     let style = make_border_style(
                         border.color,
                         border.width,
@@ -4060,24 +4631,48 @@ impl FormattingContext for TableFormattingContext {
                     if border.width <= 0.0 || matches!(border.style, BorderStyle::None | BorderStyle::Hidden) {
                         continue;
                     }
-                    let y = base_y - border.width * 0.5;
+                    let is_top_edge = row_idx == 0;
+                    let is_bottom_edge = row_idx == structure.row_count;
+                    let base_edge_width = if is_top_edge {
+                        horizontal_line_max.get(0).copied().unwrap_or(border.width)
+                    } else if is_bottom_edge {
+                        horizontal_line_max
+                            .get(structure.row_count)
+                            .copied()
+                            .unwrap_or(border.width)
+                    } else {
+                        border.width
+                    };
+                    // Top/bottom edges: keep the interior half no thicker than the baseline edge width;
+                    // any excess is pushed outward (into the margin).
+                    let inside = if is_top_edge || is_bottom_edge {
+                        (border.width.min(base_edge_width)) * 0.5
+                    } else {
+                        border.width * 0.5
+                    };
+                    let y = if is_top_edge {
+                        base_y - (border.width - inside)
+                    } else {
+                        base_y - inside
+                    };
                     let col_start = column_line_pos.get(col_idx).copied().unwrap_or(0.0);
-                    let col_width = col_widths[col_idx];
-                    let left_adjacent = collapsed_borders
-                        .vertical
-                        .get(col_idx)
-                        .and_then(|col| col.get(row_idx))
-                        .map(|b| b.width * 0.5)
+                    let col_end = column_line_pos.get(col_idx + 1).copied().unwrap_or(col_start);
+                    let corner_left = collapsed_borders
+                        .corners
+                        .get(row_idx)
+                        .and_then(|row| row.get(col_idx))
+                        .map(|c| c.width * 0.5)
                         .unwrap_or(0.0);
-                    let right_adjacent = collapsed_borders
-                        .vertical
-                        .get(col_idx + 1)
-                        .and_then(|col| col.get(row_idx))
-                        .map(|b| b.width * 0.5)
+                    let corner_right = collapsed_borders
+                        .corners
+                        .get(row_idx)
+                        .and_then(|row| row.get(col_idx + 1))
+                        .map(|c| c.width * 0.5)
                         .unwrap_or(0.0);
-                    let width = col_width + left_adjacent + right_adjacent;
-                    let x = col_start - left_adjacent;
-                    let rect = Rect::from_xywh(x, y, width, border.width);
+                    let x_start = col_start + corner_left;
+                    let x_end = col_end - corner_right;
+                    let width = (x_end - x_start).max(0.0);
+                    let rect = Rect::from_xywh(x_start, y, width, border.width);
                     let style = make_border_style(
                         border.color,
                         0.0,
@@ -4108,22 +4703,29 @@ impl FormattingContext for TableFormattingContext {
                     let x = column_line_pos.get(c).copied().unwrap_or(0.0) - corner.width * 0.5;
                     let y = row_line_pos.get(r).copied().unwrap_or(0.0) - corner.width * 0.5;
                     let rect = Rect::from_xywh(x, y, corner.width, corner.width);
-                    let style = make_border_style(
-                        corner.color,
-                        corner.width,
-                        corner.width,
-                        corner.width,
-                        corner.width,
-                        corner.style,
-                        corner.style,
-                        corner.style,
-                        corner.style,
-                    );
+                    // Fill the corner square with the winning border color and also assign the
+                    // winning border style/width on all edges so dashed/dotted/double corners
+                    // retain their paint semantics while the center stays filled to avoid gaps.
+                    let mut style = crate::style::ComputedStyle::default();
+                    style.display = Display::Block;
+                    style.background_color = corner.color;
+                    style.border_left_width = Length::px(corner.width);
+                    style.border_right_width = Length::px(corner.width);
+                    style.border_top_width = Length::px(corner.width);
+                    style.border_bottom_width = Length::px(corner.width);
+                    style.border_left_style = corner.style;
+                    style.border_right_style = corner.style;
+                    style.border_top_style = corner.style;
+                    style.border_bottom_style = corner.style;
+                    style.border_left_color = corner.color;
+                    style.border_right_color = corner.color;
+                    style.border_top_color = corner.color;
+                    style.border_bottom_color = corner.color;
                     fragments.push(FragmentNode::new_with_style(
                         rect,
                         FragmentContent::Block { box_id: None },
                         vec![],
-                        style,
+                        Arc::new(style),
                     ));
                 }
             }
@@ -4136,14 +4738,22 @@ impl FormattingContext for TableFormattingContext {
             table_style.border_bottom_width = crate::style::values::Length::px(0.0);
             table_style.border_left_width = crate::style::values::Length::px(0.0);
         }
+        let baseline_offset = table_baseline.map(|b| b - table_bounds.y());
+
         if captions.is_empty() {
-            return Ok(FragmentNode::new_with_style(
+            let mut fragment = FragmentNode::new_with_style(
                 table_bounds,
                 FragmentContent::Block { box_id: None },
                 fragments,
                 Arc::new(table_style),
-            ));
+            );
+            fragment.baseline = baseline_offset;
+            return Ok(fragment);
         }
+
+        // Table wrapper width must accommodate both the table box and any captions (CSS 2.1 §17.4).
+        let mut wrapper_width = table_bounds.width().max(caption_pref_width);
+        wrapper_width = clamp_to_min_max(wrapper_width, min_width, max_width);
 
         // Only the table box itself should render backgrounds/borders. Element-level visual
         // effects (opacity/filters/transforms) apply to the wrapper that contains captions.
@@ -4154,12 +4764,13 @@ impl FormattingContext for TableFormattingContext {
         table_style.mix_blend_mode = crate::style::types::MixBlendMode::Normal;
         table_style.isolation = crate::style::types::Isolation::Auto;
 
-        let table_fragment = FragmentNode::new_with_style(
+        let mut table_fragment = FragmentNode::new_with_style(
             table_bounds,
             FragmentContent::Block { box_id: None },
             fragments,
             Arc::new(table_style),
         );
+        table_fragment.baseline = baseline_offset;
 
         // Layout captions relative to the table's width.
         let mut wrapper_children = Vec::new();
@@ -4172,13 +4783,12 @@ impl FormattingContext for TableFormattingContext {
             let fc = self.factory.create(fc_type);
             let mut frag = fc.layout(
                 caption,
-                &LayoutConstraints::new(
-                    AvailableSpace::Definite(table_bounds.width()),
-                    constraints.available_height,
-                ),
+                &LayoutConstraints::new(AvailableSpace::Definite(wrapper_width), constraints.available_height),
             )?;
-            frag.bounds = Rect::from_xywh(0.0, 0.0, table_bounds.width(), frag.bounds.height());
-            Ok((frag.translate(Point::new(0.0, y)), frag.bounds.height()))
+            frag.bounds = Rect::from_xywh(0.0, 0.0, wrapper_width, frag.bounds.height());
+            let height = frag.bounds.height();
+            frag.bounds = frag.bounds.translate(Point::new(0.0, y));
+            Ok((frag, height))
         };
 
         for caption in captions
@@ -4192,7 +4802,8 @@ impl FormattingContext for TableFormattingContext {
         }
 
         let table_origin_y = offset_y;
-        let table_translated = table_fragment.translate(Point::new(0.0, table_origin_y));
+        let mut table_translated = table_fragment;
+        table_translated.bounds = table_translated.bounds.translate(Point::new(0.0, table_origin_y));
         offset_y += table_translated.bounds.height();
         wrapper_children.push(table_translated);
 
@@ -4221,7 +4832,7 @@ impl FormattingContext for TableFormattingContext {
         wrapper_style.box_shadow.clear();
 
         let mut wrapper_fragment = FragmentNode::new_with_style(
-            Rect::from_xywh(0.0, 0.0, table_bounds.width(), offset_y),
+            Rect::from_xywh(0.0, 0.0, wrapper_width, offset_y),
             FragmentContent::Block { box_id: None },
             wrapper_children,
             Arc::new(wrapper_style),
@@ -4238,7 +4849,17 @@ impl FormattingContext for TableFormattingContext {
                         table_bounds.height() - border_top - border_bottom,
                     ),
                 );
-                ContainingBlock::with_viewport(padding_rect, self.viewport_size)
+                let block_base = if box_node.style.height.is_some() {
+                    Some(padding_rect.size.height)
+                } else {
+                    None
+                };
+                ContainingBlock::with_viewport_and_bases(
+                    padding_rect,
+                    self.viewport_size,
+                    Some(padding_rect.size.width),
+                    block_base,
+                )
             } else {
                 self.nearest_positioned_cb
             };
@@ -4536,6 +5157,171 @@ mod tests {
     }
 
     #[test]
+    fn table_min_width_clamps_border_box() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.min_width = Some(Length::px(200.0));
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(&table, &LayoutConstraints::definite(50.0, 50.0))
+            .expect("table layout should succeed");
+
+        assert!(
+            fragment.bounds.width() >= 199.9,
+            "table min-width should clamp the border box, got {:.2}",
+            fragment.bounds.width()
+        );
+    }
+
+    #[test]
+    fn table_max_height_clamps_border_box() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.max_height = Some(Length::px(50.0));
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.height = Some(Length::px(120.0));
+
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(&table, &LayoutConstraints::definite(300.0, 300.0))
+            .expect("table layout should succeed");
+
+        assert!(
+            fragment.bounds.height() <= 50.1,
+            "table max-height should clamp the border box, got {:.2}",
+            fragment.bounds.height()
+        );
+    }
+
+    #[test]
+    fn empty_cells_hide_keeps_padding_and_borders_in_layout() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut padded_cell_style = ComputedStyle::default();
+        padded_cell_style.display = Display::TableCell;
+        padded_cell_style.padding_top = Length::px(10.0);
+        padded_cell_style.padding_bottom = Length::px(10.0);
+        padded_cell_style.border_top_width = Length::px(5.0);
+        padded_cell_style.border_bottom_width = Length::px(5.0);
+        padded_cell_style.empty_cells = EmptyCells::Hide;
+        let padded_cell = BoxNode::new_block(Arc::new(padded_cell_style), FormattingContextType::Block, vec![]);
+
+        let mut visible_cell_style = ComputedStyle::default();
+        visible_cell_style.display = Display::TableCell;
+        visible_cell_style.padding_top = Length::px(10.0);
+        visible_cell_style.padding_bottom = Length::px(10.0);
+        visible_cell_style.border_top_width = Length::px(5.0);
+        visible_cell_style.border_bottom_width = Length::px(5.0);
+        visible_cell_style.empty_cells = EmptyCells::Show;
+        let visible_cell = BoxNode::new_block(Arc::new(visible_cell_style), FormattingContextType::Block, vec![]);
+
+        let padded_row = BoxNode::new_block(
+            Arc::new(row_style.clone()),
+            FormattingContextType::Block,
+            vec![padded_cell],
+        );
+        let visible_row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![visible_cell]);
+
+        let padded_table = BoxNode::new_block(
+            Arc::new(table_style.clone()),
+            FormattingContextType::Table,
+            vec![padded_row],
+        );
+        let visible_table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![visible_row]);
+
+        let tfc = TableFormattingContext::new();
+        let padded_fragment = tfc
+            .layout(&padded_table, &LayoutConstraints::definite(200.0, 200.0))
+            .expect("layout hide");
+        let visible_fragment = tfc
+            .layout(&visible_table, &LayoutConstraints::definite(200.0, 200.0))
+            .expect("layout show");
+
+        assert!(
+            (padded_fragment.bounds.height() - visible_fragment.bounds.height()).abs() < 0.5,
+            "empty_cells: hide should not affect layout sizing (only painting)"
+        );
+    }
+
+    #[test]
+    fn empty_cells_hide_keeps_column_min_width() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut hidden_cell_style = ComputedStyle::default();
+        hidden_cell_style.display = Display::TableCell;
+        hidden_cell_style.empty_cells = EmptyCells::Hide;
+        hidden_cell_style.padding_left = Length::px(20.0);
+        hidden_cell_style.padding_right = Length::px(20.0);
+
+        let mut visible_cell_style = ComputedStyle::default();
+        visible_cell_style.display = Display::TableCell;
+        visible_cell_style.empty_cells = EmptyCells::Show;
+        visible_cell_style.padding_left = Length::px(20.0);
+        visible_cell_style.padding_right = Length::px(20.0);
+
+        let hidden_cell = BoxNode::new_block(Arc::new(hidden_cell_style), FormattingContextType::Block, vec![]);
+        let visible_cell = BoxNode::new_block(Arc::new(visible_cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(
+            Arc::new(row_style),
+            FormattingContextType::Block,
+            vec![hidden_cell, visible_cell],
+        );
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+            .map(|_| ColumnConstraints::new(0.0, 0.0))
+            .collect();
+        let tfc = TableFormattingContext::new();
+        tfc.populate_column_constraints(&table, &structure, &mut constraints, DistributionMode::Auto, None);
+
+        assert!(
+            (constraints[0].min_width - 40.0).abs() < 1.0,
+            "hidden empty cell should still reflect padding in min width (only paint suppressed): {:?}",
+            constraints[0]
+        );
+        assert!(
+            (constraints[1].min_width - 40.0).abs() < 1.0,
+            "visible cell should include padding in min width: {:?}",
+            constraints[1]
+        );
+    }
+
+    #[test]
     fn colspan_specified_width_increases_spanned_columns() {
         // First row has a single cell spanning two columns with a fixed width; it should raise the
         // combined minimum of the spanned columns.
@@ -4581,6 +5367,328 @@ mod tests {
             total_min >= 200.0,
             "spanned cell width should contribute to column minima: {:?}",
             constraints.iter().map(|c| c.min_width).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn colspan_percentage_width_constrains_span_without_freezing_columns() {
+        // Percentage widths on spanning cells constrain the total spanned width but should not turn
+        // the individual columns into percentage columns (which would freeze them as non-flex).
+        let mut span_style = ComputedStyle::default();
+        span_style.display = Display::TableCell;
+        span_style.width = Some(Length::percent(50.0));
+        let span_cell = BoxNode::new_block(Arc::new(span_style), FormattingContextType::Block, vec![])
+            .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(2, 1));
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        let cell_a = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![]);
+        let cell_b = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let row_with_span = BoxNode::new_block(
+            Arc::new(row_style.clone()),
+            FormattingContextType::Block,
+            vec![span_cell],
+        );
+        let row_normal = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell_a, cell_b]);
+
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+        table_style.width = Some(Length::px(200.0));
+        let table = BoxNode::new_block(
+            Arc::new(table_style),
+            FormattingContextType::Table,
+            vec![row_with_span, row_normal],
+        );
+
+        let structure = TableStructure::from_box_tree(&table);
+        let cell_count = structure.cells.len();
+        let col_count = structure.column_count;
+        let spans: Vec<(usize, usize)> = structure.cells.iter().map(|c| (c.col, c.colspan)).collect();
+        let percent_base = Some(200.0);
+        let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+            .map(|_| ColumnConstraints::new(0.0, 0.0))
+            .collect();
+        let tfc = TableFormattingContext::new();
+        let span_box = tfc.get_cell_box(&table, &structure.cells[0]).expect("span cell");
+        let (span_min, span_max) = tfc.measure_cell_intrinsic_widths(span_box, structure.border_collapse);
+        let resolved_width = span_box.style.width.as_ref().and_then(|width| match width.unit {
+            LengthUnit::Percent => {
+                percent_base.map(|base| ((width.value / 100.0) * base).clamp(span_min, f32::INFINITY))
+            }
+            _ => Some(width.to_px().clamp(span_min, f32::INFINITY)),
+        });
+        tfc.populate_column_constraints(
+            &table,
+            &structure,
+            &mut constraints,
+            DistributionMode::Auto,
+            percent_base,
+        );
+
+        let percent_sum: f32 = constraints.iter().filter_map(|c| c.percentage).sum();
+        assert!(
+            (percent_sum - 50.0).abs() < 0.01,
+            "50% spanning cell should split its percentage across columns (got {percent_sum}); cells={cell_count} cols={col_count} spans={spans:?} intrinsic=({span_min:.2},{span_max:.2}) resolved_width={resolved_width:?} constraints: {constraints:?}"
+        );
+        let total_min: f32 = constraints.iter().map(|c| c.min_width).sum();
+        assert!(
+            total_min < 40.0,
+            "percentage spans should not harden absolute minima (got {total_min:.2}); constraints: {constraints:?}"
+        );
+    }
+
+    #[test]
+    fn cell_min_width_raises_column_minimum() {
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.min_width = Some(Length::px(80.0));
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+            .map(|_| ColumnConstraints::new(0.0, 0.0))
+            .collect();
+        let tfc = TableFormattingContext::new();
+        tfc.populate_column_constraints(&table, &structure, &mut constraints, DistributionMode::Auto, None);
+
+        let min = constraints.get(0).map(|c| c.min_width).unwrap_or(0.0);
+        assert!(
+            min >= 80.0,
+            "cell min-width should clamp column minimum, got {:.2}",
+            min
+        );
+    }
+
+    #[test]
+    fn cell_max_width_caps_column_maximum() {
+        let text_style = Arc::new(ComputedStyle::default());
+        let text = BoxNode::new_text(text_style, "hi hi hi hi hi hi hi hi hi".to_string());
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.max_width = Some(Length::px(40.0));
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![text]);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+            .map(|_| ColumnConstraints::new(0.0, 0.0))
+            .collect();
+        let tfc = TableFormattingContext::new();
+        tfc.populate_column_constraints(&table, &structure, &mut constraints, DistributionMode::Auto, None);
+
+        let constraint = constraints
+            .get(0)
+            .cloned()
+            .unwrap_or_else(|| ColumnConstraints::new(0.0, 0.0));
+        assert!(
+            constraint.max_width <= 40.1,
+            "cell max-width should cap column maximum: {:?}",
+            constraint
+        );
+        assert!(
+            constraint.max_width + 0.01 >= constraint.min_width,
+            "column maximum should remain ≥ minimum: {:?}",
+            constraint
+        );
+    }
+
+    #[test]
+    fn column_min_width_clamps_column_constraints() {
+        let mut col_style = ComputedStyle::default();
+        col_style.display = Display::TableColumn;
+        col_style.min_width = Some(Length::px(120.0));
+        let col = BoxNode::new_block(Arc::new(col_style), FormattingContextType::Block, vec![]);
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+        let table = BoxNode::new_block(
+            Arc::new(table_style),
+            FormattingContextType::Table,
+            vec![col.clone(), row.clone()],
+        );
+
+        let structure = TableStructure::from_box_tree(&table);
+        let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+            .map(|_| ColumnConstraints::new(0.0, 0.0))
+            .collect();
+        let tfc = TableFormattingContext::new();
+        tfc.populate_column_constraints(&table, &structure, &mut constraints, DistributionMode::Auto, None);
+
+        let min = constraints.get(0).map(|c| c.min_width).unwrap_or(0.0);
+        assert!(
+            min >= 120.0,
+            "column min-width should apply to constraints, got {:.2}",
+            min
+        );
+    }
+
+    #[test]
+    fn column_max_width_caps_column_constraints() {
+        let mut col_style = ComputedStyle::default();
+        col_style.display = Display::TableColumn;
+        col_style.max_width = Some(Length::px(40.0));
+        let col = BoxNode::new_block(Arc::new(col_style), FormattingContextType::Block, vec![]);
+
+        let mut wide_cell_style = ComputedStyle::default();
+        wide_cell_style.display = Display::TableCell;
+        let text_style = Arc::new(ComputedStyle::default());
+        let text = BoxNode::new_text(text_style, "hi hi hi hi hi hi hi hi hi hi hi hi".to_string());
+        let cell = BoxNode::new_block(Arc::new(wide_cell_style), FormattingContextType::Block, vec![text]);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+        let table = BoxNode::new_block(
+            Arc::new(table_style),
+            FormattingContextType::Table,
+            vec![col.clone(), row.clone()],
+        );
+
+        let structure = TableStructure::from_box_tree(&table);
+        let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+            .map(|_| ColumnConstraints::new(0.0, 0.0))
+            .collect();
+        let tfc = TableFormattingContext::new();
+        tfc.populate_column_constraints(&table, &structure, &mut constraints, DistributionMode::Auto, None);
+
+        let constraint = constraints
+            .get(0)
+            .cloned()
+            .unwrap_or_else(|| ColumnConstraints::new(0.0, 0.0));
+        assert!(
+            constraint.max_width <= 40.1,
+            "column max-width should cap column maximum: {:?}",
+            constraint
+        );
+        assert!(
+            constraint.max_width + 0.01 >= constraint.min_width,
+            "column maximum should remain ≥ minimum after cap: {:?}",
+            constraint
+        );
+    }
+
+    #[test]
+    fn column_percent_min_width_uses_definite_table_width() {
+        let mut col_style = ComputedStyle::default();
+        col_style.display = Display::TableColumn;
+        col_style.min_width = Some(Length::percent(50.0));
+        let col = BoxNode::new_block(Arc::new(col_style), FormattingContextType::Block, vec![]);
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+        table_style.width = Some(Length::px(200.0));
+        let table = BoxNode::new_block(
+            Arc::new(table_style),
+            FormattingContextType::Table,
+            vec![col.clone(), row.clone()],
+        );
+
+        let structure = TableStructure::from_box_tree(&table);
+        let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+            .map(|_| ColumnConstraints::new(0.0, 0.0))
+            .collect();
+        let tfc = TableFormattingContext::new();
+        tfc.populate_column_constraints(
+            &table,
+            &structure,
+            &mut constraints,
+            DistributionMode::Auto,
+            Some(200.0),
+        );
+
+        let min = constraints.get(0).map(|c| c.min_width).unwrap_or(0.0);
+        assert!(
+            (min - 100.0).abs() < 0.5,
+            "percent min-width should resolve against definite table width, got {:.2}",
+            min
+        );
+    }
+
+    #[test]
+    fn column_percent_min_width_skipped_when_table_width_indefinite() {
+        let mut col_style = ComputedStyle::default();
+        col_style.display = Display::TableColumn;
+        col_style.min_width = Some(Length::percent(50.0));
+        let col = BoxNode::new_block(Arc::new(col_style), FormattingContextType::Block, vec![]);
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+        let table = BoxNode::new_block(
+            Arc::new(table_style),
+            FormattingContextType::Table,
+            vec![col.clone(), row.clone()],
+        );
+
+        let structure = TableStructure::from_box_tree(&table);
+        let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+            .map(|_| ColumnConstraints::new(0.0, 0.0))
+            .collect();
+        let tfc = TableFormattingContext::new();
+        // percent_base None to mimic auto table width
+        tfc.populate_column_constraints(&table, &structure, &mut constraints, DistributionMode::Auto, None);
+
+        let min = constraints.get(0).map(|c| c.min_width).unwrap_or(0.0);
+        assert!(
+            min < 50.0,
+            "percent min-width should be treated as auto when table width is indefinite, got {:.2}",
+            min
         );
     }
 
@@ -4638,8 +5746,9 @@ mod tests {
         let borders = compute_collapsed_borders(&table, &structure);
 
         assert_eq!(borders.vertical.len(), 3);
-        assert!((borders.vertical[1][0].width - 8.0).abs() < f32::EPSILON);
-        assert_eq!(borders.vertical[1][0].style, BorderStyle::Solid);
+        // Style wins over width: double outranks solid even though it is thinner.
+        assert!((borders.vertical[1][0].width - 2.0).abs() < f32::EPSILON);
+        assert_eq!(borders.vertical[1][0].style, BorderStyle::Double);
     }
 
     #[test]
@@ -4774,6 +5883,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn collapsed_borders_prefer_style_over_width() {
+        // Dotted 5px vs solid 1px: solid wins due to style priority, even though dotted is wider.
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_collapse = BorderCollapse::Collapse;
+
+        let mut left_cell_style = ComputedStyle::default();
+        left_cell_style.display = Display::TableCell;
+        left_cell_style.border_right_style = BorderStyle::Dotted;
+        left_cell_style.border_right_width = Length::px(5.0);
+        left_cell_style.border_right_color = Rgba::from_rgba8(200, 0, 0, 255);
+
+        let mut right_cell_style = ComputedStyle::default();
+        right_cell_style.display = Display::TableCell;
+        right_cell_style.border_left_style = BorderStyle::Solid;
+        right_cell_style.border_left_width = Length::px(1.0);
+        right_cell_style.border_left_color = Rgba::from_rgba8(0, 0, 200, 255);
+
+        let left = BoxNode::new_block(Arc::new(left_cell_style), FormattingContextType::Block, vec![]);
+        let right = BoxNode::new_block(Arc::new(right_cell_style), FormattingContextType::Block, vec![]);
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![left, right]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        let borders = compute_collapsed_borders(&table, &structure);
+        let border = borders
+            .vertical
+            .get(1)
+            .and_then(|col| col.get(0))
+            .copied()
+            .unwrap_or_else(ResolvedBorder::none);
+        assert_eq!(border.style, BorderStyle::Solid, "higher-priority style should win");
+        assert!((border.width - 1.0).abs() < 0.01, "winning border keeps its own width");
+        assert_eq!(border.color, Rgba::from_rgba8(0, 0, 200, 255));
+    }
+
     fn find_cell_fragment<'a>(fragment: &'a FragmentNode) -> Option<&'a FragmentNode> {
         if fragment
             .style
@@ -4864,12 +6012,12 @@ mod tests {
             )
             .expect("layout");
 
-        // Total height honors the specified height.
+        // Total height honors the specified height even though padding is ignored in collapsed model.
         assert!((fragment.bounds.height() - 100.0).abs() < 0.01);
 
-        // Content (rows/cells) starts after padding top.
+        // In the collapsed border model the table has no padding; content starts at the top.
         let cell_frag = find_cell_fragment(&fragment).expect("cell fragment");
-        assert!((cell_frag.bounds.y() - 10.0).abs() < 0.1);
+        assert!(cell_frag.bounds.y().abs() < 0.1);
     }
 
     #[test]
@@ -4941,7 +6089,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_cells_hide_strips_borders_in_separate_model() {
+    fn empty_cells_hide_preserves_border_widths_in_separate_model() {
         let mut table_style = ComputedStyle::default();
         table_style.display = Display::Table;
         table_style.border_spacing_horizontal = Length::px(0.0);
@@ -4975,10 +6123,14 @@ mod tests {
 
         let cell_frag = find_cell_fragment(&fragment).expect("cell fragment");
         let style = cell_frag.style.as_ref().expect("style");
-        assert!(style.border_top_width.to_px().abs() < f32::EPSILON);
-        assert!(style.border_right_width.to_px().abs() < f32::EPSILON);
-        assert!(style.border_bottom_width.to_px().abs() < f32::EPSILON);
-        assert!(style.border_left_width.to_px().abs() < f32::EPSILON);
+        assert!((style.border_top_width.to_px() - 3.0).abs() < 0.1);
+        assert!((style.border_right_width.to_px() - 3.0).abs() < 0.1);
+        assert!((style.border_bottom_width.to_px() - 3.0).abs() < 0.1);
+        assert!((style.border_left_width.to_px() - 3.0).abs() < 0.1);
+        assert_eq!(style.border_top_color, Rgba::TRANSPARENT);
+        assert_eq!(style.border_bottom_color, Rgba::TRANSPARENT);
+        assert_eq!(style.border_left_color, Rgba::TRANSPARENT);
+        assert_eq!(style.border_right_color, Rgba::TRANSPARENT);
     }
 
     #[test]
@@ -5055,6 +6207,53 @@ mod tests {
         assert_eq!(middle_border.style, BorderStyle::Double);
         assert!((middle_border.width - 3.0).abs() < f32::EPSILON);
         assert_eq!(middle_border.color, Rgba::from_rgba8(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn collapsed_line_positions_include_half_outer_borders() {
+        let sizes = vec![100.0, 50.0];
+        let line_widths = vec![10.0, 4.0, 6.0];
+        let (line_pos, offsets, extent) = collapsed_line_positions(&sizes, &line_widths, 0.0, 0.0);
+
+        assert_eq!(line_pos.len(), 3);
+        assert_eq!(offsets.len(), 2);
+        assert!((line_pos[0] - 0.0).abs() < 1e-6);
+        assert!(
+            (offsets[0] - 5.0).abs() < 1e-6,
+            "first column should start after half the left border"
+        );
+
+        let expected_second_line = 5.0 + 100.0 + 2.0;
+        assert!((line_pos[1] - expected_second_line).abs() < 1e-6);
+        assert!(
+            (offsets[1] - (line_pos[1] + line_widths[1] * 0.5)).abs() < 1e-6,
+            "second column should start after half of the interior line"
+        );
+
+        let expected_extent = expected_second_line + 2.0 + 50.0 + 3.0;
+        assert!((line_pos[2] - expected_extent).abs() < 1e-6);
+        assert!((extent - expected_extent).abs() < 1e-6);
+    }
+
+    #[test]
+    fn collapsed_segments_trim_to_corner_winners() {
+        let row_line_pos = vec![0.0, 30.0];
+        let corner_top = ResolvedBorder {
+            width: 10.0,
+            style: BorderStyle::Solid,
+            color: Rgba::BLACK,
+        };
+        let corner_bottom = ResolvedBorder {
+            width: 6.0,
+            style: BorderStyle::Solid,
+            color: Rgba::BLACK,
+        };
+
+        let y_start = row_line_pos[0] + corner_top.width * 0.5;
+        let y_end = row_line_pos[1] - corner_bottom.width * 0.5;
+        assert_eq!(y_start, 5.0);
+        assert_eq!(y_end, 27.0);
+        assert_eq!(y_end - y_start, 22.0);
     }
 
     #[test]
@@ -5150,10 +6349,10 @@ mod tests {
         let borders = compute_collapsed_borders(&table, &structure);
 
         let middle_border = &borders.vertical[1][0];
-        // The wider solid border should win despite the lower style precedence.
-        assert_eq!(middle_border.style, BorderStyle::Solid);
-        assert!((middle_border.width - 3.005).abs() < 0.0001);
-        assert_eq!(middle_border.color, Rgba::from_rgba8(0, 0, 255, 255));
+        // Style precedence wins: double outranks solid even when slightly thinner.
+        assert_eq!(middle_border.style, BorderStyle::Double);
+        assert!((middle_border.width - 3.0).abs() < 0.0001);
+        assert_eq!(middle_border.color, Rgba::from_rgba8(255, 0, 0, 255));
     }
 
     #[test]
@@ -6110,6 +7309,10 @@ mod tests {
         let mut structure = TableStructure::new();
         structure.column_count = 4;
         structure.columns = (0..4).map(ColumnInfo::new).collect();
+        for col in &mut structure.columns {
+            col.min_width = 0.0;
+            col.max_width = f32::INFINITY;
+        }
         structure.border_spacing = (0.0, 0.0);
 
         calculate_fixed_layout_widths(&mut structure, 400.0);
@@ -6127,6 +7330,9 @@ mod tests {
             ColumnInfo {
                 index: 0,
                 source_index: 0,
+                author_min_width: None,
+                author_max_width: None,
+                font_size: 0.0,
                 visibility: Visibility::Visible,
                 specified_width: Some(SpecifiedWidth::Fixed(100.0)),
                 min_width: 0.0,
@@ -6136,6 +7342,9 @@ mod tests {
             ColumnInfo {
                 index: 1,
                 source_index: 1,
+                author_min_width: None,
+                author_max_width: None,
+                font_size: 0.0,
                 visibility: Visibility::Visible,
                 specified_width: None,
                 min_width: 0.0,
@@ -6145,6 +7354,9 @@ mod tests {
             ColumnInfo {
                 index: 2,
                 source_index: 2,
+                author_min_width: None,
+                author_max_width: None,
+                font_size: 0.0,
                 visibility: Visibility::Visible,
                 specified_width: Some(SpecifiedWidth::Fixed(50.0)),
                 min_width: 0.0,
@@ -6202,6 +7414,9 @@ mod tests {
             ColumnInfo {
                 index: 0,
                 source_index: 0,
+                author_min_width: None,
+                author_max_width: None,
+                font_size: 0.0,
                 visibility: Visibility::Visible,
                 specified_width: Some(SpecifiedWidth::Percent(25.0)),
                 min_width: 0.0,
@@ -6211,6 +7426,9 @@ mod tests {
             ColumnInfo {
                 index: 1,
                 source_index: 1,
+                author_min_width: None,
+                author_max_width: None,
+                font_size: 0.0,
                 visibility: Visibility::Visible,
                 specified_width: Some(SpecifiedWidth::Percent(75.0)),
                 min_width: 0.0,
@@ -6245,6 +7463,45 @@ mod tests {
         assert!(
             total > 299.0,
             "percent columns should not be scaled down when exceeding 100%"
+        );
+    }
+
+    #[test]
+    fn fixed_layout_respects_min_width_caps() {
+        let mut structure = TableStructure::new();
+        structure.column_count = 2;
+        let mut col0 = ColumnInfo::new(0);
+        col0.min_width = 150.0;
+        let mut col1 = ColumnInfo::new(1);
+        col1.min_width = 80.0;
+        structure.columns = vec![col0, col1];
+        structure.border_spacing = (0.0, 0.0);
+
+        calculate_fixed_layout_widths(&mut structure, 200.0);
+
+        assert!((structure.columns[0].computed_width - 150.0).abs() < 0.01);
+        assert!((structure.columns[1].computed_width - 80.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn fixed_layout_max_width_caps_stop_growth() {
+        let mut structure = TableStructure::new();
+        structure.column_count = 2;
+        let mut col0 = ColumnInfo::new(0);
+        col0.max_width = 50.0;
+        let mut col1 = ColumnInfo::new(1);
+        col1.max_width = 60.0;
+        structure.columns = vec![col0, col1];
+        structure.border_spacing = (0.0, 0.0);
+
+        calculate_fixed_layout_widths(&mut structure, 200.0);
+
+        assert!((structure.columns[0].computed_width - 50.0).abs() < 0.01);
+        assert!((structure.columns[1].computed_width - 60.0).abs() < 0.01);
+        let total: f32 = structure.columns.iter().map(|c| c.computed_width).sum();
+        assert!(
+            total <= 110.1,
+            "table should not exceed capped widths when no headroom is available"
         );
     }
 
@@ -6334,6 +7591,80 @@ mod tests {
         // Should use max widths + extra distribution
         assert!(structure.columns[0].computed_width >= 100.0);
         assert!(structure.columns[1].computed_width >= 150.0);
+    }
+
+    #[test]
+    fn auto_layout_uses_largest_cell_max_width_per_column() {
+        let mut structure = TableStructure::new();
+        structure.column_count = 2;
+        structure.row_count = 2;
+        structure.columns = vec![ColumnInfo::new(0), ColumnInfo::new(1)];
+        structure.border_spacing = (0.0, 0.0);
+        structure.cells = vec![
+            CellInfo {
+                index: 0,
+                source_row: 0,
+                source_col: 0,
+                row: 0,
+                col: 0,
+                rowspan: 1,
+                colspan: 1,
+                box_index: 0,
+                min_width: 20.0,
+                max_width: 50.0,
+                min_height: 0.0,
+                bounds: Rect::ZERO,
+            },
+            CellInfo {
+                index: 1,
+                source_row: 0,
+                source_col: 1,
+                row: 0,
+                col: 1,
+                rowspan: 1,
+                colspan: 1,
+                box_index: 1,
+                min_width: 10.0,
+                max_width: 100.0,
+                min_height: 0.0,
+                bounds: Rect::ZERO,
+            },
+            CellInfo {
+                index: 2,
+                source_row: 1,
+                source_col: 0,
+                row: 1,
+                col: 0,
+                rowspan: 1,
+                colspan: 1,
+                box_index: 2,
+                min_width: 20.0,
+                max_width: 200.0,
+                min_height: 0.0,
+                bounds: Rect::ZERO,
+            },
+            CellInfo {
+                index: 3,
+                source_row: 1,
+                source_col: 1,
+                row: 1,
+                col: 1,
+                rowspan: 1,
+                colspan: 1,
+                box_index: 3,
+                min_width: 10.0,
+                max_width: 100.0,
+                min_height: 0.0,
+                bounds: Rect::ZERO,
+            },
+        ];
+
+        calculate_auto_layout_widths(&mut structure, 300.0);
+
+        assert!((structure.columns[0].max_width - 200.0).abs() < 0.01);
+        assert!((structure.columns[1].max_width - 100.0).abs() < 0.01);
+        assert!((structure.columns[0].computed_width - 200.0).abs() < 0.01);
+        assert!((structure.columns[1].computed_width - 100.0).abs() < 0.01);
     }
 
     #[test]
@@ -7073,6 +8404,61 @@ mod tests {
     }
 
     #[test]
+    fn table_cell_child_margins_do_not_collapse_with_cell() {
+        // Table cells establish a BFC; child block margins should not collapse through the cell,
+        // so the cell height includes the child's top and bottom margins.
+        let mut child_style = ComputedStyle::default();
+        child_style.display = Display::Block;
+        child_style.height = Some(Length::px(20.0));
+        child_style.margin_top = Some(Length::px(10.0));
+        child_style.margin_bottom = Some(Length::px(10.0));
+        let child = BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![]);
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![child]);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell.clone()]);
+
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(&table, &LayoutConstraints::definite(200.0, 200.0))
+            .expect("table layout");
+
+        fn find_fragment_by_box_id<'a>(frag: &'a FragmentNode, target: usize) -> Option<&'a FragmentNode> {
+            match frag.content {
+                FragmentContent::Block { box_id } | FragmentContent::Inline { box_id, .. } => {
+                    if box_id == Some(target) {
+                        return Some(frag);
+                    }
+                }
+                _ => {}
+            }
+            for child in &frag.children {
+                if let Some(found) = find_fragment_by_box_id(child, target) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let cell_fragment = find_fragment_by_box_id(&fragment, cell.id).expect("cell fragment");
+        assert!(
+            (cell_fragment.bounds.height() - 40.0).abs() < 0.1,
+            "cell height should include child margins (got {:.2})",
+            cell_fragment.bounds.height()
+        );
+    }
+
+    #[test]
     fn percent_rows_use_available_height_when_table_auto() {
         let mut structure = TableStructure::new();
         structure.border_collapse = BorderCollapse::Separate;
@@ -7399,6 +8785,181 @@ mod tests {
     }
 
     #[test]
+    fn fixed_height_table_accounts_for_padding_and_spacing() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.height = Some(Length::px(100.0));
+        table_style.padding_top = Length::px(10.0);
+        table_style.padding_bottom = Length::px(10.0);
+        table_style.border_spacing_horizontal = Length::px(5.0);
+        table_style.border_spacing_vertical = Length::px(5.0);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.min_height = Some(Length::px(40.0));
+
+        let make_row = |cell_style: &ComputedStyle| {
+            BoxNode::new_block(
+                Arc::new(row_style.clone()),
+                FormattingContextType::Block,
+                vec![BoxNode::new_block(
+                    Arc::new(cell_style.clone()),
+                    FormattingContextType::Block,
+                    vec![],
+                )],
+            )
+        };
+
+        let row0 = make_row(&cell_style);
+        let row1 = make_row(&cell_style);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row0, row1]);
+
+        let fc = TableFormattingContext::new();
+        let fragment = fc
+            .layout(&table, &LayoutConstraints::definite(200.0, 200.0))
+            .expect("table layout");
+        assert!(
+            (fragment.bounds.height() - 100.0).abs() < 0.01,
+            "table height should honor the specified 100px"
+        );
+
+        fn collect_cell_bottoms(fragment: &FragmentNode, bottoms: &mut Vec<f32>) {
+            if fragment
+                .style
+                .as_ref()
+                .map(|s| matches!(s.display, Display::TableCell))
+                .unwrap_or(false)
+            {
+                bottoms.push(fragment.bounds.y() + fragment.bounds.height());
+            }
+            for child in &fragment.children {
+                collect_cell_bottoms(child, bottoms);
+            }
+        }
+
+        let mut bottoms = Vec::new();
+        collect_cell_bottoms(&fragment, &mut bottoms);
+        assert!(!bottoms.is_empty());
+        let max_bottom = bottoms.into_iter().fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            max_bottom <= fragment.bounds.height() + 0.01,
+            "cells must fit inside the specified table height (max bottom {:.2} vs height {:.2})",
+            max_bottom,
+            fragment.bounds.height()
+        );
+    }
+
+    #[test]
+    fn spanning_percentage_width_splits_into_column_percentages() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut span_cell_style = ComputedStyle::default();
+        span_cell_style.display = Display::TableCell;
+        span_cell_style.width = Some(Length::percent(60.0));
+
+        let mut auto_cell_style = ComputedStyle::default();
+        auto_cell_style.display = Display::TableCell;
+
+        let span_cell = BoxNode::new_block(Arc::new(span_cell_style), FormattingContextType::Block, vec![])
+            .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(2, 1));
+        let auto_cell = BoxNode::new_block(Arc::new(auto_cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(
+            Arc::new(row_style),
+            FormattingContextType::Block,
+            vec![span_cell, auto_cell],
+        );
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let tfc = TableFormattingContext::new();
+        let structure = TableStructure::from_box_tree(&table);
+        let mut constraints = vec![ColumnConstraints::new(0.0, 0.0); structure.column_count];
+        let percent_base = Some(200.0);
+        tfc.populate_column_constraints(
+            &table,
+            &structure,
+            &mut constraints,
+            DistributionMode::Auto,
+            percent_base,
+        );
+        tfc.normalize_percentage_constraints(&mut constraints, percent_base);
+
+        let percents: Vec<f32> = constraints.iter().map(|c| c.percentage.unwrap_or(0.0)).collect();
+        assert_eq!(percents.len(), 3);
+        assert!((percents[0] - 30.0).abs() < 0.01);
+        assert!((percents[1] - 30.0).abs() < 0.01);
+        assert!(percents[2] < 0.01);
+
+        let min_sum: f32 = constraints.iter().map(|c| c.min_width).sum();
+        assert!(
+            min_sum < 20.0,
+            "percentage span should not lock columns to absolute minima (got {min_sum})"
+        );
+    }
+
+    #[test]
+    fn wide_caption_expands_table_wrapper() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.width = Some(Length::px(100.0));
+
+        let mut caption_style = ComputedStyle::default();
+        caption_style.display = Display::TableCaption;
+        caption_style.width = Some(Length::px(220.0));
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+        let caption = BoxNode::new_block(
+            Arc::new(caption_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(ComputedStyle::default()),
+                "caption".to_string(),
+            )],
+        );
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![caption, row]);
+
+        let fc = TableFormattingContext::new();
+        let fragment = fc
+            .layout(&table, &LayoutConstraints::definite(400.0, 400.0))
+            .expect("table layout");
+
+        // Wrapper should expand to at least the caption width.
+        assert!(
+            fragment.bounds.width() >= 219.0,
+            "wrapper should be wide enough for the caption (got {:.2})",
+            fragment.bounds.width()
+        );
+        // Table box stays at its authored width (not inflated by the caption).
+        let table_child = fragment.children.iter().find(|child| {
+            child
+                .style
+                .as_ref()
+                .map(|s| matches!(s.display, Display::Table))
+                .unwrap_or(false)
+        });
+        let table_child = table_child.expect("table child");
+        assert!(
+            (table_child.bounds.width() - 100.0).abs() < 0.1,
+            "table box width should stay at 100px (got {:.2})",
+            table_child.bounds.width()
+        );
+    }
+
+    #[test]
     fn test_vertical_align_with_rowspan() {
         let mut structure = TableStructure::new();
         structure.row_count = 2;
@@ -7458,11 +9019,11 @@ mod tests {
     }
 
     #[test]
-    fn test_vertical_align_baseline_rowspan_reserves_baseline_space() {
+    fn test_vertical_align_baseline_rowspan_does_not_set_row_baseline() {
         let mut structure = TableStructure::new();
         structure.row_count = 2;
         structure.rows = vec![RowInfo::new(0), RowInfo::new(1)];
-        // Baseline-aligned spanning cell; its first-row baseline should lift row 0's baseline metrics.
+        // Baseline-aligned spanning cell; row baselines should ignore rowspans per CSS 2.1.
         structure.cells = vec![CellInfo {
             index: 0,
             source_row: 0,
@@ -7479,11 +9040,10 @@ mod tests {
         }];
         structure.border_spacing = (0.0, 0.0);
 
-        // Manually set row height expectations to simulate a baseline offset.
         calculate_row_heights(&mut structure, None);
-        // After baseline reservation, row 0 should carry baseline metrics and a non-zero height.
-        assert!(structure.rows[0].computed_height >= 1.0);
-        assert!(structure.rows[0].min_height >= 0.0);
+        // Baselines from row-spanning cells should not force extra baseline height in the first row.
+        assert!(structure.rows[0].computed_height >= 0.0);
+        assert!(structure.rows[1].computed_height >= 0.0);
     }
 
     #[test]
@@ -7503,6 +9063,95 @@ mod tests {
         let (top, bottom) = spanning_baseline_allocation(30.0, 12.0, 0, 2, &row_heights);
         assert!((top - 12.0).abs() < 0.01);
         assert!(bottom.abs() < 0.01);
+    }
+
+    #[test]
+    fn row_baseline_uses_first_non_rowspan_cell_only() {
+        let mut row = RowMetrics::new(30.0);
+        row.max_cell_height = 0.0;
+        let row_height = 30.0;
+
+        let apply_baseline_cell = |row: &mut RowMetrics, baseline: f32, cell_height: f32| {
+            row.max_cell_height = row.max_cell_height.max(cell_height);
+            if row.has_baseline {
+                return;
+            }
+            let clamped = baseline.min(row_height);
+            let bottom = (row_height - clamped).max(0.0);
+            row.has_baseline = true;
+            row.baseline_top = clamped;
+            row.baseline_bottom = bottom;
+        };
+
+        apply_baseline_cell(&mut row, 10.0, 30.0);
+        // Second baseline-aligned cell should not replace the row baseline.
+        apply_baseline_cell(&mut row, 5.0, 30.0);
+
+        assert!((row.baseline_top - 10.0).abs() < 0.01);
+        assert!((row.baseline_bottom - 20.0).abs() < 0.01);
+        assert!((row.max_cell_height - 30.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn row_baseline_uses_leftmost_baseline_cell() {
+        let mut row = RowMetrics::new(20.0);
+        let row_height = 20.0;
+        let mut cells = vec![(0usize, 1usize, 5.0f32), (0, 0, 12.0)];
+
+        cells.sort_by_key(|(r, c, _)| (*r, *c));
+
+        for (_, _, baseline) in cells {
+            if row.has_baseline {
+                row.max_cell_height = row.max_cell_height.max(row_height);
+                continue;
+            }
+            row.max_cell_height = row.max_cell_height.max(row_height);
+            let clamped = baseline.min(row_height);
+            row.baseline_top = clamped;
+            row.baseline_bottom = (row_height - clamped).max(0.0);
+            row.has_baseline = true;
+        }
+
+        assert!((row.baseline_top - 12.0).abs() < 0.01);
+        assert!((row.baseline_bottom - 8.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn table_baseline_falls_back_to_first_row_bottom() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+
+        let mut row0_cell_style = cell_style.clone();
+        row0_cell_style.height = Some(Length::px(10.0)); // No baseline content
+
+        let mut row1_cell_style = cell_style.clone();
+        row1_cell_style.height = Some(Length::px(5.0));
+
+        let row0_cell = BoxNode::new_block(Arc::new(row0_cell_style), FormattingContextType::Block, vec![]);
+        let row1_cell = BoxNode::new_block(Arc::new(row1_cell_style), FormattingContextType::Block, vec![]);
+
+        let row0 = BoxNode::new_block(
+            Arc::new(row_style.clone()),
+            FormattingContextType::Block,
+            vec![row0_cell],
+        );
+        let row1 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![row1_cell]);
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row0, row1]);
+
+        let tfc = TableFormattingContext::new();
+        let constraints = LayoutConstraints::definite_width(200.0);
+        let fragment = tfc.layout(&table, &constraints).expect("table layout");
+
+        // Baseline should come from the first row's bottom edge (10px) even though later rows exist.
+        let baseline = find_first_baseline(&fragment, 0.0).expect("baseline");
+        assert!((baseline - 10.0).abs() < 0.01);
     }
 
     #[test]
@@ -7608,10 +9257,10 @@ mod tests {
         let constraints = LayoutConstraints::definite_width(100.0);
         let fragment = tfc.layout(&table, &constraints).expect("table layout");
 
-        // Width should include left+right collapsed borders (3 + 3) even with zero cell width.
-        assert!(fragment.bounds.width() >= 6.0);
-        // Height should include top+bottom collapsed borders (2 + 2) plus at least a minimal row height.
-        assert!(fragment.bounds.height() >= 4.0);
+        // Width should include half of the outer collapsed borders (1.5 + 1.5) even with zero cell width.
+        assert!(fragment.bounds.width() >= 3.0);
+        // Height should include half of the outer collapsed borders (1 + 1) plus at least a minimal row height.
+        assert!(fragment.bounds.height() >= 3.0);
     }
 
     #[test]
@@ -7640,8 +9289,8 @@ mod tests {
         let constraints = LayoutConstraints::definite_width(10.0);
         let fragment = tfc.layout(&table, &constraints).expect("table layout");
 
-        // Expect top border + two minimal rows + bottom border.
-        assert!((fragment.bounds.height() - 6.0).abs() < 0.51);
+        // Expect half the top border + two minimal rows + half the bottom border.
+        assert!((fragment.bounds.height() - 4.0).abs() < 0.51);
     }
 
     #[test]
@@ -7693,10 +9342,74 @@ mod tests {
             .expect("cell fragment");
 
         // Cell should be offset by the collapsed borders.
-        assert!((cell_frag.bounds.x() - 6.0).abs() < 0.51);
-        assert!((cell_frag.bounds.y() - 4.0).abs() < 0.51);
-        // Table width should include both borders plus the cell.
-        assert!(fragment.bounds.width() >= cell_frag.bounds.width() + 12.0);
+        assert!((cell_frag.bounds.x() - 3.0).abs() < 0.51);
+        assert!((cell_frag.bounds.y() - 2.0).abs() < 0.51);
+        // Table width should include both borders (half inside the bounds) plus the cell.
+        assert!(fragment.bounds.width() >= cell_frag.bounds.width() + 6.0);
+    }
+
+    #[test]
+    fn test_collapsed_outer_border_spills_margin() {
+        // Later rows with thicker outer borders should not widen the table; the extra spills outward.
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_collapse = BorderCollapse::Collapse;
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut thin_cell_style = ComputedStyle::default();
+        thin_cell_style.display = Display::TableCell;
+        thin_cell_style.border_left_style = BorderStyle::Solid;
+        thin_cell_style.border_left_width = Length::px(2.0);
+
+        let mut thick_cell_style = ComputedStyle::default();
+        thick_cell_style.display = Display::TableCell;
+        thick_cell_style.border_left_style = BorderStyle::Solid;
+        thick_cell_style.border_left_width = Length::px(10.0);
+
+        let row1 = BoxNode::new_block(
+            Arc::new(row_style.clone()),
+            FormattingContextType::Block,
+            vec![BoxNode::new_block(
+                Arc::new(thin_cell_style),
+                FormattingContextType::Block,
+                vec![],
+            )],
+        );
+        let row2 = BoxNode::new_block(
+            Arc::new(row_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_block(
+                Arc::new(thick_cell_style),
+                FormattingContextType::Block,
+                vec![],
+            )],
+        );
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row1, row2]);
+
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(&table, &LayoutConstraints::definite_width(0.0))
+            .expect("table layout");
+
+        let first_cell = fragment
+            .children
+            .iter()
+            .find(|f| f.bounds.y().abs() < f32::EPSILON)
+            .expect("first row cell");
+
+        // Cell offset should reflect only half of the first row's 2px border (≈1px), not the later 10px border.
+        assert!(
+            first_cell.bounds.x() < 2.0,
+            "cell offset should use first-row border, got {}",
+            first_cell.bounds.x()
+        );
+        // Table width should not inflate to include the thicker second-row border.
+        assert!(
+            fragment.bounds.width() < 6.0,
+            "table width should be bounded by the first row's border"
+        );
     }
 
     #[test]
@@ -7899,8 +9612,9 @@ mod tests {
         let second = &fragment.children[1];
 
         assert!((first.bounds.y() - 0.0).abs() < 0.01);
-        assert!((second.bounds.y() - 80.0).abs() < 0.01);
-        assert!((second.bounds.height() - 20.0).abs() < 0.01);
+        // Both cells occupy the full row height; bottom alignment is expressed by shifting contents, not the box.
+        assert!((second.bounds.y() - 0.0).abs() < 0.01);
+        assert!((second.bounds.height() - 100.0).abs() < 0.01);
     }
 
     #[test]

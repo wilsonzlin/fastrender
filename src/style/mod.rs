@@ -32,16 +32,17 @@ use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, AspectRatio, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer,
     BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderImage, BorderStyle, BoxSizing,
-    CaptionSide, ClipPath, Containment, CursorImage, CursorKeyword, Direction, EmptyCells, FilterFunction, FlexBasis,
-    FlexDirection, FlexWrap, FontFeatureSetting, FontKerning, FontLanguageOverride, FontOpticalSizing, FontSizeAdjust,
-    FontStretch, FontStyle, FontSynthesis, FontVariant, FontVariantAlternates, FontVariantCaps, FontVariantEastAsian,
-    FontVariantEmoji, FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontVariationSetting, FontWeight,
-    GridTrack, HyphensMode, ImageOrientation, ImageRendering, ImageResolution, Isolation, JustifyContent, LineBreak,
-    LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
-    OutlineColor, OutlineStyle, Overflow, OverflowWrap, TabSize, TableLayout, TextAlign, TextAlignLast,
-    TextCombineUpright, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent,
-    TextJustify, TextOrientation, TextOverflow, TextTransform, TextUnderlineOffset, TextUnderlinePosition,
-    TransformBox, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WillChange, WordBreak, WritingMode,
+    CaptionSide, ClipPath, ContainerType, Containment, CursorImage, CursorKeyword, Direction, EmptyCells,
+    FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting, FontKerning, FontLanguageOverride,
+    FontOpticalSizing, FontSizeAdjust, FontStretch, FontStyle, FontSynthesis, FontVariant, FontVariantAlternates,
+    FontVariantCaps, FontVariantEastAsian, FontVariantEmoji, FontVariantLigatures, FontVariantNumeric,
+    FontVariantPosition, FontVariationSetting, FontWeight, GridTrack, HyphensMode, ImageOrientation, ImageRendering,
+    ImageResolution, Isolation, JustifyContent, LineBreak, LineHeight, ListStyleImage, ListStylePosition,
+    ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowWrap,
+    TabSize, TableLayout, TextAlign, TextAlignLast, TextCombineUpright, TextDecoration, TextDecorationSkipInk,
+    TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextOverflow, TextTransform,
+    TextUnderlineOffset, TextUnderlinePosition, TransformBox, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace,
+    WillChange, WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -251,6 +252,9 @@ pub struct ComputedStyle {
     pub outline_width: Length,
     pub outline_offset: Length,
     pub box_sizing: BoxSizing,
+    pub container_type: ContainerType,
+    /// Space-separated list of container names (empty when none).
+    pub container_name: Vec<String>,
 
     // Box model
     pub width: Option<Length>,
@@ -303,6 +307,8 @@ pub struct ComputedStyle {
     pub flex_grow: f32,
     pub flex_shrink: f32,
     pub flex_basis: FlexBasis,
+    /// Flex item order (reordering within flex lines)
+    pub order: i32,
     /// Justify-items / justify-self are used for grid/inflow alignment on the inline axis.
     pub justify_items: AlignItems,
     pub justify_self: Option<AlignItems>,
@@ -478,6 +484,8 @@ impl Default for ComputedStyle {
             outline_width: Length::px(3.0),
             outline_offset: Length::px(0.0),
             box_sizing: BoxSizing::ContentBox,
+            container_type: ContainerType::Normal,
+            container_name: Vec::new(),
 
             width: None,
             height: None,
@@ -526,6 +534,7 @@ impl Default for ComputedStyle {
             flex_grow: 0.0,
             flex_shrink: 1.0,
             flex_basis: FlexBasis::Auto,
+            order: 0,
             justify_items: AlignItems::Stretch,
             justify_self: None,
 

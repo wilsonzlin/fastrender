@@ -34,8 +34,17 @@ pub fn resolve_length_with_percentage_metrics(
     style: Option<&ComputedStyle>,
     font_context: Option<&FontContext>,
 ) -> Option<f32> {
+    if length.unit == LengthUnit::Calc {
+        return length.resolve_with_context(
+            percentage_base,
+            viewport.width,
+            viewport.height,
+            font_size,
+            root_font_size,
+        );
+    }
     if length.unit.is_percentage() {
-        percentage_base.map(|b| length.resolve_against(b))
+        percentage_base.and_then(|b| length.resolve_against(b))
     } else if length.unit.is_viewport_relative() {
         Some(length.resolve_with_viewport(viewport.width, viewport.height))
     } else if length.unit.is_font_relative() {
@@ -92,8 +101,17 @@ pub fn resolve_offset_with_metrics(
     match value {
         LengthOrAuto::Auto => None,
         LengthOrAuto::Length(length) => {
+            if length.unit == LengthUnit::Calc {
+                return length.resolve_with_context(
+                    Some(percentage_base),
+                    viewport.width,
+                    viewport.height,
+                    font_size,
+                    root_font_size,
+                );
+            }
             if length.unit.is_percentage() {
-                Some(length.resolve_against(percentage_base))
+                length.resolve_against(percentage_base)
             } else if length.unit.is_absolute() {
                 Some(length.to_px())
             } else if length.unit.is_viewport_relative() {
@@ -111,7 +129,7 @@ pub fn resolve_offset_with_metrics(
 /// Resolves offsets using a positioned style (font-relative units use font metrics).
 pub fn resolve_offset_for_positioned(
     value: &LengthOrAuto,
-    percentage_base: f32,
+    percentage_base: Option<f32>,
     viewport: crate::geometry::Size,
     style: &PositionedStyle,
     font_context: &FontContext,
@@ -119,8 +137,17 @@ pub fn resolve_offset_for_positioned(
     match value {
         LengthOrAuto::Auto => None,
         LengthOrAuto::Length(length) => {
+            if length.unit == LengthUnit::Calc {
+                return length.resolve_with_context(
+                    percentage_base,
+                    viewport.width,
+                    viewport.height,
+                    style.font_size,
+                    style.root_font_size,
+                );
+            }
             if length.unit.is_percentage() {
-                Some(length.resolve_against(percentage_base))
+                percentage_base.and_then(|base| length.resolve_against(base))
             } else if length.unit.is_absolute() {
                 Some(length.to_px())
             } else if length.unit.is_viewport_relative() {
@@ -282,6 +309,7 @@ pub fn compute_replaced_size(
     percentage_base: Option<Size>,
     viewport: Size,
 ) -> Size {
+    let sanitize = |v: f32| if v.is_finite() && v >= 0.0 { v } else { 0.0 };
     const DEFAULT_SIZE: Size = Size {
         width: 300.0,
         height: 150.0,
@@ -308,10 +336,12 @@ pub fn compute_replaced_size(
     let font_size = style.font_size;
     let root_font_size = style.root_font_size;
 
-    let resolve_for_width =
-        |len: Length| resolve_replaced_length(&len, width_base, viewport, font_size, root_font_size).unwrap_or(0.0);
-    let resolve_for_height =
-        |len: Length| resolve_replaced_length(&len, height_base, viewport, font_size, root_font_size).unwrap_or(0.0);
+    let resolve_for_width = |len: Length| {
+        sanitize(resolve_replaced_length(&len, width_base, viewport, font_size, root_font_size).unwrap_or(0.0))
+    };
+    let resolve_for_height = |len: Length| {
+        sanitize(resolve_replaced_length(&len, height_base, viewport, font_size, root_font_size).unwrap_or(0.0))
+    };
 
     let horizontal_edges = resolve_for_width(style.padding_left)
         + resolve_for_width(style.padding_right)
@@ -332,11 +362,13 @@ pub fn compute_replaced_size(
         .as_ref()
         .and_then(|l| resolve_replaced_length(l, height_base, viewport, font_size, root_font_size))
         .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing));
+    let width_specified = specified_w.is_some();
+    let height_specified = specified_h.is_some();
 
     let mut width: f32;
     let mut height: f32;
 
-    match (specified_w, specified_h) {
+    match (specified_w.map(sanitize), specified_h.map(sanitize)) {
         (Some(w), Some(h)) => {
             width = w;
             height = h;
@@ -393,41 +425,76 @@ pub fn compute_replaced_size(
         },
     }
 
-    // Apply min/max constraints when present
-    if let Some(min_w) = style
+    // Resolve min/max constraints once so we can reuse them during aspect-ratio adjustments.
+    let resolved_min_w = style
         .min_width
         .as_ref()
         .and_then(|l| resolve_replaced_length(l, width_base, viewport, font_size, root_font_size))
-        .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
-    {
-        width = width.max(min_w);
-    }
-    if let Some(max_w) = style
+        .map(|w| sanitize(content_size_from_box_sizing(w, horizontal_edges, style.box_sizing)));
+    let resolved_max_w = style
         .max_width
         .as_ref()
         .and_then(|l| resolve_replaced_length(l, width_base, viewport, font_size, root_font_size))
-        .map(|w| content_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
-    {
-        width = width.min(max_w);
-    }
-    if let Some(min_h) = style
+        .map(|w| sanitize(content_size_from_box_sizing(w, horizontal_edges, style.box_sizing)));
+    let resolved_min_h = style
         .min_height
         .as_ref()
         .and_then(|l| resolve_replaced_length(l, height_base, viewport, font_size, root_font_size))
-        .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
-    {
-        height = height.max(min_h);
-    }
-    if let Some(max_h) = style
+        .map(|h| sanitize(content_size_from_box_sizing(h, vertical_edges, style.box_sizing)));
+    let resolved_max_h = style
         .max_height
         .as_ref()
         .and_then(|l| resolve_replaced_length(l, height_base, viewport, font_size, root_font_size))
-        .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
-    {
-        height = height.min(max_h);
+        .map(|h| sanitize(content_size_from_box_sizing(h, vertical_edges, style.box_sizing)));
+
+    // Apply min/max constraints, preserving the intrinsic aspect ratio when only one axis was authored.
+    let mut width_changed = false;
+    if let Some(min_w) = resolved_min_w {
+        if width < min_w {
+            width = min_w;
+            width_changed = true;
+        }
+    }
+    if let Some(max_w) = resolved_max_w {
+        if width > max_w {
+            width = max_w;
+            width_changed = true;
+        }
+    }
+    if width_changed && !height_specified {
+        if let Some(ratio) = intrinsic_ratio {
+            height = width / ratio;
+        }
     }
 
-    Size::new(width.max(0.0), height.max(0.0))
+    let mut height_changed = false;
+    if let Some(min_h) = resolved_min_h {
+        if height < min_h {
+            height = min_h;
+            height_changed = true;
+        }
+    }
+    if let Some(max_h) = resolved_max_h {
+        if height > max_h {
+            height = max_h;
+            height_changed = true;
+        }
+    }
+    if height_changed && !width_specified {
+        if let Some(ratio) = intrinsic_ratio {
+            width = height * ratio;
+            if let Some(min_w) = resolved_min_w {
+                width = width.max(min_w);
+            }
+            if let Some(max_w) = resolved_max_w {
+                width = width.min(max_w);
+            }
+        }
+    }
+
+    width = sanitize(width);
+    height = sanitize(height);
+    Size::new(width, height)
 }
 
 fn resolve_replaced_length(
@@ -438,7 +505,7 @@ fn resolve_replaced_length(
     root_font_size: f32,
 ) -> Option<f32> {
     if len.unit.is_percentage() {
-        percentage_base.map(|b| len.resolve_against(b))
+        percentage_base.and_then(|b| len.resolve_against(b))
     } else if len.unit.is_viewport_relative() {
         Some(len.resolve_with_viewport(viewport.width, viewport.height))
     } else if len.unit.is_font_relative() {
@@ -676,6 +743,51 @@ mod tests {
         assert_eq!(size.width, 250.0);
         // Height clamps independently; we do not re-derive ratio after constraints.
         assert_eq!(size.height, 50.0);
+    }
+
+    #[test]
+    fn replaced_max_width_scales_height_with_ratio() {
+        let mut style = ComputedStyle::default();
+        style.max_width = Some(Length::px(1200.0));
+        let replaced = ReplacedBox {
+            replaced_type: crate::tree::box_tree::ReplacedType::Image {
+                src: "img".into(),
+                alt: None,
+                sizes: None,
+                srcset: Vec::new(),
+            },
+            intrinsic_size: Some(Size::new(2400.0, 1600.0)),
+            aspect_ratio: Some(2400.0 / 1600.0),
+        };
+
+        let size = compute_replaced_size(
+            &style,
+            &replaced,
+            Some(Size::new(1200.0, 800.0)),
+            Size::new(1200.0, 800.0),
+        );
+        assert!((size.width - 1200.0).abs() < 0.01);
+        assert!((size.height - 800.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn replaced_max_height_scales_width_with_ratio() {
+        let mut style = ComputedStyle::default();
+        style.max_height = Some(Length::px(40.0));
+        let replaced = ReplacedBox {
+            replaced_type: crate::tree::box_tree::ReplacedType::Image {
+                src: "img".into(),
+                alt: None,
+                sizes: None,
+                srcset: Vec::new(),
+            },
+            intrinsic_size: Some(Size::new(100.0, 50.0)),
+            aspect_ratio: Some(2.0),
+        };
+
+        let size = compute_replaced_size(&style, &replaced, None, Size::new(800.0, 600.0));
+        assert!((size.width - 80.0).abs() < 0.01);
+        assert!((size.height - 40.0).abs() < 0.01);
     }
 
     #[test]

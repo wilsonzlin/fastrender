@@ -4,11 +4,18 @@
 
 use encoding_rs::{Encoding, WINDOWS_1252};
 use fastrender::css::encoding::decode_css_bytes;
+use fastrender::css::loader::{
+    absolutize_css_urls, extract_css_links, extract_embedded_css_urls, infer_base_url, inject_css_into_html,
+    inline_imports,
+};
 use fastrender::{Error, FastRender, Result};
 use std::collections::HashSet;
 use std::env;
-use std::path::Path;
-use url::Url;
+use std::sync::mpsc::{channel, RecvTimeoutError};
+use std::thread;
+use std::time::Duration;
+
+const STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
 fn fetch_bytes(url: &str) -> Result<(Vec<u8>, Option<String>)> {
     // Handle file:// URLs
@@ -195,401 +202,17 @@ fn parse_attr_value(slice_lower: &[u8]) -> (Option<String>, usize) {
     (value, consumed)
 }
 
-fn resolve_href(base: &str, href: &str) -> Option<String> {
-    if href.is_empty() {
-        return None;
-    }
-
-    if href.starts_with("data:") {
-        return Some(href.to_string());
-    }
-
-    if let Ok(abs) = Url::parse(href) {
-        return Some(abs.to_string());
-    }
-
-    let mut base_candidate = base.to_string();
-    if base_candidate.starts_with("file://") {
-        let path = &base_candidate["file://".len()..];
-        if Path::new(path).is_dir() && !base_candidate.ends_with('/') {
-            base_candidate.push('/');
-        }
-    }
-
-    let base_url = Url::parse(&base_candidate)
-        .or_else(|_| Url::from_file_path(&base_candidate).map_err(|_| url::ParseError::RelativeUrlWithoutBase))
-        .ok()?;
-
-    base_url.join(href).ok().map(|u| u.to_string())
-}
-
-/// Rewrite url(...) references in a CSS string to be absolute using the stylesheet's base URL.
-fn absolutize_css_urls(css: &str, base_url: &str) -> String {
-    #[derive(PartialEq)]
-    enum State {
-        Normal,
-        SingleString,
-        DoubleString,
-        Comment,
-    }
-
-    let mut out = String::with_capacity(css.len());
-    let mut state = State::Normal;
-    let bytes = css.as_bytes();
-    let mut i = 0usize;
-    let mut last_emit = 0usize;
-
-    while i < bytes.len() {
-        match state {
-            State::Normal => {
-                // Start of comment
-                if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-                    i += 2;
-                    state = State::Comment;
-                    continue;
-                }
-                // Strings
-                if bytes[i] == b'\'' {
-                    i += 1;
-                    state = State::SingleString;
-                    continue;
-                }
-                if bytes[i] == b'"' {
-                    i += 1;
-                    state = State::DoubleString;
-                    continue;
-                }
-
-                // Check for url(
-                if (bytes[i] == b'u' || bytes[i] == b'U')
-                    && i + 3 < bytes.len()
-                    && bytes[i + 1..].len() >= 3
-                    && bytes[i + 1].eq_ignore_ascii_case(&b'r')
-                    && bytes[i + 2].eq_ignore_ascii_case(&b'l')
-                {
-                    let mut j = i + 3;
-                    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                        j += 1;
-                    }
-                    if j < bytes.len() && bytes[j] == b'(' {
-                        j += 1;
-                        // Skip leading whitespace inside url(
-                        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                            j += 1;
-                        }
-                        let content_start = j;
-                        let mut in_single = false;
-                        let mut in_double = false;
-                        while j < bytes.len() {
-                            let b = bytes[j];
-                            if !in_single && !in_double && b == b')' {
-                                break;
-                            }
-                            match b {
-                                b'\\' => {
-                                    // Skip escaped next char
-                                    j += 1;
-                                }
-                                b'\'' if !in_double => in_single = !in_single,
-                                b'"' if !in_single => in_double = !in_double,
-                                _ => {}
-                            }
-                            j += 1;
-                        }
-                        if j < bytes.len() && bytes[j] == b')' {
-                            let content_end = j;
-                            // Emit preceding slice
-                            out.push_str(&css[last_emit..i]);
-
-                            let raw = css[content_start..content_end].trim();
-                            let unquoted = raw.trim_matches('"').trim_matches('\'').to_string();
-                            if let Some(resolved) = resolve_href(base_url, &unquoted) {
-                                out.push_str(&format!("url(\"{}\")", resolved));
-                            } else {
-                                // Fallback: leave original text
-                                out.push_str(&css[i..=content_end]);
-                            }
-                            i = content_end + 1;
-                            last_emit = i;
-                            continue;
-                        }
-                    }
-                }
-                i += 1;
-            }
-            State::SingleString => {
-                if bytes[i] == b'\\' {
-                    i += 2;
-                    continue;
-                }
-                if bytes[i] == b'\'' {
-                    state = State::Normal;
-                }
-                i += 1;
-            }
-            State::DoubleString => {
-                if bytes[i] == b'\\' {
-                    i += 2;
-                    continue;
-                }
-                if bytes[i] == b'"' {
-                    state = State::Normal;
-                }
-                i += 1;
-            }
-            State::Comment => {
-                if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
-                    i += 2;
-                    state = State::Normal;
-                } else {
-                    i += 1;
-                }
-            }
-        }
-    }
-
-    out.push_str(&css[last_emit..]);
-    out
-}
-
-fn parse_import_target(rule: &str) -> Option<(String, String)> {
-    let after_at = rule.strip_prefix("@import")?.trim_start();
-    let (target, rest) = if let Some(inner) = after_at.strip_prefix("url(") {
-        let close = inner.find(')')?;
-        let url_part = &inner[..close].trim();
-        let url_str = url_part.trim_matches(|c| c == '"' || c == '\'').to_string();
-        let media = inner[close + 1..].trim().trim_end_matches(';').trim().to_string();
-        (url_str, media)
-    } else if after_at.starts_with('"') || after_at.starts_with('\'') {
-        let quote = after_at.as_bytes()[0] as char;
-        let mut iter = after_at[1..].char_indices();
-        let mut end = None;
-        while let Some((idx, ch)) = iter.next() {
-            if ch == quote {
-                end = Some(idx + 1);
-                break;
-            }
-        }
-        let end = end?;
-        let url_str = after_at[1..end - 1].to_string();
-        let media = after_at[end..].trim().trim_end_matches(';').trim().to_string();
-        (url_str, media)
-    } else {
-        return None;
-    };
-    Some((target, rest))
-}
-
-fn inline_imports(
-    css: &str,
-    base_url: &str,
-    fetch: &dyn Fn(&str) -> Result<String>,
-    seen: &mut HashSet<String>,
-) -> String {
-    #[derive(PartialEq)]
-    enum State {
-        Normal,
-        Single,
-        Double,
-        Comment,
-    }
-
-    let mut out = String::with_capacity(css.len());
-    let mut state = State::Normal;
-    let bytes = css.as_bytes();
-    let mut i = 0usize;
-    let mut last_emit = 0usize;
-
-    while i < bytes.len() {
-        match state {
-            State::Normal => {
-                if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-                    state = State::Comment;
-                    i += 2;
-                    continue;
-                }
-                if bytes[i] == b'\'' {
-                    state = State::Single;
-                    i += 1;
-                    continue;
-                }
-                if bytes[i] == b'"' {
-                    state = State::Double;
-                    i += 1;
-                    continue;
-                }
-
-                if bytes[i] == b'@' {
-                    let remainder = &css[i..];
-                    if remainder.len() >= 7 && remainder[1..].to_lowercase().starts_with("import") {
-                        // Find end of import statement (;)
-                        let mut j = i;
-                        let mut inner_state = State::Normal;
-                        while j < bytes.len() {
-                            match inner_state {
-                                State::Normal => {
-                                    if bytes[j] == b';' {
-                                        j += 1;
-                                        break;
-                                    }
-                                    if bytes[j] == b'\'' {
-                                        inner_state = State::Single;
-                                    } else if bytes[j] == b'"' {
-                                        inner_state = State::Double;
-                                    } else if bytes[j] == b'/' && j + 1 < bytes.len() && bytes[j + 1] == b'*' {
-                                        inner_state = State::Comment;
-                                        j += 1;
-                                    }
-                                }
-                                State::Single => {
-                                    if bytes[j] == b'\\' {
-                                        j += 1;
-                                    } else if bytes[j] == b'\'' {
-                                        inner_state = State::Normal;
-                                    }
-                                }
-                                State::Double => {
-                                    if bytes[j] == b'\\' {
-                                        j += 1;
-                                    } else if bytes[j] == b'"' {
-                                        inner_state = State::Normal;
-                                    }
-                                }
-                                State::Comment => {
-                                    if bytes[j] == b'*' && j + 1 < bytes.len() && bytes[j + 1] == b'/' {
-                                        inner_state = State::Normal;
-                                        j += 1;
-                                    }
-                                }
-                            }
-                            j += 1;
-                        }
-
-                        let rule = css[i..j].trim();
-                        if let Some((target, media)) = parse_import_target(rule) {
-                            if let Some(resolved) = resolve_href(base_url, &target) {
-                                out.push_str(&css[last_emit..i]);
-                                if seen.insert(resolved.clone()) {
-                                    if let Ok(fetched) = fetch(&resolved) {
-                                        let rewritten = absolutize_css_urls(&fetched, &resolved);
-                                        let inlined = inline_imports(&rewritten, &resolved, fetch, seen);
-                                        if media.is_empty() || media.eq_ignore_ascii_case("all") {
-                                            out.push_str(&inlined);
-                                        } else {
-                                            out.push_str(&format!("@media {} {{\n{}\n}}\n", media, inlined));
-                                        }
-                                    }
-                                }
-                                last_emit = j;
-                                i = j;
-                                continue;
-                            }
-                        }
-                    }
-                }
-
-                i += 1;
-            }
-            State::Single => {
-                if bytes[i] == b'\\' {
-                    i += 2;
-                    continue;
-                }
-                if bytes[i] == b'\'' {
-                    state = State::Normal;
-                }
-                i += 1;
-            }
-            State::Double => {
-                if bytes[i] == b'\\' {
-                    i += 2;
-                    continue;
-                }
-                if bytes[i] == b'"' {
-                    state = State::Normal;
-                }
-                i += 1;
-            }
-            State::Comment => {
-                if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
-                    state = State::Normal;
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-            }
-        }
-    }
-
-    out.push_str(&css[last_emit..]);
-    out
-}
-
-fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
-    let mut css_urls = Vec::new();
-
-    // Simple regex-like extraction of <link> tags with CSS
-    let lower = html.to_lowercase();
-    let mut pos = 0;
-
-    while let Some(link_start) = lower[pos..].find("<link") {
-        let abs_start = pos + link_start;
-        if let Some(link_end) = lower[abs_start..].find('>') {
-            let link_tag = &html[abs_start..abs_start + link_end + 1];
-            let link_tag_lower = link_tag.to_lowercase();
-
-            // Check if it's a stylesheet
-            if link_tag_lower.contains("stylesheet") {
-                // Extract href
-                if let Some(href_start) = link_tag_lower.find("href") {
-                    let href_section = &link_tag[href_start..];
-                    if let Some(quote_start) = href_section.find('"').or_else(|| href_section.find('\'')) {
-                        let quote_char = href_section.chars().nth(quote_start).unwrap();
-                        let after_quote = &href_section[quote_start + 1..];
-                        if let Some(quote_end) = after_quote.find(quote_char) {
-                            let href = &after_quote[..quote_end];
-                            if let Some(full_url) = resolve_href(base_url, href) {
-                                css_urls.push(full_url);
-                            }
-                        }
-                    }
-                }
-            }
-
-            pos = abs_start + link_end + 1;
-        } else {
-            break;
-        }
-    }
-
-    css_urls
-}
-
-fn inject_css_into_html(html: &str, css: &str) -> String {
-    // Find </head> or <body> and inject <style> tag before it
-    let style_tag = format!("<style>{}</style>", css);
-
-    if let Some(head_end) = html.find("</head>") {
-        let mut result = String::with_capacity(html.len() + style_tag.len());
-        result.push_str(&html[..head_end]);
-        result.push_str(&style_tag);
-        result.push_str(&html[head_end..]);
-        result
-    } else if let Some(body_start) = html.find("<body") {
-        let mut result = String::with_capacity(html.len() + style_tag.len());
-        result.push_str(&html[..body_start]);
-        result.push_str(&style_tag);
-        result.push_str(&html[body_start..]);
-        result
-    } else {
-        // No head or body, just prepend
-        format!("{}{}", style_tag, html)
-    }
-}
-
+/// Best-effort extraction of CSS URLs that appear inside inline scripts or attributes.
+///
+/// Some sites load their primary stylesheets dynamically and never emit a
+/// `<link rel="stylesheet">` element in the static HTML. To render those pages
+/// without executing JavaScript, scan the raw HTML for any substring that looks
+/// like a CSS URL (ends with `.css`, possibly with a query string) and try to
+/// resolve and fetch it as a stylesheet.
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fastrender::css::loader::resolve_href;
 
     #[test]
     fn resolves_relative_http_links() {
@@ -696,49 +319,33 @@ mod tests {
     }
 }
 
-fn main() -> Result<()> {
-    let args: Vec<String> = env::args().collect();
+fn usage(program: &str) {
+    eprintln!("Usage: {program} [--timeout SECONDS] <url> [output.png] [width] [height] [scroll_y]");
+    eprintln!("Example: {program} --timeout 120 https://www.example.com output.png 1200 800 0");
+    eprintln!("  width: viewport width (default: 1200)");
+    eprintln!("  height: viewport height (default: 800)");
+    eprintln!("  scroll_y: vertical scroll offset (default: 0; not yet supported)");
+}
 
-    if args.len() < 2 {
-        eprintln!("Usage: {} <url> [output.png] [width] [height] [scroll_y]", args[0]);
-        eprintln!("Example: {} https://www.example.com output.png 1200 800 0", args[0]);
-        eprintln!("  width: viewport width (default: 1200)");
-        eprintln!("  height: viewport height (default: 800)");
-        eprintln!("  scroll_y: vertical scroll offset (default: 0)");
-        std::process::exit(1);
-    }
-
-    let url = &args[1];
-    let output = if args.len() >= 3 {
-        args[2].clone()
-    } else {
-        "fetched_output.png".to_string()
-    };
-
-    let width = if args.len() >= 4 {
-        args[3].parse::<u32>().unwrap_or(1200)
-    } else {
-        1200
-    };
-
-    let height = if args.len() >= 5 {
-        args[4].parse::<u32>().unwrap_or(800)
-    } else {
-        800
-    };
-
-    let scroll_y = if args.len() >= 6 {
-        args[5].parse::<u32>().unwrap_or(0)
-    } else {
-        0
-    };
-
+fn render_once(url: &str, output: &str, width: u32, height: u32, scroll_y: u32) -> Result<()> {
     println!("Fetching HTML from: {}", url);
     let (html_bytes, html_content_type) = fetch_bytes(url)?;
     let html = decode_html_bytes(&html_bytes, html_content_type.as_deref());
+    let resource_base = infer_base_url(&html, url).into_owned();
 
     println!("Extracting CSS links...");
-    let css_links = extract_css_links(&html, url);
+    let mut css_links = extract_css_links(&html, &resource_base);
+
+    // Fallback: also scan inline content for CSS URLs that are not linked.
+    let mut seen = HashSet::new();
+    for link in &css_links {
+        seen.insert(link.clone());
+    }
+    for extra in extract_embedded_css_urls(&html, &resource_base) {
+        if seen.insert(extra.clone()) {
+            css_links.push(extra);
+        }
+    }
 
     println!("Found {} CSS link(s)", css_links.len());
 
@@ -775,7 +382,7 @@ fn main() -> Result<()> {
 
     println!("Rendering to image ({}x{} viewport)...", width, height);
     let mut renderer = FastRender::new()?;
-    renderer.set_base_url(url.clone());
+    renderer.set_base_url(resource_base.clone());
     // Note: scroll_y is currently not supported, will render from top
     if scroll_y != 0 {
         eprintln!("Warning: scroll_y parameter is not yet supported, rendering from top");
@@ -787,6 +394,69 @@ fn main() -> Result<()> {
 
     println!("✓ Successfully rendered {} to {}", url, output);
     println!("  Image size: {} bytes", std::fs::metadata(&output)?.len());
-
     Ok(())
+}
+
+fn main() -> Result<()> {
+    let program = env::args().next().unwrap_or_else(|| "fetch_and_render".to_string());
+    let mut args = env::args().skip(1);
+    let mut timeout_secs: Option<u64> = None;
+    let mut positional: Vec<String> = Vec::new();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--timeout" => {
+                if let Some(val) = args.next() {
+                    timeout_secs = val.parse().ok();
+                }
+            }
+            _ => positional.push(arg),
+        }
+    }
+
+    if positional.is_empty() {
+        usage(&program);
+        std::process::exit(1);
+    }
+
+    let url = positional.get(0).cloned().unwrap();
+    let output = positional
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| "fetched_output.png".to_string());
+    let width = positional.get(2).and_then(|v| v.parse::<u32>().ok()).unwrap_or(1200);
+    let height = positional.get(3).and_then(|v| v.parse::<u32>().ok()).unwrap_or(800);
+    let scroll_y = positional.get(4).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+
+    let (tx, rx) = channel();
+    let url_clone = url.clone();
+    let output_clone = output.clone();
+    thread::Builder::new()
+        .name("fetch_and_render-worker".to_string())
+        .stack_size(STACK_SIZE)
+        .spawn(move || {
+            let _ = tx.send(render_once(&url_clone, &output_clone, width, height, scroll_y));
+        })
+        .expect("spawn render worker");
+
+    if let Some(secs) = timeout_secs {
+        match rx.recv_timeout(Duration::from_secs(secs)) {
+            Ok(res) => res,
+            Err(RecvTimeoutError::Timeout) => {
+                eprintln!("Render timed out after {secs} seconds");
+                std::process::exit(1);
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                eprintln!("Render worker exited unexpectedly");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        match rx.recv() {
+            Ok(res) => res,
+            Err(_) => {
+                eprintln!("Render worker exited unexpectedly");
+                std::process::exit(1);
+            }
+        }
+    }
 }

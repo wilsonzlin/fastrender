@@ -160,9 +160,7 @@ impl HttpFetcher {
 
     /// Fetch from an HTTP/HTTPS URL
     fn fetch_http(&self, url: &str) -> Result<FetchedResource> {
-        let config = ureq::Agent::config_builder()
-            .timeout_global(Some(self.timeout))
-            .build();
+        let config = ureq::Agent::config_builder().timeout_global(Some(self.timeout)).build();
         let agent: ureq::Agent = config.into();
 
         let mut response = agent
@@ -293,13 +291,11 @@ fn decode_data_url(url: &str) -> Result<FetchedResource> {
 
     let bytes = if is_base64 {
         use base64::Engine;
-        base64::engine::general_purpose::STANDARD
-            .decode(data)
-            .map_err(|e| {
-                Error::Image(ImageError::InvalidDataUrl {
-                    reason: format!("Invalid base64: {}", e),
-                })
-            })?
+        base64::engine::general_purpose::STANDARD.decode(data).map_err(|e| {
+            Error::Image(ImageError::InvalidDataUrl {
+                reason: format!("Invalid base64: {}", e),
+            })
+        })?
     } else {
         // URL-encoded
         percent_decode(data)?

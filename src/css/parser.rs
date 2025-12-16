@@ -9,8 +9,8 @@
 use super::properties::parse_property_value;
 use super::selectors::PseudoClassParser;
 use super::types::{
-    CssParseError, CssParseResult, CssRule, Declaration, FontFaceRule, FontFaceSource,
-    FontFaceStyle, ImportRule, LayerRule, MediaRule, StyleRule, StyleSheet,
+    ContainerRule, CssParseError, CssParseResult, CssRule, Declaration, FontFaceRule, FontFaceSource, FontFaceStyle,
+    ImportRule, LayerRule, MediaRule, StyleRule, StyleSheet, SupportsCondition, SupportsRule,
 };
 use crate::dom::DomNode;
 use crate::error::Result;
@@ -71,10 +71,7 @@ fn parse_stylesheet_collecting_errors(css: &str) -> CssParseResult {
 }
 
 /// Parse a list of CSS rules, collecting errors
-fn parse_rule_list_collecting<'i, 't>(
-    parser: &mut Parser<'i, 't>,
-    errors: &mut Vec<CssParseError>,
-) -> Vec<CssRule> {
+fn parse_rule_list_collecting<'i, 't>(parser: &mut Parser<'i, 't>, errors: &mut Vec<CssParseError>) -> Vec<CssRule> {
     let mut rules = Vec::new();
 
     while !parser.is_exhausted() {
@@ -138,6 +135,8 @@ fn parse_rule<'i, 't>(
             match kw_str.as_str() {
                 "import" => parse_import_rule(p),
                 "media" => parse_media_rule(p),
+                "container" => parse_container_rule(p),
+                "supports" => parse_supports_rule(p),
                 "layer" => parse_layer_rule(p),
                 "font-face" => parse_font_face_rule(p),
                 _ => {
@@ -260,6 +259,403 @@ fn parse_media_rule<'i, 't>(
         query,
         rules: nested_rules,
     })))
+}
+
+/// Parse a @container rule (size queries only; name is optional and stored for future use).
+fn parse_container_rule<'i, 't>(
+    parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+    // Collect tokens forming the prelude (optional name + query) up to the block.
+    let mut prelude_parts = Vec::new();
+    loop {
+        match parser.next_including_whitespace() {
+            Ok(Token::CurlyBracketBlock) => break,
+            Ok(Token::WhiteSpace(ws)) => prelude_parts.push((*ws).to_string()),
+            Ok(Token::Ident(id)) => prelude_parts.push(id.to_string()),
+            Ok(Token::Number { value, .. }) => prelude_parts.push(value.to_string()),
+            Ok(Token::Dimension { value, unit, .. }) => prelude_parts.push(format!("{}{}", value, unit)),
+            Ok(Token::Colon) => prelude_parts.push(":".to_string()),
+            Ok(Token::Delim(c)) => prelude_parts.push(c.to_string()),
+            Ok(Token::ParenthesisBlock) => {
+                let inner = parser.parse_nested_block(|p| {
+                    let mut inner_parts = Vec::new();
+                    while !p.is_exhausted() {
+                        match p.next_including_whitespace() {
+                            Ok(Token::WhiteSpace(ws)) => inner_parts.push((*ws).to_string()),
+                            Ok(Token::Ident(id)) => inner_parts.push(id.to_string()),
+                            Ok(Token::Number { value, .. }) => inner_parts.push(value.to_string()),
+                            Ok(Token::Dimension { value, unit, .. }) => inner_parts.push(format!("{}{}", value, unit)),
+                            Ok(Token::Colon) => inner_parts.push(":".to_string()),
+                            Ok(Token::Delim(c)) => inner_parts.push(c.to_string()),
+                            Ok(_) => {}
+                            Err(_) => break,
+                        }
+                    }
+                    Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(inner_parts.join(""))
+                })?;
+                prelude_parts.push(format!("({})", inner));
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+
+    let prelude = prelude_parts.join("");
+    let prelude_trimmed = prelude.trim();
+    if prelude_trimmed.is_empty() {
+        skip_at_rule(parser);
+        return Ok(None);
+    }
+
+    // Split optional name and query: text before the first '(' is treated as the name.
+    let (name, query_str) = if let Some(idx) = prelude_trimmed.find('(') {
+        let (before, after) = prelude_trimmed.split_at(idx);
+        let name = before.trim();
+        let name = if name.is_empty() { None } else { Some(name.to_string()) };
+        (name, after)
+    } else {
+        (None, prelude_trimmed)
+    };
+
+    let query = MediaQuery::parse(query_str).map_err(|_| {
+        skip_at_rule(parser);
+        parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+            "invalid container query".into(),
+        ))
+    })?;
+
+    let nested_rules = parser.parse_nested_block(|nested_parser| {
+        Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list(nested_parser))
+    })?;
+
+    if !query.is_size_query() {
+        // Container queries level 1 accept only size features; drop invalid container rules.
+        return Ok(None);
+    }
+
+    Ok(Some(CssRule::Container(ContainerRule {
+        name,
+        query,
+        rules: nested_rules,
+    })))
+}
+
+/// Parse a @supports rule
+fn parse_supports_rule<'i, 't>(
+    parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+    // Collect the prelude (condition) tokens until the block begins.
+    let mut prelude = String::new();
+    loop {
+        match parser.next_including_whitespace() {
+            Ok(Token::CurlyBracketBlock) => break,
+            Ok(token) => {
+                let token = token.clone();
+                push_supports_token(token, &mut prelude, parser)?
+            }
+            Err(_) => return Ok(None),
+        }
+    }
+
+    let condition = parse_supports_prelude(&prelude);
+    let rules = parser
+        .parse_nested_block(|nested| Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list(nested)))?;
+    Ok(Some(CssRule::Supports(SupportsRule { condition, rules })))
+}
+
+fn push_supports_token<'i, 't>(
+    token: Token<'i>,
+    out: &mut String,
+    parser: &mut Parser<'i, 't>,
+) -> std::result::Result<(), ParseError<'i, SelectorParseErrorKind<'i>>> {
+    match token {
+        Token::WhiteSpace(ws) => out.push_str(ws),
+        Token::Ident(id) => out.push_str(&id),
+        Token::AtKeyword(at) => {
+            out.push('@');
+            out.push_str(&at);
+        }
+        Token::Number { value, .. } => out.push_str(&value.to_string()),
+        Token::Dimension { value, unit, .. } => out.push_str(&format!("{}{}", value, unit)),
+        Token::Percentage { unit_value, .. } => out.push_str(&format!("{}%", unit_value)),
+        Token::Colon => out.push(':'),
+        Token::Delim(c) => out.push(c),
+        Token::IDHash(hash) => {
+            out.push('#');
+            out.push_str(&hash);
+        }
+        Token::Hash(hash) => {
+            out.push('#');
+            out.push_str(&hash);
+        }
+        Token::QuotedString(s) => {
+            out.push('"');
+            out.push_str(&s);
+            out.push('"');
+        }
+        Token::UnquotedUrl(url) => {
+            out.push_str("url(");
+            out.push_str(url.as_ref());
+            out.push(')');
+        }
+        Token::ParenthesisBlock => {
+            let inner = parser.parse_nested_block(|nested| {
+                Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(collect_supports_tokens(nested)?)
+            })?;
+            out.push('(');
+            out.push_str(&inner);
+            out.push(')');
+        }
+        Token::Function(f) => {
+            let inner = parser.parse_nested_block(|nested| {
+                Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(collect_supports_tokens(nested)?)
+            })?;
+            out.push_str(&f);
+            out.push('(');
+            out.push_str(&inner);
+            out.push(')');
+        }
+        Token::SquareBracketBlock => {
+            let inner = parser.parse_nested_block(|nested| {
+                Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(collect_supports_tokens(nested)?)
+            })?;
+            out.push('[');
+            out.push_str(&inner);
+            out.push(']');
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn collect_supports_tokens<'i, 't>(
+    parser: &mut Parser<'i, 't>,
+) -> std::result::Result<String, ParseError<'i, SelectorParseErrorKind<'i>>> {
+    let mut buf = String::new();
+    while !parser.is_exhausted() {
+        let token = match parser.next_including_whitespace() {
+            Ok(tok) => tok,
+            Err(_) => break,
+        };
+        let token = token.clone();
+        push_supports_token(token, &mut buf, parser)?;
+    }
+    Ok(buf)
+}
+
+fn parse_supports_prelude(prelude: &str) -> SupportsCondition {
+    parse_supports_or(prelude.trim())
+}
+
+fn parse_supports_or(s: &str) -> SupportsCondition {
+    let mut expr = s.trim();
+    while let Some(stripped) = strip_outer_parens(expr) {
+        expr = stripped.trim();
+    }
+    let mut depth = 0usize;
+    let lower = expr.to_ascii_lowercase();
+    let mut i = 0usize;
+    while i < expr.len() {
+        let ch = expr[i..].chars().next().unwrap();
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if depth == 0 && lower[i..].starts_with("or") && is_op_boundary(expr, i, 2) {
+            let left = expr[..i].trim_end();
+            let right = expr[i + 2..].trim_start();
+            if !left.is_empty() && !right.is_empty() {
+                let l = parse_supports_or(left);
+                let r = parse_supports_or(right);
+                return SupportsCondition::Or(vec![l, r]);
+            }
+        }
+        i += ch.len_utf8();
+    }
+    parse_supports_and(expr)
+}
+
+fn parse_supports_and(s: &str) -> SupportsCondition {
+    let mut expr = s.trim();
+    while let Some(stripped) = strip_outer_parens(expr) {
+        expr = stripped.trim();
+    }
+    let mut depth = 0usize;
+    let lower = expr.to_ascii_lowercase();
+    let mut i = 0usize;
+    while i < expr.len() {
+        let ch = expr[i..].chars().next().unwrap();
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if depth == 0 && lower[i..].starts_with("and") && is_op_boundary(expr, i, 3) {
+            let left = expr[..i].trim_end();
+            let right = expr[i + 3..].trim_start();
+            if !left.is_empty() && !right.is_empty() {
+                let l = parse_supports_and(left);
+                let r = parse_supports_and(right);
+                return SupportsCondition::And(vec![l, r]);
+            }
+        }
+        i += ch.len_utf8();
+    }
+    parse_supports_not(expr)
+}
+
+fn parse_supports_not(s: &str) -> SupportsCondition {
+    let trimmed = s.trim_start();
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("not") && is_op_boundary(trimmed, 0, 3) {
+        let idx = 3;
+        let rest = trimmed[idx..].trim_start();
+        if !rest.is_empty() {
+            return SupportsCondition::Not(Box::new(parse_supports_or(rest)));
+        }
+    }
+    parse_supports_primary(trimmed)
+}
+
+fn parse_supports_primary(s: &str) -> SupportsCondition {
+    let mut target = s.trim();
+    while let Some(stripped) = strip_outer_parens(target) {
+        target = stripped.trim();
+    }
+    if target.is_empty() {
+        return SupportsCondition::False;
+    }
+
+    let lower = target.to_ascii_lowercase();
+    if lower.starts_with("not") && is_op_boundary(target, 0, 3) {
+        let rest = target[3..].trim_start();
+        if !rest.is_empty() {
+            return SupportsCondition::Not(Box::new(parse_supports_or(rest)));
+        }
+    }
+
+    if let Some(selector) = parse_selector_condition(target) {
+        return selector;
+    }
+
+    if let Some((property, value)) = parse_declaration_condition(target) {
+        return SupportsCondition::Declaration { property, value };
+    }
+
+    SupportsCondition::False
+}
+
+fn is_op_boundary(s: &str, start: usize, len: usize) -> bool {
+    let before = if start == 0 {
+        None
+    } else {
+        s[..start].chars().rev().next()
+    };
+    let after = s[start + len..].chars().next();
+    matches!(
+        before,
+        None | Some(' ') | Some('\t') | Some('\n') | Some('\r') | Some('(') | Some(')')
+    ) && matches!(
+        after,
+        None | Some(' ') | Some('\t') | Some('\n') | Some('\r') | Some('(') | Some(')')
+    )
+}
+
+fn strip_outer_parens(s: &str) -> Option<&str> {
+    if !s.starts_with('(') || !s.ends_with(')') {
+        return None;
+    }
+    let mut depth = 0usize;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                if depth == 0 {
+                    return None;
+                }
+                depth -= 1;
+                if depth == 0 && i + 1 != s.len() {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    if depth == 0 {
+        Some(&s[1..s.len() - 1])
+    } else {
+        None
+    }
+}
+
+fn parse_selector_condition(s: &str) -> Option<SupportsCondition> {
+    let trimmed = s.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if !lower.starts_with("selector") {
+        return None;
+    }
+    let prefix_len = "selector".len();
+    let mut iter = trimmed.char_indices().skip(prefix_len);
+    let mut start_paren: Option<usize> = None;
+    for (idx, ch) in &mut iter {
+        if ch.is_whitespace() {
+            continue;
+        }
+        if ch == '(' {
+            start_paren = Some(idx);
+            break;
+        }
+        return None;
+    }
+    let start = start_paren?;
+    let mut depth = 0usize;
+    for (idx, ch) in trimmed.char_indices().skip(start) {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                if depth == 0 {
+                    return None;
+                }
+                depth -= 1;
+                if depth == 0 {
+                    let arg = trimmed[start + 1..idx].trim();
+                    if arg.is_empty() || !trimmed[idx + 1..].trim().is_empty() {
+                        return None;
+                    }
+                    return Some(SupportsCondition::Selector(arg.to_string()));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn parse_declaration_condition(s: &str) -> Option<(String, String)> {
+    let mut depth = 0usize;
+    for (idx, ch) in s.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            ':' if depth == 0 => {
+                let property = s[..idx].trim();
+                let value = s[idx + 1..].trim();
+                if property.is_empty() {
+                    return None;
+                }
+                if !value.is_empty() || property.starts_with("--") {
+                    return Some((property.to_ascii_lowercase(), value.to_string()));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn parse_layer_rule<'i, 't>(
@@ -991,5 +1387,221 @@ mod tests {
         let css = ":where(section, article) p { margin: 1em; }";
         let stylesheet = parse_stylesheet(css).unwrap();
         assert_eq!(stylesheet.rules.len(), 1, "Should parse :where() selector");
+    }
+
+    #[test]
+    fn supports_rule_applies_when_feature_supported() {
+        let css = r#"@supports (display: grid) { .ok { color: red; } }"#;
+        let result = parse_stylesheet_with_errors(css);
+        assert_eq!(result.error_count(), 0, "parse errors: {:?}", result.errors);
+        let stylesheet = result.stylesheet;
+        assert_eq!(stylesheet.rules.len(), 1);
+        assert!(matches!(stylesheet.rules[0], CssRule::Supports(_)));
+        let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let rules = stylesheet.collect_style_rules(&media);
+        assert_eq!(rules.len(), 1);
+        let rule = rules[0].rule;
+        assert_eq!(rule.declarations.len(), 1);
+    }
+
+    #[test]
+    fn supports_rule_skipped_when_feature_unsupported() {
+        let css = r#"@supports (not-a-prop: foo) { .skip { color: red; } }"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let rules = stylesheet.collect_style_rules(&media);
+        assert_eq!(rules.len(), 0, "unsupported feature should drop nested rules");
+    }
+
+    #[test]
+    fn supports_is_case_insensitive_for_properties() {
+        let css = r#"@supports (DISPLAY: GRID) { .ok { color: red; } }"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let rules = stylesheet.collect_style_rules(&media);
+        assert_eq!(rules.len(), 1, "upper-case property name should still match");
+    }
+
+    #[test]
+    fn supports_rejects_invalid_value_for_known_property() {
+        let css = r#"@supports (display: not-a-value) { .nope { color: red; } }"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let rules = stylesheet.collect_style_rules(&media);
+        assert_eq!(rules.len(), 0, "invalid value should cause @supports to fail");
+    }
+
+    #[test]
+    fn supports_selector_applies_when_selector_parses() {
+        let css = r#"@supports selector(div > span) { .ok { color: red; } }"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        assert_eq!(stylesheet.rules.len(), 1, "expected one @supports rule");
+        let cond = match &stylesheet.rules[0] {
+            CssRule::Supports(rule) => rule.condition.clone(),
+            other => panic!("expected supports rule, got {:?}", other),
+        };
+        assert!(cond.matches(), "selector() condition should match, got {:?}", cond);
+        let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let rules = stylesheet.collect_style_rules(&media);
+        assert_eq!(rules.len(), 1, "supported selector should enable nested rules");
+    }
+
+    #[test]
+    fn supports_selector_skips_when_selector_unsupported() {
+        // :has() is not implemented in our selector parser, so the feature query should fail.
+        let css = r#"@supports selector(div:has(span)) { .skip { color: red; } }"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let rules = stylesheet.collect_style_rules(&media);
+        assert_eq!(rules.len(), 0, "unsupported selector should disable nested rules");
+    }
+
+    #[test]
+    fn supports_not_selector_inverts_result() {
+        let css = r#"@supports not selector(div:has(span)) { .ok { color: red; } }"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let rules = stylesheet.collect_style_rules(&media);
+        assert_eq!(
+            rules.len(),
+            1,
+            "not selector(...) should invert unsupported selector result"
+        );
+    }
+
+    #[test]
+    fn supports_selector_prelude_parses_function() {
+        match parse_supports_prelude("selector(div > span)") {
+            SupportsCondition::Selector(sel) => assert_eq!(sel, "div > span"),
+            other => panic!("expected selector condition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn supports_selector_allows_whitespace_and_case() {
+        let css = r#"@supports SeLeCtOr ( div.foo , span.bar ) { .ok { color: red; } }"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let rules = stylesheet.collect_style_rules(&media);
+        assert_eq!(
+            rules.len(),
+            1,
+            "case-insensitive selector() with whitespace should match"
+        );
+    }
+
+    #[test]
+    fn supports_and_is_case_insensitive() {
+        let css = r#"@supports (display: grid) AND (position: sticky) { .ok { color: red; } }"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let rules = stylesheet.collect_style_rules(&media);
+        assert_eq!(rules.len(), 1, "AND should be case-insensitive");
+    }
+
+    #[test]
+    fn supports_or_is_case_insensitive() {
+        let css = r#"@supports (not-a-prop: foo) Or (display: grid) { .ok { color: red; } }"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let rules = stylesheet.collect_style_rules(&media);
+        assert_eq!(
+            rules.len(),
+            1,
+            "OR should be case-insensitive and allow a supported branch"
+        );
+    }
+
+    #[test]
+    fn supports_not_is_case_insensitive() {
+        let css = r#"@supports NOT (display: grid) { .skip { color: red; } }"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let rules = stylesheet.collect_style_rules(&media);
+        assert_eq!(
+            rules.len(),
+            0,
+            "NOT should be case-insensitive and flip supported feature to false"
+        );
+    }
+
+    #[test]
+    fn supports_and_or_precedence_is_correct() {
+        let css = r#"@supports (display: grid) or ((position: sticky) and (float: left)) { .ok { color: red; } }"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let rules = stylesheet.collect_style_rules(&media);
+        assert_eq!(
+            rules.len(),
+            1,
+            "or of supported and unsupported groups should still match"
+        );
+
+        let css2 = r#"@supports (not-a-prop: foo) or (position: sticky and float: left) { .ok { color: red; } }"#;
+        let stylesheet2 = parse_stylesheet(css2).unwrap();
+        let rules2 = stylesheet2.collect_style_rules(&media);
+        assert_eq!(rules2.len(), 1, "OR with a supported branch should succeed");
+    }
+
+    #[test]
+    fn supports_custom_property_always_matches_with_value() {
+        let css = r#"@supports (--foo: bar) { .ok { color: red; } }"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let rules = stylesheet.collect_style_rules(&media);
+        assert_eq!(
+            rules.len(),
+            1,
+            "custom property should be considered supported in @supports"
+        );
+    }
+
+    #[test]
+    fn supports_custom_property_requires_value() {
+        let css = r#"@supports (--foo: ) { .skip { color: red; } }"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let rules = stylesheet.collect_style_rules(&media);
+        assert_eq!(
+            rules.len(),
+            1,
+            "custom properties are always supported even with empty values"
+        );
+    }
+
+    #[test]
+    fn supports_nested_not_inside_parens() {
+        let css = r#"@supports (not (display: grid)) { .skip { color: red; } }"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let rules = stylesheet.collect_style_rules(&media);
+        assert_eq!(rules.len(), 0, "nested not with supported feature should fail");
+    }
+
+    #[test]
+    fn supports_double_not_inside_parens() {
+        let css = r#"@supports (not (not (display: grid))) { .ok { color: red; } }"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let rules = stylesheet.collect_style_rules(&media);
+        assert_eq!(rules.len(), 1, "double not should restore supported condition to true");
+    }
+
+    #[test]
+    fn supports_not_with_inner_or() {
+        let css = r#"@supports (not ((display: grid) or (position: sticky))) { .skip { color: red; } }"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let rules = stylesheet.collect_style_rules(&media);
+        assert_eq!(rules.len(), 0, "not of true inner or should fail");
+    }
+
+    #[test]
+    fn supports_operator_boundary_allows_parens_without_spaces() {
+        let css = r#"@supports ((display: grid)and(position: sticky)) { .ok { color: red; } }"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let rules = stylesheet.collect_style_rules(&media);
+        assert_eq!(rules.len(), 1, "parentheses-adjacent operator should still parse");
     }
 }

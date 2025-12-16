@@ -24,7 +24,7 @@ use crate::style::types::{
     BorderImageWidth, BorderImageWidthValue, BorderStyle as CssBorderStyle, TextDecorationStyle, TextEmphasisFill,
     TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
 };
-use crate::style::values::{Length, LengthUnit};
+use crate::style::values::Length;
 use crate::text::font_db::{FontStretch, FontStyle as DbFontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
 use crate::text::shaper::GlyphPosition;
@@ -624,6 +624,9 @@ struct StackingRecord {
 impl DisplayListRenderer {
     #[inline]
     fn ds_len(&self, v: f32) -> f32 {
+        if !v.is_finite() {
+            return 0.0;
+        }
         v * self.scale
     }
 
@@ -1164,9 +1167,22 @@ impl DisplayListRenderer {
             bottom,
             left,
         };
-        let target_widths =
-            resolve_border_image_widths(&border_image.width, border_widths, rect.width(), rect.height());
-        let outsets = resolve_border_image_outset(&border_image.outset, target_widths);
+        let target_widths = resolve_border_image_widths(
+            &border_image.width,
+            border_widths,
+            rect.width(),
+            rect.height(),
+            border_image.font_size,
+            border_image.root_font_size,
+            border_image.viewport,
+        );
+        let outsets = resolve_border_image_outset(
+            &border_image.outset,
+            target_widths,
+            border_image.font_size,
+            border_image.root_font_size,
+            border_image.viewport,
+        );
 
         let outer_rect = Rect::from_xywh(
             rect.x() - outsets.left,
@@ -1198,7 +1214,15 @@ impl DisplayListRenderer {
             BorderImageSourceItem::Generated(bg) => {
                 let img_w = outer_rect.width().max(1.0).round() as u32;
                 let img_h = outer_rect.height().max(1.0).round() as u32;
-                let Some(pixmap) = render_generated_border_image(bg, border_image.current_color, img_w, img_h) else {
+                let Some(pixmap) = render_generated_border_image(
+                    bg,
+                    border_image.current_color,
+                    img_w,
+                    img_h,
+                    border_image.font_size,
+                    border_image.root_font_size,
+                    border_image.viewport,
+                ) else {
                     return false;
                 };
                 let (w, h) = (pixmap.width(), pixmap.height());
@@ -1674,9 +1698,14 @@ impl DisplayListRenderer {
             stops
                 .iter()
                 .map(|s| {
+                    let pos = if s.position.is_finite() {
+                        s.position.clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
                     let alpha = (s.color.a * opacity * 255.0).round().clamp(0.0, 255.0) as u8;
                     SkiaGradientStop::new(
-                        s.position,
+                        pos,
                         tiny_skia::Color::from_rgba8(s.color.r, s.color.g, s.color.b, alpha),
                     )
                 })
@@ -2826,13 +2855,22 @@ fn resolve_slice_value(value: BorderImageSliceValue, axis_len: u32) -> f32 {
     }
 }
 
-fn resolve_length_for_border_image(len: &Length, percentage_base: f32) -> f32 {
-    match len.unit {
-        LengthUnit::Percent => len.resolve_against(percentage_base),
-        LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(16.0),
-        _ if len.unit.is_absolute() => len.to_px(),
-        _ => len.value,
-    }
+fn resolve_length_for_border_image(
+    len: &Length,
+    percentage_base: f32,
+    font_size: f32,
+    root_font_size: f32,
+    viewport: Option<(f32, f32)>,
+) -> f32 {
+    let (vw, vh) = viewport.unwrap_or((0.0, 0.0));
+    len.resolve_with_context(Some(percentage_base), vw, vh, font_size, root_font_size)
+        .unwrap_or_else(|| {
+            if len.unit.is_absolute() {
+                len.to_px()
+            } else {
+                len.value * font_size
+            }
+        })
 }
 
 fn resolve_border_image_widths(
@@ -2840,15 +2878,20 @@ fn resolve_border_image_widths(
     border: BorderImageWidths,
     box_width: f32,
     box_height: f32,
+    font_size: f32,
+    root_font_size: f32,
+    viewport: Option<(f32, f32)>,
 ) -> BorderImageWidths {
-    fn resolve_single(value: BorderImageWidthValue, border: f32, axis: f32) -> f32 {
+    let resolve_single = |value: BorderImageWidthValue, border: f32, axis: f32| -> f32 {
         match value {
             BorderImageWidthValue::Auto => border,
             BorderImageWidthValue::Number(n) => (n * border).max(0.0),
-            BorderImageWidthValue::Length(len) => resolve_length_for_border_image(&len, axis).max(0.0),
+            BorderImageWidthValue::Length(len) => {
+                resolve_length_for_border_image(&len, axis, font_size, root_font_size, viewport).max(0.0)
+            }
             BorderImageWidthValue::Percentage(p) => ((p / 100.0) * axis).max(0.0),
         }
-    }
+    };
 
     BorderImageWidths {
         top: resolve_single(widths.top, border.top, box_height),
@@ -2861,13 +2904,18 @@ fn resolve_border_image_widths(
 fn resolve_border_image_outset(
     outset: &crate::style::types::BorderImageOutset,
     border: BorderImageWidths,
+    font_size: f32,
+    root_font_size: f32,
+    viewport: Option<(f32, f32)>,
 ) -> BorderImageWidths {
-    fn resolve_single(value: BorderImageOutsetValue, border: f32) -> f32 {
+    let resolve_single = |value: BorderImageOutsetValue, border: f32| -> f32 {
         match value {
             BorderImageOutsetValue::Number(n) => (n * border).max(0.0),
-            BorderImageOutsetValue::Length(len) => resolve_length_for_border_image(&len, border.max(1.0)).max(0.0),
+            BorderImageOutsetValue::Length(len) => {
+                resolve_length_for_border_image(&len, border.max(1.0), font_size, root_font_size, viewport).max(0.0)
+            }
         }
-    }
+    };
 
     BorderImageWidths {
         top: resolve_single(outset.top, border.top),
@@ -3025,12 +3073,14 @@ fn radial_geometry(
     position: &BackgroundPosition,
     size: &RadialGradientSize,
     shape: RadialGradientShape,
-    _font_size: f32,
+    font_size: f32,
+    root_font_size: f32,
+    viewport: Option<(f32, f32)>,
 ) -> (f32, f32, f32, f32) {
     let (align_x, off_x, align_y, off_y) = match position {
         BackgroundPosition::Position { x, y } => {
-            let ox = resolve_length_for_border_image(&x.offset, rect.width());
-            let oy = resolve_length_for_border_image(&y.offset, rect.height());
+            let ox = resolve_length_for_border_image(&x.offset, rect.width(), font_size, root_font_size, viewport);
+            let oy = resolve_length_for_border_image(&y.offset, rect.height(), font_size, root_font_size, viewport);
             (x.alignment, ox, y.alignment, oy)
         }
     };
@@ -3088,10 +3138,12 @@ fn radial_geometry(
             )
         }
         RadialGradientSize::Explicit { x, y } => {
-            let rx = resolve_length_for_border_image(x, rect.width()).max(0.0);
+            let rx = resolve_length_for_border_image(x, rect.width(), font_size, root_font_size, viewport).max(0.0);
             let ry = y
                 .as_ref()
-                .map(|yy| resolve_length_for_border_image(yy, rect.height()).max(0.0))
+                .map(|yy| {
+                    resolve_length_for_border_image(yy, rect.height(), font_size, root_font_size, viewport).max(0.0)
+                })
                 .unwrap_or(rx);
             (rx, ry)
         }
@@ -3114,11 +3166,17 @@ fn radial_geometry(
     (cx, cy, radius_x.max(0.0), radius_y.max(0.0))
 }
 
-fn resolve_gradient_center(rect: Rect, position: &BackgroundPosition) -> Point {
+fn resolve_gradient_center(
+    rect: Rect,
+    position: &BackgroundPosition,
+    font_size: f32,
+    root_font_size: f32,
+    viewport: Option<(f32, f32)>,
+) -> Point {
     let (align_x, off_x, align_y, off_y) = match position {
         BackgroundPosition::Position { x, y } => {
-            let ox = resolve_length_for_border_image(&x.offset, rect.width());
-            let oy = resolve_length_for_border_image(&y.offset, rect.height());
+            let ox = resolve_length_for_border_image(&x.offset, rect.width(), font_size, root_font_size, viewport);
+            let oy = resolve_length_for_border_image(&y.offset, rect.height(), font_size, root_font_size, viewport);
             (x.alignment, ox, y.alignment, oy)
         }
     };
@@ -3169,7 +3227,15 @@ fn sample_stops(stops: &[(f32, Rgba)], t: f32, repeating: bool, period: f32) -> 
     Rgba::TRANSPARENT
 }
 
-fn render_generated_border_image(bg: &BackgroundImage, current_color: Rgba, width: u32, height: u32) -> Option<Pixmap> {
+fn render_generated_border_image(
+    bg: &BackgroundImage,
+    current_color: Rgba,
+    width: u32,
+    height: u32,
+    font_size: f32,
+    root_font_size: f32,
+    viewport: Option<(f32, f32)>,
+) -> Option<Pixmap> {
     if width == 0 || height == 0 {
         return None;
     }
@@ -3245,7 +3311,8 @@ fn render_generated_border_image(bg: &BackgroundImage, current_color: Rgba, widt
                 return None;
             }
             let skia_stops = gradient_stops(&resolved);
-            let (cx, cy, radius_x, radius_y) = radial_geometry(rect, position, size, *shape, 16.0);
+            let (cx, cy, radius_x, radius_y) =
+                radial_geometry(rect, position, size, *shape, font_size, root_font_size, viewport);
             let transform = Transform::from_translate(cx, cy).pre_scale(radius_x, radius_y);
             let shader = RadialGradient::new(
                 tiny_skia::Point::from_xy(0.0, 0.0),
@@ -3278,7 +3345,8 @@ fn render_generated_border_image(bg: &BackgroundImage, current_color: Rgba, widt
                 return None;
             }
             let skia_stops = gradient_stops(&resolved);
-            let (cx, cy, radius_x, radius_y) = radial_geometry(rect, position, size, *shape, 16.0);
+            let (cx, cy, radius_x, radius_y) =
+                radial_geometry(rect, position, size, *shape, font_size, root_font_size, viewport);
             let transform = Transform::from_translate(cx, cy).pre_scale(radius_x, radius_y);
             let shader = RadialGradient::new(
                 tiny_skia::Point::from_xy(0.0, 0.0),
@@ -3310,7 +3378,7 @@ fn render_generated_border_image(bg: &BackgroundImage, current_color: Rgba, widt
                 return None;
             }
             let mut pixmap = Pixmap::new(width, height)?;
-            let center = resolve_gradient_center(rect, position);
+            let center = resolve_gradient_center(rect, position, font_size, root_font_size, viewport);
             let start_angle = from_angle.to_radians();
             let period = 1.0;
             let data = pixmap.pixels_mut();
@@ -3345,7 +3413,7 @@ fn render_generated_border_image(bg: &BackgroundImage, current_color: Rgba, widt
                 return None;
             }
             let mut pixmap = Pixmap::new(width, height)?;
-            let center = resolve_gradient_center(rect, position);
+            let center = resolve_gradient_center(rect, position, font_size, root_font_size, viewport);
             let start_angle = from_angle.to_radians();
             let period = resolved.last().map(|(p, _)| *p).unwrap_or(1.0).max(1e-6);
             let data = pixmap.pixels_mut();
@@ -3490,6 +3558,9 @@ mod tests {
                 crate::style::types::BorderImageRepeat::Stretch,
             ),
             current_color: Rgba::BLACK,
+            font_size: 16.0,
+            root_font_size: 16.0,
+            viewport: Some((8.0, 8.0)),
         };
 
         let side = BorderSide {

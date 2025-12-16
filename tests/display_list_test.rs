@@ -5,13 +5,13 @@
 
 use fastrender::css::types::{BoxShadow, ColorStop};
 use fastrender::geometry::{Point, Rect};
+use fastrender::paint::display_list::ClipShape;
 use fastrender::style::types::{
     BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle, Containment,
 };
 use fastrender::style::values::Length;
 use fastrender::tree::box_tree::ReplacedType;
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode};
-use fastrender::paint::display_list::ClipShape;
 use fastrender::{
     BlendMode, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FillRoundedRectItem,
     GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem,
@@ -359,6 +359,7 @@ fn fragment_opacity_wraps_display_items() {
             box_id: None,
             is_marker: false,
         },
+        baseline: None,
         children: vec![],
         style: Some(Arc::new(style)),
     };

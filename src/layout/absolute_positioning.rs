@@ -49,13 +49,18 @@
 
 use crate::geometry::{Point, Rect, Size};
 use crate::layout::formatting_context::LayoutError;
-use crate::layout::utils::{content_size_from_box_sizing, resolve_offset_for_positioned};
+use crate::layout::profile::{layout_timer, LayoutKind};
+use crate::layout::utils::{
+    content_size_from_box_sizing, resolve_font_relative_length_for_positioned, resolve_offset_for_positioned,
+};
 use crate::style::computed::PositionedStyle;
 use crate::style::position::Position;
-use crate::style::values::{Length, LengthOrAuto};
+use crate::style::values::{Length, LengthOrAuto, LengthUnit};
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::tree::fragment_tree::FragmentNode;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 
 use super::contexts::positioned::ContainingBlock;
 
@@ -68,6 +73,52 @@ pub struct AbsoluteLayoutResult {
     pub size: Size,
     /// The computed margins (may be auto-resolved for centering)
     pub margins: ResolvedMargins,
+}
+
+fn log_abs_clamp(kind: &str, min: f32, max: f32, style_min: Length, style_max: Length) {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    let enabled = *ENABLED.get_or_init(|| {
+        std::env::var("FASTR_LOG_ABS_CLAMP")
+            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(false)
+    });
+    if !enabled {
+        return;
+    }
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    if COUNTER.fetch_add(1, Ordering::Relaxed) < 8 {
+        eprintln!(
+            "[abs-{kind}-clamp] adjusting max: min={:.3} max={:.3} style_min={:?} style_max={:?}",
+            min, max, style_min, style_max
+        );
+    }
+}
+
+fn resolve_length_for_positioned_size(
+    len: &Length,
+    percentage_base: Option<f32>,
+    viewport: Size,
+    style: &PositionedStyle,
+    font_context: &FontContext,
+) -> Option<f32> {
+    if len.unit == LengthUnit::Calc {
+        return len.resolve_with_context(
+            percentage_base,
+            viewport.width,
+            viewport.height,
+            style.font_size,
+            style.root_font_size,
+        );
+    }
+    if len.unit.is_percentage() {
+        percentage_base.and_then(|base| len.resolve_against(base))
+    } else if len.unit.is_absolute() {
+        Some(len.to_px())
+    } else if len.unit.is_viewport_relative() {
+        Some(len.resolve_with_viewport(viewport.width, viewport.height))
+    } else {
+        Some(resolve_font_relative_length_for_positioned(*len, style, font_context))
+    }
 }
 
 /// Resolved margin values after auto-margin calculation
@@ -172,6 +223,15 @@ impl AbsoluteLayout {
         }
     }
 
+    /// Creates an absolute layout handler that reuses an existing font context.
+    ///
+    /// Sharing the font context avoids repeatedly scanning system fonts during
+    /// positioned layout, which can be very expensive on pages with many
+    /// out-of-flow elements.
+    pub fn with_font_context(font_context: FontContext) -> Self {
+        Self { font_context }
+    }
+
     /// Resolves a computed style into a positioned style using the containing block for percentage bases.
     pub fn resolve_positioned_style(
         &self,
@@ -211,15 +271,19 @@ impl AbsoluteLayout {
         input: &AbsoluteLayoutInput,
         containing_block: &ContainingBlock,
     ) -> Result<AbsoluteLayoutResult, LayoutError> {
+        let _profile = layout_timer(LayoutKind::Absolute);
         let style = &input.style;
         let cb_width = containing_block.width();
         let cb_height = containing_block.height();
         let viewport = containing_block.viewport_size();
+        let inline_base = containing_block.inline_percentage_base();
+        let block_base = containing_block.block_percentage_base();
 
         // Resolve horizontal position and width
         let (x, mut width, margin_left, margin_right) = self.compute_horizontal(
             style,
             cb_width,
+            inline_base,
             viewport,
             input.preferred_min_inline_size,
             input.preferred_inline_size,
@@ -231,6 +295,7 @@ impl AbsoluteLayout {
         let (y, mut height, margin_top, margin_bottom) = self.compute_vertical(
             style,
             cb_height,
+            block_base,
             viewport,
             input.preferred_min_block_size,
             input.preferred_block_size,
@@ -265,10 +330,18 @@ impl AbsoluteLayout {
         let vertical_spacing =
             style.padding.top + style.padding.bottom + style.border_width.top + style.border_width.bottom;
         let min_width = content_size_from_box_sizing(style.min_width.to_px(), horizontal_spacing, style.box_sizing);
-        let max_width = content_size_from_box_sizing(style.max_width.to_px(), horizontal_spacing, style.box_sizing);
+        let mut max_width = content_size_from_box_sizing(style.max_width.to_px(), horizontal_spacing, style.box_sizing);
+        if max_width.is_finite() && max_width < min_width {
+            log_abs_clamp("width", min_width, max_width, style.min_width, style.max_width);
+            max_width = min_width;
+        }
         width = width.clamp(min_width, max_width);
         let min_height = content_size_from_box_sizing(style.min_height.to_px(), vertical_spacing, style.box_sizing);
-        let max_height = content_size_from_box_sizing(style.max_height.to_px(), vertical_spacing, style.box_sizing);
+        let mut max_height = content_size_from_box_sizing(style.max_height.to_px(), vertical_spacing, style.box_sizing);
+        if max_height.is_finite() && max_height < min_height {
+            log_abs_clamp("height", min_height, max_height, style.min_height, style.max_height);
+            max_height = min_height;
+        }
         height = height.clamp(min_height, max_height);
 
         // Position relative to containing block origin
@@ -305,14 +378,15 @@ impl AbsoluteLayout {
         &self,
         style: &PositionedStyle,
         cb_width: f32,
+        inline_base: Option<f32>,
         viewport: Size,
         preferred_min_inline_size: Option<f32>,
         preferred_inline_size: Option<f32>,
         intrinsic_width: f32,
         static_x: f32,
     ) -> Result<(f32, f32, f32, f32), LayoutError> {
-        let left = resolve_offset_for_positioned(&style.left, cb_width, viewport, style, &self.font_context);
-        let right = resolve_offset_for_positioned(&style.right, cb_width, viewport, style, &self.font_context);
+        let left = resolve_offset_for_positioned(&style.left, inline_base, viewport, style, &self.font_context);
+        let right = resolve_offset_for_positioned(&style.right, inline_base, viewport, style, &self.font_context);
 
         // Get padding and border (never auto)
         let padding_left = style.padding.left;
@@ -321,14 +395,21 @@ impl AbsoluteLayout {
         let border_right = style.border_width.right;
         let total_horizontal_spacing = padding_left + padding_right + border_left + border_right;
 
-        let specified_width = style
-            .width
-            .resolve_against(cb_width)
-            .map(|w| content_size_from_box_sizing(w, total_horizontal_spacing, style.box_sizing));
+        let specified_width = match style.width {
+            LengthOrAuto::Auto => None,
+            LengthOrAuto::Length(len) => {
+                resolve_length_for_positioned_size(&len, inline_base, viewport, style, &self.font_context)
+                    .map(|px| content_size_from_box_sizing(px, total_horizontal_spacing, style.box_sizing))
+            }
+        };
         let min_width =
             content_size_from_box_sizing(style.min_width.to_px(), total_horizontal_spacing, style.box_sizing);
-        let max_width =
+        let mut max_width =
             content_size_from_box_sizing(style.max_width.to_px(), total_horizontal_spacing, style.box_sizing);
+        if max_width.is_finite() && max_width < min_width {
+            log_abs_clamp("width", min_width, max_width, style.min_width, style.max_width);
+            max_width = min_width;
+        }
 
         // Compute shrink-to-fit candidates for auto width.
         let preferred_min = preferred_min_inline_size.unwrap_or(intrinsic_width);
@@ -443,14 +524,15 @@ impl AbsoluteLayout {
         &self,
         style: &PositionedStyle,
         cb_height: f32,
+        block_base: Option<f32>,
         viewport: Size,
         preferred_min_block_size: Option<f32>,
         preferred_block_size: Option<f32>,
         intrinsic_height: f32,
         static_y: f32,
     ) -> Result<(f32, f32, f32, f32), LayoutError> {
-        let top = resolve_offset_for_positioned(&style.top, cb_height, viewport, style, &self.font_context);
-        let bottom = resolve_offset_for_positioned(&style.bottom, cb_height, viewport, style, &self.font_context);
+        let top = resolve_offset_for_positioned(&style.top, block_base, viewport, style, &self.font_context);
+        let bottom = resolve_offset_for_positioned(&style.bottom, block_base, viewport, style, &self.font_context);
 
         // Get padding and border
         let padding_top = style.padding.top;
@@ -464,14 +546,21 @@ impl AbsoluteLayout {
         let mut margin_top = if margin_top_auto { 0.0 } else { style.margin.top };
         let mut margin_bottom = if margin_bottom_auto { 0.0 } else { style.margin.bottom };
 
-        let specified_height = style
-            .height
-            .resolve_against(cb_height)
-            .map(|h| content_size_from_box_sizing(h, total_vertical_spacing, style.box_sizing));
+        let specified_height = match style.height {
+            LengthOrAuto::Auto => None,
+            LengthOrAuto::Length(len) => {
+                resolve_length_for_positioned_size(&len, block_base, viewport, style, &self.font_context)
+                    .map(|px| content_size_from_box_sizing(px, total_vertical_spacing, style.box_sizing))
+            }
+        };
         let min_height =
             content_size_from_box_sizing(style.min_height.to_px(), total_vertical_spacing, style.box_sizing);
-        let max_height =
+        let mut max_height =
             content_size_from_box_sizing(style.max_height.to_px(), total_vertical_spacing, style.box_sizing);
+        if max_height.is_finite() && max_height < min_height {
+            log_abs_clamp("height", min_height, max_height, style.min_height, style.max_height);
+            max_height = min_height;
+        }
 
         // Compute shrink-to-fit candidates for auto height.
         let preferred_min = preferred_min_block_size.unwrap_or(intrinsic_height);
@@ -587,10 +676,10 @@ impl AbsoluteLayout {
         viewport: Size,
         width: f32,
     ) -> (f32, f32, f32) {
-        let left =
-            resolve_offset_for_positioned(&style.left, cb_width, viewport, style, &self.font_context).unwrap_or(0.0);
-        let right =
-            resolve_offset_for_positioned(&style.right, cb_width, viewport, style, &self.font_context).unwrap_or(0.0);
+        let left = resolve_offset_for_positioned(&style.left, Some(cb_width), viewport, style, &self.font_context)
+            .unwrap_or(0.0);
+        let right = resolve_offset_for_positioned(&style.right, Some(cb_width), viewport, style, &self.font_context)
+            .unwrap_or(0.0);
 
         let padding_left = style.padding.left;
         let padding_right = style.padding.right;
@@ -636,10 +725,10 @@ impl AbsoluteLayout {
         viewport: Size,
         height: f32,
     ) -> (f32, f32, f32) {
-        let top =
-            resolve_offset_for_positioned(&style.top, cb_height, viewport, style, &self.font_context).unwrap_or(0.0);
-        let bottom =
-            resolve_offset_for_positioned(&style.bottom, cb_height, viewport, style, &self.font_context).unwrap_or(0.0);
+        let top = resolve_offset_for_positioned(&style.top, Some(cb_height), viewport, style, &self.font_context)
+            .unwrap_or(0.0);
+        let bottom = resolve_offset_for_positioned(&style.bottom, Some(cb_height), viewport, style, &self.font_context)
+            .unwrap_or(0.0);
 
         let padding_top = style.padding.top;
         let padding_bottom = style.padding.bottom;
@@ -695,6 +784,7 @@ mod tests {
     use crate::layout::utils::resolve_offset;
     use crate::style::types::FontSizeAdjust;
     use crate::style::values::{Length, LengthOrAuto, LengthUnit};
+    use crate::style::ComputedStyle;
     use crate::text::font_loader::FontContext;
 
     fn default_style() -> PositionedStyle {
@@ -1050,6 +1140,40 @@ mod tests {
         assert!(
             (result.position.x - 14.0).abs() < 0.001,
             "left inset should remain satisfied after min-width expansion"
+        );
+    }
+
+    #[test]
+    fn absolute_margin_percentages_use_containing_width() {
+        let layout = AbsoluteLayout::new();
+        let cb = create_containing_block(200.0, 100.0);
+
+        let mut style = ComputedStyle::default();
+        style.position = Position::Absolute;
+        style.left = Some(Length::px(0.0));
+        style.top = Some(Length::px(0.0));
+        style.width = Some(Length::px(50.0));
+        style.height = Some(Length::px(50.0));
+        style.margin_left = Some(Length::percent(20.0));
+        style.margin_right = Some(Length::percent(0.0));
+        style.margin_top = Some(Length::percent(10.0));
+        style.margin_bottom = Some(Length::percent(5.0));
+
+        let positioned = layout.resolve_positioned_style(&style, &cb);
+        let input = AbsoluteLayoutInput::new(positioned, Size::new(10.0, 10.0), Point::ZERO);
+        let result = layout.layout_absolute(&input, &cb).unwrap();
+
+        assert!(
+            (result.margins.left - 40.0).abs() < 0.001,
+            "margin-left should be 20% of 200px"
+        );
+        assert!(
+            (result.margins.top - 20.0).abs() < 0.001,
+            "margin-top should be 10% of 200px"
+        );
+        assert!(
+            (result.margins.bottom - 10.0).abs() < 0.001,
+            "margin-bottom should be 5% of 200px"
         );
     }
 
@@ -1683,55 +1807,69 @@ pub fn resolve_positioned_style(
     resolved.font_size_adjust = style.font_size_adjust;
 
     let cb_width = containing_block.width();
-    let cb_height = containing_block.height();
-    let resolve_len = |len: &crate::style::values::Length, base: f32| -> f32 {
+    let inline_base = containing_block.inline_percentage_base().or(Some(cb_width));
+    let block_base = containing_block.block_percentage_base();
+    let resolve_len = |len: &crate::style::values::Length, base: Option<f32>| -> Option<f32> {
+        if len.unit == LengthUnit::Calc {
+            return len.resolve_with_context(
+                base,
+                viewport.width,
+                viewport.height,
+                style.font_size,
+                style.root_font_size,
+            );
+        }
         if len.unit.is_percentage() {
-            len.resolve_against(base)
+            base.and_then(|b| len.resolve_against(b))
         } else if len.unit.is_absolute() {
-            len.to_px()
+            Some(len.to_px())
         } else if len.unit.is_viewport_relative() {
-            len.resolve_with_viewport(viewport.width, viewport.height)
+            Some(len.resolve_with_viewport(viewport.width, viewport.height))
         } else {
-            crate::layout::utils::resolve_font_relative_length(*len, style, font_context)
+            Some(crate::layout::utils::resolve_font_relative_length(
+                *len,
+                style,
+                font_context,
+            ))
         }
     };
 
-    resolved.padding.left = resolve_len(&style.padding_left, cb_width);
-    resolved.padding.right = resolve_len(&style.padding_right, cb_width);
-    resolved.padding.top = resolve_len(&style.padding_top, cb_width);
-    resolved.padding.bottom = resolve_len(&style.padding_bottom, cb_width);
+    resolved.padding.left = resolve_len(&style.padding_left, inline_base).unwrap_or(0.0);
+    resolved.padding.right = resolve_len(&style.padding_right, inline_base).unwrap_or(0.0);
+    resolved.padding.top = resolve_len(&style.padding_top, inline_base).unwrap_or(0.0);
+    resolved.padding.bottom = resolve_len(&style.padding_bottom, inline_base).unwrap_or(0.0);
 
-    resolved.border_width.left = resolve_len(&style.border_left_width, cb_width);
-    resolved.border_width.right = resolve_len(&style.border_right_width, cb_width);
-    resolved.border_width.top = resolve_len(&style.border_top_width, cb_width);
-    resolved.border_width.bottom = resolve_len(&style.border_bottom_width, cb_width);
+    resolved.border_width.left = resolve_len(&style.border_left_width, inline_base).unwrap_or(0.0);
+    resolved.border_width.right = resolve_len(&style.border_right_width, inline_base).unwrap_or(0.0);
+    resolved.border_width.top = resolve_len(&style.border_top_width, inline_base).unwrap_or(0.0);
+    resolved.border_width.bottom = resolve_len(&style.border_bottom_width, inline_base).unwrap_or(0.0);
 
     resolved.min_width = Length::px(
         style
             .min_width
             .as_ref()
-            .map(|l| resolve_len(l, cb_width))
+            .and_then(|l| resolve_len(l, inline_base))
             .unwrap_or(0.0),
     );
     resolved.max_width = Length::px(
         style
             .max_width
             .as_ref()
-            .map(|l| resolve_len(l, cb_width))
+            .and_then(|l| resolve_len(l, inline_base))
             .unwrap_or(f32::INFINITY),
     );
     resolved.min_height = Length::px(
         style
             .min_height
             .as_ref()
-            .map(|l| resolve_len(l, cb_height))
+            .and_then(|l| resolve_len(l, block_base))
             .unwrap_or(0.0),
     );
     resolved.max_height = Length::px(
         style
             .max_height
             .as_ref()
-            .map(|l| resolve_len(l, cb_height))
+            .and_then(|l| resolve_len(l, block_base))
             .unwrap_or(f32::INFINITY),
     );
 
@@ -1743,22 +1881,23 @@ pub fn resolve_positioned_style(
     resolved.margin.left = style
         .margin_left
         .as_ref()
-        .map(|l| resolve_len(l, cb_width))
+        .and_then(|l| resolve_len(l, inline_base))
         .unwrap_or(0.0);
     resolved.margin.right = style
         .margin_right
         .as_ref()
-        .map(|l| resolve_len(l, cb_width))
+        .and_then(|l| resolve_len(l, inline_base))
         .unwrap_or(0.0);
+    // CSS 2.1 §8.3: percentage margins resolve against the containing block width on both axes.
     resolved.margin.top = style
         .margin_top
         .as_ref()
-        .map(|l| resolve_len(l, cb_height))
+        .and_then(|l| resolve_len(l, inline_base))
         .unwrap_or(0.0);
     resolved.margin.bottom = style
         .margin_bottom
         .as_ref()
-        .map(|l| resolve_len(l, cb_height))
+        .and_then(|l| resolve_len(l, inline_base))
         .unwrap_or(0.0);
 
     resolved

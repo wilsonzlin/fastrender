@@ -182,6 +182,12 @@ pub struct FragmentNode {
     /// The content type of this fragment
     pub content: FragmentContent,
 
+    /// Optional baseline offset from the fragment's top edge.
+    ///
+    /// Useful for fragments that need to participate in baseline alignment
+    /// even when they don't contain explicit line/text children (e.g., tables).
+    pub baseline: Option<f32>,
+
     /// Child fragments
     ///
     /// For block fragments: block and line children
@@ -215,6 +221,7 @@ impl FragmentNode {
         Self {
             bounds,
             content,
+            baseline: None,
             children,
             style: None,
         }
@@ -230,6 +237,7 @@ impl FragmentNode {
         Self {
             bounds,
             content,
+            baseline: None,
             children,
             style: Some(style),
         }
@@ -257,6 +265,12 @@ impl FragmentNode {
     /// Creates a new block fragment with style
     pub fn new_block_styled(bounds: Rect, children: Vec<FragmentNode>, style: Arc<ComputedStyle>) -> Self {
         Self::new_with_style(bounds, FragmentContent::Block { box_id: None }, children, style)
+    }
+
+    /// Returns a copy of this fragment with an explicit baseline offset.
+    pub fn with_baseline(mut self, baseline: f32) -> Self {
+        self.baseline = Some(baseline);
+        self
     }
 
     /// Creates a new block fragment with a box ID
@@ -461,6 +475,7 @@ impl FragmentNode {
         Self {
             bounds: self.bounds.translate(offset),
             content: self.content.clone(),
+            baseline: self.baseline,
             children: self.children.iter().map(|child| child.translate(offset)).collect(),
             style: self.style.clone(),
         }

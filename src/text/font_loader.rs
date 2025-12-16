@@ -30,10 +30,10 @@ use crate::text::font_db::{FontDatabase, FontStretch, FontStyle, FontWeight, Loa
 use crate::text::pipeline::DEFAULT_OBLIQUE_ANGLE_DEG;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
-use std::collections::HashSet;
 use percent_encoding::percent_decode_str;
 use rustybuzz::ttf_parser::Tag;
 use rustybuzz::{Direction, Face, Feature, UnicodeBuffer};
+use std::collections::HashSet;
 use std::fs;
 use std::sync::{Arc, RwLock};
 use ureq::Agent;

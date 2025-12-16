@@ -43,6 +43,7 @@ use taffy::tree::{NodeId as TaffyNodeId, TaffyTree};
 use crate::geometry::Rect;
 use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutConstraints};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
+use crate::layout::profile::{layout_timer, LayoutKind};
 use crate::layout::utils::resolve_font_relative_length;
 use crate::style::display::Display as CssDisplay;
 use crate::style::grid::validate_area_rectangles;
@@ -151,7 +152,7 @@ impl GridFormattingContext {
 
     fn resolve_length_for_width(&self, length: Length, percentage_base: f32, style: &ComputedStyle) -> f32 {
         if length.unit.is_percentage() {
-            length.resolve_against(percentage_base)
+            length.resolve_against(percentage_base).unwrap_or(0.0)
         } else if length.unit.is_absolute() {
             length.to_px()
         } else if length.unit.is_viewport_relative() {
@@ -913,6 +914,7 @@ impl Default for GridFormattingContext {
 
 impl FormattingContext for GridFormattingContext {
     fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
+        let _profile = layout_timer(LayoutKind::Grid);
         // Create fresh Taffy tree for this layout
         let mut taffy = TaffyTree::new();
 
@@ -994,13 +996,23 @@ impl FormattingContext for GridFormattingContext {
             );
             let padding_rect = crate::geometry::Rect::new(padding_origin, padding_size);
 
+            let block_base = if box_node.style.height.is_some() {
+                Some(padding_rect.size.height)
+            } else {
+                None
+            };
             let cb = if box_node.style.position.is_positioned() {
-                crate::layout::contexts::positioned::ContainingBlock::with_viewport(padding_rect, self.viewport_size)
+                crate::layout::contexts::positioned::ContainingBlock::with_viewport_and_bases(
+                    padding_rect,
+                    self.viewport_size,
+                    Some(padding_rect.size.width),
+                    block_base,
+                )
             } else {
                 self.nearest_positioned_cb
             };
 
-            let abs = crate::layout::absolute_positioning::AbsoluteLayout::new();
+            let abs = crate::layout::absolute_positioning::AbsoluteLayout::with_font_context(self.font_context.clone());
             for child in positioned_children {
                 // Layout child as static for intrinsic size.
                 let mut layout_child = child.clone();
@@ -1020,7 +1032,9 @@ impl FormattingContext for GridFormattingContext {
                 let fc = factory.create(fc_type);
                 let child_constraints = LayoutConstraints::new(
                     CrateAvailableSpace::Definite(padding_rect.size.width),
-                    CrateAvailableSpace::Definite(padding_rect.size.height),
+                    block_base
+                        .map(CrateAvailableSpace::Definite)
+                        .unwrap_or(CrateAvailableSpace::Indefinite),
                 );
                 let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
 

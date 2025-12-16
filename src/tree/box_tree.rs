@@ -337,37 +337,55 @@ impl SizesList {
         viewport: crate::geometry::Size,
         font_size: f32,
     ) -> f32 {
-        let mut last = None;
+        let mut last_entry: Option<crate::style::values::Length> = None;
         for entry in &self.entries {
-            last = Some(entry.length);
+            last_entry = Some(entry.length);
             let media_matches = entry.media.as_ref().map(|q| media_ctx.evaluate_list(q)).unwrap_or(true);
             if media_matches {
-                return resolve_sizes_length(entry.length, viewport, font_size);
+                if let Some(resolved) = resolve_sizes_length(entry.length, viewport, font_size) {
+                    let clamped = resolved.max(0.0);
+                    if clamped.is_finite() {
+                        return clamped;
+                    }
+                }
             }
         }
 
-        if let Some(len) = last {
-            resolve_sizes_length(len, viewport, font_size)
-        } else {
-            resolve_sizes_length(
-                crate::style::values::Length::new(100.0, crate::style::values::LengthUnit::Vw),
-                viewport,
-                font_size,
-            )
+        if let Some(len) = last_entry {
+            if let Some(resolved) = resolve_sizes_length(len, viewport, font_size) {
+                let clamped = resolved.max(0.0);
+                if clamped.is_finite() {
+                    return clamped;
+                }
+            }
         }
+
+        // Spec fallback: 100vw when all entries are missing/invalid.
+        resolve_sizes_length(
+            crate::style::values::Length::new(100.0, crate::style::values::LengthUnit::Vw),
+            viewport,
+            font_size,
+        )
+        .unwrap_or(viewport.width)
     }
 }
 
-fn resolve_sizes_length(length: crate::style::values::Length, viewport: crate::geometry::Size, font_size: f32) -> f32 {
+fn resolve_sizes_length(
+    length: crate::style::values::Length,
+    viewport: crate::geometry::Size,
+    font_size: f32,
+) -> Option<f32> {
     use crate::style::values::LengthUnit;
     match length.unit {
         LengthUnit::Percent => length.resolve_against(viewport.width),
         LengthUnit::Vw | LengthUnit::Vh | LengthUnit::Vmin | LengthUnit::Vmax => {
-            length.resolve_with_viewport(viewport.width, viewport.height)
+            Some(length.resolve_with_viewport(viewport.width, viewport.height))
         }
-        LengthUnit::Em | LengthUnit::Rem => font_size * length.value,
-        _ if length.unit.is_absolute() => length.to_px(),
-        _ => length.resolve_against(viewport.width),
+        LengthUnit::Em | LengthUnit::Rem => Some(font_size * length.value),
+        LengthUnit::Ex | LengthUnit::Ch => Some(font_size * length.value * 0.5),
+        _ if length.unit.is_absolute() => Some(length.to_px()),
+        // Unsupported units in sizes make the entry invalid; caller will fall back.
+        _ => None,
     }
 }
 
@@ -565,10 +583,16 @@ pub struct BoxNode {
     /// Child boxes in document order
     pub children: Vec<BoxNode>,
 
+    /// Unique identifier for caching and debugging
+    pub id: usize,
+
     /// Debug information (element name, class, id)
     ///
     /// Optional - only populated in debug builds or with dev tools enabled
     pub debug_info: Option<DebugInfo>,
+
+    /// Styled node identifier that produced this box (pre-order traversal id).
+    pub styled_node_id: Option<usize>,
 }
 
 impl BoxNode {
@@ -595,7 +619,9 @@ impl BoxNode {
             style,
             box_type: BoxType::Block(BlockBox { formatting_context: fc }),
             children,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -607,7 +633,9 @@ impl BoxNode {
                 formatting_context: None,
             }),
             children,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -619,7 +647,9 @@ impl BoxNode {
                 formatting_context: Some(fc),
             }),
             children,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -629,7 +659,9 @@ impl BoxNode {
             style,
             box_type: BoxType::Text(TextBox { text }),
             children: Vec::new(),
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -639,7 +671,9 @@ impl BoxNode {
             style,
             box_type: BoxType::Marker(MarkerBox { content }),
             children: Vec::new(),
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -658,7 +692,9 @@ impl BoxNode {
                 aspect_ratio,
             }),
             children: Vec::new(),
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -670,7 +706,9 @@ impl BoxNode {
                 anonymous_type: AnonymousType::Block,
             }),
             children,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -682,7 +720,9 @@ impl BoxNode {
                 anonymous_type: AnonymousType::Inline,
             }),
             children,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -692,6 +732,11 @@ impl BoxNode {
     pub fn with_debug_info(mut self, info: DebugInfo) -> Self {
         self.debug_info = Some(info);
         self
+    }
+
+    /// Unique identifier for this box within the box tree.
+    pub fn id(&self) -> usize {
+        self.id
     }
 
     // Type query methods
@@ -828,9 +873,20 @@ pub struct BoxTree {
     pub root: BoxNode,
 }
 
+fn assign_box_ids(node: &mut BoxNode, next_id: &mut usize) {
+    node.id = *next_id;
+    *next_id += 1;
+    for child in &mut node.children {
+        assign_box_ids(child, next_id);
+    }
+}
+
 impl BoxTree {
     /// Creates a new box tree with the given root
     pub fn new(root: BoxNode) -> Self {
+        let mut root = root;
+        let mut next_id = 1;
+        assign_box_ids(&mut root, &mut next_id);
         Self { root }
     }
 
@@ -1184,6 +1240,43 @@ mod tests {
         });
 
         assert_eq!(chosen, "400w", "last sizes entry (300px) should drive selection");
+    }
+
+    #[test]
+    fn sizes_resolve_ex_ch_lengths() {
+        let img = ReplacedType::Image {
+            src: "fallback".to_string(),
+            alt: None,
+            srcset: vec![
+                SrcsetCandidate {
+                    url: "100w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(100),
+                },
+                SrcsetCandidate {
+                    url: "300w".to_string(),
+                    descriptor: SrcsetDescriptor::Width(300),
+                },
+            ],
+            sizes: Some(SizesList {
+                entries: vec![SizesEntry {
+                    media: None,
+                    // 10ch at 16px font size = 80px slot width; smallest density >=1 is 100w.
+                    length: Length::new(10.0, LengthUnit::Ch),
+                }],
+            }),
+        };
+
+        let viewport = Size::new(200.0, 100.0);
+        let media_ctx = MediaContext::screen(viewport.width, viewport.height).with_device_pixel_ratio(1.0);
+        let chosen = img.image_source_for_context(ImageSelectionContext {
+            scale: 1.0,
+            slot_width: None,
+            viewport: Some(viewport),
+            media_context: Some(&media_ctx),
+            font_size: Some(16.0),
+        });
+
+        assert_eq!(chosen, "100w");
     }
 
     #[test]

@@ -73,6 +73,27 @@
         <p>שלחו מייל אל: user@example.com</p>
     </div>
 
+    <div class="label">dir=auto chooses base direction from first-strong</div>
+    <div class="container ltr">
+        <p dir="auto">שלום, this paragraph should base itself on RTL.</p>
+        <p dir="auto">Hello שלום this one should stay LTR because it starts with English.</p>
+    </div>
+
+    <div class="label">dir=auto with no strong characters falls back to parent</div>
+    <div class="container rtl">
+        <p dir="auto">1234 -- () [] ?? ..</p>
+    </div>
+
+    <div class="label">BDI isolation with auto base direction</div>
+    <div class="container ltr">
+        <p>Account: <bdi>שלום123</bdi> should be isolated RTL, then more LTR text.</p>
+    </div>
+
+    <div class="label">BDI with neutrals inherits parent for auto base</div>
+    <div class="container rtl">
+        <p>מספר: <bdi>-- 123 --</bdi> נשאר ב-RTL ונטמע בלי להפריע.</p>
+    </div>
+
     <div class="label">Explicit bidi overrides</div>
     <div class="container ltr">
         <p>Normal text <bdo dir="rtl">forced RTL text</bdo> back to normal.</p>

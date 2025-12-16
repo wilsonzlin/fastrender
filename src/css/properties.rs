@@ -6,8 +6,269 @@ use super::types::{
     GradientPosition, GradientPositionComponent, PropertyValue, RadialGradientShape, RadialGradientSize, TextShadow,
 };
 use crate::style::color::{Color, Rgba};
-use crate::style::values::{Length, LengthUnit};
+use crate::style::values::{CalcLength, Length, LengthUnit};
 use cssparser::{Parser, ParserInput, Token};
+
+/// Set of property names that the engine understands.
+///
+/// Unknown properties are dropped during parsing (per CSS 2.1 §4.2) and treated as unsupported
+/// for feature queries.
+const KNOWN_PROPERTIES: &[&str] = &[
+    "align-content",
+    "align-items",
+    "align-self",
+    "all",
+    "aspect-ratio",
+    "backdrop-filter",
+    "background",
+    "background-attachment",
+    "background-blend-mode",
+    "background-clip",
+    "background-color",
+    "background-image",
+    "background-origin",
+    "background-position",
+    "background-position-x",
+    "background-position-y",
+    "background-repeat",
+    "background-size",
+    "block-size",
+    "border",
+    "border-block",
+    "border-block-color",
+    "border-block-end-color",
+    "border-block-end-style",
+    "border-block-end-width",
+    "border-block-start-color",
+    "border-block-start-style",
+    "border-block-start-width",
+    "border-block-style",
+    "border-block-width",
+    "border-bottom-color",
+    "border-bottom-left-radius",
+    "border-bottom-right-radius",
+    "border-bottom-style",
+    "border-bottom-width",
+    "border-collapse",
+    "border-color",
+    "border-end-end-radius",
+    "border-end-start-radius",
+    "border-image",
+    "border-image-outset",
+    "border-image-repeat",
+    "border-image-slice",
+    "border-image-source",
+    "border-image-width",
+    "border-inline",
+    "border-inline-color",
+    "border-inline-end-color",
+    "border-inline-end-style",
+    "border-inline-end-width",
+    "border-inline-start-color",
+    "border-inline-start-style",
+    "border-inline-start-width",
+    "border-inline-style",
+    "border-inline-width",
+    "border-left-color",
+    "border-left-style",
+    "border-left-width",
+    "border-radius",
+    "border-right-color",
+    "border-right-style",
+    "border-right-width",
+    "border-spacing",
+    "border-start-end-radius",
+    "border-start-start-radius",
+    "border-style",
+    "border-top-color",
+    "border-top-left-radius",
+    "border-top-right-radius",
+    "border-top-style",
+    "border-top-width",
+    "border-width",
+    "bottom",
+    "box-shadow",
+    "box-sizing",
+    "caption-side",
+    "clear",
+    "clip-path",
+    "color",
+    "contain",
+    "container",
+    "container-name",
+    "container-type",
+    "content",
+    "counter-increment",
+    "counter-reset",
+    "counter-set",
+    "cursor",
+    "direction",
+    "display",
+    "empty-cells",
+    "filter",
+    "flex-basis",
+    "flex-direction",
+    "flex-flow",
+    "flex-grow",
+    "flex-shrink",
+    "flex-wrap",
+    "float",
+    "font",
+    "font-family",
+    "font-feature-settings",
+    "font-kerning",
+    "font-language-override",
+    "font-optical-sizing",
+    "font-size",
+    "font-size-adjust",
+    "font-stretch",
+    "font-style",
+    "font-synthesis",
+    "font-synthesis-position",
+    "font-synthesis-small-caps",
+    "font-synthesis-style",
+    "font-synthesis-weight",
+    "font-variant",
+    "font-variant-alternates",
+    "font-variant-caps",
+    "font-variant-east-asian",
+    "font-variant-emoji",
+    "font-variant-ligatures",
+    "font-variant-numeric",
+    "font-variant-position",
+    "font-variation-settings",
+    "font-weight",
+    "grid",
+    "grid-area",
+    "grid-auto-columns",
+    "grid-auto-flow",
+    "grid-auto-rows",
+    "grid-column",
+    "grid-column-end",
+    "grid-column-start",
+    "grid-row",
+    "grid-row-end",
+    "grid-row-start",
+    "grid-template",
+    "grid-template-areas",
+    "grid-template-columns",
+    "grid-template-rows",
+    "height",
+    "hyphens",
+    "image-orientation",
+    "image-rendering",
+    "image-resolution",
+    "inline-size",
+    "inset",
+    "inset-block",
+    "inset-block-end",
+    "inset-block-start",
+    "inset-inline",
+    "inset-inline-end",
+    "inset-inline-start",
+    "isolation",
+    "justify-content",
+    "justify-items",
+    "justify-self",
+    "left",
+    "letter-spacing",
+    "line-break",
+    "line-height",
+    "list-style",
+    "list-style-image",
+    "list-style-position",
+    "list-style-type",
+    "margin",
+    "margin-block",
+    "margin-block-end",
+    "margin-block-start",
+    "margin-bottom",
+    "margin-inline",
+    "margin-inline-end",
+    "margin-inline-start",
+    "margin-left",
+    "margin-right",
+    "margin-top",
+    "max-block-size",
+    "max-height",
+    "max-inline-size",
+    "max-width",
+    "min-block-size",
+    "min-height",
+    "min-inline-size",
+    "min-width",
+    "mix-blend-mode",
+    "object-fit",
+    "object-position",
+    "opacity",
+    "outline",
+    "outline-color",
+    "outline-offset",
+    "outline-style",
+    "outline-width",
+    "overflow",
+    "overflow-x",
+    "overflow-y",
+    "padding",
+    "padding-block",
+    "padding-block-end",
+    "padding-block-start",
+    "padding-bottom",
+    "padding-inline",
+    "padding-inline-end",
+    "padding-inline-start",
+    "padding-left",
+    "padding-right",
+    "padding-top",
+    "place-content",
+    "place-items",
+    "place-self",
+    "position",
+    "quotes",
+    "right",
+    "tab-size",
+    "table-layout",
+    "text-align",
+    "text-align-all",
+    "text-align-last",
+    "text-combine-upright",
+    "text-decoration",
+    "text-decoration-color",
+    "text-decoration-line",
+    "text-decoration-skip-ink",
+    "text-decoration-style",
+    "text-decoration-thickness",
+    "text-emphasis",
+    "text-emphasis-color",
+    "text-emphasis-position",
+    "text-emphasis-style",
+    "text-indent",
+    "text-justify",
+    "text-orientation",
+    "text-overflow",
+    "text-shadow",
+    "text-transform",
+    "text-underline-offset",
+    "text-underline-position",
+    "top",
+    "transform",
+    "transform-box",
+    "transform-origin",
+    "unicode-bidi",
+    "vertical-align",
+    "visibility",
+    "white-space",
+    "width",
+    "will-change",
+    "word-break",
+    "word-spacing",
+    "writing-mode",
+    "z-index",
+];
+
+fn is_known_property(property: &str) -> bool {
+    KNOWN_PROPERTIES.binary_search(&property).is_ok()
+}
 
 fn tokenize_property_value(value_str: &str, allow_commas: bool) -> Vec<String> {
     let mut tokens = Vec::new();
@@ -96,6 +357,16 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
         return Some(PropertyValue::Custom(value_str.to_string()));
     }
 
+    // When no property name is provided (utility parsing paths) accept generic values.
+    if property.is_empty() {
+        return parse_simple_value(value_str.trim());
+    }
+
+    // Unknown properties are ignored per the CSS error-handling rules.
+    if !is_known_property(property) {
+        return None;
+    }
+
     let value_str = value_str.trim();
     if value_str.is_empty() {
         return None;
@@ -103,6 +374,13 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
 
     // Remove trailing !important if present
     let value_str = value_str.trim_end_matches("!important").trim();
+
+    // If the value contains a CSS variable, keep the raw string so it can be resolved later
+    // during cascade/computed value resolution. Many author styles use var() with colors,
+    // sizes, etc., which would otherwise be rejected here.
+    if crate::style::var_resolution::contains_var(value_str) {
+        return Some(PropertyValue::Keyword(value_str.to_string()));
+    }
 
     let is_background_longhand = property.starts_with("background-") || property == "background";
     let allow_commas = is_background_longhand || property == "cursor";
@@ -147,6 +425,7 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
                 | "border-spacing"
                 | "background-position"
                 | "transform-origin"
+                | "list-style"
                 | "background"
                 | "background-image"
                 | "background-repeat"
@@ -154,6 +433,20 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
                 | "background-attachment"
                 | "background-origin"
                 | "background-clip"
+                | "border"
+                | "border-top"
+                | "border-right"
+                | "border-bottom"
+                | "border-left"
+                | "margin"
+                | "padding"
+                | "border-inline"
+                | "border-inline-start"
+                | "border-inline-end"
+                | "border-block"
+                | "border-block-start"
+                | "border-block-end"
+                | "outline"
         )
     {
         let mut parts = Vec::new();
@@ -210,8 +503,8 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
         return Some(PropertyValue::FontFamily(families));
     }
 
-    // Default to keyword
-    Some(PropertyValue::Keyword(value_str.to_string()))
+    // Fallback: treat remaining tokens as keywords/numbers/percentages.
+    parse_simple_value(value_str)
 }
 
 fn parse_text_shadow_list(value_str: &str) -> Option<Vec<TextShadow>> {
@@ -1116,8 +1409,20 @@ mod tests {
     }
 
     #[test]
-    fn rejects_calc_when_units_incompatible() {
-        assert!(parse_length("calc(10px + 5%)").is_none());
+    fn handles_calc_with_mixed_units() {
+        let mixed = parse_length("calc(100% - 32px)").expect("calc with percent");
+        assert_eq!(mixed.unit, LengthUnit::Calc);
+        let resolved = mixed
+            .resolve_with_context(Some(200.0), 0.0, 0.0, 16.0, 16.0)
+            .expect("resolve calc");
+        assert!((resolved - 168.0).abs() < 1e-6);
+
+        let viewport_mix = parse_length("calc(100vw + 10px)").expect("calc viewport");
+        let resolved_viewport = viewport_mix
+            .resolve_with_context(Some(0.0), 1200.0, 800.0, 16.0, 16.0)
+            .expect("resolve viewport mix");
+        assert!((resolved_viewport - 1210.0).abs() < 1e-3);
+
         assert!(parse_length("calc(10px * 5px)").is_none());
         assert!(parse_length("calc(10px / 0px)").is_none());
     }
@@ -1186,9 +1491,9 @@ pub fn parse_length(s: &str) -> Option<Length> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct CalcComponent {
-    value: f32,
-    unit: Option<LengthUnit>,
+enum CalcComponent {
+    Number(f32),
+    Length(CalcLength),
 }
 
 fn parse_function_length(input: &str) -> Option<Length> {
@@ -1209,10 +1514,7 @@ fn parse_function_length(input: &str) -> Option<Length> {
         }),
     });
 
-    match result {
-        Ok(component) => calc_component_to_length(component),
-        Err(_) => None,
-    }
+    result.ok().and_then(calc_component_to_length)
 }
 
 pub(crate) fn parse_calc_function_length<'i, 't>(
@@ -1226,9 +1528,15 @@ pub(crate) fn parse_calc_function_length<'i, 't>(
 }
 
 fn calc_component_to_length(component: CalcComponent) -> Option<Length> {
-    match component.unit {
-        Some(unit) => Some(Length::new(component.value, unit)),
-        None => None,
+    match component {
+        CalcComponent::Number(_) => None,
+        CalcComponent::Length(calc) => {
+            if let Some(term) = calc.single_term() {
+                Some(Length::new(term.value, term.unit))
+            } else {
+                Some(Length::calc(calc))
+            }
+        }
     }
 }
 
@@ -1275,10 +1583,7 @@ fn parse_calc_product<'i, 't>(input: &mut Parser<'i, 't>) -> Result<CalcComponen
 fn parse_calc_factor<'i, 't>(input: &mut Parser<'i, 't>) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
     let token = input.next()?;
     match token {
-        Token::Number { value, .. } => Ok(CalcComponent {
-            value: *value,
-            unit: None,
-        }),
+        Token::Number { value, .. } => Ok(CalcComponent::Number(*value)),
         Token::Dimension { value, ref unit, .. } => {
             let unit = unit.as_ref().to_ascii_lowercase();
             let unit = match unit.as_str() {
@@ -1304,15 +1609,12 @@ fn parse_calc_factor<'i, 't>(input: &mut Parser<'i, 't>) -> Result<CalcComponent
                     })
                 }
             };
-            Ok(CalcComponent {
-                value: *value,
-                unit: Some(unit),
-            })
+            Ok(CalcComponent::Length(CalcLength::single(unit, *value)))
         }
-        Token::Percentage { unit_value, .. } => Ok(CalcComponent {
-            value: *unit_value * 100.0,
-            unit: Some(LengthUnit::Percent),
-        }),
+        Token::Percentage { unit_value, .. } => Ok(CalcComponent::Length(CalcLength::single(
+            LengthUnit::Percent,
+            *unit_value * 100.0,
+        ))),
         Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => input.parse_nested_block(parse_calc_sum),
         Token::Function(ref name) if name.eq_ignore_ascii_case("min") => {
             input.parse_nested_block(|block| parse_min_max(block, MathFn::Min))
@@ -1325,10 +1627,10 @@ fn parse_calc_factor<'i, 't>(input: &mut Parser<'i, 't>) -> Result<CalcComponent
         Token::Delim('+') => parse_calc_factor(input),
         Token::Delim('-') => {
             let inner = parse_calc_factor(input)?;
-            Ok(CalcComponent {
-                value: -inner.value,
-                unit: inner.unit,
-            })
+            match inner {
+                CalcComponent::Number(v) => Ok(CalcComponent::Number(-v)),
+                CalcComponent::Length(len) => Ok(CalcComponent::Length(len.scale(-1.0))),
+            }
         }
         _ => Err(cssparser::ParseError {
             kind: cssparser::ParseErrorKind::Custom(()),
@@ -1400,50 +1702,109 @@ fn parse_clamp<'i, 't>(input: &mut Parser<'i, 't>) -> Result<CalcComponent, cssp
     input.skip_whitespace();
     let max = parse_calc_sum(input)?;
 
-    if !all_same_unit(&[min, preferred, max]) || min.unit.is_none() {
+    if !all_same_dimension(&[min, preferred, max]) {
         return Err(cssparser::ParseError {
             kind: cssparser::ParseErrorKind::Custom(()),
             location: input.current_source_location(),
         });
     }
 
-    let preferred_clamped = preferred.value.clamp(min.value, max.value);
-    Ok(CalcComponent {
-        value: preferred_clamped,
-        unit: min.unit,
-    })
+    match (min, preferred, max) {
+        (CalcComponent::Number(a), CalcComponent::Number(b), CalcComponent::Number(c)) => {
+            Ok(CalcComponent::Number(b.clamp(a, c)))
+        }
+        (CalcComponent::Length(a), CalcComponent::Length(b), CalcComponent::Length(c)) => {
+            let a_term = a.single_term();
+            let b_term = b.single_term();
+            let c_term = c.single_term();
+            if let (Some(min_term), Some(pref_term), Some(max_term)) = (a_term, b_term, c_term) {
+                if min_term.unit == pref_term.unit && pref_term.unit == max_term.unit {
+                    let clamped = pref_term.value.clamp(min_term.value, max_term.value);
+                    return Ok(CalcComponent::Length(CalcLength::single(pref_term.unit, clamped)));
+                }
+            }
+            Err(cssparser::ParseError {
+                kind: cssparser::ParseErrorKind::Custom(()),
+                location: input.current_source_location(),
+            })
+        }
+        _ => Err(cssparser::ParseError {
+            kind: cssparser::ParseErrorKind::Custom(()),
+            location: input.current_source_location(),
+        }),
+    }
 }
 
-fn all_same_unit(values: &[CalcComponent]) -> bool {
+fn all_same_dimension(values: &[CalcComponent]) -> bool {
     if values.is_empty() {
         return false;
     }
-    let first = values[0].unit;
-    values.iter().all(|v| v.unit == first)
+    let first_is_number = matches!(values[0], CalcComponent::Number(_));
+    values
+        .iter()
+        .all(|v| matches!(v, CalcComponent::Number(_)) == first_is_number)
 }
 
 fn reduce_components<'i>(
     values: Vec<CalcComponent>,
     func: MathFn,
 ) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
-    if !all_same_unit(&values) || values.iter().any(|v| v.unit.is_none()) {
+    if !all_same_dimension(&values) {
         return Err(cssparser::ParseError {
             kind: cssparser::ParseErrorKind::Custom(()),
             location: cssparser::SourceLocation { line: 0, column: 0 },
         });
     }
 
-    let unit = values[0].unit;
-    let init = match func {
-        MathFn::Min => f32::INFINITY,
-        MathFn::Max => f32::NEG_INFINITY,
-    };
-    let result = values.into_iter().fold(init, |acc, v| match func {
-        MathFn::Min => acc.min(v.value),
-        MathFn::Max => acc.max(v.value),
-    });
-
-    Ok(CalcComponent { value: result, unit })
+    match values[0] {
+        CalcComponent::Number(_) => {
+            let init = match func {
+                MathFn::Min => f32::INFINITY,
+                MathFn::Max => f32::NEG_INFINITY,
+            };
+            let result = values.into_iter().fold(init, |acc, v| match (func, v) {
+                (MathFn::Min, CalcComponent::Number(n)) => acc.min(n),
+                (MathFn::Max, CalcComponent::Number(n)) => acc.max(n),
+                _ => acc,
+            });
+            Ok(CalcComponent::Number(result))
+        }
+        CalcComponent::Length(_) => {
+            let mut iter = values.into_iter();
+            let first = match iter.next().unwrap() {
+                CalcComponent::Length(l) => l,
+                _ => unreachable!(),
+            };
+            // Only support min/max when all lengths reduce to a single shared unit.
+            let first_term = first.single_term().ok_or(cssparser::ParseError {
+                kind: cssparser::ParseErrorKind::Custom(()),
+                location: cssparser::SourceLocation { line: 0, column: 0 },
+            })?;
+            let mut extremum = first_term.value;
+            for comp in iter {
+                let CalcComponent::Length(calc) = comp else {
+                    continue;
+                };
+                let Some(term) = calc.single_term() else {
+                    return Err(cssparser::ParseError {
+                        kind: cssparser::ParseErrorKind::Custom(()),
+                        location: cssparser::SourceLocation { line: 0, column: 0 },
+                    });
+                };
+                if term.unit != first_term.unit {
+                    return Err(cssparser::ParseError {
+                        kind: cssparser::ParseErrorKind::Custom(()),
+                        location: cssparser::SourceLocation { line: 0, column: 0 },
+                    });
+                }
+                extremum = match func {
+                    MathFn::Min => extremum.min(term.value),
+                    MathFn::Max => extremum.max(term.value),
+                };
+            }
+            Ok(CalcComponent::Length(CalcLength::single(first_term.unit, extremum)))
+        }
+    }
 }
 
 fn combine_sum<'i>(
@@ -1451,17 +1812,17 @@ fn combine_sum<'i>(
     right: CalcComponent,
     sign: f32,
 ) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
-    let right_value = right.value * sign;
-    match (left.unit, right.unit) {
-        (Some(u1), Some(u2)) if u1 == u2 => Ok(CalcComponent {
-            value: left.value + right_value,
-            unit: Some(u1),
-        }),
-        (Some(_), None) if right.value == 0.0 => Ok(left),
-        (None, Some(u2)) if left.value == 0.0 => Ok(CalcComponent {
-            value: right_value,
-            unit: Some(u2),
-        }),
+    match (left, right) {
+        (CalcComponent::Number(a), CalcComponent::Number(b)) => Ok(CalcComponent::Number(a + b * sign)),
+        (CalcComponent::Length(l), CalcComponent::Length(r)) => l
+            .add_scaled(&r, sign)
+            .map(CalcComponent::Length)
+            .ok_or(cssparser::ParseError {
+                kind: cssparser::ParseErrorKind::Custom(()),
+                location: cssparser::SourceLocation { line: 0, column: 0 },
+            }),
+        (CalcComponent::Length(l), CalcComponent::Number(n)) if n == 0.0 => Ok(CalcComponent::Length(l)),
+        (CalcComponent::Number(n), CalcComponent::Length(l)) if n == 0.0 => Ok(CalcComponent::Length(l.scale(sign))),
         _ => Err(cssparser::ParseError {
             kind: cssparser::ParseErrorKind::Custom(()),
             location: cssparser::SourceLocation { line: 0, column: 0 },
@@ -1475,42 +1836,27 @@ fn combine_product<'i>(
     op: char,
 ) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
     match op {
-        '*' => match (left.unit, right.unit) {
-            (Some(_), Some(_)) => Err(cssparser::ParseError {
+        '*' => match (left, right) {
+            (CalcComponent::Number(a), CalcComponent::Number(b)) => Ok(CalcComponent::Number(a * b)),
+            (CalcComponent::Length(l), CalcComponent::Number(n))
+            | (CalcComponent::Number(n), CalcComponent::Length(l)) => Ok(CalcComponent::Length(l.scale(n))),
+            _ => Err(cssparser::ParseError {
                 kind: cssparser::ParseErrorKind::Custom(()),
                 location: cssparser::SourceLocation { line: 0, column: 0 },
             }),
-            (Some(unit), None) => Ok(CalcComponent {
-                value: left.value * right.value,
-                unit: Some(unit),
+        },
+        '/' => match (left, right) {
+            (_, CalcComponent::Number(0.0)) => Err(cssparser::ParseError {
+                kind: cssparser::ParseErrorKind::Custom(()),
+                location: cssparser::SourceLocation { line: 0, column: 0 },
             }),
-            (None, Some(unit)) => Ok(CalcComponent {
-                value: left.value * right.value,
-                unit: Some(unit),
-            }),
-            (None, None) => Ok(CalcComponent {
-                value: left.value * right.value,
-                unit: None,
+            (CalcComponent::Number(a), CalcComponent::Number(b)) => Ok(CalcComponent::Number(a / b)),
+            (CalcComponent::Length(l), CalcComponent::Number(n)) => Ok(CalcComponent::Length(l.scale(1.0 / n))),
+            _ => Err(cssparser::ParseError {
+                kind: cssparser::ParseErrorKind::Custom(()),
+                location: cssparser::SourceLocation { line: 0, column: 0 },
             }),
         },
-        '/' => {
-            if right.value == 0.0 {
-                return Err(cssparser::ParseError {
-                    kind: cssparser::ParseErrorKind::Custom(()),
-                    location: cssparser::SourceLocation { line: 0, column: 0 },
-                });
-            }
-            match (left.unit, right.unit) {
-                (_, Some(_)) => Err(cssparser::ParseError {
-                    kind: cssparser::ParseErrorKind::Custom(()),
-                    location: cssparser::SourceLocation { line: 0, column: 0 },
-                }),
-                (unit, None) => Ok(CalcComponent {
-                    value: left.value / right.value,
-                    unit,
-                }),
-            }
-        }
         _ => Err(cssparser::ParseError {
             kind: cssparser::ParseErrorKind::Custom(()),
             location: cssparser::SourceLocation { line: 0, column: 0 },

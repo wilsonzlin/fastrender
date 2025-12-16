@@ -196,6 +196,7 @@ pub fn compute_block_width(
         border_right,
         margin_left,
         margin_right,
+        style.direction,
     );
 
     ComputedBlockWidth {
@@ -294,6 +295,7 @@ pub fn compute_block_width_with_auto_margins(
         border_right,
         margin_left,
         margin_right,
+        style.direction,
     );
 
     ComputedBlockWidth {
@@ -319,6 +321,7 @@ fn resolve_constraint(
     border_right: f32,
     margin_left: MarginValue,
     margin_right: MarginValue,
+    direction: crate::style::types::Direction,
 ) -> (f32, f32, f32) {
     // Sum of non-auto, non-width values
     let borders_and_padding = border_left + padding_left + padding_right + border_right;
@@ -347,9 +350,17 @@ fn resolve_constraint(
                 }
                 (MarginValue::Length(ml), MarginValue::Length(_mr)) => {
                     // Neither margin is auto: OVER-CONSTRAINED
-                    // Ignore margin-right (in LTR) - recompute it
-                    let mr = containing_width - borders_and_padding - width - ml;
-                    (ml, width, mr)
+                    // Ignore the end-side margin per CSS2.1 §10.3.3: right in LTR, left in RTL.
+                    match direction {
+                        crate::style::types::Direction::Ltr => {
+                            let mr = containing_width - borders_and_padding - width - ml;
+                            (ml, width, mr)
+                        }
+                        crate::style::types::Direction::Rtl => {
+                            let ml = containing_width - borders_and_padding - width - margin_right.unwrap_or_zero();
+                            (ml, width, margin_right.unwrap_or_zero())
+                        }
+                    }
                 }
             }
         }
@@ -374,8 +385,19 @@ fn resolve_length(
     root_font_size: f32,
     viewport: crate::geometry::Size,
 ) -> f32 {
+    if length.unit == LengthUnit::Calc {
+        return length
+            .resolve_with_context(
+                Some(containing_width),
+                viewport.width,
+                viewport.height,
+                font_size,
+                root_font_size,
+            )
+            .unwrap_or(0.0);
+    }
     if length.unit.is_percentage() {
-        length.resolve_against(containing_width)
+        length.resolve_against(containing_width).unwrap_or(0.0)
     } else if length.unit.is_absolute() {
         length.to_px()
     } else if length.unit.is_viewport_relative() {
@@ -396,6 +418,7 @@ mod tests {
     use super::*;
     use crate::geometry::Size;
     use crate::style::types::BoxSizing;
+    use crate::style::types::Direction;
 
     fn default_style() -> ComputedStyle {
         ComputedStyle::default()
@@ -554,6 +577,40 @@ mod tests {
         assert_eq!(result.content_width, 400.0);
         assert_eq!(result.margin_left, 100.0);
         assert_eq!(result.margin_right, 300.0);
+    }
+
+    #[test]
+    fn test_width_over_constrained_rtl_ignores_left_margin() {
+        let mut style = default_style();
+        style.direction = Direction::Rtl;
+        style.width = Some(Length::px(400.0));
+        style.margin_left = Some(Length::px(150.0));
+        style.margin_right = Some(Length::px(50.0));
+
+        let result = compute_block_width(&style, 800.0, viewport());
+
+        // In RTL the left margin is dropped when over-constrained. Remaining space goes to margin-left.
+        // available = 800 - 400 - borders/padding(0) - margin-right(50) = 350
+        assert_eq!(result.content_width, 400.0);
+        assert_eq!(result.margin_left, 350.0);
+        assert_eq!(result.margin_right, 50.0);
+    }
+
+    #[test]
+    fn test_width_over_constrained_ltr_keeps_left_margin() {
+        let mut style = default_style();
+        style.direction = Direction::Ltr;
+        style.width = Some(Length::px(400.0));
+        style.margin_left = Some(Length::px(150.0));
+        style.margin_right = Some(Length::px(50.0));
+
+        let result = compute_block_width(&style, 800.0, viewport());
+
+        // In LTR the right margin is dropped when over-constrained. Remaining space goes to margin-right.
+        // available = 800 - 400 - 150 = 250
+        assert_eq!(result.content_width, 400.0);
+        assert_eq!(result.margin_left, 150.0);
+        assert_eq!(result.margin_right, 250.0);
     }
 
     #[test]

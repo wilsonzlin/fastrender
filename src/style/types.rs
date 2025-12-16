@@ -55,6 +55,15 @@ pub enum BoxSizing {
     BorderBox,
 }
 
+/// Container type for container queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerType {
+    None,
+    Normal,
+    Size,
+    InlineSize,
+}
+
 /// Border collapsing model for tables
 ///
 /// CSS 2.1 §17.6.1: initial value is `separate`

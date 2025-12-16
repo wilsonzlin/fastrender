@@ -22,7 +22,7 @@ pub fn resolve_object_position(
         PositionComponent::Keyword(PositionKeyword::End) => free,
         PositionComponent::Length(len) => {
             match () {
-                _ if len.unit.is_percentage() => len.resolve_against(free),
+                _ if len.unit.is_percentage() => len.resolve_against(free).unwrap_or(0.0),
                 _ if len.unit.is_absolute() => len.to_px(),
                 _ if len.unit.is_font_relative() => len.resolve_with_font_size(font_size),
                 _ if len.unit.is_viewport_relative() => {

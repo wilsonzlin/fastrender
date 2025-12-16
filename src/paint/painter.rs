@@ -26,7 +26,7 @@ use crate::css::types::{RadialGradientShape, RadialGradientSize};
 use crate::error::{RenderError, Result};
 use crate::geometry::{Point, Rect, Size};
 use crate::image_loader::{CachedImage, ImageCache};
-use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
+use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics_viewport;
 use crate::layout::contexts::inline::line_builder::TextItem;
 use crate::layout::utils::resolve_font_relative_length;
 use crate::paint::blur::apply_gaussian_blur;
@@ -62,8 +62,10 @@ use base64::Engine;
 use encoding_rs::Encoding;
 use percent_encoding::percent_decode;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::io::Read;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 use tiny_skia::{
     BlendMode as SkiaBlendMode, FilterQuality, IntSize, LinearGradient, Mask, MaskType, Paint, PathBuilder, Pattern,
     Pixmap, PixmapPaint, PremultipliedColorU8, RadialGradient, Rect as SkiaRect, SpreadMode, Stroke, Transform,
@@ -88,6 +90,123 @@ pub struct Painter {
     font_ctx: FontContext,
     /// Image cache for replaced content
     image_cache: ImageCache,
+    /// Cache of shaped runs keyed by style and text to avoid reshaping identical content during paint
+    text_shape_cache: Arc<Mutex<HashMap<TextCacheKey, Vec<ShapedRun>>>>,
+}
+
+#[derive(Default)]
+struct PaintStats {
+    background_ms: f64,
+    collect_ms: f64,
+    execute_ms: f64,
+    commands: usize,
+    backgrounds: (usize, f64),
+    borders: (usize, f64),
+    text: (usize, f64),
+    replaced: (usize, f64),
+    outline: (usize, f64),
+    stacking: (usize, f64),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct TextCacheKey {
+    style_ptr: usize,
+    font_size_bits: u32,
+    text: String,
+}
+
+fn dump_stack_enabled() -> bool {
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| {
+        std::env::var("FASTR_DUMP_STACK")
+            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(false)
+    })
+}
+
+fn dump_fragments_enabled() -> bool {
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| {
+        std::env::var("FASTR_DUMP_FRAGMENTS")
+            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(false)
+    })
+}
+
+fn dump_counts_enabled() -> bool {
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| {
+        std::env::var("FASTR_DUMP_COUNTS")
+            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(false)
+    })
+}
+
+fn nested_counts(cmds: &[DisplayCommand]) -> (usize, usize) {
+    cmds.iter().fold((0, 0), |(total, text), cmd| match cmd {
+        DisplayCommand::StackingContext { commands, .. } => {
+            let (t, tx) = nested_counts(commands);
+            (total + 1 + t, text + tx)
+        }
+        DisplayCommand::Text { .. } => (total + 1, text + 1),
+        _ => (total + 1, text),
+    })
+}
+
+impl PaintStats {
+    fn record(&mut self, cmd: &DisplayCommand, duration: std::time::Duration) {
+        let ms = duration.as_secs_f64() * 1000.0;
+        self.commands += 1;
+        match cmd {
+            DisplayCommand::Background { .. } => {
+                self.backgrounds.0 += 1;
+                self.backgrounds.1 += ms;
+            }
+            DisplayCommand::Border { .. } => {
+                self.borders.0 += 1;
+                self.borders.1 += ms;
+            }
+            DisplayCommand::Text { .. } => {
+                self.text.0 += 1;
+                self.text.1 += ms;
+            }
+            DisplayCommand::Replaced { .. } => {
+                self.replaced.0 += 1;
+                self.replaced.1 += ms;
+            }
+            DisplayCommand::Outline { .. } => {
+                self.outline.0 += 1;
+                self.outline.1 += ms;
+            }
+            DisplayCommand::StackingContext { .. } => {
+                self.stacking.0 += 1;
+                self.stacking.1 += ms;
+            }
+        }
+        self.execute_ms += ms;
+    }
+
+    fn log(&self) {
+        eprintln!(
+            "paint_stats commands={} background_ms_ms={:.2} collect_ms_ms={:.2} execute_ms_ms={:.2}",
+            self.commands, self.background_ms, self.collect_ms, self.execute_ms
+        );
+        eprintln!(
+            " paint_breakdown backgrounds count={} time_ms={:.2} borders count={} time_ms={:.2} text count={} time_ms={:.2} replaced count={} time_ms={:.2} outline count={} time_ms={:.2} stacking count={} time_ms={:.2}",
+            self.backgrounds.0,
+            self.backgrounds.1,
+            self.borders.0,
+            self.borders.1,
+            self.text.0,
+            self.text.1,
+            self.replaced.0,
+            self.replaced.1,
+            self.outline.0,
+            self.outline.1,
+            self.stacking.0,
+            self.stacking.1,
+        );
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -110,7 +229,7 @@ enum ResolvedFilter {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum DisplayCommand {
     Background {
         rect: Rect,
@@ -384,7 +503,8 @@ impl Painter {
 
                 let chosen_src = if (needs_intrinsic || needs_ratio) && !src.is_empty() {
                     let media_ctx = crate::style::media::MediaContext::screen(viewport.width, viewport.height)
-                        .with_device_pixel_ratio(self.scale);
+                        .with_device_pixel_ratio(self.scale)
+                        .with_env_overrides();
                     Some(
                         replaced_box
                             .replaced_type
@@ -546,6 +666,7 @@ impl Painter {
             shaper: ShapingPipeline::new(),
             font_ctx,
             image_cache,
+            text_shape_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -596,14 +717,216 @@ impl Painter {
 
     /// Paints a fragment tree and returns the resulting pixmap
     pub fn paint(mut self, tree: &FragmentTree) -> Result<Pixmap> {
+        let profiling = std::env::var("FASTR_PAINT_STATS")
+            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(false);
+        let mut stats = PaintStats::default();
+
+        if dump_counts_enabled() {
+            let (total, text, replaced, lines, inline) = fragment_counts(&tree.root);
+            eprintln!(
+                "fragment counts total={} text={} lines={} inline={} replaced={}",
+                total, text, lines, inline, replaced
+            );
+        }
+
         // Fill background
+        let start = Instant::now();
         self.fill_background();
+        if profiling {
+            stats.background_ms = start.elapsed().as_secs_f64() * 1000.0;
+        }
 
         // Build display list in stacking-context order then paint
         let mut items = Vec::new();
+        let collect_start = Instant::now();
         self.collect_stacking_context(&tree.root, Point::ZERO, None, true, &mut items);
+        if profiling {
+            stats.collect_ms = collect_start.elapsed().as_secs_f64() * 1000.0;
+        }
+        if dump_stack_enabled() {
+            let total_items = items.len();
+            let mut stack_items = 0;
+            let mut text_items = 0;
+            fn nested_counts(cmds: &[DisplayCommand]) -> (usize, usize) {
+                cmds.iter().fold((0, 0), |(total, text), cmd| match cmd {
+                    DisplayCommand::StackingContext { commands, .. } => {
+                        let (t, tx) = nested_counts(commands);
+                        (total + 1 + t, text + tx)
+                    }
+                    DisplayCommand::Text { .. } => (total + 1, text + 1),
+                    _ => (total + 1, text),
+                })
+            }
+            for item in &items {
+                match item {
+                    DisplayCommand::StackingContext { commands, .. } => {
+                        stack_items += 1;
+                        let (c, t) = nested_counts(commands);
+                        eprintln!(
+                            "stack list item: nested_commands={} nested_text={} bounds_not_logged_here",
+                            c, t
+                        );
+                    }
+                    DisplayCommand::Text { .. } => text_items += 1,
+                    _ => {}
+                }
+            }
+            eprintln!(
+                "stack list summary: total_items={} stack_items={} text_items={}",
+                total_items, stack_items, text_items
+            );
+        }
+
+        // Optional debug: dump a few text commands with positions/colors
+        if let Ok(v) = std::env::var("FASTR_DUMP_TEXT_ITEMS") {
+            if v != "0" && !v.eq_ignore_ascii_case("false") {
+                let limit: usize = v.parse().unwrap_or(20);
+                fn collect_text<'a>(cmds: &'a [DisplayCommand], out: &mut Vec<&'a DisplayCommand>) {
+                    for cmd in cmds {
+                        match cmd {
+                            DisplayCommand::Text { .. } => out.push(cmd),
+                            DisplayCommand::StackingContext { commands, .. } => collect_text(commands, out),
+                            _ => {}
+                        }
+                    }
+                }
+                let mut texts = Vec::new();
+                collect_text(&items, &mut texts);
+                eprintln!(
+                    "dumping first {} text commands ({} total)",
+                    limit.min(texts.len()),
+                    texts.len()
+                );
+                for (idx, cmd) in texts.into_iter().take(limit).enumerate() {
+                    if let DisplayCommand::Text {
+                        rect,
+                        baseline_offset,
+                        text,
+                        style,
+                        ..
+                    } = cmd
+                    {
+                        let (r, g, b, a) = (style.color.r, style.color.g, style.color.b, style.color.a);
+                        eprintln!(
+                            "  [{idx}] text {:?} rect=({:.1},{:.1},{:.1},{:.1}) baseline_off={:.1} color=rgba({},{},{},{:.2})",
+                            text.chars().take(60).collect::<String>(),
+                            rect.x(),
+                            rect.y(),
+                            rect.width(),
+                            rect.height(),
+                            baseline_offset,
+                            r,
+                            g,
+                            b,
+                            a
+                        );
+                    }
+                }
+            }
+        }
+
+        // Optional debug: dump the first N display commands with their rects/types.
+        if let Ok(v) = std::env::var("FASTR_DUMP_COMMANDS") {
+            if v != "0" && !v.eq_ignore_ascii_case("false") {
+                let limit: usize = v.parse().unwrap_or(50);
+                fn collect_commands<'a>(
+                    cmds: &'a [DisplayCommand],
+                    out: &mut Vec<(&'a DisplayCommand, usize)>,
+                    depth: usize,
+                ) {
+                    for cmd in cmds {
+                        out.push((cmd, depth));
+                        if let DisplayCommand::StackingContext { commands, .. } = cmd {
+                            collect_commands(commands, out, depth + 1);
+                        }
+                    }
+                }
+                let mut flat = Vec::new();
+                collect_commands(&items, &mut flat, 0);
+                eprintln!(
+                    "dumping first {} commands ({} total)",
+                    limit.min(flat.len()),
+                    flat.len()
+                );
+                for (idx, (cmd, depth)) in flat.iter().take(limit).enumerate() {
+                    match cmd {
+                        DisplayCommand::Background { rect, style } => eprintln!(
+                            "  [{idx}] {:indent$}background ({:.1},{:.1},{:.1},{:.1}) color=rgba({},{},{},{:.2})",
+                            "",
+                            rect.x(),
+                            rect.y(),
+                            rect.width(),
+                            rect.height(),
+                            style.background_color.r,
+                            style.background_color.g,
+                            style.background_color.b,
+                            style.background_color.a,
+                            indent = depth * 2
+                        ),
+                        DisplayCommand::Border { rect, .. } => eprintln!(
+                            "  [{idx}] {:indent$}border ({:.1},{:.1},{:.1},{:.1})",
+                            "",
+                            rect.x(),
+                            rect.y(),
+                            rect.width(),
+                            rect.height(),
+                            indent = depth * 2
+                        ),
+                        DisplayCommand::Outline { rect, .. } => eprintln!(
+                            "  [{idx}] {:indent$}outline ({:.1},{:.1},{:.1},{:.1})",
+                            "",
+                            rect.x(),
+                            rect.y(),
+                            rect.width(),
+                            rect.height(),
+                            indent = depth * 2
+                        ),
+                        DisplayCommand::Text { rect, .. } => eprintln!(
+                            "  [{idx}] {:indent$}text ({:.1},{:.1},{:.1},{:.1})",
+                            "",
+                            rect.x(),
+                            rect.y(),
+                            rect.width(),
+                            rect.height(),
+                            indent = depth * 2
+                        ),
+                        DisplayCommand::Replaced { rect, .. } => eprintln!(
+                            "  [{idx}] {:indent$}replaced ({:.1},{:.1},{:.1},{:.1})",
+                            "",
+                            rect.x(),
+                            rect.y(),
+                            rect.width(),
+                            rect.height(),
+                            indent = depth * 2
+                        ),
+                        DisplayCommand::StackingContext { rect, .. } => eprintln!(
+                            "  [{idx}] {:indent$}stack ({:.1},{:.1},{:.1},{:.1})",
+                            "",
+                            rect.x(),
+                            rect.y(),
+                            rect.width(),
+                            rect.height(),
+                            indent = depth * 2
+                        ),
+                    }
+                }
+            }
+        }
+
         for item in items {
-            self.execute_command(item)?;
+            if profiling {
+                let exec_start = Instant::now();
+                self.execute_command(item.clone())?;
+                stats.record(&item, exec_start.elapsed());
+            } else {
+                self.execute_command(item)?;
+            }
+        }
+
+        if profiling {
+            eprintln!("paint_stats enabled");
+            stats.log();
         }
 
         Ok(self.pixmap)
@@ -634,6 +957,7 @@ impl Painter {
         is_root_context: bool,
         items: &mut Vec<DisplayCommand>,
     ) {
+        let debug_fragments = dump_fragments_enabled();
         let is_root_fragment = parent_style.is_none() && is_root_context;
         if let Some(style) = fragment.style.as_deref() {
             if !matches!(style.visibility, crate::style::computed::Visibility::Visible) {
@@ -647,6 +971,24 @@ impl Painter {
             fragment.bounds.width(),
             fragment.bounds.height(),
         );
+
+        if debug_fragments {
+            eprintln!(
+                "fragment {:?} bounds=({}, {}, {}, {}) children={} establishes={} display={:?}",
+                describe_content(&fragment.content),
+                abs_bounds.x(),
+                abs_bounds.y(),
+                abs_bounds.width(),
+                abs_bounds.height(),
+                fragment.children.len(),
+                fragment
+                    .style
+                    .as_deref()
+                    .map(|s| creates_stacking_context(s, parent_style, is_root_context))
+                    .unwrap_or(is_root_context),
+                fragment.style.as_deref().map(|s| s.display)
+            );
+        }
 
         let style_ref = fragment.style.as_deref();
         let establishes_context = style_ref
@@ -664,10 +1006,9 @@ impl Painter {
             let mut negative_contexts = Vec::new();
             let mut zero_contexts = Vec::new();
             let mut positive_contexts = Vec::new();
-            let mut blocks = Vec::new();
-            let mut floats = Vec::new();
+            let mut blocks_and_floats = Vec::new();
             let mut inlines = Vec::new();
-            let mut positioned = Vec::new();
+            let mut positioned_auto = Vec::new();
 
             for (idx, child) in fragment.children.iter().enumerate() {
                 if let Some(style) = child.style.as_deref() {
@@ -683,23 +1024,21 @@ impl Painter {
                         continue;
                     }
                     if is_positioned(style) {
-                        positioned.push(idx);
-                    } else if is_float_for_stacking(style) {
-                        floats.push(idx);
+                        positioned_auto.push(idx);
                     } else if is_inline_level(style, child) {
                         inlines.push(idx);
                     } else {
-                        blocks.push(idx);
+                        blocks_and_floats.push(idx);
                     }
-                } else {
-                    if matches!(
-                        child.content,
-                        FragmentContent::Inline { .. } | FragmentContent::Text { .. } | FragmentContent::Line { .. }
-                    ) {
-                        inlines.push(idx);
-                    } else {
-                        blocks.push(idx);
-                    }
+                } else if matches!(
+                    child.content,
+                    FragmentContent::Inline { .. } | FragmentContent::Text { .. } | FragmentContent::Line { .. }
+                ) {
+                    inlines.push(idx);
+                }
+                // Children without style default to block-level when not inline-like.
+                else {
+                    blocks_and_floats.push(idx);
                 }
             }
 
@@ -714,16 +1053,7 @@ impl Painter {
                 );
             }
 
-            for idx in blocks {
-                self.collect_stacking_context(
-                    &fragment.children[idx],
-                    next_offset,
-                    style_ref,
-                    false,
-                    &mut local_commands,
-                );
-            }
-            for idx in floats {
+            for idx in blocks_and_floats {
                 self.collect_stacking_context(
                     &fragment.children[idx],
                     next_offset,
@@ -741,7 +1071,7 @@ impl Painter {
                     &mut local_commands,
                 );
             }
-            for idx in positioned {
+            for idx in positioned_auto {
                 self.collect_stacking_context(
                     &fragment.children[idx],
                     next_offset,
@@ -780,14 +1110,16 @@ impl Painter {
         // Stacking context: paint own background/border first
         self.enqueue_background_and_borders(fragment, abs_bounds, is_root_fragment, &mut local_commands);
 
-        // Partition children into stacking-context buckets and normal content
+        // Partition children into stacking-context buckets and normal flow (preserving DOM order)
         let mut negative_contexts = Vec::new();
         let mut zero_contexts = Vec::new();
         let mut positive_contexts = Vec::new();
-        let mut blocks = Vec::new();
-        let mut floats = Vec::new();
+        // Paint in-flow blocks and floats together in DOM order (CSS2 stacking level 4)
+        let mut blocks_and_floats = Vec::new();
+        // Paint in-flow inline-level content after blocks/floats (CSS2 stacking level 5)
         let mut inlines = Vec::new();
-        let mut positioned = Vec::new();
+        // Positioned elements with auto/0 z-index but not establishing a stacking context (CSS2 level 6)
+        let mut positioned_auto = Vec::new();
 
         for (idx, child) in fragment.children.iter().enumerate() {
             if let Some(style) = child.style.as_deref() {
@@ -802,25 +1134,20 @@ impl Painter {
                     }
                     continue;
                 }
-
                 if is_positioned(style) {
-                    positioned.push(idx);
-                } else if is_float_for_stacking(style) {
-                    floats.push(idx);
+                    positioned_auto.push(idx);
                 } else if is_inline_level(style, child) {
                     inlines.push(idx);
                 } else {
-                    blocks.push(idx);
+                    blocks_and_floats.push(idx);
                 }
             } else if matches!(
                 child.content,
                 FragmentContent::Inline { .. } | FragmentContent::Text { .. } | FragmentContent::Line { .. }
             ) {
                 inlines.push(idx);
-            }
-            // No style: treat as block-level unless inline-like
-            else {
-                blocks.push(idx);
+            } else {
+                blocks_and_floats.push(idx);
             }
         }
 
@@ -839,16 +1166,7 @@ impl Painter {
 
         // In-flow/non-positioned content for this context
         self.enqueue_content(fragment, abs_bounds, &mut local_commands);
-        for idx in blocks {
-            self.collect_stacking_context(
-                &fragment.children[idx],
-                child_offset,
-                style_ref,
-                false,
-                &mut local_commands,
-            );
-        }
-        for idx in floats {
+        for idx in blocks_and_floats {
             self.collect_stacking_context(
                 &fragment.children[idx],
                 child_offset,
@@ -866,7 +1184,7 @@ impl Painter {
                 &mut local_commands,
             );
         }
-        for idx in positioned {
+        for idx in positioned_auto {
             self.collect_stacking_context(
                 &fragment.children[idx],
                 child_offset,
@@ -917,6 +1235,9 @@ impl Painter {
             .unwrap_or_default();
         let has_backdrop = !backdrop_filters.is_empty();
         let clip = style_ref.and_then(|style| {
+            // Honor overflow clipping: when overflow is hidden/scroll/clip, restrict painting to the
+            // padding box. This prevents offscreen children from flooding the viewport when their
+            // layout positions explode.
             let clip_x = matches!(
                 style.overflow_x,
                 Overflow::Hidden | Overflow::Scroll | Overflow::Auto | Overflow::Clip
@@ -934,12 +1255,18 @@ impl Painter {
                 abs_bounds.width(),
                 abs_bounds.height(),
                 style,
+                Some((self.css_width, self.css_height)),
             );
             let clip_rect = rects.padding;
             if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 {
                 return None;
             }
-            let clip_radii = resolve_clip_radii(style, &rects, crate::style::types::BackgroundBox::PaddingBox);
+            let clip_radii = resolve_clip_radii(
+                style,
+                &rects,
+                crate::style::types::BackgroundBox::PaddingBox,
+                Some((self.css_width, self.css_height)),
+            );
             Some((clip_rect, clip_radii, clip_x, clip_y))
         });
         let clip_path = style_ref
@@ -1183,11 +1510,24 @@ impl Painter {
                 clip_path,
                 commands,
             } => {
+                let debug_stack = dump_stack_enabled();
+                if debug_stack {
+                    let (nested_cmds, nested_text) = nested_counts(&commands);
+                    eprintln!(
+                        "stack exec: preclip_bounds=({}, {}, {}, {}) nested_cmds={} nested_text={}",
+                        context_rect.x(),
+                        context_rect.y(),
+                        context_rect.width(),
+                        context_rect.height(),
+                        nested_cmds,
+                        nested_text
+                    );
+                }
                 if opacity <= 0.0 {
                     return Ok(());
                 }
 
-                let Some(bounds) = stacking_context_bounds(
+                let Some(mut bounds) = stacking_context_bounds(
                     &commands,
                     &filters,
                     &backdrop_filters,
@@ -1198,6 +1538,65 @@ impl Painter {
                 ) else {
                     return Ok(());
                 };
+
+                // Constrain the stacking layer to the visible viewport (expanded by filter outsets).
+                // If a context is entirely outside the viewport, skip it.
+                let (filter_l, filter_t, filter_r, filter_b) = filter_outset(&filters);
+                let (back_l, back_t, back_r, back_b) = filter_outset(&backdrop_filters);
+                let expand_l = filter_l.max(back_l);
+                let expand_t = filter_t.max(back_t);
+                let expand_r = filter_r.max(back_r);
+                let expand_b = filter_b.max(back_b);
+                let view_bounds = Rect::from_xywh(
+                    -expand_l,
+                    -expand_t,
+                    self.css_width + expand_l + expand_r,
+                    self.css_height + expand_t + expand_b,
+                );
+                match bounds.intersection(view_bounds) {
+                    Some(clipped) if clipped.width() > 0.0 && clipped.height() > 0.0 => bounds = clipped,
+                    _ => return Ok(()),
+                }
+                if debug_stack {
+                    eprintln!(
+                        "stack exec: postclip_bounds=({}, {}, {}, {})",
+                        bounds.x(),
+                        bounds.y(),
+                        bounds.width(),
+                        bounds.height()
+                    );
+                }
+                if !bounds.width().is_finite()
+                    || !bounds.height().is_finite()
+                    || bounds.width() <= 0.0
+                    || bounds.height() <= 0.0
+                {
+                    return Ok(());
+                }
+
+                // Optional debug: report nested command counts before translating
+                if dump_stack_enabled() {
+                    fn count_commands(cmds: &[DisplayCommand]) -> (usize, usize) {
+                        cmds.iter().fold((0, 0), |(total, text), cmd| match cmd {
+                            DisplayCommand::StackingContext { commands, .. } => {
+                                let (t, tx) = count_commands(commands);
+                                (total + 1 + t, text + tx)
+                            }
+                            DisplayCommand::Text { .. } => (total + 1, text + 1),
+                            _ => (total + 1, text),
+                        })
+                    }
+                    let (total, text) = count_commands(&commands);
+                    eprintln!(
+                        "stacking debug: commands={} text={} bounds=({}, {}, {}, {})",
+                        total,
+                        text,
+                        bounds.min_x(),
+                        bounds.min_y(),
+                        bounds.width(),
+                        bounds.height()
+                    );
+                }
 
                 // Reduce layer size by translating to the top-left of the local bounds.
                 let offset = Point::new(bounds.min_x(), bounds.min_y());
@@ -1210,12 +1609,18 @@ impl Painter {
                     return Ok(());
                 }
 
-                let root_rect = Rect::from_xywh(
-                    context_rect.x() - offset.x,
-                    context_rect.y() - offset.y,
-                    context_rect.width(),
-                    context_rect.height(),
-                );
+                let root_rect = match context_rect
+                    .intersection(bounds)
+                    .map(|r| Rect::from_xywh(r.x() - offset.x, r.y() - offset.y, r.width(), r.height()))
+                {
+                    Some(r) if r.width() > 0.0 && r.height() > 0.0 => r,
+                    _ => Rect::from_xywh(
+                        bounds.x() - offset.x,
+                        bounds.y() - offset.y,
+                        bounds.width(),
+                        bounds.height(),
+                    ),
+                };
                 let device_root_rect = self.device_rect(root_rect);
                 let (mut unclipped, clipped): (Vec<DisplayCommand>, Vec<DisplayCommand>) =
                     translated.into_iter().partition(|cmd| match cmd {
@@ -1243,6 +1648,7 @@ impl Painter {
                     shaper: ShapingPipeline::new(),
                     font_ctx: self.font_ctx.clone(),
                     image_cache: self.image_cache.clone(),
+                    text_shape_cache: Arc::clone(&self.text_shape_cache),
                 };
                 for cmd in unclipped.drain(..) {
                     base_painter.execute_command(cmd)?;
@@ -1262,6 +1668,7 @@ impl Painter {
                         shaper: ShapingPipeline::new(),
                         font_ctx: self.font_ctx.clone(),
                         image_cache: self.image_cache.clone(),
+                        text_shape_cache: Arc::clone(&self.text_shape_cache),
                     };
                     for cmd in clipped {
                         clip_painter.execute_command(cmd)?;
@@ -1276,26 +1683,39 @@ impl Painter {
                             clip_rect = Rect::from_xywh(clip_rect.x(), offset.y, clip_rect.width(), bounds.height());
                             clip_radii = BorderRadii::ZERO;
                         }
-                        let local_clip = Rect::from_xywh(
+                        let mut local_clip = Rect::from_xywh(
                             clip_rect.x() - offset.x,
                             clip_rect.y() - offset.y,
                             clip_rect.width(),
                             clip_rect.height(),
                         );
-                        apply_clip_mask_rect(
-                            &mut clip_pixmap,
-                            self.device_rect(local_clip),
-                            self.device_radii(clip_radii),
+                        let layer_bounds = Rect::from_xywh(0.0, 0.0, bounds.width(), bounds.height());
+                        local_clip = clip_rect_axes(local_clip, layer_bounds, true, true);
+                        if local_clip.width() > 0.0 && local_clip.height() > 0.0 {
+                            apply_clip_mask_rect(
+                                &mut clip_pixmap,
+                                self.device_rect(local_clip),
+                                self.device_radii(clip_radii),
+                            );
+                            base_painter.pixmap.draw_pixmap(
+                                0,
+                                0,
+                                clip_pixmap.as_ref(),
+                                &PixmapPaint::default(),
+                                Transform::identity(),
+                                None,
+                            );
+                        }
+                    } else {
+                        base_painter.pixmap.draw_pixmap(
+                            0,
+                            0,
+                            clip_pixmap.as_ref(),
+                            &PixmapPaint::default(),
+                            Transform::identity(),
+                            None,
                         );
                     }
-                    base_painter.pixmap.draw_pixmap(
-                        0,
-                        0,
-                        clip_pixmap.as_ref(),
-                        &PixmapPaint::default(),
-                        Transform::identity(),
-                        None,
-                    );
                 }
 
                 let mut layer_pixmap = base_painter.pixmap;
@@ -1380,7 +1800,7 @@ impl Painter {
 
     /// Paints the background of a fragment
     fn paint_background(&mut self, x: f32, y: f32, width: f32, height: f32, style: &ComputedStyle) {
-        let rects = background_rects(x, y, width, height, style);
+        let rects = background_rects(x, y, width, height, style, Some((self.css_width, self.css_height)));
         let scaled_rects = self.scale_background_rects(&rects);
         let fallback_layer = BackgroundLayer::default();
         let color_clip_layer = style.background_layers.first().unwrap_or(&fallback_layer);
@@ -1394,7 +1814,12 @@ impl Painter {
             return;
         }
 
-        let color_clip_radii = self.device_radii(resolve_clip_radii(style, &rects, color_clip_layer.clip));
+        let color_clip_radii = self.device_radii(resolve_clip_radii(
+            style,
+            &rects,
+            color_clip_layer.clip,
+            Some((self.css_width, self.css_height)),
+        ));
 
         if style.background_color.alpha_u8() > 0 {
             let _ = fill_rounded_rect(
@@ -1444,7 +1869,7 @@ impl Painter {
             crate::style::types::BackgroundBox::PaddingBox => rects.padding,
             crate::style::types::BackgroundBox::ContentBox => rects.content,
         };
-        let clip_radii = resolve_clip_radii(style, rects, clip_box);
+        let clip_radii = resolve_clip_radii(style, rects, clip_box, Some((self.css_width, self.css_height)));
         let origin_rect_css = if layer.attachment == BackgroundAttachment::Fixed {
             Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height)
         } else if is_local {
@@ -1486,6 +1911,8 @@ impl Painter {
                 let (mut tile_w, mut tile_h) = compute_background_size(
                     layer,
                     style.font_size,
+                    style.root_font_size,
+                    (self.css_width, self.css_height),
                     origin_rect_css.width(),
                     origin_rect_css.height(),
                     0.0,
@@ -1526,6 +1953,8 @@ impl Painter {
                     tile_w,
                     tile_h,
                     style.font_size,
+                    style.root_font_size,
+                    (self.css_width, self.css_height),
                 );
 
                 let positions_x = tile_positions(
@@ -1603,6 +2032,8 @@ impl Painter {
                 let (mut tile_w, mut tile_h) = compute_background_size(
                     layer,
                     style.font_size,
+                    style.root_font_size,
+                    (self.css_width, self.css_height),
                     origin_rect_css.width(),
                     origin_rect_css.height(),
                     img_w,
@@ -1643,6 +2074,8 @@ impl Painter {
                     tile_w,
                     tile_h,
                     style.font_size,
+                    style.root_font_size,
+                    (self.css_width, self.css_height),
                 );
 
                 let positions_x = tile_positions(
@@ -1777,6 +2210,7 @@ impl Painter {
         stops: &[(f32, Rgba)],
         repeating: bool,
         font_size: f32,
+        root_font_size: f32,
         blend_mode: MixBlendMode,
     ) {
         if stops.is_empty() {
@@ -1790,7 +2224,14 @@ impl Painter {
             return;
         }
 
-        let center = resolve_gradient_center(gradient_rect, position, paint_rect, font_size);
+        let center = resolve_gradient_center(
+            gradient_rect,
+            position,
+            paint_rect,
+            font_size,
+            root_font_size,
+            (self.css_width, self.css_height),
+        );
         let mut pix = match Pixmap::new(width, height) {
             Some(p) => p,
             None => return,
@@ -1852,7 +2293,15 @@ impl Painter {
         let gradient_rect = self.device_rect(gradient_rect);
         let paint_rect = self.device_rect(paint_rect);
         let skia_stops = gradient_stops(stops);
-        let (cx, cy, radius_x, radius_y) = radial_geometry(gradient_rect, position, size, shape, font_size);
+        let (cx, cy, radius_x, radius_y) = radial_geometry(
+            gradient_rect,
+            position,
+            size,
+            shape,
+            font_size,
+            font_size,
+            (self.css_width, self.css_height),
+        );
         let transform = Transform::from_translate(cx, cy).pre_scale(radius_x, radius_y);
         let Some(shader) = RadialGradient::new(
             tiny_skia::Point::from_xy(0.0, 0.0),
@@ -2108,8 +2557,18 @@ impl Painter {
             left,
         };
 
-        let target_widths = resolve_border_image_widths(img_widths, border_widths, width, height);
-        let outsets = resolve_border_image_outset(outset, target_widths);
+        let viewport = (self.css_width, self.css_height);
+        let target_widths = resolve_border_image_widths(
+            img_widths,
+            border_widths,
+            width,
+            height,
+            style.font_size,
+            style.root_font_size,
+            viewport,
+        );
+        let outsets =
+            resolve_border_image_outset(outset, target_widths, style.font_size, style.root_font_size, viewport);
 
         let outer_rect = Rect::from_xywh(
             x - outsets.left,
@@ -2703,10 +3162,33 @@ impl Painter {
         };
 
         // Shape text with the full pipeline (bidi, script, fallback fonts)
-        let shaped_runs = match self.shaper.shape(text, &style_for_shaping, &self.font_ctx) {
-            Ok(runs) => runs,
-            Err(_) => return,
+        let style_ptr = style_for_shaping.as_ref() as *const ComputedStyle as usize;
+        let font_size_bits = style_for_shaping.font_size.to_bits();
+        let key = TextCacheKey {
+            style_ptr,
+            font_size_bits,
+            text: text.to_string(),
         };
+
+        let shaped_runs = if let Ok(cache) = self.text_shape_cache.lock() {
+            cache.get(&key).cloned()
+        } else {
+            None
+        }
+        .unwrap_or_else(|| {
+            let runs = match self.shaper.shape(text, &style_for_shaping, &self.font_ctx) {
+                Ok(runs) => runs,
+                Err(_) => return Vec::new(),
+            };
+            if let Ok(mut cache) = self.text_shape_cache.lock() {
+                cache.insert(key, runs.clone());
+            }
+            runs
+        });
+
+        if shaped_runs.is_empty() {
+            return;
+        }
 
         self.paint_shaped_runs(&shaped_runs, x, baseline_y, color, style);
     }
@@ -3081,7 +3563,7 @@ impl Painter {
         }
 
         let content_rect = if let Some(style) = style {
-            background_rects(x, y, width, height, style).content
+            background_rects(x, y, width, height, style, Some((self.css_width, self.css_height))).content
         } else {
             Rect::from_xywh(x, y, width, height)
         };
@@ -3093,7 +3575,8 @@ impl Painter {
         match replaced_type {
             ReplacedType::Image { alt, .. } => {
                 let media_ctx = crate::style::media::MediaContext::screen(self.css_width, self.css_height)
-                    .with_device_pixel_ratio(self.scale);
+                    .with_device_pixel_ratio(self.scale)
+                    .with_env_overrides();
                 let sources = replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
                     scale: self.scale,
                     slot_width: Some(content_rect.width()),
@@ -3189,7 +3672,8 @@ impl Painter {
             }
             ReplacedType::Video { .. } => {
                 let media_ctx = crate::style::media::MediaContext::screen(self.css_width, self.css_height)
-                    .with_device_pixel_ratio(self.scale);
+                    .with_device_pixel_ratio(self.scale)
+                    .with_env_overrides();
                 let sources = replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
                     scale: self.scale,
                     slot_width: Some(content_rect.width()),
@@ -3227,8 +3711,9 @@ impl Painter {
         }
         let dom = dom::parse_html(html).ok()?;
         let stylesheet = css::parser::extract_css(&dom).ok()?;
-        let media_ctx =
-            MediaContext::screen(content_rect.width(), content_rect.height()).with_device_pixel_ratio(self.scale);
+        let media_ctx = MediaContext::screen(content_rect.width(), content_rect.height())
+            .with_device_pixel_ratio(self.scale)
+            .with_env_overrides();
         let import_loader = EmbeddedImportFetcher {
             base_url: self.image_cache.base_url(),
         };
@@ -3250,7 +3735,7 @@ impl Painter {
             &media_ctx,
             target_fragment.as_deref(),
         );
-        let mut box_tree = tree::box_generation::generate_box_tree(&styled_tree);
+        let mut box_tree = tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled_tree);
         let viewport = Size::new(content_rect.width(), content_rect.height());
         self.resolve_replaced_intrinsic_sizes(&mut box_tree.root, viewport);
         let config = layout::engine::LayoutConfig::for_viewport(viewport);
@@ -3281,9 +3766,19 @@ impl Painter {
             return false;
         }
 
+        static LOG_IMAGE_FAIL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let log_image_fail = *LOG_IMAGE_FAIL.get_or_init(|| {
+            std::env::var("FASTR_LOG_IMAGE_FAIL")
+                .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+                .unwrap_or(false)
+        });
+
         let image = match self.image_cache.load(src) {
             Ok(img) => img,
             Err(_) => {
+                if log_image_fail {
+                    eprintln!("[image-load-fail] src={} stage=load", src);
+                }
                 if src.trim_start().starts_with('<') {
                     match self.image_cache.render_svg(src) {
                         Ok(img) => img,
@@ -3301,16 +3796,33 @@ impl Painter {
             .unwrap_or_else(|| ImageOrientation::default().resolve(image.orientation, false));
         let (img_w_raw, img_h_raw) = image.oriented_dimensions(orientation);
         if img_w_raw == 0 || img_h_raw == 0 {
+            if log_image_fail {
+                eprintln!(
+                    "[image-load-fail] src={} stage=oriented-dimensions w={} h={}",
+                    src, img_w_raw, img_h_raw
+                );
+            }
             return false;
         }
         let Some((img_w_css, img_h_css)) = image.css_dimensions(orientation, &image_resolution, self.scale, None)
         else {
+            if log_image_fail {
+                eprintln!(
+                    "[image-load-fail] src={} stage=css-dimensions orientation={:?} resolution={:?}",
+                    src, orientation, image_resolution
+                );
+            }
             return false;
         };
 
         let pixmap = match Self::dynamic_image_to_pixmap(&image, orientation) {
             Some(pixmap) => pixmap,
-            None => return false,
+            None => {
+                if log_image_fail {
+                    eprintln!("[image-load-fail] src={} stage=pixmap", src);
+                }
+                return false;
+            }
         };
         let fit = style.map(|s| s.object_fit).unwrap_or(ObjectFit::Fill);
         let pos = style.map(|s| s.object_position).unwrap_or(default_object_position());
@@ -3515,6 +4027,18 @@ impl Painter {
     }
 
     fn paint_replaced_placeholder(&mut self, replaced_type: &ReplacedType, style: Option<&ComputedStyle>, rect: Rect) {
+        static LOG_IMAGE_PLACEHOLDER: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let log_placeholder = *LOG_IMAGE_PLACEHOLDER.get_or_init(|| {
+            std::env::var("FASTR_LOG_IMAGE_FAIL")
+                .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+                .unwrap_or(false)
+        });
+        if log_placeholder {
+            if let ReplacedType::Image { src, .. } = replaced_type {
+                eprintln!("[image-placeholder] src={}", src);
+            }
+        }
+
         let mut paint = Paint::default();
         paint.set_color_rgba8(200, 200, 200, 255); // Light gray
         paint.anti_alias = true;
@@ -3579,7 +4103,11 @@ impl Painter {
         TextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
 
         let metrics_scaled = self.resolve_scaled_metrics(style);
-        let line_height = compute_line_height_with_metrics(style, metrics_scaled.as_ref());
+        let line_height = compute_line_height_with_metrics_viewport(
+            style,
+            metrics_scaled.as_ref(),
+            Some(Size::new(self.css_width, self.css_height)),
+        );
         let metrics = TextItem::metrics_from_runs(&runs, line_height, style.font_size);
         let half_leading = ((metrics.line_height - (metrics.ascent + metrics.descent)) / 2.0).max(0.0);
         let baseline_y = rect.y() + half_leading + metrics.baseline_offset;
@@ -3596,7 +4124,11 @@ impl Painter {
         let mut runs = self.shaper.shape(text, style, &self.font_ctx).ok()?;
         TextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
         let metrics_scaled = Self::resolve_scaled_metrics_static(style, &self.font_ctx);
-        let line_height = compute_line_height_with_metrics(style, metrics_scaled.as_ref());
+        let line_height = compute_line_height_with_metrics_viewport(
+            style,
+            metrics_scaled.as_ref(),
+            Some(Size::new(self.css_width, self.css_height)),
+        );
         let width: f32 = runs.iter().map(|r| r.advance).sum();
         Some(Size::new(width, line_height))
     }
@@ -3691,7 +4223,7 @@ impl Painter {
             crate::style::types::TextUnderlineOffset::Auto => 0.0,
             crate::style::types::TextUnderlineOffset::Length(l) => {
                 if l.unit == LengthUnit::Percent {
-                    l.resolve_against(style.font_size)
+                    l.resolve_against(style.font_size).unwrap_or(0.0)
                 } else if l.unit.is_viewport_relative() {
                     l.resolve_with_viewport(self.css_width, self.css_height)
                 } else {
@@ -3711,7 +4243,7 @@ impl Painter {
             TextDecorationThickness::Auto | TextDecorationThickness::FromFont => None,
             TextDecorationThickness::Length(l) => {
                 if l.unit == LengthUnit::Percent {
-                    Some(l.resolve_against(style.font_size) * self.scale)
+                    Some(l.resolve_against(style.font_size).unwrap_or(0.0) * self.scale)
                 } else if l.unit.is_viewport_relative() {
                     Some(l.resolve_with_viewport(self.css_width, self.css_height) * self.scale)
                 } else {
@@ -3849,7 +4381,15 @@ impl Painter {
                     return None;
                 }
                 let skia_stops = gradient_stops(&resolved);
-                let (cx, cy, radius_x, radius_y) = radial_geometry(rect, position, size, *shape, style.font_size);
+                let (cx, cy, radius_x, radius_y) = radial_geometry(
+                    rect,
+                    position,
+                    size,
+                    *shape,
+                    style.font_size,
+                    style.root_font_size,
+                    (self.css_width, self.css_height),
+                );
                 let transform = Transform::from_translate(cx, cy).pre_scale(radius_x, radius_y);
                 let shader = RadialGradient::new(
                     tiny_skia::Point::from_xy(0.0, 0.0),
@@ -3882,7 +4422,15 @@ impl Painter {
                     return None;
                 }
                 let skia_stops = gradient_stops(&resolved);
-                let (cx, cy, radius_x, radius_y) = radial_geometry(rect, position, size, *shape, style.font_size);
+                let (cx, cy, radius_x, radius_y) = radial_geometry(
+                    rect,
+                    position,
+                    size,
+                    *shape,
+                    style.font_size,
+                    style.root_font_size,
+                    (self.css_width, self.css_height),
+                );
                 let transform = Transform::from_translate(cx, cy).pre_scale(radius_x, radius_y);
                 let shader = RadialGradient::new(
                     tiny_skia::Point::from_xy(0.0, 0.0),
@@ -3914,7 +4462,14 @@ impl Painter {
                     return None;
                 }
                 let mut pixmap = Pixmap::new(width, height)?;
-                let center = resolve_gradient_center(rect, position, rect, style.font_size);
+                let center = resolve_gradient_center(
+                    rect,
+                    position,
+                    rect,
+                    style.font_size,
+                    style.root_font_size,
+                    (self.css_width, self.css_height),
+                );
                 let start_angle = from_angle.to_radians();
                 let period = 1.0;
                 let data = pixmap.pixels_mut();
@@ -3949,7 +4504,14 @@ impl Painter {
                     return None;
                 }
                 let mut pixmap = Pixmap::new(width, height)?;
-                let center = resolve_gradient_center(rect, position, rect, style.font_size);
+                let center = resolve_gradient_center(
+                    rect,
+                    position,
+                    rect,
+                    style.font_size,
+                    style.root_font_size,
+                    (self.css_width, self.css_height),
+                );
                 let start_angle = from_angle.to_radians();
                 let period = resolved.last().map(|(p, _)| *p).unwrap_or(1.0).max(1e-6);
                 let data = pixmap.pixels_mut();
@@ -4815,7 +5377,7 @@ fn color_to_skia(color: Rgba) -> tiny_skia::Color {
 }
 
 fn transform_reference_box(style: &ComputedStyle, bounds: Rect) -> Rect {
-    let rects = background_rects(bounds.x(), bounds.y(), bounds.width(), bounds.height(), style);
+    let rects = background_rects(bounds.x(), bounds.y(), bounds.width(), bounds.height(), style, None);
     match style.transform_box {
         TransformBox::ContentBox => rects.content,
         TransformBox::BorderBox | TransformBox::FillBox | TransformBox::StrokeBox | TransformBox::ViewBox => {
@@ -4875,7 +5437,7 @@ fn build_transform(style: Option<&ComputedStyle>, bounds: Rect) -> Option<Transf
 
 fn resolve_transform_length(len: &Length, font_size: f32, percentage_base: f32) -> f32 {
     match len.unit {
-        LengthUnit::Percent => len.resolve_against(percentage_base),
+        LengthUnit::Percent => len.resolve_against(percentage_base).unwrap_or(0.0),
         LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size),
         _ if len.unit.is_absolute() => len.to_px(),
         _ => len.value,
@@ -5226,6 +5788,46 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
             },
         })
         .collect()
+}
+
+fn describe_content(content: &FragmentContent) -> &'static str {
+    match content {
+        FragmentContent::Block { .. } => "block",
+        FragmentContent::Inline { .. } => "inline",
+        FragmentContent::Text { is_marker, .. } => {
+            if *is_marker {
+                "marker-text"
+            } else {
+                "text"
+            }
+        }
+        FragmentContent::Line { .. } => "line",
+        FragmentContent::Replaced { .. } => "replaced",
+    }
+}
+
+fn fragment_counts(node: &FragmentNode) -> (usize, usize, usize, usize, usize) {
+    let mut total = 1;
+    let mut text = 0;
+    let mut replaced = 0;
+    let mut lines = 0;
+    let mut inline = 0;
+    match node.content {
+        FragmentContent::Text { .. } => text += 1,
+        FragmentContent::Replaced { .. } => replaced += 1,
+        FragmentContent::Line { .. } => lines += 1,
+        FragmentContent::Inline { .. } => inline += 1,
+        _ => {}
+    }
+    for child in &node.children {
+        let (t, tx, r, l, i) = fragment_counts(child);
+        total += t;
+        text += tx;
+        replaced += r;
+        lines += l;
+        inline += i;
+    }
+    (total, text, replaced, lines, inline)
 }
 
 fn resolve_filters(
@@ -5842,21 +6444,32 @@ fn resolve_border_radii(style: Option<&ComputedStyle>, bounds: Rect) -> BorderRa
         return BorderRadii::ZERO;
     }
 
-    fn resolve_radius(len: &Length, reference: f32, font_size: f32) -> f32 {
-        match len.unit {
-            LengthUnit::Percent => len.resolve_against(reference),
-            LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size),
-            _ if len.unit.is_absolute() => len.to_px(),
-            // Approximate unknown relative units using font size as a base.
-            _ => len.value * font_size,
-        }
+    fn resolve_radius(len: &Length, reference: f32, font_size: f32, root_font_size: f32) -> f32 {
+        len.resolve_with_context(Some(reference), reference, reference, font_size, root_font_size)
+            .unwrap_or_else(|| {
+                if len.unit.is_absolute() {
+                    len.to_px()
+                } else {
+                    len.value * font_size
+                }
+            })
     }
 
     let radii = BorderRadii {
-        top_left: resolve_radius(&style.border_top_left_radius, w, style.font_size),
-        top_right: resolve_radius(&style.border_top_right_radius, w, style.font_size),
-        bottom_right: resolve_radius(&style.border_bottom_right_radius, w, style.font_size),
-        bottom_left: resolve_radius(&style.border_bottom_left_radius, w, style.font_size),
+        top_left: resolve_radius(&style.border_top_left_radius, w, style.font_size, style.root_font_size),
+        top_right: resolve_radius(&style.border_top_right_radius, w, style.font_size, style.root_font_size),
+        bottom_right: resolve_radius(
+            &style.border_bottom_right_radius,
+            w,
+            style.font_size,
+            style.root_font_size,
+        ),
+        bottom_left: resolve_radius(
+            &style.border_bottom_left_radius,
+            w,
+            style.font_size,
+            style.root_font_size,
+        ),
     };
     radii.clamped(w, h)
 }
@@ -5865,6 +6478,7 @@ fn resolve_clip_radii(
     style: &ComputedStyle,
     rects: &BackgroundRects,
     clip: crate::style::types::BackgroundBox,
+    viewport: Option<(f32, f32)>,
 ) -> BorderRadii {
     let base = resolve_border_radii(Some(style), rects.border);
     if base.is_zero() {
@@ -5873,15 +6487,59 @@ fn resolve_clip_radii(
 
     let percentage_base = rects.border.width().max(0.0);
     let font_size = style.font_size;
-    let border_left = resolve_length_for_paint(&style.border_left_width, font_size, percentage_base);
-    let border_right = resolve_length_for_paint(&style.border_right_width, font_size, percentage_base);
-    let border_top = resolve_length_for_paint(&style.border_top_width, font_size, percentage_base);
-    let border_bottom = resolve_length_for_paint(&style.border_bottom_width, font_size, percentage_base);
+    let vp = viewport.unwrap_or((percentage_base, percentage_base));
+    let border_left = resolve_length_for_paint(
+        &style.border_left_width,
+        font_size,
+        style.root_font_size,
+        percentage_base,
+        vp,
+    );
+    let border_right = resolve_length_for_paint(
+        &style.border_right_width,
+        font_size,
+        style.root_font_size,
+        percentage_base,
+        vp,
+    );
+    let border_top = resolve_length_for_paint(
+        &style.border_top_width,
+        font_size,
+        style.root_font_size,
+        percentage_base,
+        vp,
+    );
+    let border_bottom = resolve_length_for_paint(
+        &style.border_bottom_width,
+        font_size,
+        style.root_font_size,
+        percentage_base,
+        vp,
+    );
 
-    let padding_left = resolve_length_for_paint(&style.padding_left, font_size, percentage_base);
-    let padding_right = resolve_length_for_paint(&style.padding_right, font_size, percentage_base);
-    let padding_top = resolve_length_for_paint(&style.padding_top, font_size, percentage_base);
-    let padding_bottom = resolve_length_for_paint(&style.padding_bottom, font_size, percentage_base);
+    let padding_left = resolve_length_for_paint(
+        &style.padding_left,
+        font_size,
+        style.root_font_size,
+        percentage_base,
+        vp,
+    );
+    let padding_right = resolve_length_for_paint(
+        &style.padding_right,
+        font_size,
+        style.root_font_size,
+        percentage_base,
+        vp,
+    );
+    let padding_top =
+        resolve_length_for_paint(&style.padding_top, font_size, style.root_font_size, percentage_base, vp);
+    let padding_bottom = resolve_length_for_paint(
+        &style.padding_bottom,
+        font_size,
+        style.root_font_size,
+        percentage_base,
+        vp,
+    );
 
     match clip {
         crate::style::types::BackgroundBox::BorderBox => base,
@@ -5983,19 +6641,27 @@ struct BackgroundRects {
     content: Rect,
 }
 
-fn background_rects(x: f32, y: f32, width: f32, height: f32, style: &ComputedStyle) -> BackgroundRects {
+fn background_rects(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    style: &ComputedStyle,
+    viewport: Option<(f32, f32)>,
+) -> BackgroundRects {
     let base = width.max(0.0);
     let font_size = style.font_size;
+    let vp = viewport.unwrap_or((base, base));
 
-    let border_left = resolve_length_for_paint(&style.border_left_width, font_size, base);
-    let border_right = resolve_length_for_paint(&style.border_right_width, font_size, base);
-    let border_top = resolve_length_for_paint(&style.border_top_width, font_size, base);
-    let border_bottom = resolve_length_for_paint(&style.border_bottom_width, font_size, base);
+    let border_left = resolve_length_for_paint(&style.border_left_width, font_size, style.root_font_size, base, vp);
+    let border_right = resolve_length_for_paint(&style.border_right_width, font_size, style.root_font_size, base, vp);
+    let border_top = resolve_length_for_paint(&style.border_top_width, font_size, style.root_font_size, base, vp);
+    let border_bottom = resolve_length_for_paint(&style.border_bottom_width, font_size, style.root_font_size, base, vp);
 
-    let padding_left = resolve_length_for_paint(&style.padding_left, font_size, base);
-    let padding_right = resolve_length_for_paint(&style.padding_right, font_size, base);
-    let padding_top = resolve_length_for_paint(&style.padding_top, font_size, base);
-    let padding_bottom = resolve_length_for_paint(&style.padding_bottom, font_size, base);
+    let padding_left = resolve_length_for_paint(&style.padding_left, font_size, style.root_font_size, base, vp);
+    let padding_right = resolve_length_for_paint(&style.padding_right, font_size, style.root_font_size, base, vp);
+    let padding_top = resolve_length_for_paint(&style.padding_top, font_size, style.root_font_size, base, vp);
+    let padding_bottom = resolve_length_for_paint(&style.padding_bottom, font_size, style.root_font_size, base, vp);
 
     let border_rect = Rect::from_xywh(x, y, width, height);
     let padding_rect = inset_rect(border_rect, border_left, border_top, border_right, border_bottom);
@@ -6016,18 +6682,28 @@ fn inset_rect(rect: Rect, left: f32, top: f32, right: f32, bottom: f32) -> Rect 
     Rect::from_xywh(new_x, new_y, new_w, new_h)
 }
 
-fn resolve_length_for_paint(len: &Length, font_size: f32, percentage_base: f32) -> f32 {
-    match len.unit {
-        LengthUnit::Percent => len.resolve_against(percentage_base),
-        LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size),
-        _ if len.unit.is_absolute() => len.to_px(),
-        _ => len.value,
-    }
+fn resolve_length_for_paint(
+    len: &Length,
+    font_size: f32,
+    root_font_size: f32,
+    percentage_base: f32,
+    viewport: (f32, f32),
+) -> f32 {
+    len.resolve_with_context(Some(percentage_base), viewport.0, viewport.1, font_size, root_font_size)
+        .unwrap_or_else(|| {
+            if len.unit.is_absolute() {
+                len.to_px()
+            } else {
+                len.value * font_size
+            }
+        })
 }
 
 fn compute_background_size(
     layer: &BackgroundLayer,
     font_size: f32,
+    root_font_size: f32,
+    viewport: (f32, f32),
     area_w: f32,
     area_h: f32,
     img_w: f32,
@@ -6063,7 +6739,7 @@ fn compute_background_size(
                 match component {
                     BackgroundSizeComponent::Auto => None,
                     BackgroundSizeComponent::Length(len) => {
-                        Some(resolve_length_for_paint(&len, font_size, area).max(0.0))
+                        Some(resolve_length_for_paint(&len, font_size, root_font_size, area, viewport).max(0.0))
                     }
                 }
             };
@@ -6110,10 +6786,12 @@ fn resolve_background_offset(
     tile_w: f32,
     tile_h: f32,
     font_size: f32,
+    root_font_size: f32,
+    viewport: (f32, f32),
 ) -> (f32, f32) {
     let resolve_axis = |comp: crate::style::types::BackgroundPositionComponent, area: f32, tile: f32| -> f32 {
         let available = area - tile;
-        let offset = resolve_length_for_paint(&comp.offset, font_size, available);
+        let offset = resolve_length_for_paint(&comp.offset, font_size, root_font_size, available, viewport);
         comp.alignment * available + offset
     };
 
@@ -6249,11 +6927,13 @@ fn radial_geometry(
     size: &RadialGradientSize,
     shape: RadialGradientShape,
     font_size: f32,
+    root_font_size: f32,
+    viewport: (f32, f32),
 ) -> (f32, f32, f32, f32) {
     let (align_x, off_x, align_y, off_y) = match position {
         BackgroundPosition::Position { x, y } => {
-            let ox = resolve_length_for_paint(&x.offset, font_size, rect.width());
-            let oy = resolve_length_for_paint(&y.offset, font_size, rect.height());
+            let ox = resolve_length_for_paint(&x.offset, font_size, root_font_size, rect.width(), viewport);
+            let oy = resolve_length_for_paint(&y.offset, font_size, root_font_size, rect.height(), viewport);
             (x.alignment, ox, y.alignment, oy)
         }
     };
@@ -6311,10 +6991,10 @@ fn radial_geometry(
             )
         }
         RadialGradientSize::Explicit { x, y } => {
-            let rx = resolve_length_for_paint(x, font_size, rect.width()).max(0.0);
+            let rx = resolve_length_for_paint(x, font_size, root_font_size, rect.width(), viewport).max(0.0);
             let ry = y
                 .as_ref()
-                .map(|yy| resolve_length_for_paint(yy, font_size, rect.height()).max(0.0))
+                .map(|yy| resolve_length_for_paint(yy, font_size, root_font_size, rect.height(), viewport).max(0.0))
                 .unwrap_or(rx);
             (rx, ry)
         }
@@ -6338,11 +7018,18 @@ fn radial_geometry(
     (cx, cy, radius_x.max(0.0), radius_y.max(0.0))
 }
 
-fn resolve_gradient_center(rect: Rect, position: &BackgroundPosition, paint_rect: Rect, font_size: f32) -> Point {
+fn resolve_gradient_center(
+    rect: Rect,
+    position: &BackgroundPosition,
+    paint_rect: Rect,
+    font_size: f32,
+    root_font_size: f32,
+    viewport: (f32, f32),
+) -> Point {
     let (align_x, off_x, align_y, off_y) = match position {
         BackgroundPosition::Position { x, y } => {
-            let ox = resolve_length_for_paint(&x.offset, font_size, rect.width());
-            let oy = resolve_length_for_paint(&y.offset, font_size, rect.height());
+            let ox = resolve_length_for_paint(&x.offset, font_size, root_font_size, rect.width(), viewport);
+            let oy = resolve_length_for_paint(&y.offset, font_size, root_font_size, rect.height(), viewport);
             (x.alignment, ox, y.alignment, oy)
         }
     };
@@ -6558,15 +7245,20 @@ fn resolve_border_image_widths(
     border: BorderWidths,
     box_width: f32,
     box_height: f32,
+    font_size: f32,
+    root_font_size: f32,
+    viewport: (f32, f32),
 ) -> BorderWidths {
-    fn resolve_single(value: BorderImageWidthValue, border: f32, axis: f32) -> f32 {
+    let resolve_single = |value: BorderImageWidthValue, border: f32, axis: f32| -> f32 {
         match value {
             BorderImageWidthValue::Auto => border,
             BorderImageWidthValue::Number(n) => (n * border).max(0.0),
-            BorderImageWidthValue::Length(len) => resolve_length_for_paint(&len, 16.0, axis).max(0.0),
+            BorderImageWidthValue::Length(len) => {
+                resolve_length_for_paint(&len, font_size, root_font_size, axis, viewport).max(0.0)
+            }
             BorderImageWidthValue::Percentage(p) => ((p / 100.0) * axis).max(0.0),
         }
-    }
+    };
 
     BorderWidths {
         top: resolve_single(widths.top, border.top, box_height),
@@ -6576,19 +7268,33 @@ fn resolve_border_image_widths(
     }
 }
 
-fn resolve_border_image_outset(outset: &crate::style::types::BorderImageOutset, border: BorderWidths) -> BorderWidths {
-    fn resolve_single(value: BorderImageOutsetValue, border: f32) -> f32 {
+fn resolve_border_image_outset(
+    outset: &crate::style::types::BorderImageOutset,
+    border: BorderWidths,
+    font_size: f32,
+    root_font_size: f32,
+    viewport: (f32, f32),
+) -> BorderWidths {
+    fn resolve_single(
+        value: BorderImageOutsetValue,
+        border: f32,
+        font_size: f32,
+        root_font_size: f32,
+        viewport: (f32, f32),
+    ) -> f32 {
         match value {
             BorderImageOutsetValue::Number(n) => (n * border).max(0.0),
-            BorderImageOutsetValue::Length(len) => resolve_length_for_paint(&len, 16.0, border.max(1.0)).max(0.0),
+            BorderImageOutsetValue::Length(len) => {
+                resolve_length_for_paint(&len, font_size, root_font_size, border.max(1.0), viewport).max(0.0)
+            }
         }
     }
 
     BorderWidths {
-        top: resolve_single(outset.top, border.top),
-        right: resolve_single(outset.right, border.right),
-        bottom: resolve_single(outset.bottom, border.bottom),
-        left: resolve_single(outset.left, border.left),
+        top: resolve_single(outset.top, border.top, font_size, root_font_size, viewport),
+        right: resolve_single(outset.right, border.right, font_size, root_font_size, viewport),
+        bottom: resolve_single(outset.bottom, border.bottom, font_size, root_font_size, viewport),
+        left: resolve_single(outset.left, border.left, font_size, root_font_size, viewport),
     }
 }
 
@@ -7503,7 +8209,7 @@ mod tests {
         let box_x = 10.0;
         let box_y = 10.0;
         let box_size = 20.0;
-        let rects = background_rects(box_x, box_y, box_size, box_size, &style);
+        let rects = background_rects(box_x, box_y, box_size, box_size, &style, None);
         assert!((rects.content.x() - 14.0).abs() < 0.01);
         assert!((rects.content.y() - 14.0).abs() < 0.01);
         assert!((rects.content.width() - 12.0).abs() < 0.01);
@@ -8179,8 +8885,8 @@ mod tests {
     fn background_cover_scales_to_fill() {
         let mut layer = BackgroundLayer::default();
         layer.size = BackgroundSize::Keyword(BackgroundSizeKeyword::Cover);
-        let (tw, th) = compute_background_size(&layer, 16.0, 200.0, 100.0, 50.0, 50.0);
-        let (ox, oy) = resolve_background_offset(layer.position, 200.0, 100.0, tw, th, 16.0);
+        let (tw, th) = compute_background_size(&layer, 16.0, 16.0, (200.0, 100.0), 200.0, 100.0, 50.0, 50.0);
+        let (ox, oy) = resolve_background_offset(layer.position, 200.0, 100.0, tw, th, 16.0, 16.0, (200.0, 100.0));
         assert!((tw - 200.0).abs() < 0.01);
         assert!((th - 200.0).abs() < 0.01);
         assert!((ox - 0.0).abs() < 0.01);
@@ -8203,7 +8909,7 @@ mod tests {
             ..BackgroundLayer::default()
         };
 
-        let (ox, oy) = resolve_background_offset(layer.position, 100.0, 60.0, 20.0, 10.0, 16.0);
+        let (ox, oy) = resolve_background_offset(layer.position, 100.0, 60.0, 20.0, 10.0, 16.0, 16.0, (100.0, 60.0));
         // available_x = 80; 1 * 80 - 10 = 70
         // available_y = 50; 1 * 50 - 20%*50 = 40
         assert!((ox - 70.0).abs() < 0.01);
@@ -8217,7 +8923,7 @@ mod tests {
             BackgroundSizeComponent::Auto,
             BackgroundSizeComponent::Length(Length::px(25.0)),
         );
-        let (tw, th) = compute_background_size(&layer, 16.0, 200.0, 100.0, 100.0, 50.0);
+        let (tw, th) = compute_background_size(&layer, 16.0, 16.0, (200.0, 100.0), 200.0, 100.0, 100.0, 50.0);
         assert!((tw - 50.0).abs() < 0.01);
         assert!((th - 25.0).abs() < 0.01);
     }
@@ -8225,11 +8931,11 @@ mod tests {
     #[test]
     fn background_size_auto_auto_uses_intrinsic_size_or_falls_back() {
         let layer = BackgroundLayer::default();
-        let (tw, th) = compute_background_size(&layer, 16.0, 120.0, 80.0, 30.0, 10.0);
+        let (tw, th) = compute_background_size(&layer, 16.0, 16.0, (120.0, 80.0), 120.0, 80.0, 30.0, 10.0);
         assert!((tw - 30.0).abs() < 0.01);
         assert!((th - 10.0).abs() < 0.01);
 
-        let (tw, th) = compute_background_size(&layer, 16.0, 50.0, 60.0, 0.0, 0.0);
+        let (tw, th) = compute_background_size(&layer, 16.0, 16.0, (50.0, 60.0), 50.0, 60.0, 0.0, 0.0);
         assert!((tw - 50.0).abs() < 0.01);
         assert!((th - 60.0).abs() < 0.01);
     }
@@ -9080,6 +9786,7 @@ mod tests {
                     srcdoc: Some(html.to_string()),
                 },
             },
+            baseline: None,
             children: vec![],
             style: Some(Arc::new(ComputedStyle::default())),
         };

@@ -28,9 +28,9 @@
 
 use crate::css::types::ColorStop;
 use crate::css::types::{RadialGradientShape, RadialGradientSize};
-use crate::geometry::{Point, Rect};
+use crate::geometry::{Point, Rect, Size};
 use crate::image_loader::ImageCache;
-use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics;
+use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics_viewport;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::layout::utils::resolve_font_relative_length;
 use crate::paint::clip_path::resolve_clip_path;
@@ -343,6 +343,7 @@ impl DisplayListBuilder {
         let (neg, non_neg): (Vec<_>, Vec<_>) = children.into_iter().partition(|c| c.z_index < 0);
         let (zero, pos): (Vec<_>, Vec<_>) = non_neg.into_iter().partition(|c| c.z_index == 0);
 
+        // Descendants are positioned relative to the stacking context's origin (the first fragment).
         let context_origin = context
             .fragments
             .first()
@@ -375,7 +376,7 @@ impl DisplayListBuilder {
                 )
             })
             .unwrap_or((Vec::new(), Vec::new(), crate::paint::display_list::BorderRadii::ZERO));
-        let transform = root_style.and_then(|style| Self::build_transform(style, context.bounds));
+        let transform = root_style.and_then(|style| Self::build_transform(style, context.bounds, self.viewport));
 
         let viewport = self
             .viewport
@@ -397,8 +398,8 @@ impl DisplayListBuilder {
                         Point::new(fragment.bounds.origin.x + offset.x, fragment.bounds.origin.y + offset.y),
                         fragment.bounds.size,
                     );
-                    let rects = Self::background_rects(rect, style);
-                    let radii = Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox);
+                    let rects = Self::background_rects(rect, style, self.viewport);
+                    let radii = Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox, self.viewport);
                     Some(ClipItem {
                         shape: ClipShape::Rect {
                             rect: rects.padding,
@@ -475,19 +476,42 @@ impl DisplayListBuilder {
         }
     }
 
-    fn background_rects(rect: Rect, style: &ComputedStyle) -> BackgroundRects {
+    fn background_rects(rect: Rect, style: &ComputedStyle, viewport: Option<(f32, f32)>) -> BackgroundRects {
         let font_size = style.font_size;
         let base = rect.width().max(0.0);
 
-        let border_left = Self::resolve_length_for_paint(&style.border_left_width, font_size, base);
-        let border_right = Self::resolve_length_for_paint(&style.border_right_width, font_size, base);
-        let border_top = Self::resolve_length_for_paint(&style.border_top_width, font_size, base);
-        let border_bottom = Self::resolve_length_for_paint(&style.border_bottom_width, font_size, base);
+        let border_left = Self::resolve_length_for_paint(
+            &style.border_left_width,
+            font_size,
+            style.root_font_size,
+            base,
+            viewport,
+        );
+        let border_right = Self::resolve_length_for_paint(
+            &style.border_right_width,
+            font_size,
+            style.root_font_size,
+            base,
+            viewport,
+        );
+        let border_top =
+            Self::resolve_length_for_paint(&style.border_top_width, font_size, style.root_font_size, base, viewport);
+        let border_bottom = Self::resolve_length_for_paint(
+            &style.border_bottom_width,
+            font_size,
+            style.root_font_size,
+            base,
+            viewport,
+        );
 
-        let padding_left = Self::resolve_length_for_paint(&style.padding_left, font_size, base);
-        let padding_right = Self::resolve_length_for_paint(&style.padding_right, font_size, base);
-        let padding_top = Self::resolve_length_for_paint(&style.padding_top, font_size, base);
-        let padding_bottom = Self::resolve_length_for_paint(&style.padding_bottom, font_size, base);
+        let padding_left =
+            Self::resolve_length_for_paint(&style.padding_left, font_size, style.root_font_size, base, viewport);
+        let padding_right =
+            Self::resolve_length_for_paint(&style.padding_right, font_size, style.root_font_size, base, viewport);
+        let padding_top =
+            Self::resolve_length_for_paint(&style.padding_top, font_size, style.root_font_size, base, viewport);
+        let padding_bottom =
+            Self::resolve_length_for_paint(&style.padding_bottom, font_size, style.root_font_size, base, viewport);
 
         let border_rect = rect;
         let padding_rect = Self::inset_rect(border_rect, border_left, border_top, border_right, border_bottom);
@@ -500,8 +524,8 @@ impl DisplayListBuilder {
         }
     }
 
-    fn transform_reference_box(style: &ComputedStyle, bounds: Rect) -> Rect {
-        let rects = Self::background_rects(bounds, style);
+    fn transform_reference_box(style: &ComputedStyle, bounds: Rect, viewport: Option<(f32, f32)>) -> Rect {
+        let rects = Self::background_rects(bounds, style, viewport);
         match style.transform_box {
             TransformBox::ContentBox => rects.content,
             TransformBox::BorderBox | TransformBox::FillBox | TransformBox::StrokeBox | TransformBox::ViewBox => {
@@ -521,11 +545,16 @@ impl DisplayListBuilder {
         }
 
         fn resolve_radius(len: &Length, reference: f32, font_size: f32) -> f32 {
-            match len.unit {
-                LengthUnit::Percent => len.resolve_against(reference),
+            let resolved = match len.unit {
+                LengthUnit::Percent => len.resolve_against(reference).unwrap_or(0.0),
                 LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size),
                 _ if len.unit.is_absolute() => len.to_px(),
                 _ => len.value * font_size,
+            };
+            if resolved.is_finite() {
+                resolved.max(0.0)
+            } else {
+                0.0
             }
         }
 
@@ -542,6 +571,7 @@ impl DisplayListBuilder {
         style: &ComputedStyle,
         rects: &BackgroundRects,
         clip: BackgroundBox,
+        viewport: Option<(f32, f32)>,
     ) -> crate::paint::display_list::BorderRadii {
         let base = Self::resolve_border_radii(Some(style), rects.border);
         if base.is_zero() {
@@ -550,15 +580,63 @@ impl DisplayListBuilder {
 
         let percentage_base = rects.border.width().max(0.0);
         let font_size = style.font_size;
-        let border_left = Self::resolve_length_for_paint(&style.border_left_width, font_size, percentage_base);
-        let border_right = Self::resolve_length_for_paint(&style.border_right_width, font_size, percentage_base);
-        let border_top = Self::resolve_length_for_paint(&style.border_top_width, font_size, percentage_base);
-        let border_bottom = Self::resolve_length_for_paint(&style.border_bottom_width, font_size, percentage_base);
+        let border_left = Self::resolve_length_for_paint(
+            &style.border_left_width,
+            font_size,
+            style.root_font_size,
+            percentage_base,
+            viewport,
+        );
+        let border_right = Self::resolve_length_for_paint(
+            &style.border_right_width,
+            font_size,
+            style.root_font_size,
+            percentage_base,
+            viewport,
+        );
+        let border_top = Self::resolve_length_for_paint(
+            &style.border_top_width,
+            font_size,
+            style.root_font_size,
+            percentage_base,
+            viewport,
+        );
+        let border_bottom = Self::resolve_length_for_paint(
+            &style.border_bottom_width,
+            font_size,
+            style.root_font_size,
+            percentage_base,
+            viewport,
+        );
 
-        let padding_left = Self::resolve_length_for_paint(&style.padding_left, font_size, percentage_base);
-        let padding_right = Self::resolve_length_for_paint(&style.padding_right, font_size, percentage_base);
-        let padding_top = Self::resolve_length_for_paint(&style.padding_top, font_size, percentage_base);
-        let padding_bottom = Self::resolve_length_for_paint(&style.padding_bottom, font_size, percentage_base);
+        let padding_left = Self::resolve_length_for_paint(
+            &style.padding_left,
+            font_size,
+            style.root_font_size,
+            percentage_base,
+            viewport,
+        );
+        let padding_right = Self::resolve_length_for_paint(
+            &style.padding_right,
+            font_size,
+            style.root_font_size,
+            percentage_base,
+            viewport,
+        );
+        let padding_top = Self::resolve_length_for_paint(
+            &style.padding_top,
+            font_size,
+            style.root_font_size,
+            percentage_base,
+            viewport,
+        );
+        let padding_bottom = Self::resolve_length_for_paint(
+            &style.padding_bottom,
+            font_size,
+            style.root_font_size,
+            percentage_base,
+            viewport,
+        );
 
         match clip {
             BackgroundBox::BorderBox => base,
@@ -734,11 +812,13 @@ impl DisplayListBuilder {
         size: &RadialGradientSize,
         shape: RadialGradientShape,
         font_size: f32,
+        root_font_size: f32,
+        viewport: Option<(f32, f32)>,
     ) -> (f32, f32, f32, f32) {
         let (align_x, off_x, align_y, off_y) = match position {
             BackgroundPosition::Position { x, y } => {
-                let ox = Self::resolve_length_for_paint(&x.offset, font_size, rect.width());
-                let oy = Self::resolve_length_for_paint(&y.offset, font_size, rect.height());
+                let ox = Self::resolve_length_for_paint(&x.offset, font_size, root_font_size, rect.width(), viewport);
+                let oy = Self::resolve_length_for_paint(&y.offset, font_size, root_font_size, rect.height(), viewport);
                 (x.alignment, ox, y.alignment, oy)
             }
         };
@@ -796,10 +876,12 @@ impl DisplayListBuilder {
                 )
             }
             RadialGradientSize::Explicit { x, y } => {
-                let rx = Self::resolve_length_for_paint(x, font_size, rect.width()).max(0.0);
+                let rx = Self::resolve_length_for_paint(x, font_size, root_font_size, rect.width(), viewport).max(0.0);
                 let ry = y
                     .as_ref()
-                    .map(|yy| Self::resolve_length_for_paint(yy, font_size, rect.height()).max(0.0))
+                    .map(|yy| {
+                        Self::resolve_length_for_paint(yy, font_size, root_font_size, rect.height(), viewport).max(0.0)
+                    })
                     .unwrap_or(rx);
                 (rx, ry)
             }
@@ -822,11 +904,18 @@ impl DisplayListBuilder {
         (cx, cy, rx, ry)
     }
 
-    fn resolve_gradient_center(rect: Rect, position: &BackgroundPosition, font_size: f32, clip_rect: Rect) -> Point {
+    fn resolve_gradient_center(
+        rect: Rect,
+        position: &BackgroundPosition,
+        font_size: f32,
+        root_font_size: f32,
+        clip_rect: Rect,
+        viewport: Option<(f32, f32)>,
+    ) -> Point {
         let (align_x, off_x, align_y, off_y) = match position {
             BackgroundPosition::Position { x, y } => {
-                let ox = Self::resolve_length_for_paint(&x.offset, font_size, rect.width());
-                let oy = Self::resolve_length_for_paint(&y.offset, font_size, rect.height());
+                let ox = Self::resolve_length_for_paint(&x.offset, font_size, root_font_size, rect.width(), viewport);
+                let oy = Self::resolve_length_for_paint(&y.offset, font_size, root_font_size, rect.height(), viewport);
                 (x.alignment, ox, y.alignment, oy)
             }
         };
@@ -887,18 +976,25 @@ impl DisplayListBuilder {
         viewport: (f32, f32),
         font_ctx: &FontContext,
     ) -> Option<f32> {
-        match len.unit {
+        let resolved = match len.unit {
             LengthUnit::Percent => None,
             unit if unit.is_font_relative() => Some(resolve_font_relative_length(*len, style, font_ctx)),
             unit if unit.is_viewport_relative() => Some(len.resolve_with_viewport(viewport.0, viewport.1)),
             unit if unit.is_absolute() => Some(len.to_px()),
             _ => None,
+        }?;
+        if resolved.is_finite() {
+            Some(resolved)
+        } else {
+            None
         }
     }
 
     fn compute_background_size(
         layer: &BackgroundLayer,
         font_size: f32,
+        root_font_size: f32,
+        viewport: Option<(f32, f32)>,
         area_w: f32,
         area_h: f32,
         img_w: f32,
@@ -934,7 +1030,16 @@ impl DisplayListBuilder {
                     match component {
                         BackgroundSizeComponent::Auto => None,
                         BackgroundSizeComponent::Length(len) => {
-                            Some(Self::resolve_length_for_paint(&len, font_size, area).max(0.0))
+                            let (vw, vh) = viewport.unwrap_or((area_w, area_h));
+                            len.resolve_with_context(Some(area), vw, vh, font_size, root_font_size)
+                                .or_else(|| {
+                                    if len.unit.is_absolute() {
+                                        Some(len.to_px())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .map(|v| v.max(0.0))
                         }
                     }
                 };
@@ -981,10 +1086,22 @@ impl DisplayListBuilder {
         tile_w: f32,
         tile_h: f32,
         font_size: f32,
+        root_font_size: f32,
+        viewport: Option<(f32, f32)>,
     ) -> (f32, f32) {
         let resolve_axis = |comp: crate::style::types::BackgroundPositionComponent, area: f32, tile: f32| -> f32 {
             let available = area - tile;
-            let offset = Self::resolve_length_for_paint(&comp.offset, font_size, available);
+            let (vw, vh) = viewport.unwrap_or((area_w, area_h));
+            let offset = comp
+                .offset
+                .resolve_with_context(Some(available), vw, vh, font_size, root_font_size)
+                .unwrap_or_else(|| {
+                    if comp.offset.unit.is_absolute() {
+                        comp.offset.to_px()
+                    } else {
+                        0.0
+                    }
+                });
             comp.alignment * available + offset
         };
 
@@ -1060,12 +1177,27 @@ impl DisplayListBuilder {
         }
     }
 
-    fn resolve_length_for_paint(len: &Length, font_size: f32, percentage_base: f32) -> f32 {
-        match len.unit {
-            LengthUnit::Percent => len.resolve_against(percentage_base),
-            LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size),
-            _ if len.unit.is_absolute() => len.to_px(),
-            _ => len.value,
+    fn resolve_length_for_paint(
+        len: &Length,
+        font_size: f32,
+        root_font_size: f32,
+        percentage_base: f32,
+        viewport: Option<(f32, f32)>,
+    ) -> f32 {
+        let (vw, vh) = viewport.unwrap_or((percentage_base, percentage_base));
+        let resolved = len
+            .resolve_with_context(Some(percentage_base), vw, vh, font_size, root_font_size)
+            .unwrap_or_else(|| {
+                if len.unit.is_absolute() {
+                    len.to_px()
+                } else {
+                    len.value * font_size
+                }
+            });
+        if resolved.is_finite() {
+            resolved
+        } else {
+            0.0
         }
     }
 
@@ -1092,12 +1224,12 @@ impl DisplayListBuilder {
         side.width > 0.0 && Self::border_style_visible(side.style) && !side.color.is_transparent()
     }
 
-    fn build_transform(style: &ComputedStyle, bounds: Rect) -> Option<Transform2D> {
+    fn build_transform(style: &ComputedStyle, bounds: Rect, viewport: Option<(f32, f32)>) -> Option<Transform2D> {
         if style.transform.is_empty() {
             return None;
         }
 
-        let reference = Self::transform_reference_box(style, bounds);
+        let reference = Self::transform_reference_box(style, bounds, viewport);
         let percentage_width = reference.width();
         let percentage_height = reference.height();
 
@@ -1146,7 +1278,7 @@ impl DisplayListBuilder {
 
     fn resolve_transform_length(len: &Length, font_size: f32, percentage_base: f32) -> f32 {
         match len.unit {
-            LengthUnit::Percent => len.resolve_against(percentage_base),
+            LengthUnit::Percent => len.resolve_against(percentage_base).unwrap_or(0.0),
             LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size),
             _ if len.unit.is_absolute() => len.to_px(),
             _ => len.value,
@@ -1339,7 +1471,9 @@ impl DisplayListBuilder {
 
             FragmentContent::Replaced { replaced_type, .. } => {
                 let media_ctx = self.viewport.map(|(w, h)| {
-                    crate::style::media::MediaContext::screen(w, h).with_device_pixel_ratio(self.device_pixel_ratio)
+                    crate::style::media::MediaContext::screen(w, h)
+                        .with_device_pixel_ratio(self.device_pixel_ratio)
+                        .with_env_overrides()
                 });
                 let style_for_image = fragment.style.as_deref();
                 let sources = replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
@@ -1435,7 +1569,7 @@ impl DisplayListBuilder {
             return;
         }
 
-        let rects = Self::background_rects(rect, style);
+        let rects = Self::background_rects(rect, style, self.viewport);
         let fallback = BackgroundLayer::default();
         let color_layer = style.background_layers.first().unwrap_or(&fallback);
         let color_clip_rect = match color_layer.clip {
@@ -1444,7 +1578,7 @@ impl DisplayListBuilder {
             BackgroundBox::ContentBox => rects.content,
         };
         if style.background_color.alpha_u8() > 0 && color_clip_rect.width() > 0.0 && color_clip_rect.height() > 0.0 {
-            let radii = Self::resolve_clip_radii(style, &rects, color_layer.clip);
+            let radii = Self::resolve_clip_radii(style, &rects, color_layer.clip, self.viewport);
             if radii.is_zero() {
                 self.emit_background(color_clip_rect, style.background_color);
             } else {
@@ -1513,7 +1647,7 @@ impl DisplayListBuilder {
             return;
         }
 
-        let clip_radii = Self::resolve_clip_radii(style, rects, clip_box);
+        let clip_radii = Self::resolve_clip_radii(style, rects, clip_box, self.viewport);
         let blend_mode = Self::convert_blend_mode(layer.blend_mode);
         let use_blend = blend_mode != BlendMode::Normal;
         let mut pushed_clip = false;
@@ -1579,7 +1713,14 @@ impl DisplayListBuilder {
             } => {
                 let resolved = Self::normalize_color_stops_unclamped(stops, style.color);
                 if !resolved.is_empty() {
-                    let center = Self::resolve_gradient_center(origin_rect, position, style.font_size, clip_rect);
+                    let center = Self::resolve_gradient_center(
+                        origin_rect,
+                        position,
+                        style.font_size,
+                        style.root_font_size,
+                        clip_rect,
+                        self.viewport,
+                    );
                     self.list.push(DisplayItem::ConicGradient(ConicGradientItem {
                         rect: clip_rect,
                         center,
@@ -1596,7 +1737,14 @@ impl DisplayListBuilder {
             } => {
                 let resolved = Self::normalize_color_stops_unclamped(stops, style.color);
                 if !resolved.is_empty() {
-                    let center = Self::resolve_gradient_center(origin_rect, position, style.font_size, clip_rect);
+                    let center = Self::resolve_gradient_center(
+                        origin_rect,
+                        position,
+                        style.font_size,
+                        style.root_font_size,
+                        clip_rect,
+                        self.viewport,
+                    );
                     self.list.push(DisplayItem::ConicGradient(ConicGradientItem {
                         rect: clip_rect,
                         center,
@@ -1614,8 +1762,15 @@ impl DisplayListBuilder {
             } => {
                 let resolved = Self::normalize_color_stops(stops, style.color);
                 if !resolved.is_empty() {
-                    let (cx, cy, radius_x, radius_y) =
-                        Self::radial_geometry(origin_rect, position, size, *shape, style.font_size);
+                    let (cx, cy, radius_x, radius_y) = Self::radial_geometry(
+                        origin_rect,
+                        position,
+                        size,
+                        *shape,
+                        style.font_size,
+                        style.root_font_size,
+                        self.viewport,
+                    );
                     let center = Point::new(cx - clip_rect.x(), cy - clip_rect.y());
                     self.list.push(DisplayItem::RadialGradient(RadialGradientItem {
                         rect: clip_rect,
@@ -1634,8 +1789,15 @@ impl DisplayListBuilder {
             } => {
                 let resolved = Self::normalize_color_stops(stops, style.color);
                 if !resolved.is_empty() {
-                    let (cx, cy, radius_x, radius_y) =
-                        Self::radial_geometry(origin_rect, position, size, *shape, style.font_size);
+                    let (cx, cy, radius_x, radius_y) = Self::radial_geometry(
+                        origin_rect,
+                        position,
+                        size,
+                        *shape,
+                        style.font_size,
+                        style.root_font_size,
+                        self.viewport,
+                    );
                     let center = Point::new(cx - clip_rect.x(), cy - clip_rect.y());
                     self.list.push(DisplayItem::RadialGradient(RadialGradientItem {
                         rect: clip_rect,
@@ -1654,6 +1816,8 @@ impl DisplayListBuilder {
                         let (mut tile_w, mut tile_h) = Self::compute_background_size(
                             layer,
                             style.font_size,
+                            style.root_font_size,
+                            self.viewport,
                             origin_rect.width(),
                             origin_rect.height(),
                             img_w,
@@ -1692,6 +1856,8 @@ impl DisplayListBuilder {
                                 tile_w,
                                 tile_h,
                                 style.font_size,
+                                style.root_font_size,
+                                self.viewport,
                             );
 
                             let positions_x = Self::tile_positions(
@@ -1772,19 +1938,45 @@ impl DisplayListBuilder {
         if style.box_shadow.is_empty() {
             return;
         }
-        let rects = Self::background_rects(rect, style);
+        let rects = Self::background_rects(rect, style, self.viewport);
         let outer_radii = Self::border_radii(rect, style).clamped(rect.width(), rect.height());
-        let inner_radii = Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox);
+        let inner_radii = Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox, self.viewport);
         let base_rect = if inset { rects.padding } else { rects.border };
 
         for shadow in &style.box_shadow {
             if shadow.inset != inset {
                 continue;
             }
-            let offset_x = Self::resolve_length_for_paint(&shadow.offset_x, style.font_size, rect.width());
-            let offset_y = Self::resolve_length_for_paint(&shadow.offset_y, style.font_size, rect.width());
-            let blur = Self::resolve_length_for_paint(&shadow.blur_radius, style.font_size, rect.width()).max(0.0);
-            let spread = Self::resolve_length_for_paint(&shadow.spread_radius, style.font_size, rect.width()).max(-1e6);
+            let offset_x = Self::resolve_length_for_paint(
+                &shadow.offset_x,
+                style.font_size,
+                style.root_font_size,
+                rect.width(),
+                self.viewport,
+            );
+            let offset_y = Self::resolve_length_for_paint(
+                &shadow.offset_y,
+                style.font_size,
+                style.root_font_size,
+                rect.width(),
+                self.viewport,
+            );
+            let blur = Self::resolve_length_for_paint(
+                &shadow.blur_radius,
+                style.font_size,
+                style.root_font_size,
+                rect.width(),
+                self.viewport,
+            )
+            .max(0.0);
+            let spread = Self::resolve_length_for_paint(
+                &shadow.spread_radius,
+                style.font_size,
+                style.root_font_size,
+                rect.width(),
+                self.viewport,
+            )
+            .max(-1e6);
 
             self.list.push(DisplayItem::BoxShadow(BoxShadowItem {
                 rect: base_rect,
@@ -1800,10 +1992,34 @@ impl DisplayListBuilder {
 
     fn emit_border_from_style(&mut self, rect: Rect, style: &ComputedStyle) {
         let widths = (
-            Self::resolve_length_for_paint(&style.border_top_width, style.font_size, rect.width()),
-            Self::resolve_length_for_paint(&style.border_right_width, style.font_size, rect.width()),
-            Self::resolve_length_for_paint(&style.border_bottom_width, style.font_size, rect.width()),
-            Self::resolve_length_for_paint(&style.border_left_width, style.font_size, rect.width()),
+            Self::resolve_length_for_paint(
+                &style.border_top_width,
+                style.font_size,
+                style.root_font_size,
+                rect.width(),
+                self.viewport,
+            ),
+            Self::resolve_length_for_paint(
+                &style.border_right_width,
+                style.font_size,
+                style.root_font_size,
+                rect.width(),
+                self.viewport,
+            ),
+            Self::resolve_length_for_paint(
+                &style.border_bottom_width,
+                style.font_size,
+                style.root_font_size,
+                rect.width(),
+                self.viewport,
+            ),
+            Self::resolve_length_for_paint(
+                &style.border_left_width,
+                style.font_size,
+                style.root_font_size,
+                rect.width(),
+                self.viewport,
+            ),
         );
 
         let sides = (
@@ -1860,6 +2076,9 @@ impl DisplayListBuilder {
                     outset: style.border_image.outset.clone(),
                     repeat: style.border_image.repeat,
                     current_color: style.color,
+                    font_size: style.font_size,
+                    root_font_size: style.root_font_size,
+                    viewport: self.viewport,
                 })
             }
             BorderImageSource::None => None,
@@ -2124,7 +2343,7 @@ impl DisplayListBuilder {
                 TextDecorationThickness::FromFont => None,
                 TextDecorationThickness::Length(l) => {
                     let resolved = if l.unit == LengthUnit::Percent {
-                        l.resolve_against(style.font_size)
+                        l.resolve_against(style.font_size).unwrap_or(0.0)
                     } else if l.unit.is_viewport_relative() {
                         match self.viewport {
                             Some((vw, vh)) => l.resolve_with_viewport(vw, vh),
@@ -2237,7 +2456,7 @@ impl DisplayListBuilder {
             TextUnderlineOffset::Auto => 0.0,
             TextUnderlineOffset::Length(l) => {
                 if l.unit == LengthUnit::Percent {
-                    l.resolve_against(style.font_size)
+                    l.resolve_against(style.font_size).unwrap_or(0.0)
                 } else if l.unit.is_font_relative() {
                     resolve_font_relative_length(l, style, &self.font_ctx)
                 } else if l.unit.is_viewport_relative() {
@@ -2668,7 +2887,8 @@ impl DisplayListBuilder {
         InlineTextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
 
         let metrics_scaled = Self::resolve_scaled_metrics(style, &self.font_ctx);
-        let line_height = compute_line_height_with_metrics(style, metrics_scaled.as_ref());
+        let viewport = self.viewport.map(|(w, h)| Size::new(w, h));
+        let line_height = compute_line_height_with_metrics_viewport(style, metrics_scaled.as_ref(), viewport);
         let metrics = InlineTextItem::metrics_from_runs(&runs, line_height, style.font_size);
         let half_leading = ((metrics.line_height - (metrics.ascent + metrics.descent)) / 2.0).max(0.0);
         let baseline = rect.y() + half_leading + metrics.baseline_offset;
@@ -3567,6 +3787,7 @@ mod tests {
                     srcset: Vec::new(),
                 },
             },
+            baseline: None,
             children: vec![],
             style: Some(Arc::new(style)),
         };
@@ -3609,6 +3830,7 @@ mod tests {
                     srcset: Vec::new(),
                 },
             },
+            baseline: None,
             children: vec![],
             style: Some(Arc::new(style)),
         };
@@ -3640,6 +3862,7 @@ mod tests {
                     srcset: Vec::new(),
                 },
             },
+            baseline: None,
             children: vec![],
             style: Some(Arc::new(style)),
         };
@@ -3741,6 +3964,7 @@ mod tests {
                     srcset: Vec::new(),
                 },
             },
+            baseline: None,
             children: vec![],
             style: Some(Arc::new(style)),
         };
@@ -3837,7 +4061,7 @@ mod tests {
             .push(Transform::Translate(Length::percent(50.0), Length::percent(0.0)));
 
         let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
-        let transform = DisplayListBuilder::build_transform(&style, bounds).expect("transform should build");
+        let transform = DisplayListBuilder::build_transform(&style, bounds, None).expect("transform should build");
 
         assert!((transform.e - 85.0).abs() < 1e-3);
         assert!((transform.f).abs() < 1e-3);
@@ -3856,7 +4080,7 @@ mod tests {
         style.transform.push(Transform::Scale(2.0, 1.0));
 
         let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
-        let transform = DisplayListBuilder::build_transform(&style, bounds).expect("transform should build");
+        let transform = DisplayListBuilder::build_transform(&style, bounds, None).expect("transform should build");
 
         assert!((transform.e + 15.0).abs() < 1e-3);
         assert!((transform.f).abs() < 1e-3);

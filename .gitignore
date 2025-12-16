@@ -1,3 +1,5 @@
 target/
 .DS_Store
 fetches/
+.venv/
+venv/

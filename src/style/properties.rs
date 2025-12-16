@@ -8,6 +8,7 @@
 
 use crate::css::properties::{parse_calc_function_length, parse_length, MathFn};
 use crate::css::types::{Declaration, PropertyValue};
+use crate::geometry::Size;
 use crate::style::color::Rgba;
 use crate::style::content::{parse_content, ContentValue};
 use crate::style::counters::CounterSet;
@@ -28,6 +29,9 @@ use std::cell::Cell;
 thread_local! {
     static IMAGE_SET_DPR: Cell<f32> = Cell::new(1.0);
 }
+
+/// Default viewport used by tests and legacy callers.
+pub const DEFAULT_VIEWPORT: Size = Size::new(1200.0, 800.0);
 
 /// Executes a closure with the image-set selection density overridden.
 /// Restores the previous value afterward.
@@ -690,10 +694,19 @@ fn set_margin_side(styles: &mut ComputedStyle, side: crate::style::PhysicalSide,
     *side_order_mut(&mut styles.logical.margin_orders, side) = order;
 }
 
+fn sanitize_non_negative_length(value: Length) -> Length {
+    if value.calc.is_none() && value.value < 0.0 {
+        Length::px(0.0)
+    } else {
+        value
+    }
+}
+
 fn set_padding_side(styles: &mut ComputedStyle, side: crate::style::PhysicalSide, value: Length, order: i32) {
     if order < side_order(&styles.logical.padding_orders, side) {
         return;
     }
+    let value = sanitize_non_negative_length(value);
     match side {
         crate::style::PhysicalSide::Top => styles.padding_top = value,
         crate::style::PhysicalSide::Right => styles.padding_right = value,
@@ -707,6 +720,7 @@ fn set_border_width_side(styles: &mut ComputedStyle, side: crate::style::Physica
     if order < side_order(&styles.logical.border_width_orders, side) {
         return;
     }
+    let value = sanitize_non_negative_length(value);
     match side {
         crate::style::PhysicalSide::Top => styles.border_top_width = value,
         crate::style::PhysicalSide::Right => styles.border_right_width = value,
@@ -770,6 +784,26 @@ fn set_length_with_order(target: &mut Option<Length>, order_slot: &mut i32, valu
     *order_slot = order;
 }
 
+fn sanitize_min_length(value: Option<Length>) -> Option<Length> {
+    value.map(|len| {
+        if len.calc.is_none() && len.value < 0.0 {
+            Length::px(0.0)
+        } else {
+            len
+        }
+    })
+}
+
+fn sanitize_max_length(value: Option<Length>) -> Option<Length> {
+    value.and_then(|len| {
+        if len.calc.is_none() && len.value < 0.0 {
+            None
+        } else {
+            Some(len)
+        }
+    })
+}
+
 #[derive(Debug, Clone, Copy)]
 enum PhysicalCorner {
     TopLeft,
@@ -788,6 +822,7 @@ fn set_corner_radius(styles: &mut ComputedStyle, corner: PhysicalCorner, value: 
     if order < *order_slot {
         return;
     }
+    let value = value.map(sanitize_non_negative_length);
     match corner {
         PhysicalCorner::TopLeft => {
             if let Some(v) = value {
@@ -835,6 +870,7 @@ fn set_axis_min_dimension(
         crate::style::LogicalAxis::Inline => inline_axis_is_horizontal(styles.writing_mode),
         crate::style::LogicalAxis::Block => block_axis_is_horizontal(styles.writing_mode),
     };
+    let value = sanitize_min_length(value);
     if is_horizontal {
         set_length_with_order(&mut styles.min_width, &mut styles.logical.min_width_order, value, order);
     } else {
@@ -857,6 +893,7 @@ fn set_axis_max_dimension(
         crate::style::LogicalAxis::Inline => inline_axis_is_horizontal(styles.writing_mode),
         crate::style::LogicalAxis::Block => block_axis_is_horizontal(styles.writing_mode),
     };
+    let value = sanitize_max_length(value);
     if is_horizontal {
         set_length_with_order(&mut styles.max_width, &mut styles.logical.max_width_order, value, order);
     } else {
@@ -1224,25 +1261,25 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "min-width" => set_length_with_order(
             &mut styles.min_width,
             &mut styles.logical.min_width_order,
-            source.min_width,
+            sanitize_min_length(source.min_width),
             order,
         ),
         "min-height" => set_length_with_order(
             &mut styles.min_height,
             &mut styles.logical.min_height_order,
-            source.min_height,
+            sanitize_min_length(source.min_height),
             order,
         ),
         "max-width" => set_length_with_order(
             &mut styles.max_width,
             &mut styles.logical.max_width_order,
-            source.max_width,
+            sanitize_max_length(source.max_width),
             order,
         ),
         "max-height" => set_length_with_order(
             &mut styles.max_height,
             &mut styles.logical.max_height_order,
-            source.max_height,
+            sanitize_max_length(source.max_height),
             order,
         ),
         "inline-size" => {
@@ -1911,10 +1948,15 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         }
         "flex-direction" => styles.flex_direction = source.flex_direction,
         "flex-wrap" => styles.flex_wrap = source.flex_wrap,
+        "flex-flow" => {
+            styles.flex_direction = source.flex_direction;
+            styles.flex_wrap = source.flex_wrap;
+        }
         "justify-content" => styles.justify_content = source.justify_content,
         "align-items" => styles.align_items = source.align_items,
         "align-self" => styles.align_self = source.align_self,
         "align-content" => styles.align_content = source.align_content,
+        "order" => styles.order = source.order,
         "justify-items" => styles.justify_items = source.justify_items,
         "justify-self" => styles.justify_self = source.justify_self,
         "place-items" => {
@@ -2280,7 +2322,10 @@ fn apply_global_keyword(
     apply_property_from_source(styles, source, property, order)
 }
 
-fn parse_font_variant_caps_tokens(tokens: &[&str], base_variant: FontVariant) -> Option<(FontVariantCaps, FontVariant)> {
+fn parse_font_variant_caps_tokens(
+    tokens: &[&str],
+    base_variant: FontVariant,
+) -> Option<(FontVariantCaps, FontVariant)> {
     if tokens.is_empty() {
         return None;
     }
@@ -2570,10 +2615,7 @@ fn parse_font_variant_alternates_tokens(tokens: &[&str]) -> Option<FontVariantAl
             return None;
         }
 
-        if let Some(inner) = token
-            .strip_prefix("styleset(")
-            .and_then(|s| s.strip_suffix(')'))
-        {
+        if let Some(inner) = token.strip_prefix("styleset(").and_then(|s| s.strip_suffix(')')) {
             for part in inner
                 .split(|c: char| c == ',' || c.is_whitespace())
                 .filter(|s| !s.is_empty())
@@ -2616,10 +2658,7 @@ fn parse_font_variant_alternates_tokens(tokens: &[&str]) -> Option<FontVariantAl
             return None;
         }
 
-        if let Some(inner) = token
-            .strip_prefix("ornaments(")
-            .and_then(|s| s.strip_suffix(')'))
-        {
+        if let Some(inner) = token.strip_prefix("ornaments(").and_then(|s| s.strip_suffix(')')) {
             if seen_ornaments {
                 return None;
             }
@@ -2631,10 +2670,7 @@ fn parse_font_variant_alternates_tokens(tokens: &[&str]) -> Option<FontVariantAl
             return None;
         }
 
-        if let Some(inner) = token
-            .strip_prefix("annotation(")
-            .and_then(|s| s.strip_suffix(')'))
-        {
+        if let Some(inner) = token.strip_prefix("annotation(").and_then(|s| s.strip_suffix(')')) {
             if seen_annotation {
                 return None;
             }
@@ -2708,6 +2744,25 @@ pub fn apply_declaration(
     parent_font_size: f32,
     root_font_size: f32,
 ) {
+    apply_declaration_with_viewport(
+        styles,
+        decl,
+        parent_styles,
+        parent_font_size,
+        root_font_size,
+        DEFAULT_VIEWPORT,
+    );
+}
+
+/// Applies a declaration using an explicit viewport for resolving viewport-relative units.
+pub fn apply_declaration_with_viewport(
+    styles: &mut ComputedStyle,
+    decl: &Declaration,
+    parent_styles: &ComputedStyle,
+    parent_font_size: f32,
+    root_font_size: f32,
+    viewport: Size,
+) {
     let defaults = ComputedStyle::default();
     apply_declaration_with_base(
         styles,
@@ -2717,6 +2772,7 @@ pub fn apply_declaration(
         None,
         parent_font_size,
         root_font_size,
+        viewport,
     );
 }
 
@@ -2728,6 +2784,7 @@ pub fn apply_declaration_with_base(
     revert_layer_base: Option<&ComputedStyle>,
     parent_font_size: f32,
     root_font_size: f32,
+    viewport: crate::geometry::Size,
 ) {
     // Handle CSS Custom Properties (--*)
     if decl.property.starts_with("--") {
@@ -3045,25 +3102,25 @@ pub fn apply_declaration_with_base(
         "min-width" => set_length_with_order(
             &mut styles.min_width,
             &mut styles.logical.min_width_order,
-            extract_length(&resolved_value),
+            sanitize_min_length(extract_length(&resolved_value)),
             order,
         ),
         "min-height" => set_length_with_order(
             &mut styles.min_height,
             &mut styles.logical.min_height_order,
-            extract_length(&resolved_value),
+            sanitize_min_length(extract_length(&resolved_value)),
             order,
         ),
         "max-width" => set_length_with_order(
             &mut styles.max_width,
             &mut styles.logical.max_width_order,
-            extract_length(&resolved_value),
+            sanitize_max_length(extract_length(&resolved_value)),
             order,
         ),
         "max-height" => set_length_with_order(
             &mut styles.max_height,
             &mut styles.logical.max_height_order,
-            extract_length(&resolved_value),
+            sanitize_max_length(extract_length(&resolved_value)),
             order,
         ),
         "inline-size" => {
@@ -3724,31 +3781,63 @@ pub fn apply_declaration_with_base(
 
         // Border (shorthand)
         "border" => {
-            if let PropertyValue::Multiple(values) = &resolved_value {
+            let current_color = styles.color;
+            let mut apply_shorthand = |values: &[PropertyValue]| {
+                let mut width: Option<Length> = None;
+                let mut style_val: Option<BorderStyle> = None;
+                let mut color: Option<Rgba> = None;
+
                 for val in values {
                     match val {
-                        PropertyValue::Length(len) => {
-                            set_border_width_side(styles, crate::style::PhysicalSide::Top, *len, order);
-                            set_border_width_side(styles, crate::style::PhysicalSide::Right, *len, order);
-                            set_border_width_side(styles, crate::style::PhysicalSide::Bottom, *len, order);
-                            set_border_width_side(styles, crate::style::PhysicalSide::Left, *len, order);
-                        }
+                        PropertyValue::Length(len) => width = Some(*len),
+                        PropertyValue::Number(n) => width = Some(Length::px(*n)),
                         PropertyValue::Keyword(kw) => {
-                            let style = parse_border_style(kw);
-                            set_border_style_side(styles, crate::style::PhysicalSide::Top, style, order);
-                            set_border_style_side(styles, crate::style::PhysicalSide::Right, style, order);
-                            set_border_style_side(styles, crate::style::PhysicalSide::Bottom, style, order);
-                            set_border_style_side(styles, crate::style::PhysicalSide::Left, style, order);
+                            if kw.eq_ignore_ascii_case("currentcolor") {
+                                color = Some(current_color);
+                            } else {
+                                style_val = Some(parse_border_style(kw));
+                            }
                         }
-                        PropertyValue::Color(c) => {
-                            set_border_color_side(styles, crate::style::PhysicalSide::Top, *c, order);
-                            set_border_color_side(styles, crate::style::PhysicalSide::Right, *c, order);
-                            set_border_color_side(styles, crate::style::PhysicalSide::Bottom, *c, order);
-                            set_border_color_side(styles, crate::style::PhysicalSide::Left, *c, order);
-                        }
+                        PropertyValue::Color(c) => color = Some(*c),
                         _ => {}
                     }
                 }
+
+                if let Some(BorderStyle::None | BorderStyle::Hidden) = style_val {
+                    width = Some(Length::px(0.0));
+                }
+
+                // Shorthand resets unspecified subproperties to their initial values.
+                if style_val.is_none() {
+                    style_val = Some(BorderStyle::None);
+                }
+                if color.is_none() {
+                    color = Some(current_color);
+                }
+
+                if let Some(w) = width {
+                    set_border_width_side(styles, crate::style::PhysicalSide::Top, w, order);
+                    set_border_width_side(styles, crate::style::PhysicalSide::Right, w, order);
+                    set_border_width_side(styles, crate::style::PhysicalSide::Bottom, w, order);
+                    set_border_width_side(styles, crate::style::PhysicalSide::Left, w, order);
+                }
+                if let Some(st) = style_val {
+                    set_border_style_side(styles, crate::style::PhysicalSide::Top, st, order);
+                    set_border_style_side(styles, crate::style::PhysicalSide::Right, st, order);
+                    set_border_style_side(styles, crate::style::PhysicalSide::Bottom, st, order);
+                    set_border_style_side(styles, crate::style::PhysicalSide::Left, st, order);
+                }
+                if let Some(c) = color {
+                    set_border_color_side(styles, crate::style::PhysicalSide::Top, c, order);
+                    set_border_color_side(styles, crate::style::PhysicalSide::Right, c, order);
+                    set_border_color_side(styles, crate::style::PhysicalSide::Bottom, c, order);
+                    set_border_color_side(styles, crate::style::PhysicalSide::Left, c, order);
+                }
+            };
+
+            match &resolved_value {
+                PropertyValue::Multiple(values) => apply_shorthand(values),
+                other => apply_shorthand(std::slice::from_ref(other)),
             }
         }
         "border-inline" => {
@@ -3958,6 +4047,81 @@ pub fn apply_declaration_with_base(
                 };
             }
         }
+        "flex-flow" => {
+            let tokens: Vec<String> = match &resolved_value {
+                PropertyValue::Keyword(kw) => kw.split_whitespace().map(|s| s.to_ascii_lowercase()).collect(),
+                PropertyValue::Multiple(values) => values
+                    .iter()
+                    .flat_map(|v| match v {
+                        PropertyValue::Keyword(kw) => kw.split_whitespace().map(|s| s.to_ascii_lowercase()).collect(),
+                        _ => Vec::new(),
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+
+            if !tokens.is_empty() && tokens.len() <= 2 {
+                let mut direction: Option<FlexDirection> = None;
+                let mut wrap: Option<FlexWrap> = None;
+                let mut valid = true;
+
+                for token in tokens {
+                    match token.as_str() {
+                        "row" => {
+                            if direction.replace(FlexDirection::Row).is_some() {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        "row-reverse" => {
+                            if direction.replace(FlexDirection::RowReverse).is_some() {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        "column" => {
+                            if direction.replace(FlexDirection::Column).is_some() {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        "column-reverse" => {
+                            if direction.replace(FlexDirection::ColumnReverse).is_some() {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        "nowrap" => {
+                            if wrap.replace(FlexWrap::NoWrap).is_some() {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        "wrap" => {
+                            if wrap.replace(FlexWrap::Wrap).is_some() {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        "wrap-reverse" => {
+                            if wrap.replace(FlexWrap::WrapReverse).is_some() {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        _ => {
+                            valid = false;
+                            break;
+                        }
+                    }
+                }
+
+                if valid && (direction.is_some() || wrap.is_some()) {
+                    styles.flex_direction = direction.unwrap_or(FlexDirection::Row);
+                    styles.flex_wrap = wrap.unwrap_or(FlexWrap::NoWrap);
+                }
+            }
+        }
         "justify-content" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.justify_content = match kw.as_str() {
@@ -4040,14 +4204,36 @@ pub fn apply_declaration_with_base(
                 styles.justify_content = justify;
             }
         }
+        "order" => {
+            if let PropertyValue::Number(n) = resolved_value {
+                if n.is_finite() && (n.fract() == 0.0) {
+                    // CSS order is an integer; ignore non-integers.
+                    let int = n as i64;
+                    if int >= i32::MIN as i64 && int <= i32::MAX as i64 {
+                        styles.order = int as i32;
+                    }
+                }
+            }
+        }
         "flex-grow" => {
             if let PropertyValue::Number(n) = resolved_value {
-                styles.flex_grow = n;
+                if n.is_finite() && n >= 0.0 {
+                    styles.flex_grow = n;
+                }
             }
         }
         "flex-shrink" => {
             if let PropertyValue::Number(n) = resolved_value {
-                styles.flex_shrink = n;
+                if n.is_finite() && n >= 0.0 {
+                    styles.flex_shrink = n;
+                }
+            }
+        }
+        "flex" => {
+            if let Some((grow, shrink, basis)) = parse_flex_shorthand(&resolved_value) {
+                styles.flex_grow = grow;
+                styles.flex_shrink = shrink;
+                styles.flex_basis = basis;
             }
         }
         "flex-basis" => {
@@ -4306,7 +4492,7 @@ pub fn apply_declaration_with_base(
         "font" => {
             if let PropertyValue::Keyword(raw) = &resolved_value {
                 if let Some((font_style, font_weight, font_variant, font_stretch, font_size, line_height, families)) =
-                    parse_font_shorthand(raw, parent_font_size, root_font_size)
+                    parse_font_shorthand(raw, parent_font_size, root_font_size, viewport)
                 {
                     styles.font_variant_ligatures = FontVariantLigatures::default();
                     styles.font_variant_caps = FontVariantCaps::Normal;
@@ -4337,35 +4523,26 @@ pub fn apply_declaration_with_base(
                 styles.font_family = families.clone();
             }
         }
-        "font-size" => {
-            match &resolved_value {
-                PropertyValue::Keyword(kw) => {
-                    if let Some(size) = parse_font_size_keyword(kw, parent_font_size) {
+        "font-size" => match &resolved_value {
+            PropertyValue::Keyword(kw) => {
+                if let Some(size) = parse_font_size_keyword(kw, parent_font_size) {
+                    styles.font_size = size;
+                }
+            }
+            PropertyValue::Length(len) => {
+                if len.value >= 0.0 {
+                    if let Some(size) = resolve_font_size_length(*len, parent_font_size, root_font_size, viewport) {
                         styles.font_size = size;
                     }
                 }
-                PropertyValue::Length(len) => {
-                    if len.value >= 0.0 {
-                        // Resolve font-size against parent or root depending on unit
-                        if len.unit.is_absolute() {
-                            styles.font_size = len.to_px();
-                        } else if len.unit == LengthUnit::Em {
-                            styles.font_size = len.value * parent_font_size;
-                        } else if len.unit == LengthUnit::Rem {
-                            styles.font_size = len.value * root_font_size;
-                        } else if len.unit == LengthUnit::Percent {
-                            styles.font_size = (len.value / 100.0) * parent_font_size;
-                        }
-                    }
-                }
-                PropertyValue::Percentage(p) => {
-                    if *p >= 0.0 {
-                        styles.font_size = (p / 100.0) * parent_font_size;
-                    }
-                }
-                _ => {}
             }
-        }
+            PropertyValue::Percentage(p) => {
+                if *p >= 0.0 {
+                    styles.font_size = (p / 100.0) * parent_font_size;
+                }
+            }
+            _ => {}
+        },
         "font-size-adjust" => match &resolved_value {
             PropertyValue::Keyword(kw) => match kw.as_str() {
                 "none" => styles.font_size_adjust = FontSizeAdjust::None,
@@ -4430,11 +4607,7 @@ pub fn apply_declaration_with_base(
 
                     for tok in tokens {
                         match tok {
-                            "small-caps"
-                            | "all-small-caps"
-                            | "petite-caps"
-                            | "all-petite-caps"
-                            | "unicase"
+                            "small-caps" | "all-small-caps" | "petite-caps" | "all-petite-caps" | "unicase"
                             | "titling-caps" => caps_tokens.push(tok),
                             // The shorthand grammar omits "normal"/"none" for ligatures; those are invalid here.
                             "common-ligatures"
@@ -4445,23 +4618,12 @@ pub fn apply_declaration_with_base(
                             | "no-historical-ligatures"
                             | "contextual"
                             | "no-contextual" => ligature_tokens.push(tok),
-                            "lining-nums"
-                            | "oldstyle-nums"
-                            | "proportional-nums"
-                            | "tabular-nums"
-                            | "diagonal-fractions"
-                            | "stacked-fractions"
-                            | "ordinal"
-                            | "slashed-zero" => numeric_tokens.push(tok),
-                            "jis78"
-                            | "jis83"
-                            | "jis90"
-                            | "jis04"
-                            | "simplified"
-                            | "traditional"
-                            | "full-width"
-                            | "proportional-width"
-                            | "ruby" => east_asian_tokens.push(tok),
+                            "lining-nums" | "oldstyle-nums" | "proportional-nums" | "tabular-nums"
+                            | "diagonal-fractions" | "stacked-fractions" | "ordinal" | "slashed-zero" => {
+                                numeric_tokens.push(tok)
+                            }
+                            "jis78" | "jis83" | "jis90" | "jis04" | "simplified" | "traditional" | "full-width"
+                            | "proportional-width" | "ruby" => east_asian_tokens.push(tok),
                             tok if tok.starts_with("stylistic(")
                                 || tok.starts_with("styleset(")
                                 || tok.starts_with("character-variant(")
@@ -4579,9 +4741,7 @@ pub fn apply_declaration_with_base(
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 let raw_tokens = split_font_variant_tokens(kw);
                 let tokens: Vec<&str> = raw_tokens.iter().map(String::as_str).collect();
-                if let Some(position) =
-                    parse_font_variant_position_tokens(&tokens, styles.font_variant_position)
-                {
+                if let Some(position) = parse_font_variant_position_tokens(&tokens, styles.font_variant_position) {
                     styles.font_variant_position = position;
                 }
             }
@@ -5506,6 +5666,24 @@ pub fn apply_declaration_with_base(
                 styles.will_change = value;
             }
         }
+        "container-type" => {
+            if let Some(ct) = parse_container_type_value(&resolved_value) {
+                styles.container_type = ct;
+            }
+        }
+        "container-name" => {
+            if let Some(names) = parse_container_names(&resolved_value) {
+                styles.container_name = names;
+            }
+        }
+        "container" => {
+            if let Some((names, ty)) = parse_container_shorthand(&resolved_value) {
+                styles.container_name = names;
+                if let Some(ct) = ty {
+                    styles.container_type = ct;
+                }
+            }
+        }
         "contain" => {
             if let Some(value) = parse_containment(&resolved_value) {
                 styles.containment = value;
@@ -5686,6 +5864,75 @@ fn parse_gap_token(token: &str) -> Option<Length> {
         return Some(Length::px(0.0));
     }
     parse_length(t)
+}
+
+fn length_from_value(value: &PropertyValue) -> Option<Length> {
+    match value {
+        PropertyValue::Length(l) => Some(*l),
+        PropertyValue::Percentage(p) => Some(Length::new(*p, LengthUnit::Percent)),
+        _ => None,
+    }
+}
+
+fn parse_flex_shorthand(value: &PropertyValue) -> Option<(f32, f32, FlexBasis)> {
+    match value {
+        PropertyValue::Keyword(kw) => match kw.as_str() {
+            "none" => return Some((0.0, 0.0, FlexBasis::Auto)),
+            "auto" => return Some((1.0, 1.0, FlexBasis::Auto)),
+            "initial" => return Some((0.0, 1.0, FlexBasis::Auto)),
+            _ => {}
+        },
+        PropertyValue::Number(n) if n.is_finite() && *n >= 0.0 => {
+            return Some((*n, 1.0, FlexBasis::Length(Length::new(0.0, LengthUnit::Percent))));
+        }
+        PropertyValue::Length(len) => {
+            return Some((1.0, 1.0, FlexBasis::Length(*len)));
+        }
+        PropertyValue::Percentage(p) => {
+            return Some((1.0, 1.0, FlexBasis::Length(Length::new(*p, LengthUnit::Percent))));
+        }
+        PropertyValue::Multiple(values) => {
+            let mut grow: Option<f32> = None;
+            let mut shrink: Option<f32> = None;
+            let mut basis: Option<FlexBasis> = None;
+
+            for v in values {
+                match v {
+                    PropertyValue::Number(n) if n.is_finite() && *n >= 0.0 => {
+                        if grow.is_none() {
+                            grow = Some(*n);
+                        } else if shrink.is_none() {
+                            shrink = Some(*n);
+                        }
+                    }
+                    PropertyValue::Keyword(kw) if kw == "auto" || kw == "content" => {
+                        if basis.is_none() {
+                            basis = Some(FlexBasis::Auto);
+                        }
+                    }
+                    _ => {
+                        if basis.is_none() {
+                            if let Some(len) = length_from_value(v) {
+                                basis = Some(FlexBasis::Length(len));
+                            }
+                        }
+                    }
+                }
+            }
+
+            if grow.is_none() && shrink.is_none() && basis.is_none() {
+                return None;
+            }
+
+            let grow = grow.unwrap_or(1.0);
+            let shrink = shrink.unwrap_or(1.0);
+            let basis = basis.unwrap_or(FlexBasis::Length(Length::new(0.0, LengthUnit::Percent)));
+            return Some((grow, shrink, basis));
+        }
+        _ => {}
+    }
+
+    None
 }
 
 fn extract_gap_component(value: &PropertyValue) -> Option<Length> {
@@ -6510,6 +6757,130 @@ fn parse_will_change(value: &PropertyValue) -> Option<WillChange> {
     parse_will_change_from_str(&text)
 }
 
+fn property_value_to_string(value: &PropertyValue) -> Option<String> {
+    match value {
+        PropertyValue::Keyword(kw) | PropertyValue::String(kw) => Some(kw.clone()),
+        PropertyValue::Multiple(values) if !values.is_empty() => {
+            let mut out = String::new();
+            for token in values {
+                match token {
+                    PropertyValue::Keyword(k) | PropertyValue::String(k) => {
+                        if !out.is_empty() && k != "," && k != "/" {
+                            out.push(' ');
+                        }
+                        out.push_str(k);
+                        if k == "," {
+                            out.push(' ');
+                        }
+                    }
+                    _ => return None,
+                }
+            }
+            let trimmed = out.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        _ => None,
+    }
+}
+
+fn parse_container_type_keyword(text: &str) -> Option<ContainerType> {
+    match text.to_ascii_lowercase().as_str() {
+        "none" => Some(ContainerType::None),
+        "normal" => Some(ContainerType::Normal),
+        "size" => Some(ContainerType::Size),
+        "inline-size" => Some(ContainerType::InlineSize),
+        _ => None,
+    }
+}
+
+fn parse_container_type_value(value: &PropertyValue) -> Option<ContainerType> {
+    let text = property_value_to_string(value)?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    parse_container_type_keyword(trimmed)
+}
+
+fn parse_container_names_from_str(input: &str) -> Option<Vec<String>> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.eq_ignore_ascii_case("none") {
+        return Some(Vec::new());
+    }
+
+    let mut names = Vec::new();
+    for part in trimmed.split(',') {
+        for name in part.split_whitespace() {
+            let candidate = name.trim();
+            if !candidate.is_empty() {
+                names.push(candidate.to_string());
+            }
+        }
+    }
+
+    if names.is_empty() {
+        None
+    } else if names.iter().any(|n| n.eq_ignore_ascii_case("none")) {
+        None
+    } else {
+        Some(names)
+    }
+}
+
+fn parse_container_names(value: &PropertyValue) -> Option<Vec<String>> {
+    let text = property_value_to_string(value)?;
+    parse_container_names_from_str(&text)
+}
+
+fn parse_container_shorthand(value: &PropertyValue) -> Option<(Vec<String>, Option<ContainerType>)> {
+    let text = property_value_to_string(value)?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.eq_ignore_ascii_case("none") {
+        return Some((Vec::new(), Some(ContainerType::None)));
+    }
+
+    let mut parts = trimmed.splitn(2, '/');
+    let left = parts.next().unwrap_or("").trim();
+    let right = parts.next().map(|s| s.trim());
+
+    let names = if left.is_empty() {
+        Vec::new()
+    } else {
+        parse_container_names_from_str(left)?
+    };
+    let mut container_type = None;
+
+    if let Some(right_part) = right {
+        if !right_part.is_empty() {
+            container_type = parse_container_type_keyword(right_part);
+            if container_type.is_none() {
+                return None;
+            }
+        }
+    } else if names.is_empty() && !left.is_empty() {
+        container_type = parse_container_type_keyword(left);
+        if container_type.is_none() {
+            return None;
+        }
+    }
+
+    if names.is_empty() && container_type.is_none() {
+        None
+    } else {
+        Some((names, container_type))
+    }
+}
+
 fn parse_containment(value: &PropertyValue) -> Option<Containment> {
     let text = match value {
         PropertyValue::Keyword(k) | PropertyValue::String(k) => Some(k.clone()),
@@ -7066,7 +7437,9 @@ fn parse_clamp_angle<'i, 't>(input: &mut Parser<'i, 't>) -> Result<AngleComponen
         return Err(input.new_custom_error(()));
     }
 
-    let clamped = preferred.value.clamp(min.value, max.value);
+    // CSS clamp(): treat a max below min as if max equals min.
+    let upper = if max.value < min.value { min.value } else { max.value };
+    let clamped = preferred.value.max(min.value).min(upper);
     Ok(AngleComponent {
         value: clamped,
         is_angle: true,
@@ -7100,6 +7473,7 @@ fn parse_font_shorthand(
     value: &str,
     parent_font_size: f32,
     root_font_size: f32,
+    viewport: crate::geometry::Size,
 ) -> Option<(
     FontStyle,
     FontWeight,
@@ -7175,7 +7549,7 @@ fn parse_font_shorthand(
                                 match parsed {
                                     Ok(len) if len.value >= 0.0 => {
                                         if let Some(sz) =
-                                            resolve_font_size_length(len, parent_font_size, root_font_size)
+                                            resolve_font_size_length(len, parent_font_size, root_font_size, viewport)
                                         {
                                             font_size = Some(sz);
                                             phase = Phase::AfterSize;
@@ -7189,7 +7563,7 @@ fn parse_font_shorthand(
                             }
                         }
 
-                        if let Some(sz) = parse_font_size_token(&token, parent_font_size, root_font_size) {
+                        if let Some(sz) = parse_font_size_token(&token, parent_font_size, root_font_size, viewport) {
                             font_size = Some(sz);
                             phase = Phase::AfterSize;
                             continue;
@@ -7332,7 +7706,12 @@ fn parse_font_shorthand(
     ))
 }
 
-fn parse_font_size_token(token: &Token, parent_font_size: f32, root_font_size: f32) -> Option<f32> {
+fn parse_font_size_token(
+    token: &Token,
+    parent_font_size: f32,
+    root_font_size: f32,
+    viewport: crate::geometry::Size,
+) -> Option<f32> {
     if let Token::Ident(ref ident) = token {
         if let Some(size) = parse_font_size_keyword(ident.as_ref(), parent_font_size) {
             return Some(size);
@@ -7340,7 +7719,7 @@ fn parse_font_size_token(token: &Token, parent_font_size: f32, root_font_size: f
     }
 
     if let Some(len) = length_from_token(token) {
-        return resolve_font_size_length(len, parent_font_size, root_font_size);
+        return resolve_font_size_length(len, parent_font_size, root_font_size, viewport);
     }
 
     None
@@ -7383,7 +7762,12 @@ fn parse_font_size_keyword(keyword: &str, parent_font_size: f32) -> Option<f32> 
     }
 }
 
-fn resolve_font_size_length(len: Length, parent_font_size: f32, root_font_size: f32) -> Option<f32> {
+fn resolve_font_size_length(
+    len: Length,
+    parent_font_size: f32,
+    root_font_size: f32,
+    viewport: crate::geometry::Size,
+) -> Option<f32> {
     if len.value < 0.0 {
         return None;
     }
@@ -7403,8 +7787,13 @@ fn resolve_font_size_length(len: Length, parent_font_size: f32, root_font_size: 
         len.unit,
         LengthUnit::Vw | LengthUnit::Vh | LengthUnit::Vmin | LengthUnit::Vmax
     ) {
-        // Viewport units for font-size resolve to pixels directly
-        return Some(len.to_px());
+        return Some(len.resolve_with_viewport(viewport.width, viewport.height));
+    }
+    if len.unit == LengthUnit::Ex {
+        return Some(len.value * parent_font_size * 0.5);
+    }
+    if len.unit == LengthUnit::Ch {
+        return Some(len.value * parent_font_size * 0.5);
     }
     None
 }
@@ -7420,22 +7809,10 @@ fn length_from_token(token: &Token) -> Option<Length> {
             "in" => Some(Length::inches(*value)),
             "cm" => Some(Length::cm(*value)),
             "mm" => Some(Length::mm(*value)),
-            "vh" => Some(Length {
-                value: *value,
-                unit: LengthUnit::Vh,
-            }),
-            "vw" => Some(Length {
-                value: *value,
-                unit: LengthUnit::Vw,
-            }),
-            "vmin" => Some(Length {
-                value: *value,
-                unit: LengthUnit::Vmin,
-            }),
-            "vmax" => Some(Length {
-                value: *value,
-                unit: LengthUnit::Vmax,
-            }),
+            "vh" => Some(Length::new(*value, LengthUnit::Vh)),
+            "vw" => Some(Length::new(*value, LengthUnit::Vw)),
+            "vmin" => Some(Length::new(*value, LengthUnit::Vmin)),
+            "vmax" => Some(Length::new(*value, LengthUnit::Vmax)),
             "%" => Some(Length::percent(*value)),
             _ => None,
         },
@@ -9107,13 +9484,14 @@ fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::Size;
     use crate::style::types::{
-        AlignContent, AlignItems, AspectRatio, BackgroundRepeatKeyword, BoxSizing, CaseTransform, FontStretch,
-        FontVariant, GridAutoFlow, GridTrack, ImageOrientation, ImageRendering, ImageResolution, JustifyContent,
-        ListStylePosition, ListStyleType, MixBlendMode, OutlineColor, OutlineStyle, PositionComponent, PositionKeyword,
-        TextCombineUpright, TextDecorationLine, TextDecorationStyle, TextDecorationThickness, TextEmphasisFill,
-        TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle, TextOrientation, TextOverflowSide, TextTransform,
-        TransformBox, WritingMode,
+        AlignContent, AlignItems, AspectRatio, BackgroundRepeatKeyword, BoxSizing, CaseTransform, FlexDirection,
+        FlexWrap, FontStretch, FontVariant, GridAutoFlow, GridTrack, ImageOrientation, ImageRendering, ImageResolution,
+        JustifyContent, ListStylePosition, ListStyleType, MixBlendMode, OutlineColor, OutlineStyle, PositionComponent,
+        PositionKeyword, TextCombineUpright, TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
+        TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle, TextOrientation,
+        TextOverflowSide, TextTransform, TransformBox, WritingMode,
     };
     use cssparser::{Parser, ParserInput};
 
@@ -9161,6 +9539,63 @@ mod tests {
             16.0,
         );
         assert_eq!(style.image_rendering, ImageRendering::CrispEdges);
+    }
+
+    #[test]
+    fn parses_flex_flow_shorthand() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "flex-flow".to_string(),
+                value: PropertyValue::Keyword("column wrap-reverse".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.flex_direction, FlexDirection::Column);
+        assert_eq!(style.flex_wrap, FlexWrap::WrapReverse);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "flex-flow".to_string(),
+                value: PropertyValue::Keyword("wrap row-reverse".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.flex_direction, FlexDirection::RowReverse);
+        assert_eq!(style.flex_wrap, FlexWrap::Wrap);
+    }
+
+    #[test]
+    fn parses_flex_flow_wrap_only_defaults_direction() {
+        let mut style = ComputedStyle::default();
+        style.flex_direction = FlexDirection::ColumnReverse;
+        style.flex_wrap = FlexWrap::NoWrap;
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "flex-flow".to_string(),
+                value: PropertyValue::Keyword("wrap".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(style.flex_direction, FlexDirection::Row);
+        assert_eq!(style.flex_wrap, FlexWrap::Wrap);
     }
 
     #[test]
@@ -10348,6 +10783,60 @@ mod tests {
         );
 
         assert_eq!(style.outline_width, Length::px(5.0));
+    }
+
+    #[test]
+    fn negative_padding_and_border_widths_clamp_to_zero() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "padding-left".to_string(),
+                value: PropertyValue::Length(Length::px(-4.0)),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "border-left-width".to_string(),
+                value: PropertyValue::Number(-3.0),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(style.padding_left, Length::px(0.0));
+        assert_eq!(style.border_left_width, Length::px(0.0));
+    }
+
+    #[test]
+    fn negative_border_radius_clamps_to_zero() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "border-radius".to_string(),
+                value: PropertyValue::Length(Length::px(-10.0)),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(style.border_top_left_radius, Length::px(0.0));
+        assert_eq!(style.border_top_right_radius, Length::px(0.0));
+        assert_eq!(style.border_bottom_right_radius, Length::px(0.0));
+        assert_eq!(style.border_bottom_left_radius, Length::px(0.0));
     }
 
     #[test]
@@ -12539,6 +13028,30 @@ mod tests {
     }
 
     #[test]
+    fn font_size_viewport_units_resolve_with_viewport_dimensions() {
+        let mut style = ComputedStyle::default();
+        let viewport = Size::new(1000.0, 500.0);
+
+        let decl = Declaration {
+            property: "font-size".to_string(),
+            value: PropertyValue::Length(parse_length("10vw").unwrap()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration_with_viewport(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0, viewport);
+        assert!((style.font_size - 100.0).abs() < 0.01);
+
+        let vh_decl = Declaration {
+            property: "font-size".to_string(),
+            value: PropertyValue::Length(parse_length("5vh").unwrap()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration_with_viewport(&mut style, &vh_decl, &ComputedStyle::default(), 16.0, 16.0, viewport);
+        assert!((style.font_size - 25.0).abs() < 0.01);
+    }
+
+    #[test]
     fn font_style_oblique_angle_parses_and_ranges() {
         let mut style = ComputedStyle::default();
         let decl = Declaration {
@@ -12635,7 +13148,10 @@ mod tests {
         style.font_variant_numeric.figure = NumericFigure::Oldstyle;
         style.font_variant_east_asian.width = Some(EastAsianWidth::FullWidth);
         style.font_variant_position = FontVariantPosition::Super;
-        style.font_feature_settings.push(FontFeatureSetting { tag: *b"TEST", value: 1 });
+        style.font_feature_settings.push(FontFeatureSetting {
+            tag: *b"TEST",
+            value: 1,
+        });
 
         let decl = Declaration {
             property: "font".to_string(),
@@ -12840,7 +13356,10 @@ mod tests {
 
         assert!(matches!(style.font_variant, FontVariant::SmallCaps));
         assert!(matches!(style.font_variant_caps, FontVariantCaps::AllSmallCaps));
-        assert!(matches!(style.font_variant_numeric.spacing, NumericSpacing::Proportional));
+        assert!(matches!(
+            style.font_variant_numeric.spacing,
+            NumericSpacing::Proportional
+        ));
         assert!(matches!(style.font_variant_position, FontVariantPosition::Super));
     }
 
@@ -13221,7 +13740,10 @@ mod tests {
             important: false,
         };
         apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
-        assert!(matches!(style.font_variant_numeric.spacing, NumericSpacing::Proportional));
+        assert!(matches!(
+            style.font_variant_numeric.spacing,
+            NumericSpacing::Proportional
+        ));
     }
 
     #[test]

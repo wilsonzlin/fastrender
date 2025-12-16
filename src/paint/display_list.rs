@@ -889,7 +889,7 @@ pub struct BorderImageItem {
     /// Slice geometry.
     pub slice: BorderImageSlice,
 
-    /// Target border widths.
+    /// Target border widths (length or percent).
     pub width: BorderImageWidth,
 
     /// Border image outset.
@@ -900,6 +900,15 @@ pub struct BorderImageItem {
 
     /// Current color for resolving `currentColor` stops.
     pub current_color: Rgba,
+
+    /// Font size at the element for resolving font-relative lengths.
+    pub font_size: f32,
+
+    /// Root font size for rem units.
+    pub root_font_size: f32,
+
+    /// Viewport used to resolve viewport-relative units.
+    pub viewport: Option<(f32, f32)>,
 }
 
 /// Border-image source variants.

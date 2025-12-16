@@ -851,6 +851,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_html_preserves_text_content() {
+        let html = "<!doctype html><html><body><div><h1>Example Domain</h1><p>This domain is for use in documentation examples without needing permission.</p></div></body></html>";
+        let dom = parse_html(html).expect("parse");
+        fn contains_text(node: &DomNode, needle: &str) -> bool {
+            match &node.node_type {
+                DomNodeType::Text { content } => content.contains(needle),
+                _ => node.children.iter().any(|c| contains_text(c, needle)),
+            }
+        }
+        assert!(contains_text(&dom, "Example Domain"));
+        assert!(contains_text(&dom, "documentation examples"));
+    }
+
+    #[test]
     fn scope_matches_document_root_only() {
         let child = element("div", vec![]);
         let root = element("html", vec![child.clone()]);

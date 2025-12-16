@@ -108,3 +108,7 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
         Ok(resource)
     }
 }
+
+fn main() {
+    eprintln!("caching_fetcher is a library-only helper; use it by wrapping a ResourceFetcher in code.");
+}

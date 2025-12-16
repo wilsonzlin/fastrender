@@ -331,6 +331,22 @@ fn find_matching_paren(s: &str) -> Option<usize> {
 /// This function attempts to parse the string representation of a CSS value
 /// (as stored in custom properties) into a typed PropertyValue.
 fn parse_resolved_value(value: &str, property_name: &str) -> Option<PropertyValue> {
+    // Property-agnostic resolution keeps the value mostly untyped, but still recognizes numeric lengths.
+    if property_name.is_empty() {
+        let trimmed = value.trim();
+        if let Some(len) = crate::css::properties::parse_length(trimmed) {
+            return Some(PropertyValue::Length(len));
+        }
+        if let Ok(num) = trimmed.parse::<f32>() {
+            return Some(PropertyValue::Number(num));
+        }
+        if trimmed.ends_with('%') {
+            if let Ok(num) = trimmed[..trimmed.len() - 1].parse::<f32>() {
+                return Some(PropertyValue::Percentage(num));
+            }
+        }
+        return Some(PropertyValue::Keyword(trimmed.to_string()));
+    }
     // Use the CSS parser to interpret the value
     parse_property_value(property_name, value)
 }

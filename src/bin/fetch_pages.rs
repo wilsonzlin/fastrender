@@ -74,7 +74,13 @@ fn url_to_filename(url: &str) -> String {
         .trim_start_matches("http://")
         .replace('/', "_")
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '.' || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -90,17 +96,14 @@ fn fetch_page(url: &str) -> Result<Vec<u8>, String> {
         .call()
         .map_err(|e| e.to_string())?;
 
-    response
-        .body_mut()
-        .read_to_vec()
-        .map_err(|e| e.to_string())
+    response.body_mut().read_to_vec().map_err(|e| e.to_string())
 }
 
 fn main() {
     let refresh = std::env::args().any(|a| a == "--refresh");
-    
+
     fs::create_dir_all(CACHE_DIR).expect("create cache dir");
-    
+
     println!("Fetching {} pages (parallel)...", PAGES.len());
     if refresh {
         println!("--refresh: re-fetching all");
@@ -116,17 +119,17 @@ fn main() {
             let success = Arc::clone(&success);
             let failed = Arc::clone(&failed);
             let skipped = Arc::clone(&skipped);
-            
+
             s.spawn(move || {
                 let filename = url_to_filename(url);
                 let cache_path = PathBuf::from(CACHE_DIR).join(format!("{}.html", filename));
-                
+
                 // Skip if cached and not refreshing
                 if !refresh && cache_path.exists() {
                     skipped.fetch_add(1, Ordering::Relaxed);
                     return;
                 }
-                
+
                 match fetch_page(url) {
                     Ok(bytes) => {
                         if let Ok(mut f) = fs::File::create(&cache_path) {

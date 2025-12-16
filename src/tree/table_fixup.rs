@@ -213,7 +213,9 @@ impl TableStructureFixer {
                 anonymous_type: AnonymousType::TableRow,
             }),
             children: cells,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -227,7 +229,9 @@ impl TableStructureFixer {
                 anonymous_type: AnonymousType::TableRowGroup,
             }),
             children: rows,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -241,7 +245,9 @@ impl TableStructureFixer {
                 anonymous_type: AnonymousType::TableCell,
             }),
             children,
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -255,7 +261,9 @@ impl TableStructureFixer {
                 anonymous_type: AnonymousType::TableWrapper,
             }),
             children: vec![table],
+            id: 0,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -578,8 +586,10 @@ mod tests {
             box_type: BoxType::Block(BlockBox {
                 formatting_context: FormattingContextType::Block,
             }),
+            id: 0,
             children: cells,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -590,8 +600,10 @@ mod tests {
             box_type: BoxType::Block(BlockBox {
                 formatting_context: FormattingContextType::Block,
             }),
+            id: 0,
             children: content,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -602,8 +614,10 @@ mod tests {
             box_type: BoxType::Block(BlockBox {
                 formatting_context: FormattingContextType::Block,
             }),
+            id: 0,
             children: rows,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 
@@ -614,8 +628,10 @@ mod tests {
             box_type: BoxType::Block(BlockBox {
                 formatting_context: FormattingContextType::Block,
             }),
+            id: 0,
             children: content,
             debug_info: None,
+            styled_node_id: None,
         }
     }
 

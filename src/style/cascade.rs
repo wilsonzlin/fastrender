@@ -8,21 +8,106 @@
 
 use crate::css::parser::{parse_declarations, parse_stylesheet};
 use crate::css::selectors::{PseudoElement, TextDirection};
-use crate::css::types::CssImportLoader;
-use crate::css::types::{Declaration, StyleRule, StyleSheet};
+use crate::css::types::{ContainerCondition, CssImportLoader, Declaration, StyleRule, StyleSheet};
 use crate::dom::{resolve_first_strong_direction, with_target_fragment, DomNode, ElementRef};
+use crate::geometry::Size;
 use crate::style::defaults::{get_default_styles_for_element, parse_color_attribute, parse_dimension_attribute};
 use crate::style::display::Display;
 use crate::style::grid::finalize_grid_placement;
 use crate::style::media::MediaContext;
 use crate::style::properties::{apply_declaration_with_base, resolve_pending_logical_properties, with_image_set_dpr};
-use crate::style::{normalize_language_tag, ComputedStyle};
+use crate::style::types::ContainerType;
+use crate::style::values::{Length, LengthUnit};
+use crate::style::{normalize_language_tag, ComputedStyle, Direction};
 use selectors::context::{QuirksMode, SelectorCaches};
 use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
-use std::collections::HashMap;
+use selectors::parser::Selector;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
+use std::time::Instant;
 
 /// User-agent stylesheet containing default browser styles
 const USER_AGENT_STYLESHEET: &str = include_str!("../user_agent.css");
+
+// Optional cascade profiling for large-page performance analysis.
+// Enable with FASTR_CASCADE_PROFILE=1.
+static CASCADE_PROFILE_NODES: AtomicU64 = AtomicU64::new(0);
+static CASCADE_PROFILE_RULE_CANDIDATES: AtomicU64 = AtomicU64::new(0);
+static CASCADE_PROFILE_RULE_MATCHES: AtomicU64 = AtomicU64::new(0);
+static CASCADE_PROFILE_FIND_TIME_NS: AtomicU64 = AtomicU64::new(0);
+static CASCADE_PROFILE_DECL_TIME_NS: AtomicU64 = AtomicU64::new(0);
+static CASCADE_PROFILE_PSEUDO_TIME_NS: AtomicU64 = AtomicU64::new(0);
+static CASCADE_PROFILE_ENABLED: OnceLock<bool> = OnceLock::new();
+
+fn cascade_profile_enabled() -> bool {
+    *CASCADE_PROFILE_ENABLED.get_or_init(|| {
+        std::env::var("FASTR_CASCADE_PROFILE")
+            .map(|v| v != "0")
+            .unwrap_or(false)
+    })
+}
+
+fn reset_cascade_profile() {
+    CASCADE_PROFILE_NODES.store(0, Ordering::Relaxed);
+    CASCADE_PROFILE_RULE_CANDIDATES.store(0, Ordering::Relaxed);
+    CASCADE_PROFILE_RULE_MATCHES.store(0, Ordering::Relaxed);
+    CASCADE_PROFILE_FIND_TIME_NS.store(0, Ordering::Relaxed);
+    CASCADE_PROFILE_DECL_TIME_NS.store(0, Ordering::Relaxed);
+    CASCADE_PROFILE_PSEUDO_TIME_NS.store(0, Ordering::Relaxed);
+}
+
+fn log_cascade_profile(elapsed_ms: f64) {
+    let nodes = CASCADE_PROFILE_NODES.load(Ordering::Relaxed);
+    let candidates = CASCADE_PROFILE_RULE_CANDIDATES.load(Ordering::Relaxed);
+    let matches = CASCADE_PROFILE_RULE_MATCHES.load(Ordering::Relaxed);
+    let find_time_ns = CASCADE_PROFILE_FIND_TIME_NS.load(Ordering::Relaxed);
+    let decl_time_ns = CASCADE_PROFILE_DECL_TIME_NS.load(Ordering::Relaxed);
+    let pseudo_time_ns = CASCADE_PROFILE_PSEUDO_TIME_NS.load(Ordering::Relaxed);
+    let find_ms = find_time_ns as f64 / 1_000_000.0;
+    let decl_ms = decl_time_ns as f64 / 1_000_000.0;
+    let pseudo_ms = pseudo_time_ns as f64 / 1_000_000.0;
+    let avg_candidates = if nodes > 0 {
+        candidates as f64 / nodes as f64
+    } else {
+        0.0
+    };
+    let avg_matches = if nodes > 0 { matches as f64 / nodes as f64 } else { 0.0 };
+    eprintln!(
+        "cascade profile: total_ms={:.2} nodes={} candidates={} matches={} avg_candidates={:.1} avg_matches={:.1} find_ms={:.2} decl_ms={:.2} pseudo_ms={:.2}",
+        elapsed_ms, nodes, candidates, matches, avg_candidates, avg_matches, find_ms, decl_ms, pseudo_ms
+    );
+}
+
+fn record_node_visit(node: &DomNode) {
+    if cascade_profile_enabled() && node.is_element() {
+        CASCADE_PROFILE_NODES.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn record_matching_stats(candidates: usize, matches: usize, elapsed: Option<std::time::Duration>) {
+    if !cascade_profile_enabled() {
+        return;
+    }
+    CASCADE_PROFILE_RULE_CANDIDATES.fetch_add(candidates as u64, Ordering::Relaxed);
+    CASCADE_PROFILE_RULE_MATCHES.fetch_add(matches as u64, Ordering::Relaxed);
+    if let Some(dur) = elapsed {
+        CASCADE_PROFILE_FIND_TIME_NS.fetch_add(dur.as_nanos() as u64, Ordering::Relaxed);
+    }
+}
+
+fn record_declaration_time(elapsed: std::time::Duration) {
+    if cascade_profile_enabled() {
+        CASCADE_PROFILE_DECL_TIME_NS.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
+    }
+}
+
+fn record_pseudo_time(elapsed: std::time::Duration) {
+    if cascade_profile_enabled() {
+        CASCADE_PROFILE_PSEUDO_TIME_NS.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
+    }
+}
 
 /// The origin of a style rule for cascade ordering.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -48,27 +133,269 @@ struct CascadeRule<'a> {
     order: usize,
     rule: &'a StyleRule,
     layer_order: Vec<u32>,
+    container_conditions: Vec<ContainerCondition>,
+}
+
+/// Simple index over the rightmost compound selector to prune rule matching.
+struct IndexedSelector<'a> {
+    rule_idx: usize,
+    selector: &'a Selector<crate::css::selectors::FastRenderSelectorImpl>,
+    specificity: u32,
+}
+
+struct PseudoBuckets {
+    by_id: HashMap<String, Vec<usize>>,
+    by_class: HashMap<String, Vec<usize>>,
+    by_tag: HashMap<String, Vec<usize>>,
+    by_attr: HashMap<String, Vec<usize>>,
+    universal: Vec<usize>,
+}
+
+impl PseudoBuckets {
+    fn new() -> Self {
+        Self {
+            by_id: HashMap::new(),
+            by_class: HashMap::new(),
+            by_tag: HashMap::new(),
+            by_attr: HashMap::new(),
+            universal: Vec::new(),
+        }
+    }
+}
+
+struct RuleIndex<'a> {
+    rules: Vec<CascadeRule<'a>>,
+    selectors: Vec<IndexedSelector<'a>>,
+    by_id: HashMap<String, Vec<usize>>,
+    by_class: HashMap<String, Vec<usize>>,
+    by_tag: HashMap<String, Vec<usize>>,
+    by_attr: HashMap<String, Vec<usize>>,
+    universal: Vec<usize>,
+    pseudo_selectors: Vec<IndexedSelector<'a>>,
+    pseudo_buckets: HashMap<PseudoElement, PseudoBuckets>,
+}
+
+fn selector_key(selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>) -> SelectorKey {
+    use selectors::parser::Component;
+
+    let mut id: Option<String> = None;
+    let mut class: Option<String> = None;
+    let mut tag: Option<String> = None;
+    let mut attr: Option<String> = None;
+
+    let mut iter = selector.iter();
+    loop {
+        if let Some(component) = iter.next() {
+            match component {
+                Component::ID(ident) => id = Some(ident.0.clone()),
+                Component::Class(cls) => class = Some(cls.0.clone()),
+                Component::LocalName(local) => tag = Some(local.lower_name.0.clone()),
+                Component::AttributeInNoNamespaceExists { local_name_lower, .. } => {
+                    attr.get_or_insert(local_name_lower.0.clone());
+                }
+                Component::AttributeInNoNamespace { local_name, .. } => {
+                    attr.get_or_insert(local_name.0.clone());
+                }
+                Component::AttributeOther(other) => {
+                    if other.namespace.is_none() {
+                        attr.get_or_insert(other.local_name_lower.0.clone());
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+        // Finished the rightmost sequence; stop before traversing combinators.
+        let _ = iter.next_sequence();
+        break;
+    }
+
+    if let Some(id) = id {
+        SelectorKey::Id(id)
+    } else if let Some(cls) = class {
+        SelectorKey::Class(cls)
+    } else if let Some(tag) = tag {
+        SelectorKey::Tag(tag)
+    } else if let Some(attr) = attr {
+        SelectorKey::Attribute(attr)
+    } else {
+        SelectorKey::Universal
+    }
+}
+
+#[derive(Debug)]
+enum SelectorKey {
+    Id(String),
+    Class(String),
+    Tag(String),
+    Attribute(String),
+    Universal,
+}
+
+impl<'a> RuleIndex<'a> {
+    fn new(rules: Vec<CascadeRule<'a>>) -> Self {
+        let mut index = RuleIndex {
+            rules: Vec::new(),
+            selectors: Vec::new(),
+            by_id: HashMap::new(),
+            by_class: HashMap::new(),
+            by_tag: HashMap::new(),
+            by_attr: HashMap::new(),
+            universal: Vec::new(),
+            pseudo_selectors: Vec::new(),
+            pseudo_buckets: HashMap::new(),
+        };
+
+        for rule in rules {
+            let rule_idx = index.rules.len();
+            index.rules.push(rule);
+            let stored_rule = &index.rules[rule_idx];
+
+            for selector in stored_rule.rule.selectors.slice().iter() {
+                if let Some(pe) = selector.pseudo_element() {
+                    let bucket = index
+                        .pseudo_buckets
+                        .entry(pe.clone())
+                        .or_insert_with(PseudoBuckets::new);
+                    let selector_idx = index.pseudo_selectors.len();
+                    index.pseudo_selectors.push(IndexedSelector {
+                        rule_idx,
+                        selector,
+                        specificity: selector.specificity(),
+                    });
+                    match selector_key(selector) {
+                        SelectorKey::Id(id) => bucket.by_id.entry(id).or_default().push(selector_idx),
+                        SelectorKey::Class(cls) => bucket.by_class.entry(cls).or_default().push(selector_idx),
+                        SelectorKey::Tag(tag) => bucket.by_tag.entry(tag).or_default().push(selector_idx),
+                        SelectorKey::Attribute(attr) => bucket.by_attr.entry(attr).or_default().push(selector_idx),
+                        SelectorKey::Universal => bucket.universal.push(selector_idx),
+                    }
+                    continue;
+                }
+
+                let selector_idx = index.selectors.len();
+                index.selectors.push(IndexedSelector {
+                    rule_idx,
+                    selector,
+                    specificity: selector.specificity(),
+                });
+                match selector_key(selector) {
+                    SelectorKey::Id(id) => index.by_id.entry(id).or_default().push(selector_idx),
+                    SelectorKey::Class(cls) => index.by_class.entry(cls).or_default().push(selector_idx),
+                    SelectorKey::Tag(tag) => index.by_tag.entry(tag).or_default().push(selector_idx),
+                    SelectorKey::Attribute(attr) => index.by_attr.entry(attr).or_default().push(selector_idx),
+                    SelectorKey::Universal => index.universal.push(selector_idx),
+                }
+            }
+        }
+
+        index
+    }
+
+    fn has_pseudo_rules(&self, pseudo: &PseudoElement) -> bool {
+        self.pseudo_buckets.contains_key(pseudo)
+    }
+
+    fn selector_candidates(&self, node: &DomNode, out: &mut Vec<usize>) {
+        out.clear();
+        if !node.is_element() {
+            return;
+        }
+
+        if let Some(id) = node.get_attribute("id") {
+            if let Some(list) = self.by_id.get(&id) {
+                out.extend(list.iter().copied());
+            }
+        }
+
+        if let Some(class_attr) = node.get_attribute("class") {
+            for cls in class_attr.split_whitespace() {
+                if !cls.is_empty() {
+                    if let Some(list) = self.by_class.get(cls) {
+                        out.extend(list.iter().copied());
+                    }
+                }
+            }
+        }
+
+        if let Some(tag) = node.tag_name() {
+            if let Some(list) = self.by_tag.get(tag) {
+                out.extend(list.iter().copied());
+            }
+        }
+
+        for (name, _) in node.attributes_iter() {
+            let key = name.to_ascii_lowercase();
+            if let Some(list) = self.by_attr.get(&key) {
+                out.extend(list.iter().copied());
+            }
+        }
+
+        out.extend(self.universal.iter().copied());
+    }
+
+    fn pseudo_candidates(&self, node: &DomNode, pseudo: &PseudoElement, out: &mut Vec<usize>) {
+        out.clear();
+        if !node.is_element() {
+            return;
+        }
+
+        let Some(bucket) = self.pseudo_buckets.get(pseudo) else {
+            return;
+        };
+
+        if let Some(id) = node.get_attribute("id") {
+            if let Some(list) = bucket.by_id.get(&id) {
+                out.extend(list.iter().copied());
+            }
+        }
+
+        if let Some(class_attr) = node.get_attribute("class") {
+            for cls in class_attr.split_whitespace() {
+                if !cls.is_empty() {
+                    if let Some(list) = bucket.by_class.get(cls) {
+                        out.extend(list.iter().copied());
+                    }
+                }
+            }
+        }
+
+        if let Some(tag) = node.tag_name() {
+            if let Some(list) = bucket.by_tag.get(tag) {
+                out.extend(list.iter().copied());
+            }
+        }
+
+        for (name, _) in node.attributes_iter() {
+            let key = name.to_ascii_lowercase();
+            if let Some(list) = bucket.by_attr.get(&key) {
+                out.extend(list.iter().copied());
+            }
+        }
+
+        out.extend(bucket.universal.iter().copied());
+    }
 }
 
 /// A matched rule with the specificity of the selector that applied.
 #[derive(Clone)]
-struct MatchedRule {
+struct MatchedRule<'a> {
     origin: StyleOrigin,
     specificity: u32,
     order: usize,
     layer_order: Vec<u32>,
-    declarations: Vec<Declaration>,
+    declarations: Cow<'a, [Declaration]>,
 }
 
 /// A single declaration annotated with cascade ordering keys.
-struct MatchedDeclaration {
+struct MatchedDeclaration<'a> {
     important: bool,
     origin: StyleOrigin,
     specificity: u32,
     rule_order: usize,
     decl_order: usize,
     layer_order: Vec<u32>,
-    declaration: Declaration,
+    declaration: Cow<'a, Declaration>,
 }
 
 const INLINE_SPECIFICITY: u32 = 1 << 30;
@@ -77,6 +404,8 @@ const INLINE_RULE_ORDER: usize = usize::MAX / 2;
 /// A styled DOM node with computed CSS styles
 #[derive(Debug, Clone)]
 pub struct StyledNode {
+    /// Stable identifier for this node within the DOM traversal (pre-order index).
+    pub node_id: usize,
     pub node: DomNode,
     pub styles: ComputedStyle,
     /// Styles for ::before pseudo-element (if content is set)
@@ -86,6 +415,91 @@ pub struct StyledNode {
     /// Styles for ::marker pseudo-element (list items only)
     pub marker_styles: Option<ComputedStyle>,
     pub children: Vec<StyledNode>,
+}
+
+fn count_styled_nodes(node: &StyledNode) -> usize {
+    1 + node.children.iter().map(count_styled_nodes).sum::<usize>()
+}
+
+/// Captured container size and metadata for container query evaluation.
+#[derive(Debug, Clone)]
+pub struct ContainerQueryInfo {
+    pub inline_size: f32,
+    pub block_size: f32,
+    pub container_type: ContainerType,
+    pub names: Vec<String>,
+    pub font_size: f32,
+}
+
+/// Map of styled-node ids to their resolved container query metrics.
+#[derive(Debug, Clone)]
+pub struct ContainerQueryContext {
+    pub base_media: MediaContext,
+    pub containers: HashMap<usize, ContainerQueryInfo>,
+}
+
+impl ContainerQueryContext {
+    /// Returns true when all container conditions match against the nearest qualifying containers.
+    pub fn matches(&self, node_id: usize, ancestor_ids: &[usize], conditions: &[ContainerCondition]) -> bool {
+        if conditions.is_empty() {
+            return true;
+        }
+
+        for condition in conditions {
+            let container = match self.find_container(node_id, ancestor_ids, condition) {
+                Some(info) => info,
+                None => return false,
+            };
+
+            let mut ctx = self.base_media.clone();
+            ctx.viewport_width = container.inline_size;
+            ctx.viewport_height = match container.container_type {
+                ContainerType::InlineSize => f32::NAN,
+                _ => container.block_size,
+            };
+            ctx.base_font_size = container.font_size;
+            if !ctx.evaluate(&condition.query) {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn find_container<'a>(
+        &'a self,
+        node_id: usize,
+        ancestor_ids: &[usize],
+        condition: &ContainerCondition,
+    ) -> Option<&'a ContainerQueryInfo> {
+        // Per spec the query container is the nearest ancestor that establishes a container;
+        // allow the current element itself if it is a container.
+        let mut search: Vec<usize> = Vec::with_capacity(ancestor_ids.len() + 1);
+        search.extend_from_slice(ancestor_ids);
+        search.push(node_id);
+
+        for &candidate in search.iter().rev() {
+            let info = match self.containers.get(&candidate) {
+                Some(info) => info,
+                None => continue,
+            };
+
+            match info.container_type {
+                ContainerType::Size | ContainerType::InlineSize => {}
+                _ => continue,
+            }
+
+            if let Some(name) = &condition.name {
+                if !info.names.iter().any(|n| n == name) {
+                    continue;
+                }
+            }
+
+            return Some(info);
+        }
+
+        None
+    }
 }
 
 /// Apply styles to a DOM tree with default viewport (desktop)
@@ -117,7 +531,17 @@ pub fn apply_styles_with_media_and_target(
     media_ctx: &MediaContext,
     target_fragment: Option<&str>,
 ) -> StyledNode {
-    apply_styles_with_media_target_and_imports(dom, stylesheet, media_ctx, target_fragment, None, None::<&str>)
+    apply_styles_with_media_target_and_imports(
+        dom,
+        stylesheet,
+        media_ctx,
+        target_fragment,
+        None,
+        None::<&str>,
+        None,
+        None,
+        None,
+    )
 }
 
 /// Apply styles with media context, optional :target, and optional import loader/base URL.
@@ -128,7 +552,20 @@ pub fn apply_styles_with_media_target_and_imports(
     target_fragment: Option<&str>,
     import_loader: Option<&dyn CssImportLoader>,
     base_url: Option<&str>,
+    container_ctx: Option<&ContainerQueryContext>,
+    container_scope: Option<&HashSet<usize>>,
+    reuse_map: Option<&HashMap<usize, *const StyledNode>>,
 ) -> StyledNode {
+    let profile_enabled = cascade_profile_enabled();
+    let profile_start = profile_enabled.then(|| Instant::now());
+    if profile_enabled {
+        reset_cascade_profile();
+    }
+    let log_reuse = std::env::var("FASTR_LOG_CONTAINER_REUSE")
+        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+        .unwrap_or(false);
+    let mut reuse_counter: usize = 0;
+
     // Parse user-agent stylesheet
     let ua_stylesheet = parse_stylesheet(USER_AGENT_STYLESHEET).unwrap_or_else(|_| StyleSheet::new());
 
@@ -151,6 +588,7 @@ pub fn apply_styles_with_media_target_and_imports(
             order,
             rule: rule.rule,
             layer_order: rule.layer_order.clone(),
+            container_conditions: rule.container_conditions.clone(),
         });
     }
     let offset = all_rules.len();
@@ -160,41 +598,289 @@ pub fn apply_styles_with_media_target_and_imports(
             order: offset + idx,
             rule: rule.rule,
             layer_order: rule.layer_order.clone(),
+            container_conditions: rule.container_conditions.clone(),
         });
     }
 
-    with_target_fragment(target_fragment, || {
+    let rule_index = RuleIndex::new(all_rules);
+    let styled = with_target_fragment(target_fragment, || {
         with_image_set_dpr(media_ctx.device_pixel_ratio, || {
+            let mut selector_caches = SelectorCaches::default();
+            let mut node_counter: usize = 1;
+            let mut ancestor_ids: Vec<usize> = Vec::new();
+            let mut reuse_counter_opt = if container_scope.is_some() || reuse_map.is_some() {
+                Some(&mut reuse_counter)
+            } else {
+                None
+            };
             apply_styles_internal(
                 dom,
-                &all_rules,
+                &rule_index,
+                &mut selector_caches,
                 &ComputedStyle::default(),
                 &ComputedStyle::default(),
                 16.0,
                 16.0,
+                Size::new(media_ctx.viewport_width, media_ctx.viewport_height),
+                &mut node_counter,
+                &mut ancestor_ids,
+                container_ctx,
+                container_scope,
+                reuse_map,
+                reuse_counter_opt.as_deref_mut(),
             )
         })
-    })
+    });
+
+    if let (true, Some(start)) = (profile_enabled, profile_start) {
+        log_cascade_profile(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    if log_reuse {
+        fn count_nodes(node: &StyledNode) -> usize {
+            1 + node.children.iter().map(count_nodes).sum::<usize>()
+        }
+        let total = count_nodes(&styled);
+        eprintln!(
+            "[container-reuse] total_nodes={} reused_nodes={} reused_pct={:.1}%",
+            total,
+            reuse_counter,
+            if total > 0 {
+                (reuse_counter as f64 / total as f64) * 100.0
+            } else {
+                0.0
+            }
+        );
+    }
+
+    styled
+}
+
+fn append_presentational_hints<'a>(
+    node: &DomNode,
+    ancestors: &[&DomNode],
+    parent_direction: Direction,
+    matching_rules: &mut Vec<MatchedRule<'a>>,
+) {
+    if let Some(presentational_rule) = dir_presentational_hint(node, parent_direction, 0) {
+        matching_rules.push(presentational_rule);
+    }
+    if let Some(presentational_rule) = list_type_presentational_hint(node, 1) {
+        matching_rules.push(presentational_rule);
+    }
+    if let Some(presentational_rule) = alignment_presentational_hint(node, 2) {
+        matching_rules.push(presentational_rule);
+    }
+    if let Some(presentational_rule) = dimension_presentational_hint(node, 3) {
+        matching_rules.push(presentational_rule);
+    }
+    if let Some(presentational_rule) = bgcolor_presentational_hint(node, 4) {
+        matching_rules.push(presentational_rule);
+    }
+    if let Some(presentational_rule) = border_presentational_hint(node, ancestors, 5) {
+        matching_rules.push(presentational_rule);
+    }
+    if let Some(presentational_rule) = bordercolor_presentational_hint(node, 6) {
+        matching_rules.push(presentational_rule);
+    }
+    if let Some(presentational_rule) = cellspacing_presentational_hint(node, 7) {
+        matching_rules.push(presentational_rule);
+    }
+    if let Some(presentational_rule) = cellpadding_presentational_hint(node, ancestors, 8) {
+        matching_rules.push(presentational_rule);
+    }
+    if let Some(presentational_rule) = replaced_alignment_presentational_hint(node, 9) {
+        matching_rules.push(presentational_rule);
+    }
+}
+
+fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedRule<'static>> {
+    let mut rules = Vec::new();
+    let tag = match node.tag_name() {
+        Some(t) => t.to_ascii_lowercase(),
+        None => return rules,
+    };
+
+    let mut add_rule = |css: &str, order: usize| {
+        rules.push(MatchedRule {
+            origin: StyleOrigin::UserAgent,
+            specificity: 1, // tag selector specificity
+            order,
+            layer_order: vec![u32::MAX],
+            declarations: Cow::Owned(parse_declarations(css)),
+        })
+    };
+
+    match tag.as_str() {
+        "a" if node.get_attribute("href").is_some() => {
+            add_rule("color: rgb(0, 0, 238); text-decoration: underline; cursor: pointer;", 0);
+        }
+        "bdi" if node.get_attribute("dir").is_none() => {
+            let resolved = resolve_first_strong_direction(node).map(|d| match d {
+                TextDirection::Ltr => crate::style::types::Direction::Ltr,
+                TextDirection::Rtl => crate::style::types::Direction::Rtl,
+            });
+            let dir_value = match resolved.unwrap_or(parent_direction) {
+                crate::style::types::Direction::Rtl => "rtl",
+                crate::style::types::Direction::Ltr => "ltr",
+            };
+            add_rule(
+                &format!("unicode-bidi: isolate; direction: {};", dir_value),
+                0,
+            );
+        }
+        "bdo" if node.get_attribute("dir").is_none() => {
+            add_rule("unicode-bidi: bidi-override; direction: ltr;", 0);
+        }
+        "h1" => add_rule("font-size: 2em; font-weight: bolder; margin-top: 0.67em; margin-bottom: 0.67em;", 0),
+        "h2" => add_rule("font-size: 1.5em; font-weight: bolder; margin-top: 0.83em; margin-bottom: 0.83em;", 0),
+        "h3" => add_rule("font-size: 1.17em; font-weight: bolder; margin-top: 1em; margin-bottom: 1em;", 0),
+        "h4" => add_rule("font-size: 1em; font-weight: bolder; margin-top: 1.33em; margin-bottom: 1.33em;", 0),
+        "h5" => add_rule("font-size: 0.83em; font-weight: bolder; margin-top: 1.67em; margin-bottom: 1.67em;", 0),
+        "h6" => add_rule("font-size: 0.67em; font-weight: bolder; margin-top: 2.33em; margin-bottom: 2.33em;", 0),
+        "p" => add_rule("margin-top: 1em; margin-bottom: 1em;", 0),
+        "pre" => add_rule(
+            "font-family: monospace; white-space: pre; margin-top: 1em; margin-bottom: 1em;",
+            0,
+        ),
+        "code" | "kbd" | "samp" | "tt" => add_rule("font-family: monospace;", 0),
+        "blockquote" => add_rule(
+            "margin-top: 1em; margin-bottom: 1em; margin-left: 40px; margin-right: 40px;",
+            0,
+        ),
+        "ul" => add_rule(
+            "margin-top: 1em; margin-bottom: 1em; padding-left: 40px; list-style-type: disc;",
+            0,
+        ),
+        "menu" | "dir" => add_rule(
+            "display: block; margin-top: 1em; margin-bottom: 1em; padding-left: 40px; list-style-type: disc;",
+            0,
+        ),
+        "ol" => add_rule(
+            "margin-top: 1em; margin-bottom: 1em; padding-left: 40px; list-style-type: decimal;",
+            0,
+        ),
+        "dd" => add_rule("margin-left: 40px;", 0),
+        "hr" => add_rule(
+            "box-sizing: content-box; height: 1px; margin: 0.5em auto; border: 1px inset; border-color: currentColor; color: gray;",
+            0,
+        ),
+        "small" => add_rule("font-size: smaller;", 0),
+        "big" => add_rule("font-size: larger;", 0),
+        "sub" => add_rule("font-size: smaller; vertical-align: sub;", 0),
+        "sup" => add_rule("font-size: smaller; vertical-align: super;", 0),
+        "mark" => add_rule("background-color: yellow; color: black;", 0),
+        "address" | "cite" | "dfn" | "var" | "em" | "i" => add_rule("font-style: italic;", 0),
+        "ins" => add_rule("text-decoration: underline;", 0),
+        "del" => add_rule("text-decoration: line-through;", 0),
+        "q" => add_rule("quotes: '“' '”' '‘' '’';", 0),
+        "details" => add_rule("display: block;", 0),
+        "summary" => add_rule(
+            "display: list-item; cursor: pointer; list-style-type: disclosure-closed; list-style-position: outside;",
+            0,
+        ),
+        "u" => add_rule("text-decoration: underline;", 0),
+        "s" | "strike" => add_rule("text-decoration: line-through;", 0),
+        "center" => add_rule("text-align: center;", 0),
+        "th" => add_rule("font-weight: bolder; text-align: center;", 0),
+        "option" => add_rule("display: block; white-space: pre;", 0),
+        "optgroup" => add_rule("display: block; white-space: pre; font-weight: bolder;", 0),
+        "fieldset" => add_rule(
+            "display: block; margin: 0.35em 2px 0.625em; padding: 0.35em 0.75em 0.625em; border: 2px groove rgb(192, 192, 192);",
+            0,
+        ),
+        "legend" => add_rule("display: block; padding-left: 2px; padding-right: 2px;", 0),
+        "textarea" => {
+            add_rule(
+                "font: inherit; color: inherit; border: 2px inset rgb(204,204,204); background: white; padding: 2px 3px; box-sizing: border-box; display: inline-block; cursor: text;",
+                0,
+            );
+        }
+        "input" => {
+            let input_type = node
+                .get_attribute("type")
+                .map(|t| t.to_ascii_lowercase())
+                .unwrap_or_else(|| "text".to_string());
+            if input_type == "hidden" {
+                rules.push(MatchedRule {
+                    origin: StyleOrigin::UserAgent,
+                    specificity: 11, // input[type=\"hidden\"] should outrank generic UA form rules
+                    order: 0,
+                    layer_order: vec![u32::MAX],
+                    declarations: Cow::Owned(parse_declarations("display: none;")),
+                });
+                return rules;
+            }
+            add_rule(
+                "font: inherit; color: inherit; border: 2px inset rgb(204,204,204); background: white; padding: 2px 3px; box-sizing: border-box; display: inline-block;",
+                0,
+            );
+            if matches!(
+                input_type.as_str(),
+                "text" | "search" | "email" | "url" | "tel" | "password" | "number"
+            ) {
+                add_rule("cursor: text;", 1);
+            } else if matches!(input_type.as_str(), "button" | "submit" | "reset") {
+                add_rule("cursor: pointer;", 1);
+            }
+        }
+        "select" | "button" => add_rule(
+            "font: inherit; color: inherit; border: 2px inset rgb(204,204,204); background: white; padding: 2px 3px; box-sizing: border-box; display: inline-block;",
+            0,
+        ),
+        _ => {}
+    }
+
+    if (tag == "abbr" || tag == "acronym") && node.get_attribute("title").is_some() {
+        add_rule(
+            "border-bottom-width: 1px; border-bottom-style: dotted; border-bottom-color: currentColor; cursor: help;",
+            1,
+        );
+    }
+
+    rules
 }
 
 fn apply_styles_internal(
     node: &DomNode,
-    rules: &[CascadeRule<'_>],
+    rules: &RuleIndex<'_>,
+    selector_caches: &mut SelectorCaches,
     parent_styles: &ComputedStyle,
     parent_ua_styles: &ComputedStyle,
     root_font_size: f32,
     ua_root_font_size: f32,
+    viewport: Size,
+    node_counter: &mut usize,
+    ancestor_ids: &mut Vec<usize>,
+    container_ctx: Option<&ContainerQueryContext>,
+    container_scope: Option<&HashSet<usize>>,
+    reuse_map: Option<&HashMap<usize, *const StyledNode>>,
+    reuse_counter: Option<&mut usize>,
 ) -> StyledNode {
+    record_node_visit(node);
+
     let mut ua_styles = get_default_styles_for_element(node);
     inherit_styles(&mut ua_styles, parent_ua_styles);
 
-    let ancestors: Vec<&DomNode> = vec![];
-    let mut matching_rules = find_matching_rules(node, rules, &ancestors);
-    let ua_matches: Vec<MatchedRule> = matching_rules
+    let mut ancestors: Vec<&DomNode> = Vec::new();
+    let node_id = *node_counter;
+    *node_counter += 1;
+    let mut matching_rules = find_matching_rules(
+        node,
+        rules,
+        selector_caches,
+        &ancestors,
+        ancestor_ids,
+        node_id,
+        container_ctx,
+    );
+    matching_rules.extend(ua_default_rules(node, parent_styles.direction));
+    let ua_matches: Vec<_> = matching_rules
         .iter()
         .filter(|r| r.origin == StyleOrigin::UserAgent)
         .cloned()
         .collect();
+    let prof = cascade_profile_enabled();
+    let decl_start = prof.then(|| Instant::now());
     apply_cascaded_declarations(
         &mut ua_styles,
         ua_matches,
@@ -202,9 +888,13 @@ fn apply_styles_internal(
         parent_ua_styles,
         parent_ua_styles.font_size,
         ua_root_font_size,
+        viewport,
         &ComputedStyle::default(),
         |_| true,
     );
+    if let (true, Some(start)) = (prof, decl_start) {
+        record_declaration_time(start.elapsed());
+    }
 
     if let Some(lang) = node
         .get_attribute("lang")
@@ -227,6 +917,8 @@ fn apply_styles_internal(
         ua_root_font_size
     };
     ua_styles.root_font_size = current_ua_root_font_size;
+    resolve_line_height_length(&mut ua_styles, viewport);
+    resolve_absolute_lengths(&mut ua_styles, current_ua_root_font_size, viewport);
 
     let mut styles = get_default_styles_for_element(node);
 
@@ -234,16 +926,9 @@ fn apply_styles_internal(
     inherit_styles(&mut styles, parent_styles);
 
     // Apply matching CSS rules and inline styles with full cascade ordering
-    if let Some(presentational_rule) = dir_presentational_hint(node, 0) {
-        matching_rules.push(presentational_rule);
-    }
-    if let Some(presentational_rule) = list_type_presentational_hint(node, 1) {
-        matching_rules.push(presentational_rule);
-    }
-    if let Some(presentational_rule) = alignment_presentational_hint(node, 2) {
-        matching_rules.push(presentational_rule);
-    }
+    append_presentational_hints(node, ancestors.as_slice(), parent_styles.direction, &mut matching_rules);
     let inline_decls = node.get_attribute("style").as_deref().map(parse_declarations);
+    let decl_start = prof.then(|| Instant::now());
     apply_cascaded_declarations(
         &mut styles,
         matching_rules,
@@ -251,9 +936,13 @@ fn apply_styles_internal(
         parent_styles,
         parent_styles.font_size,
         root_font_size,
+        viewport,
         &ua_styles,
         |_| true,
     );
+    if let (true, Some(start)) = (prof, decl_start) {
+        record_declaration_time(start.elapsed());
+    }
 
     // Apply language from attributes (inherits by default)
     if let Some(lang) = node
@@ -275,58 +964,88 @@ fn apply_styles_internal(
     let is_root = ancestors.is_empty();
     let current_root_font_size = if is_root { styles.font_size } else { root_font_size };
     styles.root_font_size = current_root_font_size;
+    resolve_line_height_length(&mut styles, viewport);
 
     // Compute pseudo-element styles
-    let before_styles = compute_pseudo_element_styles(
-        node,
-        rules,
-        &ancestors,
-        &styles,
-        &ua_styles,
-        current_root_font_size,
-        current_ua_root_font_size,
-        &PseudoElement::Before,
-    );
-    let after_styles = compute_pseudo_element_styles(
-        node,
-        rules,
-        &ancestors,
-        &styles,
-        &ua_styles,
-        current_root_font_size,
-        current_ua_root_font_size,
-        &PseudoElement::After,
-    );
+    let pseudo_start = prof.then(|| Instant::now());
+    let before_styles = if rules.has_pseudo_rules(&PseudoElement::Before) {
+        compute_pseudo_element_styles(
+            node,
+            rules,
+            selector_caches,
+            ancestors.as_slice(),
+            &styles,
+            &ua_styles,
+            current_root_font_size,
+            current_ua_root_font_size,
+            viewport,
+            &PseudoElement::Before,
+        )
+    } else {
+        None
+    };
+    let after_styles = if rules.has_pseudo_rules(&PseudoElement::After) {
+        compute_pseudo_element_styles(
+            node,
+            rules,
+            selector_caches,
+            ancestors.as_slice(),
+            &styles,
+            &ua_styles,
+            current_root_font_size,
+            current_ua_root_font_size,
+            viewport,
+            &PseudoElement::After,
+        )
+    } else {
+        None
+    };
     let marker_styles = compute_marker_styles(
         node,
         rules,
-        &ancestors,
+        selector_caches,
+        ancestors.as_slice(),
         &styles,
         &ua_styles,
         current_root_font_size,
         current_ua_root_font_size,
+        viewport,
     );
+    if let (true, Some(start)) = (prof, pseudo_start) {
+        record_pseudo_time(start.elapsed());
+    }
 
     // Recursively style children (passing current node in ancestors)
-    let mut new_ancestors = ancestors.clone();
-    new_ancestors.push(node);
-    let children = node
-        .children
-        .iter()
-        .map(|child| {
-            apply_styles_internal_with_ancestors(
-                child,
-                rules,
-                &styles,
-                &ua_styles,
-                current_root_font_size,
-                current_ua_root_font_size,
-                &new_ancestors,
-            )
-        })
-        .collect();
+    let mut children = Vec::with_capacity(node.children.len());
+    let mut reuse_counter = reuse_counter;
+    ancestors.push(node);
+    ancestor_ids.push(node_id);
+    for child in &node.children {
+        let child_reuse = reuse_counter.as_deref_mut();
+        let child_styled = apply_styles_internal_with_ancestors(
+            child,
+            rules,
+            selector_caches,
+            &styles,
+            &ua_styles,
+            current_root_font_size,
+            current_ua_root_font_size,
+            viewport,
+            &mut ancestors,
+            node_counter,
+            ancestor_ids,
+            container_ctx,
+            container_scope,
+            reuse_map,
+            child_reuse,
+        );
+        children.push(child_styled);
+    }
+    ancestors.pop();
+    ancestor_ids.pop();
 
     StyledNode {
+        node_id,
         node: node.clone(),
         styles,
         before_styles,
@@ -336,24 +1055,74 @@ fn apply_styles_internal(
     }
 }
 
-fn apply_styles_internal_with_ancestors(
-    node: &DomNode,
-    rules: &[CascadeRule<'_>],
+fn apply_styles_internal_with_ancestors<'a>(
+    node: &'a DomNode,
+    rules: &RuleIndex<'_>,
+    selector_caches: &mut SelectorCaches,
     parent_styles: &ComputedStyle,
     parent_ua_styles: &ComputedStyle,
     root_font_size: f32,
     ua_root_font_size: f32,
-    ancestors: &[&DomNode],
+    viewport: Size,
+    ancestors: &mut Vec<&'a DomNode>,
+    node_counter: &mut usize,
+    ancestor_ids: &mut Vec<usize>,
+    container_ctx: Option<&ContainerQueryContext>,
+    container_scope: Option<&HashSet<usize>>,
+    reuse_map: Option<&HashMap<usize, *const StyledNode>>,
+    reuse_counter: Option<&mut usize>,
 ) -> StyledNode {
+    record_node_visit(node);
+
     let mut ua_styles = get_default_styles_for_element(node);
     inherit_styles(&mut ua_styles, parent_ua_styles);
 
-    let mut matching_rules = find_matching_rules(node, rules, ancestors);
-    let ua_matches: Vec<MatchedRule> = matching_rules
+    let node_id = *node_counter;
+    *node_counter += 1;
+
+    // If this node lies outside any container scope during a container-query recascade,
+    // reuse the prior styled subtree to avoid recomputing unaffected branches.
+    if let (Some(scope), Some(map)) = (container_scope, reuse_map) {
+        if !scope.contains(&node_id) {
+            if let Some(ptr) = map.get(&node_id) {
+                // Safety: pointers are produced from the previous styled tree, which is
+                // alive for the duration of this call. We clone to produce an owned subtree.
+                // This bypasses rule matching and recursion for unaffected nodes.
+                let reused_ref = unsafe { &**ptr };
+                let reused_size = count_styled_nodes(reused_ref);
+                if reused_size > 1 {
+                    // Advance the traversal counter so sibling nodes keep the same ids
+                    // they had in the first cascade, maintaining alignment with the
+                    // reuse map and container scope built from that pass.
+                    let advance = reused_size.saturating_sub(1);
+                    *node_counter = (*node_counter).saturating_add(advance);
+                }
+                let reused = reused_ref.clone();
+                if let Some(counter) = reuse_counter {
+                    *counter += reused_size;
+                }
+                return reused;
+            }
+        }
+    }
+
+    let mut matching_rules = find_matching_rules(
+        node,
+        rules,
+        selector_caches,
+        ancestors.as_slice(),
+        ancestor_ids,
+        node_id,
+        container_ctx,
+    );
+    matching_rules.extend(ua_default_rules(node, parent_styles.direction));
+    let ua_matches: Vec<_> = matching_rules
         .iter()
         .filter(|r| r.origin == StyleOrigin::UserAgent)
         .cloned()
         .collect();
+    let prof = cascade_profile_enabled();
+    let decl_start = prof.then(|| Instant::now());
     apply_cascaded_declarations(
         &mut ua_styles,
         ua_matches,
@@ -361,9 +1130,13 @@ fn apply_styles_internal_with_ancestors(
         parent_ua_styles,
         parent_ua_styles.font_size,
         ua_root_font_size,
+        viewport,
         &ComputedStyle::default(),
         |_| true,
     );
+    if let (true, Some(start)) = (prof, decl_start) {
+        record_declaration_time(start.elapsed());
+    }
 
     if let Some(lang) = node
         .get_attribute("lang")
@@ -386,6 +1159,7 @@ fn apply_styles_internal_with_ancestors(
         ua_root_font_size
     };
     ua_styles.root_font_size = current_ua_root_font_size;
+    resolve_line_height_length(&mut ua_styles, viewport);
 
     let mut styles = get_default_styles_for_element(node);
 
@@ -393,16 +1167,9 @@ fn apply_styles_internal_with_ancestors(
     inherit_styles(&mut styles, parent_styles);
 
     // Apply matching CSS rules and inline styles with full cascade ordering
-    if let Some(presentational_rule) = dir_presentational_hint(node, 0) {
-        matching_rules.push(presentational_rule);
-    }
-    if let Some(presentational_rule) = list_type_presentational_hint(node, 1) {
-        matching_rules.push(presentational_rule);
-    }
-    if let Some(presentational_rule) = alignment_presentational_hint(node, 2) {
-        matching_rules.push(presentational_rule);
-    }
+    append_presentational_hints(node, ancestors.as_slice(), parent_styles.direction, &mut matching_rules);
     let inline_decls = node.get_attribute("style").as_deref().map(parse_declarations);
+    let decl_start = prof.then(|| Instant::now());
     apply_cascaded_declarations(
         &mut styles,
         matching_rules,
@@ -410,29 +1177,12 @@ fn apply_styles_internal_with_ancestors(
         parent_styles,
         parent_styles.font_size,
         root_font_size,
+        viewport,
         &ua_styles,
         |_| true,
     );
-
-    // Parse legacy HTML presentation attributes (bgcolor, width, height, etc.)
-    if let Some(bgcolor) = node.get_attribute("bgcolor") {
-        if let Some(color) = parse_color_attribute(&bgcolor) {
-            styles.background_color = color;
-        }
-    }
-
-    // Parse width attribute (can be pixels like "18" or percentage like "85%")
-    if let Some(width_str) = node.get_attribute("width") {
-        if let Some(width) = parse_dimension_attribute(&width_str) {
-            styles.width = Some(width);
-        }
-    }
-
-    // Parse height attribute
-    if let Some(height_str) = node.get_attribute("height") {
-        if let Some(height) = parse_dimension_attribute(&height_str) {
-            styles.height = Some(height);
-        }
+    if let (true, Some(start)) = (prof, decl_start) {
+        record_declaration_time(start.elapsed());
     }
 
     // Finalize grid placement - resolve named grid lines
@@ -444,58 +1194,88 @@ fn apply_styles_internal_with_ancestors(
 
     let current_root_font_size = if is_root { styles.font_size } else { root_font_size };
     styles.root_font_size = current_root_font_size;
+    resolve_line_height_length(&mut styles, viewport);
+    resolve_absolute_lengths(&mut styles, current_root_font_size, viewport);
 
-    // Compute pseudo-element styles from CSS rules
-    let before_styles = compute_pseudo_element_styles(
-        node,
-        rules,
-        ancestors,
-        &styles,
-        &ua_styles,
-        current_root_font_size,
-        current_ua_root_font_size,
-        &PseudoElement::Before,
-    );
-    let after_styles = compute_pseudo_element_styles(
-        node,
-        rules,
-        ancestors,
-        &styles,
-        &ua_styles,
-        current_root_font_size,
-        current_ua_root_font_size,
-        &PseudoElement::After,
-    );
+    let pseudo_start = prof.then(|| Instant::now());
+    let before_styles = if rules.has_pseudo_rules(&PseudoElement::Before) {
+        compute_pseudo_element_styles(
+            node,
+            rules,
+            selector_caches,
+            ancestors.as_slice(),
+            &styles,
+            &ua_styles,
+            current_root_font_size,
+            current_ua_root_font_size,
+            viewport,
+            &PseudoElement::Before,
+        )
+    } else {
+        None
+    };
+    let after_styles = if rules.has_pseudo_rules(&PseudoElement::After) {
+        compute_pseudo_element_styles(
+            node,
+            rules,
+            selector_caches,
+            ancestors.as_slice(),
+            &styles,
+            &ua_styles,
+            current_root_font_size,
+            current_ua_root_font_size,
+            viewport,
+            &PseudoElement::After,
+        )
+    } else {
+        None
+    };
     let marker_styles = compute_marker_styles(
         node,
         rules,
-        ancestors,
+        selector_caches,
+        ancestors.as_slice(),
         &styles,
         &ua_styles,
         current_root_font_size,
         current_ua_root_font_size,
+        viewport,
     );
+    if let (true, Some(start)) = (prof, pseudo_start) {
+        record_pseudo_time(start.elapsed());
+    }
 
-    // Recursively style children (passing current node in ancestors)
-    let mut new_ancestors = ancestors.to_vec();
-    new_ancestors.push(node);
-    let children: Vec<StyledNode> = node
-        .children
-        .iter()
-        .map(|child| {
-            apply_styles_internal_with_ancestors(
-                child,
-                rules,
-                &styles,
-                &ua_styles,
-                current_root_font_size,
-                current_ua_root_font_size,
-                &new_ancestors,
-            )
-        })
-        .collect();
+    let mut children = Vec::with_capacity(node.children.len());
+    let mut reuse_counter = reuse_counter;
+
+    ancestors.push(node);
+    ancestor_ids.push(node_id);
+    for child in &node.children {
+        let child_reuse = reuse_counter.as_deref_mut();
+        let child_styled = apply_styles_internal_with_ancestors(
+            child,
+            rules,
+            selector_caches,
+            &styles,
+            &ua_styles,
+            current_root_font_size,
+            current_ua_root_font_size,
+            viewport,
+            ancestors,
+            node_counter,
+            ancestor_ids,
+            container_ctx,
+            container_scope,
+            reuse_map,
+            child_reuse,
+        );
+        children.push(child_styled);
+    }
+    ancestors.pop();
+    ancestor_ids.pop();
 
     StyledNode {
+        node_id,
         node: node.clone(),
         styles,
         before_styles,
@@ -571,6 +1351,25 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
 
     // CSS Custom Properties inherit
     styles.custom_properties = parent.custom_properties.clone();
+}
+
+/// Resolves line-height lengths to absolute pixels using computed font sizes and viewport metrics.
+fn resolve_line_height_length(style: &mut ComputedStyle, viewport: Size) {
+    use crate::style::types::LineHeight;
+
+    if let LineHeight::Length(len) = style.line_height {
+        let px = match len.unit {
+            u if u.is_absolute() => len.to_px(),
+            LengthUnit::Em => len.value * style.font_size,
+            LengthUnit::Rem => len.value * style.root_font_size,
+            LengthUnit::Ex => len.value * style.font_size * 0.5,
+            LengthUnit::Ch => len.value * style.font_size * 0.5,
+            u if u.is_viewport_relative() => len.resolve_with_viewport(viewport.width, viewport.height),
+            _ => len.value,
+        };
+
+        style.line_height = LineHeight::Length(Length::px(px));
+    }
 }
 
 fn resolve_match_parent_text_align(styles: &mut ComputedStyle, parent: &ComputedStyle, is_root: bool) {
@@ -664,8 +1463,9 @@ mod tests {
     use crate::style::float::Float;
     use crate::style::properties::apply_declaration;
     use crate::style::types::{
-        BorderStyle, LineBreak, ListStylePosition, ListStyleType, TextCombineUpright, TextDecorationLine,
-        TextUnderlineOffset, TextUnderlinePosition, UnicodeBidi, WhiteSpace, WillChange, WillChangeHint,
+        BorderCollapse, BorderStyle, Direction, LineBreak, ListStylePosition, ListStyleType, TextCombineUpright,
+        TextDecorationLine, TextUnderlineOffset, TextUnderlinePosition, UnicodeBidi, WhiteSpace, WillChange,
+        WillChangeHint,
     };
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
@@ -745,6 +1545,31 @@ mod tests {
         let stylesheet = parse_stylesheet(".item { color: blue !important; }").unwrap();
         let styled = apply_styles(&dom, &stylesheet);
         assert_eq!(styled.styles.color, Rgba::rgb(0, 128, 0));
+    }
+
+    #[test]
+    fn type_and_class_selector_applies_properties() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "span".to_string(),
+                attributes: vec![("class".to_string(), "pagetop".to_string())],
+            },
+            children: vec![],
+        };
+        let stylesheet = parse_stylesheet(
+            r#"
+            .pagetop { line-height: 12px; }
+            span.pagetop { display: block; margin: 3px 5px; }
+        "#,
+        )
+        .unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        assert!(matches!(styled.styles.display, Display::Block));
+        assert_eq!(styled.styles.margin_top, Some(Length::px(3.0)));
+        assert_eq!(styled.styles.margin_right, Some(Length::px(5.0)));
+        assert_eq!(styled.styles.margin_bottom, Some(Length::px(3.0)));
+        assert_eq!(styled.styles.margin_left, Some(Length::px(5.0)));
     }
 
     #[test]
@@ -962,6 +1787,85 @@ mod tests {
     }
 
     #[test]
+    fn navigation_visibility_respects_author_stylesheet() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "nav".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            }],
+        };
+        let stylesheet = parse_stylesheet("nav { visibility: hidden; }").unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        let nav = styled.children.first().expect("nav");
+        assert!(matches!(nav.styles.visibility, Visibility::Hidden));
+    }
+
+    #[test]
+    fn navigation_visibility_respects_authored_hidden_value() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "nav".to_string(),
+                    attributes: vec![
+                        ("style".to_string(), "visibility: hidden;".to_string()),
+                        ("role".to_string(), "navigation".to_string()),
+                    ],
+                },
+                children: vec![],
+            }],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        let nav = styled.children.first().expect("nav");
+        assert!(matches!(nav.styles.visibility, Visibility::Hidden));
+    }
+
+    #[test]
+    fn ad_slot_classes_do_not_collapse_without_css_rules() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "div".to_string(),
+                    attributes: vec![(
+                        "class".to_string(),
+                        "ad-slot ad-slot-header ad-slot-header__wrapper".to_string(),
+                    )],
+                },
+                children: vec![],
+            }],
+        };
+        let stylesheet = parse_stylesheet(
+            "div.ad-slot { min-height: 24px; padding-top: 8px; margin-top: 4px; background: rgb(1, 2, 3); }",
+        )
+        .unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        let ad = styled.children.first().expect("ad slot");
+        assert!(matches!(ad.styles.display, Display::Block));
+        assert!(matches!(ad.styles.visibility, Visibility::Visible));
+        assert_eq!(ad.styles.min_height, Some(Length::px(24.0)));
+        assert_eq!(ad.styles.padding_top, Length::px(8.0));
+        assert_eq!(ad.styles.margin_top, Some(Length::px(4.0)));
+        assert_eq!(ad.styles.background_color, Rgba::rgb(1, 2, 3));
+    }
+
+    #[test]
     fn font_variation_settings_inherit() {
         let dom = DomNode {
             node_type: DomNodeType::Element {
@@ -1036,6 +1940,9 @@ mod tests {
             None,
             Some(&Loader),
             Some("https://example.com/page.css"),
+            None,
+            None,
+            None,
         );
         assert_eq!(styled.styles.color, Rgba::rgb(1, 2, 3));
     }
@@ -1113,6 +2020,1113 @@ mod tests {
 
         let styled = apply_styles(&dom, &StyleSheet::new());
         assert!(matches!(styled.styles.direction, crate::style::types::Direction::Ltr));
+    }
+
+    #[test]
+    fn replaced_dimensions_use_presentational_hints() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "img".to_string(),
+                attributes: vec![
+                    ("width".to_string(), "320".to_string()),
+                    ("height".to_string(), "240".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.width, Some(Length::px(320.0)));
+        assert_eq!(styled.styles.height, Some(Length::px(240.0)));
+    }
+
+    #[test]
+    fn author_css_overrides_replaced_presentational_dimensions() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "img".to_string(),
+                attributes: vec![
+                    ("width".to_string(), "640".to_string()),
+                    ("height".to_string(), "480".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        let stylesheet = parse_stylesheet("img { width: 120px; height: auto; }").unwrap();
+        let styled = apply_styles(&dom, &stylesheet);
+        assert_eq!(styled.styles.width, Some(Length::px(120.0)));
+        assert!(styled.styles.height.is_none());
+    }
+
+    #[test]
+    fn html_defaults_to_white_background() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "html".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.background_color, Rgba::WHITE);
+    }
+
+    #[test]
+    fn body_defaults_to_ua_margin() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "body".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        let expected = Some(Length::px(8.0));
+        assert_eq!(styled.styles.margin_top, expected);
+        assert_eq!(styled.styles.margin_right, expected);
+        assert_eq!(styled.styles.margin_bottom, expected);
+        assert_eq!(styled.styles.margin_left, expected);
+    }
+
+    #[test]
+    fn anchor_defaults_to_ua_link_style() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "a".to_string(),
+                attributes: vec![("href".to_string(), "https://example.com".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.color, Rgba::from_rgba8(0, 0, 238, 255));
+        assert!(styled
+            .styles
+            .text_decoration
+            .lines
+            .contains(TextDecorationLine::UNDERLINE));
+        assert_eq!(styled.styles.cursor, crate::style::types::CursorKeyword::Pointer);
+    }
+
+    #[test]
+    fn author_css_overrides_anchor_ua_style() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "a".to_string(),
+                attributes: vec![("href".to_string(), "https://example.com".to_string())],
+            },
+            children: vec![],
+        };
+
+        let stylesheet =
+            parse_stylesheet("a { color: rgb(255, 0, 0); text-decoration: none; cursor: default; }").unwrap();
+        let styled = apply_styles(&dom, &stylesheet);
+        assert_eq!(styled.styles.color, Rgba::rgb(255, 0, 0));
+        assert!(styled.styles.text_decoration.lines.is_empty());
+        assert!(styled.styles.applied_text_decorations.is_empty());
+        assert_eq!(styled.styles.cursor, crate::style::types::CursorKeyword::Default);
+    }
+
+    #[test]
+    fn heading_ua_defaults_apply() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "h1".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!((styled.styles.font_size - 32.0).abs() < 0.01);
+        assert_eq!(styled.styles.font_weight.to_u16(), 700);
+        assert_eq!(styled.styles.margin_top, Some(Length::em(0.67)));
+        assert_eq!(styled.styles.margin_bottom, Some(Length::em(0.67)));
+    }
+
+    #[test]
+    fn paragraph_ua_defaults_apply() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "p".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.margin_top, Some(Length::em(1.0)));
+        assert_eq!(styled.styles.margin_bottom, Some(Length::em(1.0)));
+    }
+
+    #[test]
+    fn preformatted_ua_defaults_apply() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "pre".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.white_space, crate::style::types::WhiteSpace::Pre);
+        assert_eq!(styled.styles.font_family[0], "monospace");
+        assert_eq!(styled.styles.margin_top, Some(Length::em(1.0)));
+        assert_eq!(styled.styles.margin_bottom, Some(Length::em(1.0)));
+    }
+
+    #[test]
+    fn blockquote_ua_defaults_apply() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "blockquote".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.margin_top, Some(Length::em(1.0)));
+        assert_eq!(styled.styles.margin_bottom, Some(Length::em(1.0)));
+        assert_eq!(styled.styles.margin_left, Some(Length::px(40.0)));
+        assert_eq!(styled.styles.margin_right, Some(Length::px(40.0)));
+    }
+
+    #[test]
+    fn list_defaults_apply() {
+        let ul = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "ul".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let ul_styled = apply_styles(&ul, &StyleSheet::new());
+        assert_eq!(
+            ul_styled.styles.list_style_type,
+            crate::style::types::ListStyleType::Disc
+        );
+        assert_eq!(ul_styled.styles.padding_left, Length::px(40.0));
+        assert_eq!(ul_styled.styles.margin_top, Some(Length::em(1.0)));
+        assert_eq!(ul_styled.styles.margin_bottom, Some(Length::em(1.0)));
+
+        let li = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "li".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let li_styled = apply_styles(&li, &StyleSheet::new());
+        assert_eq!(li_styled.styles.display, Display::ListItem);
+
+        let ol = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "ol".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let ol_styled = apply_styles(&ol, &StyleSheet::new());
+        assert_eq!(
+            ol_styled.styles.list_style_type,
+            crate::style::types::ListStyleType::Decimal
+        );
+        assert_eq!(ol_styled.styles.padding_left, Length::px(40.0));
+
+        for tag in ["menu", "dir"] {
+            let dom = DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: tag.to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            };
+            let styled = apply_styles(&dom, &StyleSheet::new());
+            assert_eq!(styled.styles.display, Display::Block);
+            assert_eq!(styled.styles.list_style_type, crate::style::types::ListStyleType::Disc);
+            assert_eq!(styled.styles.padding_left, Length::px(40.0));
+        }
+    }
+
+    #[test]
+    fn definition_list_defaults_apply() {
+        let dd = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "dd".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dd, &StyleSheet::new());
+        assert_eq!(styled.styles.margin_left, Some(Length::px(40.0)));
+    }
+
+    #[test]
+    fn horizontal_rule_defaults_apply() {
+        let hr = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "hr".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&hr, &StyleSheet::new());
+        assert_eq!(styled.styles.height, Some(Length::px(1.0)));
+        assert_eq!(styled.styles.box_sizing, crate::style::types::BoxSizing::ContentBox);
+        assert_eq!(styled.styles.border_top_width, Length::px(1.0));
+        assert_eq!(styled.styles.border_top_style, crate::style::types::BorderStyle::Inset);
+        let gray = Rgba::from_rgba8(128, 128, 128, 255);
+        assert_eq!(styled.styles.color, gray);
+        assert_eq!(styled.styles.border_top_color, gray);
+    }
+
+    #[test]
+    fn bdi_defaults_to_isolate_with_auto_direction() {
+        let bdi = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "bdi".to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Text {
+                    content: "مرحبا".to_string(),
+                },
+                children: vec![],
+            }],
+        };
+
+        let styled = apply_styles(&bdi, &StyleSheet::new());
+        assert_eq!(styled.styles.unicode_bidi, UnicodeBidi::Isolate);
+        assert_eq!(styled.styles.direction, Direction::Rtl);
+    }
+
+    #[test]
+    fn bdo_dir_attribute_uses_bidi_override() {
+        let bdo = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "bdo".to_string(),
+                attributes: vec![("dir".to_string(), "rtl".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&bdo, &StyleSheet::new());
+        assert_eq!(styled.styles.direction, Direction::Rtl);
+        assert_eq!(styled.styles.unicode_bidi, UnicodeBidi::BidiOverride);
+    }
+
+    #[test]
+    fn bdo_without_dir_defaults_to_override_ltr() {
+        let bdo = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "bdo".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&bdo, &StyleSheet::new());
+        assert_eq!(styled.styles.direction, Direction::Ltr);
+        assert_eq!(styled.styles.unicode_bidi, UnicodeBidi::BidiOverride);
+    }
+
+    #[test]
+    fn dir_auto_inherits_parent_direction_when_no_strong_characters() {
+        let child = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("dir".to_string(), "auto".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Text {
+                    content: "1234".to_string(), // neutrals only
+                },
+                children: vec![],
+            }],
+        };
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("dir".to_string(), "rtl".to_string())],
+            },
+            children: vec![child],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let child_styles = &styled.children[0].styles;
+        assert_eq!(child_styles.direction, Direction::Rtl);
+        assert_eq!(child_styles.unicode_bidi, UnicodeBidi::Isolate);
+    }
+
+    #[test]
+    fn bdi_auto_direction_uses_parent_when_no_strong_characters() {
+        let bdi = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "bdi".to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Text {
+                    content: "--".to_string(), // no strong directional characters
+                },
+                children: vec![],
+            }],
+        };
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("dir".to_string(), "rtl".to_string())],
+            },
+            children: vec![bdi],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let bdi_styles = &styled.children[0].styles;
+        assert_eq!(bdi_styles.direction, Direction::Rtl);
+        assert_eq!(bdi_styles.unicode_bidi, UnicodeBidi::Isolate);
+    }
+
+    #[test]
+    fn small_and_big_defaults_apply() {
+        let small = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "small".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let big = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "big".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let small_styled = apply_styles(&small, &StyleSheet::new());
+        let big_styled = apply_styles(&big, &StyleSheet::new());
+        let parent = 16.0;
+        assert!(
+            small_styled.styles.font_size < parent,
+            "small font size {} should be less than parent {}",
+            small_styled.styles.font_size,
+            parent
+        );
+        assert!(
+            (small_styled.styles.font_size * 1.2 - parent).abs() < 0.1,
+            "small font size {} not near 1/1.2 of parent {}",
+            small_styled.styles.font_size,
+            parent
+        );
+        assert!(
+            big_styled.styles.font_size > parent,
+            "big font size {} should be greater than parent {}",
+            big_styled.styles.font_size,
+            parent
+        );
+        assert!(
+            (big_styled.styles.font_size / 1.2 - parent).abs() < 0.1,
+            "big font size {} not near 1.2 of parent {}",
+            big_styled.styles.font_size,
+            parent
+        );
+    }
+
+    #[test]
+    fn sub_and_sup_defaults_apply() {
+        let sub = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "sub".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let sup = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "sup".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let sub_styled = apply_styles(&sub, &StyleSheet::new());
+        let sup_styled = apply_styles(&sup, &StyleSheet::new());
+        assert_eq!(
+            sub_styled.styles.vertical_align,
+            crate::style::types::VerticalAlign::Sub
+        );
+        assert_eq!(
+            sup_styled.styles.vertical_align,
+            crate::style::types::VerticalAlign::Super
+        );
+        let expected = 16.0 / 1.2;
+        assert!((sub_styled.styles.font_size - expected).abs() < 0.01);
+        assert!((sup_styled.styles.font_size - expected).abs() < 0.01);
+    }
+
+    #[test]
+    fn mark_defaults_apply() {
+        let mark = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "mark".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&mark, &StyleSheet::new());
+        assert_eq!(styled.styles.background_color, Rgba::from_rgba8(255, 255, 0, 255));
+        assert_eq!(styled.styles.color, Rgba::BLACK);
+    }
+
+    #[test]
+    fn semantic_font_style_defaults_apply() {
+        for tag in ["address", "cite", "dfn", "var", "em", "i"] {
+            let dom = DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: tag.to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            };
+            let styled = apply_styles(&dom, &StyleSheet::new());
+            assert_eq!(styled.styles.font_style, crate::style::types::FontStyle::Italic);
+        }
+    }
+
+    #[test]
+    fn ins_and_del_defaults_apply() {
+        let ins = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "ins".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let del = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "del".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let ins_styled = apply_styles(&ins, &StyleSheet::new());
+        assert!(ins_styled
+            .styles
+            .text_decoration
+            .lines
+            .contains(TextDecorationLine::UNDERLINE));
+
+        let del_styled = apply_styles(&del, &StyleSheet::new());
+        assert!(del_styled
+            .styles
+            .text_decoration
+            .lines
+            .contains(TextDecorationLine::LINE_THROUGH));
+    }
+
+    #[test]
+    fn abbr_with_title_defaults_apply() {
+        let abbr = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "abbr".to_string(),
+                attributes: vec![("title".to_string(), "World Health Organization".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&abbr, &StyleSheet::new());
+        assert_eq!(styled.styles.border_bottom_width, Length::px(1.0));
+        assert_eq!(
+            styled.styles.border_bottom_style,
+            crate::style::types::BorderStyle::Dotted
+        );
+        assert_eq!(styled.styles.cursor, crate::style::types::CursorKeyword::Help);
+    }
+
+    #[test]
+    fn underline_and_strike_defaults_apply() {
+        let u = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "u".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let s = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "s".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let strike = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "strike".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let u_styled = apply_styles(&u, &StyleSheet::new());
+        assert!(u_styled
+            .styles
+            .text_decoration
+            .lines
+            .contains(TextDecorationLine::UNDERLINE));
+
+        for dom in [s, strike] {
+            let styled = apply_styles(&dom, &StyleSheet::new());
+            assert!(styled
+                .styles
+                .text_decoration
+                .lines
+                .contains(TextDecorationLine::LINE_THROUGH));
+        }
+    }
+
+    #[test]
+    fn center_defaults_apply() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "center".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.text_align, crate::style::types::TextAlign::Center);
+    }
+
+    #[test]
+    fn form_control_defaults_apply() {
+        let text_input = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![("type".to_string(), "text".to_string())],
+            },
+            children: vec![],
+        };
+        let submit_input = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![("type".to_string(), "submit".to_string())],
+            },
+            children: vec![],
+        };
+        let hidden_input = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![("type".to_string(), "hidden".to_string())],
+            },
+            children: vec![],
+        };
+        let textarea = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "textarea".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let select = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "select".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let button = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "button".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let option = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "option".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let optgroup = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "optgroup".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let fieldset = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "fieldset".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let legend = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "legend".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let details = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "details".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let summary = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "summary".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let details_with_summary = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "details".to_string(),
+                attributes: vec![("open".to_string(), "".to_string())],
+            },
+            children: vec![summary.clone()],
+        };
+        let details_closed_with_content = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "details".to_string(),
+                attributes: vec![],
+            },
+            children: vec![
+                summary.clone(),
+                DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "div".to_string(),
+                        attributes: vec![],
+                    },
+                    children: vec![],
+                },
+            ],
+        };
+        let details_open_with_content = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "details".to_string(),
+                attributes: vec![("open".to_string(), "".to_string())],
+            },
+            children: details_closed_with_content.children.clone(),
+        };
+
+        for dom in [&text_input, &submit_input, &textarea, &select, &button] {
+            let styled = apply_styles(dom, &StyleSheet::new());
+            assert!(styled.styles.border_top_width.to_px() >= 1.0);
+            assert_ne!(styled.styles.border_top_style, crate::style::types::BorderStyle::None);
+            assert_eq!(styled.styles.background_color, Rgba::WHITE);
+            assert_eq!(styled.styles.display, Display::InlineBlock);
+        }
+
+        let styled_textarea = apply_styles(&textarea, &StyleSheet::new());
+        assert_eq!(styled_textarea.styles.display, Display::InlineBlock);
+        assert_eq!(styled_textarea.styles.cursor, crate::style::types::CursorKeyword::Text);
+
+        let styled_text_input = apply_styles(&text_input, &StyleSheet::new());
+        assert_eq!(
+            styled_text_input.styles.cursor,
+            crate::style::types::CursorKeyword::Text
+        );
+
+        let styled_submit = apply_styles(&submit_input, &StyleSheet::new());
+        assert_eq!(styled_submit.styles.cursor, crate::style::types::CursorKeyword::Pointer);
+
+        let styled_hidden = apply_styles(&hidden_input, &StyleSheet::new());
+        assert_eq!(styled_hidden.styles.display, Display::None);
+
+        let styled_option = apply_styles(&option, &StyleSheet::new());
+        assert_eq!(styled_option.styles.display, Display::Block);
+        assert_eq!(styled_option.styles.white_space, crate::style::types::WhiteSpace::Pre);
+
+        let styled_optgroup = apply_styles(&optgroup, &StyleSheet::new());
+        assert_eq!(styled_optgroup.styles.display, Display::Block);
+        assert_eq!(styled_optgroup.styles.white_space, crate::style::types::WhiteSpace::Pre);
+        assert!(styled_optgroup.styles.font_weight.to_u16() >= 700);
+
+        let styled_fieldset = apply_styles(&fieldset, &StyleSheet::new());
+        assert_eq!(styled_fieldset.styles.display, Display::Block);
+        assert!(styled_fieldset.styles.border_top_width.to_px() >= 1.5);
+        assert_ne!(
+            styled_fieldset.styles.border_top_style,
+            crate::style::types::BorderStyle::None
+        );
+        assert!(
+            styled_fieldset
+                .styles
+                .padding_left
+                .resolve_with_font_size(styled_fieldset.styles.font_size)
+                > 0.0
+        );
+
+        let styled_legend = apply_styles(&legend, &StyleSheet::new());
+        assert_eq!(styled_legend.styles.display, Display::Block);
+        assert!(
+            styled_legend
+                .styles
+                .padding_left
+                .resolve_with_font_size(styled_legend.styles.font_size)
+                > 0.0
+        );
+        assert!(
+            styled_legend
+                .styles
+                .padding_right
+                .resolve_with_font_size(styled_legend.styles.font_size)
+                > 0.0
+        );
+
+        let styled_details = apply_styles(&details, &StyleSheet::new());
+        assert_eq!(styled_details.styles.display, Display::Block);
+
+        let styled_summary = apply_styles(&summary, &StyleSheet::new());
+        assert_eq!(styled_summary.styles.display, Display::ListItem);
+        assert_eq!(
+            styled_summary.styles.cursor,
+            crate::style::types::CursorKeyword::Pointer
+        );
+        assert_eq!(
+            styled_summary.styles.list_style_type,
+            crate::style::types::ListStyleType::DisclosureClosed
+        );
+
+        let styled_open_details = apply_styles(&details_with_summary, &StyleSheet::new());
+        let styled_open_summary = &styled_open_details.children[0];
+        assert_eq!(
+            styled_open_summary.styles.list_style_type,
+            crate::style::types::ListStyleType::DisclosureOpen
+        );
+
+        let styled_closed_details = apply_styles(&details_closed_with_content, &StyleSheet::new());
+        assert_eq!(styled_closed_details.children[0].styles.display, Display::ListItem);
+        assert_eq!(styled_closed_details.children[1].styles.display, Display::None);
+
+        let styled_open_details_with_content = apply_styles(&details_open_with_content, &StyleSheet::new());
+        assert_eq!(
+            styled_open_details_with_content.children[1].styles.display,
+            Display::Block
+        );
+    }
+
+    #[test]
+    fn table_header_defaults_apply() {
+        let th = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "th".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&th, &StyleSheet::new());
+        assert_eq!(styled.styles.font_weight.to_u16(), 700);
+        assert_eq!(styled.styles.text_align, crate::style::types::TextAlign::Center);
+    }
+
+    #[test]
+    fn q_defaults_apply_quotes() {
+        let q = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "q".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&q, &StyleSheet::new());
+        assert_eq!(
+            styled.styles.quotes,
+            vec![("“".into(), "”".into()), ("‘".into(), "’".into())]
+        );
+    }
+
+    #[test]
+    fn presentational_dimensions_apply_to_descendants() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "img".to_string(),
+                    attributes: vec![
+                        ("width".to_string(), "120".to_string()),
+                        ("height".to_string(), "60".to_string()),
+                    ],
+                },
+                children: vec![],
+            }],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        let img = &styled.children[0];
+        assert_eq!(img.styles.width, Some(Length::px(120.0)));
+        assert_eq!(img.styles.height, Some(Length::px(60.0)));
+    }
+
+    #[test]
+    fn bgcolor_presentational_hint_applies() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("bgcolor".to_string(), "#ff0000".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.background_color, Rgba::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn author_css_overrides_bgcolor_presentational_hint() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("bgcolor".to_string(), "#ff0000".to_string())],
+            },
+            children: vec![],
+        };
+
+        let stylesheet = parse_stylesheet("div { background-color: rgb(0, 0, 255); }").unwrap();
+        let styled = apply_styles(&dom, &stylesheet);
+        assert_eq!(styled.styles.background_color, Rgba::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn bgcolor_presentational_hint_applies_to_descendants() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "td".to_string(),
+                    attributes: vec![("bgcolor".to_string(), "#ff6600".to_string())],
+                },
+                children: vec![],
+            }],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        let cell = &styled.children[0];
+        assert_eq!(cell.styles.background_color, Rgba::rgb(255, 102, 0));
+    }
+
+    #[test]
+    fn cellspacing_presentational_hint_sets_border_spacing() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "table".to_string(),
+                attributes: vec![("cellspacing".to_string(), "0".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.border_spacing_horizontal, Length::px(0.0));
+        assert_eq!(styled.styles.border_spacing_vertical, Length::px(0.0));
+    }
+
+    #[test]
+    fn author_css_overrides_cellspacing_presentational_hint() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "table".to_string(),
+                attributes: vec![("cellspacing".to_string(), "12".to_string())],
+            },
+            children: vec![],
+        };
+
+        let stylesheet = parse_stylesheet("table { border-spacing: 3px 5px; }").unwrap();
+        let styled = apply_styles(&dom, &stylesheet);
+        assert_eq!(styled.styles.border_spacing_horizontal, Length::px(3.0));
+        assert_eq!(styled.styles.border_spacing_vertical, Length::px(5.0));
+    }
+
+    #[test]
+    fn cellpadding_presentational_hint_applies_to_cells() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "table".to_string(),
+                attributes: vec![("cellpadding".to_string(), "10".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "tr".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "td".to_string(),
+                        attributes: vec![],
+                    },
+                    children: vec![],
+                }],
+            }],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        let cell = &styled.children[0].children[0];
+        assert_eq!(cell.styles.padding_left, Length::px(10.0));
+        assert_eq!(cell.styles.padding_right, Length::px(10.0));
+        assert_eq!(cell.styles.padding_top, Length::px(10.0));
+        assert_eq!(cell.styles.padding_bottom, Length::px(10.0));
+    }
+
+    #[test]
+    fn author_css_overrides_cellpadding_presentational_hint() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "table".to_string(),
+                attributes: vec![("cellpadding".to_string(), "8".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "tr".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "td".to_string(),
+                        attributes: vec![],
+                    },
+                    children: vec![],
+                }],
+            }],
+        };
+
+        let stylesheet = parse_stylesheet("td { padding: 2px; }").unwrap();
+        let styled = apply_styles(&dom, &stylesheet);
+        let cell = &styled.children[0].children[0];
+        assert_eq!(cell.styles.padding_left, Length::px(2.0));
+        assert_eq!(cell.styles.padding_right, Length::px(2.0));
+        assert_eq!(cell.styles.padding_top, Length::px(2.0));
+        assert_eq!(cell.styles.padding_bottom, Length::px(2.0));
+    }
+
+    #[test]
+    fn bordercolor_presentational_hint_sets_border_color() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "table".to_string(),
+                attributes: vec![("bordercolor".to_string(), "#00ff00".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "tr".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "td".to_string(),
+                        attributes: vec![("bordercolor".to_string(), "rgb(255, 0, 0)".to_string())],
+                    },
+                    children: vec![],
+                }],
+            }],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.border_top_color, Rgba::rgb(0, 255, 0));
+        let cell = &styled.children[0].children[0];
+        assert_eq!(cell.styles.border_top_color, Rgba::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn author_css_overrides_bordercolor_presentational_hint() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "table".to_string(),
+                attributes: vec![("bordercolor".to_string(), "#00ff00".to_string())],
+            },
+            children: vec![],
+        };
+
+        let stylesheet = parse_stylesheet("table { border-color: blue; }").unwrap();
+        let styled = apply_styles(&dom, &stylesheet);
+        assert_eq!(styled.styles.border_top_color, Rgba::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn border_presentational_hint_sets_table_border_and_collapse() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "table".to_string(),
+                attributes: vec![("border".to_string(), "3".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "tr".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "td".to_string(),
+                        attributes: vec![],
+                    },
+                    children: vec![],
+                }],
+            }],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.border_top_width, Length::px(3.0));
+        assert_eq!(styled.styles.border_left_style, BorderStyle::Solid);
+        assert!(matches!(styled.styles.border_collapse, BorderCollapse::Collapse));
+
+        let cell = &styled.children[0].children[0];
+        assert_eq!(cell.styles.border_top_width, Length::px(3.0));
+        assert_eq!(cell.styles.border_left_style, BorderStyle::Solid);
+    }
+
+    #[test]
+    fn author_css_overrides_border_presentational_hint() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "table".to_string(),
+                attributes: vec![("border".to_string(), "3".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "tr".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "td".to_string(),
+                        attributes: vec![],
+                    },
+                    children: vec![],
+                }],
+            }],
+        };
+
+        let stylesheet =
+            parse_stylesheet("table { border: 1px dotted red; border-collapse: separate; } td { border: 0; }").unwrap();
+        let styled = apply_styles(&dom, &stylesheet);
+        assert_eq!(styled.styles.border_top_width, Length::px(1.0));
+        assert_eq!(styled.styles.border_left_style, BorderStyle::Dotted);
+        assert!(matches!(styled.styles.border_collapse, BorderCollapse::Separate));
+
+        let cell = &styled.children[0].children[0];
+        assert_eq!(cell.styles.border_top_width, Length::px(0.0));
+        assert!(matches!(cell.styles.border_left_style, BorderStyle::None));
     }
 
     #[test]
@@ -1295,6 +3309,112 @@ mod tests {
         assert!(matches!(
             styled.styles.text_align,
             crate::style::types::TextAlign::Center
+        ));
+    }
+
+    #[test]
+    fn align_attribute_on_table_centers_box() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "table".to_string(),
+                attributes: vec![("align".to_string(), "center".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(
+            styled.styles.text_align,
+            crate::style::types::TextAlign::Center
+        ));
+        assert!(styled.styles.margin_left.is_none());
+        assert!(styled.styles.margin_right.is_none());
+    }
+
+    #[test]
+    fn align_attribute_on_table_left_collapses_right_margin() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "table".to_string(),
+                attributes: vec![("align".to_string(), "left".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(styled.styles.text_align, crate::style::types::TextAlign::Left));
+        assert_eq!(styled.styles.margin_left, Some(Length::px(0.0)));
+        assert!(styled.styles.margin_right.is_none());
+    }
+
+    #[test]
+    fn align_attribute_on_table_right_collapses_left_margin() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "table".to_string(),
+                attributes: vec![("align".to_string(), "right".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(
+            styled.styles.text_align,
+            crate::style::types::TextAlign::Right
+        ));
+        assert!(styled.styles.margin_left.is_none());
+        assert_eq!(styled.styles.margin_right, Some(Length::px(0.0)));
+    }
+
+    #[test]
+    fn align_attribute_on_image_sets_float() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "img".to_string(),
+                attributes: vec![("align".to_string(), "left".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(styled.styles.float, crate::style::float::Float::Left));
+    }
+
+    #[test]
+    fn align_attribute_on_image_sets_vertical_align() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "img".to_string(),
+                attributes: vec![("align".to_string(), "middle".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(
+            styled.styles.vertical_align,
+            crate::style::types::VerticalAlign::Middle
+        ));
+    }
+
+    #[test]
+    fn author_css_overrides_presentational_image_align() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "img".to_string(),
+                attributes: vec![
+                    ("align".to_string(), "right".to_string()),
+                    ("style".to_string(), "float: left; vertical-align: top;".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(styled.styles.float, crate::style::float::Float::Left));
+        assert!(matches!(
+            styled.styles.vertical_align,
+            crate::style::types::VerticalAlign::Top
         ));
     }
 
@@ -2041,9 +4161,11 @@ mod tests {
                 order,
                 rule: rule.rule,
                 layer_order: rule.layer_order,
+                container_conditions: rule.container_conditions.clone(),
             })
             .collect();
-        assert_eq!(rule_refs.len(), 1, "should collect the authored li::marker rule");
+        let rule_index = RuleIndex::new(rule_refs);
+        assert_eq!(rule_index.rules.len(), 1, "should collect the authored li::marker rule");
         let ancestors: Vec<&DomNode> = vec![&dom]; // ul ancestor for the li
         let element_ref = build_element_ref_chain(&dom.children[0], &ancestors);
         let mut caches = SelectorCaches::default();
@@ -2055,13 +4177,24 @@ mod tests {
             selectors::matching::NeedsSelectorFlags::No,
             selectors::matching::MatchingForInvalidation::No,
         );
-        let selector = rule_refs[0].rule.selectors.slice().first().expect("selector in rule");
+        let selector = rule_index.rules[0]
+            .rule
+            .selectors
+            .slice()
+            .first()
+            .expect("selector in rule");
         assert!(
             matches_selector(selector, 0, None, &element_ref, &mut context),
             "selector should match the originating element"
         );
-        let marker_matches =
-            find_pseudo_element_rules(&dom.children[0], &rule_refs, &ancestors, &PseudoElement::Marker);
+        let mut caches = SelectorCaches::default();
+        let marker_matches = find_pseudo_element_rules(
+            &dom.children[0],
+            &rule_index,
+            &mut caches,
+            &ancestors,
+            &PseudoElement::Marker,
+        );
         assert_eq!(marker_matches.len(), 1, "marker rules should match li::marker");
 
         let styled = apply_styles(&dom, &stylesheet);
@@ -2426,143 +4559,204 @@ mod tests {
     }
 }
 
-fn find_matching_rules(node: &DomNode, rules: &[CascadeRule<'_>], ancestors: &[&DomNode]) -> Vec<MatchedRule> {
-    let mut matches = Vec::new();
+fn find_matching_rules<'a>(
+    node: &DomNode,
+    rules: &'a RuleIndex<'a>,
+    selector_caches: &mut SelectorCaches,
+    ancestors: &[&DomNode],
+    ancestor_ids: &[usize],
+    node_id: usize,
+    container_ctx: Option<&ContainerQueryContext>,
+) -> Vec<MatchedRule<'a>> {
+    if !node.is_element() {
+        return Vec::new();
+    }
+    let profiling = cascade_profile_enabled();
+    let start = profiling.then(|| Instant::now());
+    let mut candidates = Vec::new();
+    rules.selector_candidates(node, &mut candidates);
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let mut matches: Vec<MatchedRule<'a>> = Vec::new();
+    let mut match_indices: HashMap<usize, usize> = HashMap::with_capacity(candidates.len());
 
     // Build ElementRef chain with proper parent links
     let element_ref = build_element_ref_chain(node, ancestors);
 
     // Create selector caches and matching context
-    let mut caches = SelectorCaches::default();
     let mut context = MatchingContext::new(
         MatchingMode::Normal,
         None,
-        &mut caches,
+        selector_caches,
         QuirksMode::NoQuirks,
         selectors::matching::NeedsSelectorFlags::No,
         selectors::matching::MatchingForInvalidation::No,
     );
 
-    for rule in rules.iter() {
-        // Check if any selector in the list matches
-        let mut matched = false;
-        let mut max_specificity = 0u32;
-
-        for selector in rule.rule.selectors.slice().iter() {
-            // Skip selectors with pseudo-elements (handled separately)
-            if selector.pseudo_element().is_some() {
-                continue;
-            }
-            if matches_selector(selector, 0, None, &element_ref, &mut context) {
-                matched = true;
-                let spec = selector.specificity();
-                if spec > max_specificity {
-                    max_specificity = spec;
+    for &selector_idx in &candidates {
+        let indexed = &rules.selectors[selector_idx];
+        let selector = indexed.selector;
+        if matches_selector(selector, 0, None, &element_ref, &mut context) {
+            let spec = indexed.specificity;
+            if let Some(&pos) = match_indices.get(&indexed.rule_idx) {
+                if spec > matches[pos].specificity {
+                    matches[pos].specificity = spec;
                 }
+            } else {
+                let rule = &rules.rules[indexed.rule_idx];
+                if !rule.container_conditions.is_empty() {
+                    match container_ctx {
+                        Some(ctx) if ctx.matches(node_id, ancestor_ids, &rule.container_conditions) => {}
+                        _ => continue,
+                    }
+                }
+                let pos = matches.len();
+                match_indices.insert(indexed.rule_idx, pos);
+                matches.push(MatchedRule {
+                    origin: rule.origin,
+                    specificity: spec,
+                    order: rule.order,
+                    layer_order: rule.layer_order.clone(),
+                    declarations: Cow::Borrowed(&rule.rule.declarations),
+                });
             }
-        }
-
-        if matched {
-            matches.push(MatchedRule {
-                origin: rule.origin,
-                specificity: max_specificity,
-                order: rule.order,
-                layer_order: rule.layer_order.clone(),
-                declarations: rule.rule.declarations.clone(),
-            });
         }
     }
 
     // Sort by specificity (lower specificity first, so later rules override), then document order.
     matches.sort_by(|a, b| a.specificity.cmp(&b.specificity).then(a.order.cmp(&b.order)));
 
+    if profiling {
+        record_matching_stats(candidates.len(), matches.len(), start.map(|s| s.elapsed()));
+    }
+
     matches
 }
 
 /// Find rules that match an element with a specific pseudo-element
-fn find_pseudo_element_rules(
+fn find_pseudo_element_rules<'a>(
     node: &DomNode,
-    rules: &[CascadeRule<'_>],
+    rules: &'a RuleIndex<'a>,
+    selector_caches: &mut SelectorCaches,
     ancestors: &[&DomNode],
     pseudo: &PseudoElement,
-) -> Vec<MatchedRule> {
-    let mut matches = Vec::new();
+) -> Vec<MatchedRule<'a>> {
+    if !node.is_element() {
+        return Vec::new();
+    }
+    let profiling = cascade_profile_enabled();
+    let start = profiling.then(|| Instant::now());
+    let mut candidates = Vec::new();
+    rules.pseudo_candidates(node, pseudo, &mut candidates);
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let mut matches: Vec<MatchedRule<'a>> = Vec::new();
+    let mut match_indices: HashMap<usize, usize> = HashMap::with_capacity(candidates.len());
 
     // Build ElementRef chain with proper parent links
     let element_ref = build_element_ref_chain(node, ancestors);
 
     // Create selector caches and matching context
-    let mut caches = SelectorCaches::default();
     let mut context = MatchingContext::new(
         MatchingMode::ForStatelessPseudoElement,
         None,
-        &mut caches,
+        selector_caches,
         QuirksMode::NoQuirks,
         selectors::matching::NeedsSelectorFlags::No,
         selectors::matching::MatchingForInvalidation::No,
     );
 
-    for rule in rules.iter() {
-        let mut matched = false;
-        let mut max_specificity = 0u32;
-
-        for selector in rule.rule.selectors.slice().iter() {
-            // Only consider selectors with the matching pseudo-element
-            if let Some(selector_pseudo) = selector.pseudo_element() {
-                if selector_pseudo == pseudo {
-                    let result = matches_selector(selector, 0, None, &element_ref, &mut context);
-                    if result {
-                        matched = true;
-                        let spec = selector.specificity();
-                        if spec > max_specificity {
-                            max_specificity = spec;
-                        }
-                    }
+    for &selector_idx in &candidates {
+        let indexed = &rules.pseudo_selectors[selector_idx];
+        let selector = indexed.selector;
+        if matches_selector(selector, 0, None, &element_ref, &mut context) {
+            let spec = indexed.specificity;
+            if let Some(&pos) = match_indices.get(&indexed.rule_idx) {
+                if spec > matches[pos].specificity {
+                    matches[pos].specificity = spec;
                 }
+            } else {
+                let rule = &rules.rules[indexed.rule_idx];
+                let pos = matches.len();
+                match_indices.insert(indexed.rule_idx, pos);
+                matches.push(MatchedRule {
+                    origin: rule.origin,
+                    specificity: spec,
+                    order: rule.order,
+                    layer_order: rule.layer_order.clone(),
+                    declarations: Cow::Borrowed(&rule.rule.declarations),
+                });
             }
-        }
-
-        if matched {
-            matches.push(MatchedRule {
-                origin: rule.origin,
-                specificity: max_specificity,
-                order: rule.order,
-                layer_order: rule.layer_order.clone(),
-                declarations: rule.rule.declarations.clone(),
-            });
         }
     }
 
     matches.sort_by(|a, b| a.specificity.cmp(&b.specificity).then(a.order.cmp(&b.order)));
 
+    if profiling {
+        record_matching_stats(candidates.len(), matches.len(), start.map(|s| s.elapsed()));
+    }
+
     matches
 }
 
-fn apply_cascaded_declarations<F>(
+fn apply_cascaded_declarations<'a, F>(
     styles: &mut ComputedStyle,
-    matched_rules: Vec<MatchedRule>,
+    matched_rules: Vec<MatchedRule<'a>>,
     inline_declarations: Option<Vec<Declaration>>,
     parent_styles: &ComputedStyle,
     parent_font_size: f32,
     root_font_size: f32,
+    viewport: Size,
     revert_base_styles: &ComputedStyle,
     filter: F,
 ) where
     F: Fn(&Declaration) -> bool,
 {
-    let mut flattened: Vec<MatchedDeclaration> = Vec::new();
+    let mut flattened: Vec<MatchedDeclaration<'a>> = Vec::new();
+    let mut total_decls = 0usize;
+    for rule in matched_rules.iter() {
+        total_decls += rule.declarations.len();
+    }
+    if let Some(inline) = inline_declarations.as_ref() {
+        total_decls += inline.len();
+    }
+    flattened.reserve(total_decls);
 
     for rule in matched_rules {
-        for (decl_order, declaration) in rule.declarations.into_iter().enumerate() {
-            flattened.push(MatchedDeclaration {
-                important: declaration.important,
-                origin: rule.origin,
-                specificity: rule.specificity,
-                rule_order: rule.order,
-                decl_order,
-                layer_order: rule.layer_order.clone(),
-                declaration,
-            });
+        let origin = rule.origin;
+        let specificity = rule.specificity;
+        let order = rule.order;
+        let layer_order = rule.layer_order.clone();
+
+        match rule.declarations {
+            Cow::Borrowed(decls) => {
+                for (decl_order, declaration) in decls.iter().enumerate() {
+                    flattened.push(MatchedDeclaration {
+                        important: declaration.important,
+                        origin,
+                        specificity,
+                        rule_order: order,
+                        decl_order,
+                        layer_order: layer_order.clone(),
+                        declaration: Cow::Borrowed(declaration),
+                    });
+                }
+            }
+            Cow::Owned(decls) => {
+                for (decl_order, declaration) in decls.into_iter().enumerate() {
+                    flattened.push(MatchedDeclaration {
+                        important: declaration.important,
+                        origin,
+                        specificity,
+                        rule_order: order,
+                        decl_order,
+                        layer_order: layer_order.clone(),
+                        declaration: Cow::Owned(declaration),
+                    });
+                }
+            }
         }
     }
 
@@ -2575,7 +4769,7 @@ fn apply_cascaded_declarations<F>(
                 rule_order: INLINE_RULE_ORDER,
                 decl_order,
                 layer_order: vec![u32::MAX],
-                declaration,
+                declaration: Cow::Owned(declaration),
             });
         }
     }
@@ -2601,42 +4795,63 @@ fn apply_cascaded_declarations<F>(
 
     let defaults = ComputedStyle::default();
     let mut layer_snapshots: HashMap<Vec<u32>, ComputedStyle> = HashMap::new();
-    for entry in flattened {
-        if filter(&entry.declaration) {
-            let revert_base = match entry.origin {
-                StyleOrigin::UserAgent => &defaults,
-                StyleOrigin::Author | StyleOrigin::Inline => revert_base_styles,
-            };
-            let layer_base = layer_snapshots
-                .entry(entry.layer_order.clone())
-                .or_insert_with(|| styles.clone());
-            apply_declaration_with_base(
-                styles,
-                &entry.declaration,
-                parent_styles,
-                revert_base,
-                Some(&*layer_base),
-                parent_font_size,
-                root_font_size,
-            );
+
+    let mut apply_entry = |entry: &MatchedDeclaration<'_>| {
+        if !filter(entry.declaration.as_ref()) {
+            return;
         }
+        let revert_base = match entry.origin {
+            StyleOrigin::UserAgent => &defaults,
+            StyleOrigin::Author | StyleOrigin::Inline => revert_base_styles,
+        };
+        let layer_base = layer_snapshots
+            .entry(entry.layer_order.clone())
+            .or_insert_with(|| styles.clone());
+        apply_declaration_with_base(
+            styles,
+            entry.declaration.as_ref(),
+            parent_styles,
+            revert_base,
+            Some(&*layer_base),
+            parent_font_size,
+            root_font_size,
+            viewport,
+        );
+    };
+
+    // First apply custom properties so later var() resolutions can see them
+    for entry in flattened.iter().filter(|e| e.declaration.property.starts_with("--")) {
+        apply_entry(entry);
+    }
+    // Then apply all other declarations in cascade order
+    for entry in flattened.iter().filter(|e| !e.declaration.property.starts_with("--")) {
+        apply_entry(entry);
     }
     resolve_pending_logical_properties(styles);
+
+    resolve_absolute_lengths(styles, root_font_size, viewport);
 }
 
-fn dir_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule> {
+fn dir_presentational_hint(
+    node: &DomNode,
+    fallback_direction: Direction,
+    order: usize,
+) -> Option<MatchedRule<'static>> {
+    let tag = node.tag_name().map(|t| t.to_ascii_lowercase());
+    let is_bdo = matches!(tag.as_deref(), Some("bdo"));
+    let unicode_bidi_value = if is_bdo { "bidi-override" } else { "isolate" };
     let dir = node.get_attribute("dir")?;
     let dir = dir.trim().to_ascii_lowercase();
     match dir.as_str() {
         "ltr" | "rtl" => {
-            let css = format!("direction: {}; unicode-bidi: isolate;", dir);
+            let css = format!("direction: {}; unicode-bidi: {};", dir, unicode_bidi_value);
             let declarations = parse_declarations(&css);
             Some(MatchedRule {
                 origin: StyleOrigin::Author,
                 specificity: 0,
                 order,
                 layer_order: vec![u32::MAX],
-                declarations,
+                declarations: Cow::Owned(declarations),
             })
         }
         "auto" => {
@@ -2644,24 +4859,27 @@ fn dir_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule> 
                 TextDirection::Ltr => crate::style::types::Direction::Ltr,
                 TextDirection::Rtl => crate::style::types::Direction::Rtl,
             });
-            let dir_value = match resolved.unwrap_or(crate::style::types::Direction::Ltr) {
+            let dir_value = match resolved.unwrap_or(fallback_direction) {
                 crate::style::types::Direction::Rtl => "rtl",
                 crate::style::types::Direction::Ltr => "ltr",
             };
-            let declarations = parse_declarations(&format!("direction: {}; unicode-bidi: isolate;", dir_value));
+            let declarations = parse_declarations(&format!(
+                "direction: {}; unicode-bidi: {};",
+                dir_value, unicode_bidi_value
+            ));
             Some(MatchedRule {
                 origin: StyleOrigin::Author,
                 specificity: 0,
                 order,
                 layer_order: vec![u32::MAX],
-                declarations,
+                declarations: Cow::Owned(declarations),
             })
         }
         _ => None,
     }
 }
 
-fn list_type_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule> {
+fn list_type_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
     let tag = node.tag_name()?.to_ascii_lowercase();
     let ty = node.get_attribute("type")?;
     let mapped = match tag.as_str() {
@@ -2675,7 +4893,7 @@ fn list_type_presentational_hint(node: &DomNode, order: usize) -> Option<Matched
         specificity: 0,
         order,
         layer_order: vec![u32::MAX],
-        declarations,
+        declarations: Cow::Owned(declarations),
     })
 }
 
@@ -2699,7 +4917,7 @@ fn map_ul_type(value: &str) -> Option<&'static str> {
     }
 }
 
-fn alignment_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule> {
+fn alignment_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
     let tag = node.tag_name()?.to_ascii_lowercase();
     let mut declarations = String::new();
 
@@ -2713,6 +4931,14 @@ fn alignment_presentational_hint(node: &DomNode, order: usize) -> Option<Matched
                 "td" | "th" | "tr" | "table" | "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "center"
             ) {
                 declarations.push_str(&format!("text-align: {};", mapped));
+            }
+            if tag == "table" {
+                match mapped {
+                    "center" => declarations.push_str("margin-left: auto; margin-right: auto;"),
+                    "right" => declarations.push_str("margin-left: auto; margin-right: 0;"),
+                    "left" => declarations.push_str("margin-left: 0; margin-right: auto;"),
+                    _ => {}
+                }
             }
         }
     }
@@ -2734,7 +4960,194 @@ fn alignment_presentational_hint(node: &DomNode, order: usize) -> Option<Matched
         specificity: 0,
         order,
         layer_order: vec![u32::MAX],
-        declarations: parse_declarations(&declarations),
+        declarations: Cow::Owned(parse_declarations(&declarations)),
+    })
+}
+
+fn dimension_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
+    let width = node
+        .get_attribute("width")
+        .and_then(|width| parse_dimension_attribute(&width));
+    let height = node
+        .get_attribute("height")
+        .and_then(|height| parse_dimension_attribute(&height));
+
+    if width.is_none() && height.is_none() {
+        return None;
+    }
+
+    let mut css = String::new();
+    if let Some(w) = width {
+        css.push_str(&format!("width: {};", w));
+    }
+    if let Some(h) = height {
+        css.push_str(&format!("height: {};", h));
+    }
+
+    Some(MatchedRule {
+        origin: StyleOrigin::Author,
+        specificity: 0,
+        order,
+        layer_order: vec![u32::MAX],
+        declarations: Cow::Owned(parse_declarations(&css)),
+    })
+}
+
+fn bgcolor_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
+    let color = node
+        .get_attribute("bgcolor")
+        .and_then(|color| parse_color_attribute(&color))?;
+    let css = format!("background-color: {};", color);
+    Some(MatchedRule {
+        origin: StyleOrigin::Author,
+        specificity: 0,
+        order,
+        layer_order: vec![u32::MAX],
+        declarations: Cow::Owned(parse_declarations(&css)),
+    })
+}
+
+fn bordercolor_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
+    let color = node
+        .get_attribute("bordercolor")
+        .and_then(|color| parse_color_attribute(&color))?;
+    let css = format!("border-color: {};", color);
+    Some(MatchedRule {
+        origin: StyleOrigin::Author,
+        specificity: 0,
+        order,
+        layer_order: vec![u32::MAX],
+        declarations: Cow::Owned(parse_declarations(&css)),
+    })
+}
+
+fn resolve_absolute_lengths(styles: &mut ComputedStyle, root_font_size: f32, viewport: Size) {
+    let resolve_len = |len: Length| -> Length {
+        match len.unit {
+            u if u.is_absolute() => Length::px(len.to_px()),
+            LengthUnit::Em => Length::px(len.value * styles.font_size),
+            LengthUnit::Ex => Length::px(len.value * styles.font_size * 0.5),
+            LengthUnit::Ch => Length::px(len.value * styles.font_size * 0.5),
+            LengthUnit::Rem => Length::px(len.value * root_font_size),
+            u if u.is_viewport_relative() => Length::px(len.resolve_with_viewport(viewport.width, viewport.height)),
+            _ => len,
+        }
+    };
+
+    styles.border_top_width = resolve_len(styles.border_top_width);
+    styles.border_right_width = resolve_len(styles.border_right_width);
+    styles.border_bottom_width = resolve_len(styles.border_bottom_width);
+    styles.border_left_width = resolve_len(styles.border_left_width);
+    styles.border_top_left_radius = resolve_len(styles.border_top_left_radius);
+    styles.border_top_right_radius = resolve_len(styles.border_top_right_radius);
+    styles.border_bottom_right_radius = resolve_len(styles.border_bottom_right_radius);
+    styles.border_bottom_left_radius = resolve_len(styles.border_bottom_left_radius);
+    styles.outline_width = resolve_len(styles.outline_width);
+    styles.outline_offset = resolve_len(styles.outline_offset);
+    styles.border_spacing_horizontal = resolve_len(styles.border_spacing_horizontal);
+    styles.border_spacing_vertical = resolve_len(styles.border_spacing_vertical);
+
+    // Percentage radii remain relative and are handled during paint/layout.
+}
+
+fn table_border_value(node: &DomNode) -> Option<Length> {
+    node.get_attribute("border")
+        .and_then(|val| parse_dimension_attribute(&val))
+        .filter(|len| len.unit.is_absolute())
+}
+
+fn find_table_border_value(ancestors: &[&DomNode], node: &DomNode) -> Option<Length> {
+    if let Some(len) = table_border_value(node) {
+        return Some(len);
+    }
+    for ancestor in ancestors.iter().rev() {
+        if let Some(tag) = ancestor.tag_name() {
+            if tag.eq_ignore_ascii_case("table") {
+                return table_border_value(ancestor);
+            }
+        }
+    }
+    None
+}
+
+fn border_presentational_hint(node: &DomNode, ancestors: &[&DomNode], order: usize) -> Option<MatchedRule<'static>> {
+    let tag = node.tag_name()?.to_ascii_lowercase();
+    let border_len = match tag.as_str() {
+        "table" => table_border_value(node),
+        "td" | "th" | "tr" => find_table_border_value(ancestors, node),
+        _ => None,
+    }?;
+
+    let mut css = format!("border: {} solid;", border_len);
+    if tag == "table" {
+        css.push_str("border-collapse: collapse;");
+    }
+
+    Some(MatchedRule {
+        origin: StyleOrigin::Author,
+        specificity: 0,
+        order,
+        layer_order: vec![u32::MAX],
+        declarations: Cow::Owned(parse_declarations(&css)),
+    })
+}
+
+fn cellspacing_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
+    let tag = node.tag_name()?.to_ascii_lowercase();
+    if tag != "table" {
+        return None;
+    }
+    let spacing = node.get_attribute("cellspacing")?;
+    let length = parse_dimension_attribute(&spacing)?;
+    let css = format!("border-spacing: {} {};", length, length);
+    Some(MatchedRule {
+        origin: StyleOrigin::Author,
+        specificity: 0,
+        order,
+        layer_order: vec![u32::MAX],
+        declarations: Cow::Owned(parse_declarations(&css)),
+    })
+}
+
+fn find_cellpadding(ancestors: &[&DomNode], node: &DomNode) -> Option<Length> {
+    if let Some(value) = node.get_attribute("cellpadding") {
+        if let Some(len) = parse_dimension_attribute(&value) {
+            return Some(len);
+        }
+    }
+
+    for ancestor in ancestors.iter().rev() {
+        if let Some(tag) = ancestor.tag_name() {
+            if tag.eq_ignore_ascii_case("table") {
+                if let Some(value) = ancestor.get_attribute("cellpadding") {
+                    if let Some(len) = parse_dimension_attribute(&value) {
+                        return Some(len);
+                    }
+                }
+                break;
+            }
+        }
+    }
+    None
+}
+
+fn cellpadding_presentational_hint(
+    node: &DomNode,
+    ancestors: &[&DomNode],
+    order: usize,
+) -> Option<MatchedRule<'static>> {
+    let tag = node.tag_name()?.to_ascii_lowercase();
+    if tag != "td" && tag != "th" {
+        return None;
+    }
+    let padding = find_cellpadding(ancestors, node)?;
+    let css = format!("padding: {};", padding);
+    Some(MatchedRule {
+        origin: StyleOrigin::Author,
+        specificity: 0,
+        order,
+        layer_order: vec![u32::MAX],
+        declarations: Cow::Owned(parse_declarations(&css)),
     })
 }
 
@@ -2754,8 +5167,46 @@ fn map_valign(value: &str) -> Option<&'static str> {
         "middle" => Some("middle"),
         "bottom" => Some("bottom"),
         "baseline" => Some("baseline"),
+        "texttop" | "text-top" => Some("text-top"),
+        "absmiddle" => Some("middle"),
+        "absbottom" | "textbottom" | "text-bottom" => Some("text-bottom"),
         _ => None,
     }
+}
+
+fn replaced_alignment_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
+    let tag = node.tag_name()?.to_ascii_lowercase();
+    // HTML presentational align on replaced elements (e.g., img, object) maps to float/vertical-align.
+    if !matches!(
+        tag.as_str(),
+        "img" | "object" | "embed" | "iframe" | "applet" | "video" | "canvas"
+    ) {
+        return None;
+    }
+
+    let align = node.get_attribute("align")?;
+    let align_lower = align.trim().to_ascii_lowercase();
+    let mut declarations = String::new();
+    match align_lower.as_str() {
+        "left" => declarations.push_str("float: left;"),
+        "right" => declarations.push_str("float: right;"),
+        _ => {}
+    }
+    if let Some(valign) = map_valign(&align_lower) {
+        declarations.push_str(&format!("vertical-align: {};", valign));
+    }
+
+    if declarations.is_empty() {
+        return None;
+    }
+
+    Some(MatchedRule {
+        origin: StyleOrigin::Author,
+        specificity: 0,
+        order,
+        layer_order: vec![u32::MAX],
+        declarations: Cow::Owned(parse_declarations(&declarations)),
+    })
 }
 
 fn resolve_relative_font_weight(styles: &mut ComputedStyle, parent: &ComputedStyle) {
@@ -2796,22 +5247,27 @@ fn build_element_ref_chain<'a>(node: &'a DomNode, ancestors: &'a [&'a DomNode]) 
 /// (i.e., has content property set to something other than 'none' or 'normal')
 fn compute_pseudo_element_styles(
     node: &DomNode,
-    rules: &[CascadeRule<'_>],
+    rules: &RuleIndex<'_>,
+    selector_caches: &mut SelectorCaches,
     ancestors: &[&DomNode],
     parent_styles: &ComputedStyle,
     ua_parent_styles: &ComputedStyle,
     root_font_size: f32,
     ua_root_font_size: f32,
+    viewport: Size,
     pseudo: &PseudoElement,
 ) -> Option<ComputedStyle> {
+    if !rules.has_pseudo_rules(pseudo) {
+        return None;
+    }
     // Find rules matching this pseudo-element
-    let matching_rules = find_pseudo_element_rules(node, rules, ancestors, pseudo);
+    let matching_rules = find_pseudo_element_rules(node, rules, selector_caches, ancestors, pseudo);
 
     if matching_rules.is_empty() {
         return None;
     }
 
-    let ua_matches: Vec<MatchedRule> = matching_rules
+    let ua_matches: Vec<_> = matching_rules
         .iter()
         .filter(|r| r.origin == StyleOrigin::UserAgent)
         .cloned()
@@ -2827,6 +5283,7 @@ fn compute_pseudo_element_styles(
         ua_parent_styles,
         ua_parent_styles.font_size,
         ua_root_font_size,
+        viewport,
         &ComputedStyle::default(),
         |_| true,
     );
@@ -2835,6 +5292,8 @@ fn compute_pseudo_element_styles(
     resolve_relative_font_weight(&mut ua_styles, ua_parent_styles);
     propagate_text_decorations(&mut ua_styles, ua_parent_styles);
     ua_styles.root_font_size = ua_root_font_size;
+    resolve_line_height_length(&mut ua_styles, viewport);
+    resolve_absolute_lengths(&mut ua_styles, ua_root_font_size, viewport);
 
     // Start with default inline styles (pseudo-elements default to display: inline)
     let mut styles = ComputedStyle::default();
@@ -2851,6 +5310,7 @@ fn compute_pseudo_element_styles(
         parent_styles,
         parent_styles.font_size,
         root_font_size,
+        viewport,
         &ua_styles,
         |_| true,
     );
@@ -2859,6 +5319,8 @@ fn compute_pseudo_element_styles(
     resolve_relative_font_weight(&mut styles, parent_styles);
     propagate_text_decorations(&mut styles, parent_styles);
     styles.root_font_size = root_font_size;
+    resolve_line_height_length(&mut styles, viewport);
+    resolve_absolute_lengths(&mut styles, root_font_size, viewport);
 
     // Check if content property generates content
     // Per CSS spec, ::before/::after only generate boxes if content is not 'none' or 'normal'
@@ -2874,19 +5336,25 @@ fn compute_pseudo_element_styles(
 
 fn compute_marker_styles(
     node: &DomNode,
-    rules: &[CascadeRule<'_>],
+    rules: &RuleIndex<'_>,
+    selector_caches: &mut SelectorCaches,
     ancestors: &[&DomNode],
     list_item_styles: &ComputedStyle,
     ua_list_item_styles: &ComputedStyle,
     root_font_size: f32,
     ua_root_font_size: f32,
+    viewport: Size,
 ) -> Option<ComputedStyle> {
     if list_item_styles.display != Display::ListItem {
         return None;
     }
 
-    let matching_rules = find_pseudo_element_rules(node, rules, ancestors, &PseudoElement::Marker);
-    let ua_matches: Vec<MatchedRule> = matching_rules
+    let matching_rules = if rules.has_pseudo_rules(&PseudoElement::Marker) {
+        find_pseudo_element_rules(node, rules, selector_caches, ancestors, &PseudoElement::Marker)
+    } else {
+        Vec::new()
+    };
+    let ua_matches: Vec<_> = matching_rules
         .iter()
         .filter(|r| r.origin == StyleOrigin::UserAgent)
         .cloned()
@@ -2909,6 +5377,7 @@ fn compute_marker_styles(
         ua_list_item_styles,
         ua_list_item_styles.font_size,
         ua_root_font_size,
+        viewport,
         &ComputedStyle::default(),
         |_| true,
     );
@@ -2917,6 +5386,8 @@ fn compute_marker_styles(
     resolve_relative_font_weight(&mut ua_styles, ua_list_item_styles);
     propagate_text_decorations(&mut ua_styles, ua_list_item_styles);
     ua_styles.root_font_size = ua_root_font_size;
+    resolve_line_height_length(&mut ua_styles, viewport);
+    resolve_absolute_lengths(&mut ua_styles, ua_root_font_size, viewport);
     reset_marker_box_properties(&mut ua_styles);
     ua_styles.display = Display::Inline;
 
@@ -2937,6 +5408,7 @@ fn compute_marker_styles(
         list_item_styles,
         list_item_styles.font_size,
         root_font_size,
+        viewport,
         &ua_styles,
         |decl| marker_allows_property(&decl.property),
     );
@@ -2945,6 +5417,8 @@ fn compute_marker_styles(
     resolve_relative_font_weight(&mut styles, list_item_styles);
     propagate_text_decorations(&mut styles, list_item_styles);
     styles.root_font_size = root_font_size;
+    resolve_line_height_length(&mut styles, viewport);
+    resolve_absolute_lengths(&mut styles, root_font_size, viewport);
 
     reset_marker_box_properties(&mut styles);
     styles.display = Display::Inline;

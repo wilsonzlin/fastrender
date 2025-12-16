@@ -47,8 +47,12 @@ use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::line_builder::InlineBoxItem;
 use crate::layout::contexts::positioned::ContainingBlock;
 use crate::layout::float_context::FloatContext;
-use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
+use crate::layout::formatting_context::{
+    count_inline_intrinsic_call, intrinsic_cache_lookup, intrinsic_cache_store, FormattingContext, IntrinsicSizingMode,
+    LayoutError,
+};
 use crate::layout::inline::float_integration::InlineFloatIntegration;
+use crate::layout::profile::{layout_timer, LayoutKind};
 use crate::layout::utils::{border_size_from_box_sizing, compute_replaced_size, resolve_font_relative_length};
 use crate::style::display::FormattingContextType;
 use crate::style::types::{
@@ -64,13 +68,14 @@ use crate::text::line_break::{find_break_opportunities, BreakOpportunity, BreakT
 use crate::text::pipeline::{
     compute_adjusted_font_size, preferred_font_aspect, ExplicitBidiContext, ShapedRun, ShapingPipeline,
 };
-use crate::tree::box_tree::{BoxNode, BoxType, MarkerContent, ReplacedBox};
+use crate::tree::box_tree::{AnonymousType, BoxNode, BoxType, MarkerContent, ReplacedBox};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::text::font_db::ScaledMetrics;
-use baseline::{compute_line_height_with_metrics, BaselineMetrics, LineBaselineAccumulator, VerticalAlign};
+use baseline::{compute_line_height_with_metrics_viewport, BaselineMetrics, LineBaselineAccumulator, VerticalAlign};
 use line_builder::{InlineBlockItem, InlineItem, Line, LineBuilder, PositionedItem, ReplacedItem, TabItem, TextItem};
 
 /// Inline Formatting Context implementation
@@ -99,6 +104,27 @@ pub struct InlineFormattingContext {
     default_hyphenator: Option<Hyphenator>,
     viewport_size: crate::geometry::Size,
     nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock,
+}
+
+fn dump_text_enabled() -> bool {
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| {
+        std::env::var("FASTR_DUMP_TEXT")
+            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(false)
+    })
+}
+
+fn truncate_text(text: &str, limit: usize) -> String {
+    let mut out = String::new();
+    for (i, ch) in text.chars().enumerate() {
+        if i >= limit {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 #[derive(Debug, Clone)]
@@ -142,8 +168,22 @@ impl InlineFormattingContext {
         viewport_size: crate::geometry::Size,
         nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock,
     ) -> Self {
+        Self::with_font_context_viewport_cb_and_pipeline(
+            font_context,
+            viewport_size,
+            nearest_positioned_cb,
+            ShapingPipeline::new(),
+        )
+    }
+
+    pub fn with_font_context_viewport_cb_and_pipeline(
+        font_context: FontContext,
+        viewport_size: crate::geometry::Size,
+        nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock,
+        pipeline: ShapingPipeline,
+    ) -> Self {
         Self {
-            pipeline: ShapingPipeline::new(),
+            pipeline,
             font_context,
             default_hyphenator: Hyphenator::new("en-us").ok(),
             viewport_size,
@@ -195,9 +235,11 @@ impl InlineFormattingContext {
                 let px = if len.unit.is_font_relative() {
                     len.resolve_with_font_size(font_size)
                 } else if len.unit.is_percentage() {
-                    len.resolve_against(line_height)
+                    len.resolve_against(line_height).unwrap_or(0.0)
                 } else if len.unit.is_absolute() {
                     len.to_px()
+                } else if len.unit.is_viewport_relative() {
+                    len.resolve_with_viewport(self.viewport_size.width, self.viewport_size.height)
                 } else {
                     len.value
                 };
@@ -307,6 +349,9 @@ impl InlineFormattingContext {
 
             match &child.box_type {
                 BoxType::Text(text_box) => {
+                    if dump_text_enabled() {
+                        eprintln!("ifc text: \"{}\"", truncate_text(&text_box.text, 80));
+                    }
                     let mut inherited_boundary = CombineBoundary::default();
                     if Some(idx) == first_combinable {
                         inherited_boundary.prev = boundary.prev;
@@ -509,6 +554,236 @@ impl InlineFormattingContext {
                         bidi_stack,
                         child_boundary,
                     )?;
+                    if dump_text_enabled() {
+                        static INLINE_ANON_ITEMS_LOG: OnceLock<AtomicUsize> = OnceLock::new();
+                        let logged = INLINE_ANON_ITEMS_LOG.get_or_init(|| AtomicUsize::new(0));
+                        if logged.fetch_add(1, Ordering::Relaxed) < 20 {
+                            fn text_desc(node: &BoxNode) -> usize {
+                                let mut total = 0;
+                                if matches!(node.box_type, BoxType::Text(_)) {
+                                    total += 1;
+                                }
+                                for child in &node.children {
+                                    total += text_desc(child);
+                                }
+                                total
+                            }
+                            eprintln!(
+                                "ifc anon inline child box_id={} children={} text_desc={} -> items={}",
+                                child.id,
+                                child.children.len(),
+                                text_desc(child),
+                                child_items.len()
+                            );
+                            if child_items.is_empty() && !child.children.is_empty() {
+                                let mut child_kinds = Vec::new();
+                                for grand in child.children.iter().take(5) {
+                                    child_kinds.push(format!(
+                                        "{:?}/display={:?}/children={}/text_desc={}",
+                                        grand.box_type,
+                                        grand.style.display,
+                                        grand.children.len(),
+                                        text_desc(grand)
+                                    ));
+                                }
+                                eprintln!("    anon inline child descendants: {}", child_kinds.join(" | "));
+                            }
+                        }
+                    }
+                    bidi_stack.pop();
+                    let fallback_metrics = self.compute_strut_metrics(&child.style);
+                    let metrics = compute_inline_box_metrics(
+                        &child_items,
+                        content_offset_y,
+                        padding_bottom + border_bottom,
+                        fallback_metrics,
+                    );
+
+                    let mut inline_box = InlineBoxItem::new(
+                        start_edge,
+                        end_edge,
+                        content_offset_y,
+                        metrics,
+                        child.style.clone(),
+                        0,
+                        if matches!(child.style.unicode_bidi, UnicodeBidi::Plaintext) {
+                            let mut logical = String::new();
+                            collect_logical_text_for_direction(child, &mut logical);
+                            first_strong_direction(&logical).unwrap_or(child.style.direction)
+                        } else {
+                            child.style.direction
+                        },
+                        child.style.unicode_bidi,
+                    );
+                    inline_box.vertical_align = self.convert_vertical_align(
+                        child.style.vertical_align,
+                        child.style.font_size,
+                        metrics.line_height,
+                    );
+                    for item in child_items {
+                        inline_box.add_child(item);
+                    }
+
+                    current_items.push(InlineItem::InlineBox(inline_box));
+                }
+                BoxType::Anonymous(anon) if matches!(anon.anonymous_type, AnonymousType::Inline) => {
+                    if float {
+                        let metrics = self.compute_strut_metrics(&child.style);
+                        let va = self.convert_vertical_align(
+                            child.style.vertical_align,
+                            child.style.font_size,
+                            metrics.line_height,
+                        );
+                        let floating = crate::layout::contexts::inline::line_builder::FloatingItem {
+                            box_node: child.clone(),
+                            metrics,
+                            vertical_align: va,
+                            direction: child.style.direction,
+                            unicode_bidi: child.style.unicode_bidi,
+                        };
+                        current_items.push(InlineItem::Floating(floating));
+                        continue;
+                    }
+                    if formatting_context.is_some() {
+                        let item = self.layout_inline_block(child, available_width, available_height)?;
+                        current_items.push(InlineItem::InlineBlock(item));
+                        continue;
+                    }
+
+                    let percentage_base = if available_width.is_finite() {
+                        available_width
+                    } else {
+                        0.0
+                    };
+                    let padding_left = resolve_length_for_width(
+                        child.style.padding_left,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let padding_right = resolve_length_for_width(
+                        child.style.padding_right,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let padding_top = resolve_length_for_width(
+                        child.style.padding_top,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let padding_bottom = resolve_length_for_width(
+                        child.style.padding_bottom,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let border_left = resolve_length_for_width(
+                        child.style.border_left_width,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let border_right = resolve_length_for_width(
+                        child.style.border_right_width,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let border_top = resolve_length_for_width(
+                        child.style.border_top_width,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let border_bottom = resolve_length_for_width(
+                        child.style.border_bottom_width,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+
+                    let start_edge = padding_left + border_left;
+                    let end_edge = padding_right + border_right;
+                    let content_offset_y = padding_top + border_top;
+
+                    bidi_stack.push((child.style.unicode_bidi, child.style.direction));
+                    let mut child_boundary = CombineBoundary::default();
+                    if Some(idx) == first_combinable {
+                        child_boundary.prev = boundary.prev;
+                    }
+                    if Some(idx) == last_combinable {
+                        child_boundary.next = boundary.next;
+                    }
+                    let child_items = self.collect_inline_items_internal(
+                        child,
+                        available_width,
+                        available_height,
+                        &mut pending_space,
+                        base_direction,
+                        positioned_children,
+                        bidi_stack,
+                        child_boundary,
+                    )?;
+                    if dump_text_enabled() {
+                        static INLINE_ANON_LOG: OnceLock<AtomicUsize> = OnceLock::new();
+                        let logged = INLINE_ANON_LOG.get_or_init(|| AtomicUsize::new(0));
+                        if logged.fetch_add(1, Ordering::Relaxed) < 20 {
+                            fn text_desc(node: &BoxNode) -> usize {
+                                let mut total = 0;
+                                if matches!(node.box_type, BoxType::Text(_)) {
+                                    total += 1;
+                                }
+                                for child in &node.children {
+                                    total += text_desc(child);
+                                }
+                                total
+                            }
+                            fn first_text(node: &BoxNode) -> Option<String> {
+                                match &node.box_type {
+                                    BoxType::Text(t) => Some(truncate_text(&t.text, 40)),
+                                    _ => {
+                                        for child in &node.children {
+                                            if let Some(found) = first_text(child) {
+                                                return Some(found);
+                                            }
+                                        }
+                                        None
+                                    }
+                                }
+                            }
+                            eprintln!(
+                                "ifc anon inline child box_id={} children={} text_desc={} -> items={} first_text={:?}",
+                                child.id,
+                                child.children.len(),
+                                text_desc(child),
+                                child_items.len(),
+                                first_text(child)
+                            );
+                            if child_items.is_empty() && !child.children.is_empty() {
+                                let mut child_kinds = Vec::new();
+                                for grand in child.children.iter().take(5) {
+                                    child_kinds.push(format!(
+                                        "{:?}/display={:?}/children={}/text_desc={}",
+                                        grand.box_type,
+                                        grand.style.display,
+                                        grand.children.len(),
+                                        text_desc(grand)
+                                    ));
+                                }
+                                eprintln!("    anon inline child descendants: {}", child_kinds.join(" | "));
+                            }
+                        }
+                    }
                     bidi_stack.pop();
                     let fallback_metrics = self.compute_strut_metrics(&child.style);
                     let metrics = compute_inline_box_metrics(
@@ -578,6 +853,30 @@ impl InlineFormattingContext {
         bidi_stack: &mut Vec<(UnicodeBidi, Direction)>,
         boundary: CombineBoundary,
     ) -> Result<Vec<InlineItem>, LayoutError> {
+        if dump_text_enabled() {
+            static NODE_LOG: OnceLock<AtomicUsize> = OnceLock::new();
+            let logged = NODE_LOG.get_or_init(|| AtomicUsize::new(0));
+            if logged.fetch_add(1, Ordering::Relaxed) < 50 {
+                fn text_descendants(node: &BoxNode) -> usize {
+                    let mut total = 0;
+                    if matches!(node.box_type, BoxType::Text(_)) {
+                        total += 1;
+                    }
+                    for child in &node.children {
+                        total += text_descendants(child);
+                    }
+                    total
+                }
+                eprintln!(
+                    "ifc node box_id={} type={:?} display={:?} children={} text_desc={}",
+                    box_node.id,
+                    box_node.box_type,
+                    box_node.style.display,
+                    box_node.children.len(),
+                    text_descendants(box_node)
+                );
+            }
+        }
         let mut items = Vec::new();
 
         let combinable_indices: Vec<usize> = box_node
@@ -612,6 +911,22 @@ impl InlineFormattingContext {
             }
             match &child.box_type {
                 BoxType::Text(text_box) => {
+                    static TEXT_PROCESSED: OnceLock<AtomicUsize> = OnceLock::new();
+                    let total_counter = TEXT_PROCESSED.get_or_init(|| AtomicUsize::new(0));
+                    total_counter.fetch_add(1, Ordering::Relaxed);
+                    if dump_text_enabled() {
+                        static TEXT_LOGGED: OnceLock<AtomicUsize> = OnceLock::new();
+                        let counter = TEXT_LOGGED.get_or_init(|| AtomicUsize::new(0));
+                        if counter.fetch_add(1, Ordering::Relaxed) < 200 {
+                            eprintln!(
+                                "ifc item text box_id={} display={:?} len={} \"{}\"",
+                                child.id,
+                                child.style.display,
+                                text_box.text.len(),
+                                truncate_text(&text_box.text, 80)
+                            );
+                        }
+                    }
                     let mut inherited_boundary = CombineBoundary::default();
                     if Some(idx) == first_combinable {
                         inherited_boundary.prev = boundary.prev;
@@ -633,6 +948,16 @@ impl InlineFormattingContext {
                         &apply_text_transform(&text_box.text, child.style.text_transform, child.style.white_space),
                         child.style.white_space,
                     );
+                    if dump_text_enabled() && normalized.text.is_empty() && !text_box.text.is_empty() {
+                        eprintln!(
+                            "ifc normalized empty box_id={} raw_len={} ws={:?} transform={:?} text={:?}",
+                            child.id,
+                            text_box.text.len(),
+                            child.style.white_space,
+                            child.style.text_transform,
+                            truncate_text(&text_box.text, 80)
+                        );
+                    }
 
                     let mut produced = self.create_inline_items_from_normalized_with_base(
                         child,
@@ -810,6 +1135,237 @@ impl InlineFormattingContext {
                         bidi_stack,
                         CombineBoundary::default(),
                     )?;
+                    if dump_text_enabled() {
+                        static INLINE_CHILD_LOG: OnceLock<AtomicUsize> = OnceLock::new();
+                        let logged = INLINE_CHILD_LOG.get_or_init(|| AtomicUsize::new(0));
+                        if logged.fetch_add(1, Ordering::Relaxed) < 20 {
+                            fn text_desc(node: &BoxNode) -> usize {
+                                let mut total = 0;
+                                if matches!(node.box_type, BoxType::Text(_)) {
+                                    total += 1;
+                                }
+                                for child in &node.children {
+                                    total += text_desc(child);
+                                }
+                                total
+                            }
+                            fn first_text(node: &BoxNode) -> Option<String> {
+                                match &node.box_type {
+                                    BoxType::Text(t) => Some(truncate_text(&t.text, 40)),
+                                    _ => {
+                                        for child in &node.children {
+                                            if let Some(found) = first_text(child) {
+                                                return Some(found);
+                                            }
+                                        }
+                                        None
+                                    }
+                                }
+                            }
+                            eprintln!(
+                                "ifc inline child box_id={} children={} text_desc={} -> items={} first_text={:?}",
+                                child.id,
+                                child.children.len(),
+                                text_desc(child),
+                                child_items.len(),
+                                first_text(child)
+                            );
+                            if child_items.is_empty() && !child.children.is_empty() {
+                                let mut child_kinds = Vec::new();
+                                for grand in child.children.iter().take(5) {
+                                    child_kinds.push(format!(
+                                        "{:?}/display={:?}/children={}/text_desc={}",
+                                        grand.box_type,
+                                        grand.style.display,
+                                        grand.children.len(),
+                                        text_desc(grand)
+                                    ));
+                                }
+                                eprintln!("    inline child descendants: {}", child_kinds.join(" | "));
+                            }
+                        }
+                    }
+                    bidi_stack.pop();
+                    let fallback_metrics = self.compute_strut_metrics(&child.style);
+                    let metrics = compute_inline_box_metrics(
+                        &child_items,
+                        content_offset_y,
+                        padding_bottom + border_bottom,
+                        fallback_metrics,
+                    );
+
+                    let mut inline_box = InlineBoxItem::new(
+                        start_edge,
+                        end_edge,
+                        content_offset_y,
+                        metrics,
+                        child.style.clone(),
+                        0,
+                        child.style.direction,
+                        child.style.unicode_bidi,
+                    );
+                    inline_box.vertical_align = self.convert_vertical_align(
+                        child.style.vertical_align,
+                        child.style.font_size,
+                        metrics.line_height,
+                    );
+                    for item in child_items {
+                        inline_box.add_child(item);
+                    }
+
+                    items.push(InlineItem::InlineBox(inline_box));
+                }
+                BoxType::Anonymous(anon) if matches!(anon.anonymous_type, AnonymousType::Inline) => {
+                    if child.style.float.is_floating() {
+                        let metrics = self.compute_strut_metrics(&child.style);
+                        let va = self.convert_vertical_align(
+                            child.style.vertical_align,
+                            child.style.font_size,
+                            metrics.line_height,
+                        );
+                        let floating = crate::layout::contexts::inline::line_builder::FloatingItem {
+                            box_node: child.clone(),
+                            metrics,
+                            vertical_align: va,
+                            direction: child.style.direction,
+                            unicode_bidi: child.style.unicode_bidi,
+                        };
+                        items.push(InlineItem::Floating(floating));
+                        continue;
+                    }
+                    if child.formatting_context().is_some() {
+                        let item = self.layout_inline_block(child, available_width, available_height)?;
+                        items.push(InlineItem::InlineBlock(item));
+                        continue;
+                    }
+
+                    let percentage_base = if available_width.is_finite() {
+                        available_width
+                    } else {
+                        0.0
+                    };
+                    let padding_left = resolve_length_for_width(
+                        child.style.padding_left,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let padding_right = resolve_length_for_width(
+                        child.style.padding_right,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let padding_top = resolve_length_for_width(
+                        child.style.padding_top,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let padding_bottom = resolve_length_for_width(
+                        child.style.padding_bottom,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let border_left = resolve_length_for_width(
+                        child.style.border_left_width,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let border_right = resolve_length_for_width(
+                        child.style.border_right_width,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let border_top = resolve_length_for_width(
+                        child.style.border_top_width,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+                    let border_bottom = resolve_length_for_width(
+                        child.style.border_bottom_width,
+                        percentage_base,
+                        &child.style,
+                        &self.font_context,
+                        self.viewport_size,
+                    );
+
+                    let start_edge = padding_left + border_left;
+                    let end_edge = padding_right + border_right;
+                    let content_offset_y = padding_top + border_top;
+
+                    bidi_stack.push((child.style.unicode_bidi, child.style.direction));
+                    let child_items = self.collect_inline_items_internal(
+                        child,
+                        available_width,
+                        available_height,
+                        pending_space,
+                        base_direction,
+                        positioned_children,
+                        bidi_stack,
+                        CombineBoundary::default(),
+                    )?;
+                    if dump_text_enabled() {
+                        static INLINE_ANON_ITEMS_LOG: OnceLock<AtomicUsize> = OnceLock::new();
+                        let logged = INLINE_ANON_ITEMS_LOG.get_or_init(|| AtomicUsize::new(0));
+                        if logged.fetch_add(1, Ordering::Relaxed) < 20 {
+                            fn text_desc(node: &BoxNode) -> usize {
+                                let mut total = 0;
+                                if matches!(node.box_type, BoxType::Text(_)) {
+                                    total += 1;
+                                }
+                                for child in &node.children {
+                                    total += text_desc(child);
+                                }
+                                total
+                            }
+                            fn first_text(node: &BoxNode) -> Option<String> {
+                                match &node.box_type {
+                                    BoxType::Text(t) => Some(truncate_text(&t.text, 40)),
+                                    _ => {
+                                        for child in &node.children {
+                                            if let Some(found) = first_text(child) {
+                                                return Some(found);
+                                            }
+                                        }
+                                        None
+                                    }
+                                }
+                            }
+                            eprintln!(
+                                "ifc anon inline child box_id={} children={} text_desc={} -> items={} first_text={:?}",
+                                child.id,
+                                child.children.len(),
+                                text_desc(child),
+                                child_items.len(),
+                                first_text(child)
+                            );
+                            if child_items.is_empty() && !child.children.is_empty() {
+                                let mut child_kinds = Vec::new();
+                                for grand in child.children.iter().take(5) {
+                                    child_kinds.push(format!(
+                                        "{:?}/display={:?}/children={}/text_desc={}",
+                                        grand.box_type,
+                                        grand.style.display,
+                                        grand.children.len(),
+                                        text_desc(grand)
+                                    ));
+                                }
+                                eprintln!("    anon inline child descendants: {}", child_kinds.join(" | "));
+                            }
+                        }
+                    }
                     bidi_stack.pop();
                     let fallback_metrics = self.compute_strut_metrics(&child.style);
                     let metrics = compute_inline_box_metrics(
@@ -865,7 +1421,7 @@ impl InlineFormattingContext {
 
         let style = &box_node.style;
         let metrics = self.resolve_scaled_metrics(style);
-        let line_height = compute_line_height_with_metrics(style, metrics.as_ref());
+        let line_height = compute_line_height_with_metrics_viewport(style, metrics.as_ref(), Some(self.viewport_size));
         let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
             self.font_context.clone(),
             self.viewport_size,
@@ -1015,6 +1571,8 @@ impl InlineFormattingContext {
             box_node.style.unicode_bidi,
             margin_left,
             margin_right,
+            matches!(style.overflow_x, crate::style::types::Overflow::Visible)
+                && matches!(style.overflow_y, crate::style::types::Overflow::Visible),
         )
         .with_vertical_align(va))
     }
@@ -1211,7 +1769,7 @@ impl InlineFormattingContext {
         }
         let bidi_stack = contextual_stack;
         let metrics = self.resolve_scaled_metrics(style);
-        let line_height = compute_line_height_with_metrics(style, metrics.as_ref());
+        let line_height = compute_line_height_with_metrics_viewport(style, metrics.as_ref(), Some(self.viewport_size));
         let (hyphen_free, hyphen_breaks) = if is_marker {
             (normalized_text.to_string(), Vec::new())
         } else {
@@ -1550,7 +2108,7 @@ impl InlineFormattingContext {
     ) -> Result<ReplacedItem, LayoutError> {
         let style = &box_node.style;
         let metrics = self.resolve_scaled_metrics(style);
-        let line_height = compute_line_height_with_metrics(style, metrics.as_ref());
+        let line_height = compute_line_height_with_metrics_viewport(style, metrics.as_ref(), Some(self.viewport_size));
         let width_base = available_width.is_finite().then_some(available_width);
         let height_base = available_height.filter(|h| h.is_finite());
         let percentage_size = match (width_base, height_base) {
@@ -1710,11 +2268,22 @@ impl InlineFormattingContext {
     }
 
     fn resolve_scaled_metrics(&self, style: &ComputedStyle) -> Option<ScaledMetrics> {
+        static METRICS_CACHE: OnceLock<Mutex<HashMap<usize, Option<ScaledMetrics>>>> = OnceLock::new();
+        let cache = METRICS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        let key = style as *const ComputedStyle as usize;
+
+        if let Ok(cache) = cache.lock() {
+            if let Some(cached) = cache.get(&key) {
+                return cached.clone();
+            }
+        }
+
         let italic = matches!(style.font_style, FontStyle::Italic);
         let oblique = matches!(style.font_style, FontStyle::Oblique(_));
         let stretch = crate::text::font_db::FontStretch::from_percentage(style.font_stretch.to_percentage());
         let preferred_aspect = preferred_font_aspect(style, &self.font_context);
-        self.font_context
+        let resolved = self
+            .font_context
             .get_font_full(
                 &style.font_family,
                 style.font_weight.to_u16(),
@@ -1731,12 +2300,17 @@ impl InlineFormattingContext {
             .and_then(|font| {
                 let used_font_size = compute_adjusted_font_size(style, &font, preferred_aspect);
                 font.metrics().ok().map(|metrics| metrics.scale(used_font_size))
-            })
+            });
+
+        if let Ok(mut cache) = cache.lock() {
+            cache.insert(key, resolved.clone());
+        }
+        resolved
     }
 
     fn compute_strut_metrics(&self, style: &ComputedStyle) -> BaselineMetrics {
         let scaled = self.resolve_scaled_metrics(style);
-        let line_height = compute_line_height_with_metrics(style, scaled.as_ref());
+        let line_height = compute_line_height_with_metrics_viewport(style, scaled.as_ref(), Some(self.viewport_size));
         if let Some(scaled) = scaled {
             return BaselineMetrics {
                 baseline_offset: scaled.ascent,
@@ -1745,6 +2319,7 @@ impl InlineFormattingContext {
                 descent: scaled.descent,
                 line_gap: scaled.line_gap,
                 line_height,
+                x_height: scaled.x_height,
             };
         }
 
@@ -1898,12 +2473,40 @@ impl InlineFormattingContext {
         indent_offset: f32,
         inline_vertical: bool,
     ) -> FragmentNode {
+        static LOG_BASELINE: OnceLock<Option<AtomicUsize>> = OnceLock::new();
+        let mut log_line = false;
+        if LOG_BASELINE
+            .get_or_init(|| {
+                if std::env::var("FASTR_LOG_INLINE_BASELINE")
+                    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+                    .unwrap_or(false)
+                {
+                    Some(AtomicUsize::new(0))
+                } else {
+                    None
+                }
+            })
+            .as_ref()
+            .map(|counter| counter.fetch_add(1, Ordering::Relaxed) < 5)
+            .unwrap_or(false)
+        {
+            log_line = true;
+        }
+
         let should_justify = is_justify_align(line_align) && !matches!(resolved_justify, TextJustify::None);
-        let items: Vec<PositionedItem> = if should_justify {
+        let mut items: Vec<PositionedItem> = if should_justify {
             self.expand_items_for_justification(&line.items, resolved_justify)
         } else {
             line.items.clone()
         };
+        let rtl = matches!(direction, crate::style::types::Direction::Rtl);
+        if rtl {
+            items.reverse();
+        }
+        // Floats are taken out-of-flow; if any remain in the line items, skip them
+        // so they don't affect justification or fragment construction.
+        items.retain(|p| !matches!(p.item, InlineItem::Floating(_)));
+
         let mut children = Vec::new();
         let usable_width = if available_width.is_finite() {
             available_width.max(0.0)
@@ -1926,12 +2529,21 @@ impl InlineFormattingContext {
             _ => (0.0, 0.0),
         };
 
-        let rtl = matches!(direction, crate::style::types::Direction::Rtl);
         let mut cursor = if rtl {
-            line.left_offset + indent_offset + lead + total_width
+            indent_offset + lead + total_width
         } else {
-            line.left_offset + indent_offset + lead
+            indent_offset + lead
         };
+        if log_line {
+            eprintln!(
+                "[inline-baseline] line y_offset={:.2} block_offset={:.2} height={:.2} baseline={:.2} items={}",
+                line.y_offset,
+                block_offset,
+                line.height,
+                line.baseline,
+                items.len()
+            );
+        }
 
         for (i, positioned) in items.iter().enumerate() {
             let item_width = positioned.item.width();
@@ -1948,6 +2560,20 @@ impl InlineFormattingContext {
             };
 
             let fragment = self.create_item_fragment_oriented(&positioned.item, block_pos, inline_pos, inline_vertical);
+            if log_line {
+                let metrics = positioned.item.baseline_metrics();
+                eprintln!(
+                    "  item#{i} width={:.2} block_pos={:.2} baseline_offset={:.2} metrics(base={:.2} h={:.2} asc={:.2} desc={:.2}) kind={:?}",
+                    item_width,
+                    block_pos,
+                    positioned.baseline_offset,
+                    metrics.baseline_offset,
+                    metrics.height,
+                    metrics.ascent,
+                    metrics.descent,
+                    positioned.item
+                );
+            }
             children.push(fragment);
 
             if rtl {
@@ -2180,8 +2806,8 @@ impl InlineFormattingContext {
             }
             InlineItem::InlineBox(box_item) => {
                 if inline_vertical {
-                    let mut child_inline = inline_pos + box_item.start_edge;
-                    let child_block = block_pos + box_item.content_offset_y;
+                    let mut child_inline = box_item.start_edge;
+                    let child_block = box_item.content_offset_y;
                     let children: Vec<_> = box_item
                         .children
                         .iter()
@@ -2195,8 +2821,8 @@ impl InlineFormattingContext {
                     let bounds = Rect::from_xywh(block_pos, inline_pos, box_item.metrics.height, box_item.width());
                     FragmentNode::new_inline_styled(bounds, box_item.box_index, children, box_item.style.clone())
                 } else {
-                    let mut child_x = inline_pos + box_item.start_edge;
-                    let child_y = block_pos + box_item.content_offset_y;
+                    let mut child_x = box_item.start_edge;
+                    let child_y = box_item.content_offset_y;
                     let children: Vec<_> = box_item
                         .children
                         .iter()
@@ -2266,7 +2892,10 @@ impl InlineFormattingContext {
                     )
                 }
             }
-            InlineItem::Floating(_) => unreachable!("Floating items are handled before fragment creation"),
+            InlineItem::Floating(_) => {
+                // Floats are laid out separately by the float integration logic; skip any stray placeholders.
+                FragmentNode::new_inline(Rect::from_xywh(inline_pos, block_pos, 0.0, 0.0), 0, vec![])
+            }
         }
     }
 
@@ -2304,8 +2933,8 @@ impl InlineFormattingContext {
             }
             InlineItem::InlineBox(box_item) => {
                 // Recursively create children with horizontal and vertical offsets
-                let mut child_x = x + box_item.start_edge;
-                let child_y = y + box_item.content_offset_y;
+                let mut child_x = box_item.start_edge;
+                let child_y = box_item.content_offset_y;
                 let children: Vec<_> = box_item
                     .children
                     .iter()
@@ -2342,7 +2971,10 @@ impl InlineFormattingContext {
                     replaced_item.style.clone(),
                 )
             }
-            InlineItem::Floating(_) => unreachable!("Floating items are handled before fragment creation"),
+            InlineItem::Floating(_) => {
+                // Floats should have been extracted before fragment creation.
+                FragmentNode::new_inline(Rect::from_xywh(x, y, 0.0, 0.0), 0, vec![])
+            }
         }
     }
 
@@ -2566,7 +3198,7 @@ fn resolve_length_for_width(
     viewport: crate::geometry::Size,
 ) -> f32 {
     if length.unit.is_percentage() {
-        length.resolve_against(percentage_base)
+        length.resolve_against(percentage_base).unwrap_or(0.0)
     } else if length.unit.is_absolute() {
         length.to_px()
     } else if length.unit.is_viewport_relative() {
@@ -2584,7 +3216,7 @@ fn resolve_length_with_percentage_inline(
     viewport: crate::geometry::Size,
 ) -> Option<f32> {
     if length.unit.is_percentage() {
-        percentage_base.map(|b| length.resolve_against(b))
+        percentage_base.and_then(|b| length.resolve_against(b))
     } else if length.unit.is_absolute() {
         Some(length.to_px())
     } else if length.unit.is_viewport_relative() {
@@ -2616,15 +3248,23 @@ fn compute_inline_box_metrics(
         let mut metrics = fallback;
         metrics.baseline_offset += content_offset_y;
         metrics.ascent += content_offset_y;
-        metrics.descent += bottom_inset;
-        metrics.height += content_offset_y + bottom_inset;
+        metrics.descent = (metrics.descent + bottom_inset).max(0.0);
+        metrics.height = metrics.height.max(metrics.baseline_offset + metrics.descent + bottom_inset);
         metrics.line_height = metrics.height;
         return metrics;
     }
 
     let mut content_height: f32 = 0.0;
     for child in children {
-        content_height = content_height.max(child.baseline_metrics().height);
+        let child_metrics = child.baseline_metrics();
+        // Guard against fonts whose ascent exceeds the authored line-height by using the larger of
+        // the line box height and the font’s intrinsic ascent+descent. This avoids negative
+        // descents that would otherwise push nested inline boxes downward when line-height is
+        // tighter than the font metrics.
+        let child_height = child_metrics
+            .height
+            .max(child_metrics.baseline_offset + child_metrics.descent);
+        content_height = content_height.max(child_height);
     }
 
     let baseline_child = children
@@ -2636,7 +3276,7 @@ fn compute_inline_box_metrics(
     let baseline_offset = content_offset_y + child_metrics.baseline_offset;
     let ascent = content_offset_y + child_metrics.ascent;
     let height = content_offset_y + content_height + bottom_inset;
-    let descent = height - baseline_offset;
+    let descent = (height - baseline_offset).max(0.0);
 
     BaselineMetrics {
         baseline_offset,
@@ -2645,6 +3285,7 @@ fn compute_inline_box_metrics(
         descent,
         line_gap: child_metrics.line_gap,
         line_height: height,
+        x_height: child_metrics.x_height,
     }
 }
 
@@ -3442,7 +4083,13 @@ impl FormattingContext for InlineFormattingContext {
     }
 
     fn compute_intrinsic_inline_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
-        Ok(self.calculate_intrinsic_width(box_node, mode))
+        count_inline_intrinsic_call();
+        if let Some(cached) = intrinsic_cache_lookup(box_node, mode) {
+            return Ok(cached);
+        }
+        let width = self.calculate_intrinsic_width(box_node, mode);
+        intrinsic_cache_store(box_node, mode, width);
+        Ok(width)
     }
 }
 
@@ -3940,7 +4587,9 @@ impl InlineFormattingContext {
                 acc.add_line_relative(&metrics, align);
                 0.0
             } else {
-                acc.add_baseline_relative(&metrics, align, None)
+                // Reuse the parent strut metrics so baseline-relative alignments (e.g. middle)
+                // can reference the parent font/x-height during rebuild.
+                acc.add_baseline_relative(&metrics, align, Some(strut_metrics))
             };
 
             positioned.push(PositionedItem {
@@ -3993,6 +4642,60 @@ impl InlineFormattingContext {
         mut float_ctx: Option<&mut FloatContext>,
         float_base_y: f32,
     ) -> Result<FragmentNode, LayoutError> {
+        let _profile = layout_timer(LayoutKind::Inline);
+        if dump_text_enabled() {
+            static TREE_DUMP: OnceLock<AtomicUsize> = OnceLock::new();
+            let tree_counter = TREE_DUMP.get_or_init(|| AtomicUsize::new(0));
+            if tree_counter.fetch_add(1, Ordering::Relaxed) == 0 {
+                fn dump_inline_tree(node: &BoxNode, depth: usize) {
+                    if depth > 5 {
+                        return;
+                    }
+                    let indent = "  ".repeat(depth);
+                    match &node.box_type {
+                        BoxType::Text(t) => {
+                            eprintln!(
+                                "{}text display={:?} \"{}\"",
+                                indent,
+                                node.style.display,
+                                truncate_text(&t.text, 60)
+                            );
+                        }
+                        _ => {
+                            eprintln!(
+                                "{}{:?} display={:?} children={}",
+                                indent,
+                                node.box_type,
+                                node.style.display,
+                                node.children.len()
+                            );
+                            for child in &node.children {
+                                dump_inline_tree(child, depth + 1);
+                            }
+                        }
+                    }
+                }
+                dump_inline_tree(box_node, 0);
+            }
+            fn count_text_nodes(node: &BoxNode) -> usize {
+                let mut total = 0;
+                if matches!(node.box_type, BoxType::Text(_)) {
+                    total += 1;
+                }
+                for child in &node.children {
+                    total += count_text_nodes(child);
+                }
+                total
+            }
+            eprintln!(
+                "ifc start display={:?} children={} text_desc={} available_inline={:.2} available_block={:.2}",
+                box_node.style.display,
+                box_node.children.len(),
+                count_text_nodes(box_node),
+                constraints.width().unwrap_or(f32::MAX),
+                constraints.height().unwrap_or(f32::MAX)
+            );
+        }
         let style = &box_node.style;
         let inline_vertical = is_vertical_writing_mode(style.writing_mode);
         let available_inline = if inline_vertical {
@@ -4029,6 +4732,113 @@ impl InlineFormattingContext {
             &mut bidi_stack,
             CombineBoundary::default(),
         )?;
+        if dump_text_enabled() {
+            let mut inline_segments = 0;
+            let mut inline_items = 0;
+            let mut text_items = 0;
+            let mut block_segments = 0;
+            for seg in &segments {
+                match seg {
+                    InlineFlowSegment::InlineItems(items) => {
+                        inline_segments += 1;
+                        inline_items += items.len();
+                        text_items += items.iter().filter(|i| matches!(i, InlineItem::Text(_))).count();
+                    }
+                    InlineFlowSegment::Block { .. } => block_segments += 1,
+                }
+            }
+            eprintln!(
+                "ifc segments inline_segments={} block_segments={} inline_items={} text_items={}",
+                inline_segments, block_segments, inline_items, text_items
+            );
+            if text_items == 0 && inline_items > 0 {
+                fn text_child_count(items: &[InlineItem]) -> usize {
+                    let mut count = 0;
+                    for item in items {
+                        match item {
+                            InlineItem::Text(_) => count += 1,
+                            InlineItem::InlineBox(b) => count += text_child_count(&b.children),
+                            _ => {}
+                        }
+                    }
+                    count
+                }
+                let mut summaries = Vec::new();
+                for (seg_idx, seg) in segments.iter().enumerate() {
+                    match seg {
+                        InlineFlowSegment::InlineItems(items) => {
+                            let mut kinds = Vec::new();
+                            for item in items.iter().take(10) {
+                                let label = match item {
+                                    InlineItem::Text(t) => format!("Text(len={})", t.text.len()),
+                                    InlineItem::Tab(_) => "Tab".to_string(),
+                                    InlineItem::InlineBox(b) => format!(
+                                        "InlineBox(children={}, text_children={})",
+                                        b.children.len(),
+                                        text_child_count(&b.children)
+                                    ),
+                                    InlineItem::InlineBlock(_) => "InlineBlock".to_string(),
+                                    InlineItem::Replaced(_) => "Replaced".to_string(),
+                                    InlineItem::Floating(_) => "Floating".to_string(),
+                                };
+                                kinds.push(label);
+                            }
+                            summaries.push(format!("seg{seg_idx}: {}", kinds.join(", ")));
+                        }
+                        InlineFlowSegment::Block { .. } => summaries.push(format!("seg{seg_idx}: Block")),
+                    }
+                }
+                eprintln!(
+                    "inline detail box_id={} display={:?} -> {}",
+                    box_node.id,
+                    box_node.style.display,
+                    summaries.join(" | ")
+                );
+                static VERBOSE_INLINE: OnceLock<AtomicUsize> = OnceLock::new();
+                let verbose_count = VERBOSE_INLINE.get_or_init(|| AtomicUsize::new(0));
+                if verbose_count.fetch_add(1, Ordering::Relaxed) < 3 {
+                    fn describe_item(item: &InlineItem, depth: usize) -> String {
+                        if depth > 2 {
+                            return "...".to_string();
+                        }
+                        match item {
+                            InlineItem::Text(t) => format!("Text({:?})", truncate_text(&t.text, 20)),
+                            InlineItem::Tab(_) => "Tab".to_string(),
+                            InlineItem::InlineBox(b) => {
+                                let mut child_desc = Vec::new();
+                                for child in b.children.iter().take(5) {
+                                    child_desc.push(describe_item(child, depth + 1));
+                                }
+                                format!("InlineBox[{}]", child_desc.join(", "))
+                            }
+                            InlineItem::InlineBlock(b) => {
+                                format!("InlineBlock({:.1}x{:.1})", b.width, b.height)
+                            }
+                            InlineItem::Replaced(r) => {
+                                format!("Replaced({:.1}x{:.1})", r.width, r.height)
+                            }
+                            InlineItem::Floating(_) => "Floating".to_string(),
+                        }
+                    }
+                    let mut verbose_segments = Vec::new();
+                    for (seg_idx, seg) in segments.iter().enumerate() {
+                        match seg {
+                            InlineFlowSegment::InlineItems(items) => {
+                                let desc: Vec<String> = items.iter().take(6).map(|i| describe_item(i, 0)).collect();
+                                verbose_segments.push(format!("seg{seg_idx}: {}", desc.join(", ")));
+                            }
+                            InlineFlowSegment::Block { .. } => verbose_segments.push(format!("seg{seg_idx}: Block")),
+                        }
+                    }
+                    eprintln!(
+                        "inline verbose box_id={} display={:?} -> {}",
+                        box_node.id,
+                        box_node.style.display,
+                        verbose_segments.join(" || ")
+                    );
+                }
+            }
+        }
 
         let indent_value = resolve_length_with_percentage_inline(
             style.text_indent.length,
@@ -4472,8 +5282,18 @@ impl InlineFormattingContext {
                     bounds.height() - border_top - border_bottom,
                 ),
             );
+            let cb_block_base = if style.height.is_some() {
+                Some(padding_rect.size.height)
+            } else {
+                None
+            };
             let cb = if style.position.is_positioned() {
-                ContainingBlock::with_viewport(padding_rect, self.viewport_size)
+                ContainingBlock::with_viewport_and_bases(
+                    padding_rect,
+                    self.viewport_size,
+                    Some(padding_rect.size.width),
+                    cb_block_base,
+                )
             } else {
                 self.nearest_positioned_cb
             };
@@ -4483,7 +5303,7 @@ impl InlineFormattingContext {
                 static_position
             };
 
-            let abs = AbsoluteLayout::new();
+            let abs = AbsoluteLayout::with_font_context(self.font_context.clone());
             for child in positioned_children {
                 let mut layout_child = child.clone();
                 let mut child_style = (*layout_child.style).clone();
@@ -4501,7 +5321,9 @@ impl InlineFormattingContext {
                 let fc = factory.create(fc_type);
                 let child_constraints = LayoutConstraints::new(
                     AvailableSpace::Definite(cb.rect.size.width),
-                    AvailableSpace::Definite(cb.rect.size.height),
+                    cb_block_base
+                        .map(AvailableSpace::Definite)
+                        .unwrap_or(AvailableSpace::Indefinite),
                 );
                 let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
                 let positioned_style =
@@ -5319,6 +6141,7 @@ mod tests {
     };
     use crate::style::values::{Length, LengthUnit};
     use crate::style::ComputedStyle;
+    use crate::text::font_loader::FontContext;
     use crate::text::line_break::BreakType;
     use crate::tree::box_tree::{MarkerContent, ReplacedType};
     use crate::tree::fragment_tree::FragmentContent;
@@ -5336,6 +6159,20 @@ mod tests {
 
     fn make_inline_container(children: Vec<BoxNode>) -> BoxNode {
         BoxNode::new_block(default_style(), FormattingContextType::Block, children)
+    }
+
+    #[test]
+    fn vertical_align_length_resolves_viewport_units() {
+        let ctx = InlineFormattingContext::with_font_context_and_viewport(FontContext::new(), Size::new(500.0, 400.0));
+        let align = ctx.convert_vertical_align(
+            crate::style::types::VerticalAlign::Length(Length::new(10.0, LengthUnit::Vh)),
+            10.0,
+            12.0,
+        );
+        assert!(matches!(
+            align,
+            crate::layout::contexts::inline::baseline::VerticalAlign::Length(v) if (v - 40.0).abs() < 1e-3
+        ));
     }
 
     fn marker_and_text_positions(fragment: &FragmentNode) -> (Option<f32>, Option<f32>) {

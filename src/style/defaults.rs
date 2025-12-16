@@ -32,9 +32,12 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
             "html" | "body" => Display::Block,
 
             // Block-level elements
-            "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol" | "li" | "blockquote" | "pre"
-            | "article" | "section" | "nav" | "aside" | "header" | "footer" | "main" | "figure" | "figcaption"
-            | "dl" | "dt" | "dd" | "form" | "fieldset" | "legend" | "address" | "hr" => Display::Block,
+            "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol" | "blockquote" | "pre" | "article"
+            | "section" | "nav" | "aside" | "header" | "footer" | "main" | "figure" | "figcaption" | "dl" | "dt"
+            | "dd" | "form" | "fieldset" | "legend" | "address" | "hr" => Display::Block,
+
+            // Lists
+            "li" => Display::ListItem,
 
             // Center element - centers its contents
             "center" => Display::Block,
@@ -50,6 +53,9 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
             "a" | "span" | "em" | "strong" | "code" | "b" | "i" | "u" | "small" | "sub" | "sup" | "mark" | "abbr"
             | "cite" | "q" | "kbd" | "samp" | "var" | "time" | "label" => Display::Inline,
 
+            // Replaced elements: keep them inline by default
+            "img" | "video" | "audio" | "canvas" | "svg" => Display::Inline,
+
             // Hidden elements (display: none - not rendered)
             "head" | "style" | "script" | "meta" | "link" | "title" | "noscript" | "template" => Display::None,
 
@@ -59,6 +65,18 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
 
         // Force minimal spacing for table elements (consistent with user-agent.css)
         match tag {
+            "html" => {
+                // Canvas default background per UA stylesheet
+                styles.background_color = Rgba::WHITE;
+            }
+            "body" => {
+                // UA default margins: 8px on all sides
+                let default_margin = Some(Length::px(8.0));
+                styles.margin_top = default_margin;
+                styles.margin_right = default_margin;
+                styles.margin_bottom = default_margin;
+                styles.margin_left = default_margin;
+            }
             "table" => {
                 // Remove all spacing from tables
                 styles.margin_top = Some(Length::px(0.0));
@@ -87,6 +105,10 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
             "i" | "em" => {
                 // Italic text - using Oblique since we may not have true italics
                 styles.font_style = crate::style::FontStyle::Oblique(None);
+            }
+            "img" | "video" | "audio" | "canvas" | "svg" => {
+                // Responsive default: limit replaced elements to their containing block
+                styles.max_width = Some(Length::percent(100.0));
             }
             _ => {}
         }
@@ -149,6 +171,11 @@ pub fn parse_color_attribute(color_str: &str) -> Option<Rgba> {
                 });
             }
         }
+    }
+
+    // Fallback to CSS color parsing for rgb()/named colors.
+    if let Ok(color) = crate::style::color::Color::parse(color_str) {
+        return Some(color.to_rgba(Rgba::BLACK));
     }
 
     None

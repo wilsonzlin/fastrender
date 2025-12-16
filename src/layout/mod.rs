@@ -54,6 +54,10 @@ pub mod utils;
 // W2.T09 - Formatting context factory
 pub mod contexts;
 
+// Optional layout profiling
+pub mod flex_profile;
+pub mod profile;
+
 // W2.T04 - Layout constraints
 pub mod constraints;
 

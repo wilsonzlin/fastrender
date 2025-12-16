@@ -42,6 +42,7 @@
 //! - CSS Media Queries Level 5: <https://www.w3.org/TR/mediaqueries-5/>
 
 use crate::style::values::Length;
+use std::env;
 use std::fmt;
 
 /// A single media query
@@ -76,6 +77,15 @@ pub struct MediaQuery {
 }
 
 impl MediaQuery {
+    /// Returns true when the query only uses size features suitable for container queries.
+    pub fn is_size_query(&self) -> bool {
+        // Container queries level 1 allow only size features and no media type.
+        if self.media_type.is_some() {
+            return false;
+        }
+        self.features.iter().all(|f| f.is_size_feature())
+    }
+
     /// Creates a new empty media query
     ///
     /// An empty query matches all media.
@@ -277,21 +287,33 @@ impl fmt::Display for MediaModifier {
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub enum MediaFeature {
-    // Viewport width features
+    // Viewport width/inline-size features
     /// Exact viewport width: `(width: 768px)`
     Width(Length),
     /// Minimum viewport width: `(min-width: 768px)`
     MinWidth(Length),
     /// Maximum viewport width: `(max-width: 1024px)`
     MaxWidth(Length),
+    /// Exact inline size (alias of width for container queries): `(inline-size: 500px)`
+    InlineSize(Length),
+    /// Minimum inline size: `(min-inline-size: 500px)`
+    MinInlineSize(Length),
+    /// Maximum inline size: `(max-inline-size: 800px)`
+    MaxInlineSize(Length),
 
-    // Viewport height features
+    // Viewport height/block-size features
     /// Exact viewport height: `(height: 600px)`
     Height(Length),
     /// Minimum viewport height: `(min-height: 400px)`
     MinHeight(Length),
     /// Maximum viewport height: `(max-height: 900px)`
     MaxHeight(Length),
+    /// Exact block size (alias of height for container queries): `(block-size: 400px)`
+    BlockSize(Length),
+    /// Minimum block size: `(min-block-size: 400px)`
+    MinBlockSize(Length),
+    /// Maximum block size: `(max-block-size: 900px)`
+    MaxBlockSize(Length),
 
     // Orientation
     /// Device orientation: `(orientation: portrait)`
@@ -354,9 +376,77 @@ pub enum MediaFeature {
     PrefersContrast(ContrastPreference),
     /// Reduced transparency preference: `(prefers-reduced-transparency: reduce)`
     PrefersReducedTransparency(ReducedTransparency),
+    /// Reduced data usage preference: `(prefers-reduced-data: reduce)`
+    PrefersReducedData(ReducedData),
+    /// Range comparisons using level 4 syntax (e.g., `400px < width <= 800px`)
+    Range {
+        feature: RangeFeature,
+        op: ComparisonOp,
+        value: RangeValue,
+    },
+}
+
+/// Comparison operator for range-based media features
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComparisonOp {
+    LessThan,
+    LessThanEqual,
+    GreaterThan,
+    GreaterThanEqual,
+    Equal,
+}
+
+/// Which media dimension/value a range comparison targets
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeFeature {
+    Width,
+    InlineSize,
+    BlockSize,
+    Height,
+    AspectRatio,
+    Resolution,
+}
+
+/// Value for a range comparison
+#[derive(Debug, Clone, PartialEq)]
+pub enum RangeValue {
+    Length(Length),
+    AspectRatio(u32, u32),
+    Resolution(Resolution),
 }
 
 impl MediaFeature {
+    /// Returns true when this feature is a size query (width/height/inline-size/block-size/aspect-ratio/orientation).
+    pub fn is_size_feature(&self) -> bool {
+        match self {
+            MediaFeature::Width(_)
+            | MediaFeature::MinWidth(_)
+            | MediaFeature::MaxWidth(_)
+            | MediaFeature::InlineSize(_)
+            | MediaFeature::MinInlineSize(_)
+            | MediaFeature::MaxInlineSize(_)
+            | MediaFeature::Height(_)
+            | MediaFeature::MinHeight(_)
+            | MediaFeature::MaxHeight(_)
+            | MediaFeature::BlockSize(_)
+            | MediaFeature::MinBlockSize(_)
+            | MediaFeature::MaxBlockSize(_)
+            | MediaFeature::AspectRatio { .. }
+            | MediaFeature::MinAspectRatio { .. }
+            | MediaFeature::MaxAspectRatio { .. }
+            | MediaFeature::Orientation(_) => true,
+            MediaFeature::Range { feature, .. } => matches!(
+                feature,
+                RangeFeature::Width
+                    | RangeFeature::InlineSize
+                    | RangeFeature::BlockSize
+                    | RangeFeature::Height
+                    | RangeFeature::AspectRatio
+            ),
+            _ => false,
+        }
+    }
+
     /// Parses a media feature from name and optional value
     ///
     /// # Examples
@@ -385,6 +475,20 @@ impl MediaFeature {
                 Ok(MediaFeature::MaxWidth(length))
             }
 
+            // Inline-size features (aliases of width for container queries)
+            "inline-size" => {
+                let length = Self::parse_length_value(&name, value)?;
+                Ok(MediaFeature::InlineSize(length))
+            }
+            "min-inline-size" => {
+                let length = Self::parse_length_value(&name, value)?;
+                Ok(MediaFeature::MinInlineSize(length))
+            }
+            "max-inline-size" => {
+                let length = Self::parse_length_value(&name, value)?;
+                Ok(MediaFeature::MaxInlineSize(length))
+            }
+
             // Height features
             "height" => {
                 let length = Self::parse_length_value(&name, value)?;
@@ -397,6 +501,20 @@ impl MediaFeature {
             "max-height" => {
                 let length = Self::parse_length_value(&name, value)?;
                 Ok(MediaFeature::MaxHeight(length))
+            }
+
+            // Block-size features (aliases of height for container queries)
+            "block-size" => {
+                let length = Self::parse_length_value(&name, value)?;
+                Ok(MediaFeature::BlockSize(length))
+            }
+            "min-block-size" => {
+                let length = Self::parse_length_value(&name, value)?;
+                Ok(MediaFeature::MinBlockSize(length))
+            }
+            "max-block-size" => {
+                let length = Self::parse_length_value(&name, value)?;
+                Ok(MediaFeature::MaxBlockSize(length))
             }
 
             // Orientation
@@ -532,6 +650,11 @@ impl MediaFeature {
                 let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
                 let transparency = ReducedTransparency::parse(value)?;
                 Ok(MediaFeature::PrefersReducedTransparency(transparency))
+            }
+            "prefers-reduced-data" => {
+                let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+                let data = ReducedData::parse(value)?;
+                Ok(MediaFeature::PrefersReducedData(data))
             }
 
             _ => Err(MediaParseError::UnknownFeature(name)),
@@ -915,6 +1038,36 @@ impl fmt::Display for ReducedTransparency {
     }
 }
 
+/// Reduced data preference
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ReducedData {
+    /// No preference for reduced data
+    NoPreference,
+    /// Reduced data preferred
+    Reduce,
+}
+
+impl ReducedData {
+    /// Parses a reduced data value
+    pub fn parse(s: &str) -> Result<Self, MediaParseError> {
+        let s = s.trim().to_lowercase();
+        match s.as_str() {
+            "no-preference" => Ok(ReducedData::NoPreference),
+            "reduce" => Ok(ReducedData::Reduce),
+            _ => Err(MediaParseError::InvalidReducedData(s)),
+        }
+    }
+}
+
+impl fmt::Display for ReducedData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ReducedData::NoPreference => write!(f, "no-preference"),
+            ReducedData::Reduce => write!(f, "reduce"),
+        }
+    }
+}
+
 // ============================================================================
 // Media Context - Evaluation Environment
 // ============================================================================
@@ -942,6 +1095,8 @@ pub struct MediaContext {
     pub viewport_width: f32,
     /// Viewport height in CSS pixels
     pub viewport_height: f32,
+    /// Base font size (px) for resolving font-relative lengths in queries
+    pub base_font_size: f32,
     /// Device pixel ratio (DPR)
     pub device_pixel_ratio: f32,
     /// Media type (screen, print, etc.)
@@ -968,6 +1123,8 @@ pub struct MediaContext {
     pub prefers_contrast: ContrastPreference,
     /// User's reduced transparency preference
     pub prefers_reduced_transparency: bool,
+    /// User's reduced data preference
+    pub prefers_reduced_data: bool,
 }
 
 impl MediaContext {
@@ -992,6 +1149,7 @@ impl MediaContext {
         Self {
             viewport_width: width,
             viewport_height: height,
+            base_font_size: 16.0,
             device_pixel_ratio: 1.0,
             media_type: MediaType::Screen,
             color_depth: 8,
@@ -1005,7 +1163,61 @@ impl MediaContext {
             prefers_reduced_motion: false,
             prefers_contrast: ContrastPreference::NoPreference,
             prefers_reduced_transparency: false,
+            prefers_reduced_data: false,
         }
+    }
+
+    /// Applies user/environment overrides for media preferences.
+    ///
+    /// Recognized environment variables:
+    /// - `FASTR_PREFERS_COLOR_SCHEME` = `light` | `dark` | `no-preference`
+    /// - `FASTR_PREFERS_REDUCED_MOTION` = `reduce` | `no-preference` | truthy/falsy
+    /// - `FASTR_PREFERS_CONTRAST` = `more`/`high` | `less`/`low` | `custom`/`forced` | `no-preference`
+    /// - `FASTR_PREFERS_REDUCED_TRANSPARENCY` = `reduce` | `no-preference` | truthy/falsy
+    /// - `FASTR_PREFERS_REDUCED_DATA` = `reduce` | `no-preference` | truthy/falsy
+    pub fn with_env_overrides(mut self) -> Self {
+        if let Ok(value) = env::var("FASTR_PREFERS_COLOR_SCHEME") {
+            let v = value.trim().to_ascii_lowercase();
+            self.prefers_color_scheme = match v.as_str() {
+                "light" => Some(ColorScheme::Light),
+                "dark" => Some(ColorScheme::Dark),
+                "no-preference" => None,
+                _ => self.prefers_color_scheme,
+            };
+        }
+
+        if let Ok(value) = env::var("FASTR_PREFERS_REDUCED_MOTION") {
+            let v = value.trim().to_ascii_lowercase();
+            self.prefers_reduced_motion = matches!(
+                v.as_str(),
+                "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
+            ) || matches!(ReducedMotion::parse(&v), Ok(ReducedMotion::Reduce));
+        }
+
+        if let Ok(value) = env::var("FASTR_PREFERS_CONTRAST") {
+            if let Ok(pref) = ContrastPreference::parse(&value) {
+                self.prefers_contrast = pref;
+            }
+        }
+
+        if let Ok(value) = env::var("FASTR_PREFERS_REDUCED_TRANSPARENCY") {
+            let v = value.trim().to_ascii_lowercase();
+            self.prefers_reduced_transparency =
+                matches!(
+                    v.as_str(),
+                    "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
+                ) || matches!(ReducedTransparency::parse(&v), Ok(ReducedTransparency::Reduce));
+        }
+
+        if let Ok(value) = env::var("FASTR_PREFERS_REDUCED_DATA") {
+            let v = value.trim().to_ascii_lowercase();
+            self.prefers_reduced_data = matches!(
+                v.as_str(),
+                "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
+            ) || matches!(ReducedData::parse(&v), Ok(ReducedData::Reduce));
+        }
+
+        self
     }
 
     /// Returns a new context with the given device pixel ratio.
@@ -1033,6 +1245,7 @@ impl MediaContext {
         Self {
             viewport_width: width,
             viewport_height: height,
+            base_font_size: 16.0,
             device_pixel_ratio: 1.0,
             media_type: MediaType::Print,
             color_depth: 8, // Most printers can do color
@@ -1046,6 +1259,7 @@ impl MediaContext {
             prefers_reduced_motion: false,
             prefers_contrast: ContrastPreference::NoPreference,
             prefers_reduced_transparency: false,
+            prefers_reduced_data: false,
         }
     }
 
@@ -1068,6 +1282,7 @@ impl MediaContext {
         Self {
             viewport_width: width,
             viewport_height: height,
+            base_font_size: 16.0,
             device_pixel_ratio: 2.0, // Common for mobile
             media_type: MediaType::Screen,
             color_depth: 8,
@@ -1081,6 +1296,7 @@ impl MediaContext {
             prefers_reduced_motion: false,
             prefers_contrast: ContrastPreference::NoPreference,
             prefers_reduced_transparency: false,
+            prefers_reduced_data: false,
         }
     }
 
@@ -1098,6 +1314,12 @@ impl MediaContext {
     /// Sets the reduced motion preference
     pub fn with_reduced_motion(mut self, reduce: bool) -> Self {
         self.prefers_reduced_motion = reduce;
+        self
+    }
+
+    /// Sets the reduced data preference
+    pub fn with_reduced_data(mut self, reduce: bool) -> Self {
+        self.prefers_reduced_data = reduce;
         self
     }
 
@@ -1175,6 +1397,20 @@ impl MediaContext {
                 self.viewport_width <= target
             }
 
+            // Inline-size (alias of width for container queries)
+            MediaFeature::InlineSize(length) => {
+                let target = self.resolve_length(length);
+                (self.viewport_width - target).abs() < 0.5
+            }
+            MediaFeature::MinInlineSize(length) => {
+                let target = self.resolve_length(length);
+                self.viewport_width >= target
+            }
+            MediaFeature::MaxInlineSize(length) => {
+                let target = self.resolve_length(length);
+                self.viewport_width <= target
+            }
+
             // Height features
             MediaFeature::Height(length) => {
                 let target = self.resolve_length(length);
@@ -1185,6 +1421,20 @@ impl MediaContext {
                 self.viewport_height >= target
             }
             MediaFeature::MaxHeight(length) => {
+                let target = self.resolve_length(length);
+                self.viewport_height <= target
+            }
+
+            // Block-size (alias of height for container queries)
+            MediaFeature::BlockSize(length) => {
+                let target = self.resolve_length(length);
+                (self.viewport_height - target).abs() < 0.5
+            }
+            MediaFeature::MinBlockSize(length) => {
+                let target = self.resolve_length(length);
+                self.viewport_height >= target
+            }
+            MediaFeature::MaxBlockSize(length) => {
                 let target = self.resolve_length(length);
                 self.viewport_height <= target
             }
@@ -1277,18 +1527,67 @@ impl MediaContext {
                 ReducedTransparency::NoPreference => !self.prefers_reduced_transparency,
                 ReducedTransparency::Reduce => self.prefers_reduced_transparency,
             },
+            MediaFeature::PrefersReducedData(data) => match data {
+                ReducedData::NoPreference => !self.prefers_reduced_data,
+                ReducedData::Reduce => self.prefers_reduced_data,
+            },
+            MediaFeature::Range { feature, op, value } => match (feature, value) {
+                (RangeFeature::Width, RangeValue::Length(len)) => {
+                    let target = self.resolve_length(len);
+                    compare_with_op(*op, self.viewport_width, target)
+                }
+                (RangeFeature::InlineSize, RangeValue::Length(len)) => {
+                    let target = self.resolve_length(len);
+                    compare_with_op(*op, self.viewport_width, target)
+                }
+                (RangeFeature::BlockSize, RangeValue::Length(len)) => {
+                    let target = self.resolve_length(len);
+                    compare_with_op(*op, self.viewport_height, target)
+                }
+                (RangeFeature::Height, RangeValue::Length(len)) => {
+                    let target = self.resolve_length(len);
+                    compare_with_op(*op, self.viewport_height, target)
+                }
+                (RangeFeature::AspectRatio, RangeValue::AspectRatio(w, h)) => {
+                    let target_ratio = *w as f32 / *h as f32;
+                    let actual_ratio = self.viewport_width / self.viewport_height;
+                    compare_with_op(*op, actual_ratio, target_ratio)
+                }
+                (RangeFeature::Resolution, RangeValue::Resolution(res)) => {
+                    let target_dppx = res.to_dppx();
+                    compare_with_op(*op, self.device_pixel_ratio, target_dppx)
+                }
+                _ => false,
+            },
         }
     }
 
     fn resolve_length(&self, length: &Length) -> f32 {
-        // For media queries, we resolve lengths to pixels
-        // assuming a base font size of 16px for em/rem
+        // For media/container queries, resolve lengths to pixels using the
+        // context viewport and base font size (em/rem derived from the query context).
         use crate::style::values::LengthUnit;
 
+        let base_font = if self.base_font_size.is_finite() && self.base_font_size > 0.0 {
+            self.base_font_size
+        } else {
+            16.0
+        };
+
+        if length.unit == LengthUnit::Calc {
+            return length
+                .resolve_with_context(
+                    Some(self.viewport_width),
+                    self.viewport_width,
+                    self.viewport_height,
+                    base_font,
+                    base_font,
+                )
+                .unwrap_or(0.0);
+        }
         match length.unit {
             LengthUnit::Px => length.value,
-            LengthUnit::Em => length.value * 16.0,
-            LengthUnit::Rem => length.value * 16.0,
+            LengthUnit::Em => length.value * base_font,
+            LengthUnit::Rem => length.value * base_font,
             LengthUnit::Percent => length.value / 100.0 * self.viewport_width,
             LengthUnit::Vw => length.value / 100.0 * self.viewport_width,
             LengthUnit::Vh => length.value / 100.0 * self.viewport_height,
@@ -1306,9 +1605,22 @@ impl MediaContext {
             LengthUnit::Q => length.value * 96.0 / 101.6, // 1Q = 0.25mm = 1/40th cm
             LengthUnit::In => length.value * 96.0,
             LengthUnit::Pc => length.value * 16.0,
-            LengthUnit::Ex => length.value * 8.0, // Approximate: half of em
-            LengthUnit::Ch => length.value * 8.0, // Approximate: width of '0'
+            LengthUnit::Ex => length.value * (base_font * 0.5), // Approximate: half of em
+            LengthUnit::Ch => length.value * (base_font * 0.5), // Approximate: width of '0'
+            LengthUnit::Calc => 0.0,
         }
+    }
+}
+
+fn compare_with_op(op: ComparisonOp, actual: f32, target: f32) -> bool {
+    // Allow a small tolerance for equality to smooth out float noise.
+    let eps = 1e-6;
+    match op {
+        ComparisonOp::LessThan => actual < target - eps,
+        ComparisonOp::LessThanEqual => actual <= target + eps,
+        ComparisonOp::GreaterThan => actual > target + eps,
+        ComparisonOp::GreaterThanEqual => actual >= target - eps,
+        ComparisonOp::Equal => (actual - target).abs() <= eps,
     }
 }
 
@@ -1403,10 +1715,10 @@ impl<'a> MediaQueryParser<'a> {
                 }
             }
 
-            // Parse feature: (name: value) or (name)
+            // Parse feature: (name: value) or (range syntax) or (name)
             if self.peek() == Some('(') {
-                let feature = self.parse_feature()?;
-                features.push(feature);
+                let feature_list = self.parse_feature()?;
+                features.extend(feature_list);
             } else {
                 break;
             }
@@ -1424,13 +1736,28 @@ impl<'a> MediaQueryParser<'a> {
         })
     }
 
-    fn parse_feature(&mut self) -> Result<MediaFeature, MediaParseError> {
+    fn parse_feature(&mut self) -> Result<Vec<MediaFeature>, MediaParseError> {
         // Consume '('
         if self.peek() != Some('(') {
             return Err(MediaParseError::ExpectedOpenParen);
         }
         self.advance();
         self.skip_whitespace();
+
+        // Look ahead to the closing ')' and attempt level-4 range syntax first.
+        if let Some(close_idx) = self.input[self.pos..].find(')') {
+            let inner = &self.input[self.pos..self.pos + close_idx];
+            if inner.contains('<') || inner.contains('>') || inner.contains('=') {
+                if let Some(result) = Self::parse_range_feature_expr(inner.trim()) {
+                    self.pos += close_idx;
+                    if self.peek() != Some(')') {
+                        return Err(MediaParseError::ExpectedCloseParen);
+                    }
+                    self.advance();
+                    return result;
+                }
+            }
+        }
 
         // Parse feature name
         let name = self.parse_ident().ok_or(MediaParseError::ExpectedFeatureName)?;
@@ -1460,7 +1787,153 @@ impl<'a> MediaQueryParser<'a> {
         }
         self.advance();
 
-        MediaFeature::parse(&name, value)
+        MediaFeature::parse(&name, value).map(|f| vec![f])
+    }
+
+    fn parse_range_feature_expr(input: &str) -> Option<Result<Vec<MediaFeature>, MediaParseError>> {
+        #[derive(Debug)]
+        enum RangeToken {
+            Atom(String),
+            Op(ComparisonOp),
+        }
+
+        let mut tokens = Vec::new();
+        let mut buf = String::new();
+        let mut chars = input.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '<' | '>' => {
+                    if !buf.trim().is_empty() {
+                        tokens.push(RangeToken::Atom(buf.trim().to_string()));
+                    }
+                    buf.clear();
+                    let op = if let Some('=') = chars.peek() {
+                        let _ = chars.next();
+                        if c == '<' {
+                            ComparisonOp::LessThanEqual
+                        } else {
+                            ComparisonOp::GreaterThanEqual
+                        }
+                    } else if c == '<' {
+                        ComparisonOp::LessThan
+                    } else {
+                        ComparisonOp::GreaterThan
+                    };
+                    tokens.push(RangeToken::Op(op));
+                }
+                '=' => {
+                    if !buf.trim().is_empty() {
+                        tokens.push(RangeToken::Atom(buf.trim().to_string()));
+                    }
+                    buf.clear();
+                    tokens.push(RangeToken::Op(ComparisonOp::Equal));
+                }
+                other if other.is_whitespace() => {
+                    if !buf.trim().is_empty() {
+                        tokens.push(RangeToken::Atom(buf.trim().to_string()));
+                        buf.clear();
+                    }
+                }
+                _ => buf.push(c),
+            }
+        }
+        if !buf.trim().is_empty() {
+            tokens.push(RangeToken::Atom(buf.trim().to_string()));
+        }
+
+        if !tokens.iter().any(|t| matches!(t, RangeToken::Op(_))) {
+            return None;
+        }
+
+        let parse_feature_kind = |name: &str| -> Option<RangeFeature> {
+            match name.trim().to_ascii_lowercase().as_str() {
+                "width" => Some(RangeFeature::Width),
+                "inline-size" => Some(RangeFeature::InlineSize),
+                "block-size" => Some(RangeFeature::BlockSize),
+                "height" => Some(RangeFeature::Height),
+                "aspect-ratio" => Some(RangeFeature::AspectRatio),
+                "resolution" => Some(RangeFeature::Resolution),
+                _ => None,
+            }
+        };
+
+        let parse_value = |feature: RangeFeature, raw: &str| -> Result<RangeValue, MediaParseError> {
+            match feature {
+                RangeFeature::Width | RangeFeature::InlineSize | RangeFeature::BlockSize | RangeFeature::Height => {
+                    let len = MediaFeature::parse_length_value(
+                        match feature {
+                            RangeFeature::Width => "width",
+                            RangeFeature::InlineSize => "inline-size",
+                            RangeFeature::BlockSize => "block-size",
+                            RangeFeature::Height => "height",
+                            _ => unreachable!(),
+                        },
+                        Some(raw),
+                    )?;
+                    Ok(RangeValue::Length(len))
+                }
+                RangeFeature::AspectRatio => {
+                    let (w, h) = MediaFeature::parse_ratio_value("aspect-ratio", Some(raw))?;
+                    Ok(RangeValue::AspectRatio(w, h))
+                }
+                RangeFeature::Resolution => {
+                    let res = MediaFeature::parse_resolution_value("resolution", Some(raw))?;
+                    Ok(RangeValue::Resolution(res))
+                }
+            }
+        };
+
+        let build_feature =
+            |feature: RangeFeature, op: ComparisonOp, raw: &str| -> Result<MediaFeature, MediaParseError> {
+                let value = parse_value(feature, raw)?;
+                Ok(MediaFeature::Range { feature, op, value })
+            };
+
+        let invert_op = |op: ComparisonOp| match op {
+            ComparisonOp::LessThan => ComparisonOp::GreaterThan,
+            ComparisonOp::LessThanEqual => ComparisonOp::GreaterThanEqual,
+            ComparisonOp::GreaterThan => ComparisonOp::LessThan,
+            ComparisonOp::GreaterThanEqual => ComparisonOp::LessThanEqual,
+            ComparisonOp::Equal => ComparisonOp::Equal,
+        };
+
+        match tokens.as_slice() {
+            [RangeToken::Atom(a), RangeToken::Op(op), RangeToken::Atom(b)] => {
+                // Either `feature <value` or `<value> < feature`
+                if let Some(feature) = parse_feature_kind(a) {
+                    Some(build_feature(feature, *op, b).map(|f| vec![f]))
+                } else if let Some(feature) = parse_feature_kind(b) {
+                    let flipped = invert_op(*op);
+                    Some(build_feature(feature, flipped, a).map(|f| vec![f]))
+                } else {
+                    Some(Err(MediaParseError::InvalidValue {
+                        feature: "range".to_string(),
+                        value: input.to_string(),
+                    }))
+                }
+            }
+            [RangeToken::Atom(a), RangeToken::Op(op1), RangeToken::Atom(center), RangeToken::Op(op2), RangeToken::Atom(b)] => {
+                if let Some(feature) = parse_feature_kind(center) {
+                    let left_op = invert_op(*op1);
+                    let first = build_feature(feature, left_op, a);
+                    let second = build_feature(feature, *op2, b);
+                    match (first, second) {
+                        (Ok(f1), Ok(f2)) => Some(Ok(vec![f1, f2])),
+                        (Err(e), _) => Some(Err(e)),
+                        (_, Err(e)) => Some(Err(e)),
+                    }
+                } else {
+                    Some(Err(MediaParseError::InvalidValue {
+                        feature: "range".to_string(),
+                        value: input.to_string(),
+                    }))
+                }
+            }
+            _ => Some(Err(MediaParseError::InvalidValue {
+                feature: "range".to_string(),
+                value: input.to_string(),
+            })),
+        }
     }
 
     fn skip_whitespace(&mut self) {
@@ -1551,6 +2024,8 @@ pub enum MediaParseError {
     InvalidContrastPreference(String),
     /// Invalid reduced transparency value
     InvalidReducedTransparency(String),
+    /// Invalid reduced data value
+    InvalidReducedData(String),
     /// Empty media query
     EmptyQuery,
     /// Expected '(' for feature
@@ -1613,6 +2088,13 @@ impl fmt::Display for MediaParseError {
                 write!(
                     f,
                     "Invalid reduced transparency: '{}' (expected 'no-preference' or 'reduce')",
+                    s
+                )
+            }
+            MediaParseError::InvalidReducedData(s) => {
+                write!(
+                    f,
+                    "Invalid reduced data: '{}' (expected 'no-preference' or 'reduce')",
                     s
                 )
             }
@@ -1682,6 +2164,60 @@ fn parse_length(s: &str) -> Option<Length> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+
+    struct EnvGuard {
+        key: &'static str,
+        old: Option<String>,
+        _lock: Option<std::sync::MutexGuard<'static, ()>>,
+    }
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(std::sync::Mutex::default).lock().unwrap()
+    }
+
+    impl EnvGuard {
+        fn new(key: &'static str, value: Option<&str>) -> Self {
+            thread_local! {
+                static DEPTH: std::cell::Cell<u32> = std::cell::Cell::new(0);
+            }
+
+            let mut lock = None;
+            DEPTH.with(|depth| {
+                if depth.get() == 0 {
+                    lock = Some(env_lock());
+                }
+                depth.set(depth.get().saturating_add(1));
+            });
+
+            let old = env::var(key).ok();
+            match value {
+                Some(v) => env::set_var(key, v),
+                None => env::remove_var(key),
+            }
+            EnvGuard { key, old, _lock: lock }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            thread_local! {
+                static DEPTH: std::cell::Cell<u32> = std::cell::Cell::new(0);
+            }
+
+            DEPTH.with(|depth| {
+                let current = depth.get();
+                depth.set(current.saturating_sub(1));
+            });
+
+            if let Some(ref val) = self.old {
+                env::set_var(self.key, val);
+            } else {
+                env::remove_var(self.key);
+            }
+        }
+    }
 
     // ============================================================================
     // MediaType Tests
@@ -2001,6 +2537,114 @@ mod tests {
 
         let query = MediaQuery::parse("(prefers-reduced-motion: no-preference)").unwrap();
         assert!(!ctx.evaluate(&query));
+    }
+
+    #[test]
+    fn test_evaluate_prefers_reduced_data() {
+        let ctx = MediaContext::screen(1024.0, 768.0).with_reduced_data(true);
+
+        let query = MediaQuery::parse("(prefers-reduced-data: reduce)").unwrap();
+        assert!(ctx.evaluate(&query));
+
+        let query = MediaQuery::parse("(prefers-reduced-data: no-preference)").unwrap();
+        assert!(!ctx.evaluate(&query));
+    }
+
+    #[test]
+    fn test_evaluate_range_width_syntax() {
+        let ctx = MediaContext::screen(700.0, 800.0);
+        let query = MediaQuery::parse("(400px <= width <= 800px)").unwrap();
+        assert!(ctx.evaluate(&query));
+
+        let narrow = MediaContext::screen(399.0, 800.0);
+        assert!(!narrow.evaluate(&query));
+
+        let wide = MediaContext::screen(900.0, 800.0);
+        assert!(!wide.evaluate(&query));
+    }
+
+    #[test]
+    fn test_evaluate_range_width_reversed_bounds() {
+        let ctx = MediaContext::screen(500.0, 800.0);
+        let query = MediaQuery::parse("(800px >= width >= 400px)").unwrap();
+        assert!(ctx.evaluate(&query));
+
+        let too_large = MediaContext::screen(900.0, 800.0);
+        assert!(!too_large.evaluate(&query));
+    }
+
+    #[test]
+    fn test_evaluate_range_height_and_aspect_ratio() {
+        let ctx = MediaContext::screen(1200.0, 900.0);
+        let height_query = MediaQuery::parse("(height > 800px)").unwrap();
+        assert!(ctx.evaluate(&height_query));
+
+        let ratio_query = MediaQuery::parse("(aspect-ratio >= 4/3)").unwrap();
+        assert!(ctx.evaluate(&ratio_query)); // 1200/900 = 4/3
+
+        let tall_ctx = MediaContext::screen(900.0, 1600.0);
+        assert!(!tall_ctx.evaluate(&ratio_query)); // 0.5625 < 4/3
+    }
+
+    #[test]
+    fn test_evaluate_range_resolution() {
+        let mut ctx = MediaContext::screen(1024.0, 768.0);
+        ctx.device_pixel_ratio = 1.5;
+
+        let res_query = MediaQuery::parse("(resolution <= 2dppx)").unwrap();
+        assert!(ctx.evaluate(&res_query));
+
+        let strict_query = MediaQuery::parse("(resolution > 2dppx)").unwrap();
+        assert!(!ctx.evaluate(&strict_query));
+    }
+
+    #[test]
+    fn test_evaluate_range_equality() {
+        let ctx = MediaContext::screen(700.0, 800.0);
+        let width_eq = MediaQuery::parse("(width = 700px)").unwrap();
+        assert!(ctx.evaluate(&width_eq));
+
+        let width_miss = MediaContext::screen(701.0, 800.0);
+        assert!(!width_miss.evaluate(&width_eq));
+
+        let ratio_ctx = MediaContext::screen(1200.0, 900.0); // 4/3
+        let ratio_eq = MediaQuery::parse("(aspect-ratio = 4/3)").unwrap();
+        assert!(ratio_ctx.evaluate(&ratio_eq));
+
+        let ratio_miss = MediaContext::screen(900.0, 1600.0);
+        assert!(!ratio_miss.evaluate(&ratio_eq));
+    }
+
+    #[test]
+    fn env_overrides_color_scheme_and_motion() {
+        let guard_scheme = EnvGuard::new("FASTR_PREFERS_COLOR_SCHEME", Some("dark"));
+        let guard_motion = EnvGuard::new("FASTR_PREFERS_REDUCED_MOTION", Some("reduce"));
+        let guard_contrast = EnvGuard::new("FASTR_PREFERS_CONTRAST", Some("high"));
+        let guard_transparency = EnvGuard::new("FASTR_PREFERS_REDUCED_TRANSPARENCY", Some("1"));
+        let guard_data = EnvGuard::new("FASTR_PREFERS_REDUCED_DATA", Some("yes"));
+
+        let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+        assert_eq!(ctx.prefers_color_scheme, Some(ColorScheme::Dark));
+        assert!(ctx.prefers_reduced_motion);
+        assert!(matches!(ctx.prefers_contrast, ContrastPreference::More));
+        assert!(ctx.prefers_reduced_transparency);
+        assert!(ctx.prefers_reduced_data);
+
+        drop(guard_scheme);
+        drop(guard_motion);
+        drop(guard_contrast);
+        drop(guard_transparency);
+        drop(guard_data);
+    }
+
+    #[test]
+    fn env_overrides_ignore_invalid_values() {
+        let guard_scheme = EnvGuard::new("FASTR_PREFERS_COLOR_SCHEME", Some("invalid"));
+        let ctx = MediaContext::screen(800.0, 600.0)
+            .with_color_scheme(ColorScheme::Light)
+            .with_env_overrides();
+        assert_eq!(ctx.prefers_color_scheme, Some(ColorScheme::Light));
+        drop(guard_scheme);
     }
 
     #[test]

@@ -41,7 +41,9 @@
 
 use crate::geometry::{Point, Rect, Size};
 use crate::layout::formatting_context::LayoutError;
-use crate::layout::utils::{content_size_from_box_sizing, resolve_offset_for_positioned};
+use crate::layout::utils::{
+    content_size_from_box_sizing, resolve_length_with_percentage, resolve_offset_for_positioned,
+};
 use crate::style::computed::PositionedStyle;
 use crate::style::position::Position;
 use crate::text::font_loader::FontContext;
@@ -67,32 +69,50 @@ pub struct ContainingBlock {
     /// For fixed positioning, this is the viewport.
     pub rect: Rect,
     viewport_size: Size,
+    inline_percentage_base: Option<f32>,
+    block_percentage_base: Option<f32>,
 }
 
 impl ContainingBlock {
     /// Creates a new containing block from a rectangle
     pub const fn new(rect: Rect) -> Self {
-        Self {
-            viewport_size: rect.size,
-            rect,
-        }
+        Self::with_viewport_and_bases(rect, rect.size, Some(rect.size.width), Some(rect.size.height))
     }
 
     /// Creates a containing block from a rectangle and an explicit viewport size
     pub const fn with_viewport(rect: Rect, viewport_size: Size) -> Self {
-        Self { rect, viewport_size }
+        Self::with_viewport_and_bases(rect, viewport_size, Some(rect.size.width), Some(rect.size.height))
+    }
+
+    /// Creates a containing block with explicit percentage bases.
+    ///
+    /// When the containing block's inline/block sizes are auto (content-driven),
+    /// the percentage bases should be set to `None` so percentage offsets resolve
+    /// to `auto` per CSS 2.1 §10.5/10.6 instead of being treated as 0px.
+    pub const fn with_viewport_and_bases(
+        rect: Rect,
+        viewport_size: Size,
+        inline_base: Option<f32>,
+        block_base: Option<f32>,
+    ) -> Self {
+        Self {
+            rect,
+            viewport_size,
+            inline_percentage_base: inline_base,
+            block_percentage_base: block_base,
+        }
     }
 
     /// Creates a containing block from position and size
     pub fn from_origin_size(origin: Point, size: Size) -> Self {
-        Self::with_viewport(Rect::new(origin, size), size)
+        Self::with_viewport_and_bases(Rect::new(origin, size), size, Some(size.width), Some(size.height))
     }
 
     /// Creates a containing block representing the viewport
     ///
     /// Used for fixed positioning and as the initial containing block.
     pub fn viewport(size: Size) -> Self {
-        Self::with_viewport(Rect::new(Point::ZERO, size), size)
+        Self::with_viewport_and_bases(Rect::new(Point::ZERO, size), size, Some(size.width), Some(size.height))
     }
 
     /// Returns the width of the containing block
@@ -116,6 +136,16 @@ impl ContainingBlock {
     /// to the rect size when no explicit viewport is available.
     pub fn viewport_size(&self) -> Size {
         self.viewport_size
+    }
+
+    /// Percentage base for inline-axis offsets (Some(width) when definite).
+    pub fn inline_percentage_base(&self) -> Option<f32> {
+        self.inline_percentage_base
+    }
+
+    /// Percentage base for block-axis offsets (None when block-size is auto).
+    pub fn block_percentage_base(&self) -> Option<f32> {
+        self.block_percentage_base
     }
 }
 
@@ -155,17 +185,13 @@ impl StickyConstraints {
     /// Creates sticky constraints from computed style
     pub fn from_style(style: &PositionedStyle, containing_block: &ContainingBlock, font_context: &FontContext) -> Self {
         let viewport = containing_block.viewport_size();
+        let inline_base = containing_block.inline_percentage_base();
+        let block_base = containing_block.block_percentage_base();
         Self {
-            top: resolve_offset_for_positioned(&style.top, containing_block.height(), viewport, style, font_context),
-            right: resolve_offset_for_positioned(&style.right, containing_block.width(), viewport, style, font_context),
-            bottom: resolve_offset_for_positioned(
-                &style.bottom,
-                containing_block.height(),
-                viewport,
-                style,
-                font_context,
-            ),
-            left: resolve_offset_for_positioned(&style.left, containing_block.width(), viewport, style, font_context),
+            top: resolve_offset_for_positioned(&style.top, block_base, viewport, style, font_context),
+            right: resolve_offset_for_positioned(&style.right, inline_base, viewport, style, font_context),
+            bottom: resolve_offset_for_positioned(&style.bottom, block_base, viewport, style, font_context),
+            left: resolve_offset_for_positioned(&style.left, inline_base, viewport, style, font_context),
         }
     }
 
@@ -265,6 +291,7 @@ impl PositionedLayout {
         Ok(FragmentNode {
             bounds: new_bounds,
             content: fragment.content.clone(),
+            baseline: fragment.baseline,
             children: fragment.children.clone(),
             style: fragment.style.clone(),
         })
@@ -278,29 +305,53 @@ impl PositionedLayout {
     fn compute_relative_offset(&self, style: &PositionedStyle, containing_block: &ContainingBlock) -> Point {
         let mut offset_x = 0.0;
         let mut offset_y = 0.0;
-        let cb_width = containing_block.width();
-        let cb_height = containing_block.height();
         let viewport = containing_block.viewport_size();
+        let inline_base = containing_block.inline_percentage_base();
+        let block_base = containing_block.block_percentage_base();
 
         // Vertical offset: top takes precedence over bottom
-        if let Some(top) = resolve_offset_for_positioned(&style.top, cb_height, viewport, style, &self.font_context) {
+        if let Some(top) = resolve_offset_for_positioned(&style.top, block_base, viewport, style, &self.font_context) {
             offset_y = top;
         } else if let Some(bottom) =
-            resolve_offset_for_positioned(&style.bottom, cb_height, viewport, style, &self.font_context)
+            resolve_offset_for_positioned(&style.bottom, block_base, viewport, style, &self.font_context)
         {
             offset_y = -bottom;
         }
 
         // Horizontal offset: left takes precedence over right (LTR)
-        if let Some(left) = resolve_offset_for_positioned(&style.left, cb_width, viewport, style, &self.font_context) {
+        if let Some(left) = resolve_offset_for_positioned(&style.left, inline_base, viewport, style, &self.font_context)
+        {
             offset_x = left;
         } else if let Some(right) =
-            resolve_offset_for_positioned(&style.right, cb_width, viewport, style, &self.font_context)
+            resolve_offset_for_positioned(&style.right, inline_base, viewport, style, &self.font_context)
         {
             offset_x = -right;
         }
 
         Point::new(offset_x, offset_y)
+    }
+
+    /// Resolves a length-or-auto for width/height using percentage, viewport, or font bases.
+    ///
+    /// Percentages use the provided base, viewport units use the containing viewport, and
+    /// font-relative units use the element/root font sizes. Returns `None` for `auto`.
+    fn resolve_length_for_size(
+        &self,
+        value: &crate::style::values::LengthOrAuto,
+        percentage_base: Option<f32>,
+        viewport: Size,
+        style: &PositionedStyle,
+    ) -> Option<f32> {
+        match value {
+            crate::style::values::LengthOrAuto::Auto => None,
+            crate::style::values::LengthOrAuto::Length(length) => resolve_length_with_percentage(
+                *length,
+                percentage_base,
+                viewport,
+                style.font_size,
+                style.root_font_size,
+            ),
+        }
     }
 
     /// Computes the position and size for an absolutely positioned element
@@ -332,12 +383,16 @@ impl PositionedLayout {
         let cb_width = containing_block.width();
         let cb_height = containing_block.height();
         let viewport = containing_block.viewport_size();
+        let inline_base = containing_block.inline_percentage_base();
+        let block_base = containing_block.block_percentage_base();
 
         // Compute horizontal position and width
-        let (x, width) = self.compute_absolute_horizontal(style, cb_width, viewport, intrinsic_size.width)?;
+        let (x, width) =
+            self.compute_absolute_horizontal(style, cb_width, inline_base, viewport, intrinsic_size.width)?;
 
         // Compute vertical position and height
-        let (y, height) = self.compute_absolute_vertical(style, cb_height, viewport, intrinsic_size.height)?;
+        let (y, height) =
+            self.compute_absolute_vertical(style, cb_height, block_base, viewport, intrinsic_size.height)?;
 
         let mut width = width;
         let mut height = height;
@@ -375,11 +430,12 @@ impl PositionedLayout {
         &self,
         style: &PositionedStyle,
         cb_width: f32,
+        inline_base: Option<f32>,
         viewport: Size,
         intrinsic_width: f32,
     ) -> Result<(f32, f32), LayoutError> {
-        let left = resolve_offset_for_positioned(&style.left, cb_width, viewport, style, &self.font_context);
-        let right = resolve_offset_for_positioned(&style.right, cb_width, viewport, style, &self.font_context);
+        let left = resolve_offset_for_positioned(&style.left, inline_base, viewport, style, &self.font_context);
+        let right = resolve_offset_for_positioned(&style.right, inline_base, viewport, style, &self.font_context);
 
         // Get margin values (auto margins = 0 for absolute positioning unless overconstrained)
         let margin_left = style.margin.left;
@@ -394,9 +450,8 @@ impl PositionedLayout {
         let total_horizontal = padding_left + padding_right + border_left + border_right;
 
         // Get width value (may be auto)
-        let specified_width = style
-            .width
-            .resolve_against(cb_width)
+        let specified_width = self
+            .resolve_length_for_size(&style.width, inline_base, viewport, style)
             .map(|w| content_size_from_box_sizing(w, total_horizontal, style.box_sizing));
 
         match (left, specified_width, right) {
@@ -458,11 +513,12 @@ impl PositionedLayout {
         &self,
         style: &PositionedStyle,
         cb_height: f32,
+        block_base: Option<f32>,
         viewport: Size,
         intrinsic_height: f32,
     ) -> Result<(f32, f32), LayoutError> {
-        let top = resolve_offset_for_positioned(&style.top, cb_height, viewport, style, &self.font_context);
-        let bottom = resolve_offset_for_positioned(&style.bottom, cb_height, viewport, style, &self.font_context);
+        let top = resolve_offset_for_positioned(&style.top, block_base, viewport, style, &self.font_context);
+        let bottom = resolve_offset_for_positioned(&style.bottom, block_base, viewport, style, &self.font_context);
 
         // Get margin values
         let margin_top = style.margin.top;
@@ -477,9 +533,8 @@ impl PositionedLayout {
         let total_vertical = padding_top + padding_bottom + border_top + border_bottom;
 
         // Get height value (may be auto)
-        let specified_height = style
-            .height
-            .resolve_against(cb_height)
+        let specified_height = self
+            .resolve_length_for_size(&style.height, block_base, viewport, style)
             .map(|h| content_size_from_box_sizing(h, total_vertical, style.box_sizing));
 
         match (top, specified_height, bottom) {
@@ -564,13 +619,27 @@ impl PositionedLayout {
             Position::Static | Position::Relative | Position::Sticky => {
                 // Use nearest block container ancestor, or viewport if none
                 block_ancestor_rect
-                    .map(|rect| ContainingBlock::with_viewport(rect, viewport_size))
+                    .map(|rect| {
+                        let block_base = if rect.size.height > 0.0 {
+                            Some(rect.size.height)
+                        } else {
+                            None
+                        };
+                        ContainingBlock::with_viewport_and_bases(rect, viewport_size, Some(rect.size.width), block_base)
+                    })
                     .unwrap_or_else(|| ContainingBlock::viewport(viewport_size))
             }
             Position::Absolute => {
                 // Use nearest positioned ancestor, or viewport if none (initial containing block)
                 positioned_ancestor_rect
-                    .map(|rect| ContainingBlock::with_viewport(rect, viewport_size))
+                    .map(|rect| {
+                        let block_base = if rect.size.height > 0.0 {
+                            Some(rect.size.height)
+                        } else {
+                            None
+                        };
+                        ContainingBlock::with_viewport_and_bases(rect, viewport_size, Some(rect.size.width), block_base)
+                    })
                     .unwrap_or_else(|| ContainingBlock::viewport(viewport_size))
             }
             Position::Fixed => {
@@ -635,7 +704,7 @@ mod tests {
     use crate::style::computed::PositionedStyle;
 
     use crate::layout::utils::resolve_offset;
-    use crate::style::values::LengthOrAuto;
+    use crate::style::values::{Length, LengthOrAuto, LengthUnit};
     use crate::text::font_loader::FontContext;
 
     fn default_style() -> PositionedStyle {
@@ -892,6 +961,41 @@ mod tests {
         // x = 400 - 50 - 200 = 150
         assert_eq!(pos.x, 150.0);
         assert_eq!(size.width, 200.0);
+    }
+
+    #[test]
+    fn test_absolute_position_width_with_viewport_units() {
+        let layout = PositionedLayout::new();
+
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.width = LengthOrAuto::Length(Length::new(50.0, LengthUnit::Vw));
+
+        let cb = create_containing_block(200.0, 150.0);
+        let intrinsic = Size::new(10.0, 10.0);
+
+        let (_pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+
+        // 50vw of a 200px viewport = 100px
+        assert!((size.width - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_absolute_position_width_with_font_relative_units() {
+        let layout = PositionedLayout::new();
+
+        let mut style = default_style();
+        style.position = Position::Absolute;
+        style.font_size = 18.0;
+        style.root_font_size = 18.0;
+        style.width = LengthOrAuto::Length(Length::em(2.0));
+
+        let cb = create_containing_block(300.0, 200.0);
+        let intrinsic = Size::new(5.0, 5.0);
+
+        let (_pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+
+        assert!((size.width - 36.0).abs() < 0.01);
     }
 
     #[test]

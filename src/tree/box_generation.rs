@@ -821,6 +821,17 @@ impl BoxGenerator {
 
     /// Returns true if element should be skipped (display: none)
     fn should_skip_element(&self, node: &DOMNode) -> bool {
+        // Always skip non-rendered metadata elements per HTML UA defaults.
+        // These never generate boxes and their contents should not be rendered.
+        if let Some(tag) = node.tag_name.as_deref() {
+            if matches!(
+                tag.to_ascii_lowercase().as_str(),
+                "head" | "style" | "script" | "meta" | "link" | "title" | "base" | "template"
+            ) {
+                return true;
+            }
+        }
+
         if node.is_text() {
             return false;
         }
@@ -855,7 +866,7 @@ impl BoxGenerator {
 
         if !applied_default_reset {
             if let Some(tag) = &node.tag_name {
-                if tag.eq_ignore_ascii_case("ol") || tag.eq_ignore_ascii_case("ul") {
+                if matches!(tag.to_ascii_lowercase().as_str(), "ol" | "ul" | "menu" | "dir") {
                     let default_reset = CounterSet::single("list-item", 0);
                     counters.apply_reset(&default_reset);
                 }
@@ -884,6 +895,7 @@ impl BoxGenerator {
             children: vec![],
         };
         let dummy_styled = StyledNode {
+            node_id: 0,
             node: dummy_dom,
             styles: (*style).clone(),
             before_styles: None,
@@ -1086,6 +1098,22 @@ impl Default for BoxGenerator {
 
 use crate::style::cascade::StyledNode;
 
+fn build_box_tree_root(styled: &StyledNode) -> BoxNode {
+    let mut counters = CounterManager::new();
+    counters.enter_scope();
+    let mut roots = generate_boxes_for_styled(styled, &mut counters, true);
+    counters.leave_scope();
+    match roots.len() {
+        0 => BoxNode::new_block(
+            Arc::new(ComputedStyle::default()),
+            FormattingContextType::Block,
+            Vec::new(),
+        ),
+        1 => roots.remove(0),
+        _ => BoxNode::new_anonymous_block(Arc::new(ComputedStyle::default()), roots),
+    }
+}
+
 /// Generates a BoxTree from a StyledNode tree
 ///
 /// This is the main entry point for box generation from styled DOM.
@@ -1099,20 +1127,24 @@ use crate::style::cascade::StyledNode;
 ///
 /// A `BoxTree` containing the generated box structure
 pub fn generate_box_tree(styled: &StyledNode) -> BoxTree {
-    let mut counters = CounterManager::new();
-    counters.enter_scope();
-    let mut roots = generate_boxes_for_styled(styled, &mut counters, true);
-    counters.leave_scope();
-    let root = match roots.len() {
-        0 => BoxNode::new_block(
-            Arc::new(ComputedStyle::default()),
-            FormattingContextType::Block,
-            Vec::new(),
-        ),
-        1 => roots.remove(0),
-        _ => BoxNode::new_anonymous_block(Arc::new(ComputedStyle::default()), roots),
-    };
-    BoxTree { root }
+    let root = build_box_tree_root(styled);
+    BoxTree::new(root)
+}
+
+/// Generates a BoxTree from a StyledNode tree and applies CSS-mandated anonymous box fixup.
+///
+/// This wraps inline-level runs in anonymous blocks and text in anonymous inline boxes so the
+/// resulting tree satisfies the CSS 2.1 box-generation invariants (required for flex/grid/blocks
+/// that contain raw text to be layed out correctly).
+pub fn generate_box_tree_with_anonymous_fixup(styled: &StyledNode) -> BoxTree {
+    let root = build_box_tree_root(styled);
+    let fixed_root = AnonymousBoxCreator::fixup_tree(root);
+    BoxTree::new(fixed_root)
+}
+
+fn attach_styled_id(mut node: BoxNode, styled: &StyledNode) -> BoxNode {
+    node.styled_node_id = Some(styled.node_id);
+    node
 }
 
 fn escape_attr(value: &str) -> String {
@@ -1161,7 +1193,7 @@ fn generate_boxes_for_styled(styled: &StyledNode, counters: &mut CounterManager,
     if let Some(text) = styled.node.text_content() {
         if !text.is_empty() {
             let style = Arc::new(styled.styles.clone());
-            return vec![BoxNode::new_text(style, text.to_string())];
+            return vec![attach_styled_id(BoxNode::new_text(style, text.to_string()), styled)];
         }
     }
 
@@ -1261,6 +1293,7 @@ fn generate_boxes_for_styled(styled: &StyledNode, counters: &mut CounterManager,
 }
 
 fn attach_debug_info(mut box_node: BoxNode, styled: &StyledNode) -> BoxNode {
+    box_node.styled_node_id = Some(styled.node_id);
     if let Some(tag) = styled.node.tag_name() {
         // Extract colspan/rowspan for table cells and span for columns/colgroups
         let colspan = styled
@@ -1329,7 +1362,9 @@ fn create_pseudo_element_box(
 
     let flush_text = |buf: &mut String, pseudo_style: &Arc<ComputedStyle>, out: &mut Vec<BoxNode>| {
         if !buf.is_empty() {
-            out.push(BoxNode::new_text(pseudo_style.clone(), buf.clone()));
+            let mut text_box = BoxNode::new_text(pseudo_style.clone(), buf.clone());
+            text_box.styled_node_id = Some(styled.node_id);
+            out.push(text_box);
             buf.clear();
         }
     };
@@ -1392,7 +1427,9 @@ fn create_pseudo_element_box(
                     box_type: BoxType::Replaced(replaced),
                     style: pseudo_style.clone(),
                     children: vec![],
+                    id: 0,
                     debug_info: None,
+                    styled_node_id: Some(styled.node_id),
                 });
             }
         }
@@ -1424,6 +1461,7 @@ fn create_pseudo_element_box(
         None,
         vec!["pseudo-element".to_string()],
     ));
+    pseudo_box.styled_node_id = Some(styled.node_id);
 
     Some(pseudo_box)
 }
@@ -1440,7 +1478,9 @@ fn create_marker_box(styled: &StyledNode, counters: &CounterManager) -> Option<B
     marker_style.list_style_image = crate::style::types::ListStyleImage::None;
     marker_style.text_transform = TextTransform::none();
 
-    Some(BoxNode::new_marker(Arc::new(marker_style), content))
+    let mut node = BoxNode::new_marker(Arc::new(marker_style), content);
+    node.styled_node_id = Some(styled.node_id);
+    Some(node)
 }
 
 fn marker_content_from_style(
@@ -1582,18 +1622,27 @@ fn apply_counter_properties_from_style(styled: &StyledNode, counters: &mut Count
     let mut applied_default_reset = false;
     let tag_name = styled.node.tag_name().map(|t| t.to_ascii_lowercase());
     let is_ol = tag_name.as_deref() == Some("ol");
-    let is_ul = tag_name.as_deref() == Some("ul");
     let reversed = is_ol && styled.node.get_attribute("reversed").is_some();
-    if reversed {
-        counters.set_list_item_increment(-1);
-    }
 
     if let Some(reset) = &styled.styles.counters.counter_reset {
         counters.apply_reset(reset);
         applied_default_reset = true;
     }
 
-    if !applied_default_reset && (is_ol || is_ul) {
+    let is_list_container = matches!(
+        tag_name.as_deref(),
+        Some("ol") | Some("ul") | Some("menu") | Some("dir")
+    );
+
+    if is_list_container {
+        // Each list establishes its own default step; child lists shouldn't inherit reversed steps.
+        counters.set_list_item_increment(1);
+        if reversed {
+            counters.set_list_item_increment(-1);
+        }
+    }
+
+    if !applied_default_reset && is_list_container {
         let start = styled.node.get_attribute("start").and_then(|s| s.parse::<i32>().ok());
         let step = counters.list_item_increment();
         let start_value = if is_ol {
@@ -1638,7 +1687,7 @@ fn list_item_count(styled: &StyledNode) -> usize {
     fn walk(node: &StyledNode, in_nested_list: bool, acc: &mut usize) {
         for child in &node.children {
             let tag = child.node.tag_name().map(|t| t.to_ascii_lowercase());
-            let is_list = matches!(tag.as_deref(), Some("ol") | Some("ul"));
+            let is_list = matches!(tag.as_deref(), Some("ol") | Some("ul") | Some("menu") | Some("dir"));
             let now_nested = in_nested_list || is_list;
             if !now_nested && tag.as_deref() == Some("li") {
                 *acc += 1;
@@ -1749,7 +1798,9 @@ fn create_replaced_box_from_styled(styled: &StyledNode, style: Arc<ComputedStyle
         box_type: BoxType::Replaced(replaced_box),
         style,
         children: vec![],
+        id: 0,
         debug_info: None,
+        styled_node_id: None,
     }
 }
 
@@ -1945,6 +1996,7 @@ mod tests {
             children: vec![],
         };
         let text_node = StyledNode {
+            node_id: 0,
             node: text_dom.clone(),
             styles: ComputedStyle::default(),
             before_styles: None,
@@ -1962,6 +2014,7 @@ mod tests {
         };
 
         let li = StyledNode {
+            node_id: 0,
             node: li_dom,
             styles: li_style,
             before_styles: None,
@@ -2411,6 +2464,7 @@ mod tests {
 
     fn styled_element(tag: &str) -> StyledNode {
         StyledNode {
+            node_id: 0,
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: tag.to_string(),
@@ -2617,6 +2671,7 @@ mod tests {
         li_style.margin_left = Some(crate::style::values::Length::px(10.0));
 
         let styled = StyledNode {
+            node_id: 0,
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
@@ -2672,6 +2727,7 @@ mod tests {
         marker_styles.background_color = Rgba::rgb(255, 0, 255);
 
         let styled = StyledNode {
+            node_id: 0,
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
@@ -2829,6 +2885,7 @@ mod tests {
 
         let base_style = ComputedStyle::default();
         let styled = StyledNode {
+            node_id: 0,
             node: dom::DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "div".to_string(),
@@ -2881,6 +2938,7 @@ mod tests {
 
         let base_style = ComputedStyle::default();
         let styled = StyledNode {
+            node_id: 0,
             node: dom::DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "div".to_string(),
@@ -2938,6 +2996,7 @@ mod tests {
 
         let base_style = ComputedStyle::default();
         let styled = StyledNode {
+            node_id: 0,
             node: dom::DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "li".to_string(),
@@ -2975,6 +3034,7 @@ mod tests {
         style.list_style_type = ListStyleType::String("★".to_string());
         style.display = Display::ListItem;
         let styled = StyledNode {
+            node_id: 0,
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
@@ -3023,6 +3083,7 @@ mod tests {
         };
 
         let mk_li = |text: &str| StyledNode {
+            node_id: 0,
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
@@ -3040,6 +3101,7 @@ mod tests {
             after_styles: None,
             marker_styles: None,
             children: vec![StyledNode {
+                node_id: 0,
                 node: dom::DomNode {
                     node_type: dom::DomNodeType::Text {
                         content: text.to_string(),
@@ -3055,6 +3117,7 @@ mod tests {
         };
 
         let ol = StyledNode {
+            node_id: 0,
             node: ol_dom,
             styles: ol_style,
             before_styles: None,
@@ -3100,6 +3163,7 @@ mod tests {
         };
 
         let mk_li = |text: &str| StyledNode {
+            node_id: 0,
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
@@ -3117,6 +3181,7 @@ mod tests {
             after_styles: None,
             marker_styles: None,
             children: vec![StyledNode {
+                node_id: 0,
                 node: dom::DomNode {
                     node_type: dom::DomNodeType::Text {
                         content: text.to_string(),
@@ -3132,6 +3197,7 @@ mod tests {
         };
 
         let ol = StyledNode {
+            node_id: 0,
             node: ol_dom,
             styles: ol_style,
             before_styles: None,
@@ -3177,6 +3243,7 @@ mod tests {
         };
 
         let mk_li = |text: &str| StyledNode {
+            node_id: 0,
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
@@ -3194,6 +3261,7 @@ mod tests {
             after_styles: None,
             marker_styles: None,
             children: vec![StyledNode {
+                node_id: 0,
                 node: dom::DomNode {
                     node_type: dom::DomNodeType::Text {
                         content: text.to_string(),
@@ -3209,6 +3277,7 @@ mod tests {
         };
 
         let ol = StyledNode {
+            node_id: 0,
             node: ol_dom,
             styles: ol_style,
             before_styles: None,
@@ -3254,6 +3323,7 @@ mod tests {
         };
 
         let mk_li = |text: &str, value: Option<&str>| StyledNode {
+            node_id: 0,
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
@@ -3273,6 +3343,7 @@ mod tests {
             after_styles: None,
             marker_styles: None,
             children: vec![StyledNode {
+                node_id: 0,
                 node: dom::DomNode {
                     node_type: dom::DomNodeType::Text {
                         content: text.to_string(),
@@ -3288,6 +3359,7 @@ mod tests {
         };
 
         let ol = StyledNode {
+            node_id: 0,
             node: ol_dom,
             styles: ol_style,
             before_styles: None,
@@ -3333,6 +3405,7 @@ mod tests {
         };
 
         let mk_li = |text: &str, value: Option<&str>| StyledNode {
+            node_id: 0,
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
@@ -3352,6 +3425,7 @@ mod tests {
             after_styles: None,
             marker_styles: None,
             children: vec![StyledNode {
+                node_id: 0,
                 node: dom::DomNode {
                     node_type: dom::DomNodeType::Text {
                         content: text.to_string(),
@@ -3367,6 +3441,7 @@ mod tests {
         };
 
         let ol = StyledNode {
+            node_id: 0,
             node: ol_dom,
             styles: ol_style,
             before_styles: None,
@@ -3404,6 +3479,7 @@ mod tests {
         li_style.list_style_type = ListStyleType::Decimal;
 
         let nested_ol = StyledNode {
+            node_id: 0,
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "ol".to_string(),
@@ -3416,6 +3492,7 @@ mod tests {
             after_styles: None,
             marker_styles: None,
             children: vec![StyledNode {
+                node_id: 0,
                 node: dom::DomNode {
                     node_type: dom::DomNodeType::Element {
                         tag_name: "li".to_string(),
@@ -3433,6 +3510,7 @@ mod tests {
                 after_styles: None,
                 marker_styles: None,
                 children: vec![StyledNode {
+                    node_id: 0,
                     node: dom::DomNode {
                         node_type: dom::DomNodeType::Text {
                             content: "inner".to_string(),
@@ -3457,6 +3535,7 @@ mod tests {
         };
 
         let outer_li = |child: StyledNode| StyledNode {
+            node_id: 0,
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
@@ -3472,13 +3551,15 @@ mod tests {
         };
 
         let ol = StyledNode {
+            node_id: 0,
             node: ol_dom,
-            styles: ol_style,
+            styles: ol_style.clone(),
             before_styles: None,
             after_styles: None,
             marker_styles: None,
             children: vec![
                 outer_li(StyledNode {
+                    node_id: 0,
                     node: dom::DomNode {
                         node_type: dom::DomNodeType::Text {
                             content: "outer1".to_string(),
@@ -3511,6 +3592,104 @@ mod tests {
             })
             .collect();
 
+        assert_eq!(markers, vec!["2 ", "1 "]);
+    }
+
+    #[test]
+    fn reversed_list_skips_menu_items_for_default_start() {
+        let mut ol_style = ComputedStyle::default();
+        ol_style.display = Display::Block;
+        ol_style.list_style_type = ListStyleType::Decimal;
+
+        let mut li_style = ComputedStyle::default();
+        li_style.display = Display::ListItem;
+        li_style.list_style_type = ListStyleType::Decimal;
+
+        let mut menu_style = ComputedStyle::default();
+        menu_style.display = Display::Block;
+        menu_style.list_style_type = ListStyleType::Disc;
+
+        let text_node = |content: &str| StyledNode {
+            node_id: 0,
+            node: dom::DomNode {
+                node_type: dom::DomNodeType::Text {
+                    content: content.to_string(),
+                },
+                children: vec![],
+            },
+            styles: ComputedStyle::default(),
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children: vec![],
+        };
+
+        let li = |content: &str| StyledNode {
+            node_id: 0,
+            node: dom::DomNode {
+                node_type: dom::DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            },
+            styles: li_style.clone(),
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children: vec![text_node(content)],
+        };
+
+        let menu = StyledNode {
+            node_id: 0,
+            node: dom::DomNode {
+                node_type: dom::DomNodeType::Element {
+                    tag_name: "menu".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            },
+            styles: menu_style,
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children: vec![li("skip-1"), li("skip-2")],
+        };
+
+        let ol = StyledNode {
+            node_id: 0,
+            node: dom::DomNode {
+                node_type: dom::DomNodeType::Element {
+                    tag_name: "ol".to_string(),
+                    attributes: vec![("reversed".to_string(), "".to_string())],
+                },
+                children: vec![],
+            },
+            styles: ol_style,
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children: vec![li("one"), menu, li("two")],
+        };
+
+        let tree = generate_box_tree(&ol);
+        let markers: Vec<String> = tree
+            .root
+            .children
+            .iter()
+            .filter_map(|child| match &child.box_type {
+                BoxType::Block(_) => child.children.first().and_then(|c| match &c.box_type {
+                    BoxType::Marker(m) => match &m.content {
+                        MarkerContent::Text(t) => Some(t.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                }),
+                _ => None,
+            })
+            .collect();
+
+        // Only top-level list items should contribute to the count: markers 2, 1.
         assert_eq!(markers, vec!["2 ", "1 "]);
     }
 
@@ -3780,6 +3959,194 @@ mod tests {
         } else {
             panic!("expected inner marker text");
         }
+    }
+
+    #[test]
+    fn legacy_lists_reset_counters() {
+        let generator = BoxGenerator::new();
+
+        let mut li_style = ComputedStyle::default();
+        li_style.display = Display::ListItem;
+        li_style.list_style_type = ListStyleType::Decimal;
+        let li_style = Arc::new(li_style);
+
+        let text_style = Arc::new(ComputedStyle::default());
+
+        let mk_li = |text: &str| {
+            DOMNode::new_element(
+                "li",
+                li_style.clone(),
+                vec![DOMNode::new_text(text.to_string(), text_style.clone())],
+            )
+        };
+
+        // First list (ol) increments counter to 2.
+        let ol = DOMNode::new_element(
+            "ol",
+            style_with_display(Display::Block),
+            vec![mk_li("one"), mk_li("two")],
+        );
+
+        // Second list (menu) should reset counters back to 1 even though its items are decimal.
+        let menu_li_style = {
+            let mut s = (*li_style).clone();
+            s.list_style_type = ListStyleType::Decimal;
+            Arc::new(s)
+        };
+        let mk_menu_li = |text: &str| {
+            DOMNode::new_element(
+                "li",
+                menu_li_style.clone(),
+                vec![DOMNode::new_text(text.to_string(), text_style.clone())],
+            )
+        };
+        let menu = DOMNode::new_element(
+            "menu",
+            style_with_display(Display::Block),
+            vec![mk_menu_li("first"), mk_menu_li("second")],
+        );
+
+        let root = DOMNode::new_element("div", style_with_display(Display::Block), vec![ol, menu]);
+        let tree = generator.generate(&root).unwrap();
+
+        // Inspect menu markers
+        let menu_box = tree.root.children[1].clone();
+        let first_marker_text = match &menu_box.children[0].children[0].box_type {
+            BoxType::Marker(marker) => match &marker.content {
+                MarkerContent::Text(t) => t.clone(),
+                other => panic!("expected text marker for first menu item, got {:?}", other),
+            },
+            other => panic!("expected marker for first menu item, got {:?}", other),
+        };
+        let second_marker_text = match &menu_box.children[1].children[0].box_type {
+            BoxType::Marker(marker) => match &marker.content {
+                MarkerContent::Text(t) => t.clone(),
+                other => panic!("expected text marker for second menu item, got {:?}", other),
+            },
+            other => panic!("expected marker for second menu item, got {:?}", other),
+        };
+
+        assert_eq!(first_marker_text, "1 ");
+        assert_eq!(second_marker_text, "2 ");
+    }
+
+    #[test]
+    fn nested_list_resets_increment_to_default() {
+        // Outer reversed list should not force inner list to count down; inner list starts at 1.
+        let mut ol_style = ComputedStyle::default();
+        ol_style.display = Display::Block;
+        ol_style.list_style_type = ListStyleType::Decimal;
+
+        let mut li_style = ComputedStyle::default();
+        li_style.display = Display::ListItem;
+        li_style.list_style_type = ListStyleType::Decimal;
+
+        let text_node = |content: &str| StyledNode {
+            node_id: 0,
+            node: dom::DomNode {
+                node_type: dom::DomNodeType::Text {
+                    content: content.to_string(),
+                },
+                children: vec![],
+            },
+            styles: ComputedStyle::default(),
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children: vec![],
+        };
+
+        let mk_li = |content: &str| StyledNode {
+            node_id: 0,
+            node: dom::DomNode {
+                node_type: dom::DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            },
+            styles: li_style.clone(),
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children: vec![text_node(content)],
+        };
+
+        let inner_ol = StyledNode {
+            node_id: 0,
+            node: dom::DomNode {
+                node_type: dom::DomNodeType::Element {
+                    tag_name: "ol".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            },
+            styles: ol_style.clone(),
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children: vec![mk_li("inner-one"), mk_li("inner-two")],
+        };
+
+        let outer_li = StyledNode {
+            node_id: 0,
+            node: dom::DomNode {
+                node_type: dom::DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            },
+            styles: li_style.clone(),
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children: vec![text_node("outer"), inner_ol],
+        };
+
+        let outer_ol = StyledNode {
+            node_id: 0,
+            node: dom::DomNode {
+                node_type: dom::DomNodeType::Element {
+                    tag_name: "ol".to_string(),
+                    attributes: vec![("reversed".to_string(), "".to_string())],
+                },
+                children: vec![],
+            },
+            styles: ol_style,
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children: vec![outer_li],
+        };
+
+        let tree = generate_box_tree(&outer_ol);
+        let inner_box = tree.root.children[0]
+            .children
+            .iter()
+            .find(|child| matches!(child.box_type, BoxType::Block(_)))
+            .expect("inner list block");
+
+        let first_inner_marker = match &inner_box.children[0].children[0].box_type {
+            BoxType::Marker(marker) => marker.content.clone(),
+            other => panic!("expected marker for first inner item, got {:?}", other),
+        };
+        let second_inner_marker = match &inner_box.children[1].children[0].box_type {
+            BoxType::Marker(marker) => marker.content.clone(),
+            other => panic!("expected marker for second inner item, got {:?}", other),
+        };
+
+        let first_text = match first_inner_marker {
+            MarkerContent::Text(t) => t,
+            other => panic!("expected text marker, got {:?}", other),
+        };
+        let second_text = match second_inner_marker {
+            MarkerContent::Text(t) => t,
+            other => panic!("expected text marker, got {:?}", other),
+        };
+
+        assert_eq!(first_text, "1 ");
+        assert_eq!(second_text, "2 ");
     }
 
     #[test]
