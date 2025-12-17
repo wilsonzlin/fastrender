@@ -60,7 +60,7 @@ hyphenation = { version = "0.8", features = ["embed_en-us"] }
 tiny-skia = "0.11"
 
 # Image encoding/decoding
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 kamadak-exif = "0.6"
 
 # SVG rendering

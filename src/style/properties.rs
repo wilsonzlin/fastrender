@@ -2089,7 +2089,10 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "table-layout" => styles.table_layout = source.table_layout,
         "empty-cells" => styles.empty_cells = source.empty_cells,
         "caption-side" => styles.caption_side = source.caption_side,
-        "vertical-align" => styles.vertical_align = source.vertical_align,
+        "vertical-align" => {
+            styles.vertical_align = source.vertical_align;
+            styles.vertical_align_specified = source.vertical_align_specified;
+        }
         "text-align" => {
             styles.text_align = source.text_align;
             styles.text_align_last = source.text_align_last;
@@ -4966,12 +4969,15 @@ pub fn apply_declaration_with_base(
                     "bottom" => VerticalAlign::Bottom,
                     _ => styles.vertical_align,
                 };
+                styles.vertical_align_specified = true;
             }
             PropertyValue::Length(len) => {
                 styles.vertical_align = VerticalAlign::Length(*len);
+                styles.vertical_align_specified = true;
             }
             PropertyValue::Percentage(pct) => {
                 styles.vertical_align = VerticalAlign::Percentage(*pct);
+                styles.vertical_align_specified = true;
             }
             _ => {}
         },
@@ -5617,6 +5623,12 @@ pub fn apply_declaration_with_base(
         "transform" => {
             if let PropertyValue::Transform(transforms) = &resolved_value {
                 styles.transform = transforms.clone();
+            } else if let PropertyValue::Keyword(kw) = &resolved_value {
+                if kw.eq_ignore_ascii_case("none") {
+                    styles.transform.clear();
+                } else if let Some(ts) = crate::css::properties::parse_transform_list(kw) {
+                    styles.transform = ts;
+                }
             }
         }
         "transform-box" => {
@@ -7787,7 +7799,7 @@ fn resolve_font_size_length(
         len.unit,
         LengthUnit::Vw | LengthUnit::Vh | LengthUnit::Vmin | LengthUnit::Vmax
     ) {
-        return Some(len.resolve_with_viewport(viewport.width, viewport.height));
+        return len.resolve_with_viewport(viewport.width, viewport.height);
     }
     if len.unit == LengthUnit::Ex {
         return Some(len.value * parent_font_size * 0.5);

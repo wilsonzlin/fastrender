@@ -287,7 +287,7 @@ impl CalcLength {
                 LengthUnit::Percent => percentage_base.map(|b| (term.value / 100.0) * b),
                 u if u.is_absolute() => Some(Length::new(term.value, u).to_px()),
                 u if u.is_viewport_relative() => {
-                    Some(Length::new(term.value, u).resolve_with_viewport(viewport_width, viewport_height))
+                    Length::new(term.value, u).resolve_with_viewport(viewport_width, viewport_height)
                 }
                 LengthUnit::Em => Some(term.value * font_size_px),
                 LengthUnit::Ex | LengthUnit::Ch => Some(term.value * font_size_px * 0.5),
@@ -412,31 +412,31 @@ mod tests {
     #[test]
     fn test_length_font_size_resolution() {
         let em = Length::em(2.0);
-        assert_eq!(em.resolve_with_font_size(16.0), 32.0);
+        assert_eq!(em.resolve_with_font_size(16.0), Some(32.0));
 
         let rem = Length::rem(1.5);
-        assert_eq!(rem.resolve_with_font_size(16.0), 24.0);
+        assert_eq!(rem.resolve_with_font_size(16.0), Some(24.0));
 
         let ex = Length::ex(2.0);
-        assert_eq!(ex.resolve_with_font_size(16.0), 16.0);
+        assert_eq!(ex.resolve_with_font_size(16.0), Some(16.0));
 
         let ch = Length::ch(3.0);
-        assert_eq!(ch.resolve_with_font_size(16.0), 24.0);
+        assert_eq!(ch.resolve_with_font_size(16.0), Some(24.0));
     }
 
     #[test]
     fn test_length_viewport_resolution() {
         let vw = Length::new(50.0, LengthUnit::Vw);
-        assert_eq!(vw.resolve_with_viewport(800.0, 600.0), 400.0);
+        assert_eq!(vw.resolve_with_viewport(800.0, 600.0), Some(400.0));
 
         let vh = Length::new(50.0, LengthUnit::Vh);
-        assert_eq!(vh.resolve_with_viewport(800.0, 600.0), 300.0);
+        assert_eq!(vh.resolve_with_viewport(800.0, 600.0), Some(300.0));
 
         let vmin = Length::new(10.0, LengthUnit::Vmin);
-        assert_eq!(vmin.resolve_with_viewport(800.0, 600.0), 60.0); // 10% of 600
+        assert_eq!(vmin.resolve_with_viewport(800.0, 600.0), Some(60.0)); // 10% of 600
 
         let vmax = Length::new(10.0, LengthUnit::Vmax);
-        assert_eq!(vmax.resolve_with_viewport(800.0, 600.0), 80.0); // 10% of 800
+        assert_eq!(vmax.resolve_with_viewport(800.0, 600.0), Some(80.0)); // 10% of 800
     }
 
     #[test]
@@ -546,7 +546,7 @@ impl fmt::Display for LengthUnit {
 ///
 /// let em_length = Length::em(2.0);
 /// let resolved = em_length.resolve_with_font_size(16.0);
-/// assert_eq!(resolved, 32.0);
+/// assert_eq!(resolved, Some(32.0));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Length {
@@ -723,29 +723,29 @@ impl Length {
     ///
     /// ```
     /// use fastrender::Length;
-    ///
-    /// let length = Length::em(2.0);
-    /// assert_eq!(length.resolve_with_font_size(16.0), 32.0);
-    ///
-    /// let rem_length = Length::rem(1.5);
-    /// assert_eq!(rem_length.resolve_with_font_size(16.0), 24.0);
-    ///
-    /// // ex/ch fallback to 0.5em when font metrics are unavailable
-    /// let ex_length = Length::ex(2.0);
-    /// assert_eq!(ex_length.resolve_with_font_size(16.0), 16.0);
+///
+/// let length = Length::em(2.0);
+/// assert_eq!(length.resolve_with_font_size(16.0), Some(32.0));
+///
+/// let rem_length = Length::rem(1.5);
+/// assert_eq!(rem_length.resolve_with_font_size(16.0), Some(24.0));
+///
+/// // ex/ch fallback to 0.5em when font metrics are unavailable
+/// let ex_length = Length::ex(2.0);
+/// assert_eq!(ex_length.resolve_with_font_size(16.0), Some(16.0));
     /// ```
-    pub fn resolve_with_font_size(self, font_size_px: f32) -> f32 {
+    pub fn resolve_with_font_size(self, font_size_px: f32) -> Option<f32> {
         if let Some(calc) = self.calc {
             return calc
                 .resolve(None, 0.0, 0.0, font_size_px, font_size_px)
-                .unwrap_or(self.value * font_size_px);
+                .or_else(|| Some(self.value * font_size_px));
         }
         match self.unit {
-            LengthUnit::Em | LengthUnit::Rem => self.value * font_size_px,
+            LengthUnit::Em | LengthUnit::Rem => Some(self.value * font_size_px),
             // Approximate ex/ch with font metrics; fallback to 0.5em when actual x-height/zero-width is unknown.
-            LengthUnit::Ex | LengthUnit::Ch => self.value * font_size_px * 0.5,
-            _ if self.unit.is_absolute() => self.to_px(),
-            _ => panic!("Cannot resolve {} with only font size", self.unit.as_str()),
+            LengthUnit::Ex | LengthUnit::Ch => Some(self.value * font_size_px * 0.5),
+            _ if self.unit.is_absolute() => Some(self.to_px()),
+            _ => None,
         }
     }
 
@@ -755,26 +755,26 @@ impl Length {
     ///
     /// ```
     /// use fastrender::{Length, LengthUnit};
-    ///
-    /// let length = Length::new(50.0, LengthUnit::Vw);
-    /// assert_eq!(length.resolve_with_viewport(800.0, 600.0), 400.0);
-    ///
-    /// let vh_length = Length::new(50.0, LengthUnit::Vh);
-    /// assert_eq!(vh_length.resolve_with_viewport(800.0, 600.0), 300.0);
-    /// ```
-    pub fn resolve_with_viewport(self, viewport_width: f32, viewport_height: f32) -> f32 {
+///
+/// let length = Length::new(50.0, LengthUnit::Vw);
+/// assert_eq!(length.resolve_with_viewport(800.0, 600.0), Some(400.0));
+///
+/// let vh_length = Length::new(50.0, LengthUnit::Vh);
+/// assert_eq!(vh_length.resolve_with_viewport(800.0, 600.0), Some(300.0));
+/// ```
+    pub fn resolve_with_viewport(self, viewport_width: f32, viewport_height: f32) -> Option<f32> {
         if let Some(calc) = self.calc {
             return calc
                 .resolve(None, viewport_width, viewport_height, 0.0, 0.0)
-                .unwrap_or(self.value);
+                .or_else(|| Some(self.value));
         }
         match self.unit {
-            LengthUnit::Vw => (self.value / 100.0) * viewport_width,
-            LengthUnit::Vh => (self.value / 100.0) * viewport_height,
-            LengthUnit::Vmin => (self.value / 100.0) * viewport_width.min(viewport_height),
-            LengthUnit::Vmax => (self.value / 100.0) * viewport_width.max(viewport_height),
-            _ if self.unit.is_absolute() => self.to_px(),
-            _ => panic!("Cannot resolve {} with only viewport dimensions", self.unit.as_str()),
+            LengthUnit::Vw => Some((self.value / 100.0) * viewport_width),
+            LengthUnit::Vh => Some((self.value / 100.0) * viewport_height),
+            LengthUnit::Vmin => Some((self.value / 100.0) * viewport_width.min(viewport_height)),
+            LengthUnit::Vmax => Some((self.value / 100.0) * viewport_width.max(viewport_height)),
+            _ if self.unit.is_absolute() => Some(self.to_px()),
+            _ => None,
         }
     }
 
@@ -802,13 +802,13 @@ impl Length {
         if self.unit.is_percentage() {
             percentage_base.map(|b| (self.value / 100.0) * b)
         } else if self.unit.is_viewport_relative() {
-            Some(self.resolve_with_viewport(viewport_width, viewport_height))
+            self.resolve_with_viewport(viewport_width, viewport_height)
         } else if self.unit.is_font_relative() {
-            Some(self.resolve_with_font_size(if self.unit == LengthUnit::Rem {
+            self.resolve_with_font_size(if self.unit == LengthUnit::Rem {
                 root_font_size_px
             } else {
                 font_size_px
-            }))
+            })
         } else if self.unit.is_absolute() {
             Some(self.to_px())
         } else {

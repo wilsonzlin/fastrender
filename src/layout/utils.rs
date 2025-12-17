@@ -46,7 +46,7 @@ pub fn resolve_length_with_percentage_metrics(
     if length.unit.is_percentage() {
         percentage_base.and_then(|b| length.resolve_against(b))
     } else if length.unit.is_viewport_relative() {
-        Some(length.resolve_with_viewport(viewport.width, viewport.height))
+        length.resolve_with_viewport(viewport.width, viewport.height)
     } else if length.unit.is_font_relative() {
         match (style, font_context) {
             (Some(style), Some(ctx)) => Some(resolve_font_relative_length(length, style, ctx)),
@@ -115,7 +115,7 @@ pub fn resolve_offset_with_metrics(
             } else if length.unit.is_absolute() {
                 Some(length.to_px())
             } else if length.unit.is_viewport_relative() {
-                Some(length.resolve_with_viewport(viewport.width, viewport.height))
+                length.resolve_with_viewport(viewport.width, viewport.height)
             } else {
                 match (style, font_context) {
                     (Some(style), Some(ctx)) => Some(resolve_font_relative_length(*length, style, ctx)),
@@ -151,7 +151,7 @@ pub fn resolve_offset_for_positioned(
             } else if length.unit.is_absolute() {
                 Some(length.to_px())
             } else if length.unit.is_viewport_relative() {
-                Some(length.resolve_with_viewport(viewport.width, viewport.height))
+                length.resolve_with_viewport(viewport.width, viewport.height)
             } else {
                 Some(resolve_font_relative_length_for_positioned(
                     *length,
@@ -277,7 +277,9 @@ fn resolve_font_relative_length_with_params(
         LengthUnit::Ex => length.value * x_height,
         LengthUnit::Ch => length.value * ch_width,
         LengthUnit::Rem => length.value * root_font_size,
-        _ => length.resolve_with_font_size(font_size),
+        _ => length
+            .resolve_with_font_size(font_size)
+            .unwrap_or(length.value * font_size),
     }
 }
 
@@ -507,7 +509,7 @@ fn resolve_replaced_length(
     if len.unit.is_percentage() {
         percentage_base.and_then(|b| len.resolve_against(b))
     } else if len.unit.is_viewport_relative() {
-        Some(len.resolve_with_viewport(viewport.width, viewport.height))
+        len.resolve_with_viewport(viewport.width, viewport.height)
     } else if len.unit.is_font_relative() {
         Some(resolve_font_relative(*len, font_size, root_font_size))
     } else if len.unit.is_absolute() {
@@ -523,7 +525,9 @@ fn resolve_font_relative(len: Length, font_size: f32, root_font_size: f32) -> f3
         LengthUnit::Ex => len.value * font_size * 0.5,
         LengthUnit::Ch => len.value * font_size * 0.5,
         LengthUnit::Rem => len.value * root_font_size,
-        _ => len.resolve_with_font_size(font_size),
+        _ => len
+            .resolve_with_font_size(font_size)
+            .unwrap_or(len.value * font_size),
     }
 }
 

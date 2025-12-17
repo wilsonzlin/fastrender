@@ -3775,9 +3775,9 @@ impl Painter {
 
         let image = match self.image_cache.load(src) {
             Ok(img) => img,
-            Err(_) => {
+            Err(e) => {
                 if log_image_fail {
-                    eprintln!("[image-load-fail] src={} stage=load", src);
+                    eprintln!("[image-load-fail] src={} stage=load err={}", src, e);
                 }
                 if src.trim_start().starts_with('<') {
                     match self.image_cache.render_svg(src) {
@@ -4226,6 +4226,7 @@ impl Painter {
                     l.resolve_against(style.font_size).unwrap_or(0.0)
                 } else if l.unit.is_viewport_relative() {
                     l.resolve_with_viewport(self.css_width, self.css_height)
+                        .unwrap_or_else(|| l.to_px())
                 } else {
                     resolve_font_relative_length(l, style, &self.font_ctx)
                 }
@@ -4245,7 +4246,8 @@ impl Painter {
                 if l.unit == LengthUnit::Percent {
                     Some(l.resolve_against(style.font_size).unwrap_or(0.0) * self.scale)
                 } else if l.unit.is_viewport_relative() {
-                    Some(l.resolve_with_viewport(self.css_width, self.css_height) * self.scale)
+                    l.resolve_with_viewport(self.css_width, self.css_height)
+                        .map(|v| v * self.scale)
                 } else {
                     Some(resolve_font_relative_length(l, style, &self.font_ctx) * self.scale)
                 }
@@ -5438,7 +5440,9 @@ fn build_transform(style: Option<&ComputedStyle>, bounds: Rect) -> Option<Transf
 fn resolve_transform_length(len: &Length, font_size: f32, percentage_base: f32) -> f32 {
     match len.unit {
         LengthUnit::Percent => len.resolve_against(percentage_base).unwrap_or(0.0),
-        LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size),
+        LengthUnit::Em | LengthUnit::Rem => len
+            .resolve_with_font_size(font_size)
+            .unwrap_or(len.value * font_size),
         _ if len.unit.is_absolute() => len.to_px(),
         _ => len.value,
     }
@@ -5884,7 +5888,7 @@ fn resolve_filter_length(
     match len.unit {
         LengthUnit::Percent => None,
         unit if unit.is_font_relative() => Some(resolve_font_relative_length(*len, style, font_ctx)),
-        unit if unit.is_viewport_relative() => Some(len.resolve_with_viewport(viewport.0, viewport.1)),
+        unit if unit.is_viewport_relative() => len.resolve_with_viewport(viewport.0, viewport.1),
         unit if unit.is_absolute() => Some(len.to_px()),
         _ => None,
     }

@@ -396,7 +396,7 @@ fn resolve_clip_length(
     match len.unit {
         LengthUnit::Percent => len.resolve_against(percentage_base).unwrap_or(0.0),
         u if u.is_font_relative() => resolve_font_relative_length(len, style, font_ctx),
-        u if u.is_viewport_relative() => len.resolve_with_viewport(viewport.0, viewport.1),
+        u if u.is_viewport_relative() => len.resolve_with_viewport(viewport.0, viewport.1).unwrap_or(len.value),
         _ if len.unit.is_absolute() => len.to_px(),
         _ => len.value,
     }

@@ -18,13 +18,29 @@ use fastrender::tree::box_generation::generate_box_tree_with_anonymous_fixup;
 use fastrender::tree::box_tree::BoxNode;
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode};
 use fastrender::{geometry::Point, geometry::Rect, geometry::Size, paint::stacking::creates_stacking_context};
-use url::Url;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::fs;
+use url::Url;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Avoid panicking on SIGPIPE/BrokenPipe when piped through tools like `head`.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let mut msg = info.to_string();
+        if let Some(s) = info.payload().downcast_ref::<&str>() {
+            msg = (*s).to_string();
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            msg = s.clone();
+        }
+        if msg.contains("Broken pipe") {
+            // Exit silently with success for broken pipe to mirror common CLI behavior.
+            std::process::exit(0);
+        }
+        default_hook(info);
+    }));
+
     let raw_path = env::args().nth(1).expect("path arg");
     let (path, input_url) = if let Ok(url) = Url::parse(&raw_path) {
         if url.scheme() == "file" {
@@ -317,6 +333,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("fragments: {}", fragment_tree.fragment_count());
 
+    let mut fragments_abs: Vec<(Rect, &FragmentNode)> = Vec::new();
+    collect_fragments_abs(&fragment_tree.root, Point::ZERO, &mut fragments_abs);
+
     let mut text_count = 0;
     let mut block_count = 0;
     let mut line_count = 0;
@@ -326,19 +345,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut maxx = f32::MIN;
     let mut maxy = f32::MIN;
 
-    for frag in fragment_tree.iter_fragments() {
-        let bounds = frag.bounds;
-        minx = minx.min(bounds.x());
-        miny = miny.min(bounds.y());
-        maxx = maxx.max(bounds.max_x());
-        maxy = maxy.max(bounds.max_y());
+    for (abs, frag) in &fragments_abs {
+        minx = minx.min(abs.x());
+        miny = miny.min(abs.y());
+        maxx = maxx.max(abs.max_x());
+        maxy = maxy.max(abs.max_y());
 
         match &frag.content {
             FragmentContent::Text { text, .. } => {
                 text_count += 1;
                 if text_count <= 5 {
                     let preview: String = text.chars().take(50).collect();
-                    println!("text {:?} @ {:?}", preview, bounds);
+                    println!("text {:?} @ {:?}", preview, abs);
                 }
             }
             FragmentContent::Block { .. } => block_count += 1,
@@ -362,12 +380,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut in_view = 0usize;
         let mut text_in_view = 0usize;
         let mut samples: Vec<(f32, String)> = Vec::new();
-        for frag in fragment_tree.iter_fragments() {
-            let b = frag.bounds;
-            let intersects = b.x() < viewport_rect.x() + viewport_rect.width()
-                && b.x() + b.width() > viewport_rect.x()
-                && b.y() < viewport_rect.y() + viewport_rect.height()
-                && b.y() + b.height() > viewport_rect.y();
+        for (abs, frag) in &fragments_abs {
+            let intersects = abs.x() < viewport_rect.x() + viewport_rect.width()
+                && abs.x() + abs.width() > viewport_rect.x()
+                && abs.y() < viewport_rect.y() + viewport_rect.height()
+                && abs.y() + abs.height() > viewport_rect.y();
             if !intersects {
                 continue;
             }
@@ -382,7 +399,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     snippet.push(ch);
                 }
-                samples.push((b.y(), format!("y={:.1} h={:.1} \"{snippet}\"", b.y(), b.height())));
+                samples.push((abs.y(), format!("y={:.1} h={:.1} \"{snippet}\"", abs.y(), abs.height())));
             }
         }
         samples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -395,14 +412,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     let mut dark_backgrounds: Vec<(f32, f32, Rect, String)> = Vec::new();
-    for frag in fragment_tree.iter_fragments() {
+    for (abs, frag) in &fragments_abs {
         if let Some(style) = frag.style.as_deref() {
             let bg = style.background_color;
             if bg.a > 0.0 && bg.r == 12 && bg.g == 12 && bg.b == 12 {
                 dark_backgrounds.push((
-                    frag.bounds.y(),
-                    frag.bounds.x(),
-                    frag.bounds,
+                    abs.y(),
+                    abs.x(),
+                    *abs,
                     match &frag.content {
                         FragmentContent::Block { box_id } | FragmentContent::Inline { box_id, .. } => box_id
                             .and_then(|id| box_debug.get(&id))
@@ -445,14 +462,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  {idx}: rank={} at ({:.1},{:.1})", n, x, y);
     }
     // Surface far-right fragments to catch runaway translations.
-    let mut far_right: Vec<_> = fragment_tree
-        .iter_fragments()
-        .filter(|f| f.bounds.max_x() > 2000.0)
-        .map(|f| {
+    let mut far_right: Vec<_> = fragments_abs
+        .iter()
+        .filter(|(abs, _)| abs.max_x() > 2000.0)
+        .map(|(abs, f)| {
             let (id, debug) = match &f.content {
                 FragmentContent::Block { box_id } | FragmentContent::Inline { box_id, .. } => {
                     if let Some(id) = box_id {
-                        let dbg = box_debug.get(id).cloned().unwrap_or_else(|| format!("{:?}", f.content));
+                        let dbg = box_debug.get(&id).cloned().unwrap_or_else(|| format!("{:?}", f.content));
                         (Some(*id), dbg)
                     } else {
                         (None, format!("{:?}", f.content))
@@ -460,15 +477,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 _ => (None, format!("{:?}", f.content)),
             };
-            (
-                f.bounds.max_x(),
-                f.bounds.x(),
-                f.bounds.y(),
-                f.bounds.width(),
-                f.bounds.height(),
-                id,
-                debug,
-            )
+            (abs.max_x(), abs.x(), abs.y(), abs.width(), abs.height(), id, debug)
         })
         .collect();
     far_right.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -485,9 +494,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  {idx}: ({x:.1}, {y:.1}) {preview:?}");
     }
     println!("first 5 text fragments with color/font-size:");
-    for frag in fragment_tree
-        .iter_fragments()
-        .filter(|f| matches!(f.content, FragmentContent::Text { .. }))
+    for (abs, frag) in fragments_abs
+        .iter()
+        .filter(|(_, f)| matches!(f.content, FragmentContent::Text { .. }))
         .take(5)
     {
         if let FragmentContent::Text { text, .. } = &frag.content {
@@ -501,8 +510,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!(
                 "  text {:?} @ ({:.1},{:.1}) size={:.1} color=rgba({},{},{},{:.2}) visibility={}",
                 text.chars().take(40).collect::<String>(),
-                frag.bounds.x(),
-                frag.bounds.y(),
+                abs.x(),
+                abs.y(),
                 fs,
                 r,
                 g,
@@ -566,18 +575,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut backgrounds = Vec::new();
-    for frag in fragment_tree.iter_fragments() {
+    for (abs, frag) in &fragments_abs {
         if let Some(style) = frag.style.as_deref() {
             let bg = style.background_color;
             if bg.a > 0.0 {
-                backgrounds.push((
-                    frag.bounds.y(),
-                    frag.bounds.x(),
-                    bg,
-                    format!("{:?}", frag.content),
-                    frag.bounds.width(),
-                    frag.bounds.height(),
-                ));
+                backgrounds.push((abs.y(), abs.x(), bg, format!("{:?}", frag.content), abs.width(), abs.height()));
             }
         }
     }
@@ -591,30 +593,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     // Backgrounds that intersect the viewport (1200x800)
     let viewport = Rect::from_xywh(0.0, 0.0, 1200.0, 800.0);
-    let mut view_bgs: Vec<_> = fragment_tree
-        .iter_fragments()
-        .filter_map(|frag| frag.style.as_deref().map(|style| (style.background_color, frag)))
-        .filter(|(bg, frag)| bg.a > 0.0 && frag.bounds.intersects(viewport))
+    let mut view_bgs: Vec<_> = fragments_abs
+        .iter()
+        .filter_map(|(abs, frag)| frag.style.as_deref().map(|style| (style.background_color, *abs, frag)))
+        .filter(|(bg, rect, _)| bg.a > 0.0 && rect.intersects(viewport))
         .collect();
     view_bgs.sort_by(|a, b| {
-        a.1.bounds
-            .y()
-            .partial_cmp(&b.1.bounds.y())
-            .unwrap_or(std::cmp::Ordering::Equal)
+        a.1.y().partial_cmp(&b.1.y()).unwrap_or(std::cmp::Ordering::Equal)
     });
     println!("viewport-intersecting backgrounds (alpha>0): {}", view_bgs.len());
-    for (idx, (bg, frag)) in view_bgs
+    for (idx, (bg, rect, frag)) in view_bgs
         .iter()
-        .filter(|(_, f)| f.bounds.width() * f.bounds.height() > 1000.0)
+        .filter(|(_, r, _)| r.width() * r.height() > 1000.0)
         .take(20)
         .enumerate()
     {
         println!(
             "  #{idx}: ({:.1},{:.1},{:.1},{:.1}) bg=rgba({},{},{},{:.2}) content={:?}",
-            frag.bounds.x(),
-            frag.bounds.y(),
-            frag.bounds.width(),
-            frag.bounds.height(),
+            rect.x(),
+            rect.y(),
+            rect.width(),
+            rect.height(),
             bg.r,
             bg.g,
             bg.b,
@@ -624,18 +623,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mut view_bgs_by_area: Vec<_> = view_bgs
         .iter()
-        .map(|(bg, frag)| (frag.bounds.width() * frag.bounds.height(), *bg, frag))
+        .map(|(bg, rect, frag)| (rect.width() * rect.height(), *bg, rect, frag))
         .collect();
     view_bgs_by_area.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     println!("largest viewport-intersecting backgrounds (alpha>0):");
-    for (idx, (area, bg, frag)) in view_bgs_by_area.iter().take(10).enumerate() {
+    for (idx, (area, bg, rect, frag)) in view_bgs_by_area.iter().take(10).enumerate() {
         println!(
             "  #{idx}: area={:.1} rect=({:.1},{:.1},{:.1},{:.1}) bg=rgba({},{},{},{:.2}) content={:?}",
             *area,
-            frag.bounds.x(),
-            frag.bounds.y(),
-            frag.bounds.width(),
-            frag.bounds.height(),
+            rect.x(),
+            rect.y(),
+            rect.width(),
+            rect.height(),
             bg.r,
             bg.g,
             bg.b,
@@ -705,6 +704,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             bg.a,
             frag.content
         );
+    }
+
+    // Trace nav/header positioning for HN: find first text containing "Hacker News" or ".pagetop" span.
+    let mut nav_path = Vec::new();
+    if find_fragment_with_text(&fragment_tree.root, Point::ZERO, "Hacker News", &mut nav_path) {
+        println!("path to 'Hacker News' fragment:");
+        for (idx, entry) in nav_path.iter().enumerate() {
+            println!("  {idx}: {entry}");
+        }
+    } else {
+        println!("no 'Hacker News' text fragment found");
     }
 
     // Surface fragments that have effectively zero width but large height, which can
@@ -1217,6 +1227,20 @@ fn collect_dark_boxes(node: &BoxNode, out: &mut Vec<DarkBox>) {
     }
 }
 
+fn collect_fragments_abs<'a>(fragment: &'a FragmentNode, offset: Point, out: &mut Vec<(Rect, &'a FragmentNode)>) {
+    let abs = Rect::from_xywh(
+        fragment.bounds.x() + offset.x,
+        fragment.bounds.y() + offset.y,
+        fragment.bounds.width(),
+        fragment.bounds.height(),
+    );
+    out.push((abs, fragment));
+    let next_offset = Point::new(abs.x(), abs.y());
+    for child in &fragment.children {
+        collect_fragments_abs(child, next_offset, out);
+    }
+}
+
 fn collect_backgrounds_abs<'a>(fragment: &'a FragmentNode, offset: Point, out: &mut Vec<(Rect, &'a FragmentNode)>) {
     let abs = Rect::from_xywh(
         fragment.bounds.x() + offset.x,
@@ -1423,4 +1447,38 @@ fn find_first_skinny(
         }
     }
     None
+}
+
+fn find_fragment_with_text(
+    fragment: &FragmentNode,
+    offset: Point,
+    needle: &str,
+    path: &mut Vec<String>,
+) -> bool {
+    let abs = Rect::from_xywh(
+        fragment.bounds.x() + offset.x,
+        fragment.bounds.y() + offset.y,
+        fragment.bounds.width(),
+        fragment.bounds.height(),
+    );
+    let mut label = format!("{:?} @ ({:.1},{:.1},{:.1},{:.1})", fragment.content, abs.x(), abs.y(), abs.width(), abs.height());
+    if let Some(style) = fragment.style.as_deref() {
+        label.push_str(&format!(" display={:?} pos={:?}", style.display, style.position));
+    }
+
+    if let FragmentContent::Text { text, .. } = &fragment.content {
+        if text.contains(needle) {
+            path.push(label);
+            return true;
+        }
+    }
+
+    let next_offset = Point::new(abs.x(), abs.y());
+    for child in &fragment.children {
+        if find_fragment_with_text(child, next_offset, needle, path) {
+            path.insert(0, label);
+            return true;
+        }
+    }
+    false
 }

@@ -553,6 +553,18 @@ impl ColumnDistributor {
         let total_max: f32 = columns.iter().map(|c| c.max_width.max(self.min_column_width)).sum();
         let has_percentage = columns.iter().any(|c| c.percentage.is_some());
 
+        // Guard against non-finite available width: fall back to the tightest finite bound we have.
+        let mut available_width = available_width;
+        if !available_width.is_finite() {
+            if total_max.is_finite() {
+                available_width = total_max;
+            } else if total_min.is_finite() {
+                available_width = total_min;
+            } else {
+                available_width = 0.0;
+            }
+        }
+
         // Step 2: Handle edge cases
         if available_width <= 0.0 {
             // No space available, use minimums
@@ -816,54 +828,84 @@ pub fn distribute_spanning_cell_width(
         return;
     }
 
+    // Ignore non-finite requirements; they cannot be satisfied meaningfully and would otherwise
+    // contaminate the computation with NaNs.
+    let required_min = if cell_min.is_finite() { cell_min.max(0.0) } else { 0.0 };
+    let required_max = cell_max.is_finite().then_some(cell_max);
+
     let spanned = &mut columns[start_col..end_col];
 
     let distribute_min = |cols: &mut [ColumnConstraints], indices: &[usize], need: f32| -> f32 {
         if indices.is_empty() || need <= 0.0 {
             return need;
         }
-        // Prefer columns with existing headroom so we don't immediately burst past their maxima.
-        let headrooms: Vec<f32> = indices
-            .iter()
-            .map(|&i| (cols[i].max_width - cols[i].min_width).max(0.0))
-            .collect();
-        let total_headroom: f32 = headrooms.iter().sum();
+        let mut remaining = need;
 
-        if total_headroom > 0.0 {
-            for (&idx, headroom) in indices.iter().zip(headrooms.iter()) {
-                if *headroom <= 0.0 {
-                    continue;
+        // Prefer columns with finite headroom; keep unbounded headroom separate to avoid inf/inf.
+        let mut finite: Vec<(usize, f32)> = Vec::new();
+        let mut infinite: Vec<usize> = Vec::new();
+        for &i in indices {
+            let headroom = (cols[i].max_width - cols[i].min_width).max(0.0);
+            if headroom.is_finite() {
+                if headroom > 0.0 {
+                    finite.push((i, headroom));
                 }
-                let share = need * (*headroom / total_headroom);
-                let delta = share.min(*headroom);
-                cols[idx].min_width += delta;
-                if cols[idx].min_width > cols[idx].max_width {
-                    cols[idx].max_width = cols[idx].min_width;
+            } else {
+                infinite.push(i);
+            }
+        }
+
+        if !finite.is_empty() && remaining.is_finite() {
+            let total_headroom: f32 = finite.iter().map(|(_, h)| *h).sum();
+            if total_headroom > 0.0 {
+                let mut distributed = 0.0;
+                for (idx, headroom) in &finite {
+                    let share = remaining * (*headroom / total_headroom);
+                    let delta = share.min(*headroom);
+                    cols[*idx].min_width += delta;
+                    if cols[*idx].min_width > cols[*idx].max_width {
+                        cols[*idx].max_width = cols[*idx].min_width;
+                    }
+                    distributed += delta;
                 }
+                remaining = (remaining - distributed).max(0.0);
             }
-        } else {
-            // No headroom left—fall back to weighting by current widths.
-            let weights: Vec<f32> = indices.iter().map(|&i| cols[i].min_width.max(1.0)).collect();
-            let total_weight: f32 = weights.iter().sum();
-            if total_weight <= 0.0 {
-                return need;
-            }
-            for (&idx, weight) in indices.iter().zip(weights.iter()) {
-                let delta = need * (*weight / total_weight);
-                cols[idx].min_width += delta;
-                if cols[idx].min_width > cols[idx].max_width {
-                    cols[idx].max_width = cols[idx].min_width;
+        }
+
+        if remaining > 0.0 {
+            if !infinite.is_empty() {
+                let per = remaining / infinite.len() as f32;
+                for idx in infinite {
+                    cols[idx].min_width += per;
+                    if cols[idx].max_width < cols[idx].min_width {
+                        cols[idx].max_width = cols[idx].min_width;
+                    }
+                }
+                remaining = 0.0;
+            } else {
+                let weights: Vec<f32> = indices.iter().map(|&i| cols[i].min_width.max(1.0)).collect();
+                let total_weight: f32 = weights.iter().sum();
+                if total_weight > 0.0 {
+                    let mut distributed = 0.0;
+                    for (&idx, weight) in indices.iter().zip(weights.iter()) {
+                        let delta = remaining * (*weight / total_weight);
+                        cols[idx].min_width += delta;
+                        if cols[idx].max_width < cols[idx].min_width {
+                            cols[idx].max_width = cols[idx].min_width;
+                        }
+                        distributed += delta;
+                    }
+                    remaining = (remaining - distributed).max(0.0);
                 }
             }
         }
 
-        let new_sum: f32 = cols.iter().map(|c| c.min_width).sum();
-        (cell_min - new_sum).max(0.0)
+        remaining
     };
 
     let current_min_sum: f32 = spanned.iter().map(|c| c.min_width).sum();
-    if cell_min > current_min_sum {
-        let mut need = cell_min - current_min_sum;
+    if required_min > current_min_sum {
+        let mut need = required_min - current_min_sum;
         let flex_indices: Vec<usize> = spanned
             .iter()
             .enumerate()
@@ -897,76 +939,99 @@ pub fn distribute_spanning_cell_width(
     }
 
     // Then ensure the span can satisfy the cell's maximum width request, preferring flexible and percentage columns.
-    let current_max_sum: f32 = spanned.iter().map(|c| c.max_width).sum();
-    if cell_max > current_max_sum {
-        let distribute_max = |cols: &mut [ColumnConstraints], indices: &[usize], need: f32| -> f32 {
-            if indices.is_empty() || need <= 0.0 {
-                return need;
-            }
-
-            let headrooms: Vec<f32> = indices
-                .iter()
-                .map(|&i| (cols[i].max_width - cols[i].min_width).max(0.0))
-                .collect();
-            let total_headroom: f32 = headrooms.iter().sum();
-            let mut remaining = need;
-
-            if total_headroom > 0.0 {
-                let to_distribute = remaining.min(total_headroom);
-                let mut distributed = 0.0;
-                for (&idx, headroom) in indices.iter().zip(headrooms.iter()) {
-                    if *headroom <= 0.0 {
-                        continue;
-                    }
-                    let delta = (to_distribute * (*headroom / total_headroom)).min(*headroom);
-                    cols[idx].max_width += delta;
-                    if cols[idx].max_width < cols[idx].min_width {
-                        cols[idx].max_width = cols[idx].min_width;
-                    }
-                    distributed += delta;
+    if let Some(required_max) = required_max {
+        let current_max_sum: f32 = spanned.iter().map(|c| c.max_width).sum();
+        if required_max > current_max_sum {
+            let distribute_max = |cols: &mut [ColumnConstraints], indices: &[usize], need: f32| -> f32 {
+                if indices.is_empty() || need <= 0.0 {
+                    return need;
                 }
-                remaining -= distributed;
-            }
 
-            if remaining > 0.0 {
-                let weights: Vec<f32> = indices.iter().map(|&i| cols[i].max_width.max(1.0)).collect();
-                let total_weight: f32 = weights.iter().sum();
-                if total_weight > 0.0 {
-                    let mut distributed = 0.0;
-                    for (&idx, weight) in indices.iter().zip(weights.iter()) {
-                        let delta = remaining * (*weight / total_weight);
-                        cols[idx].max_width += delta;
-                        if cols[idx].max_width < cols[idx].min_width {
-                            cols[idx].max_width = cols[idx].min_width;
+                let mut remaining = need;
+
+                let mut finite: Vec<(usize, f32)> = Vec::new();
+                let mut infinite: Vec<usize> = Vec::new();
+                for &i in indices {
+                    let headroom = (cols[i].max_width - cols[i].min_width).max(0.0);
+                    if headroom.is_finite() {
+                        finite.push((i, headroom));
+                    } else {
+                        infinite.push(i);
+                    }
+                }
+
+                if !finite.is_empty() && remaining.is_finite() {
+                    let total_headroom: f32 = finite.iter().map(|(_, h)| *h).sum();
+                    if total_headroom > 0.0 {
+                        let to_distribute = remaining.min(total_headroom);
+                        let mut distributed = 0.0;
+                        for (idx, headroom) in &finite {
+                            if *headroom <= 0.0 {
+                                continue;
+                            }
+                            let delta = (to_distribute * (*headroom / total_headroom)).min(*headroom);
+                            cols[*idx].max_width += delta;
+                            if cols[*idx].max_width < cols[*idx].min_width {
+                                cols[*idx].max_width = cols[*idx].min_width;
+                            }
+                            distributed += delta;
                         }
-                        distributed += delta;
+                        remaining = (remaining - distributed).max(0.0);
                     }
-                    remaining -= distributed;
                 }
+
+                if remaining > 0.0 {
+                    if !infinite.is_empty() {
+                        let per = remaining / infinite.len() as f32;
+                        for idx in infinite {
+                            cols[idx].max_width += per;
+                            if cols[idx].max_width < cols[idx].min_width {
+                                cols[idx].max_width = cols[idx].min_width;
+                            }
+                        }
+                        remaining = 0.0;
+                    } else {
+                        let weights: Vec<f32> =
+                            indices.iter().map(|&i| cols[i].max_width.max(1.0)).collect();
+                        let total_weight: f32 = weights.iter().sum();
+                        if total_weight > 0.0 {
+                            let mut distributed = 0.0;
+                            for (&idx, weight) in indices.iter().zip(weights.iter()) {
+                                let delta = remaining * (*weight / total_weight);
+                                cols[idx].max_width += delta;
+                                if cols[idx].max_width < cols[idx].min_width {
+                                    cols[idx].max_width = cols[idx].min_width;
+                                }
+                                distributed += delta;
+                            }
+                            remaining = (remaining - distributed).max(0.0);
+                        }
+                    }
+                }
+
+                remaining
+            };
+
+            let mut extra = required_max - current_max_sum;
+            let adjustable: Vec<usize> = spanned
+                .iter()
+                .enumerate()
+                .filter_map(|(i, c)| {
+                    if c.max_width > c.min_width + 0.01 {
+                        Some(i)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if !adjustable.is_empty() {
+                extra = distribute_max(spanned, &adjustable, extra);
             }
 
-            remaining
-        };
-
-        let mut extra = cell_max - current_max_sum;
-        let adjustable: Vec<usize> = spanned
-            .iter()
-            .enumerate()
-            .filter_map(|(i, c)| {
-                if c.max_width > c.min_width + 0.01 {
-                    Some(i)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        if !adjustable.is_empty() {
-            extra = distribute_max(spanned, &adjustable, extra);
-        }
-
-        if extra > 0.0 {
-            let all_indices: Vec<usize> = (0..spanned.len()).collect();
-            distribute_max(spanned, &all_indices, extra);
+            if extra > 0.0 {
+                let all_indices: Vec<usize> = (0..spanned.len()).collect();
+                distribute_max(spanned, &all_indices, extra);
+            }
         }
     }
 }
@@ -1514,6 +1579,35 @@ mod tests {
     }
 
     #[test]
+    fn distributor_handles_infinite_available_width() {
+        let columns = vec![ColumnConstraints::new(50.0, 100.0), ColumnConstraints::new(75.0, 125.0)];
+        let distributor = ColumnDistributor::new(DistributionMode::Auto);
+
+        let result = distributor.distribute(&columns, f32::INFINITY);
+
+        // With unbounded space and finite maxima, we should land on max widths, not NaN/inf.
+        assert!((result.widths[0] - 100.0).abs() < 0.01);
+        assert!((result.widths[1] - 125.0).abs() < 0.01);
+        assert!(result.widths.iter().all(|w| w.is_finite()));
+    }
+
+    #[test]
+    fn distributor_handles_infinite_max_widths_with_infinite_available() {
+        let columns = vec![
+            ColumnConstraints::new(10.0, f32::INFINITY),
+            ColumnConstraints::new(20.0, f32::INFINITY),
+        ];
+        let distributor = ColumnDistributor::new(DistributionMode::Auto);
+
+        let result = distributor.distribute(&columns, f32::INFINITY);
+
+        // Fall back to the finite minimums when nothing else is bounded.
+        assert!((result.widths[0] - 10.0).abs() < 0.01);
+        assert!((result.widths[1] - 20.0).abs() < 0.01);
+        assert!(result.widths.iter().all(|w| w.is_finite()));
+    }
+
+    #[test]
     fn test_distributor_with_min_column_width() {
         let columns = vec![ColumnConstraints::zero(), ColumnConstraints::zero()];
         let distributor = ColumnDistributor::new(DistributionMode::Auto).with_min_column_width(10.0);
@@ -1677,6 +1771,42 @@ mod tests {
         assert!((total_max - 150.0).abs() < 0.5);
         assert!((columns[0].min_width - 75.0).abs() < 0.5);
         assert!((columns[1].min_width - 75.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn spanning_min_with_unbounded_headroom_splits_evenly_without_nan() {
+        let mut columns = vec![
+            ColumnConstraints::new(10.0, f32::INFINITY),
+            ColumnConstraints::new(10.0, f32::INFINITY),
+        ];
+
+        distribute_spanning_cell_width(&mut columns, 0, 2, 100.0, 150.0);
+
+        for col in &columns {
+            assert!(!col.min_width.is_nan());
+            assert!(!col.max_width.is_nan());
+        }
+        let total_min: f32 = columns.iter().map(|c| c.min_width).sum();
+        assert!(total_min >= 100.0 - 0.01);
+        assert!((columns[0].min_width - columns[1].min_width).abs() < 0.5);
+    }
+
+    #[test]
+    fn spanning_min_prefers_finite_headroom_before_unbounded() {
+        let mut columns = vec![
+            ColumnConstraints::new(10.0, f32::INFINITY),
+            ColumnConstraints::new(40.0, 60.0),
+        ];
+
+        distribute_spanning_cell_width(&mut columns, 0, 2, 170.0, 200.0);
+
+        assert!(!columns[0].min_width.is_nan());
+        assert!(!columns[1].min_width.is_nan());
+        // Finite column should rise to its cap before the unbounded column absorbs the remainder.
+        assert!((columns[1].min_width - 60.0).abs() < 0.5);
+        assert!(columns[0].min_width > 100.0);
+        let total_min: f32 = columns.iter().map(|c| c.min_width).sum();
+        assert!(total_min >= 170.0 - 0.01);
     }
 
     #[test]

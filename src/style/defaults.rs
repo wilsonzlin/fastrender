@@ -83,6 +83,9 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
                 styles.margin_bottom = Some(Length::px(0.0));
                 styles.padding_top = Length::px(0.0);
                 styles.padding_bottom = Length::px(0.0);
+                // UA default border-spacing per HTML/CSS UA stylesheets (CSS2 §17.6.1).
+                styles.border_spacing_horizontal = Length::px(2.0);
+                styles.border_spacing_vertical = Length::px(2.0);
             }
             "tr" => {
                 // Minimal spacing between table rows
@@ -91,12 +94,28 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
                 styles.padding_top = Length::px(0.0);
                 styles.padding_bottom = Length::px(0.0);
             }
-            "td" | "th" => {
+            "td" => {
                 // Minimal padding for table cells
                 styles.padding_top = Length::px(1.0);
                 styles.padding_bottom = Length::px(1.0);
+                styles.padding_left = Length::px(1.0);
+                styles.padding_right = Length::px(1.0);
                 styles.margin_top = Some(Length::px(0.0));
                 styles.margin_bottom = Some(Length::px(0.0));
+                // CSS 2.1 §17.5.3: table cells default to middle alignment
+                styles.vertical_align = crate::style::types::VerticalAlign::Middle;
+            }
+            "th" => {
+                // Header cells inherit td defaults plus bold/centered text
+                styles.padding_top = Length::px(1.0);
+                styles.padding_bottom = Length::px(1.0);
+                styles.padding_left = Length::px(1.0);
+                styles.padding_right = Length::px(1.0);
+                styles.margin_top = Some(Length::px(0.0));
+                styles.margin_bottom = Some(Length::px(0.0));
+                styles.vertical_align = crate::style::types::VerticalAlign::Middle;
+                styles.text_align = crate::style::types::TextAlign::Center;
+                styles.font_weight = crate::style::FontWeight::Bold;
             }
             "b" | "strong" => {
                 // Bold text

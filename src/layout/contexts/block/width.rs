@@ -401,7 +401,9 @@ fn resolve_length(
     } else if length.unit.is_absolute() {
         length.to_px()
     } else if length.unit.is_viewport_relative() {
-        length.resolve_with_viewport(viewport.width, viewport.height)
+        length
+            .resolve_with_viewport(viewport.width, viewport.height)
+            .unwrap_or_else(|| length.to_px())
     } else {
         match length.unit {
             LengthUnit::Em => length.value * font_size,

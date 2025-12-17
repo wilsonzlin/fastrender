@@ -115,7 +115,7 @@ fn resolve_length_for_positioned_size(
     } else if len.unit.is_absolute() {
         Some(len.to_px())
     } else if len.unit.is_viewport_relative() {
-        Some(len.resolve_with_viewport(viewport.width, viewport.height))
+        len.resolve_with_viewport(viewport.width, viewport.height)
     } else {
         Some(resolve_font_relative_length_for_positioned(*len, style, font_context))
     }
@@ -1824,7 +1824,7 @@ pub fn resolve_positioned_style(
         } else if len.unit.is_absolute() {
             Some(len.to_px())
         } else if len.unit.is_viewport_relative() {
-            Some(len.resolve_with_viewport(viewport.width, viewport.height))
+            len.resolve_with_viewport(viewport.width, viewport.height)
         } else {
             Some(crate::layout::utils::resolve_font_relative_length(
                 *len,

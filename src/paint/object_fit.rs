@@ -24,10 +24,12 @@ pub fn resolve_object_position(
             match () {
                 _ if len.unit.is_percentage() => len.resolve_against(free).unwrap_or(0.0),
                 _ if len.unit.is_absolute() => len.to_px(),
-                _ if len.unit.is_font_relative() => len.resolve_with_font_size(font_size),
+                _ if len.unit.is_font_relative() => {
+                    len.resolve_with_font_size(font_size).unwrap_or(len.value * font_size)
+                }
                 _ if len.unit.is_viewport_relative() => {
                     if let Some((vw, vh)) = viewport {
-                        len.resolve_with_viewport(vw, vh)
+                        len.resolve_with_viewport(vw, vh).unwrap_or(len.value)
                     } else {
                         // Fallback: treat unresolved viewport units as raw numbers to avoid panics.
                         len.value

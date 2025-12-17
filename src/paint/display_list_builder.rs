@@ -547,7 +547,9 @@ impl DisplayListBuilder {
         fn resolve_radius(len: &Length, reference: f32, font_size: f32) -> f32 {
             let resolved = match len.unit {
                 LengthUnit::Percent => len.resolve_against(reference).unwrap_or(0.0),
-                LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size),
+                LengthUnit::Em | LengthUnit::Rem => {
+                    len.resolve_with_font_size(font_size).unwrap_or(len.value * font_size)
+                }
                 _ if len.unit.is_absolute() => len.to_px(),
                 _ => len.value * font_size,
             };
@@ -979,7 +981,7 @@ impl DisplayListBuilder {
         let resolved = match len.unit {
             LengthUnit::Percent => None,
             unit if unit.is_font_relative() => Some(resolve_font_relative_length(*len, style, font_ctx)),
-            unit if unit.is_viewport_relative() => Some(len.resolve_with_viewport(viewport.0, viewport.1)),
+            unit if unit.is_viewport_relative() => len.resolve_with_viewport(viewport.0, viewport.1),
             unit if unit.is_absolute() => Some(len.to_px()),
             _ => None,
         }?;
@@ -1279,7 +1281,9 @@ impl DisplayListBuilder {
     fn resolve_transform_length(len: &Length, font_size: f32, percentage_base: f32) -> f32 {
         match len.unit {
             LengthUnit::Percent => len.resolve_against(percentage_base).unwrap_or(0.0),
-            LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size),
+            LengthUnit::Em | LengthUnit::Rem => {
+                len.resolve_with_font_size(font_size).unwrap_or(len.value * font_size)
+            }
             _ if len.unit.is_absolute() => len.to_px(),
             _ => len.value,
         }
@@ -2342,17 +2346,13 @@ impl DisplayListBuilder {
                 TextDecorationThickness::Auto => None,
                 TextDecorationThickness::FromFont => None,
                 TextDecorationThickness::Length(l) => {
-                    let resolved = if l.unit == LengthUnit::Percent {
-                        l.resolve_against(style.font_size).unwrap_or(0.0)
+                    if l.unit == LengthUnit::Percent {
+                        l.resolve_against(style.font_size)
                     } else if l.unit.is_viewport_relative() {
-                        match self.viewport {
-                            Some((vw, vh)) => l.resolve_with_viewport(vw, vh),
-                            None => l.to_px(),
-                        }
+                        self.viewport.and_then(|(vw, vh)| l.resolve_with_viewport(vw, vh))
                     } else {
-                        resolve_font_relative_length(l, style, &self.font_ctx)
-                    };
-                    Some(resolved)
+                        Some(resolve_font_relative_length(l, style, &self.font_ctx))
+                    }
                 }
             };
 
@@ -2460,10 +2460,9 @@ impl DisplayListBuilder {
                 } else if l.unit.is_font_relative() {
                     resolve_font_relative_length(l, style, &self.font_ctx)
                 } else if l.unit.is_viewport_relative() {
-                    match self.viewport {
-                        Some((vw, vh)) => l.resolve_with_viewport(vw, vh),
-                        None => l.to_px(),
-                    }
+                    self.viewport
+                        .and_then(|(vw, vh)| l.resolve_with_viewport(vw, vh))
+                        .unwrap_or_else(|| l.to_px())
                 } else if l.unit.is_absolute() {
                     l.to_px()
                 } else {

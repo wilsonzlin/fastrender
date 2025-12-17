@@ -35,6 +35,7 @@ use rustybuzz::ttf_parser::Tag;
 use rustybuzz::{Direction, Face, Feature, UnicodeBuffer};
 use std::collections::HashSet;
 use std::fs;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use ureq::Agent;
 use url::Url;
@@ -76,6 +77,7 @@ pub struct FontContext {
     web_fonts: Arc<RwLock<Vec<WebFontFace>>>,
     web_families: Arc<RwLock<std::collections::HashSet<String>>>,
     feature_support: Arc<RwLock<std::collections::HashMap<(usize, u32, u32), bool>>>,
+    generation: Arc<AtomicU64>,
 }
 
 impl FontContext {
@@ -121,6 +123,7 @@ impl FontContext {
             web_fonts: Arc::new(RwLock::new(Vec::new())),
             web_families: Arc::new(RwLock::new(std::collections::HashSet::new())),
             feature_support: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -140,6 +143,7 @@ impl FontContext {
             web_fonts: Arc::new(RwLock::new(Vec::new())),
             web_families: Arc::new(RwLock::new(std::collections::HashSet::new())),
             feature_support: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -152,6 +156,7 @@ impl FontContext {
             web_fonts: Arc::new(RwLock::new(Vec::new())),
             web_families: Arc::new(RwLock::new(std::collections::HashSet::new())),
             feature_support: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -389,12 +394,14 @@ impl FontContext {
         if let Ok(mut support) = self.feature_support.write() {
             support.clear();
         }
+        self.bump_generation();
     }
 
     /// Loads web fonts defined by @font-face rules into the context.
     ///
     /// Relative URLs are resolved against `base_url` when provided.
     pub fn load_web_fonts(&self, faces: &[FontFaceRule], base_url: Option<&str>) -> Result<()> {
+        let mut modified = false;
         for (order, face) in faces.iter().enumerate() {
             let family = match &face.family {
                 Some(f) => f.clone(),
@@ -409,11 +416,15 @@ impl FontContext {
                 };
 
                 if loaded.is_ok() {
+                    modified = true;
                     break;
                 }
             }
         }
 
+        if modified {
+            self.bump_generation();
+        }
         Ok(())
     }
 
@@ -490,6 +501,16 @@ impl FontContext {
             },
             has_math,
         });
+    }
+
+    #[inline]
+    pub(crate) fn font_generation(&self) -> u64 {
+        self.generation.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    fn bump_generation(&self) {
+        let _ = self.generation.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn match_web_font_for_char(

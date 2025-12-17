@@ -4,10 +4,11 @@
 
 use super::types::{
     GradientPosition, GradientPositionComponent, PropertyValue, RadialGradientShape, RadialGradientSize, TextShadow,
+    Transform,
 };
 use crate::style::color::{Color, Rgba};
 use crate::style::values::{CalcLength, Length, LengthUnit};
-use cssparser::{Parser, ParserInput, Token};
+use cssparser::{BasicParseErrorKind, Parser, ParserInput, Token};
 
 /// Set of property names that the engine understands.
 ///
@@ -350,6 +351,200 @@ fn tokenize_property_value(value_str: &str, allow_commas: bool) -> Vec<String> {
     tokens
 }
 
+pub(crate) fn parse_transform_list(value: &str) -> Option<Vec<Transform>> {
+    let mut input = ParserInput::new(value);
+    let mut parser = Parser::new(&mut input);
+    let mut transforms = Vec::new();
+    let mut saw_none = false;
+
+    loop {
+        match parser.next() {
+            Ok(Token::Function(function_name)) => {
+                let name = function_name.as_ref().to_ascii_lowercase();
+                let parsed = parser
+                    .parse_nested_block(|p| {
+                        match name.as_str() {
+                            "translate" => parse_translate(p),
+                            "translatex" => parse_translate_x(p),
+                            "translatey" => parse_translate_y(p),
+                            "scale" => parse_scale(p),
+                            "scalex" => parse_scale_x(p),
+                            "scaley" => parse_scale_y(p),
+                            "rotate" => parse_rotate(p),
+                            "skewx" => parse_skew_x(p),
+                            "skewy" => parse_skew_y(p),
+                            "matrix" => parse_matrix(p),
+                            _ => Err(()),
+                        }
+                        .map_err(|_| p.new_error::<()>(BasicParseErrorKind::QualifiedRuleInvalid))
+                    })
+                    .ok()?;
+                transforms.push(parsed);
+            }
+            Ok(Token::Ident(ident)) => {
+                if ident.eq_ignore_ascii_case("none") {
+                    saw_none = true;
+                    transforms.clear();
+                } else {
+                    return None;
+                }
+            }
+            Ok(Token::WhiteSpace(_)) => continue,
+            Err(_) => break,
+            _ => return None,
+        }
+    }
+
+    if saw_none {
+        return Some(Vec::new());
+    }
+    if transforms.is_empty() {
+        None
+    } else {
+        Some(transforms)
+    }
+}
+
+fn parse_length_component(parser: &mut Parser) -> Result<Length, ()> {
+    let token = parser.next().map_err(|_| ())?;
+    match token {
+        Token::Percentage { unit_value, .. } => Ok(Length::new(*unit_value, LengthUnit::Percent)),
+        Token::Dimension { value, ref unit, .. } => {
+            let u = unit.to_ascii_lowercase();
+            let unit = match u.as_str() {
+                "px" => LengthUnit::Px,
+                "pt" => LengthUnit::Pt,
+                "pc" => LengthUnit::Pc,
+                "in" => LengthUnit::In,
+                "cm" => LengthUnit::Cm,
+                "mm" => LengthUnit::Mm,
+                "q" => LengthUnit::Q,
+                "em" => LengthUnit::Em,
+                "rem" => LengthUnit::Rem,
+                "ex" => LengthUnit::Ex,
+                "ch" => LengthUnit::Ch,
+                "vw" => LengthUnit::Vw,
+                "vh" => LengthUnit::Vh,
+                "vmin" => LengthUnit::Vmin,
+                "vmax" => LengthUnit::Vmax,
+                _ => return Err(()),
+            };
+            Ok(Length::new(*value, unit))
+        }
+        Token::Number { value, .. } => Ok(Length::px(*value)),
+        _ => Err(()),
+    }
+}
+
+fn parse_angle_component(parser: &mut Parser) -> Result<f32, ()> {
+    let token = parser.next().map_err(|_| ())?;
+    match token {
+        Token::Dimension { value, ref unit, .. } => {
+            let u = unit.to_ascii_lowercase();
+            let deg = match u.as_str() {
+                "deg" => *value,
+                "grad" => *value * (360.0 / 400.0),
+                "rad" => value.to_degrees(),
+                "turn" => *value * 360.0,
+                _ => return Err(()),
+            };
+            Ok(deg)
+        }
+        Token::Number { value, .. } if *value == 0.0 => Ok(0.0),
+        _ => Err(()),
+    }
+}
+
+fn parse_translate(parser: &mut Parser) -> Result<Transform, ()> {
+    let x = parse_length_component(parser)?;
+    parser.skip_whitespace();
+    let _ = parser.try_parse(|p| p.expect_delim(','));
+    let y = if parser.is_exhausted() {
+        Length::px(0.0)
+    } else {
+        parser.skip_whitespace();
+        parse_length_component(parser)?
+    };
+    Ok(Transform::Translate(x, y))
+}
+
+fn parse_translate_x(parser: &mut Parser) -> Result<Transform, ()> {
+    let x = parse_length_component(parser)?;
+    Ok(Transform::TranslateX(x))
+}
+
+fn parse_translate_y(parser: &mut Parser) -> Result<Transform, ()> {
+    let y = parse_length_component(parser)?;
+    Ok(Transform::TranslateY(y))
+}
+
+fn parse_scale(parser: &mut Parser) -> Result<Transform, ()> {
+    let sx = parse_number_component(parser)?;
+    parser.skip_whitespace();
+    let _ = parser.try_parse(|p| p.expect_delim(','));
+    let sy = if parser.is_exhausted() {
+        sx
+    } else {
+        parser.skip_whitespace();
+        parse_number_component(parser)?
+    };
+    Ok(Transform::Scale(sx, sy))
+}
+
+fn parse_scale_x(parser: &mut Parser) -> Result<Transform, ()> {
+    let s = parse_number_component(parser)?;
+    Ok(Transform::ScaleX(s))
+}
+
+fn parse_scale_y(parser: &mut Parser) -> Result<Transform, ()> {
+    let s = parse_number_component(parser)?;
+    Ok(Transform::ScaleY(s))
+}
+
+fn parse_rotate(parser: &mut Parser) -> Result<Transform, ()> {
+    let deg = parse_angle_component(parser)?;
+    Ok(Transform::Rotate(deg))
+}
+
+fn parse_skew_x(parser: &mut Parser) -> Result<Transform, ()> {
+    let deg = parse_angle_component(parser)?;
+    Ok(Transform::SkewX(deg))
+}
+
+fn parse_skew_y(parser: &mut Parser) -> Result<Transform, ()> {
+    let deg = parse_angle_component(parser)?;
+    Ok(Transform::SkewY(deg))
+}
+
+fn parse_matrix(parser: &mut Parser) -> Result<Transform, ()> {
+    let a = parse_number_component(parser)?;
+    parser.skip_whitespace();
+    let _ = parser.try_parse(|p| p.expect_delim(','));
+    let b = parse_number_component(parser)?;
+    parser.skip_whitespace();
+    let _ = parser.try_parse(|p| p.expect_delim(','));
+    let c = parse_number_component(parser)?;
+    parser.skip_whitespace();
+    let _ = parser.try_parse(|p| p.expect_delim(','));
+    let d = parse_number_component(parser)?;
+    parser.skip_whitespace();
+    let _ = parser.try_parse(|p| p.expect_delim(','));
+    let e = parse_number_component(parser)?;
+    parser.skip_whitespace();
+    let _ = parser.try_parse(|p| p.expect_delim(','));
+    let f = parse_number_component(parser)?;
+    Ok(Transform::Matrix(a, b, c, d, e, f))
+}
+
+fn parse_number_component(parser: &mut Parser) -> Result<f32, ()> {
+    let token = parser.next().map_err(|_| ())?;
+    match token {
+        Token::Number { value, .. } => Ok(*value),
+        Token::Dimension { value, .. } => Ok(*value),
+        _ => Err(()),
+    }
+}
+
 /// Parse a CSS property value
 pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyValue> {
     // Custom properties store their tokens verbatim (post !important stripping handled by caller).
@@ -414,6 +609,16 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
     // Gradients
     if let Some(gradient) = parse_gradient(value_str) {
         return Some(gradient);
+    }
+
+    // Transform
+    if property == "transform" {
+        if value_str.eq_ignore_ascii_case("none") {
+            return Some(PropertyValue::Transform(Vec::new()));
+        }
+        if let Some(ts) = parse_transform_list(value_str) {
+            return Some(PropertyValue::Transform(ts));
+        }
     }
 
     // Tokenize respecting commas (for background layering) and spaces.

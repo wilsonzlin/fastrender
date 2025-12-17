@@ -407,7 +407,7 @@ pub fn compute_line_height_with_metrics_viewport(
                 len.value * x_height
             }
             crate::style::values::LengthUnit::Ch => len.value * font_size * 0.5,
-            u if u.is_viewport_relative() => len.resolve_with_viewport(vw, vh),
+            u if u.is_viewport_relative() => len.resolve_with_viewport(vw, vh).unwrap_or(len.value),
             _ => len.value,
         },
         LineHeight::Percentage(pct) => font_size * (pct / 100.0),

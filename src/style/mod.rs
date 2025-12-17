@@ -395,6 +395,9 @@ pub struct ComputedStyle {
     pub word_break: WordBreak,
     pub overflow_wrap: OverflowWrap,
     pub vertical_align: VerticalAlign,
+    /// True when vertical-align came from an authored/UA declaration or presentational hint.
+    /// Used to distinguish default UA values from explicit ones when applying table row fallbacks.
+    pub vertical_align_specified: bool,
     /// BCP47 language tag inherited from DOM (lang/xml:lang)
     pub language: String,
     pub list_style_type: ListStyleType,
@@ -609,6 +612,7 @@ impl Default for ComputedStyle {
             word_break: WordBreak::Normal,
             overflow_wrap: OverflowWrap::Normal,
             vertical_align: VerticalAlign::Baseline,
+            vertical_align_specified: false,
             language: "en".to_string(),
             list_style_type: ListStyleType::Disc,
             list_style_position: ListStylePosition::Outside,

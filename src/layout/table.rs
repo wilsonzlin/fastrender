@@ -272,6 +272,9 @@ pub struct RowInfo {
     /// Visibility state for this row
     pub visibility: Visibility,
 
+    /// Explicit vertical-align from the row or its row group (if provided)
+    pub vertical_align: Option<VerticalAlign>,
+
     /// Specified height (from row element)
     pub specified_height: Option<SpecifiedHeight>,
 
@@ -298,6 +301,7 @@ impl RowInfo {
             index,
             source_index: index,
             visibility: Visibility::Visible,
+            vertical_align: None,
             specified_height: None,
             author_min_height: None,
             author_max_height: None,
@@ -1057,6 +1061,7 @@ impl TableStructure {
         let mut row_min_heights: Vec<Option<SpecifiedHeight>> = Vec::new();
         let mut row_max_heights: Vec<Option<SpecifiedHeight>> = Vec::new();
         let mut row_visibilities: Vec<Visibility> = Vec::new();
+        let mut row_vertical_aligns: Vec<Option<VerticalAlign>> = Vec::new();
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         enum RowGroupKind {
             Head,
@@ -1109,6 +1114,11 @@ impl TableStructure {
                         _ => RowGroupKind::Body,
                     };
                     let group_visibility = child.style.visibility;
+                    let group_vertical_align = if child.style.vertical_align_specified {
+                        Some(child.style.vertical_align)
+                    } else {
+                        None
+                    };
                     // Process rows within the group
                     for (row_child_idx, row_child) in child.children.iter().enumerate() {
                         if matches!(Self::get_table_element_type(row_child), TableElementType::Row) {
@@ -1129,10 +1139,16 @@ impl TableStructure {
                             } else {
                                 row_child.style.visibility
                             };
+                            let row_vertical_align = if row_child.style.vertical_align_specified {
+                                Some(row_child.style.vertical_align)
+                            } else {
+                                group_vertical_align
+                            };
                             row_visibilities.push(row_visibility);
                             row_heights.push(spec_height);
                             row_min_heights.push(min_h);
                             row_max_heights.push(max_h);
+                            row_vertical_aligns.push(row_vertical_align);
                             match kind {
                                 RowGroupKind::Head => header_rows.push(current_row),
                                 RowGroupKind::Foot => footer_rows.push(current_row),
@@ -1156,6 +1172,12 @@ impl TableStructure {
                     let max_h =
                         Self::length_to_specified_height_opt(child.style.max_height.as_ref(), child.style.font_size);
                     row_visibilities.push(child.style.visibility);
+                    let row_vertical_align = if child.style.vertical_align_specified {
+                        Some(child.style.vertical_align)
+                    } else {
+                        None
+                    };
+                    row_vertical_aligns.push(row_vertical_align);
                     row_heights.push(spec_height);
                     row_min_heights.push(min_h);
                     row_max_heights.push(max_h);
@@ -1192,6 +1214,12 @@ impl TableStructure {
         reorder_vec(&mut row_heights);
         reorder_vec(&mut row_min_heights);
         reorder_vec(&mut row_max_heights);
+
+        let mut reordered_aligns = Vec::with_capacity(row_vertical_aligns.len());
+        for idx in &row_order {
+            reordered_aligns.push(row_vertical_aligns.get(*idx).cloned().unwrap_or(None));
+        }
+        row_vertical_aligns = reordered_aligns;
 
         let mut reordered_vis = Vec::with_capacity(row_visibilities.len());
         for idx in &row_order {
@@ -1300,6 +1328,7 @@ impl TableStructure {
             row.author_min_height = row_min_heights.get(i).cloned().unwrap_or(None);
             row.author_max_height = row_max_heights.get(i).cloned().unwrap_or(None);
             row.visibility = row_visibilities.get(i).cloned().unwrap_or(Visibility::Visible);
+            row.vertical_align = row_vertical_aligns.get(i).cloned().unwrap_or(None);
             // Preserve the original DOM order for source_index so style lookups remain stable.
             let source_idx = row_order.get(i).copied().unwrap_or(i);
             row.source_index = source_idx;
@@ -1536,7 +1565,7 @@ impl TableStructure {
         if self.column_count == 0 {
             return 0.0;
         }
-        self.border_spacing.0 * (self.column_count + 1) as f32
+        self.border_spacing.0 * self.column_count as f32
     }
 
     /// Returns the total height of border spacing
@@ -1544,7 +1573,7 @@ impl TableStructure {
         if self.row_count == 0 {
             return 0.0;
         }
-        self.border_spacing.1 * (self.row_count + 1) as f32
+        self.border_spacing.1 * self.row_count as f32
     }
 
     fn length_to_specified_width(length: &crate::style::values::Length) -> SpecifiedWidth {
@@ -1874,9 +1903,14 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
 
     fn resolved_border_width(style: BorderStyle, len: &crate::style::values::Length) -> f32 {
         if matches!(style, BorderStyle::None | BorderStyle::Hidden) {
-            0.0
+            return 0.0;
+        }
+        let width = length_to_px(len);
+        // CSS 2.1 §17.6.2.2: double borders must be wide enough to render as three strokes.
+        if matches!(style, BorderStyle::Double) {
+            width.max(3.0)
         } else {
-            length_to_px(len)
+            width
         }
     }
 
@@ -2419,9 +2453,23 @@ impl RowMetrics {
         if self.has_baseline {
             self.baseline_top + self.baseline_bottom
         } else {
-            0.0
+            // CSS 2.1 §17.5.3: if no cell contributes a baseline, the row baseline
+            // falls to the bottom of the row box.
+            self.height
         }
     }
+}
+
+#[test]
+fn row_metrics_without_baseline_fall_back_to_row_height() {
+    let mut metrics = RowMetrics::new(24.0);
+    assert!(!metrics.has_baseline);
+    assert!((metrics.baseline_height() - 24.0).abs() < 0.01);
+
+    metrics.has_baseline = true;
+    metrics.baseline_top = 10.0;
+    metrics.baseline_bottom = 5.0;
+    assert!((metrics.baseline_height() - 15.0).abs() < 0.01);
 }
 
 // ============================================================================
@@ -2648,6 +2696,16 @@ pub fn calculate_auto_layout_widths(structure: &mut TableStructure, available_wi
     // Phase 3: Calculate totals
     let total_min: f32 = structure.columns.iter().map(|c| c.min_width).sum();
     let total_max: f32 = structure.columns.iter().map(|c| c.max_width).sum();
+    let mut content_width = content_width;
+    if !content_width.is_finite() {
+        if total_max.is_finite() {
+            content_width = total_max;
+        } else if total_min.is_finite() {
+            content_width = total_min;
+        } else {
+            content_width = 0.0;
+        }
+    }
 
     // Phase 4: Distribute available width
     if content_width <= total_min {
@@ -2675,12 +2733,49 @@ pub fn calculate_auto_layout_widths(structure: &mut TableStructure, available_wi
     } else {
         // Between min and max - distribute proportionally
         let range = content_width - total_min;
-        let total_flex: f32 = structure.columns.iter().map(|c| c.max_width - c.min_width).sum();
+        let flex_ranges: Vec<f32> = structure
+            .columns
+            .iter()
+            .map(|c| (c.max_width - c.min_width).max(0.0))
+            .collect();
+        let total_flex: f32 = flex_ranges.iter().copied().filter(|f| f.is_finite()).sum();
+        let infinite_indices: Vec<usize> = flex_ranges
+            .iter()
+            .enumerate()
+            .filter_map(|(i, f)| if f.is_finite() { None } else { Some(i) })
+            .collect();
 
-        if total_flex > 0.0 {
-            for col in &mut structure.columns {
-                let flex = col.max_width - col.min_width;
-                let extra = range * (flex / total_flex);
+        if !infinite_indices.is_empty() {
+            // Allocate finite headroom first, then spread any remaining space evenly across
+            // unbounded columns to avoid NaNs from inf/inf ratios.
+            let mut remaining = range;
+            let mut widths: Vec<f32> = structure.columns.iter().map(|c| c.min_width).collect();
+            if total_flex > 0.0 {
+                for (idx, flex) in flex_ranges.iter().enumerate() {
+                    if !flex.is_finite() || *flex <= 0.0 {
+                        continue;
+                    }
+                    let share = range * (*flex / total_flex);
+                    let delta = share.min(*flex);
+                    widths[idx] += delta;
+                    remaining -= delta;
+                }
+                remaining = remaining.max(0.0);
+            }
+
+            if remaining > 0.0 && !infinite_indices.is_empty() {
+                let per = remaining / infinite_indices.len() as f32;
+                for idx in infinite_indices {
+                    widths[idx] += per;
+                }
+            }
+
+            for (col, width) in structure.columns.iter_mut().zip(widths.into_iter()) {
+                col.computed_width = width;
+            }
+        } else if total_flex > 0.0 {
+            for (col, flex) in structure.columns.iter_mut().zip(flex_ranges.iter()) {
+                let extra = range * (*flex / total_flex);
                 col.computed_width = col.min_width + extra;
             }
         } else {
@@ -2716,13 +2811,8 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
         structure.border_spacing.1
     };
     let content_available = available_height.map(|h| {
-        (h - spacing
-            * (if spacing > 0.0 {
-                structure.row_count as f32 + 1.0
-            } else {
-                0.0
-            }))
-        .max(0.0)
+        (h - spacing * structure.row_count as f32)
+            .max(0.0)
     });
 
     let row_floor = |row: &RowInfo| -> f32 {
@@ -3636,6 +3726,16 @@ impl FormattingContext for TableFormattingContext {
             (None, AvailableSpace::MinContent) => min_content_sum,
             (None, AvailableSpace::MaxContent) | (None, AvailableSpace::Indefinite) => max_content_sum,
         };
+        if !available_content.is_finite() {
+            // Prefer the widest finite bound; fall back to min content to stay stable.
+            if max_content_sum.is_finite() {
+                available_content = max_content_sum;
+            } else if min_content_sum.is_finite() {
+                available_content = min_content_sum;
+            } else {
+                available_content = 0.0;
+            }
+        }
         // Honor min/max width constraints even when the table width is auto: expand or clamp the content
         // box before column distribution so columns and fragment bounds agree with the final border box.
         if let Some(min_w) = min_width {
@@ -3764,6 +3864,12 @@ impl FormattingContext for TableFormattingContext {
             }
 
             if let Some(cell_box) = self.get_cell_box(box_node, cell) {
+                let row_vertical_align = structure.rows.get(cell.row).and_then(|r| r.vertical_align);
+                let effective_vertical_align = if cell_box.style.vertical_align_specified {
+                    cell_box.style.vertical_align
+                } else {
+                    row_vertical_align.unwrap_or(cell_box.style.vertical_align)
+                };
                 match self.layout_cell(cell_box, width, structure.border_collapse) {
                     Ok(fragment) => {
                         if dump {
@@ -3781,7 +3887,7 @@ impl FormattingContext for TableFormattingContext {
                         laid_out_cells.push(LaidOutCell {
                             cell,
                             fragment,
-                            vertical_align: cell_box.style.vertical_align,
+                            vertical_align: effective_vertical_align,
                             baseline,
                             height,
                         });
@@ -3819,7 +3925,7 @@ impl FormattingContext for TableFormattingContext {
                 (base - padding_v - border_v).max(0.0)
             };
             if structure.border_collapse != BorderCollapse::Collapse {
-                let spacing_total = v_spacing * (structure.row_count as f32 + 1.0);
+                let spacing_total = structure.total_vertical_spacing();
                 content_base = (content_base - spacing_total).max(0.0);
             }
             content_base
@@ -3930,12 +4036,7 @@ impl FormattingContext for TableFormattingContext {
 
         // If the table has a definite height, adjust rows so percent rows meet their targets and remaining space is distributed.
         if let Some(percent_base) = percent_height_base {
-            let spacing_total = if structure.border_collapse == BorderCollapse::Collapse {
-                0.0
-            } else {
-                v_spacing * (structure.row_count as f32 + 1.0)
-            };
-            let target_rows = (percent_base + spacing_total).max(0.0);
+            let target_rows = percent_base.max(0.0);
             let mut percent_rows = Vec::new();
             let mut adjustable_rows = Vec::new();
             for (idx, row) in structure.rows.iter().enumerate() {
@@ -4151,7 +4252,7 @@ impl FormattingContext for TableFormattingContext {
             content_height = collapsed_height;
         } else {
             let content_origin_y = border_top + pad_top;
-            let mut y = content_origin_y + v_spacing;
+            let mut y = content_origin_y + v_spacing * 0.5;
 
             if dump {
                 let preview: String = row_metrics
@@ -4191,7 +4292,7 @@ impl FormattingContext for TableFormattingContext {
 
             // Precompute column offsets for positioning in the separated model.
             let start_x = border_left + pad_left;
-            let mut x = start_x + h_spacing;
+            let mut x = start_x + h_spacing * 0.5;
             for col_idx in 0..structure.column_count {
                 col_offsets.push(x);
                 x += col_widths[col_idx] + h_spacing;
@@ -4200,14 +4301,14 @@ impl FormattingContext for TableFormattingContext {
             content_width = if col_widths.is_empty() {
                 available_content
             } else {
-                col_widths.iter().sum::<f32>() + spacing
+                let total_spacing = h_spacing * structure.column_count as f32;
+                col_widths.iter().sum::<f32>() + total_spacing
             };
             content_height = if structure.row_count > 0 {
                 row_offsets
                     .last()
-                    .map(|start| start + row_metrics.last().map(|r| r.height).unwrap_or(0.0))
+                    .map(|start| start + row_metrics.last().map(|r| r.height).unwrap_or(0.0) + v_spacing * 0.5)
                     .unwrap_or(0.0)
-                    + v_spacing
                     - content_origin_y
             } else {
                 0.0
@@ -4474,13 +4575,12 @@ impl FormattingContext for TableFormattingContext {
             fragment.bounds = crate::geometry::Rect::from_xywh(x, base_y, fragment.bounds.width(), spanned_height);
 
             if y_offset.abs() > 0.0 {
-                fn translate_children(node: &mut FragmentNode, delta: Point) {
-                    for child in &mut node.children {
-                        child.bounds = child.bounds.translate(delta);
-                        translate_children(child, delta);
-                    }
+                let delta = Point::new(0.0, y_offset);
+                for child in &mut fragment.children {
+                    // Shift each direct child; their descendants stay relative to the shifted
+                    // parent, preventing cumulative translations down the subtree.
+                    child.bounds = child.bounds.translate(delta);
                 }
-                translate_children(&mut fragment, Point::new(0.0, y_offset));
             }
             fragments.push(fragment);
         }
@@ -4906,6 +5006,30 @@ impl FormattingContext for TableFormattingContext {
                 column_constraints.iter().map(|c| c.max_width).sum::<f32>() + spacing + edges
             }
         };
+        static LOG_IDS: OnceLock<Vec<usize>> = OnceLock::new();
+        let log_ids = LOG_IDS.get_or_init(|| {
+            std::env::var("FASTR_LOG_INTRINSIC_IDS")
+                .ok()
+                .map(|s| {
+                    s.split(',')
+                        .filter_map(|tok| tok.trim().parse::<usize>().ok())
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+        let log_this = !log_ids.is_empty() && log_ids.contains(&box_node.id);
+        if log_this {
+            let selector = box_node
+                .debug_info
+                .as_ref()
+                .map(|d| d.to_selector())
+                .unwrap_or_else(|| "<anon>".to_string());
+            let cols: Vec<(f32, f32)> = column_constraints.iter().map(|c| (c.min_width, c.max_width)).collect();
+            eprintln!(
+                "[intrinsic-table] id={} selector={} mode={:?} cols={:?} spacing={:.2} edges={:.2}",
+                box_node.id, selector, mode, cols, spacing, edges
+            );
+        }
         let mut caption_min: f32 = 0.0;
         for child in box_node.children.iter().filter(|child| {
             !matches!(
@@ -5747,8 +5871,10 @@ mod tests {
 
         assert_eq!(borders.vertical.len(), 3);
         // Style wins over width: double outranks solid even though it is thinner.
-        assert!((borders.vertical[1][0].width - 2.0).abs() < f32::EPSILON);
-        assert_eq!(borders.vertical[1][0].style, BorderStyle::Double);
+        // Double borders are clamped to a minimum of 3px so they can render as three strokes.
+        let winning = &borders.vertical[1][0];
+        assert!(winning.width >= 3.0);
+        assert_eq!(winning.style, BorderStyle::Double);
     }
 
     #[test]
@@ -6607,12 +6733,12 @@ mod tests {
             .layout(&table, &LayoutConstraints::definite(100.0, 200.0))
             .expect("table layout");
 
-        // Total spacing = 3 gaps * 10 = 30, so rows share the remaining 90 -> 45 each.
+        // Total spacing = 2 rows * 10 = 20, so rows share the remaining 100 -> 50 each.
         assert!((fragment.bounds.height() - 120.0).abs() < 0.1);
         assert!(fragment.children.len() >= 2);
         let first_y = fragment.children[0].bounds.y();
         let second_y = fragment.children[1].bounds.y();
-        assert!((second_y - first_y - 55.0).abs() < 0.1); // 45 height + 10 spacing
+        assert!((second_y - first_y - 60.0).abs() < 0.1); // 50 height + 10 spacing
     }
 
     #[test]
@@ -7280,8 +7406,8 @@ mod tests {
         structure.column_count = 3;
         structure.border_spacing = (5.0, 5.0);
 
-        // 4 gaps for 3 columns: left + between1 + between2 + right
-        assert_eq!(structure.total_horizontal_spacing(), 20.0);
+        // Total spacing = column_count * spacing (includes both edges)
+        assert_eq!(structure.total_horizontal_spacing(), 15.0);
     }
 
     #[test]
@@ -7290,8 +7416,46 @@ mod tests {
         structure.row_count = 2;
         structure.border_spacing = (5.0, 10.0);
 
-        // 3 gaps for 2 rows: top + between + bottom
-        assert_eq!(structure.total_vertical_spacing(), 30.0);
+        // Total spacing = row_count * spacing (includes both edges)
+        assert_eq!(structure.total_vertical_spacing(), 20.0);
+    }
+
+    #[test]
+    fn collapsed_double_border_is_at_least_three_px() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_collapse = BorderCollapse::Collapse;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.border_top_style = BorderStyle::Double;
+        cell_style.border_right_style = BorderStyle::Double;
+        cell_style.border_bottom_style = BorderStyle::Double;
+        cell_style.border_left_style = BorderStyle::Double;
+        cell_style.border_top_width = Length::px(1.0);
+        cell_style.border_right_width = Length::px(1.0);
+        cell_style.border_bottom_width = Length::px(1.0);
+        cell_style.border_left_width = Length::px(1.0);
+
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(
+            Arc::new(ComputedStyle {
+                display: Display::TableRow,
+                ..ComputedStyle::default()
+            }),
+            FormattingContextType::Block,
+            vec![cell],
+        );
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        let borders = compute_collapsed_borders(&table, &structure);
+
+        // All edges should be at least 3px wide when style is double.
+        assert!(borders.vertical[0][0].width >= 3.0);
+        assert!(borders.vertical[1][0].width >= 3.0);
+        assert!(borders.horizontal[0][0].width >= 3.0);
+        assert!(borders.horizontal[1][0].width >= 3.0);
     }
 
     #[test]
@@ -7692,6 +7856,143 @@ mod tests {
 
         let total_width: f32 = structure.columns.iter().map(|c| c.computed_width).sum();
         assert!(total_width >= 200.0);
+    }
+
+    #[test]
+    fn auto_layout_with_infinite_max_headroom_splits_extra_without_nan() {
+        let mut structure = TableStructure::new();
+        structure.column_count = 2;
+        structure.columns = vec![ColumnInfo::new(0), ColumnInfo::new(1)];
+        structure.cells = vec![
+            CellInfo {
+                index: 0,
+                source_row: 0,
+                source_col: 0,
+                row: 0,
+                col: 0,
+                rowspan: 1,
+                colspan: 1,
+                box_index: 0,
+                min_width: 10.0,
+                max_width: f32::INFINITY,
+                min_height: 0.0,
+                bounds: Rect::ZERO,
+            },
+            CellInfo {
+                index: 1,
+                source_row: 0,
+                source_col: 1,
+                row: 0,
+                col: 1,
+                rowspan: 1,
+                colspan: 1,
+                box_index: 1,
+                min_width: 10.0,
+                max_width: f32::INFINITY,
+                min_height: 0.0,
+                bounds: Rect::ZERO,
+            },
+        ];
+        structure.border_spacing = (0.0, 0.0);
+
+        calculate_auto_layout_widths(&mut structure, 100.0);
+
+        for col in &structure.columns {
+            assert!(!col.computed_width.is_nan());
+            assert!(col.computed_width.is_finite());
+        }
+        let total: f32 = structure.columns.iter().map(|c| c.computed_width).sum();
+        assert!((total - 100.0).abs() < 0.5);
+        assert!((structure.columns[0].computed_width - structure.columns[1].computed_width).abs() < 0.5);
+    }
+
+    #[test]
+    fn auto_layout_allocates_finite_headroom_before_unbounded_columns() {
+        let mut structure = TableStructure::new();
+        structure.column_count = 2;
+        structure.columns = vec![ColumnInfo::new(0), ColumnInfo::new(1)];
+        structure.cells = vec![
+            CellInfo {
+                index: 0,
+                source_row: 0,
+                source_col: 0,
+                row: 0,
+                col: 0,
+                rowspan: 1,
+                colspan: 1,
+                box_index: 0,
+                min_width: 10.0,
+                max_width: 20.0,
+                min_height: 0.0,
+                bounds: Rect::ZERO,
+            },
+            CellInfo {
+                index: 1,
+                source_row: 0,
+                source_col: 1,
+                row: 0,
+                col: 1,
+                rowspan: 1,
+                colspan: 1,
+                box_index: 1,
+                min_width: 10.0,
+                max_width: f32::INFINITY,
+                min_height: 0.0,
+                bounds: Rect::ZERO,
+            },
+        ];
+        structure.border_spacing = (0.0, 0.0);
+
+        calculate_auto_layout_widths(&mut structure, 60.0);
+
+        assert!((structure.columns[0].computed_width - 20.0).abs() < 0.5); // filled finite headroom first
+        assert!(!structure.columns[1].computed_width.is_nan());
+        let total: f32 = structure.columns.iter().map(|c| c.computed_width).sum();
+        assert!((total - 60.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn auto_layout_handles_infinite_available_content() {
+        let mut structure = TableStructure::new();
+        structure.column_count = 2;
+        structure.columns = vec![ColumnInfo::new(0), ColumnInfo::new(1)];
+        structure.cells = vec![
+            CellInfo {
+                index: 0,
+                source_row: 0,
+                source_col: 0,
+                row: 0,
+                col: 0,
+                rowspan: 1,
+                colspan: 1,
+                box_index: 0,
+                min_width: 10.0,
+                max_width: 20.0,
+                min_height: 0.0,
+                bounds: Rect::ZERO,
+            },
+            CellInfo {
+                index: 1,
+                source_row: 0,
+                source_col: 1,
+                row: 0,
+                col: 1,
+                rowspan: 1,
+                colspan: 1,
+                box_index: 1,
+                min_width: 15.0,
+                max_width: 25.0,
+                min_height: 0.0,
+                bounds: Rect::ZERO,
+            },
+        ];
+        structure.border_spacing = (0.0, 0.0);
+
+        calculate_auto_layout_widths(&mut structure, f32::INFINITY);
+
+        assert!((structure.columns[0].computed_width - 20.0).abs() < 0.01);
+        assert!((structure.columns[1].computed_width - 25.0).abs() < 0.01);
+        assert!(structure.columns.iter().all(|c| c.computed_width.is_finite()));
     }
 
     #[test]
@@ -9477,15 +9778,18 @@ mod tests {
         let mut cell_top_style = ComputedStyle::default();
         cell_top_style.display = Display::TableCell;
         cell_top_style.vertical_align = VerticalAlign::Top;
+        cell_top_style.vertical_align_specified = true;
         cell_top_style.min_height = Some(Length::px(10.0));
 
         let mut cell_span_style = ComputedStyle::default();
         cell_span_style.display = Display::TableCell;
         cell_span_style.vertical_align = VerticalAlign::Baseline;
+        cell_span_style.vertical_align_specified = true;
 
         let mut cell_bottom_style = ComputedStyle::default();
         cell_bottom_style.display = Display::TableCell;
         cell_bottom_style.vertical_align = VerticalAlign::Bottom;
+        cell_bottom_style.vertical_align_specified = true;
         cell_bottom_style.min_height = Some(Length::px(10.0));
 
         let top_cell = BoxNode::new_block(Arc::new(cell_top_style), FormattingContextType::Block, vec![]);
@@ -9594,6 +9898,7 @@ mod tests {
         short_style.display = Display::TableCell;
         short_style.height = Some(Length::px(20.0));
         short_style.vertical_align = VerticalAlign::Bottom;
+        short_style.vertical_align_specified = true;
 
         let short_cell = BoxNode::new_block(Arc::new(short_style), FormattingContextType::Block, vec![]);
         let row = BoxNode::new_block(
@@ -9615,6 +9920,53 @@ mod tests {
         // Both cells occupy the full row height; bottom alignment is expressed by shifting contents, not the box.
         assert!((second.bounds.y() - 0.0).abs() < 0.01);
         assert!((second.bounds.height() - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_row_vertical_align_applies_to_cells() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        row_style.height = Some(Length::px(40.0));
+        row_style.vertical_align = VerticalAlign::Top;
+        row_style.vertical_align_specified = true;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.vertical_align = VerticalAlign::Middle; // UA default
+        cell_style.vertical_align_specified = false;
+        cell_style.padding_top = Length::px(0.0);
+        cell_style.padding_bottom = Length::px(0.0);
+
+        let mut inner_style = ComputedStyle::default();
+        inner_style.display = Display::Block;
+        inner_style.height = Some(Length::px(10.0));
+        let inner = BoxNode::new_block(Arc::new(inner_style), FormattingContextType::Block, vec![]);
+
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![inner]);
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let tfc = TableFormattingContext::new();
+        let constraints = LayoutConstraints::definite_width(200.0);
+        let fragment = tfc.layout(&table, &constraints).expect("table layout");
+
+        let cell_fragment = fragment
+            .children
+            .iter()
+            .find(|f| matches!(f.content, FragmentContent::Block { .. }) && !f.children.is_empty())
+            .expect("cell fragment");
+        let content = cell_fragment.children.first().expect("cell content");
+
+        // Top alignment from the row should place the content at the start of the cell box.
+        let offset = content.bounds.y() - cell_fragment.bounds.y();
+        assert!(
+            offset.abs() < 0.5,
+            "row vertical-align should place content at top (offset {:.2})",
+            offset
+        );
     }
 
     #[test]

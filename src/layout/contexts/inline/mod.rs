@@ -48,8 +48,7 @@ use crate::layout::contexts::inline::line_builder::InlineBoxItem;
 use crate::layout::contexts::positioned::ContainingBlock;
 use crate::layout::float_context::FloatContext;
 use crate::layout::formatting_context::{
-    count_inline_intrinsic_call, intrinsic_cache_lookup, intrinsic_cache_store, FormattingContext, IntrinsicSizingMode,
-    LayoutError,
+    count_inline_intrinsic_call, FormattingContext, IntrinsicSizingMode, LayoutError,
 };
 use crate::layout::inline::float_integration::InlineFloatIntegration;
 use crate::layout::profile::{layout_timer, LayoutKind};
@@ -233,13 +232,14 @@ impl InlineFormattingContext {
             StyleAlign::Bottom => Align::Bottom,
             StyleAlign::Length(len) => {
                 let px = if len.unit.is_font_relative() {
-                    len.resolve_with_font_size(font_size)
+                    len.resolve_with_font_size(font_size).unwrap_or(len.value * font_size)
                 } else if len.unit.is_percentage() {
                     len.resolve_against(line_height).unwrap_or(0.0)
                 } else if len.unit.is_absolute() {
                     len.to_px()
                 } else if len.unit.is_viewport_relative() {
                     len.resolve_with_viewport(self.viewport_size.width, self.viewport_size.height)
+                        .unwrap_or(len.value)
                 } else {
                     len.value
                 };
@@ -1429,20 +1429,17 @@ impl InlineFormattingContext {
         );
         let fc = factory.create(fc_type);
 
-        let percentage_base = if available_width.is_finite() {
-            available_width
-        } else {
-            0.0
-        };
+        let percentage_base = available_width.is_finite().then_some(available_width);
+        let percentage_base_px = percentage_base.unwrap_or(0.0);
         let margin_left = style
             .margin_left
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size))
+            .map(|l| resolve_length_for_width(*l, percentage_base_px, style, &self.font_context, self.viewport_size))
             .unwrap_or(0.0);
         let margin_right = style
             .margin_right
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size))
+            .map(|l| resolve_length_for_width(*l, percentage_base_px, style, &self.font_context, self.viewport_size))
             .unwrap_or(0.0);
         let available_for_box = if available_width.is_finite() {
             (available_width - margin_left - margin_right).max(0.0)
@@ -1460,7 +1457,7 @@ impl InlineFormattingContext {
             .unwrap_or(preferred_min_content);
 
         let horizontal_edges =
-            horizontal_padding_and_borders(style, percentage_base, self.viewport_size, &self.font_context);
+            horizontal_padding_and_borders(style, percentage_base_px, self.viewport_size, &self.font_context);
         let preferred_min = preferred_min_content + horizontal_edges;
         let preferred = preferred_content + horizontal_edges;
 
@@ -1473,19 +1470,31 @@ impl InlineFormattingContext {
         let specified_width = style
             .width
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size))
+            .and_then(|l| {
+                if l.unit.is_percentage() && percentage_base.is_none() {
+                    None
+                } else {
+                    Some(resolve_length_for_width(
+                        *l,
+                        percentage_base_px,
+                        style,
+                        &self.font_context,
+                        self.viewport_size,
+                    ))
+                }
+            })
             .map(|w| border_size_from_box_sizing(w, horizontal_edges, style.box_sizing));
 
         let min_width = style
             .min_width
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size))
+            .map(|l| resolve_length_for_width(*l, percentage_base_px, style, &self.font_context, self.viewport_size))
             .map(|w| border_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
             .unwrap_or(0.0);
         let max_width = style
             .max_width
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size))
+            .map(|l| resolve_length_for_width(*l, percentage_base_px, style, &self.font_context, self.viewport_size))
             .map(|w| border_size_from_box_sizing(w, horizontal_edges, style.box_sizing))
             .unwrap_or(f32::INFINITY);
 
@@ -1534,16 +1543,44 @@ impl InlineFormattingContext {
         let constraints = LayoutConstraints::new(AvailableSpace::Definite(constraint_width), height_space);
         let fragment = fc.layout(box_node, &constraints)?;
         let mut fragment = fragment;
+        static LOG_IDS: OnceLock<Vec<usize>> = OnceLock::new();
+        let log_ids = LOG_IDS.get_or_init(|| {
+            std::env::var("FASTR_LOG_INTRINSIC_IDS")
+                .ok()
+                .map(|s| {
+                    s.split(',')
+                        .filter_map(|tok| tok.trim().parse::<usize>().ok())
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+        if !log_ids.is_empty() && log_ids.contains(&box_node.id) {
+            let selector = box_node
+                .debug_info
+                .as_ref()
+                .map(|d| d.to_selector())
+                .unwrap_or_else(|| "<anon>".to_string());
+            eprintln!(
+                "[intrinsic-inline-block] id={} selector={} available={:.2} preferred_min={:.2} preferred={:.2} constraint={:.2} fragment_w={:.2}",
+                box_node.id,
+                selector,
+                available_for_box,
+                preferred_min,
+                preferred,
+                constraint_width,
+                fragment.bounds.width()
+            );
+        }
 
         let margin_left = style
             .margin_left
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size))
+            .map(|l| resolve_length_for_width(*l, percentage_base_px, style, &self.font_context, self.viewport_size))
             .unwrap_or(0.0);
         let margin_right = style
             .margin_right
             .as_ref()
-            .map(|l| resolve_length_for_width(*l, percentage_base, style, &self.font_context, self.viewport_size))
+            .map(|l| resolve_length_for_width(*l, percentage_base_px, style, &self.font_context, self.viewport_size))
             .unwrap_or(0.0);
 
         let va = self.convert_vertical_align(style.vertical_align, style.font_size, line_height);
@@ -2806,8 +2843,8 @@ impl InlineFormattingContext {
             }
             InlineItem::InlineBox(box_item) => {
                 if inline_vertical {
-                    let mut child_inline = box_item.start_edge;
-                    let child_block = box_item.content_offset_y;
+                    let mut child_inline = box_item.start_edge + inline_pos;
+                    let child_block = box_item.content_offset_y + block_pos;
                     let children: Vec<_> = box_item
                         .children
                         .iter()
@@ -2821,8 +2858,8 @@ impl InlineFormattingContext {
                     let bounds = Rect::from_xywh(block_pos, inline_pos, box_item.metrics.height, box_item.width());
                     FragmentNode::new_inline_styled(bounds, box_item.box_index, children, box_item.style.clone())
                 } else {
-                    let mut child_x = box_item.start_edge;
-                    let child_y = box_item.content_offset_y;
+                    let mut child_x = box_item.start_edge + inline_pos;
+                    let child_y = box_item.content_offset_y + block_pos;
                     let children: Vec<_> = box_item
                         .children
                         .iter()
@@ -3202,7 +3239,9 @@ fn resolve_length_for_width(
     } else if length.unit.is_absolute() {
         length.to_px()
     } else if length.unit.is_viewport_relative() {
-        length.resolve_with_viewport(viewport.width, viewport.height)
+        length
+            .resolve_with_viewport(viewport.width, viewport.height)
+            .unwrap_or(0.0)
     } else {
         resolve_font_relative_length(length, style, font_context)
     }
@@ -3220,7 +3259,7 @@ fn resolve_length_with_percentage_inline(
     } else if length.unit.is_absolute() {
         Some(length.to_px())
     } else if length.unit.is_viewport_relative() {
-        Some(length.resolve_with_viewport(viewport.width, viewport.height))
+        length.resolve_with_viewport(viewport.width, viewport.height)
     } else {
         Some(resolve_font_relative_length(length, style, font_context))
     }
@@ -3249,7 +3288,9 @@ fn compute_inline_box_metrics(
         metrics.baseline_offset += content_offset_y;
         metrics.ascent += content_offset_y;
         metrics.descent = (metrics.descent + bottom_inset).max(0.0);
-        metrics.height = metrics.height.max(metrics.baseline_offset + metrics.descent + bottom_inset);
+        metrics.height = metrics
+            .height
+            .max(metrics.baseline_offset + metrics.descent + bottom_inset);
         metrics.line_height = metrics.height;
         return metrics;
     }
@@ -4084,12 +4125,10 @@ impl FormattingContext for InlineFormattingContext {
 
     fn compute_intrinsic_inline_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
         count_inline_intrinsic_call();
-        if let Some(cached) = intrinsic_cache_lookup(box_node, mode) {
-            return Ok(cached);
-        }
-        let width = self.calculate_intrinsic_width(box_node, mode);
-        intrinsic_cache_store(box_node, mode, width);
-        Ok(width)
+        // Inline intrinsic widths can vary subtly with inline formatting context construction
+        // (e.g., cached fragments from prior layout passes). Recompute each time instead of
+        // using the shared intrinsic cache to avoid reusing layout-sized results.
+        Ok(self.calculate_intrinsic_width(box_node, mode))
     }
 }
 

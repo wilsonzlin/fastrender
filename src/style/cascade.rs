@@ -1364,7 +1364,10 @@ fn resolve_line_height_length(style: &mut ComputedStyle, viewport: Size) {
             LengthUnit::Rem => len.value * style.root_font_size,
             LengthUnit::Ex => len.value * style.font_size * 0.5,
             LengthUnit::Ch => len.value * style.font_size * 0.5,
-            u if u.is_viewport_relative() => len.resolve_with_viewport(viewport.width, viewport.height),
+            u if u.is_viewport_relative() => {
+                len.resolve_with_viewport(viewport.width, viewport.height)
+                    .unwrap_or(len.value)
+            }
             _ => len.value,
         };
 
@@ -2769,6 +2772,7 @@ mod tests {
                 .styles
                 .padding_left
                 .resolve_with_font_size(styled_fieldset.styles.font_size)
+                .unwrap_or(0.0)
                 > 0.0
         );
 
@@ -2779,6 +2783,7 @@ mod tests {
                 .styles
                 .padding_left
                 .resolve_with_font_size(styled_legend.styles.font_size)
+                .unwrap_or(0.0)
                 > 0.0
         );
         assert!(
@@ -2786,6 +2791,7 @@ mod tests {
                 .styles
                 .padding_right
                 .resolve_with_font_size(styled_legend.styles.font_size)
+                .unwrap_or(0.0)
                 > 0.0
         );
 
@@ -2941,6 +2947,21 @@ mod tests {
         let styled = apply_styles(&dom, &StyleSheet::new());
         assert_eq!(styled.styles.border_spacing_horizontal, Length::px(0.0));
         assert_eq!(styled.styles.border_spacing_vertical, Length::px(0.0));
+    }
+
+    #[test]
+    fn table_ua_default_border_spacing_is_two_px() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "table".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.border_spacing_horizontal, Length::px(2.0));
+        assert_eq!(styled.styles.border_spacing_vertical, Length::px(2.0));
     }
 
     #[test]
@@ -3267,6 +3288,23 @@ mod tests {
             node_type: DomNodeType::Element {
                 tag_name: "td".to_string(),
                 attributes: vec![("valign".to_string(), "middle".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(
+            styled.styles.vertical_align,
+            crate::style::types::VerticalAlign::Middle
+        ));
+    }
+
+    #[test]
+    fn table_cells_default_to_middle_alignment() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "td".to_string(),
+                attributes: vec![],
             },
             children: vec![],
         };
@@ -5029,7 +5067,10 @@ fn resolve_absolute_lengths(styles: &mut ComputedStyle, root_font_size: f32, vie
             LengthUnit::Ex => Length::px(len.value * styles.font_size * 0.5),
             LengthUnit::Ch => Length::px(len.value * styles.font_size * 0.5),
             LengthUnit::Rem => Length::px(len.value * root_font_size),
-            u if u.is_viewport_relative() => Length::px(len.resolve_with_viewport(viewport.width, viewport.height)),
+            u if u.is_viewport_relative() => len
+                .resolve_with_viewport(viewport.width, viewport.height)
+                .map(Length::px)
+                .unwrap_or(len),
             _ => len,
         }
     };
@@ -5079,7 +5120,7 @@ fn border_presentational_hint(node: &DomNode, ancestors: &[&DomNode], order: usi
     }?;
 
     let mut css = format!("border: {} solid;", border_len);
-    if tag == "table" {
+    if tag == "table" && border_len.to_px() > 0.0 {
         css.push_str("border-collapse: collapse;");
     }
 

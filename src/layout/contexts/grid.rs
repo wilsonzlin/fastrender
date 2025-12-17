@@ -156,7 +156,9 @@ impl GridFormattingContext {
         } else if length.unit.is_absolute() {
             length.to_px()
         } else if length.unit.is_viewport_relative() {
-            length.resolve_with_viewport(self.viewport_size.width, self.viewport_size.height)
+            length
+                .resolve_with_viewport(self.viewport_size.width, self.viewport_size.height)
+                .unwrap_or_else(|| length.to_px())
         } else {
             resolve_font_relative_length(length, style, &self.font_context)
         }
@@ -546,7 +548,7 @@ impl GridFormattingContext {
             Ex => Some(len.value * style.font_size * 0.5),
             Ch => Some(len.value * style.font_size * 0.5),
             unit if unit.is_viewport_relative() => {
-                Some(len.resolve_with_viewport(self.viewport_size.width, self.viewport_size.height))
+                len.resolve_with_viewport(self.viewport_size.width, self.viewport_size.height)
             }
             _ => None,
         }

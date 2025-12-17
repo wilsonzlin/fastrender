@@ -379,7 +379,7 @@ fn resolve_sizes_length(
     match length.unit {
         LengthUnit::Percent => length.resolve_against(viewport.width),
         LengthUnit::Vw | LengthUnit::Vh | LengthUnit::Vmin | LengthUnit::Vmax => {
-            Some(length.resolve_with_viewport(viewport.width, viewport.height))
+            length.resolve_with_viewport(viewport.width, viewport.height)
         }
         LengthUnit::Em | LengthUnit::Rem => Some(font_size * length.value),
         LengthUnit::Ex | LengthUnit::Ch => Some(font_size * length.value * 0.5),

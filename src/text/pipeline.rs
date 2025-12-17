@@ -2091,13 +2091,13 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
 #[derive(Debug, Default, Clone)]
 pub struct ShapingPipeline {
     cache: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<ShapingCacheKey, std::sync::Arc<Vec<ShapedRun>>>>>,
-    style_hashes: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<usize, u64>>>,
 }
 
 #[derive(Clone, Eq, Debug)]
 struct ShapingCacheKey {
     text: std::sync::Arc<str>,
     style_hash: u64,
+    font_generation: u64,
 }
 
 fn shaping_style_hash(style: &ComputedStyle) -> u64 {
@@ -2197,13 +2197,16 @@ fn shaping_style_hash(style: &ComputedStyle) -> u64 {
 impl std::hash::Hash for ShapingCacheKey {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.style_hash.hash(state);
+        self.font_generation.hash(state);
         self.text.hash(state);
     }
 }
 
 impl PartialEq for ShapingCacheKey {
     fn eq(&self, other: &Self) -> bool {
-        self.style_hash == other.style_hash && self.text.as_ref() == other.text.as_ref()
+        self.style_hash == other.style_hash
+            && self.font_generation == other.font_generation
+            && self.text.as_ref() == other.text.as_ref()
     }
 }
 
@@ -2212,7 +2215,6 @@ impl ShapingPipeline {
     pub fn new() -> Self {
         Self {
             cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-            style_hashes: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -2220,9 +2222,6 @@ impl ShapingPipeline {
     pub fn clear_cache(&self) {
         if let Ok(mut cache) = self.cache.lock() {
             cache.clear();
-        }
-        if let Ok(mut hashes) = self.style_hashes.lock() {
-            hashes.clear();
         }
     }
 
@@ -2276,15 +2275,12 @@ impl ShapingPipeline {
         }
 
         let cache_text = std::sync::Arc::<str>::from(text);
-        let style_ptr = style as *const ComputedStyle as usize;
-        let style_hash = if let Ok(mut hashes) = self.style_hashes.lock() {
-            *hashes.entry(style_ptr).or_insert_with(|| shaping_style_hash(style))
-        } else {
-            shaping_style_hash(style)
-        };
+        let style_hash = shaping_style_hash(style);
+        let font_generation = font_context.font_generation();
         let cache_key = ShapingCacheKey {
             text: cache_text.clone(),
             style_hash,
+            font_generation,
         };
         if let Ok(cache) = self.cache.lock() {
             if let Some(cached) = cache.get(&cache_key) {
@@ -3199,6 +3195,55 @@ mod tests {
             "wdth axis should shrink glyph advances"
         );
         assert!(wide_advance > default_advance, "wdth axis should widen glyph advances");
+    }
+
+    #[test]
+    fn shaping_cache_resets_when_fonts_change() {
+        let roboto_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/fonts/Roboto-Regular.ttf");
+        let (roboto_data, roboto_family) = load_font_fixture(&roboto_path);
+
+        let mut db = FontDatabase::empty();
+        db.load_font_data(roboto_data).expect("load fallback font");
+        let ctx = FontContext::with_database(Arc::new(db));
+
+        let mut style = ComputedStyle::default();
+        style.font_family = vec!["Webby".to_string(), roboto_family.clone()];
+        style.font_size = 16.0;
+
+        let pipeline = ShapingPipeline::new();
+        let fallback_runs = match pipeline.shape("mmmm", &style, &ctx) {
+            Ok(runs) => runs,
+            Err(_) => return,
+        };
+        if fallback_runs.is_empty() {
+            return;
+        }
+        let fallback_font = &fallback_runs[0].font;
+        assert_eq!(fallback_font.family, roboto_family);
+
+        let web_font_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fonts/STIXTwoMath-Regular.otf");
+        let web_url = Url::from_file_path(&web_font_path).expect("file url");
+        let face = FontFaceRule {
+            family: Some("Webby".to_string()),
+            sources: vec![FontFaceSource::Url(web_url.to_string())],
+            ..Default::default()
+        };
+        ctx.load_web_fonts(&[face], None).expect("load web font");
+
+        let web_runs = match pipeline.shape("mmmm", &style, &ctx) {
+            Ok(runs) => runs,
+            Err(_) => return,
+        };
+        if web_runs.is_empty() {
+            return;
+        }
+        let web_font = &web_runs[0].font;
+        assert_eq!(web_font.family, "Webby");
+        assert!(
+            !Arc::ptr_eq(&web_font.data, &fallback_font.data)
+                || (web_runs[0].advance - fallback_runs[0].advance).abs() > 0.1,
+            "web font selection should invalidate cached shaping"
+        );
     }
 
     #[test]

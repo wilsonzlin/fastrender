@@ -79,7 +79,9 @@ fn resolve_length(length: &Length, font_size: f32, containing_block_size: f32, v
         LengthUnit::Em | LengthUnit::Rem => length.value * font_size,
         LengthUnit::Percent => (length.value / 100.0) * containing_block_size,
         _ if length.unit.is_absolute() => length.to_px(),
-        _ if length.unit.is_viewport_relative() => length.resolve_with_viewport(viewport.width, viewport.height),
+        _ if length.unit.is_viewport_relative() => length
+            .resolve_with_viewport(viewport.width, viewport.height)
+            .unwrap_or_else(|| length.to_px()),
         _ => 0.0, // Fallback for unknown units
     }
 }
@@ -839,13 +841,21 @@ impl BlockFormattingContext {
         // Get containing width from constraints, but guard against collapsed/indefinite widths that
         // would zero out percentage sizing for descendants. Mirror the root-width fallback used in
         // `layout` so children still see a usable containing block when the parent was laid out with
-        // a near-zero available width (common when flex measurement feeds 0px constraints).
-        let mut containing_width = constraints
+        // a near-zero available width (common when flex measurement feeds 0px constraints). When the
+        // available inline size is intrinsic/indefinite (min-/max-content probes), avoid inflating
+        // the base to the viewport — leave it at 0 unless the caller provided a definite percentage
+        // base.
+        let intrinsic_width = matches!(
+            constraints.available_width,
+            AvailableSpace::MinContent | AvailableSpace::MaxContent | AvailableSpace::Indefinite
+        );
+        let containing_width = constraints
             .inline_percentage_base
             .or_else(|| constraints.width())
-            .unwrap_or(self.viewport_size.width);
-        containing_width = containing_width.min(self.viewport_size.width);
-        if containing_width <= 1.0 {
+            .map(|w| w.min(self.viewport_size.width));
+        let mut containing_width =
+            containing_width.unwrap_or_else(|| if intrinsic_width { 0.0 } else { self.viewport_size.width });
+        if !intrinsic_width && containing_width <= 1.0 {
             let width_is_absolute = parent
                 .style
                 .width
@@ -1601,6 +1611,10 @@ impl FormattingContext for BlockFormattingContext {
             ));
         }
 
+        let intrinsic_width_mode = matches!(
+            constraints.available_width,
+            AvailableSpace::MaxContent | AvailableSpace::MinContent | AvailableSpace::Indefinite
+        );
         let mut containing_width = match constraints.available_width {
             AvailableSpace::Definite(w) => w,
             // In-flow blocks use the containing block’s inline size; shrink-to-fit contexts should
@@ -1612,7 +1626,7 @@ impl FormattingContext for BlockFormattingContext {
             }
         }
         .min(self.viewport_size.width);
-        if containing_width <= 1.0 {
+        if containing_width <= 1.0 && !intrinsic_width_mode {
             let width_is_absolute = style.width.as_ref().map(|l| l.unit.is_absolute()).unwrap_or(false);
             if !width_is_absolute {
                 containing_width = self.viewport_size.width;
@@ -2073,6 +2087,19 @@ impl FormattingContext for BlockFormattingContext {
 
         // Inline formatting context contribution (text and inline-level children).
         // Block-level children split inline runs into separate formatting contexts.
+        static LOG_IDS: OnceLock<Vec<usize>> = OnceLock::new();
+        let log_ids = LOG_IDS.get_or_init(|| {
+            std::env::var("FASTR_LOG_INTRINSIC_IDS")
+                .ok()
+                .map(|s| {
+                    s.split(',')
+                        .filter_map(|tok| tok.trim().parse::<usize>().ok())
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+        let log_children = !log_ids.is_empty() && log_ids.contains(&box_node.id);
+
         let mut inline_width = 0.0f32;
         let mut inline_run: Vec<BoxNode> = Vec::new();
         let mut flush_inline_run = |run: &mut Vec<BoxNode>, widest: &mut f32| -> Result<(), LayoutError> {
@@ -2081,6 +2108,12 @@ impl FormattingContext for BlockFormattingContext {
             }
             let key = run.iter().map(|c| c.id()).collect::<Vec<_>>();
             if let Some(width) = inline_run_cache.get(&(key.clone(), mode)) {
+                if log_children {
+                    eprintln!(
+                        "[intrinsic-inline-run-cache] parent_id={} mode={:?} ids={:?} width={:.2}",
+                        box_node.id, mode, key, width
+                    );
+                }
                 *widest = widest.max(*width);
                 run.clear();
                 return Ok(());
@@ -2089,11 +2122,19 @@ impl FormattingContext for BlockFormattingContext {
             let inline_container = BoxNode::new_inline(box_node.style.clone(), run.clone());
             let width = inline_fc.compute_intrinsic_inline_size(&inline_container, mode)?;
             inline_run_cache.insert((key, mode), width);
+            if log_children {
+                let ids: Vec<usize> = run.iter().map(|c| c.id()).collect();
+                eprintln!(
+                    "[intrinsic-inline-run] parent_id={} mode={:?} ids={:?} width={:.2}",
+                    box_node.id, mode, ids, width
+                );
+            }
             *widest = widest.max(width);
             run.clear();
             Ok(())
         };
 
+        let mut inline_child_debug: Vec<(usize, Display)> = Vec::new();
         for child in &box_node.children {
             if is_out_of_flow(child) {
                 continue;
@@ -2107,6 +2148,9 @@ impl FormattingContext for BlockFormattingContext {
             if treated_as_block {
                 flush_inline_run(&mut inline_run, &mut inline_width)?;
             } else {
+                if log_children {
+                    inline_child_debug.push((child.id, child.style.display));
+                }
                 inline_run.push(child.clone());
             }
         }
@@ -2122,6 +2166,18 @@ impl FormattingContext for BlockFormattingContext {
             let fc = factory.create(fc_type);
             let child_width = fc.compute_intrinsic_inline_size(child, mode)?;
             block_child_width = block_child_width.max(child_width);
+            if log_children {
+                let sel = child
+                    .debug_info
+                    .as_ref()
+                    .map(|d| d.to_selector())
+                    .unwrap_or_else(|| "<anon>".to_string());
+                let disp = child.style.display;
+                eprintln!(
+                    "[intrinsic-child] parent_id={} child_id={} selector={} display={:?} mode={:?} width={:.2}",
+                    box_node.id, child.id, sel, disp, mode, child_width
+                );
+            }
         }
 
         let content_width = inline_width.max(block_child_width);
@@ -2148,6 +2204,33 @@ impl FormattingContext for BlockFormattingContext {
         width = width.clamp(min_width, max_width);
 
         let clamped = width.max(0.0);
+        // Optional tracing for over-large intrinsic widths.
+        if !log_ids.is_empty() && log_ids.contains(&box_node.id) {
+            let selector = box_node
+                .debug_info
+                .as_ref()
+                .map(|d| d.to_selector())
+                .unwrap_or_else(|| "<anon>".to_string());
+            if !inline_child_debug.is_empty() {
+                eprintln!(
+                    "[intrinsic-inline-children] parent_id={} ids={:?}",
+                    box_node.id, inline_child_debug
+                );
+            }
+            eprintln!(
+                    "[intrinsic-width] id={} selector={} mode={:?} inline_width={:.2} block_width={:.2} content_width={:.2} edges={:.2} min={:.2} max={:.2} result={:.2}",
+                    box_node.id,
+                selector,
+                mode,
+                inline_width,
+                block_child_width,
+                content_width,
+                edges,
+                min_width,
+                max_width,
+                clamped
+            );
+        }
         intrinsic_cache_store(box_node, mode, clamped);
         Ok(clamped)
     }
@@ -2171,7 +2254,9 @@ fn resolve_length_for_width(
     } else if length.unit.is_absolute() {
         length.to_px()
     } else if length.unit.is_viewport_relative() {
-        length.resolve_with_viewport(viewport.width, viewport.height)
+        length
+            .resolve_with_viewport(viewport.width, viewport.height)
+            .unwrap_or_else(|| length.to_px())
     } else {
         resolve_font_relative_length(length, style, font_context)
     }
