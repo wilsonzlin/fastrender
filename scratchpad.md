@@ -1,5 +1,6 @@
 - Added discord.com, weather.com, and bbc.co.uk to the fetch_pages target list; `cargo check --bin fetch_pages` passes.
 - SVG intrinsic sizing: render_svg now falls back to 300×150 with viewBox-derived aspect ratios when width/height are absent, preserves preserveAspectRatio="none", and tests cover width/height, viewBox-only, and aspect-ratio none cases.
+- Media queries now reject percentage widths: added regression ensuring `(max-width: 50%)` and similar percent-valued media features fail to parse.
 # Scratchpad – rendering engine session notes
 - Stylesheet extraction: `extract_css_links` now deduplicates `<link rel="stylesheet">` entries while preserving order, cutting redundant fetches (regression `dedupes_stylesheet_links_preserving_order`).
 - Embedded CSS scan hardened: `.css-*{...}` class tokens and percent-encoded variants are ignored when hunting CSS URLs, preventing bogus fetches (e.g., aljazeera encoded class names). Added regressions `ignores_embedded_css_class_tokens` and `ignores_percent_encoded_css_class_tokens`; cascade color tests updated for `from_rgba8` alpha arg.

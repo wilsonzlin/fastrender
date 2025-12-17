@@ -24,6 +24,13 @@ impl EnvGuard {
     }
 }
 
+#[test]
+fn rejects_media_query_with_percentage_width() {
+    // Percentages are not valid in media feature values; parsing should fail rather than treat them as 0.
+    assert!(MediaQuery::parse("(max-width: 50%)").is_err());
+    assert!(MediaQuery::parse("(min-width: 120%)").is_err());
+}
+
 impl Drop for EnvGuard {
     fn drop(&mut self) {
         if let Some(v) = &self.prev {
