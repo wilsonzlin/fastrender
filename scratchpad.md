@@ -1,5 +1,6 @@
 # Scratchpad – rendering engine session notes
 - Idle; no current tasks. Available for new tasks.
+- Added a regression for nested isolate-override containing an inner isolate: inline bidi reordering now has test `bidi_isolate_override_keeps_inner_isolate_atomic` comparing the render with unicode-bidi controls. `cargo test bidi_isolate_override_keeps_inner_isolate_atomic -- --nocapture` passes. Stashed unrelated WIP (`pre-bidi-wip`) that tweaks rowspan weight defaults/match-parent text-align_last propagation.
 - font-variant-emoji now has picker regressions: text preference avoids emoji fonts, emoji preference selects emoji fonts, unicode uses text for non-emoji, and FE0E/FE0F variation selectors force text/emoji choices accordingly.
 - Media query caching optimized: `MediaQueryCache` memoizes per-query keys and tracks results internally instead of exposing a raw HashMap, reducing rebuilds while keeping the existing API. `cargo test media_query_cache_reused_between_collections -- --nocapture` passes.
 - Added a display-list renderer regression for clip-path from the builder: `builder_clip_path_masks_rendered_output` builds a stacking tree with a circular clip-path and ensures the rendered output is clipped (center red, corners white).
