@@ -7111,6 +7111,22 @@ mod tests {
     }
 
     #[test]
+    fn marker_gap_uses_inline_start_margin_in_horizontal_rtl() {
+        let mut style = ComputedStyle::default();
+        style.direction = crate::style::types::Direction::Rtl;
+        style.margin_left = Some(Length::px(9.0));
+        style.margin_right = Some(Length::px(2.0));
+
+        // RTL swaps inline-start/end; gap should use margin-left
+        let gap = marker_inline_gap(&style, &FontContext::new(), Size::new(800.0, 600.0));
+        assert!(
+            (8.5..9.5).contains(&gap),
+            "expected inline-end gap to come from margin-left in RTL, got {}",
+            gap
+        );
+    }
+
+    #[test]
     fn upright_vertical_forces_ltr_base_direction() {
         let mut style = ComputedStyle::default();
         style.direction = crate::style::types::Direction::Rtl;
