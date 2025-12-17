@@ -9198,7 +9198,7 @@ fn parse_text_decoration_style(value: &PropertyValue) -> Option<TextDecorationSt
 fn parse_text_decoration_color(value: &PropertyValue) -> Option<Option<Rgba>> {
     match value {
         PropertyValue::Color(c) => Some(Some(*c)),
-        PropertyValue::Keyword(kw) if kw == "currentcolor" => Some(None),
+        PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentcolor") => Some(None),
         _ => None,
     }
 }
@@ -12577,6 +12577,15 @@ mod tests {
             style.text_decoration.thickness,
             TextDecorationThickness::FromFont
         ));
+
+        let decl = Declaration {
+            property: "text-decoration-color".to_string(),
+            value: PropertyValue::Keyword("CurrentColor".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert_eq!(style.text_decoration.color, None);
 
         let decl = Declaration {
             property: "text-underline-position".to_string(),
