@@ -9077,6 +9077,42 @@ mod tests {
     }
 
     #[test]
+    fn bidi_rtl_run_positions_between_ltr_runs() {
+        // A plain RTL run should sit between surrounding LTR runs in visual order.
+        let mut rtl_style = ComputedStyle::default();
+        rtl_style.direction = crate::style::types::Direction::Rtl;
+        let rtl_style = Arc::new(rtl_style);
+
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![
+                BoxNode::new_text(default_style(), "ABC\u{00A0}".to_string()),
+                BoxNode::new_text(rtl_style.clone(), "אבג".to_string()),
+                BoxNode::new_text(default_style(), "\u{00A0}DEF".to_string()),
+            ],
+        );
+
+        let ifc = InlineFormattingContext::new();
+        let constraints = LayoutConstraints::definite_width(400.0);
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+        let mut texts = Vec::new();
+        collect_text_with_x(&fragment, &mut texts);
+        texts.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let labels: Vec<_> = texts.iter().map(|(t, _)| t.clone()).collect();
+        let joined = labels.join("");
+        assert_eq!(joined, "ABC\u{00A0}אבג\u{00A0}DEF");
+
+        assert_eq!(texts.len(), 3);
+        let first_x = texts[0].1;
+        let rtl_x = texts[1].1;
+        let last_x = texts[2].1;
+        assert!(first_x <= rtl_x && rtl_x <= last_x);
+    }
+
+    #[test]
     fn word_break_break_word_reduces_min_content_width() {
         let mut text_style = ComputedStyle::default();
         text_style.word_break = WordBreak::BreakWord;
