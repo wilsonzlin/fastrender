@@ -504,6 +504,22 @@ mod tests {
     }
 
     #[test]
+    fn resolve_length_handles_non_finite_contexts() {
+        use std::f32::NAN;
+
+        assert_eq!(Length::percent(50.0).resolve_against(NAN), None);
+        assert_eq!(Length::em(2.0).resolve_with_font_size(NAN), None);
+        assert_eq!(
+            Length::new(10.0, LengthUnit::Vw).resolve_with_viewport(NAN, 800.0),
+            None
+        );
+        assert_eq!(
+            Length::percent(10.0).resolve_with_context(Some(NAN), NAN, NAN, NAN, NAN),
+            None
+        );
+    }
+
+    #[test]
     fn test_length_or_auto_from_length() {
         let length = Length::px(100.0);
         let auto_length: LengthOrAuto = length.into();
@@ -707,6 +723,9 @@ impl Length {
     /// assert_eq!(px_length.resolve_against(200.0), Some(100.0)); // Absolute units ignore base
     /// ```
     pub fn resolve_against(self, percentage_base: f32) -> Option<f32> {
+        if !self.value.is_finite() || !percentage_base.is_finite() {
+            return None;
+        }
         if let Some(calc) = self.calc {
             return calc.resolve(Some(percentage_base), 0.0, 0.0, 0.0, 0.0);
         }
@@ -735,6 +754,9 @@ impl Length {
     /// assert_eq!(ex_length.resolve_with_font_size(16.0), Some(16.0));
     /// ```
     pub fn resolve_with_font_size(self, font_size_px: f32) -> Option<f32> {
+        if !self.value.is_finite() || !font_size_px.is_finite() {
+            return None;
+        }
         if let Some(calc) = self.calc {
             return calc
                 .resolve(None, 0.0, 0.0, font_size_px, font_size_px)
@@ -763,6 +785,9 @@ impl Length {
     /// assert_eq!(vh_length.resolve_with_viewport(800.0, 600.0), Some(300.0));
     /// ```
     pub fn resolve_with_viewport(self, viewport_width: f32, viewport_height: f32) -> Option<f32> {
+        if !self.value.is_finite() || !viewport_width.is_finite() || !viewport_height.is_finite() {
+            return None;
+        }
         if let Some(calc) = self.calc {
             return calc
                 .resolve(None, viewport_width, viewport_height, 0.0, 0.0)
@@ -789,26 +814,42 @@ impl Length {
         font_size_px: f32,
         root_font_size_px: f32,
     ) -> Option<f32> {
+        if !self.value.is_finite() {
+            return None;
+        }
+
+        let percentage_base = percentage_base.filter(|b| b.is_finite());
+        let vw = if viewport_width.is_finite() {
+            viewport_width
+        } else {
+            return None;
+        };
+        let vh = if viewport_height.is_finite() {
+            viewport_height
+        } else {
+            return None;
+        };
+        let font_px = if font_size_px.is_finite() {
+            font_size_px
+        } else {
+            return None;
+        };
+        let root_px = if root_font_size_px.is_finite() {
+            root_font_size_px
+        } else {
+            return None;
+        };
+
         if let Some(calc) = self.calc {
-            return calc.resolve(
-                percentage_base,
-                viewport_width,
-                viewport_height,
-                font_size_px,
-                root_font_size_px,
-            );
+            return calc.resolve(percentage_base, vw, vh, font_px, root_px);
         }
 
         if self.unit.is_percentage() {
-            Some((self.value / 100.0) * percentage_base.unwrap_or(0.0))
+            percentage_base.map(|base| (self.value / 100.0) * base)
         } else if self.unit.is_viewport_relative() {
-            self.resolve_with_viewport(viewport_width, viewport_height)
+            self.resolve_with_viewport(vw, vh)
         } else if self.unit.is_font_relative() {
-            self.resolve_with_font_size(if self.unit == LengthUnit::Rem {
-                root_font_size_px
-            } else {
-                font_size_px
-            })
+            self.resolve_with_font_size(if self.unit == LengthUnit::Rem { root_px } else { font_px })
         } else if self.unit.is_absolute() {
             Some(self.to_px())
         } else {
