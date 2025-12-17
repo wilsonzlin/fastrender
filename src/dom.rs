@@ -13,6 +13,8 @@ use std::ptr;
 use std::thread_local;
 use unicode_bidi::bidi_class;
 
+const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
+
 #[derive(Debug, Clone)]
 pub struct DomNode {
     pub node_type: DomNodeType,
@@ -126,7 +128,12 @@ fn convert_handle_to_node(handle: &Handle) -> DomNode {
         }
     };
 
-    let mut children = node.children.borrow().iter().map(convert_handle_to_node).collect::<Vec<_>>();
+    let mut children = node
+        .children
+        .borrow()
+        .iter()
+        .map(convert_handle_to_node)
+        .collect::<Vec<_>>();
 
     // HTML <wbr> elements represent optional break opportunities. Synthesize a zero-width break
     // text node so line breaking can consider the opportunity while still allowing the element to
@@ -440,12 +447,19 @@ impl<'a> Element for ElementRef<'a> {
             .unwrap_or(false)
     }
 
-    fn has_namespace(&self, _ns: &str) -> bool {
-        true // Simplification: assume HTML namespace
+    fn has_namespace(&self, ns: &str) -> bool {
+        if self.node.tag_name().is_none() {
+            return false;
+        }
+
+        ns.is_empty() || ns == HTML_NAMESPACE
     }
 
     fn is_same_type(&self, other: &Self) -> bool {
-        self.node.tag_name() == other.node.tag_name()
+        match (self.node.tag_name(), other.node.tag_name()) {
+            (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+            _ => false,
+        }
     }
 
     fn attr_matches(
@@ -657,6 +671,27 @@ mod tests {
         );
         let element_ref = ElementRef::with_ancestors(node, ancestors);
         element_ref.match_non_ts_pseudo_class(pseudo, &mut context)
+    }
+
+    #[test]
+    fn namespace_matching_defaults_to_html() {
+        let node = element("div", vec![]);
+        let element_ref = ElementRef::new(&node);
+
+        assert!(element_ref.has_namespace(""));
+        assert!(element_ref.has_namespace(HTML_NAMESPACE));
+        assert!(!element_ref.has_namespace("http://www.w3.org/2000/svg"));
+    }
+
+    #[test]
+    fn is_same_type_ignores_ascii_case() {
+        let upper = element("DIV", vec![]);
+        let lower = element("div", vec![]);
+
+        let upper_ref = ElementRef::new(&upper);
+        let lower_ref = ElementRef::new(&lower);
+
+        assert!(upper_ref.is_same_type(&lower_ref));
     }
 
     fn collect_wbr_texts(node: &DomNode, out: &mut Vec<String>) {
