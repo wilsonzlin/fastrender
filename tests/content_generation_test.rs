@@ -224,6 +224,10 @@ fn additive_counter_styles_fall_back_out_of_range() {
     assert_eq!(CounterStyle::LowerArmenian.format(-1), "-1");
     assert_eq!(CounterStyle::Georgian.format(20_000), "20000");
     assert_eq!(CounterStyle::Georgian.format(-5), "-5");
+
+    // Lower-greek is additive and should also fall back outside its range
+    assert_eq!(CounterStyle::LowerGreek.format(0), "0");
+    assert_eq!(CounterStyle::LowerGreek.format(27), "27");
 }
 
 #[test]
