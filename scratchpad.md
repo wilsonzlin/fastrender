@@ -1,12 +1,3 @@
-- Added discord.com, weather.com, and bbc.co.uk to the fetch_pages target list; `cargo check --bin fetch_pages` passes. Added media query invalid units regression and SVG percent dimension fallback regression; pushed.
-- SVG intrinsic sizing: render_svg now falls back to 300×150 with viewBox-derived aspect ratios when width/height are absent, preserves preserveAspectRatio="none", and tests cover width/height, viewBox-only, and aspect-ratio none cases.
-- Media queries now reject percentage widths: added regression ensuring `(max-width: 50%)` and similar percent-valued media features fail to parse.
-- Media queries now reject percent and unitless/invalid lengths: added regressions for percentage widths and invalid units (e.g., `(max-width: 10)` / `10foo`).
-- SVG percent width/height are ignored for intrinsic sizing: percent-specified dimensions fall back to default 300×150 while preserving viewBox aspect ratios; added regression.
-# Scratchpad – rendering engine session notes
-Idle; no current tasks. Available for new tasks.
-- Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
->>>>>>> c73968a (Add media invalid length regression)
 # Scratchpad – rendering engine session notes
 - Scroll snapping now honors scroll-padding and scroll-margin: CSS parsing/cascade accept physical scroll-padding/scroll-margin properties, layout fingerprints include them, and snap target computation accounts for container padding insets and target margins. Added scroll snap regressions for padding/margin alignment.
 - Color-scheme now inherits through the cascade: `inherit_styles` copies the computed color-scheme to children, and a regression (`color_scheme_inherits_to_descendants`) ensures author-supported schemes propagate. `cargo test color_scheme_inherits_to_descendants --quiet` passes. Push previously timed out; rebase in progress.
@@ -14,7 +5,7 @@ Idle; no current tasks. Available for new tasks.
 - UA disabled form controls now have dimmed UA styling (gray text/background, default cursor); cascade test `disabled_form_controls_use_ua_styles` covers the defaults.
 - UA focus outlines now apply to form controls: UA CSS adds focus outlines for inputs/selects/textareas/buttons, and a cascade regression `ua_focus_outline_applies_to_form_controls` locks the outline style/offset.
 - Added UA disabled form-control styling: user_agent.css dims disabled inputs/selects/textareas/buttons/options/optgroups and switches cursors to default; cascade regression `disabled_form_controls_use_ua_styles` verifies the UA defaults.
-Idle; no current tasks. Available for new tasks.
+ Idle; no current tasks. Available for new tasks.
 - Pull/push to origin have been failing (SSH timeouts/HTTPS creds). A full patch series for all local commits lives in `local_patches/` (0001–0018) so others can apply while pushes are blocked.
 - Fixed display-list underline currentColor test to assert resolved color/thickness and remove unused vars; warnings cleared.
 - PositionedLayout absolute helper delegates to AbsoluteLayout for spec-accurate shrink-to-fit/auto-margin handling; positioned layout tests updated (shrink-to-fit expectation) and an auto-margin centering regression added. `cargo test --quiet test_absolute_position_left_right_shrink_to_fit` and `cargo test --quiet absolute_position_auto_margins_center_between_insets` pass.
