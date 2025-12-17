@@ -42,6 +42,7 @@ Idle; no current tasks.
 - Added CSS `text-rendering`: new computed type/default (auto), inherited, property parsing (optimizeSpeed/optimizeLegibility/geometricPrecision), property lists, and regression tests. `cargo test text_rendering --quiet` passes.
 
 - Added `scrollbar-color` parsing/computed support (keywords + thumb/track colors), inherited via cascade with regression coverage.
+- Implemented `text-size-adjust`: parses auto/none/percentage, cascades/inherits with regression coverage.
 
 - DOM now tracks element namespaces: parse_html captures the element namespace, selector matching respects the actual namespace (HTML vs foreign), and local-name/type comparisons are case-insensitive only for HTML elements. Tests cover namespace matching, HTML vs. SVG casing, and namespace-aware type equality. HTML-only form states (disabled/required/etc.) are gated to HTML elements.
 

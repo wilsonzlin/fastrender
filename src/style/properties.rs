@@ -2264,6 +2264,8 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "text-align-last" => styles.text_align_last = source.text_align_last,
         "text-justify" => styles.text_justify = source.text_justify,
         "text-rendering" => styles.text_rendering = source.text_rendering,
+        "text-size-adjust" => styles.text_size_adjust = source.text_size_adjust,
+        "text-size-adjust" => styles.text_size_adjust = source.text_size_adjust,
         "text-orientation" => {
             styles.text_orientation = match source.text_orientation {
                 crate::style::types::TextOrientation::SidewaysRight => crate::style::types::TextOrientation::Sideways,
@@ -5228,6 +5230,17 @@ pub fn apply_declaration_with_base(
                     _ => styles.text_justify,
                 };
             }
+        }
+        "text-size-adjust" => {
+            styles.text_size_adjust = match &resolved_value {
+                PropertyValue::Keyword(kw) => match kw.to_ascii_lowercase().as_str() {
+                    "auto" => TextSizeAdjust::Auto,
+                    "none" => TextSizeAdjust::None,
+                    _ => styles.text_size_adjust,
+                },
+                PropertyValue::Percentage(p) if *p >= 0.0 => TextSizeAdjust::Percentage(*p),
+                _ => styles.text_size_adjust,
+            };
         }
         "text-orientation" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
@@ -9951,7 +9964,7 @@ mod tests {
         JustifyContent, ListStylePosition, ListStyleType, MixBlendMode, OutlineColor, OutlineStyle, PositionComponent,
         PositionKeyword, TextCombineUpright, TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
         TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle, TextOrientation,
-        TextOverflowSide, TextTransform, TransformBox, WritingMode,
+        TextOverflowSide, TextSizeAdjust, TextTransform, TransformBox, WritingMode,
     };
     use cssparser::{Parser, ParserInput};
 
@@ -12825,6 +12838,78 @@ mod tests {
             }
         ));
         assert_eq!(style.text_emphasis_color, Some(Rgba::BLUE));
+    }
+
+    #[test]
+    fn text_size_adjust_parses() {
+        let mut style = ComputedStyle::default();
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-size-adjust".to_string(),
+                value: PropertyValue::Keyword("none".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_size_adjust, TextSizeAdjust::None));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-size-adjust".to_string(),
+                value: PropertyValue::Percentage(125.0),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_size_adjust, TextSizeAdjust::Percentage(p) if (p - 125.0).abs() < f32::EPSILON));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-size-adjust".to_string(),
+                value: PropertyValue::Percentage(-10.0),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        // Negative percentages are ignored; previous value is preserved.
+        assert!(matches!(style.text_size_adjust, TextSizeAdjust::Percentage(p) if (p - 125.0).abs() < f32::EPSILON));
+    }
+
+    #[test]
+    fn text_size_adjust_inherits_with_keyword() {
+        let parent = ComputedStyle {
+            text_size_adjust: TextSizeAdjust::Percentage(80.0),
+            ..ComputedStyle::default()
+        };
+
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-size-adjust".to_string(),
+                value: PropertyValue::Keyword("inherit".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(style.text_size_adjust, parent.text_size_adjust);
     }
 
     #[test]
