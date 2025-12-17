@@ -1,8 +1,6 @@
 # Scratchpad – rendering engine session notes
 Idle; no current tasks. Available for new tasks.
 - Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
-- Added display-list regression for `color-mix()` backgrounds: srgb/srgb-linear mixes and currentColor participation render to the resolved color (`paint_color_mix_display_list_test.rs`).
-- Added counter-style fallback regressions for out-of-range lower-greek/lower-armenian counters falling back to decimal markers.
 - Added a painter regression for `clip-path: polygon(...)`: triangular clip masks paint output (inside red, outside white). `cargo test clip_path_polygon_masks_paint_output -- --nocapture` passes.
 - Added bidi regression `bidi_override_does_not_cross_paragraph_boundary` to ensure an override in one paragraph doesn’t reorder later paragraphs; embeds in following paragraphs resolve independently.
 - Added a regression for nested isolate-override containing an inner isolate: inline bidi reordering now has test `bidi_isolate_override_keeps_inner_isolate_atomic` comparing the render with unicode-bidi controls. `cargo test bidi_isolate_override_keeps_inner_isolate_atomic -- --nocapture` passes. Stashed unrelated WIP (`pre-bidi-wip`) that tweaks rowspan weight defaults/match-parent text-align_last propagation.
@@ -17,13 +15,10 @@ Idle; no current tasks. Available for new tasks.
 - Display-list skip-ink: builder regressions ensure skip-ink auto carves underline segments and skip-ink none emits a solid line.
 - Added display-list renderer regression for `color-mix(in oklab, ...)` backgrounds to ensure mixed colors render as resolved RGBA.
 - Added display-list renderer regression for `color-mix(in srgb, currentColor, blue)` backgrounds to ensure currentColor participates in mixing correctly at render time.
-- Added display-list renderer regression for `color-mix(in oklch, ...)` backgrounds so polar-space mixes render to the expected RGBA in the painter/renderer path.
+- Added selector() @supports regression: unsupported selectors (e.g., :has) fail selector(), while supported selectors (nth-child) pass.
 - Added a display-list renderer regression for border images: `display_list_border_image_nine_slice` encodes a 3×3 PNG with distinct corners/edges, builds via DisplayListBuilder, renders, and asserts the nine-slice corners/edges land in the correct pixels.
 - Added a display-list renderer regression for border-image gradients: `display_list_border_image_generated_uniform_color` uses a uniform linear-gradient source and checks all corners render red, exercising generated border-image sources in the builder/renderer.
 - Added a display-list regression for `background-attachment: local`: display-list builder/renderer keep backgrounds clipped to the padding box for scrollable elements (border stays transparent, padding paints red). `cargo test background_attachment_local_clips_to_padding_box_in_display_list -- --nocapture` passes.
-- Added a background-position regression for vertical-first keyword orders with offsets (e.g., `bottom 12px right 8px`), confirming swapped keyword order still maps to vertical/horizontal sides with end offsets stored as negative.
-- Counter styles: additive lower-greek now has fallback regression coverage—values outside its range fall back to decimal formatting, matching other additive styles.
-- Filter parsing tightened: negative blur lengths (including fractional) are rejected; regression added to keep filters empty when blur radii are negative.
 - Painter now has a matching clip-path polygon regression to ensure raster clipping aligns with the display-list path (triangle fills inside, keeps clipped corners white).
 - Added display-list rendering regressions for `color-mix()`: background colors set via `color-mix` in sRGB and sRGB-linear are compared against parsed expectations to lock color evaluation in the display-list renderer.
 - Added a display-list regression for `background-attachment: fixed` that renders two adjacent fragments through the display list renderer; fixed backgrounds stay anchored to the viewport (colors differ across x). `cargo test background_attachment_fixed_anchors_to_viewport_in_display_list -- --nocapture` passes.

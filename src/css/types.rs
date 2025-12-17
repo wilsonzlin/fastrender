@@ -634,6 +634,15 @@ mod tests {
         let cond = SupportsCondition::Selector("div + span".into());
         assert!(cond.matches(), "supported selector list should be accepted");
     }
+
+    #[test]
+    fn supports_selector_rejects_has_and_accepts_supported() {
+        let unsupported = SupportsCondition::Selector("div:has(span)".into());
+        assert!(!unsupported.matches(), ":has() is unsupported in selector() queries");
+
+        let supported = SupportsCondition::Selector(".foo:nth-child(2n+1)".into());
+        assert!(supported.matches(), "nth-child selector should be supported in selector()");
+    }
 }
 
 impl Default for StyleSheet {
