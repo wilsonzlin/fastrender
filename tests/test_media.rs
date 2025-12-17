@@ -303,6 +303,34 @@ fn test_device_aspect_ratio_queries() {
 }
 
 // ============================================================================
+// Media Parse Error Cases
+// ============================================================================
+
+#[test]
+fn media_length_features_reject_calc_and_invalid_units() {
+    let calc_query = MediaQuery::parse("(min-width: calc(100px + 10%))");
+    assert!(calc_query.is_err(), "calc() should not be accepted in media lengths");
+
+    let bogus_unit = MediaQuery::parse("(min-width: 10foobar)");
+    assert!(bogus_unit.is_err(), "unknown length units should fail parsing");
+}
+
+#[test]
+fn media_range_syntax_requires_valid_lengths() {
+    let calc_range = MediaQuery::parse("(400px < width < calc(800px + 10%))");
+    assert!(calc_range.is_err(), "range syntax should reject calc lengths");
+
+    let bad_range = MediaQuery::parse("(width >< 500px)");
+    assert!(bad_range.is_err(), "invalid range operators should fail parsing");
+}
+
+#[test]
+fn media_resolution_rejects_invalid_units() {
+    let invalid_res = MediaQuery::parse("(min-resolution: 2xyz)");
+    assert!(invalid_res.is_err(), "resolution with unknown units should fail");
+}
+
+// ============================================================================
 // Print Media Tests
 // ============================================================================
 
