@@ -917,6 +917,8 @@ pub enum ColorScheme {
     Light,
     /// Dark color scheme preferred
     Dark,
+    /// No preference specified
+    NoPreference,
 }
 
 impl ColorScheme {
@@ -926,6 +928,7 @@ impl ColorScheme {
         match s.as_str() {
             "light" => Ok(ColorScheme::Light),
             "dark" => Ok(ColorScheme::Dark),
+            "no-preference" => Ok(ColorScheme::NoPreference),
             _ => Err(MediaParseError::InvalidColorScheme(s)),
         }
     }
@@ -936,6 +939,7 @@ impl fmt::Display for ColorScheme {
         match self {
             ColorScheme::Light => write!(f, "light"),
             ColorScheme::Dark => write!(f, "dark"),
+            ColorScheme::NoPreference => write!(f, "no-preference"),
         }
     }
 }
@@ -1116,7 +1120,7 @@ pub struct MediaContext {
     /// Any pointer accuracy (finest available)
     pub any_pointer: PointerCapability,
     /// User's color scheme preference
-    pub prefers_color_scheme: Option<ColorScheme>,
+    pub prefers_color_scheme: ColorScheme,
     /// User's reduced motion preference
     pub prefers_reduced_motion: bool,
     /// User's contrast preference
@@ -1159,7 +1163,7 @@ impl MediaContext {
             any_can_hover: true,
             pointer: PointerCapability::Fine,
             any_pointer: PointerCapability::Fine,
-            prefers_color_scheme: None,
+            prefers_color_scheme: ColorScheme::NoPreference,
             prefers_reduced_motion: false,
             prefers_contrast: ContrastPreference::NoPreference,
             prefers_reduced_transparency: false,
@@ -1179,9 +1183,9 @@ impl MediaContext {
         if let Ok(value) = env::var("FASTR_PREFERS_COLOR_SCHEME") {
             let v = value.trim().to_ascii_lowercase();
             self.prefers_color_scheme = match v.as_str() {
-                "light" => Some(ColorScheme::Light),
-                "dark" => Some(ColorScheme::Dark),
-                "no-preference" => None,
+                "light" => ColorScheme::Light,
+                "dark" => ColorScheme::Dark,
+                "no-preference" => ColorScheme::NoPreference,
                 _ => self.prefers_color_scheme,
             };
         }
@@ -1255,7 +1259,7 @@ impl MediaContext {
             any_can_hover: false,
             pointer: PointerCapability::None,
             any_pointer: PointerCapability::None,
-            prefers_color_scheme: None,
+            prefers_color_scheme: ColorScheme::NoPreference,
             prefers_reduced_motion: false,
             prefers_contrast: ContrastPreference::NoPreference,
             prefers_reduced_transparency: false,
@@ -1292,7 +1296,7 @@ impl MediaContext {
             any_can_hover: false,
             pointer: PointerCapability::Coarse,
             any_pointer: PointerCapability::Coarse,
-            prefers_color_scheme: None,
+            prefers_color_scheme: ColorScheme::NoPreference,
             prefers_reduced_motion: false,
             prefers_contrast: ContrastPreference::NoPreference,
             prefers_reduced_transparency: false,
@@ -1307,7 +1311,7 @@ impl MediaContext {
 
     /// Sets the color scheme preference
     pub fn with_color_scheme(mut self, scheme: ColorScheme) -> Self {
-        self.prefers_color_scheme = Some(scheme);
+        self.prefers_color_scheme = scheme;
         self
     }
 
@@ -1517,7 +1521,7 @@ impl MediaContext {
             }
 
             // User preferences
-            MediaFeature::PrefersColorScheme(scheme) => self.prefers_color_scheme == Some(*scheme),
+            MediaFeature::PrefersColorScheme(scheme) => self.prefers_color_scheme == *scheme,
             MediaFeature::PrefersReducedMotion(motion) => match motion {
                 ReducedMotion::NoPreference => !self.prefers_reduced_motion,
                 ReducedMotion::Reduce => self.prefers_reduced_motion,
@@ -2314,6 +2318,11 @@ mod tests {
     fn test_media_feature_parse_prefers_color_scheme() {
         let feature = MediaFeature::parse("prefers-color-scheme", Some("dark")).unwrap();
         assert_eq!(feature, MediaFeature::PrefersColorScheme(ColorScheme::Dark));
+        let feature = MediaFeature::parse("prefers-color-scheme", Some("light")).unwrap();
+        assert_eq!(feature, MediaFeature::PrefersColorScheme(ColorScheme::Light));
+        let feature = MediaFeature::parse("prefers-color-scheme", Some("no-preference")).unwrap();
+        assert_eq!(feature, MediaFeature::PrefersColorScheme(ColorScheme::NoPreference));
+        assert!(MediaFeature::parse("prefers-color-scheme", Some("unknown")).is_err());
     }
 
     // ============================================================================
@@ -2526,6 +2535,10 @@ mod tests {
 
         let query = MediaQuery::parse("(prefers-color-scheme: light)").unwrap();
         assert!(!ctx.evaluate(&query));
+
+        let default_ctx = MediaContext::screen(1024.0, 768.0);
+        let query = MediaQuery::parse("(prefers-color-scheme: no-preference)").unwrap();
+        assert!(default_ctx.evaluate(&query));
     }
 
     #[test]
@@ -2624,7 +2637,7 @@ mod tests {
         let guard_data = EnvGuard::new("FASTR_PREFERS_REDUCED_DATA", Some("yes"));
 
         let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
-        assert_eq!(ctx.prefers_color_scheme, Some(ColorScheme::Dark));
+        assert_eq!(ctx.prefers_color_scheme, ColorScheme::Dark);
         assert!(ctx.prefers_reduced_motion);
         assert!(matches!(ctx.prefers_contrast, ContrastPreference::More));
         assert!(ctx.prefers_reduced_transparency);
@@ -2643,7 +2656,17 @@ mod tests {
         let ctx = MediaContext::screen(800.0, 600.0)
             .with_color_scheme(ColorScheme::Light)
             .with_env_overrides();
-        assert_eq!(ctx.prefers_color_scheme, Some(ColorScheme::Light));
+        assert_eq!(ctx.prefers_color_scheme, ColorScheme::Light);
+        drop(guard_scheme);
+    }
+
+    #[test]
+    fn env_overrides_no_preference_scheme() {
+        let guard_scheme = EnvGuard::new("FASTR_PREFERS_COLOR_SCHEME", Some("no-preference"));
+        let ctx = MediaContext::screen(800.0, 600.0)
+            .with_color_scheme(ColorScheme::Dark)
+            .with_env_overrides();
+        assert_eq!(ctx.prefers_color_scheme, ColorScheme::NoPreference);
         drop(guard_scheme);
     }
 
