@@ -3716,6 +3716,58 @@ mod tests {
         assert_eq!(para2_text, "DEF".to_string());
     }
 
+    #[test]
+    fn bidi_override_and_embed_across_paragraphs() {
+        // Paragraph 1 uses an override; paragraph 2 uses an embed. Each should reorder independently.
+        let mut builder = make_builder(200.0);
+
+        let mut para1 = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            0,
+            Direction::Rtl,
+            UnicodeBidi::BidiOverride,
+        );
+        para1.add_child(InlineItem::Text(make_text_item("ABC", 30.0)));
+        builder.add_item(InlineItem::InlineBox(para1));
+        builder.force_break();
+
+        let mut para2 = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            1,
+            Direction::Rtl,
+            UnicodeBidi::Embed,
+        );
+        para2.add_child(InlineItem::Text(make_text_item("XYZ", 30.0)));
+        builder.add_item(InlineItem::InlineBox(para2));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 2);
+
+        let para1_text: String = lines[0]
+            .items
+            .iter()
+            .map(|p| flatten_text(&p.item))
+            .collect();
+        let expected_para1 = reorder_with_controls(&format!("{}ABC{}", '\u{202e}', '\u{202c}'), Some(Level::ltr()));
+        assert_eq!(para1_text, expected_para1);
+
+        let para2_text: String = lines[1]
+            .items
+            .iter()
+            .map(|p| flatten_text(&p.item))
+            .collect();
+        let expected_para2 = reorder_with_controls(&format!("{}XYZ{}", '\u{202b}', '\u{202c}'), Some(Level::ltr()));
+        assert_eq!(para2_text, expected_para2);
+    }
+
     fn nested_inline_box_with_depth(
         depth: usize,
         ub: UnicodeBidi,
