@@ -25,6 +25,7 @@ use crate::style::var_resolution::{resolve_var_for_property, VarResolutionResult
 use crate::style::ComputedStyle;
 use cssparser::{Parser, ParserInput, Token};
 use std::cell::Cell;
+use std::collections::HashMap;
 
 thread_local! {
     static IMAGE_SET_DPR: Cell<f32> = Cell::new(1.0);
@@ -4515,6 +4516,51 @@ pub fn apply_declaration_with_base(
                     if styles.grid_template_rows.is_empty() {
                         styles.grid_template_rows = vec![GridTrack::Auto; row_count];
                         styles.grid_row_line_names = vec![Vec::new(); row_count + 1];
+                    }
+
+                    // Per CSS Grid, each named area also defines start/end line names on its
+                    // row and column boundaries. Populate line-name vectors and name maps so
+                    // `grid-column`/`grid-row` placements can reference `<name>-start`/`<name>-end`.
+                    if let Some(bounds) = crate::style::grid::validate_area_rectangles(&styles.grid_template_areas) {
+                        let ensure_line = |lines: &mut Vec<Vec<String>>, names: &mut HashMap<String, Vec<usize>>, idx: usize, name: String| {
+                            if lines.len() <= idx {
+                                lines.resize(idx + 1, Vec::new());
+                            }
+                            lines[idx].push(name.clone());
+                            names.entry(name).or_default().push(idx);
+                        };
+
+                        for (name, (top, bottom, left, right)) in bounds {
+                            let col_start = left;
+                            let col_end = right + 1;
+                            let row_start = top;
+                            let row_end = bottom + 1;
+
+                            ensure_line(
+                                &mut styles.grid_column_line_names,
+                                &mut styles.grid_column_names,
+                                col_start,
+                                format!("{}-start", name),
+                            );
+                            ensure_line(
+                                &mut styles.grid_column_line_names,
+                                &mut styles.grid_column_names,
+                                col_end,
+                                format!("{}-end", name),
+                            );
+                            ensure_line(
+                                &mut styles.grid_row_line_names,
+                                &mut styles.grid_row_names,
+                                row_start,
+                                format!("{}-start", name),
+                            );
+                            ensure_line(
+                                &mut styles.grid_row_line_names,
+                                &mut styles.grid_row_names,
+                                row_end,
+                                format!("{}-end", name),
+                            );
+                        }
                     }
                 }
             }
