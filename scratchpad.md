@@ -11,6 +11,7 @@
 # Render bug hunt: stackoverflow.com (1200×800) looked normal; no regression added. Economist.com fetch blocked with 403.
 # Color-scheme dark palette now recolors UA form controls (backgrounds/borders/outlines) when dark is selected, with regressions for palette and overrides. Pushes completed.
 # RTL markers anchor to inline-start: RTL lines now keep marker fragments at the front so ::marker content stays on the inline-start side. Regression `marker_outside_positions_inline_start_in_horizontal_rtl` covers horizontal RTL outside markers.
+# Marker justification exclusion: inter-character/distribute justification now skips ::marker items so outside markers don't get gaps injected; added regression `marker_outside_is_not_justified_apart`.
 # Rendered example.com at 1200×800 during a random render check; output looked normal (no visible issues observed).
 # Rendered example.com again after fetch/rerender; output still clean, no regressions observed.
 # Added legend shrink-to-fit regression: a legend with auto width should shrink to its text instead of spanning the fieldset width.

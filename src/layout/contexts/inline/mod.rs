@@ -2687,7 +2687,14 @@ impl InlineFormattingContext {
 
     fn count_justifiable_gaps(items: &[PositionedItem], mode: TextJustify) -> usize {
         if matches!(mode, TextJustify::InterCharacter | TextJustify::Distribute) {
-            return items.len().saturating_sub(1);
+            return items
+                .windows(2)
+                .filter(|pair| {
+                    let prev = &pair[0].item;
+                    let next = &pair[1].item;
+                    !is_marker_item(prev) && !is_marker_item(next)
+                })
+                .count();
         }
         items
             .windows(2)
@@ -2704,6 +2711,9 @@ impl InlineFormattingContext {
             return false;
         }
         if matches!(mode, TextJustify::InterCharacter | TextJustify::Distribute) {
+            if is_marker_item(&items[index].item) || is_marker_item(&items[index + 1].item) {
+                return false;
+            }
             return true;
         }
         let prev = &items[index].item;
@@ -5718,6 +5728,10 @@ fn is_expandable_space(ch: char) -> bool {
     matches!(ch, ' ' | '\t')
 }
 
+fn is_marker_item(item: &InlineItem) -> bool {
+    matches!(item, InlineItem::Text(t) if t.is_marker) || matches!(item, InlineItem::Replaced(r) if r.is_marker)
+}
+
 fn resolve_text_align_for_line(
     text_align: TextAlign,
     text_align_last: crate::style::types::TextAlignLast,
@@ -6271,29 +6285,40 @@ fn has_justify_opportunities(items: &[PositionedItem], mode: TextJustify) -> boo
         return false;
     }
 
+    let non_marker: Vec<&PositionedItem> = items.iter().filter(|p| !is_marker_item(&p.item)).collect();
+
     match mode {
         TextJustify::InterCharacter | TextJustify::Distribute => {
-            if items.len() > 1 {
+            if non_marker.len() > 1 {
                 return true;
             }
-            items.iter().any(|pos| item_has_interchar_opportunity(&pos.item))
+            non_marker
+                .iter()
+                .any(|pos| item_has_interchar_opportunity(&pos.item))
         }
         _ => {
-            if items
+            if non_marker
                 .windows(2)
                 .any(|pair| is_space_boundary_between(&pair[0].item, &pair[1].item))
             {
                 return true;
             }
 
-            items.iter().any(|pos| item_has_space_boundary(&pos.item))
+            non_marker
+                .iter()
+                .any(|pos| item_has_space_boundary(&pos.item))
         }
     }
 }
 
 fn item_has_interchar_opportunity(item: &InlineItem) -> bool {
     match item {
-        InlineItem::Text(t) => t.cluster_byte_offsets().skip(1).next().is_some() || t.text.chars().count() > 1,
+        InlineItem::Text(t) => {
+            if t.is_marker {
+                return false;
+            }
+            t.cluster_byte_offsets().skip(1).next().is_some() || t.text.chars().count() > 1
+        }
         InlineItem::InlineBox(b) => b.children.iter().any(item_has_interchar_opportunity),
         InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => false,
         InlineItem::Tab(_) => false,
@@ -6344,6 +6369,9 @@ fn count_justify_scripts(items: &[PositionedItem]) -> ScriptCounts {
 fn accumulate_scripts(item: &InlineItem, counts: &mut ScriptCounts) {
     match item {
         InlineItem::Text(t) => {
+            if t.is_marker {
+                return;
+            }
             for ch in t.text.chars() {
                 if ch.is_whitespace() {
                     continue;
@@ -6373,8 +6401,9 @@ mod tests {
     use crate::style::display::{Display, FormattingContextType};
     use crate::style::types::FontSizeAdjust;
     use crate::style::types::{
-        CaseTransform, HyphensMode, ListStylePosition, Overflow, OverflowWrap, TextCombineUpright, TextOverflow,
-        TextOverflowSide, TextTransform, TextWrap, WhiteSpace, WordBreak, WritingMode,
+        CaseTransform, HyphensMode, ListStylePosition, Overflow, OverflowWrap, TextAlign, TextAlignLast,
+        TextCombineUpright, TextJustify, TextOverflow, TextOverflowSide, TextTransform, TextWrap, WhiteSpace,
+        WordBreak, WritingMode,
     };
     use crate::style::values::{Length, LengthUnit};
     use crate::style::ComputedStyle;
@@ -6598,6 +6627,64 @@ mod tests {
             "RTL outside marker should sit at inline-start (right) of text: marker_x={} text_max_x={}",
             marker.x(),
             text.max_x()
+        );
+    }
+
+    #[test]
+    fn marker_outside_is_not_justified_apart() {
+        let ifc = InlineFormattingContext::new();
+
+        let mut root_style = ComputedStyle::default();
+        root_style.text_align = TextAlign::Justify;
+        root_style.text_align_last = TextAlignLast::Justify;
+        root_style.text_justify = TextJustify::Distribute;
+        let root_style = Arc::new(root_style);
+
+        let mut marker_style = (*root_style).clone();
+        marker_style.list_style_position = ListStylePosition::Outside;
+        let marker_style = Arc::new(marker_style);
+
+        let text_style = Arc::new((*root_style).clone());
+
+        let marker = BoxNode::new_marker(marker_style, MarkerContent::Text("•".to_string()));
+        let text = BoxNode::new_text(text_style, "content".to_string());
+        let root = BoxNode::new_block(root_style, FormattingContextType::Block, vec![marker, text]);
+        let constraints = LayoutConstraints::definite(300.0, 100.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let line = fragment.children.first().expect("line fragment");
+        let mut marker_x: Option<f32> = None;
+        let mut min_text_x: Option<f32> = None;
+        let mut stack = vec![line];
+        while let Some(node) = stack.pop() {
+            match node.content {
+                FragmentContent::Text { is_marker: true, .. } | FragmentContent::Replaced { .. } => {
+                    if marker_x.is_none() {
+                        marker_x = Some(node.bounds.x());
+                    }
+                }
+                FragmentContent::Text { is_marker: false, .. } => {
+                    let x = node.bounds.x();
+                    min_text_x = Some(min_text_x.map_or(x, |m| m.min(x)));
+                }
+                _ => {}
+            }
+            for child in &node.children {
+                stack.push(child);
+            }
+        }
+        let marker_x = marker_x.expect("marker x");
+        let text_x = min_text_x.expect("text x");
+
+        assert!(
+            text_x.abs() < 2.0,
+            "justify distribute should not push text away from outside marker; text_x={}",
+            text_x
+        );
+        assert!(
+            marker_x < -5.0,
+            "marker should remain outside at inline-start; marker_x={}",
+            marker_x
         );
     }
 
