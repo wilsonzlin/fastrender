@@ -25,9 +25,10 @@ use std::fs;
 use url::Url;
 
 fn usage() {
-    eprintln!("Usage: inspect_frag [--viewport WxH] [--dpr RATIO] <file.html | file://url>");
+    eprintln!("Usage: inspect_frag [--viewport WxH] [--dpr RATIO] [--scroll-y PX] <file.html | file://url>");
     eprintln!("  --viewport WxH   Set viewport size (default 1200x800)");
     eprintln!("  --dpr RATIO      Device pixel ratio for media queries/srcset (default 1.0)");
+    eprintln!("  --scroll-y PX    Vertical scroll offset in CSS px (default 0)");
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -50,6 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args().skip(1);
     let mut viewport_size = (1200u32, 800u32);
     let mut device_pixel_ratio = 1.0f32;
+    let mut scroll_y = 0.0f32;
     let mut raw_path: Option<String> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -72,6 +74,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Ok(parsed) = val.parse::<f32>() {
                         if parsed.is_finite() && parsed > 0.0 {
                             device_pixel_ratio = parsed;
+                        }
+                    }
+                }
+            }
+            "--scroll-y" => {
+                if let Some(val) = args.next() {
+                    if let Ok(parsed) = val.parse::<f32>() {
+                        if parsed.is_finite() {
+                            scroll_y = parsed;
                         }
                     }
                 }
@@ -120,6 +131,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut html = fs::read_to_string(&path)?;
     let resource_base = infer_base_url(&html, &input_url).into_owned();
+
+    if scroll_y != 0.0 {
+        eprintln!("Applying scroll offset: y={:.1}px", scroll_y);
+    }
 
     let mut renderer = FastRender::builder().device_pixel_ratio(device_pixel_ratio).build()?;
     renderer.set_base_url(resource_base.clone());
@@ -305,6 +320,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         renderer.font_context().clone(),
     );
     let fragment_tree = engine.layout_tree(&mut box_tree)?;
+    let scroll_offset = Point::new(0.0, -scroll_y);
     let mut box_debug: HashMap<usize, String> = HashMap::new();
     collect_box_debug(&box_tree.root, &mut box_debug);
     let mut box_styles: HashMap<usize, std::sync::Arc<ComputedStyle>> = HashMap::new();
@@ -390,7 +406,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("fragments: {}", fragment_tree.fragment_count());
 
     let mut fragments_abs: Vec<(Rect, &FragmentNode)> = Vec::new();
-    collect_fragments_abs(&fragment_tree.root, Point::ZERO, &mut fragments_abs);
+    collect_fragments_abs(&fragment_tree.root, scroll_offset, &mut fragments_abs);
 
     let mut text_count = 0;
     let mut block_count = 0;
@@ -492,7 +508,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("dark bg #{idx}: {:?} @ {:?}", content, rect);
     }
     let mut all_text: Vec<(f32, f32, String)> = Vec::new();
-    collect_text_abs(&fragment_tree.root, Point::ZERO, &mut all_text);
+    collect_text_abs(&fragment_tree.root, scroll_offset, &mut all_text);
     all_text.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     println!("leftmost text fragments:");
     for (idx, (x, y, text)) in all_text.iter().take(10).enumerate() {
@@ -582,10 +598,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("path to first 'US' text fragment (absolute bounds):");
     let mut path: Vec<String> = Vec::new();
-    find_us_fragment(&fragment_tree.root, Point::ZERO, &mut path);
+    find_us_fragment(&fragment_tree.root, scroll_offset, &mut path);
 
     let mut stacks = Vec::new();
-    collect_stacking_contexts(&fragment_tree.root, Point::ZERO, None, true, &mut stacks);
+    collect_stacking_contexts(&fragment_tree.root, scroll_offset, None, true, &mut stacks);
     stacks.sort_by(|a, b| a.rect.y().partial_cmp(&b.rect.y()).unwrap_or(std::cmp::Ordering::Equal));
     println!("stacking contexts (top to bottom): {}", stacks.len());
     for (idx, ctx) in stacks.iter().enumerate() {
@@ -709,7 +725,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Absolute-coordinate background analysis.
     let mut abs_backgrounds: Vec<(Rect, &FragmentNode)> = Vec::new();
-    collect_backgrounds_abs(&fragment_tree.root, Point::ZERO, &mut abs_backgrounds);
+    collect_backgrounds_abs(&fragment_tree.root, scroll_offset, &mut abs_backgrounds);
     let mut abs_view_bgs: Vec<_> = abs_backgrounds
         .iter()
         .filter_map(|(rect, frag)| frag.style.as_deref().map(|style| (rect, style.background_color, *frag)))
@@ -772,7 +788,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Trace nav/header positioning for HN: find first text containing "Hacker News" or ".pagetop" span.
     let mut nav_path = Vec::new();
-    if find_fragment_with_text(&fragment_tree.root, Point::ZERO, "Hacker News", &mut nav_path) {
+    if find_fragment_with_text(&fragment_tree.root, scroll_offset, "Hacker News", &mut nav_path) {
         println!("path to 'Hacker News' fragment:");
         for (idx, entry) in nav_path.iter().enumerate() {
             println!("  {idx}: {entry}");
@@ -856,7 +872,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     }
-    if let Some(path) = find_first_skinny(&fragment_tree.root, Point::ZERO, &box_debug) {
+    if let Some(path) = find_first_skinny(&fragment_tree.root, scroll_offset, &box_debug) {
         println!("path to first skinny fragment:");
         for (idx, entry) in path.iter().enumerate() {
             println!("  {idx}: {entry}");
@@ -888,7 +904,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // are sized/positioned.
     let needle = env::var("FASTR_NEEDLE").unwrap_or_else(|_| "New photos released from Epstein".into());
     if !needle.is_empty() {
-        if let Some(path) = find_fragment_path(&fragment_tree.root, Point::ZERO, &needle) {
+        if let Some(path) = find_fragment_path(&fragment_tree.root, scroll_offset, &needle) {
             println!("ancestor chain for text containing {:?}:", needle);
             for (depth, (label, rect)) in path.iter().enumerate() {
                 println!(
@@ -914,7 +930,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     for target_id in trace_ids {
-        if let Some(path) = find_fragment_by_box_id(&fragment_tree.root, Point::ZERO, target_id, &box_debug) {
+        if let Some(path) = find_fragment_by_box_id(&fragment_tree.root, scroll_offset, target_id, &box_debug) {
             println!("path to box_id {target_id}:");
             for (idx, entry) in path.iter().enumerate() {
                 println!("  {idx}: {entry}");
@@ -941,7 +957,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("box_id {target_id} not found in fragments");
         }
     }
-    if let Some(path) = find_max_x_fragment(&fragment_tree.root, Point::ZERO) {
+    if let Some(path) = find_max_x_fragment(&fragment_tree.root, scroll_offset) {
         println!("path to fragment with largest max_x:");
         for (idx, entry) in path.iter().enumerate() {
             println!("  {idx}: {entry}");

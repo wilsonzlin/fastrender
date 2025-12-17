@@ -2307,6 +2307,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "accent-color" => styles.accent_color = source.accent_color,
         "caret-color" => styles.caret_color = source.caret_color,
         "color-scheme" => styles.color_scheme = source.color_scheme.clone(),
+        "forced-color-adjust" => styles.forced_color_adjust = source.forced_color_adjust,
         "color" => styles.color = source.color,
         "background-color" => styles.background_color = source.background_color,
         "background-image" => {
@@ -9271,7 +9272,7 @@ fn parse_text_decoration_color(value: &PropertyValue) -> Option<Option<Rgba>> {
 
 fn parse_text_underline_offset(value: &PropertyValue) -> Option<TextUnderlineOffset> {
     match value {
-        PropertyValue::Keyword(kw) if kw == "auto" => Some(TextUnderlineOffset::Auto),
+        PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => Some(TextUnderlineOffset::Auto),
         PropertyValue::Length(l) => Some(TextUnderlineOffset::Length(*l)),
         PropertyValue::Percentage(p) => Some(TextUnderlineOffset::Length(Length::percent(*p))),
         _ => None,
@@ -9331,7 +9332,7 @@ fn parse_text_underline_position(value: &PropertyValue) -> Option<TextUnderlineP
             let mut kws = Vec::new();
             for v in values {
                 if let PropertyValue::Keyword(kw) = v {
-                    kws.extend(kw.split_whitespace().map(|s| s.to_string()));
+                    kws.extend(kw.split_whitespace().map(|s| s.to_ascii_lowercase()));
                 } else {
                     return None;
                 }
