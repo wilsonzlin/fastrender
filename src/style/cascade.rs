@@ -4511,7 +4511,12 @@ mod tests {
                 node_type: DomNodeType::Element {
                     tag_name: "span".to_string(),
                     namespace: HTML_NAMESPACE.to_string(),
-                    attributes: vec![("style".to_string(), "text-align: match-parent;".to_string())],
+                    attributes: vec![
+                        (
+                            "style".to_string(),
+                            "text-align: match-parent; text-align-last: match-parent;".to_string(),
+                        ),
+                    ],
                 },
                 children: vec![],
             }],
@@ -4687,6 +4692,34 @@ mod tests {
             styled.styles.text_align_last,
             crate::style::types::TextAlignLast::Start
         ));
+    }
+
+    #[test]
+    fn text_align_match_parent_follows_parent_resolved_end_in_rtl() {
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![
+                    (
+                        "style".to_string(),
+                        "direction: rtl; text-align: end; text-align-last: end;".to_string(),
+                    ),
+                ],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "span".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
+                    attributes: vec![("style".to_string(), "text-align: match-parent;".to_string())],
+                },
+                children: vec![],
+            }],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let child = styled.children.first().expect("child");
+        assert!(matches!(child.styles.text_align, crate::style::types::TextAlign::Left));
     }
 
     #[test]
